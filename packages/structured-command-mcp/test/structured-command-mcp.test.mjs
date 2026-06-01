@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,11 +10,19 @@ import {
 
 const root = mkdtempSync(join(tmpdir(), 'structured-command-mcp-'));
 const auditLogDir = join(root, 'audit');
+const trustConfigPath = join(root, 'config.toml');
+writeFileSync(trustConfigPath, `[projects.'${root.replaceAll('\\', '\\\\')}']\ntrust_level = "trusted"\n`, 'utf8');
+
 const state = createServerState({
   allowedRoot: root,
   allowCommand: ['node'],
   allowPrefix: ['git status'],
   auditLogDir,
+});
+const stateFromTrustConfig = createServerState({
+  rootsFromTrustConfig: trustConfigPath,
+  allowCommand: ['node'],
+  auditLogDir: join(root, 'audit-trust-config'),
 });
 
 const init = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
@@ -37,6 +45,14 @@ const ok = await executeStructuredCommand({
 assert.equal(ok.status, 'ok');
 assert.equal(ok.executed, true);
 assert.match(ok.stdout, /^v\d+/);
+
+const okFromTrustConfig = await executeStructuredCommand({
+  command: 'node',
+  args: ['--version'],
+  working_directory: root,
+}, stateFromTrustConfig);
+assert.equal(okFromTrustConfig.status, 'ok');
+assert.equal(okFromTrustConfig.executed, true);
 
 const refusedCommand = await executeStructuredCommand({
   command: 'pwsh',

@@ -5,6 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  buildAllowedRoots,
   createExecutionPolicy,
   decideStructuredCommandExecution,
   publicExecutionPolicy,
@@ -46,7 +47,10 @@ export async function runStdioServer(options) {
 }
 
 export function createServerState(options = {}) {
-  const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots);
+  const allowedRoots = buildAllowedRoots({
+    trustConfigPaths: optionList(options.rootsFromTrustConfig),
+    explicitRoots: [...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
+  });
   if (allowedRoots.length === 0) throw new Error('structured_command_requires_allowed_root');
   return {
     policy: createExecutionPolicy({
