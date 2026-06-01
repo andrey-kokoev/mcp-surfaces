@@ -7,7 +7,8 @@
   "scripts": {
     "test": "pnpm -r test",
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
-    "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test"
+    "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
+    "test:structured-shell": "pnpm --filter @narada2/structured-shell-mcp test"
   },
   "packageManager": "pnpm@10.9.0"
 }
