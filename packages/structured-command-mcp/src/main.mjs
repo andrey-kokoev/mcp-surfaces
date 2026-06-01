@@ -4,14 +4,12 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  buildOutputRefToolContent,
-  listOutputTools,
-  outputShow,
-} from '@narada2/mcp-transport';
-import { createShellPolicy, decideShellCommand, publicPolicy } from './policy.mjs';
+  createExecutionPolicy,
+  decideStructuredCommandExecution,
+  publicExecutionPolicy,
+} from './policy.mjs';
 
 const PROTOCOL_VERSION = '2024-11-05';
-let activeToolName = null;
 
 if (isMainModule()) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -45,9 +43,9 @@ export async function runStdioServer(options) {
 
 export function createServerState(options = {}) {
   const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots);
-  if (allowedRoots.length === 0) throw new Error('structured_shell_requires_allowed_root');
+  if (allowedRoots.length === 0) throw new Error('structured_command_requires_allowed_root');
   return {
-    policy: createShellPolicy({
+    policy: createExecutionPolicy({
       allowedRoots,
       allowedCommands: optionList(options.allowCommand ?? options.allowedCommands),
       allowedPrefixes: optionList(options.allowPrefix ?? options.allowedPrefixes),
@@ -56,7 +54,6 @@ export function createServerState(options = {}) {
       maxOutputBytes: options.maxOutputBytes,
     }),
     auditLogDir: options.auditLogDir ? resolve(options.auditLogDir) : null,
-    outputRoot: resolve(options.outputRoot ?? process.cwd()),
   };
 }
 
@@ -79,7 +76,7 @@ async function dispatchMethod(method, params, state) {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
       capabilities: { tools: {} },
-      serverInfo: { name: 'structured-shell-mcp', version: '0.1.0' },
+      serverInfo: { name: 'structured-command-mcp', version: '0.1.0' },
     };
   }
   if (method === 'tools/list') return { tools: listTools() };
@@ -90,13 +87,13 @@ async function dispatchMethod(method, params, state) {
 export function listTools() {
   return [
     {
-      name: 'shell_command_policy',
-      description: 'Show structured shell command policy.',
+      name: 'structured_command_execution_policy_inspect',
+      description: 'Inspect the policy governing structured command execution.',
       inputSchema: objectSchema({}),
     },
     {
-      name: 'shell_command_run',
-      description: 'Run a structured argv command under allowed-root and command policy.',
+      name: 'structured_command_execute',
+      description: 'Execute a structured argv command under allowed-root and command policy.',
       inputSchema: objectSchema({
         command: { type: 'string', description: 'Executable name or absolute executable path admitted by policy.' },
         args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
@@ -104,31 +101,28 @@ export function listTools() {
         timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
       }, ['command']),
     },
-    ...listOutputTools(),
   ];
 }
 
 async function callTool(params, state) {
   const name = params?.name;
   const args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
-  activeToolName = name;
-  if (name === 'shell_command_policy') return toolResult(publicPolicy(state.policy), state);
-  if (name === 'shell_command_run') return toolResult(await runStructuredCommand(args, state), state);
-  if (name === 'mcp_output_show') return toolResult(outputShow({ siteRoot: state.outputRoot, args }), state);
-  throw new Error(`structured_shell_unknown_tool:${name}`);
+  if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy));
+  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state));
+  throw new Error(`structured_command_unknown_tool:${name}`);
 }
 
-export async function runStructuredCommand(args, state) {
+export async function executeStructuredCommand(args, state) {
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(args.timeout_ms ?? 60_000)));
   const workingDirectory = args.working_directory ? resolve(String(args.working_directory)) : state.policy.allowedRoots[0];
-  const decision = decideShellCommand({
+  const decision = decideStructuredCommandExecution({
     command: args.command,
     args: Array.isArray(args.args) ? args.args : [],
     workingDirectory,
   }, state.policy);
   if (decision.status !== 'allowed') {
     return {
-      schema: 'narada.structured_shell.command_result.v0',
+      schema: 'narada.structured_command.execution_result.v0',
       status: 'refused',
       decision,
       executed: false,
@@ -143,7 +137,7 @@ export async function runStructuredCommand(args, state) {
   });
   const finishedAt = new Date().toISOString();
   const payload = {
-    schema: 'narada.structured_shell.command_result.v0',
+    schema: 'narada.structured_command.execution_result.v0',
     status: result.timed_out ? 'timed_out' : result.exit_code === 0 ? 'ok' : 'failed',
     executed: true,
     command: decision.command,
@@ -215,18 +209,14 @@ function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
   });
 }
 
-function toolResult(payload, state) {
-  return buildOutputRefToolContent({
-    siteRoot: state.outputRoot,
-    toolName: activeToolName ?? 'structured_shell',
-    value: payload,
-  });
+function toolResult(payload) {
+  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
 }
 
 function audit(state, payload) {
   if (!state.auditLogDir) return;
   mkdirSync(state.auditLogDir, { recursive: true });
-  appendFileSync(join(state.auditLogDir, 'structured-shell.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
+  appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
 function truncateUtf8(value, maxBytes) {

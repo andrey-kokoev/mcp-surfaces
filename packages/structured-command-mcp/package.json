@@ -1,0 +1,16 @@
+{
+  "name": "@narada2/structured-command-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Structured, policy-gated local command execution MCP surface.",
+  "bin": {
+    "structured-command-mcp": "./src/main.mjs"
+  },
+  "exports": {
+    ".": "./src/main.mjs"
+  },
+  "scripts": {
+    "test": "node test/structured-command-mcp.test.mjs"
+  }
+}

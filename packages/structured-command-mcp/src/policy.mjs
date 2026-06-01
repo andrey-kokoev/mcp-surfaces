@@ -11,7 +11,7 @@ const DEFAULT_BLOCKED_COMMANDS = new Set([
   'wsl.exe',
 ]);
 
-export function createShellPolicy(options = {}) {
+export function createExecutionPolicy(options = {}) {
   const allowedRoots = normalizeList(options.allowedRoots).map((root) => resolve(root));
   const allowedCommands = new Set(normalizeList(options.allowedCommands).map((item) => item.toLowerCase()));
   const allowedPrefixes = normalizeList(options.allowedPrefixes).map((prefix) => normalizePrefix(prefix));
@@ -26,7 +26,7 @@ export function createShellPolicy(options = {}) {
   };
 }
 
-export function decideShellCommand({ command, args = [], workingDirectory }, policy) {
+export function decideStructuredCommandExecution({ command, args = [], workingDirectory }, policy) {
   const normalizedCommand = normalizeCommand(command);
   const argv = [normalizedCommand, ...normalizeArgs(args)];
   const cwd = resolve(workingDirectory ?? '.');
@@ -38,7 +38,7 @@ export function decideShellCommand({ command, args = [], workingDirectory }, pol
   if (!isCommandAllowed(argv, policy)) reasons.push(`command_not_allowed:${argv.join(' ')}`);
 
   return {
-    schema: 'narada.structured_shell.policy_decision.v0',
+    schema: 'narada.structured_command.execution_decision.v0',
     status: reasons.length === 0 ? 'allowed' : 'refused',
     reasons,
     command: normalizedCommand,
@@ -48,15 +48,16 @@ export function decideShellCommand({ command, args = [], workingDirectory }, pol
   };
 }
 
-export function publicPolicy(policy) {
+export function publicExecutionPolicy(policy) {
   return {
-    schema: 'narada.structured_shell.policy.v0',
+    schema: 'narada.structured_command.execution_policy.v0',
     allowed_roots: policy.allowedRoots,
     allowed_commands: [...policy.allowedCommands].sort(),
     allowed_prefixes: policy.allowedPrefixes.map((prefix) => prefix.join(' ')),
     blocked_commands: [...policy.blockedCommands].sort(),
     max_timeout_ms: policy.maxTimeoutMs,
     max_output_bytes: policy.maxOutputBytes,
+    shell_interpolation: false,
   };
 }
 

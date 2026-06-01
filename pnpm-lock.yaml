@@ -16,8 +16,4 @@ importers:
 
   packages/mcp-transport: {}
 
-  packages/structured-shell-mcp:
-    dependencies:
-      '@narada2/mcp-transport':
-        specifier: workspace:*
-        version: link:../mcp-transport
+  packages/structured-command-mcp: {}
