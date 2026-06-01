@@ -1,0 +1,19 @@
+{
+  "name": "@narada2/local-filesystem-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/local-filesystem-mcp.test.mjs"
+  },
+  "exports": {
+    ".": "./src/main.mjs",
+    "./policy": "./src/policy.mjs"
+  },
+  "dependencies": {
+    "@narada2/mcp-transport": "workspace:*"
+  },
+  "files": [
+    "src/"
+  ]
+}

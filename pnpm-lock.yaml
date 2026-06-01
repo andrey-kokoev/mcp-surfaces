@@ -1,0 +1,17 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  packages/local-filesystem-mcp:
+    dependencies:
+      '@narada2/mcp-transport':
+        specifier: workspace:*
+        version: link:../mcp-transport
+
+  packages/mcp-transport: {}
