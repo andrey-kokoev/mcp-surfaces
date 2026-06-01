@@ -25,6 +25,8 @@ const toolNames = tools.result.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames, [
   'structured_command_execute',
   'structured_command_execution_policy_inspect',
+  'structured_command_input_create',
+  'structured_command_output_show',
 ]);
 
 const ok = await executeStructuredCommand({
@@ -72,20 +74,48 @@ const policy = await handleRequest({
 assert.match(policy.result.content[0].text, /structured_command\.execution_policy/);
 assert.ok(policy.result.content[0].text.length <= 200);
 assert.equal(policy.result.structuredContent.truncated, true);
+assert.match(policy.result.structuredContent.output_ref, /^structured_command_output:/);
 
-const call = await handleRequest({
+const input = await handleRequest({
   jsonrpc: '2.0',
   id: 4,
   method: 'tools/call',
   params: {
+    name: 'structured_command_input_create',
+    arguments: { input_id: 'inputtest1', command: 'node', args: ['--version'], working_directory: root },
+  },
+}, state);
+assert.match(input.result.content[0].text, /structured_command\.input_create_result/);
+
+const inputRef = input.result.structuredContent.input_ref;
+assert.match(inputRef, /^structured_command_input:/);
+
+const call = await handleRequest({
+  jsonrpc: '2.0',
+  id: 5,
+  method: 'tools/call',
+  params: {
     name: 'structured_command_execute',
-    arguments: { command: 'node', args: ['--version'], working_directory: root },
+    arguments: { input_ref: inputRef },
   },
 }, state);
 assert.equal(call.result.content[0].type, 'text');
 assert.match(call.result.content[0].text, /structured_command\.execution_result/);
 assert.ok(call.result.content[0].text.length <= 200);
 assert.equal(call.result.structuredContent.truncated, true);
+assert.match(call.result.structuredContent.output_ref, /^structured_command_output:/);
+
+const shown = await handleRequest({
+  jsonrpc: '2.0',
+  id: 6,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_output_show',
+    arguments: { output_ref: call.result.structuredContent.output_ref },
+  },
+}, state);
+assert.equal(shown.result.content[0].type, 'text');
+assert.ok(shown.result.content[0].text.length <= 200);
 
 const audit = readFileSync(join(auditLogDir, 'structured-command.jsonl'), 'utf8');
 assert.match(audit, /structured_command\.execution_result/);

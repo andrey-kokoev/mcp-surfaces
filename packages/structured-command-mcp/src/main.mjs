@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   createExecutionPolicy,
@@ -12,6 +13,7 @@ import {
 const PROTOCOL_VERSION = '2024-11-05';
 const TOOL_RESULT_CHAR_LIMIT = 200;
 const TOOL_INPUT_CHAR_LIMIT = 200;
+const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
 if (isMainModule()) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -56,6 +58,7 @@ export function createServerState(options = {}) {
       maxOutputBytes: options.maxOutputBytes,
     }),
     auditLogDir: options.auditLogDir ? resolve(options.auditLogDir) : null,
+    storageRoot: resolve(options.storageRoot ?? join(allowedRoots[0], '.structured-command-mcp')),
   };
 }
 
@@ -97,11 +100,31 @@ export function listTools() {
       name: 'structured_command_execute',
       description: 'Execute a structured argv command under allowed-root and command policy.',
       inputSchema: objectSchema({
+        input_ref: { type: 'string', description: 'Structured command input ref from structured_command_input_create.' },
         command: { type: 'string', description: 'Executable name or absolute executable path admitted by policy.' },
         args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
         working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
         timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
+      }),
+    },
+    {
+      name: 'structured_command_input_create',
+      description: 'Create a scoped structured command input ref.',
+      inputSchema: objectSchema({
+        input_id: { type: 'string', description: 'Optional caller-chosen id, max 80 chars.' },
+        command: { type: 'string' },
+        args: { type: 'array', items: { type: 'string' } },
+        working_directory: { type: 'string' },
+        timeout_ms: { type: 'integer' },
       }, ['command']),
+    },
+    {
+      name: 'structured_command_output_show',
+      description: 'Read a scoped structured command output ref, capped to 200 chars.',
+      inputSchema: objectSchema({
+        output_ref: { type: 'string' },
+        offset: { type: 'integer' },
+      }, ['output_ref']),
     },
   ];
 }
@@ -109,18 +132,22 @@ export function listTools() {
 async function callTool(params, state) {
   const name = params?.name;
   const args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
-  if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy));
-  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state));
+  enforceInputCharLimit(args);
+  if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
+  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state), state);
+  if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
+  if (name === 'structured_command_output_show') return toolResult(showStructuredCommandOutput(args, state), state);
   throw new Error(`structured_command_unknown_tool:${name}`);
 }
 
 export async function executeStructuredCommand(args, state) {
   enforceInputCharLimit(args);
-  const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(args.timeout_ms ?? 60_000)));
-  const workingDirectory = args.working_directory ? resolve(String(args.working_directory)) : state.policy.allowedRoots[0];
+  const effectiveArgs = args.input_ref ? readStructuredCommandInput(args.input_ref, state).input : args;
+  const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
+  const workingDirectory = effectiveArgs.working_directory ? resolve(String(effectiveArgs.working_directory)) : state.policy.allowedRoots[0];
   const decision = decideStructuredCommandExecution({
-    command: args.command,
-    args: Array.isArray(args.args) ? args.args : [],
+    command: effectiveArgs.command,
+    args: Array.isArray(effectiveArgs.args) ? effectiveArgs.args : [],
     workingDirectory,
   }, state.policy);
   if (decision.status !== 'allowed') {
@@ -155,9 +182,51 @@ export async function executeStructuredCommand(args, state) {
     stdout_truncated: result.stdout_truncated,
     stderr_truncated: result.stderr_truncated,
     timed_out: result.timed_out,
+    input_ref: args.input_ref ?? null,
   };
   audit(state, payload);
   return payload;
+}
+
+export function createStructuredCommandInput(args, state) {
+  const inputId = normalizeRefId(args.input_id ?? `i_${randomUUID().replace(/-/g, '').slice(0, 24)}`);
+  const input = {
+    command: String(args.command ?? ''),
+    args: Array.isArray(args.args) ? args.args.map(String) : [],
+    ...(args.working_directory ? { working_directory: String(args.working_directory) } : {}),
+    ...(args.timeout_ms ? { timeout_ms: Number(args.timeout_ms) } : {}),
+  };
+  const record = {
+    schema: 'narada.structured_command.input.v0',
+    ref: `structured_command_input:${inputId}`,
+    created_at: new Date().toISOString(),
+    sha256: sha256Json(input),
+    input,
+  };
+  writeJsonRecord(inputPath(state, inputId), record);
+  return {
+    schema: 'narada.structured_command.input_create_result.v0',
+    status: 'created',
+    input_ref: record.ref,
+    sha256: record.sha256,
+  };
+}
+
+export function showStructuredCommandOutput(args, state) {
+  const { id } = parseRef(args.output_ref, 'output');
+  const record = readJsonRecord(outputPath(state, id));
+  const offset = Math.max(0, Number(args.offset ?? 0));
+  const text = String(record.text ?? '');
+  const chunk = text.slice(offset, offset + TOOL_RESULT_CHAR_LIMIT);
+  return {
+    schema: 'narada.structured_command.output_show_result.v0',
+    status: 'ok',
+    output_ref: record.ref,
+    offset,
+    next_offset: offset + chunk.length < text.length ? offset + chunk.length : null,
+    text: chunk,
+    full_output_char_length: text.length,
+  };
 }
 
 function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
@@ -212,13 +281,20 @@ function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
   });
 }
 
-function toolResult(payload) {
+function toolResult(payload, state) {
   const text = JSON.stringify(payload, null, 2);
   const truncated = text.length > TOOL_RESULT_CHAR_LIMIT;
+  const outputRef = truncated ? createStructuredCommandOutput(text, state) : null;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {
     content: [{ type: 'text', text: rendered }],
-    ...(truncated ? { structuredContent: { truncated: true, full_output_char_length: text.length } } : {}),
+    structuredContent: {
+      truncated,
+      ...(outputRef ? { output_ref: outputRef } : {}),
+      ...(payload?.input_ref ? { input_ref: payload.input_ref } : {}),
+      ...(payload?.sha256 ? { sha256: payload.sha256 } : {}),
+      full_output_char_length: text.length,
+    },
   };
 }
 
@@ -241,6 +317,63 @@ function audit(state, payload) {
   if (!state.auditLogDir) return;
   mkdirSync(state.auditLogDir, { recursive: true });
   appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+function createStructuredCommandOutput(text, state) {
+  if (!state) return null;
+  const outputId = `o_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  const record = {
+    schema: 'narada.structured_command.output.v0',
+    ref: `structured_command_output:${outputId}`,
+    created_at: new Date().toISOString(),
+    sha256: sha256Text(text),
+    text,
+  };
+  writeJsonRecord(outputPath(state, outputId), record);
+  return record.ref;
+}
+
+function readStructuredCommandInput(ref, state) {
+  const { id } = parseRef(ref, 'input');
+  return readJsonRecord(inputPath(state, id));
+}
+
+function parseRef(ref, kind) {
+  const match = String(ref ?? '').match(REF_PATTERN);
+  if (!match || match[1] !== kind) throw new Error(`structured_command_invalid_${kind}_ref`);
+  return { kind: match[1], id: match[2] };
+}
+
+function inputPath(state, id) {
+  return join(state.storageRoot, 'inputs', `${id}.json`);
+}
+
+function outputPath(state, id) {
+  return join(state.storageRoot, 'outputs', `${id}.json`);
+}
+
+function writeJsonRecord(path, record) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+}
+
+function readJsonRecord(path) {
+  if (!existsSync(path)) throw new Error('structured_command_ref_not_found');
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function normalizeRefId(value) {
+  const id = String(value).trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('structured_command_invalid_ref_id');
+  return id;
+}
+
+function sha256Json(value) {
+  return sha256Text(JSON.stringify(value));
+}
+
+function sha256Text(value) {
+  return createHash('sha256').update(String(value)).digest('hex');
 }
 
 function truncateUtf8(value, maxBytes) {
