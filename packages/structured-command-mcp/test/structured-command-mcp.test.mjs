@@ -61,6 +61,8 @@ const policy = await handleRequest({
   },
 }, state);
 assert.match(policy.result.content[0].text, /structured_command\.execution_policy/);
+assert.ok(policy.result.content[0].text.length <= 200);
+assert.equal(policy.result.structuredContent.truncated, true);
 
 const call = await handleRequest({
   jsonrpc: '2.0',
@@ -73,6 +75,8 @@ const call = await handleRequest({
 }, state);
 assert.equal(call.result.content[0].type, 'text');
 assert.match(call.result.content[0].text, /structured_command\.execution_result/);
+assert.ok(call.result.content[0].text.length <= 200);
+assert.equal(call.result.structuredContent.truncated, true);
 
 const audit = readFileSync(join(auditLogDir, 'structured-command.jsonl'), 'utf8');
 assert.match(audit, /structured_command\.execution_result/);

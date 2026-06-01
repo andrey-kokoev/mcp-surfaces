@@ -10,6 +10,7 @@ import {
 } from './policy.mjs';
 
 const PROTOCOL_VERSION = '2024-11-05';
+const TOOL_RESULT_CHAR_LIMIT = 200;
 
 if (isMainModule()) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -210,7 +211,13 @@ function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
 }
 
 function toolResult(payload) {
-  return { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+  const text = JSON.stringify(payload, null, 2);
+  const truncated = text.length > TOOL_RESULT_CHAR_LIMIT;
+  const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
+  return {
+    content: [{ type: 'text', text: rendered }],
+    ...(truncated ? { structuredContent: { truncated: true, full_output_char_length: text.length } } : {}),
+  };
 }
 
 function audit(state, payload) {
