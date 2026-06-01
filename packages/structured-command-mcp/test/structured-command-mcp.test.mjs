@@ -51,6 +51,15 @@ const refusedRoot = await executeStructuredCommand({
 }, state);
 assert.equal(refusedRoot.status, 'refused');
 
+await assert.rejects(
+  () => executeStructuredCommand({
+    command: 'node',
+    args: ['x'.repeat(201)],
+    working_directory: root,
+  }, state),
+  /structured_command_input_too_long:arguments\.args\[0\]:201>200/,
+);
+
 const policy = await handleRequest({
   jsonrpc: '2.0',
   id: 3,

@@ -11,6 +11,7 @@ import {
 
 const PROTOCOL_VERSION = '2024-11-05';
 const TOOL_RESULT_CHAR_LIMIT = 200;
+const TOOL_INPUT_CHAR_LIMIT = 200;
 
 if (isMainModule()) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -114,6 +115,7 @@ async function callTool(params, state) {
 }
 
 export async function executeStructuredCommand(args, state) {
+  enforceInputCharLimit(args);
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(args.timeout_ms ?? 60_000)));
   const workingDirectory = args.working_directory ? resolve(String(args.working_directory)) : state.policy.allowedRoots[0];
   const decision = decideStructuredCommandExecution({
@@ -218,6 +220,21 @@ function toolResult(payload) {
     content: [{ type: 'text', text: rendered }],
     ...(truncated ? { structuredContent: { truncated: true, full_output_char_length: text.length } } : {}),
   };
+}
+
+function enforceInputCharLimit(value, path = 'arguments') {
+  if (typeof value === 'string' && value.length > TOOL_INPUT_CHAR_LIMIT) {
+    throw new Error(`structured_command_input_too_long:${path}:${value.length}>${TOOL_INPUT_CHAR_LIMIT}`);
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => enforceInputCharLimit(item, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      enforceInputCharLimit(child, `${path}.${key}`);
+    }
+  }
 }
 
 function audit(state, payload) {
