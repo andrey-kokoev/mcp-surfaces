@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
   buildOutputRefToolContent,
   listOutputTools,
   outputShow,
 } from '@narada2/mcp-transport';
-import { buildAllowedRoots, resolveAllowedPath } from './policy.mjs';
+import { buildAllowedRoots, resolveAllowedPath } from './policy.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
-let activeToolName = null;
+let activeToolName: string | null = null;
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -20,7 +20,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   });
 }
 
-export async function runStdioServer(options) {
+export async function runStdioServer(options: any) {
   const state = createServerState(options);
   let buffer = '';
   process.stdin.setEncoding('utf8');
@@ -43,7 +43,7 @@ export async function runStdioServer(options) {
   }
 }
 
-export function createServerState(options) {
+export function createServerState(options: any): any {
   const mode = options.mode;
   if (!['read', 'write'].includes(mode)) throw new Error('mode_must_be_read_or_write');
   const allowedRoots = buildAllowedRoots({
@@ -60,7 +60,7 @@ export function createServerState(options) {
   };
 }
 
-export function handleRequest(request, state) {
+export function handleRequest(request: any, state: any): any {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
     const result = dispatchMethod(request.method, request.params ?? {}, state);
@@ -122,6 +122,7 @@ export function listTools(mode) {
       inputSchema: objectSchema({
         pattern: { type: 'string' },
         directory: { type: 'string', default: '.' },
+        offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 100 },
       }, ['pattern']),
     },
@@ -132,6 +133,7 @@ export function listTools(mode) {
         pattern: { type: 'string' },
         path: { type: 'string', default: '.' },
         output_mode: { type: 'string', enum: ['files_with_matches', 'count_matches', 'content'], default: 'files_with_matches' },
+        offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 80 },
       }, ['pattern']),
     },
@@ -173,7 +175,7 @@ export function listTools(mode) {
       }, ['from', 'to']),
     },
   ];
-  return mode === 'read' ? readTools : writeTools;
+  return mode === 'read' ? readTools : [...readTools, ...writeTools];
 }
 
 function callTool(params, state) {
@@ -218,6 +220,7 @@ function readFileRangeTool(args, state) {
 function readFileRange({ path, root, offset, limit }) {
   const lines = readFileSync(path, 'utf8').split(/\r?\n/);
   const selected = lines.slice(offset - 1, offset - 1 + limit);
+  const nextOffset = offset + selected.length <= lines.length ? offset + selected.length : null;
   return {
     path,
     root,
@@ -226,6 +229,7 @@ function readFileRange({ path, root, offset, limit }) {
     offset,
     limit,
     returned_lines: selected.length,
+    next_offset: nextOffset,
     content: selected.join('\n'),
   };
 }
@@ -247,9 +251,10 @@ function globSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw new Error('glob_requires_pattern');
   const { path: directory } = resolveAllowedPath(stringField(args, 'directory') ?? '.', state.allowedRoots);
+  const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
   const rg = spawnSync('rg', ['--files', '--hidden', '--no-ignore', '-g', pattern, directory], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
-  return cappedSearchResult({ state, kind: 'glob', args, lines: splitLines(rg.stdout), limit });
+  return cappedSearchResult({ state, kind: 'glob', args, lines: splitLines(rg.stdout), offset, limit });
 }
 
 function grepSearchTool(args, state) {
@@ -257,19 +262,27 @@ function grepSearchTool(args, state) {
   if (!pattern) throw new Error('grep_requires_pattern');
   const { path } = resolveAllowedPath(stringField(args, 'path') ?? '.', state.allowedRoots);
   const mode = stringField(args, 'output_mode') ?? 'files_with_matches';
+  if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw new Error(`grep_output_mode_unsupported: ${mode}`);
+  const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
-  const rg = spawnSync('rg', [pattern, path, ...modeArgs, '--max-count', String(limit)], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, lines: splitLines(rg.stdout), limit });
+  const rg = spawnSync('rg', [pattern, path, ...modeArgs, '--max-count', String(limit + offset)], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, lines: splitLines(rg.stdout), offset, limit });
 }
 
-function cappedSearchResult({ state, kind, args, lines, limit }) {
+function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
+  const matches = lines.slice(offset, offset + limit);
+  const nextOffset = offset + matches.length < lines.length ? offset + matches.length : null;
   const value = {
     schema: `local.filesystem.${kind}.v1`,
     status: 'ok',
+    offset,
+    limit,
     count: lines.length,
-    returned: Math.min(lines.length, limit),
-    matches: lines.slice(0, limit),
+    returned: matches.length,
+    truncated: nextOffset !== null,
+    next_offset: nextOffset,
+    matches,
   };
   if (JSON.stringify(value).length <= 6000) return value;
   return buildOutputRefToolContent({ siteRoot: state.outputRoot, toolName: activeToolName, value, isError: false });
@@ -325,15 +338,18 @@ function applyPatchTool(args, state) {
   if (!patch) throw new Error('patch_required');
   const files = parseUnifiedPatch(patch);
   if (files.length === 0) throw new Error('patch_contains_no_files');
-  const changed = [];
-  for (const filePatch of files) {
+  const planned = files.map((filePatch) => {
     const target = resolvePatchTarget(filePatch, state);
     const before = existsSync(target.path) ? readFileSync(target.path, 'utf8') : '';
     const after = applyFilePatch(before, filePatch);
-    mkdirSync(dirname(target.path), { recursive: true });
-    writeFileSync(target.path, after, 'utf8');
-    appendAudit(state, 'fs_apply_patch', target.path, target.root, { patch_sha256: sha256(patch), before_sha256: sha256(before), after_sha256: sha256(after), hunks: filePatch.hunks.length });
-    changed.push({ path: target.path, hunks: filePatch.hunks.length, before_sha256: sha256(before), after_sha256: sha256(after) });
+    return { filePatch, target, before, after };
+  });
+  const changed = [];
+  for (const item of planned) {
+    mkdirSync(dirname(item.target.path), { recursive: true });
+    writeFileSync(item.target.path, item.after, 'utf8');
+    appendAudit(state, 'fs_apply_patch', item.target.path, item.target.root, { patch_sha256: sha256(patch), before_sha256: sha256(item.before), after_sha256: sha256(item.after), hunks: item.filePatch.hunks.length });
+    changed.push({ path: item.target.path, hunks: item.filePatch.hunks.length, before_sha256: sha256(item.before), after_sha256: sha256(item.after) });
   }
   return { status: 'patched', changed_files: changed };
 }
@@ -342,9 +358,14 @@ function movePathTool(args, state) {
   const from = resolveAllowedPath(stringField(args, 'from'), state.allowedRoots);
   const to = resolveAllowedPath(stringField(args, 'to'), state.allowedRoots);
   const overwrite = booleanField(args, 'overwrite') ?? false;
+  if (samePath(from.path, to.path)) throw new Error(`move_source_and_destination_same: ${from.path}`);
   if (!existsSync(from.path)) throw new Error(`move_source_not_found: ${from.path}`);
+  const fromStat = statSync(from.path);
+  if (fromStat.isDirectory() && isPathInside(to.path, from.path)) throw new Error(`move_destination_inside_source: ${to.path}`);
   if (existsSync(to.path)) {
     if (!overwrite) throw new Error(`move_destination_exists: ${to.path}`);
+    const toStat = statSync(to.path);
+    if (fromStat.isDirectory() !== toStat.isDirectory()) throw new Error(`move_destination_type_mismatch: ${to.path}`);
     rmSync(to.path, { recursive: true, force: true });
   }
   mkdirSync(dirname(to.path), { recursive: true });
@@ -451,15 +472,47 @@ function appendAudit(state, operation, path, root, detail) {
 }
 
 function toolResult(value) {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
+  if (isToolResult(value)) {
+    return {
+      ...value,
+      structuredContent: value.structuredContent ?? parseToolResultStructuredContent(value),
+    };
+  }
+  return {
+    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    structuredContent: value,
+  };
+}
+
+function isToolResult(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.content));
+}
+
+function parseToolResultStructuredContent(value) {
+  const text = value.content.find((item) => item?.type === 'text' && typeof item.text === 'string')?.text;
+  if (!text) return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function samePath(left, right) {
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+}
+
+function isPathInside(path, root) {
+  const rel = relative(root, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 function objectSchema(properties, required = []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
-function parseArgs(argv) {
-  const options = { mode: 'read', allowedRoots: [] };
+function parseArgs(argv: string[]): any {
+  const options: any = { mode: 'read', allowedRoots: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -470,7 +523,7 @@ function parseArgs(argv) {
     else if (arg === '--audit-log-dir') { options.auditLogDir = next; i += 1; }
     else if (arg === '--output-root') { options.outputRoot = next; i += 1; }
     else if (arg === '--help') {
-      process.stdout.write('Usage: node main.mjs --mode read|write --roots-from-trust-config <path> [--allowed-root <path>] [--roots-config <json>] [--audit-log-dir <path>]\n');
+      process.stdout.write('Usage: node dist/src/main.js --mode read|write --roots-from-trust-config <path> [--allowed-root <path>] [--roots-config <json>] [--audit-log-dir <path>]\n');
       process.exit(0);
     }
   }

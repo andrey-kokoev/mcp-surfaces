@@ -12,7 +12,7 @@ const DEFAULT_BLOCKED_COMMANDS = new Set([
   'wsl.exe',
 ]);
 
-export function createExecutionPolicy(options = {}) {
+export function createExecutionPolicy(options: any = {}): any {
   const allowedRoots = normalizeAllowedRoots(options.allowedRoots);
   const allowedCommands = new Set(normalizeList(options.allowedCommands).map((item) => item.toLowerCase()));
   const allowedPrefixes = normalizeList(options.allowedPrefixes).map((prefix) => normalizePrefix(prefix));

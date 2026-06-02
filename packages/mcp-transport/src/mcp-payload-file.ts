@@ -143,7 +143,7 @@ export function enforceInlinePayloadLimit({
   exemptFields = DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS,
   objectPayloadFields = DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS,
   allowPayloadCreation = false,
-} = {}) {
+}: any = {}) {
   const input = asRecord(args);
   if (allowPayloadCreation && isPayloadWorkspaceTool(toolName)) return;
   const violations = [];
@@ -246,7 +246,7 @@ export function buildOutputRefToolContent({
   isError = false,
   limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
   createdBy = process.env.NARADA_AGENT_ID || null,
-} = {}) {
+}: any = {}) {
   if (isOutputLocator(value)) {
     return { content: [{ type: 'text', text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) };
   }

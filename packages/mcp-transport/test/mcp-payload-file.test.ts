@@ -9,7 +9,7 @@ import {
   outputShow,
   payloadCreate,
   payloadShow,
-} from '../src/mcp-payload-file.mjs';
+} from '../src/mcp-payload-file.js';
 
 const exactly200 = 'x'.repeat(200);
 const over200 = 'x'.repeat(201);
@@ -34,12 +34,14 @@ assert.doesNotThrow(() => enforceInlinePayloadLimit({
 }));
 
 const outputShowTool = listOutputTools().find((tool) => tool.name === 'mcp_output_show');
-assert.deepEqual(outputShowTool.inputSchema.required, ['ref']);
-assert.equal(outputShowTool.inputSchema.anyOf, undefined);
-assert.equal(outputShowTool.inputSchema.oneOf, undefined);
-assert.equal(outputShowTool.inputSchema.allOf, undefined);
-assert.equal(outputShowTool.inputSchema.not, undefined);
-assert.equal(outputShowTool.inputSchema.enum, undefined);
+assert.ok(outputShowTool);
+const outputShowSchema = outputShowTool.inputSchema as Record<string, unknown>;
+assert.deepEqual(outputShowSchema.required, ['ref']);
+assert.equal(outputShowSchema.anyOf, undefined);
+assert.equal(outputShowSchema.oneOf, undefined);
+assert.equal(outputShowSchema.allOf, undefined);
+assert.equal(outputShowSchema.not, undefined);
+assert.equal(outputShowSchema.enum, undefined);
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {

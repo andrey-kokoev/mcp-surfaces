@@ -4,16 +4,25 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/local-filesystem-mcp.test.mjs"
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/local-filesystem-mcp.test.js"
   },
+  "types": "./dist/src/main.d.ts",
   "exports": {
-    ".": "./src/main.mjs",
-    "./policy": "./src/policy.mjs"
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    },
+    "./policy": {
+      "types": "./dist/src/policy.d.ts",
+      "default": "./dist/src/policy.js"
+    }
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*"
   },
   "files": [
-    "src/"
+    "dist/"
   ]
 }

@@ -9,10 +9,13 @@ import {
   createExecutionPolicy,
   decideStructuredCommandExecution,
   publicExecutionPolicy,
-} from './policy.mjs';
+} from './policy.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
-const TOOL_RESULT_CHAR_LIMIT = 200;
+const TOOL_RESULT_CHAR_LIMIT = 4000;
+const STREAM_PREVIEW_CHAR_LIMIT = 1000;
+const TOOL_OUTPUT_SHOW_DEFAULT_LIMIT = 4000;
+const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 200;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
@@ -23,7 +26,7 @@ if (isMainModule()) {
   });
 }
 
-export async function runStdioServer(options) {
+export async function runStdioServer(options: any) {
   const state = createServerState(options);
   let buffer = '';
   process.stdin.setEncoding('utf8');
@@ -46,7 +49,7 @@ export async function runStdioServer(options) {
   }
 }
 
-export function createServerState(options = {}) {
+export function createServerState(options: any = {}): any {
   const allowedRoots = buildAllowedRoots({
     trustConfigPaths: optionList(options.rootsFromTrustConfig),
     explicitRoots: [...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
@@ -66,7 +69,7 @@ export function createServerState(options = {}) {
   };
 }
 
-export async function handleRequest(request, state) {
+export async function handleRequest(request: any, state: any): Promise<any> {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
     const result = await dispatchMethod(request.method, request.params ?? {}, state);
@@ -80,7 +83,7 @@ export async function handleRequest(request, state) {
   }
 }
 
-async function dispatchMethod(method, params, state) {
+async function dispatchMethod(method: string, params: any, state: any): Promise<any> {
   if (method === 'initialize') {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
@@ -124,10 +127,11 @@ export function listTools() {
     },
     {
       name: 'structured_command_output_show',
-      description: 'Read a scoped structured command output ref, capped to 200 chars.',
+      description: 'Read a scoped structured command output ref with bounded pagination.',
       inputSchema: objectSchema({
         output_ref: { type: 'string' },
         offset: { type: 'integer' },
+        limit: { type: 'integer', description: `Characters to read, default ${TOOL_OUTPUT_SHOW_DEFAULT_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
       }, ['output_ref']),
     },
   ];
@@ -144,7 +148,7 @@ async function callTool(params, state) {
   throw new Error(`structured_command_unknown_tool:${name}`);
 }
 
-export async function executeStructuredCommand(args, state) {
+export async function executeStructuredCommand(args: any, state: any): Promise<any> {
   enforceInputCharLimit(args);
   const effectiveArgs = args.input_ref ? readStructuredCommandInput(args.input_ref, state).input : args;
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
@@ -220,20 +224,23 @@ export function showStructuredCommandOutput(args, state) {
   const { id } = parseRef(args.output_ref, 'output');
   const record = readJsonRecord(outputPath(state, id));
   const offset = Math.max(0, Number(args.offset ?? 0));
+  const limit = clampInteger(args.limit, 1, TOOL_OUTPUT_SHOW_MAX_LIMIT, TOOL_OUTPUT_SHOW_DEFAULT_LIMIT);
   const text = String(record.text ?? '');
-  const chunk = text.slice(offset, offset + TOOL_RESULT_CHAR_LIMIT);
+  const chunk = text.slice(offset, offset + limit);
   return {
     schema: 'narada.structured_command.output_show_result.v0',
     status: 'ok',
+    kind: record.kind ?? 'output',
     output_ref: record.ref,
     offset,
+    limit,
     next_offset: offset + chunk.length < text.length ? offset + chunk.length : null,
     text: chunk,
     full_output_char_length: text.length,
   };
 }
 
-function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
+function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes }: any): Promise<any> {
   return new Promise((resolvePromise) => {
     const child = spawn(command, args, {
       cwd,
@@ -286,20 +293,111 @@ function spawnStructured(command, args, { cwd, timeoutMs, maxOutputBytes }) {
 }
 
 function toolResult(payload, state) {
-  const text = JSON.stringify(payload, null, 2);
+  const text = renderToolResultText(payload);
   const truncated = text.length > TOOL_RESULT_CHAR_LIMIT;
-  const outputRef = truncated ? createStructuredCommandOutput(text, state) : null;
+  const outputRef = truncated ? createStructuredCommandOutput(text, state, 'rendered') : null;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {
     content: [{ type: 'text', text: rendered }],
-    structuredContent: {
+    structuredContent: buildStructuredContent(payload, {
       truncated,
-      ...(outputRef ? { output_ref: outputRef } : {}),
-      ...(payload?.input_ref ? { input_ref: payload.input_ref } : {}),
-      ...(payload?.sha256 ? { sha256: payload.sha256 } : {}),
-      full_output_char_length: text.length,
-    },
+      outputRef,
+      renderedTextLength: rendered.length,
+      fullTextLength: text.length,
+      state,
+    }),
   };
+}
+
+function buildStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
+  if (payload?.schema === 'narada.structured_command.execution_result.v0') {
+    return buildExecutionStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state });
+  }
+  if (payload?.schema === 'narada.structured_command.output_show_result.v0') {
+    return {
+      schema: payload.schema,
+      status: payload.status,
+      kind: payload.kind,
+      output_ref: payload.output_ref,
+      offset: payload.offset,
+      limit: payload.limit,
+      next_offset: payload.next_offset,
+      text_char_length: String(payload.text ?? '').length,
+      full_output_char_length: payload.full_output_char_length,
+      truncated,
+    };
+  }
+  return {
+    schema: payload?.schema,
+    status: payload?.status,
+    truncated,
+    ...(outputRef ? { output_ref: outputRef } : {}),
+    ...(payload?.input_ref ? { input_ref: payload.input_ref } : {}),
+    ...(payload?.sha256 ? { sha256: payload.sha256 } : {}),
+    rendered_text_char_length: renderedTextLength,
+    full_output_char_length: fullTextLength,
+  };
+}
+
+function buildExecutionStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
+  const stdout = String(payload.stdout ?? '');
+  const stderr = String(payload.stderr ?? '');
+  const stdoutNeedsRef = stdout.length > STREAM_PREVIEW_CHAR_LIMIT || payload.stdout_truncated;
+  const stderrNeedsRef = stderr.length > STREAM_PREVIEW_CHAR_LIMIT || payload.stderr_truncated;
+  const stdoutRef = stdoutNeedsRef ? createStructuredCommandOutput(stdout, state, 'stdout') : null;
+  const stderrRef = stderrNeedsRef ? createStructuredCommandOutput(stderr, state, 'stderr') : null;
+  return {
+    schema: payload.schema,
+    status: payload.status,
+    executed: payload.executed,
+    command: payload.command,
+    args: payload.args,
+    working_directory: payload.working_directory,
+    timeout_ms: payload.timeout_ms,
+    exit_code: payload.exit_code,
+    timed_out: payload.timed_out,
+    stdout: stdoutNeedsRef ? stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stdout,
+    stderr: stderrNeedsRef ? stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stderr,
+    stdout_truncated: payload.stdout_truncated,
+    stderr_truncated: payload.stderr_truncated,
+    stdout_char_length: stdout.length,
+    stderr_char_length: stderr.length,
+    ...(stdoutRef ? { stdout_ref: stdoutRef, stdout_next_offset: STREAM_PREVIEW_CHAR_LIMIT } : {}),
+    ...(stderrRef ? { stderr_ref: stderrRef, stderr_next_offset: STREAM_PREVIEW_CHAR_LIMIT } : {}),
+    ...(payload.input_ref ? { input_ref: payload.input_ref } : {}),
+    truncated,
+    ...(outputRef ? { output_ref: outputRef } : {}),
+    rendered_text_char_length: renderedTextLength,
+    full_output_char_length: fullTextLength,
+  };
+}
+
+function renderToolResultText(payload) {
+  if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === true) {
+    const lines = [
+      `structured_command_execute: ${payload.status}`,
+      `exit_code: ${payload.exit_code}`,
+    ];
+    if (payload.stdout || payload.stdout_truncated) {
+      const stdout = String(payload.stdout ?? '');
+      const stdoutPreview = stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
+      lines.push('stdout:', stdoutPreview);
+      if (stdout.length > stdoutPreview.length) lines.push('[stdout preview truncated]');
+      if (payload.stdout_truncated) lines.push('[stdout truncated]');
+    }
+    if (payload.stderr || payload.stderr_truncated) {
+      const stderr = String(payload.stderr ?? '');
+      const stderrPreview = stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
+      lines.push('stderr:', stderrPreview);
+      if (stderr.length > stderrPreview.length) lines.push('[stderr preview truncated]');
+      if (payload.stderr_truncated) lines.push('[stderr truncated]');
+    }
+    return lines.join('\n');
+  }
+  if (payload?.schema === 'narada.structured_command.output_show_result.v0') {
+    return String(payload.text ?? '');
+  }
+  return JSON.stringify(payload, null, 2);
 }
 
 function enforceInputCharLimit(value, path = 'arguments') {
@@ -323,11 +421,12 @@ function audit(state, payload) {
   appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
-function createStructuredCommandOutput(text, state) {
+function createStructuredCommandOutput(text, state, kind = 'output') {
   if (!state) return null;
   const outputId = `o_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const record = {
     schema: 'narada.structured_command.output.v0',
+    kind,
     ref: `structured_command_output:${outputId}`,
     created_at: new Date().toISOString(),
     sha256: sha256Text(text),
@@ -370,6 +469,12 @@ function normalizeRefId(value) {
   const id = String(value).trim();
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('structured_command_invalid_ref_id');
   return id;
+}
+
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
 }
 
 function sha256Json(value) {

@@ -5,11 +5,16 @@
   "type": "module",
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",
   "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
     "test": "pnpm -r test",
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test"
   },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  },
   "packageManager": "pnpm@10.9.0"
 }
-

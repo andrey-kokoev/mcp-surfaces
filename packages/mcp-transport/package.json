@@ -4,13 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test/mcp-payload-file.test.mjs"
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/mcp-payload-file.test.js"
   },
+  "types": "./dist/src/mcp-payload-file.d.ts",
   "exports": {
-    ".": "./src/mcp-payload-file.mjs",
-    "./mcp-payload-file": "./src/mcp-payload-file.mjs"
+    ".": {
+      "types": "./dist/src/mcp-payload-file.d.ts",
+      "default": "./dist/src/mcp-payload-file.js"
+    },
+    "./mcp-payload-file": {
+      "types": "./dist/src/mcp-payload-file.d.ts",
+      "default": "./dist/src/mcp-payload-file.js"
+    }
   },
   "files": [
-    "src/"
+    "dist/"
   ]
 }

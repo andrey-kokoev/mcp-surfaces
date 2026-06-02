@@ -16,5 +16,6 @@ Write mode tools are exposed only when launched with `--mode write`.
 Example:
 
 ```powershell
-node D:/code/mcp-surfaces/packages/local-filesystem-mcp/src/main.mjs --mode read --allowed-root D:/code/narada
+pnpm --filter @narada2/local-filesystem-mcp build
+node D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js --mode read --allowed-root D:/code/narada
 ```

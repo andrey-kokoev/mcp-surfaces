@@ -1,0 +1,8 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/mcp-transport" },
+    { "path": "./packages/local-filesystem-mcp" },
+    { "path": "./packages/structured-command-mcp" }
+  ]
+}

@@ -23,7 +23,8 @@ The server requires:
 ## Run
 
 ```powershell
-node packages/structured-command-mcp/src/main.mjs --allowed-root D:/code --allow-command node --allow-command git
+pnpm --filter @narada2/structured-command-mcp build
+node packages/structured-command-mcp/dist/src/main.js --allowed-root D:/code --allow-command node --allow-command git
 ```
 
 ## Tools
