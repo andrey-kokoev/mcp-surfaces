@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
   listAgentStartSessions,
@@ -25,6 +25,42 @@ const PROTOCOL_VERSION = '2026-04-18';
 const args = parseArgs(process.argv.slice(2));
 const siteRoot = resolve(args['site-root'] ?? process.cwd());
 const dbPath = resolve(process.env.NARADA_AGENT_CONTEXT_DB || join(siteRoot, '.ai', 'state', 'agent-context.sqlite'));
+const startupTracePath = join(siteRoot, '.ai', 'tmp', 'agent-context-mcp-startup.log');
+const startupTraceEnabled = process.env.NARADA_AGENT_CONTEXT_MCP_TRACE === '1';
+
+function traceStartup(event, extra = {}) {
+  if (!startupTraceEnabled) return;
+  try {
+    mkdirSync(join(siteRoot, '.ai', 'tmp'), { recursive: true });
+    appendFileSync(startupTracePath, `${JSON.stringify({
+      at: new Date().toISOString(),
+      event,
+      pid: process.pid,
+      ppid: process.ppid,
+      argv: process.argv,
+      cwd: process.cwd(),
+      execPath: process.execPath,
+      siteRoot,
+      dbPath,
+      agentId: process.env.NARADA_AGENT_ID ?? null,
+      carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      ...extra,
+    })}\n`);
+  } catch {
+    // Startup tracing must never interfere with MCP stdio.
+  }
+}
+
+process.on('uncaughtException', (error) => {
+  traceStartup('uncaughtException', { error: error?.stack ?? String(error) });
+  throw error;
+});
+
+process.on('unhandledRejection', (error) => {
+  traceStartup('unhandledRejection', { error: error?.stack ?? String(error) });
+});
+
+traceStartup('process_start');
 
 const TOOLS = [
   {
@@ -128,10 +164,18 @@ const TOOLS = [
 ];
 
 assertSiteRoot();
+traceStartup('site_root_ok');
 
 let inputBuffer = '';
+let transportMode = 'content-length';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
+  if (inputBuffer.length === 0) {
+    traceStartup('first_stdin_chunk', {
+      bytes: Buffer.byteLength(chunk, 'utf8'),
+      sample: JSON.stringify(chunk.slice(0, 300)),
+    });
+  }
   inputBuffer += chunk;
   processInputBuffer();
 });
@@ -162,13 +206,29 @@ const agPath = join(siteRoot, 'AGENTS.md');
 
 function processInputBuffer() {
   while (true) {
-    const headerEnd = inputBuffer.indexOf('\r\n\r\n');
+    if (inputBuffer.startsWith('{')) {
+      const lineEnd = inputBuffer.indexOf('\n');
+      if (lineEnd === -1) return;
+      const line = inputBuffer.slice(0, lineEnd).trim();
+      inputBuffer = inputBuffer.slice(lineEnd + 1);
+      transportMode = 'ndjson';
+      if (line) handleMessage(JSON.parse(line));
+      continue;
+    }
+    const crlfHeaderEnd = inputBuffer.indexOf('\r\n\r\n');
+    const lfHeaderEnd = inputBuffer.indexOf('\n\n');
+    const headerEnd = crlfHeaderEnd === -1
+      ? lfHeaderEnd
+      : lfHeaderEnd === -1
+        ? crlfHeaderEnd
+        : Math.min(crlfHeaderEnd, lfHeaderEnd);
     if (headerEnd === -1) return;
+    const separatorLength = inputBuffer.startsWith('\r\n\r\n', headerEnd) ? 4 : 2;
     const header = inputBuffer.slice(0, headerEnd);
     const match = header.match(/Content-Length:\s*(\d+)/i);
     if (!match) throw new Error('mcp_content_length_missing');
     const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
+    const bodyStart = headerEnd + separatorLength;
     if (inputBuffer.length < bodyStart + length) return;
     const body = inputBuffer.slice(bodyStart, bodyStart + length);
     inputBuffer = inputBuffer.slice(bodyStart + length);
@@ -178,6 +238,10 @@ function processInputBuffer() {
 
 function send(payload) {
   const body = JSON.stringify(payload);
+  if (transportMode === 'ndjson') {
+    process.stdout.write(`${body}\n`);
+    return;
+  }
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
 }
 
@@ -198,9 +262,11 @@ function respondError(id, error) {
 
 function handleMessage(message) {
   if (!message || typeof message !== 'object') return;
+  if (message.error) return;
   const id = message.id ?? null;
   try {
     if (message.method === 'initialize') {
+      traceStartup('initialize');
       respond(id, {
         protocolVersion: message.params?.protocolVersion ?? PROTOCOL_VERSION,
         capabilities: { tools: {} },
@@ -210,6 +276,7 @@ function handleMessage(message) {
     }
     if (message.method === 'notifications/initialized') return;
     if (message.method === 'tools/list') {
+      traceStartup('tools_list');
       respond(id, { tools: TOOLS });
       return;
     }
