@@ -12,7 +12,8 @@
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
     "test:task-lifecycle": "pnpm --filter @narada2/task-lifecycle-mcp test",
-    "test:sonar-site-ops": "pnpm --filter @narada2/sonar-site-ops-mcp test"
+    "test:sonar-site-ops": "pnpm --filter @narada2/sonar-site-ops-mcp test",
+    "test:agent-context": "pnpm --filter @narada2/agent-context-mcp test"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
