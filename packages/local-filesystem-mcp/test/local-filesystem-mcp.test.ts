@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 
@@ -12,6 +14,17 @@ function call(state, id, name, args = {}) {
     method: 'tools/call',
     params: { name, arguments: args },
   }, state);
+}
+
+function parseFirstJsonRpcFrame(output) {
+  const headerEnd = output.indexOf('\r\n\r\n');
+  assert.notEqual(headerEnd, -1, 'expected framed JSON-RPC response');
+  const header = output.slice(0, headerEnd);
+  const match = /Content-Length:\s*(\d+)/i.exec(header);
+  assert.ok(match, 'expected Content-Length response header');
+  const bodyStart = headerEnd + 4;
+  const body = output.slice(bodyStart, bodyStart + Number(match[1]));
+  return JSON.parse(body);
 }
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'local-filesystem-mcp-'));
@@ -125,6 +138,34 @@ trust_level = "untrusted"
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
+
+  const stdioWritePath = join(trusted, 'stdio-framed-write.txt');
+  const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
+  const framedRequestBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 300,
+    method: 'tools/call',
+    params: {
+      name: 'fs_write_file',
+      arguments: { path: stdioWritePath, content: 'framed\n' },
+    },
+  });
+  const framedWrite = spawnSync(process.execPath, [
+    serverPath,
+    '--mode', 'write',
+    '--allowed-root', trusted,
+    '--output-root', tempRoot,
+    '--audit-log-dir', auditDir,
+  ], {
+    input: `Content-Length: ${Buffer.byteLength(framedRequestBody, 'utf8')}\n\n${framedRequestBody}`,
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  assert.equal(framedWrite.status, 0, framedWrite.stderr);
+  const framedResponse = parseFirstJsonRpcFrame(framedWrite.stdout);
+  assert.equal(framedResponse.id, 300);
+  assert.equal(framedResponse.result.structuredContent.status, 'written');
+  assert.equal(readFileSync(stdioWritePath, 'utf8'), 'framed\n');
 
   const replaceRangeResponse = call(writeState, 31, 'fs_replace_range', { path: join(trusted, 'b.txt'), start_line: 1, end_line: 1, replacement: 'range-edited' });
   assert.equal(replaceRangeResponse.result.structuredContent.status, 'replaced_range');
