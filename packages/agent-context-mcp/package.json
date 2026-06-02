@@ -19,9 +19,6 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/agent-context-mcp.test.js"
   },
-  "dependencies": {
-    "better-sqlite3": "^12.9.0"
-  },
   "files": [
     "dist/"
   ]

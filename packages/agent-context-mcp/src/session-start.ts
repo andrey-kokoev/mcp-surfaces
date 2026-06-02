@@ -1,5 +1,5 @@
 // @ts-nocheck
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -79,7 +79,7 @@ function validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity) {
 
   let db = null;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = new DatabaseSync(dbPath, { readOnly: true });
     const hasRoster = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_roster'").get();
     if (!hasRoster) return { valid: false, error: 'task_lifecycle_roster_table_not_found' };
     const row = db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(identity);
@@ -165,7 +165,7 @@ export function openAgentContextDb(siteRoot, dbPath = join(siteRoot, '.ai', 'sta
     mkdirSync(dbDir, { recursive: true });
   }
 
-  const db = new Database(dbPath);
+  const db = new DatabaseSync(dbPath);
   applyAgentContextMigrations(db, siteRoot);
   ensureAgentStartEventCompatibility(db);
   ensureCodexAdmissionColumns(db);
@@ -412,7 +412,7 @@ export function completeCodexSessionAdmission({
 
     const completedAt = new Date().toISOString();
     let startResult;
-    db.transaction(() => {
+    runTransaction(db, () => {
       startResult = writeSessionMaterialization(db, { siteRoot, identity, runtime, dbPath, cwd, rosterCheck });
       const mergedEvidence = {
         ...parseJsonObject(row.evidence_json),
@@ -441,7 +441,7 @@ export function completeCodexSessionAdmission({
         completedAt,
         admissionId
       );
-    })();
+    });
 
     const updated = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
     return {
@@ -668,12 +668,12 @@ export function writeSessionMaterialization(db, { siteRoot, identity, runtime, d
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  db.transaction(() => {
+  runTransaction(db, () => {
     insertEvent.run(eventId, identity, runtime, now, 'materialized', resumeCommand, null);
     insertEC.run(ecMaterializationId, eventId, runtime, cwd, JSON.stringify(executionContextPayload), now, expiresAt);
     insertIC.run(materializationId, eventId, 'narada.intelligence_context.v0', JSON.stringify(intelligenceContextPayload), now, expiresAt);
     insertProposal.run(proposalId, eventId, materializationId, proposalPayload.proposal_type, JSON.stringify(proposalPayload), 'pending', now);
-  })();
+  });
 
   const l1Bootstrap = synthesizeBootstrap(db, identity, { limit: 10 });
 
@@ -701,6 +701,22 @@ export function writeSessionMaterialization(db, { siteRoot, identity, runtime, d
     expires_at: expiresAt,
     l1_bootstrap_summary: l1Bootstrap.summary,
   };
+}
+
+function runTransaction(db, fn) {
+  db.exec('BEGIN');
+  try {
+    const result = fn();
+    db.exec('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the original transaction failure.
+    }
+    throw error;
+  }
 }
 
 export function buildCarrierCommand(runtime, identity) {
