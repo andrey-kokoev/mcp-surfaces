@@ -1,2 +1,3 @@
 packages:
   - "packages/*"
+  - "../narada-core/packages/*"

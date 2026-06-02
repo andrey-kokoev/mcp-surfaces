@@ -1,0 +1,28 @@
+{
+  "name": "@narada2/sonar-site-ops-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sonar site-ops MCP runtime and site loop tools.",
+  "bin": {
+    "sonar-site-ops-mcp": "./src/site-ops-mcp-server.mjs"
+  },
+  "exports": {
+    ".": { "default": "./src/site-ops-mcp-server.mjs" },
+    "./site-ops-mcp-server": { "default": "./src/site-ops-mcp-server.mjs" },
+    "./site-loop/sonar-email-resident-loop": { "default": "./src/site-loop/sonar-email-resident-loop.mjs" },
+    "./site-operating-loop/site-loop-store": { "default": "./src/site-operating-loop/site-loop-store.mjs" },
+    "./site-operating-loop/policy": { "default": "./src/site-operating-loop/policy.mjs" }
+  },
+  "scripts": {
+    "build": "node test/syntax-check-all.mjs",
+    "typecheck": "tsc -b --pretty false && node test/syntax-check-all.mjs",
+    "test": "node test/syntax-check-all.mjs"
+  },
+  "dependencies": {
+    "@narada2/mcp-transport": "workspace:*",
+    "@narada2/task-governance-core": "workspace:*",
+    "@narada2/task-lifecycle-mcp": "workspace:*"
+  },
+  "files": ["src/"]
+}
