@@ -23,11 +23,13 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
 export async function runStdioServer(options: any) {
   const state = createServerState(options);
   let buffer = '';
+  let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) {
     buffer += chunk;
     let requests = [];
     if (buffer.includes('Content-Length:')) {
+      sawFramedInput = true;
       const drained = drainJsonRpcFrames(buffer);
       buffer = drained.remaining;
       requests = drained.requests;
@@ -38,7 +40,7 @@ export async function runStdioServer(options: any) {
     }
     for (const request of requests) {
       const response = handleRequest(request, state);
-      if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
+      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
     }
   }
 }
@@ -534,18 +536,30 @@ function drainJsonRpcFrames(buffer) {
   const requests = [];
   let remaining = buffer;
   while (true) {
-    const headerEnd = remaining.indexOf('\r\n\r\n');
+    const crlfHeaderEnd = remaining.indexOf('\r\n\r\n');
+    const lfHeaderEnd = remaining.indexOf('\n\n');
+    const headerEnd = crlfHeaderEnd >= 0 ? crlfHeaderEnd : lfHeaderEnd;
     if (headerEnd < 0) break;
+    const separatorLength = crlfHeaderEnd >= 0 ? 4 : 2;
     const header = remaining.slice(0, headerEnd);
     const match = header.match(/Content-Length:\s*(\d+)/i);
     if (!match) break;
     const length = Number(match[1]);
-    const start = headerEnd + 4;
+    const start = headerEnd + separatorLength;
     if (remaining.length < start + length) break;
     requests.push(JSON.parse(remaining.slice(start, start + length)));
     remaining = remaining.slice(start + length);
   }
   return { requests, remaining };
+}
+
+function writeJsonRpcResponse(response, { framed = false } = {}) {
+  const body = JSON.stringify(response);
+  if (!framed) {
+    process.stdout.write(`${body}\n`);
+    return;
+  }
+  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
 }
 
 function splitLines(value) {
