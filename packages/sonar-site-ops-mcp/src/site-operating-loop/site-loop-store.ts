@@ -3,6 +3,104 @@ import { createHash, randomUUID } from 'node:crypto';
 export const DEFAULT_SITE_OPERATING_LOOP_ID = 'site.operating-loop';
 export const DEFAULT_SITE_OPERATING_LOOP_OWNER_ID = 'site-operating-loop';
 
+type JsonValue = unknown;
+type JsonObject = Record<string, JsonValue>;
+
+interface DirectiveOutcomeRecordOptions {
+  loopId?: string;
+  directiveId?: string;
+  outcome?: string;
+  agentId?: string | null;
+  taskId?: string | null;
+  reportId?: string | null;
+  receiptId?: string | null;
+  reason?: string | null;
+  evidence?: JsonValue;
+  at?: string | null;
+  eventAt?: string | null;
+  observedAt?: string | null;
+  recordedAt?: string | null;
+}
+
+interface DirectiveOutcomeLookupOptions {
+  loopId?: string;
+  directiveId?: string;
+  outcomeId?: string;
+  outcome?: string | null;
+  limit?: number;
+}
+
+interface LoopLockOptions {
+  loopId?: string;
+  runId?: string;
+  ownerId?: string;
+  ttlMs?: number;
+  now?: Date;
+}
+
+interface LoopHealthSuccessOptions {
+  loopId?: string;
+  runId?: string;
+  at?: string;
+}
+
+interface LoopHealthFailureOptions extends LoopHealthSuccessOptions {
+  failingStep?: string | null;
+  error?: JsonValue;
+  forcedStatus?: string | null;
+}
+
+interface LoopRunFinishOptions {
+  status: string;
+  finished_at: string;
+  summary?: JsonValue;
+  error?: JsonValue;
+}
+
+interface LoopControlOptions {
+  loopId?: string;
+  paused?: boolean;
+  mode?: string;
+  reason?: string | null;
+  at?: string;
+}
+
+interface LoopClassificationOptions {
+  loopId?: string;
+  directiveId?: string;
+  classification?: string;
+  observation?: JsonValue;
+  limit?: number;
+  at?: string;
+}
+
+interface LoopEscalationOptions {
+  loopId?: string;
+  directiveId?: string;
+  classification?: string;
+  envelopeId?: string | null;
+  escalation?: JsonValue;
+  at?: string;
+}
+
+interface LoopAttentionLookupOptions {
+  attentionId?: string;
+}
+
+interface LoopAttentionAckOptions extends LoopAttentionLookupOptions {
+  reason?: string;
+  acknowledgedBy?: string;
+  at?: string;
+}
+
+interface DirectiveOutcomeResolveOptions {
+  loopId?: string;
+  directiveId?: string;
+  reason?: string;
+  resolvedBy?: string;
+  at?: string;
+}
+
 export function ensureSiteLoopTables(db) {
   const repairs = [];
   db.exec(`
@@ -171,7 +269,7 @@ export function recordDirectiveOutcome(store, {
   eventAt = null,
   observedAt = null,
   recordedAt = null,
-}: Record<string, any> = {}) {
+}: DirectiveOutcomeRecordOptions = {}) {
   const finalRecordedAt = recordedAt ?? at ?? new Date().toISOString();
   const finalObservedAt = observedAt ?? finalRecordedAt;
   const finalEventAt = eventAt ?? finalObservedAt;
@@ -214,12 +312,12 @@ export function recordDirectiveOutcome(store, {
   return getDirectiveOutcome(store, { outcomeId });
 }
 
-export function getDirectiveOutcome(store, { outcomeId }: Record<string, any> = {}) {
+export function getDirectiveOutcome(store, { outcomeId }: DirectiveOutcomeLookupOptions = {}) {
   const row = store.db.prepare('SELECT * FROM directive_outcomes WHERE outcome_id = ?').get(outcomeId);
   return row ? parseDirectiveOutcomeRow(row) : null;
 }
 
-export function getLatestDirectiveOutcome(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, directiveId }: Record<string, any> = {}) {
+export function getLatestDirectiveOutcome(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, directiveId }: DirectiveOutcomeLookupOptions = {}) {
   const row = store.db.prepare(`
     SELECT * FROM directive_outcome_latest
     WHERE loop_id = ? AND directive_id = ?
@@ -228,7 +326,7 @@ export function getLatestDirectiveOutcome(store, { loopId = DEFAULT_SITE_OPERATI
   return row ? parseDirectiveOutcomeRow(row) : null;
 }
 
-export function listDirectiveOutcomes(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, outcome = null, limit = 50 }: Record<string, any> = {}) {
+export function listDirectiveOutcomes(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, outcome = null, limit = 50 }: DirectiveOutcomeLookupOptions = {}) {
   const max = Math.max(1, Math.min(500, Number(limit ?? 50)));
   const rows = outcome
     ? store.db.prepare(`
@@ -246,7 +344,7 @@ export function listDirectiveOutcomes(store, { loopId = DEFAULT_SITE_OPERATING_L
   return rows.map(parseDirectiveOutcomeRow);
 }
 
-export function getDirectiveOutcomeSummary(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID }: Record<string, any> = {}) {
+export function getDirectiveOutcomeSummary(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID }: DirectiveOutcomeLookupOptions = {}) {
   const rows = store.db.prepare(`
     SELECT directive_id, outcome, recorded_at
     FROM directive_outcome_latest
@@ -269,7 +367,7 @@ export function acquireLoopLock(store, {
   ownerId = DEFAULT_SITE_OPERATING_LOOP_OWNER_ID,
   ttlMs = 5 * 60 * 1000,
   now = new Date(),
-}: Record<string, any> = {}) {
+}: LoopLockOptions = {}) {
   const nowIso = now.toISOString();
   const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
   store.db.exec('BEGIN IMMEDIATE');
@@ -324,7 +422,7 @@ export function acquireLoopLock(store, {
   }
 }
 
-export function releaseLoopLock(store, { loopId, runId }: Record<string, any> = {}) {
+export function releaseLoopLock(store, { loopId, runId }: LoopLockOptions = {}) {
   const row = store.db.prepare('SELECT run_id FROM site_loop_locks WHERE loop_id = ?').get(loopId);
   if (!row) return { status: 'not_held', loop_id: loopId, run_id: runId };
   if (String(row.run_id) !== runId) {
@@ -349,7 +447,7 @@ export function getLoopLock(store, loopId) {
   };
 }
 
-export function recordLoopHealthSuccess(store, { loopId, runId, at = new Date().toISOString() }: Record<string, any> = {}) {
+export function recordLoopHealthSuccess(store, { loopId, runId, at = new Date().toISOString() }: LoopHealthSuccessOptions = {}) {
   store.db.prepare(`
     INSERT INTO site_loop_health (
       loop_id, status, consecutive_failures, last_successful_run_id, last_success_at,
@@ -376,7 +474,7 @@ export function recordLoopHealthFailure(store, {
   error = null,
   forcedStatus = null,
   at = new Date().toISOString(),
-}: Record<string, any> = {}) {
+}: LoopHealthFailureOptions = {}) {
   const previous = getLoopHealth(store, loopId);
   const consecutiveFailures = Number(previous?.consecutive_failures ?? 0) + 1;
   const status = forcedStatus ?? (consecutiveFailures >= 3 ? 'critical' : 'degraded');
@@ -449,7 +547,7 @@ export function beginLoopRun(store, run) {
   );
 }
 
-export function finishLoopRun(store, runId, { status, finished_at, summary = null, error = null }: Record<string, any>) {
+export function finishLoopRun(store, runId, { status, finished_at, summary = null, error = null }: LoopRunFinishOptions) {
   store.db.prepare(`
     UPDATE site_loop_runs
     SET status = ?, finished_at = ?, summary_json = ?, error_json = ?
@@ -553,7 +651,7 @@ export function getLoopControl(store, loopId) {
   };
 }
 
-export function setLoopControl(store, { loopId, paused = false, mode = paused ? 'paused' : 'running', reason = null, at = new Date().toISOString() }: Record<string, any> = {}) {
+export function setLoopControl(store, { loopId, paused = false, mode = paused ? 'paused' : 'running', reason = null, at = new Date().toISOString() }: LoopControlOptions = {}) {
   store.db.prepare(`
     INSERT INTO site_loop_control (loop_id, paused, mode, reason, updated_at)
     VALUES (?, ?, ?, ?, ?)
@@ -566,7 +664,7 @@ export function setLoopControl(store, { loopId, paused = false, mode = paused ? 
   return getLoopControl(store, loopId);
 }
 
-export function recordLoopClassificationObservation(store, { loopId, directiveId, classification, observation, at = new Date().toISOString() }: Record<string, any> = {}) {
+export function recordLoopClassificationObservation(store, { loopId, directiveId, classification, observation, at = new Date().toISOString() }: LoopClassificationOptions = {}) {
   const observationId = `loopobs_${hashStable({ loopId, directiveId, classification, at }).slice(0, 32)}`;
   store.db.prepare(`
     INSERT OR IGNORE INTO site_loop_classification_observations (
@@ -576,7 +674,7 @@ export function recordLoopClassificationObservation(store, { loopId, directiveId
   return { observation_id: observationId, loop_id: loopId, directive_id: directiveId, classification, observed_at: at };
 }
 
-export function countRecentLoopClassificationObservations(store, { loopId, directiveId, classification, limit = 3 }: Record<string, any> = {}) {
+export function countRecentLoopClassificationObservations(store, { loopId, directiveId, classification, limit = 3 }: LoopClassificationOptions = {}) {
   const rows = store.db.prepare(`
     SELECT observation_id
     FROM site_loop_classification_observations
@@ -587,7 +685,7 @@ export function countRecentLoopClassificationObservations(store, { loopId, direc
   return rows.length;
 }
 
-export function countRecentConsecutiveLoopClassificationObservations(store, { loopId, directiveId, classification, limit = 3 }: Record<string, any> = {}) {
+export function countRecentConsecutiveLoopClassificationObservations(store, { loopId, directiveId, classification, limit = 3 }: LoopClassificationOptions = {}) {
   const rows = store.db.prepare(`
     SELECT classification
     FROM site_loop_classification_observations
@@ -603,7 +701,7 @@ export function countRecentConsecutiveLoopClassificationObservations(store, { lo
   return count;
 }
 
-export function getLoopEscalation(store, { loopId, directiveId, classification }: Record<string, any> = {}) {
+export function getLoopEscalation(store, { loopId, directiveId, classification }: LoopEscalationOptions = {}) {
   const row = store.db.prepare(`
     SELECT * FROM site_loop_escalations
     WHERE loop_id = ? AND directive_id = ? AND classification = ?
@@ -624,7 +722,7 @@ export function getLoopEscalation(store, { loopId, directiveId, classification }
   };
 }
 
-export function recordLoopEscalation(store, { loopId, directiveId, classification, envelopeId, escalation, at = new Date().toISOString() }: Record<string, any> = {}) {
+export function recordLoopEscalation(store, { loopId, directiveId, classification, envelopeId, escalation, at = new Date().toISOString() }: LoopEscalationOptions = {}) {
   const escalationId = `loopesc_${hashStable({ loopId, directiveId, classification }).slice(0, 32)}`;
   const escalationJson = stringifyJson(escalation);
   store.db.prepare(`
@@ -669,7 +767,7 @@ export function listLoopAttention(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_
   return rows.map(parseEscalationRow);
 }
 
-export function getLoopAttention(store, { attentionId }: Record<string, any> = {}) {
+export function getLoopAttention(store, { attentionId }: LoopAttentionLookupOptions = {}) {
   const row = store.db.prepare(`
     SELECT * FROM site_loop_escalations
     WHERE envelope_id = ? OR escalation_id = ?
@@ -683,7 +781,7 @@ export function acknowledgeLoopAttention(store, {
   reason,
   acknowledgedBy = 'operator',
   at = new Date().toISOString(),
-}: Record<string, any> = {}) {
+}: LoopAttentionAckOptions = {}) {
   const existing = getLoopAttention(store, { attentionId });
   if (!existing) return { status: 'not_found', attention_id: attentionId };
   store.db.prepare(`
@@ -758,7 +856,7 @@ export function resolveDirectiveOutcome(store, {
   reason = 'operator_cleanup',
   resolvedBy = 'operator',
   at = new Date().toISOString(),
-}: Record<string, any> = {}) {
+}: DirectiveOutcomeResolveOptions = {}) {
   if (!directiveId) {
     return { schema: 'narada.site_operating_loop.directive_outcome_resolve.v1', status: 'refused', reason: 'directive_id_required' };
   }

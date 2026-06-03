@@ -3,7 +3,11 @@ import { ensureSiteLoopTables } from '../site-operating-loop/site-loop-store.js'
 
 export * from '../site-operating-loop/site-loop-store.js';
 
-export function openSiteLoopStore(cwd, options: Record<string, any> = {}) {
+interface OpenSiteLoopStoreOptions {
+  write?: boolean;
+}
+
+export function openSiteLoopStore(cwd, options: OpenSiteLoopStoreOptions = {}) {
   const write = options.write !== false;
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write });
   if (write) ensureSiteLoopTables(lifecycleStore.db);

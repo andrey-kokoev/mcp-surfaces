@@ -1,7 +1,22 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-type AnyRecord = Record<string, any>;
+interface LoadSiteOperatingLoopPolicyOptions {
+  path?: string;
+  defaults?: typeof DEFAULT_SITE_OPERATING_LOOP_POLICY;
+  validation?: ValidateSiteOperatingLoopPolicyOptions;
+}
+
+interface ValidateSiteOperatingLoopPolicyOptions {
+  expectedSchema?: string;
+  expectedLoopId?: string;
+  allowedPreferredCarriers?: string[];
+  allowedFallbackCarriers?: string[];
+}
+
+interface QuietHoursStateOptions {
+  now?: Date | string | number;
+}
 
 export const SITE_OPERATING_LOOP_POLICY_SCHEMA = 'narada.site_operating_loop.policy.v1';
 
@@ -41,7 +56,7 @@ export function operatingLoopPolicyPath(cwd) {
   return join(resolve(cwd), '.narada', 'capabilities', 'operating-loop-policy.json');
 }
 
-export function loadSiteOperatingLoopPolicy(cwd, options: AnyRecord = {}) {
+export function loadSiteOperatingLoopPolicy(cwd, options: LoadSiteOperatingLoopPolicyOptions = {}) {
   const path = options.path ?? operatingLoopPolicyPath(cwd);
   const defaults = options.defaults ?? DEFAULT_SITE_OPERATING_LOOP_POLICY;
   const loaded = existsSync(path) ? readPolicy(path, defaults.schema) : {};
@@ -73,7 +88,7 @@ export function loadSiteOperatingLoopPolicy(cwd, options: AnyRecord = {}) {
   };
 }
 
-export function validateSiteOperatingLoopPolicy(policy, options: AnyRecord = {}) {
+export function validateSiteOperatingLoopPolicy(policy, options: ValidateSiteOperatingLoopPolicyOptions = {}) {
   const errors: string[] = [];
   const expectedSchema = options.expectedSchema ?? SITE_OPERATING_LOOP_POLICY_SCHEMA;
   if (policy?.schema !== expectedSchema) errors.push('schema_mismatch');
@@ -114,7 +129,7 @@ export function validateSiteOperatingLoopPolicy(policy, options: AnyRecord = {})
   };
 }
 
-export function currentQuietHoursState(policy, options: AnyRecord = {}) {
+export function currentQuietHoursState(policy, options: QuietHoursStateOptions = {}) {
   const quiet = policy?.quiet_hours ?? {};
   if (quiet.enabled !== true) {
     return {

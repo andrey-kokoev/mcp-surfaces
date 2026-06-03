@@ -1,7 +1,6 @@
 {
   "name": "@narada2/structured-command-mcp",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Structured, policy-gated local command execution MCP surface.",
   "bin": {

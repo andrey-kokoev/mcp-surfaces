@@ -1,7 +1,6 @@
 {
   "name": "mcp-surfaces",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",

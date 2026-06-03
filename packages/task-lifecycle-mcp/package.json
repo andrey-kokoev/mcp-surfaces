@@ -1,7 +1,6 @@
 {
   "name": "@narada2/task-lifecycle-mcp",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Task lifecycle MCP stdio runtime and tool dispatch surface.",
   "bin": {
@@ -32,7 +31,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/import-boundary.test.js && node dist/test/handler-coverage.test.js && node dist/test/stdio-smoke.test.js && node dist/test/protocol-smoke.test.js"
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/syntax-check-all.js && node --disable-warning=ExperimentalWarning dist/test/import-boundary.test.js && node --disable-warning=ExperimentalWarning dist/test/handler-coverage.test.js && node --disable-warning=ExperimentalWarning dist/test/stdio-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*",

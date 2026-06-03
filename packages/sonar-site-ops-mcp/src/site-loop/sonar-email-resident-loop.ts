@@ -50,9 +50,16 @@ import {
 
 export { SONAR_EMAIL_RESIDENT_LOOP_ID } from './sonar-email-resident-constants.js';
 const MAILBOX_PROOF_FRESHNESS_MS = 24 * 60 * 60_000;
-type AnyRecord = Record<string, any>;
+type SiteLoopPayload = Record<string, any>;
+type SiteLoopOptions = SiteLoopPayload;
+type ResidentLoopStep = SiteLoopPayload;
+type ResidentCarrier = SiteLoopPayload;
+type ResidentRunResult = SiteLoopPayload;
+type SurfacePolicyNoise = SiteLoopPayload;
+type OperatorAttentionResult = SiteLoopPayload;
+type EnrichedProcessError = Error & SiteLoopPayload;
 
-export async function runSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
+export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = {}) {
   const siteRoot = resolve(cwd);
   const dryRun = options.dryRun === true || options.dry_run === true;
   const limit = Number(options.limit ?? 25);
@@ -62,8 +69,8 @@ export async function runSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
   const runId = options.runId ?? makeRunId();
   const startedAt = new Date().toISOString();
   const operatingPolicy = loadSonarEmailResidentOperatingPolicy(siteRoot).policy;
-  const steps: AnyRecord[] = [];
-  let failedStep: AnyRecord | null = null;
+  const steps: ResidentLoopStep[] = [];
+  let failedStep: ResidentLoopStep | null = null;
   mkdirSync(resolve(siteRoot, '.ai', 'state'), { recursive: true });
   let store = null;
   let lock = null;
@@ -181,7 +188,7 @@ export async function runSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
       }));
     }
 
-    const ticketTaskReconciliation: AnyRecord = dryRun || drain || !sourceSync
+    const ticketTaskReconciliation: SiteLoopPayload = dryRun || drain || !sourceSync
       ? {
           schema: 'narada.sonar.ticket_task_reconciliation.v1',
           status: 'skipped',
@@ -290,7 +297,7 @@ export async function runSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
       evidence: summarizeResidentBacklogRecovery(backlogRecovery),
     }));
 
-    const residentSupervisor: AnyRecord = dryRun || !options.ensureResident
+    const residentSupervisor: SiteLoopPayload = dryRun || !options.ensureResident
       ? { status: 'skipped', reason: dryRun ? 'dry_run' : 'not_enabled' }
       : await runStep({
           store,
@@ -520,7 +527,7 @@ export async function runSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
   }
 }
 
-async function runSourceSync(siteRoot, { dryRun, runner }: AnyRecord = {}) {
+async function runSourceSync(siteRoot, { dryRun, runner }: SiteLoopPayload = {}) {
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun });
   }
@@ -533,7 +540,7 @@ async function runSourceSync(siteRoot, { dryRun, runner }: AnyRecord = {}) {
   });
   if (result.error) throw result.error;
   if ((result.status ?? 1) !== 0) {
-    const error: Error & AnyRecord = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`);
+    const error: EnrichedProcessError = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`);
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     throw error;
@@ -545,7 +552,7 @@ async function runSourceSync(siteRoot, { dryRun, runner }: AnyRecord = {}) {
   });
 }
 
-async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, runner }: AnyRecord = {}) {
+async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, runner }: SiteLoopPayload = {}) {
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun, limit, preferredRole });
   }
@@ -568,7 +575,7 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
   });
   if (result.error) throw result.error;
   if ((result.status ?? 1) !== 0) {
-    const error: Error & AnyRecord = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`);
+    const error: EnrichedProcessError = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`);
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     throw error;
@@ -582,7 +589,7 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
   };
 }
 
-export function listSonarEmailResidentLoopRuns(cwd, options: AnyRecord = {}) {
+export function listSonarEmailResidentLoopRuns(cwd, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd), { write: false });
   try {
     return {
@@ -630,7 +637,7 @@ export function sonarEmailResidentLoopHealth(cwd) {
   }
 }
 
-export function sonarEmailResidentOperatingLayerStatus(cwd, options: AnyRecord = {}) {
+export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const nowMs = Date.parse(options.now ?? options.nowIso ?? options.now_iso ?? new Date().toISOString());
   const loop = sonarEmailResidentLoopStatus(siteRoot);
@@ -663,7 +670,7 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: AnyRecord =
   const healthOk = ['healthy', 'unknown'].includes(health?.status ?? 'unknown');
   const carrierUsable = ['available', 'busy'].includes(resident.status);
   const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
-  const carrier: AnyRecord = resident.carrier ?? {};
+  const carrier: ResidentCarrier = resident.carrier ?? {};
   const agentCliControlPath = carrier.preferred_interactive?.controlPath ?? (carrier.runtime === 'agent-cli' ? carrier.controlPath ?? null : null);
   const agentCliReady = Boolean(agentCliControlPath && existsSync(agentCliControlPath))
     && (carrier.preferred_interactive?.status === 'available' || carrier.runtime === 'agent-cli');
@@ -781,7 +788,7 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: AnyRecord =
   };
 }
 
-export function sonarEmailResidentReadiness(cwd, options: AnyRecord = {}) {
+export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const operating = sonarEmailResidentOperatingLayerStatus(siteRoot, options);
   const requireProduction = options.requireProduction === true || options.require_production === true;
@@ -907,7 +914,7 @@ export function sonarEmailResidentReadiness(cwd, options: AnyRecord = {}) {
   };
 }
 
-export function sonarEmailResidentCoherence(cwd, options: AnyRecord = {}) {
+export function sonarEmailResidentCoherence(cwd, options: SiteLoopPayload = {}) {
   const requireProduction = options.requireProduction !== false && options.require_production !== false;
   const requireMailboxProof = options.requireMailboxProof !== false && options.require_mailbox_proof !== false;
   const readiness = sonarEmailResidentReadiness(cwd, {
@@ -1044,7 +1051,7 @@ function checkTaskGovernancePackageBoundary(siteRoot) {
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'task-governance'),
     },
   ];
-  const result: AnyRecord = {
+  const result: SiteLoopPayload = {
     status: 'ok',
     packages: [],
   };
@@ -1081,7 +1088,7 @@ function checkTaskGovernancePackageBoundary(siteRoot) {
   return result;
 }
 
-function readinessGate(gate, ok, detail: AnyRecord = {}) {
+function readinessGate(gate, ok, detail: SiteLoopPayload = {}) {
   return {
     gate,
     ...detail,
@@ -1133,7 +1140,7 @@ function appendNodeOption(existing, option) {
   return [current, option].filter(Boolean).join(' ');
 }
 
-function recentSurfacePolicyNoise(siteRoot, options: AnyRecord = {}) {
+function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
   const policyPath = join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json');
   const actionDir = join(siteRoot, '.narada', 'crew', 'action-admission');
   const declaredTools = loadSurfaceDeclaredTools(policyPath);
@@ -1144,11 +1151,11 @@ function recentSurfacePolicyNoise(siteRoot, options: AnyRecord = {}) {
     repairedAtMs,
     Number.isFinite(carrierStartedAtMs) ? carrierStartedAtMs : 0,
   );
-  const current: AnyRecord[] = [];
-  const historical: AnyRecord[] = [];
-  const repairedHistorical: AnyRecord[] = [];
+  const current: SurfacePolicyNoise[] = [];
+  const historical: SurfacePolicyNoise[] = [];
+  const repairedHistorical: SurfacePolicyNoise[] = [];
   if (!existsSync(actionDir)) {
-    const result: AnyRecord = {
+    const result: SiteLoopPayload = {
       schema: 'narada.sonar.surface_policy_noise.v1',
       status: 'ok',
       policy_path: policyPath,
@@ -1180,7 +1187,7 @@ function recentSurfacePolicyNoise(siteRoot, options: AnyRecord = {}) {
     if (item.mtime_ms >= currentBaselineMs) current.push(item);
     else historical.push(item);
   }
-  const result: AnyRecord = {
+  const result: SiteLoopPayload = {
     schema: 'narada.sonar.surface_policy_noise.v1',
     status: current.length === 0 ? 'ok' : 'attention_needed',
     policy_path: policyPath,
@@ -1217,7 +1224,7 @@ function recordResidentMailboxProof(siteRoot, proof) {
   return { ...packet, path };
 }
 
-function latestResidentMailboxProof(siteRoot, options: AnyRecord = {}) {
+function latestResidentMailboxProof(siteRoot, options: SiteLoopPayload = {}) {
   const dir = residentMailboxProofDir(siteRoot);
   const nowMs = Number(options.nowMs ?? Date.now());
   const freshnessWindowMs = Number(options.freshnessMs ?? MAILBOX_PROOF_FRESHNESS_MS);
@@ -1288,7 +1295,7 @@ export function setSonarEmailResidentLoopControl(cwd, control) {
   }
 }
 
-export function sonarResidentStatus(cwd, options: AnyRecord = {}) {
+export function sonarResidentStatus(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const status = getResidentStatus(siteRoot, options);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
@@ -1336,7 +1343,7 @@ export function sonarResidentStatus(cwd, options: AnyRecord = {}) {
   }
 }
 
-export function sonarResidentPending(cwd, options: AnyRecord = {}) {
+export function sonarResidentPending(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
@@ -1346,7 +1353,7 @@ export function sonarResidentPending(cwd, options: AnyRecord = {}) {
   }
 }
 
-function sonarResidentPendingFromDb(db, options: AnyRecord = {}) {
+function sonarResidentPendingFromDb(db, options: SiteLoopPayload = {}) {
   const directiveStore = new SqliteDirectiveRuntimeStore({ db });
   directiveStore.initSchema();
   const limit = Number(options.limit ?? 25);
@@ -1364,7 +1371,7 @@ function sonarResidentPendingFromDb(db, options: AnyRecord = {}) {
   };
 }
 
-export function sonarResidentReceipts(cwd, options: AnyRecord = {}) {
+export function sonarResidentReceipts(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
@@ -1409,7 +1416,7 @@ export function sonarResidentReceipts(cwd, options: AnyRecord = {}) {
   }
 }
 
-export function sonarResidentOutcomes(cwd, options: AnyRecord = {}) {
+export function sonarResidentOutcomes(cwd, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd));
   try {
     const outcomes = listDirectiveOutcomes(store, {
@@ -1448,7 +1455,7 @@ function directiveOutcomeProofSplit(outcomes) {
   };
 }
 
-function residentBacklogSummaryFromDb(db, options: AnyRecord = {}) {
+function residentBacklogSummaryFromDb(db, options: SiteLoopPayload = {}) {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const candidates = residentBacklogCandidates(db, { limit: 500, siteRoot: options.siteRoot });
@@ -1500,7 +1507,7 @@ function isResidentFixtureHistoryTask(candidate) {
     || /\bresident-recovery-drill\b/.test(taskId);
 }
 
-async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: AnyRecord = {}) {
+async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: SiteLoopPayload = {}) {
   const limit = Number(options.limit ?? 100);
   const nowIso = options.nowIso ?? new Date().toISOString();
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
@@ -1593,7 +1600,7 @@ function isResidentAutoworkReport(row) {
   }
 }
 
-export async function cleanupResidentFixtureResidue(cwd, options: AnyRecord = {}) {
+export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const dryRun = options.dryRun === true || options.dry_run === true;
   const limit = Number(options.limit ?? 100);
@@ -1724,7 +1731,7 @@ function latestProductionReportedOutcome(outcomes) {
     && (item.evidence?.production_proof === true || item.evidence?.proof_mode === 'agent_reasoning')) ?? null;
 }
 
-function stalePendingDirectives(directives, options: AnyRecord = {}) {
+function stalePendingDirectives(directives, options: SiteLoopPayload = {}) {
   const nowMs = Date.parse(options.now ?? new Date().toISOString());
   const thresholdMs = Number(options.thresholdMs ?? options.threshold_ms ?? 10 * 60_000);
   return directives.filter((directive) => {
@@ -1763,7 +1770,7 @@ function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stale
   return alerts;
 }
 
-function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date().toISOString(), requireFreshProductionProof = false }: AnyRecord = {}) {
+function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date().toISOString(), requireFreshProductionProof = false }: SiteLoopPayload = {}) {
   const resident = sonarResidentStatus(siteRoot);
   const pending = sonarResidentPending(siteRoot, { limit: 500 });
   const dbHealth = taskLifecycleDbHealth(siteRoot);
@@ -1835,7 +1842,7 @@ function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date
   };
 }
 
-export function refuseResidentDirective(cwd, options: AnyRecord = {}) {
+export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
   const directiveId = options.directiveId ?? options.directive_id;
   const reason = options.reason;
   if (!directiveId) return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'directive_required' };
@@ -1896,7 +1903,7 @@ export function refuseResidentDirective(cwd, options: AnyRecord = {}) {
   }
 }
 
-export function sonarResidentCapabilities(cwd, options: AnyRecord = {}) {
+export function sonarResidentCapabilities(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const agentId = options.agentId ?? RESIDENT_AGENT_ID;
   const identities = readJson(join(siteRoot, 'operator-surfaces', 'identities.json'));
@@ -1955,7 +1962,7 @@ function readResidentTaskLifecycleSurfacePolicy(siteRoot) {
   };
 }
 
-export function ensureResidentCarrier(cwd, options: AnyRecord = {}) {
+export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const control = options.control ?? readLoopControlForSupervisor(siteRoot);
   if (control?.paused) {
@@ -1971,7 +1978,7 @@ export function ensureResidentCarrier(cwd, options: AnyRecord = {}) {
   }
   const runtimeCleanup = cleanupResidentRuntime(siteRoot, { runtime: 'agent-cli' });
   const before = getResidentStatus(siteRoot, { agentId: RESIDENT_AGENT_ID, requireLiveCarrier: options.requireLiveCarrier !== false });
-  const beforeCarrier: AnyRecord = before.carrier ?? {};
+  const beforeCarrier: SiteLoopPayload = before.carrier ?? {};
   if (['available', 'busy'].includes(before.status) && residentCarrierAcceptableForSupervisor(before)) {
     const redundantFallbackCleanup = beforeCarrier.runtime === 'agent-cli'
       ? cleanupRedundantNarsFallbacks(siteRoot, before)
@@ -2116,7 +2123,7 @@ function readLoopControlForSupervisor(siteRoot) {
   }
 }
 
-function evaluateResidentRestartPolicy(siteRoot, options: AnyRecord = {}) {
+function evaluateResidentRestartPolicy(siteRoot, options: SiteLoopPayload = {}) {
   const maxRestarts = Number(options.maxRestarts ?? options.max_restarts ?? 3);
   const windowMs = Number(options.windowMs ?? options.window_ms ?? 10 * 60 * 1000);
   const sinceMs = Date.now() - windowMs;
@@ -2153,7 +2160,7 @@ function readdirSafe(path) {
   }
 }
 
-export async function runSonarResidentE2E(cwd, options: AnyRecord = {}) {
+export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   const mailboxProof = options.mailboxProof === true || options.mailbox_proof === true;
   const controlledMailboxProof = options.controlledMailboxProof === true || options.controlled_mailbox_proof === true;
   const controlledMailboxSource = options.controlledMailboxSource ?? options.controlled_mailbox_source ?? options.controlledSource ?? options.controlled_source ?? null;
@@ -2205,7 +2212,7 @@ export async function runSonarResidentE2E(cwd, options: AnyRecord = {}) {
   if (requireProductionProof) {
     cleanupResidentRuntime(siteRoot, { runtime: 'agent-cli' });
     const currentResident = sonarResidentStatus(siteRoot);
-    const currentCarrier: AnyRecord = currentResident?.carrier ?? {};
+    const currentCarrier: SiteLoopPayload = currentResident?.carrier ?? {};
     const observedPreference = currentCarrier.preference ?? null;
     const observedPrimary = currentCarrier.runtime === 'agent-cli'
       && observedPreference === 'interactive_agent_cli'
@@ -2249,7 +2256,7 @@ export async function runSonarResidentE2E(cwd, options: AnyRecord = {}) {
   const beforeDirectiveIds = mailboxProof ? allResidentDirectiveIds(siteRoot) : [];
   const deadline = Date.now() + Number(options.timeoutMs ?? options.timeout_ms ?? 120_000);
   const pollMs = Number(options.pollMs ?? options.poll_ms ?? 5_000);
-  let firstRun: AnyRecord = await runSonarEmailResidentLoop(siteRoot, {
+  let firstRun: SiteLoopPayload = await runSonarEmailResidentLoop(siteRoot, {
     limit: options.limit ?? 25,
     sourceSync: options.sourceSync === true || mailboxProof,
     sourceSyncRunner: options.sourceSyncRunner,
@@ -2305,7 +2312,7 @@ export async function runSonarResidentE2E(cwd, options: AnyRecord = {}) {
     polls.push({ run_id: cycle.run_id, status: cycle.status, counts: finalOutcome.counts });
   }
   const finalResident = sonarResidentStatus(siteRoot);
-  const finalCarrier: AnyRecord = finalResident?.carrier ?? {};
+  const finalCarrier: SiteLoopPayload = finalResident?.carrier ?? {};
   const carrierPreferenceObserved = finalCarrier.preference ?? null;
   const carrierPreferenceMatch = expectedCarrierPreference
     ? carrierPreferenceObserved === expectedCarrierPreference
@@ -2398,7 +2405,7 @@ function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, residen
   };
 }
 
-function simulateResidentFixtureCompletion(siteRoot, directiveIds, { at = new Date().toISOString() }: AnyRecord = {}) {
+function simulateResidentFixtureCompletion(siteRoot, directiveIds, { at = new Date().toISOString() }: SiteLoopPayload = {}) {
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
@@ -2450,7 +2457,7 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, { at = new Da
   }
 }
 
-export function listSonarLoopAttention(cwd, options: AnyRecord = {}) {
+export function listSonarLoopAttention(cwd, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd));
   try {
     return {
@@ -2482,7 +2489,7 @@ export function showSonarLoopAttention(cwd, attentionId) {
   }
 }
 
-export function ackSonarLoopAttention(cwd, attentionId, options: AnyRecord = {}) {
+export function ackSonarLoopAttention(cwd, attentionId, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd));
   try {
     return {
@@ -2499,7 +2506,7 @@ export function ackSonarLoopAttention(cwd, attentionId, options: AnyRecord = {})
   }
 }
 
-export function recoverStaleResidentCarrier(cwd, options: AnyRecord = {}) {
+export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const reason = String(options.reason ?? '').trim();
   if (!reason) return { schema: 'narada.sonar.resident_recover_stale.v1', status: 'refused', reason: 'reason_required' };
@@ -2580,7 +2587,7 @@ export function recoverStaleResidentCarrier(cwd, options: AnyRecord = {}) {
   }
 }
 
-export function cleanupResidentRuntime(cwd, options: AnyRecord = {}) {
+export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const runtime = options.runtime ?? 'all';
   const dryRun = options.dryRun === true;
@@ -2655,7 +2662,7 @@ export function cleanupResidentRuntime(cwd, options: AnyRecord = {}) {
   };
 }
 
-export function sonarResidentProofPacket(cwd, options: AnyRecord = {}) {
+export function sonarResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const resident = sonarResidentStatus(siteRoot);
   const receipts = sonarResidentReceipts(siteRoot, { limit: Number(options.limit ?? 5) });
@@ -2667,7 +2674,7 @@ export function sonarResidentProofPacket(cwd, options: AnyRecord = {}) {
     || (proofDriver && item.evidence?.production_proof !== true)).length;
   const productionReports = reportedOutcomes.filter((item) => item.evidence?.production_proof === true
     || item.evidence?.proof_mode === 'agent_reasoning').length;
-  const proofCarrier: AnyRecord = resident.carrier ?? {};
+  const proofCarrier: SiteLoopPayload = resident.carrier ?? {};
   const primaryRuntimeReady = proofCarrier.runtime === 'agent-cli'
     && proofCarrier.preference === 'interactive_agent_cli'
     && proofDriver !== true;
@@ -2711,11 +2718,11 @@ function hasProductionReportedOutcome(outcome) {
   return (outcome?.classifications ?? []).some((item) => item.status === 'reported' && item.production_proof === true);
 }
 
-export async function runSonarResidentRecoveryDrill(cwd, options: AnyRecord = {}) {
+export async function runSonarResidentRecoveryDrill(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const fixtureId = options.id ?? `resident-recovery-drill-${Date.now()}`;
   const before = sonarResidentStatus(siteRoot);
-  const beforeCarrier: AnyRecord = before.carrier ?? {};
+  const beforeCarrier: SiteLoopPayload = before.carrier ?? {};
   const retired = beforeCarrier.carrierSessionId
     ? retireResidentCarrier(siteRoot, beforeCarrier.carrierSessionId, {
         reason: options.reason ?? 'resident_recovery_drill',
@@ -2773,7 +2780,7 @@ export function inspectSonarEmailResidentLoopSchema(cwd) {
   }
 }
 
-export function resolveSonarResidentOutcome(cwd, options: AnyRecord = {}) {
+export function resolveSonarResidentOutcome(cwd, options: SiteLoopPayload = {}) {
   const directiveId = options.directiveId ?? options.directive_id;
   const store = openSiteLoopStore(resolve(cwd));
   try {
@@ -2791,7 +2798,7 @@ export function resolveSonarResidentOutcome(cwd, options: AnyRecord = {}) {
   }
 }
 
-export function seedResidentWorkFixture(cwd, options: AnyRecord = {}) {
+export function seedResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
   if (options.ackFixture !== true) {
     return {
       schema: 'narada.sonar.loop_fixture_seed.v1',
@@ -2836,7 +2843,7 @@ export function seedResidentWorkFixture(cwd, options: AnyRecord = {}) {
   };
 }
 
-export function cleanupResidentWorkFixture(cwd, options: AnyRecord = {}) {
+export function cleanupResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const id = options.id ?? 'resident_work_fixture';
   const envelopeId = `env_${sanitizeId(id)}`;
@@ -2853,7 +2860,7 @@ export function cleanupResidentWorkFixture(cwd, options: AnyRecord = {}) {
   return { schema: 'narada.sonar.loop_fixture_cleanup.v1', status: 'removed', envelope_id: envelopeId, path };
 }
 
-export async function superviseSonarEmailResidentLoop(cwd, options: AnyRecord = {}) {
+export async function superviseSonarEmailResidentLoop(cwd, options: SiteLoopPayload = {}) {
   const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
   const cycles = options.cycles == null ? Infinity : Number(options.cycles);
   const intervalMs = Number(options.intervalMs ?? options.interval_ms ?? policy.cadence.supervise_interval_ms);
@@ -2909,7 +2916,7 @@ export async function superviseSonarEmailResidentLoop(cwd, options: AnyRecord = 
   };
 }
 
-export async function runSonarEmailResidentSoak(cwd, options: AnyRecord = {}) {
+export async function runSonarEmailResidentSoak(cwd, options: SiteLoopPayload = {}) {
   const cycles = Math.max(1, Number(options.cycles ?? 3));
   const result = await superviseSonarEmailResidentLoop(cwd, {
     ...options,
@@ -2996,7 +3003,7 @@ async function runStep({ store, runId, stepId, inputRefs = [], execute, outputRe
   }
 }
 
-function recordSyntheticStep({ store, runId, stepId, status = 'ok', inputRefs = [], outputRefs = [], evidence = null }: AnyRecord) {
+function recordSyntheticStep({ store, runId, stepId, status = 'ok', inputRefs = [], outputRefs = [], evidence = null }: SiteLoopPayload) {
   const now = new Date().toISOString();
   const step = {
     step_run_id: `${runId}:${stepId}`,
@@ -3103,7 +3110,7 @@ function summarizeResidentBacklogRecovery(result) {
   };
 }
 
-function emitResidentBacklogRecoveryDirectives(siteRoot, options: AnyRecord = {}) {
+function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayload = {}) {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const limit = Math.max(0, Number(options.limit ?? 25));
@@ -3452,7 +3459,7 @@ function summarizeReceiptReconciliation(result) {
   };
 }
 
-function summarizeRun({ bridge, dispatch, steps }: AnyRecord) {
+function summarizeRun({ bridge, dispatch, steps }: SiteLoopPayload) {
   const directEmissionCount = steps.find((step) => step.step_id === 'resident_directive_emission')?.evidence?.emitted_count ?? residentDirectiveRefs(bridge).length;
   const backlogEmissionCount = steps.find((step) => step.step_id === 'resident_backlog_recovery_emission')?.evidence?.emitted_count ?? 0;
   const ticketTaskReconciliation = steps.find((step) => step.step_id === 'ticket_task_reconciliation')?.evidence ?? null;
@@ -3483,7 +3490,7 @@ function sourceSyncRefs(result) {
   ];
 }
 
-export function runAgentOutcomeReconciliation(cwd, options: AnyRecord = {}) {
+export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}) {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const nowMs = Date.parse(nowIso);
   const deliveryStaleMinutes = Number(options.deliveryStaleMinutes ?? 5);
@@ -3688,7 +3695,7 @@ function latestDirectiveOutcome(db, directiveId) {
   } : null;
 }
 
-function recordOutcomeForClassification(store, classification, { nowIso = new Date().toISOString() }: AnyRecord = {}) {
+function recordOutcomeForClassification(store, classification, { nowIso = new Date().toISOString() }: SiteLoopPayload = {}) {
   if (!classification?.directive_id || classification.status === 'unknown') return null;
   if (classification.status === 'superseded') {
     const existing = latestDirectiveOutcome(store.db, classification.directive_id);
@@ -3710,7 +3717,7 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
   });
 }
 
-function reconcileLoopEscalations(siteRoot, store, outcome, { runId, nowIso = new Date().toISOString() }: AnyRecord = {}) {
+function reconcileLoopEscalations(siteRoot, store, outcome, { runId, nowIso = new Date().toISOString() }: SiteLoopPayload = {}) {
   const created = [];
   const cleared = [];
   const observed = [];
@@ -3965,7 +3972,7 @@ function writeOperatorAttentionEnvelope(siteRoot, classification, { runId, nowIs
   return { envelope_id: envelopeId, path };
 }
 
-function retireResidentCarrier(siteRoot, carrierSessionId, { reason, at }: AnyRecord = {}) {
+function retireResidentCarrier(siteRoot, carrierSessionId, { reason, at }: SiteLoopPayload = {}) {
   if (!carrierSessionId) return { status: 'skipped', reason: 'carrier_session_id_missing' };
   const dir = join(siteRoot, '.narada', 'crew', 'nars-sessions', carrierSessionId);
   mkdirSync(dir, { recursive: true });
@@ -3991,7 +3998,7 @@ function readCarrierRetirement(siteRoot, carrierSessionId) {
   return readJson(path);
 }
 
-function isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs = 30000 }: AnyRecord = {}) {
+function isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs = 30000 }: SiteLoopPayload = {}) {
   if (!carrierSessionId) return { live: false, reason: 'carrier_session_id_missing' };
   const heartbeat = readCarrierHeartbeat(siteRoot, carrierSessionId, staleAfterMs);
   if (heartbeat.fresh) {
@@ -4150,7 +4157,7 @@ function reportMentionsDirective(report, directiveId) {
   return new RegExp(`(^|[^A-Za-z0-9_.:-])${escapeRegExp(token)}([^A-Za-z0-9_.:-]|$)`).test(haystack);
 }
 
-function isResidentDirectiveTarget(directive, options: AnyRecord = {}) {
+function isResidentDirectiveTarget(directive, options: SiteLoopPayload = {}) {
   const target = directive?.target;
   if (!target) return false;
   if (target.kind === 'agent' && target.id === (options.agentId ?? RESIDENT_AGENT_ID)) return true;
@@ -4259,7 +4266,7 @@ function fixtureDirectiveIds(siteRoot, envelopeId) {
   }
 }
 
-function mailboxProofDirectiveIds(siteRoot, run, beforeDirectiveIds: any[] = [], options: AnyRecord = {}) {
+function mailboxProofDirectiveIds(siteRoot, run, beforeDirectiveIds: any[] = [], options: SiteLoopPayload = {}) {
   const before = new Set(beforeDirectiveIds.map(String));
   const ids = directiveIdsFromRun(run).filter((id) => !before.has(id));
   if (ids.length === 0) return [];
@@ -4297,7 +4304,7 @@ function directiveMatchesControlledSource(db, directive, controlledSource) {
   return sources.has(controlledSource);
 }
 
-function controlledMailboxSourceStatus(siteRoot, controlledSource, options: AnyRecord = {}) {
+function controlledMailboxSourceStatus(siteRoot, controlledSource, options: SiteLoopPayload = {}) {
   const sourceRef = controlledSource == null ? null : String(controlledSource);
   if (!sourceRef) {
     return {
@@ -4444,7 +4451,7 @@ function receiptRefs(result) {
 }
 
 function publicStep(step) {
-  const out: AnyRecord = {
+  const out: SiteLoopPayload = {
     step_id: step.step_id,
     status: step.status,
     started_at: step.started_at,
@@ -4479,7 +4486,7 @@ function parseJsonOutput(text, fallback) {
   }
 }
 function parseArgs(argv) {
-  const parsed: AnyRecord = { cwd: process.cwd() };
+  const parsed: SiteLoopPayload = { cwd: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') parsed.dryRun = true;

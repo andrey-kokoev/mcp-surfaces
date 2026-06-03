@@ -3,11 +3,18 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 
-type AnyRecord = Record<string, any>;
+interface TaskLifecycleSqliteOptions {
+  write?: boolean;
+  ackRepair?: boolean;
+  busyTimeoutMs?: number;
+  staleMs?: number;
+  timeoutMs?: number;
+  pollMs?: number;
+}
 
 const heldLocks = new Map();
 
-export function openTaskLifecycleStoreWithDiscipline(cwd, options: AnyRecord = {}) {
+export function openTaskLifecycleStoreWithDiscipline(cwd, options: TaskLifecycleSqliteOptions = {}) {
   const siteRoot = resolve(cwd);
   const write = options.write !== false;
   const lock = write ? acquireWriteLock(siteRoot, options) : null;
@@ -76,7 +83,7 @@ export function taskLifecycleDbHealth(cwd) {
   }
 }
 
-export function repairTaskLifecycleDbIndexes(cwd, options: AnyRecord = {}) {
+export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOptions = {}) {
   const siteRoot = resolve(cwd);
   if (options.ackRepair !== true) {
     return {
@@ -131,7 +138,7 @@ export function repairTaskLifecycleDbIndexes(cwd, options: AnyRecord = {}) {
   }
 }
 
-function applyDbPragmas(db, options: AnyRecord = {}) {
+function applyDbPragmas(db, options: TaskLifecycleSqliteOptions = {}) {
   db.pragma(`busy_timeout = ${Number(options.busyTimeoutMs ?? 10_000)}`);
   if (process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE !== '1') {
     db.pragma('journal_mode = WAL');
@@ -169,7 +176,7 @@ function copyTaskLifecycleDbFiles(siteRoot, backupDir) {
 }
 
 
-function acquireWriteLock(siteRoot, options: AnyRecord = {}) {
+function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
   const lockDir = join(siteRoot, '.ai', 'task-lifecycle.write.lock');
   const staleMs = Number(options.staleMs ?? 10 * 60_000);
   const timeoutMs = Number(options.timeoutMs ?? 30_000);
