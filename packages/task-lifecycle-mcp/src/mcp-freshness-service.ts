@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { createHash } from 'node:crypto';
 import { join, relative, resolve, sep } from 'node:path';
 
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export function readJsonFile(filePath) {
   if (!existsSync(filePath)) return null;
@@ -101,7 +101,7 @@ export function writeMcpRuntimeInstanceObservation({
   freshnessEvidencePath = null,
   transport = { type: 'stdio', runtime_kind: 'node-stdio' },
   now = new Date(),
-}: AnyRecord = {}) {
+}: TaskLifecyclePayload = {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!surfaceId) throw new Error('surfaceId is required');
   const observedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
@@ -656,7 +656,7 @@ export function validateMcpRestartAcknowledgement({
   sourceEvidence,
   expectedTools = [],
   registeredTools = [],
-}: AnyRecord = {}) {
+}: TaskLifecyclePayload = {}) {
   if (!restartRequest || restartRequest.status === 'unreadable') {
     return {
       status: 'rejected',

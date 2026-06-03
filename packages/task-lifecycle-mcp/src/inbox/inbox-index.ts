@@ -7,7 +7,7 @@ const INBOX_DIR = '.ai/inbox-envelopes';
 const INDEX_PATH = '.ai/state/inbox-index.sqlite';
 const INDEX_SCHEMA_VERSION = 1;
 const ENVELOPE_ID_PATTERN = /^env_[A-Za-z0-9][A-Za-z0-9_-]*$/;
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export function isValidEnvelopeId(envelopeId) {
   return typeof envelopeId === 'string' && ENVELOPE_ID_PATTERN.test(envelopeId);
@@ -88,7 +88,7 @@ function effectiveStatus(envelope, latestEvents) {
   return envelope.status ?? 'received';
 }
 
-export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: AnyRecord = {}) {
+export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
   const { db, dbPath } = openInboxIndex(siteRoot);
   const now = new Date().toISOString();
   const latestEvents = getLatestEventsByEnvelope(siteRoot);
@@ -168,7 +168,7 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: AnyRec
   });
   transaction();
 
-  const total = (db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get() as AnyRecord).count;
+  const total = (db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get() as TaskLifecyclePayload).count;
   return {
     status: 'ok',
     db,
@@ -180,7 +180,7 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: AnyRec
   };
 }
 
-export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: AnyRecord = {}) {
+export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
   const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
     const rows = index.db.prepare(`
@@ -188,7 +188,7 @@ export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: 
       FROM inbox_envelopes
       WHERE status = 'received'
       ORDER BY COALESCE(severity, 0) DESC, COALESCE(received_at, '') ASC
-    `).all() as AnyRecord[];
+    `).all() as TaskLifecyclePayload[];
     return {
       ...index,
       rows: rows.map((row) => ({
@@ -201,11 +201,11 @@ export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: 
   }
 }
 
-export function readInboxIndexCounts(siteRoot, { evaluateEnvelopeSeverity }: AnyRecord = {}) {
+export function readInboxIndexCounts(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
   const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
     const receivedStatus = { status: 'received' };
-    const count = (where, params: AnyRecord = {}) => (index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params) as AnyRecord).count;
+    const count = (where, params: TaskLifecyclePayload = {}) => (index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params) as TaskLifecyclePayload).count;
     return {
       ...index,
       counts: {

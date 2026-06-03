@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export function resolveAgentRole(store, siteRoot, agentId) {
   return resolveAgentRoleWithDiagnostics(store, siteRoot, agentId).role;
@@ -20,7 +20,7 @@ export function buildAgentRoleBindingProjection({ agentId, role, source }) {
 }
 
 export function resolveAgentRoleWithDiagnostics(store, siteRoot, agentId) {
-  const diagnostics: AnyRecord = {
+  const diagnostics: TaskLifecyclePayload = {
     schema: 'narada.task.agent_role_resolution.v0',
     agent_id: agentId,
     role: null,

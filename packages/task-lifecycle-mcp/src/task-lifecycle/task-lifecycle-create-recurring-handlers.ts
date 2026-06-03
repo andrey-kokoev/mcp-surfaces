@@ -1,4 +1,4 @@
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export const TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES = Object.freeze([
   "task_lifecycle_roster_admit",
@@ -51,7 +51,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
     insertRecurringRun,
   } = context;
 
-  async function dispatchCreateRecurringTool(canonicalName, args, dispatchContext: AnyRecord = {}) {
+  async function dispatchCreateRecurringTool(canonicalName, args, dispatchContext: TaskLifecyclePayload = {}) {
     switch (canonicalName) {
     case 'task_lifecycle_roster_admit': {
       return jsonToolResult(admitRosterIdentity(args));

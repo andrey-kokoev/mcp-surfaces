@@ -11,7 +11,14 @@ import {
 import { openTaskLifecycleStoreWithDiscipline } from './sqlite-discipline.js';
 import { loadSonarEmailResidentOperatingPolicy } from '../site-loop/operating-loop-policy.js';
 
-type AnyRecord = Record<string, any>;
+type DirectiveDispatchPayload = Record<string, any>;
+type ResidentControlTarget = DirectiveDispatchPayload;
+type DirectiveDispatchEntry = DirectiveDispatchPayload;
+type ResidentSessionState = DirectiveDispatchPayload;
+type ResidentCarrierStateInput = DirectiveDispatchPayload;
+type ResidentStatusOptions = DirectiveDispatchPayload;
+type RuntimeControlTargetOptions = DirectiveDispatchPayload;
+type DispatchCliArgs = DirectiveDispatchPayload;
 
 export function dispatchPendingDirectives({
   cwd,
@@ -27,14 +34,14 @@ export function dispatchPendingDirectives({
   store.initSchema();
   const receiptReconciliation = reconcileCarrierReceipts(cwd, store);
   const leaseRecovery = recoverExpiredLeases(store);
-  const carrier: AnyRecord | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as AnyRecord | null;
+  const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as ResidentControlTarget | null;
   const controlPath = carrier?.controlPath ?? null;
   const pending = dedupeDirectives([
     ...store.listPending({ target: { kind: 'agent', id: agentId }, limit }),
     ...store.listPending({ target: { kind: 'role', id: role }, limit }),
   ]).slice(0, limit);
-  const dispatched: AnyRecord[] = [];
-  const skipped: AnyRecord[] = [];
+  const dispatched: DirectiveDispatchEntry[] = [];
+  const skipped: DirectiveDispatchEntry[] = [];
 
   if (!controlPath) {
     lifecycleStore.db.close();
@@ -218,10 +225,10 @@ function latestTerminalDirectiveOutcome(db, directiveId) {
   }
 }
 
-export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLiveCarrier = true }: AnyRecord = {}) {
+export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLiveCarrier = true }: ResidentStatusOptions = {}) {
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
   try {
-    const carrier: AnyRecord | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as AnyRecord | null;
+    const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as ResidentControlTarget | null;
     const latestReceipt = latestResidentReceipt(lifecycleStore.db, agentId);
     const latestReport = lifecycleStore.db.prepare(`
       SELECT report_id, task_id, agent_id, submitted_at, summary
@@ -301,7 +308,7 @@ function residentAvailabilityDetail(carrier) {
   return { state: carrier?.reason ?? 'unknown' };
 }
 
-function residentAvailabilityStatus(carrier, sessionState: AnyRecord = {}, carrierState = null) {
+function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState = {}, carrierState = null) {
   if (carrierState?.state === 'policy_stale') return 'blocked';
   if (carrierState?.state === 'stale_busy') return 'blocked';
   if (carrier?.status === 'available') {
@@ -322,7 +329,7 @@ function residentAvailabilityStatus(carrier, sessionState: AnyRecord = {}, carri
   return 'blocked';
 }
 
-function detectTerminalWorkInflight(db, { sessionState = {}, host = null }: AnyRecord = {}) {
+function detectTerminalWorkInflight(db, { sessionState = {}, host = null }: ResidentCarrierStateInput = {}) {
   if (sessionState.active_turn_state !== 'running') {
     return { status: 'none', directive_id: null, outcome: null };
   }
@@ -381,7 +388,7 @@ function residentStaleCarrierCount(carrier) {
     + Number(carrier.fallback_nars?.stale_candidate_count ?? 0);
 }
 
-export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null }: AnyRecord = {}) {
+export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null }: ResidentCarrierStateInput = {}) {
   if (!carrier || carrier.status !== 'available') {
     return {
       schema: 'narada.sonar.resident_carrier_state.v1',
@@ -599,10 +606,10 @@ export function findLatestAgentCliControlTarget(cwd, agentId, { requireLiveCarri
   return findLatestControlTargetByRuntime(cwd, agentId, 'agent-cli', { requireLiveCarrier });
 }
 
-function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true }: AnyRecord = {}) {
+function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true }: RuntimeControlTargetOptions = {}) {
   const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing' };
-  const candidates: AnyRecord[] = readdirSync(resultsDir)
+  const candidates: ResidentControlTarget[] = readdirSync(resultsDir)
     .filter((name) => name.endsWith('.result.json'))
     .map((name) => {
       try {
@@ -890,7 +897,7 @@ function readLastJsonlEvent(path, eventName) {
 }
 
 function parseArgs(argv) {
-  const parsed: AnyRecord = {};
+  const parsed: DispatchCliArgs = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--agent') parsed.agent = argv[++i];

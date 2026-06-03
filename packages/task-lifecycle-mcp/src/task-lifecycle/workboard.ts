@@ -7,19 +7,19 @@ import { join } from 'node:path';
 import { detectSameOperatorReview, detectSelfReview } from './operator-identity.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, allTasks }) {
-  const all_in_review: AnyRecord[] = [];
-  const in_progress: AnyRecord[] = [];
-  const needs_continuation: AnyRecord[] = [];
-  const local_followups: AnyRecord[] = [];
-  const role_wide_followups: AnyRecord[] = [];
-  const non_actionable_parent_followups: AnyRecord[] = [];
-  const closure_authority_conflicts: AnyRecord[] = [];
-  const downstream_role_followups: AnyRecord[] = [];
-  const deferred: AnyRecord[] = [];
-  const actionable_deferred: AnyRecord[] = [];
+  const all_in_review: TaskLifecyclePayload[] = [];
+  const in_progress: TaskLifecyclePayload[] = [];
+  const needs_continuation: TaskLifecyclePayload[] = [];
+  const local_followups: TaskLifecyclePayload[] = [];
+  const role_wide_followups: TaskLifecyclePayload[] = [];
+  const non_actionable_parent_followups: TaskLifecyclePayload[] = [];
+  const closure_authority_conflicts: TaskLifecyclePayload[] = [];
+  const downstream_role_followups: TaskLifecyclePayload[] = [];
+  const deferred: TaskLifecyclePayload[] = [];
+  const actionable_deferred: TaskLifecyclePayload[] = [];
   const lifecycleByNumber = new Map((allTasks || []).map((t) => [t.task_number, t]));
 
   // Preload operator identities for agents in the workboard
@@ -56,7 +56,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       }
     }
 
-    const item: AnyRecord = {
+    const item: TaskLifecyclePayload = {
       task_number: task.task_number,
       task_id: task.task_id,
       status: task.status,
@@ -97,7 +97,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
     if (task.status === 'in_review') {
       // Detect if the requesting agent would face a single-operator review
       if (agentId) {
-        let structuralInfo: AnyRecord = detectSameOperatorReview(store, agentId, task.task_number);
+        let structuralInfo: TaskLifecyclePayload = detectSameOperatorReview(store, agentId, task.task_number);
         if (!structuralInfo?.sameOperator) {
           structuralInfo = detectSelfReview(store, agentId, task.task_number);
         }

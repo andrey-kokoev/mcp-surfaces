@@ -3,7 +3,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 let siteLoopModulePromise = null;
-type AnyRecord = Record<string, any>;
+type SiteOpsServerArgs = Record<string, any>;
+type SiteLoopToolArgs = SiteOpsServerArgs;
+type LoopControlToolArgs = SiteOpsServerArgs;
 
 const SERVER_NAME = 'narada-sonar-site-ops-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -88,7 +90,7 @@ process.stdin.on('data', (chunk) => {
 });
 
 function parseArgs(argv) {
-  const parsed: AnyRecord = {};
+  const parsed: SiteOpsServerArgs = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -230,7 +232,7 @@ function loadSiteLoopModule() {
   siteLoopModulePromise ??= import('./site-loop/sonar-email-resident-loop.js');
   return siteLoopModulePromise;
 }
-function normalizeLoopOptions(args: AnyRecord = {}) {
+function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
   return {
     limit: optionalNumber(args.limit),
     status: optionalString(args.status),
@@ -244,7 +246,7 @@ function normalizeLoopOptions(args: AnyRecord = {}) {
   };
 }
 
-function normalizeLoopControl(args: AnyRecord = {}) {
+function normalizeLoopControl(args: LoopControlToolArgs = {}) {
   return {
     enabled: typeof args.enabled === 'boolean' ? args.enabled : undefined,
     paused: typeof args.paused === 'boolean' ? args.paused : undefined,

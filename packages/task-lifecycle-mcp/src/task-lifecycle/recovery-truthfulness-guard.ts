@@ -1,4 +1,4 @@
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 const SERIOUS_FAILURE_STATES = Object.freeze([
   'inventory_in_progress',
@@ -177,7 +177,7 @@ export function recoveryTruthfulnessTriggerContract() {
   };
 }
 
-export function evaluateRecoveryTruthfulnessTrigger(packet: AnyRecord = {}) {
+export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload = {}) {
   const triggers = [];
 
   if (packet.serious_failure_recovery === true) triggers.push('explicit_serious_failure_recovery');
@@ -299,7 +299,7 @@ function hasDurableChangeEvidence(packet) {
   return content.length > 0 && content !== '__narada_no_files_changed_declared__' && !/\bno\s+files?\s+changed\b/i.test(content);
 }
 
-export function validateRecoveryTruthfulnessPacket(packet: AnyRecord = {}) {
+export function validateRecoveryTruthfulnessPacket(packet: TaskLifecyclePayload = {}) {
   const evaluation = evaluateRecoveryTruthfulnessTrigger(packet);
   if (!evaluation.triggered) return { ok: true, evaluation, errors: [] };
 

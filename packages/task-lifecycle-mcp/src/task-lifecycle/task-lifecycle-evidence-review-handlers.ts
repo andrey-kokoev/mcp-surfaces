@@ -1,4 +1,4 @@
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_self_certification_preflight",
@@ -196,7 +196,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         recoveryTruthfulness,
       });
       if (!truthfulnessGate.ok) {
-        const payload: AnyRecord = {
+        const payload: TaskLifecyclePayload = {
           status: 'blocked',
           error: 'recovery_truthfulness_guard_failed',
           close_blocked: true,
@@ -217,7 +217,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       const testGate = lifecycle ? testResultArtifactGate(store, lifecycle.task_id) : { failed_test_artifacts: [], latest_passing_artifacts: [] };
       if (testGate.failed_test_artifacts.length > 0) {
-        const payload: AnyRecord = {
+        const payload: TaskLifecyclePayload = {
           status: 'blocked',
           schema: 'narada.task.mcp.finish.test_gate.v0',
           task_number: taskNumber,
@@ -246,7 +246,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           })
           : validateSelfCertificationBody({ body, summary, actor_principal: agentId });
         if (!selfCertificationValidation.ok) {
-          const payload: AnyRecord = {
+          const payload: TaskLifecyclePayload = {
             status: 'blocked',
             error: 'self_certification_guard_failed',
             close_blocked: true,
@@ -265,7 +265,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         }
         const followUpValidation = validateFollowUpLedger(body);
         if (!followUpValidation.ok) {
-          const payload: AnyRecord = {
+          const payload: TaskLifecyclePayload = {
             status: 'error',
             error: 'follow_up_ledger_required',
             close_blocked: true,
@@ -284,7 +284,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           ? { ok: true }
           : validateRecoveryTruthfulnessBody({ body, summary, context: `task:${taskNumber}` });
         if (!recoveryTruthfulnessValidation.ok) {
-          const payload: AnyRecord = {
+          const payload: TaskLifecyclePayload = {
             status: 'error',
             error: 'recovery_truthfulness_guard_required',
             close_blocked: true,
@@ -303,7 +303,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       }
       ensureStaticRosterAgentInSql(store, siteRoot, agentId);
       const autoDetectedChangedFiles = !changedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
-      const finishOptions: AnyRecord = { cwd: siteRoot, taskNumber, agent: agentId, summary, verdict, close: true };
+      const finishOptions: TaskLifecyclePayload = { cwd: siteRoot, taskNumber, agent: agentId, summary, verdict, close: true };
       if (reviewer) finishOptions.reviewer = reviewer;
       if (changedFiles) finishOptions.changedFiles = JSON.stringify(changedFiles);
       if (!changedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);
@@ -448,7 +448,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           terminal_correction_claim: ['accepted', 'accepted_with_notes'].includes(verdict),
         });
         if (!validation.ok) {
-          const payload: AnyRecord = {
+          const payload: TaskLifecyclePayload = {
             status: 'blocked',
             error: 'self_certification_guard_failed',
             close_blocked: true,

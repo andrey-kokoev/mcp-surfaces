@@ -58,6 +58,7 @@ type ResidentRunResult = SiteLoopPayload;
 type SurfacePolicyNoise = SiteLoopPayload;
 type OperatorAttentionResult = SiteLoopPayload;
 type EnrichedProcessError = Error & SiteLoopPayload;
+type RecoveredDirectiveDelivery = SiteLoopPayload;
 
 export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = {}) {
   const siteRoot = resolve(cwd);
@@ -2541,7 +2542,7 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
           retryable: true,
           recovered_at: at,
           previous_status: previousDelivery.status ?? 'leased',
-        } as any,
+        } as RecoveredDirectiveDelivery,
       });
       recovered.push({ directive_id: directive.directive_id, retryable: true, previous_status: previousDelivery.status ?? 'leased' });
     }

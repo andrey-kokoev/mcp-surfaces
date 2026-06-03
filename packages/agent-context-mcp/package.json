@@ -1,6 +1,7 @@
 {
   "name": "@narada2/agent-context-mcp",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Agent-context MCP surface for site-local startup hydration and checkpoints.",
   "bin": {

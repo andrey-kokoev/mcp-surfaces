@@ -1,8 +1,8 @@
 const FOLLOW_UP_SCHEMA = 'narada.task.follow_up_policy.v0';
 const POST_CLOSEOUT_CONTINUATION_SCHEMA = 'narada.task.post_closeout_continuation.v0';
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
-export function evaluatePostTransitionFollowups(input: AnyRecord = {}) {
+export function evaluatePostTransitionFollowups(input: TaskLifecyclePayload = {}) {
   const event = input.event && typeof input.event === 'object' ? input.event : {};
   const sourceTask = input.source_task && typeof input.source_task === 'object' ? input.source_task : {};
   const result = input.result && typeof input.result === 'object' ? input.result : {};
@@ -92,7 +92,7 @@ export function evaluatePostTransitionFollowups(input: AnyRecord = {}) {
   };
 }
 
-export function classifyPostCloseoutContinuation(input: AnyRecord = {}) {
+export function classifyPostCloseoutContinuation(input: TaskLifecyclePayload = {}) {
   const workboard = input.workboard && typeof input.workboard === 'object' ? input.workboard : {};
   const result = input.result && typeof input.result === 'object' ? input.result : {};
   const pauseTrigger = input.pause_trigger && typeof input.pause_trigger === 'object' ? input.pause_trigger : null;

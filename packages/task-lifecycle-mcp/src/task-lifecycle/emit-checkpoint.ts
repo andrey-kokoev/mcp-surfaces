@@ -7,30 +7,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-
-function resolveBetterSqlite3() {
-  // Try standard resolution first, then fallbacks
-  try {
-    return require('better-sqlite3');
-  } catch {
-    try {
-      return require(resolve(process.cwd(), 'node_modules', 'better-sqlite3'));
-    } catch {
-      try {
-        return require(resolve(process.cwd(), 'node_modules', '.pnpm', 'node_modules', 'better-sqlite3'));
-      } catch {
-        try {
-          return require(resolve(process.cwd(), 'tools', 'agent-context', 'node_modules', 'better-sqlite3'));
-        } catch {
-          return require(resolve(process.cwd(), 'tools', 'incubation', 'node_modules', 'better-sqlite3'));
-        }
-      }
-    }
-  }
-}
+import { DatabaseSync } from 'node:sqlite';
 
 const AGENT_EVENTS_DDL = `
 CREATE TABLE IF NOT EXISTS agent_events (
@@ -51,11 +28,10 @@ function openAgentContextDb(cwd) {
   const dbDir = join(siteRoot, '.ai', 'state');
   const dbPath = join(dbDir, 'agent-context.sqlite');
   try {
-    const Database = resolveBetterSqlite3();
     if (!existsSync(dbDir)) {
       mkdirSync(dbDir, { recursive: true });
     }
-    const db = new Database(dbPath);
+    const db = new DatabaseSync(dbPath);
     db.exec(AGENT_EVENTS_DDL);
     return db;
   } catch {

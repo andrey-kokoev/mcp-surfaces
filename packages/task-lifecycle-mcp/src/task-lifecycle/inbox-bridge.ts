@@ -20,7 +20,7 @@ import {
 
 const INBOX_DIR = '.ai/inbox-envelopes';
 const TASKS_DIR = '.ai/do-not-open/tasks';
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 const AUTO_MATERIALIZE_THRESHOLD = 50;
 
@@ -84,7 +84,7 @@ function ensureTaskRolePreferencesTable(store) {
   }
 }
 
-export function deriveRoutingFromEnvelopePayload(envelope, severityResult: AnyRecord = {}, store = null) {
+export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskLifecyclePayload = {}, store = null) {
   const payload = envelope?.payload ?? {};
   const ownership = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE, { requireAgentId: true });
   const explicitRole = firstPayloadString(payload, ROLE_FIELD_PRECEDENCE);
@@ -180,7 +180,7 @@ export function checkDuplicateTask(store, envelope) {
 /**
  * Build a task spec from an inbox envelope and severity evaluation.
  */
-export function buildTaskSpecFromEnvelope(envelope, severityResult, options: AnyRecord = {}) {
+export function buildTaskSpecFromEnvelope(envelope, severityResult, options: TaskLifecyclePayload = {}) {
   const payload = envelope.payload ?? {};
   const title = `[From Inbox] ${payload.title ?? envelope.title ?? 'Untitled'}`;
   const goal = payload.summary ?? payload.description ?? '';
@@ -252,7 +252,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Any
     routingSource: routing.source,
     relativePriority: severityResult.relativePriority ?? severityResult.severity ?? 0,
     priorityReason: severityResult.reason,
-  } as AnyRecord;
+  } as TaskLifecyclePayload;
 }
 
 /**
@@ -719,7 +719,7 @@ export function readUnprocessedEnvelopes(cwd) {
   }
 }
 
-export async function targetInboxEnvelope(cwd, options: AnyRecord = {}) {
+export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {}) {
   const envelopeId = options.envelopeId ?? options.envelope_id;
   if (!envelopeId) throw new Error('envelope_id_required');
 
@@ -859,7 +859,7 @@ export async function targetInboxEnvelope(cwd, options: AnyRecord = {}) {
  *
  * Returns { evaluated, materialized, skipped, duplicates, errors }.
  */
-export async function pollInboxBridge(cwd, options: AnyRecord = {}) {
+export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
   const dryRun = options.dryRun ?? false;
   const threshold = options.threshold ?? AUTO_MATERIALIZE_THRESHOLD;
   const limit = options.limit ?? 20;
@@ -899,7 +899,7 @@ export async function pollInboxBridge(cwd, options: AnyRecord = {}) {
       processed++;
 
       const severityResult = evaluateEnvelopeSeverity(envelope);
-      const outcome = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun }) as AnyRecord;
+      const outcome = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun }) as TaskLifecyclePayload;
       evaluated.push(summarizeBridgeOutcome(outcome));
 
       if (outcome.status === 'ignored') {

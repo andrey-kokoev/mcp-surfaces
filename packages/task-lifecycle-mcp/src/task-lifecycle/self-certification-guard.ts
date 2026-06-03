@@ -1,4 +1,4 @@
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 const TARGET_CATEGORIES = Object.freeze([
   'architect_failure',
@@ -191,7 +191,7 @@ export function selfCertificationGuardContract() {
   };
 }
 
-export function evaluateSelfCertificationGuard(packet: AnyRecord = {}) {
+export function evaluateSelfCertificationGuard(packet: TaskLifecyclePayload = {}) {
   const targetCategory = inferTargetCategory(packet);
   const target = TARGET_CATEGORIES.includes(targetCategory);
   const subjectPrincipal = normalizePrincipal(packet.subject_principal);
@@ -221,7 +221,7 @@ export function evaluateSelfCertificationGuard(packet: AnyRecord = {}) {
   };
 }
 
-export function validateSelfCertificationPacket(packet: AnyRecord = {}) {
+export function validateSelfCertificationPacket(packet: TaskLifecyclePayload = {}) {
   const evaluation = evaluateSelfCertificationGuard(packet);
   const errors = [];
 
@@ -250,9 +250,9 @@ export function validateSelfCertificationPacket(packet: AnyRecord = {}) {
   return { ok: errors.length === 0, evaluation, errors };
 }
 
-export function validateSelfCertificationBody({ body = '', summary = '', actor_principal = '' }: AnyRecord = {}) {
+export function validateSelfCertificationBody({ body = '', summary = '', actor_principal = '' }: TaskLifecyclePayload = {}) {
   const section = extractMarkdownSection(body, 'Self-Certification Guard');
-  const parsed = parseSelfCertificationSection(section) as AnyRecord;
+  const parsed = parseSelfCertificationSection(section) as TaskLifecyclePayload;
   return validateSelfCertificationPacket({
     ...parsed,
     actor_principal: parsed.actor_principal ?? actor_principal,

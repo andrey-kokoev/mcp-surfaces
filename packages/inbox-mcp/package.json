@@ -1,6 +1,7 @@
 {
   "name": "@narada2/inbox-mcp",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Governed inbox intake and triage MCP surface.",
   "bin": {

@@ -1,6 +1,7 @@
 {
   "name": "@narada2/task-lifecycle-mcp",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Task lifecycle MCP stdio runtime and tool dispatch surface.",
   "bin": {

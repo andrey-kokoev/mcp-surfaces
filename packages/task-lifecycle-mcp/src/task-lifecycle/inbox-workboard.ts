@@ -6,7 +6,7 @@ import { readIndexedInboxBacklog } from '../inbox/inbox-index.js';
 import { hasEnvelopeCoverageEvidence } from '../inbox/inbox-policy.js';
 import { evaluateEnvelopeSeverity } from './inbox-bridge.js';
 
-type AnyRecord = Record<string, any>;
+type TaskLifecyclePayload = Record<string, any>;
 
 function findExactLinkedTask(store, envelope) {
   if (!store || !envelope?.envelope_id) return null;
@@ -34,7 +34,7 @@ function findExactLinkedTask(store, envelope) {
     INNER JOIN task_lifecycle l ON s.task_id = l.task_id
     WHERE instr(COALESCE(s.context_markdown, ''), ?) > 0
     ORDER BY s.task_number ASC
-  `).all(envelopeId).find((candidate: AnyRecord) => hasEnvelopeCoverageEvidence(candidate, envelopeId)) as AnyRecord | undefined;
+  `).all(envelopeId).find((candidate: TaskLifecyclePayload) => hasEnvelopeCoverageEvidence(candidate, envelopeId)) as TaskLifecyclePayload | undefined;
 
   if (!row) return null;
   return {
@@ -47,8 +47,8 @@ function findExactLinkedTask(store, envelope) {
 
 export function buildInboxWorkboard(siteRoot, { store }: Record<string, any> = {}) {
   const index = readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity });
-  const rows = index.rows as AnyRecord[];
-  const backlog: AnyRecord[] = [];
+  const rows = index.rows as TaskLifecyclePayload[];
+  const backlog: TaskLifecyclePayload[] = [];
   const linkedTaskSuppressed = [];
   let highSeverity = 0;
 

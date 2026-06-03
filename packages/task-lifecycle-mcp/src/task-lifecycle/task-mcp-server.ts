@@ -2200,7 +2200,8 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
       const afterNotes = readFileSync(taskFile.path, 'utf8');
       const proved = afterNotes.replace(/^(\s*)- \[ \](.*)$/gm, '$1- [x]$2');
       if (proved !== afterNotes) writeFileSync(taskFile.path, proved, 'utf8');
-      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: ['criteria_proof', 'disposition_closeout'] as any });
+      const evidenceMethods: NonNullable<Parameters<typeof admitTaskEvidence>[0]['methods']> = ['criteria_proof'];
+      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: evidenceMethods });
       criteriaResult = {
         status: admission.blockers.length === 0 ? 'proved' : 'proved_with_blockers',
         admission_id: admission.result.admission_id,
