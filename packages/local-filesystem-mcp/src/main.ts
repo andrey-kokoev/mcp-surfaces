@@ -8,10 +8,22 @@ import {
   listOutputTools,
   outputShow,
 } from '@narada2/mcp-transport';
-import { buildAllowedRoots, resolveAllowedPath } from './policy.js';
+import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 let activeToolName: string | null = null;
+
+class McpToolError extends Error {
+  codeName: string;
+  details: any;
+
+  constructor(codeName: string, message: string, details: any = {}) {
+    super(message);
+    this.name = 'McpToolError';
+    this.codeName = codeName;
+    this.details = details;
+  }
+}
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
@@ -68,10 +80,15 @@ export function handleRequest(request: any, state: any): any {
     const result = dispatchMethod(request.method, request.params ?? {}, state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
+    const diagnostic = errorDiagnostic(error);
     return {
       jsonrpc: '2.0',
       id: request?.id ?? null,
-      error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+      error: {
+        code: -32000,
+        message: diagnostic.message,
+        data: diagnostic,
+      },
     };
   }
 }
@@ -204,7 +221,7 @@ function callTool(params, state) {
 }
 
 function readFileTool(args, state) {
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
   return readFileRange({ path, root, offset, limit });
@@ -215,7 +232,7 @@ function readFileRangeTool(args, state) {
   const endLine = integerField(args, 'end_line');
   if (!Number.isInteger(startLine) || startLine < 1) throw new Error('start_line_must_be_positive_integer');
   if (!Number.isInteger(endLine) || endLine < startLine) throw new Error('end_line_must_be_greater_than_or_equal_start_line');
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
   return readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
 }
 
@@ -237,7 +254,7 @@ function readFileRange({ path, root, offset, limit }) {
 }
 
 function statTool(args, state) {
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_stat' });
   const stat = statSync(path);
   return {
     path,
@@ -252,7 +269,7 @@ function statTool(args, state) {
 function globSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw new Error('glob_requires_pattern');
-  const { path: directory } = resolveAllowedPath(stringField(args, 'directory') ?? '.', state.allowedRoots);
+  const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
   const rg = spawnSync('rg', ['--files', '--hidden', '--no-ignore', '-g', pattern, directory], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
@@ -262,7 +279,7 @@ function globSearchTool(args, state) {
 function grepSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw new Error('grep_requires_pattern');
-  const { path } = resolveAllowedPath(stringField(args, 'path') ?? '.', state.allowedRoots);
+  const { path } = resolveAllowedToolPath(stringField(args, 'path') ?? '.', state.allowedRoots, { operation: 'fs_grep_search' });
   const mode = stringField(args, 'output_mode') ?? 'files_with_matches';
   if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw new Error(`grep_output_mode_unsupported: ${mode}`);
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
@@ -291,16 +308,16 @@ function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
 }
 
 function writeFileTool(args, state) {
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
   const content = stringField(args, 'content') ?? '';
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, 'utf8');
   appendAudit(state, 'fs_write_file', path, root, { size: content.length });
-  return { status: 'written', path, size: content.length };
+  return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length };
 }
 
 function strReplaceTool(args, state) {
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_str_replace_file' });
   const oldText = stringField(args, 'old') ?? '';
   const newText = stringField(args, 'new') ?? '';
   if (!oldText) throw new Error('str_replace_requires_old');
@@ -311,7 +328,14 @@ function strReplaceTool(args, state) {
   const after = before.replace(oldText, newText);
   writeFileSync(path, after, 'utf8');
   appendAudit(state, 'fs_str_replace_file', path, root, { old_length: oldText.length, new_length: newText.length, before_sha256: sha256(before), after_sha256: sha256(after) });
-  return { status: 'replaced', path, occurrences: 1 };
+  return {
+    schema: 'local.filesystem.str_replace_file.v1',
+    status: 'replaced',
+    ...pathMetadata(path, root),
+    occurrences: 1,
+    before_sha256: sha256(before),
+    after_sha256: sha256(after),
+  };
 }
 
 function replaceRangeTool(args, state) {
@@ -319,7 +343,7 @@ function replaceRangeTool(args, state) {
   const endLine = integerField(args, 'end_line');
   if (!Number.isInteger(startLine) || startLine < 1) throw new Error('start_line_must_be_positive_integer');
   if (!Number.isInteger(endLine) || endLine < startLine) throw new Error('end_line_must_be_greater_than_or_equal_start_line');
-  const { path, root } = resolveAllowedPath(stringField(args, 'path'), state.allowedRoots);
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_replace_range' });
   const replacement = stringField(args, 'replacement') ?? '';
   const before = readFileSync(path, 'utf8');
   const hasTrailingNewline = /\r?\n$/.test(before);
@@ -332,14 +356,28 @@ function replaceRangeTool(args, state) {
   const after = `${afterLines.join(newline)}${hasTrailingNewline ? newline : ''}`;
   writeFileSync(path, after, 'utf8');
   appendAudit(state, 'fs_replace_range', path, root, { start_line: startLine, end_line: endLine, before_sha256: sha256(before), after_sha256: sha256(after) });
-  return { status: 'replaced_range', path, start_line: startLine, end_line: endLine, inserted_lines: replacementLines.length };
+  return {
+    schema: 'local.filesystem.replace_range.v1',
+    status: 'replaced_range',
+    ...pathMetadata(path, root),
+    start_line: startLine,
+    end_line: endLine,
+    inserted_lines: replacementLines.length,
+    before_sha256: sha256(before),
+    after_sha256: sha256(after),
+  };
 }
 
 function applyPatchTool(args, state) {
   const patch = stringField(args, 'patch');
-  if (!patch) throw new Error('patch_required');
+  if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
   const files = parseUnifiedPatch(patch);
-  if (files.length === 0) throw new Error('patch_contains_no_files');
+  if (files.length === 0) {
+    throw patchDiagnosticError('patch_contains_no_files', patch, {
+      expected_format: 'unified_diff',
+      expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@'],
+    });
+  }
   const planned = files.map((filePatch) => {
     const target = resolvePatchTarget(filePatch, state);
     const before = existsSync(target.path) ? readFileSync(target.path, 'utf8') : '';
@@ -351,14 +389,14 @@ function applyPatchTool(args, state) {
     mkdirSync(dirname(item.target.path), { recursive: true });
     writeFileSync(item.target.path, item.after, 'utf8');
     appendAudit(state, 'fs_apply_patch', item.target.path, item.target.root, { patch_sha256: sha256(patch), before_sha256: sha256(item.before), after_sha256: sha256(item.after), hunks: item.filePatch.hunks.length });
-    changed.push({ path: item.target.path, hunks: item.filePatch.hunks.length, before_sha256: sha256(item.before), after_sha256: sha256(item.after) });
+    changed.push({ ...pathMetadata(item.target.path, item.target.root), hunks: item.filePatch.hunks.length, before_sha256: sha256(item.before), after_sha256: sha256(item.after) });
   }
-  return { status: 'patched', changed_files: changed };
+  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', changed_files: changed };
 }
 
 function movePathTool(args, state) {
-  const from = resolveAllowedPath(stringField(args, 'from'), state.allowedRoots);
-  const to = resolveAllowedPath(stringField(args, 'to'), state.allowedRoots);
+  const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_move_path', field: 'from' });
+  const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_move_path', field: 'to' });
   const overwrite = booleanField(args, 'overwrite') ?? false;
   if (samePath(from.path, to.path)) throw new Error(`move_source_and_destination_same: ${from.path}`);
   if (!existsSync(from.path)) throw new Error(`move_source_not_found: ${from.path}`);
@@ -379,7 +417,21 @@ function movePathTool(args, state) {
     to_root: to.root,
     overwrite,
   });
-  return { status: 'moved', from: from.path, to: to.path, overwrite };
+  return {
+    schema: 'local.filesystem.move_path.v1',
+    status: 'moved',
+    from: pathMetadata(from.path, from.root),
+    to: pathMetadata(to.path, to.root),
+    overwrite,
+  };
+}
+
+function pathMetadata(path, root) {
+  return {
+    path,
+    root,
+    relative_path: relative(root, path).replace(/\\/g, '/'),
+  };
 }
 
 function parseUnifiedPatch(patch) {
@@ -389,19 +441,19 @@ function parseUnifiedPatch(patch) {
   let currentHunk = null;
   for (const line of lines) {
     if (line.startsWith('--- ')) {
-      current = { oldPath: line.slice(4).trim(), newPath: null, hunks: [] };
+      current = { oldPath: parsePatchHeaderPath(line.slice(4)), newPath: null, hunks: [] };
       files.push(current);
       currentHunk = null;
       continue;
     }
     if (line.startsWith('+++ ')) {
-      if (!current) throw new Error('patch_new_file_without_old_file_header');
-      current.newPath = line.slice(4).trim();
+      if (!current) throw diagnosticError('patch_new_file_without_old_file_header', 'Patch has a new-file header before an old-file header.');
+      current.newPath = parsePatchHeaderPath(line.slice(4));
       continue;
     }
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      if (!current?.newPath) throw new Error('patch_hunk_without_file_header');
+      if (!current?.newPath) throw diagnosticError('patch_hunk_without_file_header', 'Patch hunk appears before complete file headers.');
       currentHunk = {
         oldStart: Number(hunkMatch[1]),
         oldCount: Number(hunkMatch[2] ?? '1'),
@@ -421,13 +473,46 @@ function parseUnifiedPatch(patch) {
 
 function resolvePatchTarget(filePatch, state) {
   const patchPath = stripPatchPrefix(filePatch.newPath === '/dev/null' ? filePatch.oldPath : filePatch.newPath);
-  return resolveAllowedPath(patchPath, state.allowedRoots);
+  return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_path' });
+}
+
+function resolveAllowedToolPath(inputPath, allowedRoots, context: any = {}) {
+  try {
+    return resolvePolicyAllowedPath(inputPath, allowedRoots);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const codeName = message.split(/[:\s]/)[0] || 'path_resolution_failed';
+    if (codeName === 'path_required' || codeName === 'path_outside_allowed_roots' || codeName === 'allowed_root_not_found') {
+      throw diagnosticError(codeName, message, {
+        ...context,
+        requested_path: inputPath ?? null,
+        allowed_roots: allowedRoots,
+      });
+    }
+    throw error;
+  }
 }
 
 function stripPatchPrefix(path) {
-  const cleaned = String(path ?? '').trim();
+  const cleaned = normalizePatchPath(String(path ?? '').trim());
   if (cleaned.startsWith('a/') || cleaned.startsWith('b/')) return cleaned.slice(2);
   return cleaned;
+}
+
+function parsePatchHeaderPath(value) {
+  const trimmed = String(value ?? '').trim();
+  if (trimmed === '/dev/null') return trimmed;
+  const quoted = trimmed.match(/^"((?:\\.|[^"])*)"/);
+  if (quoted) return quoted[1].replace(/\\"/g, '"');
+  const tabIndex = trimmed.indexOf('\t');
+  if (tabIndex >= 0) return trimmed.slice(0, tabIndex);
+  return trimmed.split(/\s+/)[0] ?? '';
+}
+
+function normalizePatchPath(path) {
+  if (/^[A-Za-z]:\//.test(path)) return path;
+  if (/^[A-Za-z]:\\/.test(path)) return path.replace(/\\/g, '/');
+  return path.replace(/\\/g, '/');
 }
 
 function applyFilePatch(before, filePatch) {
@@ -443,15 +528,15 @@ function applyFilePatch(before, filePatch) {
       const kind = line[0];
       const text = line.slice(1);
       if (kind === ' ') {
-        if (source[sourceIndex] !== text) throw new Error(`patch_context_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`);
+        if (source[sourceIndex] !== text) throw diagnosticError('patch_context_mismatch', `patch_context_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`, { expected: text, actual: source[sourceIndex] ?? null });
         output.push(source[sourceIndex++]);
       } else if (kind === '-') {
-        if (source[sourceIndex] !== text) throw new Error(`patch_remove_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`);
+        if (source[sourceIndex] !== text) throw diagnosticError('patch_remove_mismatch', `patch_remove_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`, { expected: text, actual: source[sourceIndex] ?? null });
         sourceIndex += 1;
       } else if (kind === '+') {
         output.push(text);
       } else {
-        throw new Error(`patch_line_kind_unsupported: ${kind}`);
+        throw diagnosticError('patch_line_kind_unsupported', `patch_line_kind_unsupported: ${kind}`, { kind });
       }
     }
   }
@@ -568,6 +653,45 @@ function splitLines(value) {
 
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex');
+}
+
+function diagnosticError(codeName, message, details: any = {}) {
+  return new McpToolError(codeName, message, details);
+}
+
+function patchDiagnosticError(codeName, patch, details: any = {}) {
+  const firstNonEmptyLine = splitLines(patch)[0] ?? '';
+  const detectedFormat = firstNonEmptyLine === '*** Begin Patch'
+    ? 'codex_apply_patch'
+    : firstNonEmptyLine.startsWith('diff --git ')
+      ? 'git_unified_diff'
+      : firstNonEmptyLine.startsWith('--- ')
+        ? 'unified_diff_incomplete'
+        : 'unknown';
+  return diagnosticError(codeName, `${codeName}: expected unified diff with ---/+++ file headers and @@ hunks`, {
+    ...details,
+    detected_format: detectedFormat,
+    first_non_empty_line: firstNonEmptyLine,
+  });
+}
+
+function errorDiagnostic(error) {
+  if (error instanceof McpToolError) {
+    return {
+      schema: 'local.filesystem.error.v1',
+      code: error.codeName,
+      message: error.message,
+      details: error.details,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const code = message.split(/[:\s]/)[0] || 'tool_error';
+  return {
+    schema: 'local.filesystem.error.v1',
+    code,
+    message,
+    details: {},
+  };
 }
 
 function asRecord(value) {

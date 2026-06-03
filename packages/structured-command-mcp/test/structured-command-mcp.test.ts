@@ -94,6 +94,19 @@ assert.ok(policy.result.content[0].text.length <= 4000);
 assert.equal(policy.result.structuredContent.truncated, false);
 assert.equal(policy.result.structuredContent.output_ref, undefined);
 
+const unknownTool = await handleRequest({
+  jsonrpc: '2.0',
+  id: 31,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_missing_tool',
+    arguments: {},
+  },
+}, state);
+assert.equal(unknownTool.error.data.schema, 'narada.structured_command.error.v0');
+assert.equal(unknownTool.error.data.code, 'structured_command_unknown_tool');
+assert.equal(unknownTool.error.data.details.tool_name, 'structured_command_missing_tool');
+
 const input = await handleRequest({
   jsonrpc: '2.0',
   id: 4,
@@ -107,6 +120,19 @@ assert.match(input.result.content[0].text, /structured_command\.input_create_res
 
 const inputRef = input.result.structuredContent.input_ref;
 assert.match(inputRef, /^structured_command_input:/);
+
+const badInputRef = await handleRequest({
+  jsonrpc: '2.0',
+  id: 41,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: { input_ref: 'structured_command_output:not_an_input' },
+  },
+}, state);
+assert.equal(badInputRef.error.data.schema, 'narada.structured_command.error.v0');
+assert.equal(badInputRef.error.data.code, 'structured_command_invalid_input_ref');
+assert.equal(badInputRef.error.data.details.expected_kind, 'input');
 
 const smallCall = await handleRequest({
   jsonrpc: '2.0',

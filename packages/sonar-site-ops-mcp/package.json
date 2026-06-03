@@ -17,7 +17,7 @@
   "scripts": {
     "build": "node test/syntax-check-all.mjs",
     "typecheck": "tsc -b --pretty false && node test/syntax-check-all.mjs",
-    "test": "node test/syntax-check-all.mjs"
+    "test": "node test/syntax-check-all.mjs && node test/protocol-smoke.test.mjs"
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*",

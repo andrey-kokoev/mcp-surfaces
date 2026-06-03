@@ -19,6 +19,18 @@ const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 200;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
+class StructuredCommandError extends Error {
+  codeName: string;
+  details: any;
+
+  constructor(codeName: string, message: string, details: any = {}) {
+    super(message);
+    this.name = 'StructuredCommandError';
+    this.codeName = codeName;
+    this.details = details;
+  }
+}
+
 if (isMainModule()) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -75,10 +87,15 @@ export async function handleRequest(request: any, state: any): Promise<any> {
     const result = await dispatchMethod(request.method, request.params ?? {}, state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
+    const diagnostic = errorDiagnostic(error);
     return {
       jsonrpc: '2.0',
       id: request?.id ?? null,
-      error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+      error: {
+        code: -32000,
+        message: diagnostic.message,
+        data: diagnostic,
+      },
     };
   }
 }
@@ -93,7 +110,7 @@ async function dispatchMethod(method: string, params: any, state: any): Promise<
   }
   if (method === 'tools/list') return { tools: listTools() };
   if (method === 'tools/call') return callTool(params, state);
-  throw new Error(`unsupported_mcp_method:${method}`);
+  throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method:${method}`, { method });
 }
 
 export function listTools() {
@@ -145,7 +162,7 @@ async function callTool(params, state) {
   if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state), state);
   if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
   if (name === 'structured_command_output_show') return toolResult(showStructuredCommandOutput(args, state), state);
-  throw new Error(`structured_command_unknown_tool:${name}`);
+  throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
 }
 
 export async function executeStructuredCommand(args: any, state: any): Promise<any> {
@@ -402,7 +419,11 @@ function renderToolResultText(payload) {
 
 function enforceInputCharLimit(value, path = 'arguments') {
   if (typeof value === 'string' && value.length > TOOL_INPUT_CHAR_LIMIT) {
-    throw new Error(`structured_command_input_too_long:${path}:${value.length}>${TOOL_INPUT_CHAR_LIMIT}`);
+    throw diagnosticError('structured_command_input_too_long', `structured_command_input_too_long:${path}:${value.length}>${TOOL_INPUT_CHAR_LIMIT}`, {
+      path,
+      length: value.length,
+      limit: TOOL_INPUT_CHAR_LIMIT,
+    });
   }
   if (Array.isArray(value)) {
     value.forEach((item, index) => enforceInputCharLimit(item, `${path}[${index}]`));
@@ -443,7 +464,7 @@ function readStructuredCommandInput(ref, state) {
 
 function parseRef(ref, kind) {
   const match = String(ref ?? '').match(REF_PATTERN);
-  if (!match || match[1] !== kind) throw new Error(`structured_command_invalid_${kind}_ref`);
+  if (!match || match[1] !== kind) throw diagnosticError(`structured_command_invalid_${kind}_ref`, `structured_command_invalid_${kind}_ref`, { ref: String(ref ?? ''), expected_kind: kind });
   return { kind: match[1], id: match[2] };
 }
 
@@ -461,13 +482,13 @@ function writeJsonRecord(path, record) {
 }
 
 function readJsonRecord(path) {
-  if (!existsSync(path)) throw new Error('structured_command_ref_not_found');
+  if (!existsSync(path)) throw diagnosticError('structured_command_ref_not_found', 'structured_command_ref_not_found', { path });
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
 function normalizeRefId(value) {
   const id = String(value).trim();
-  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw new Error('structured_command_invalid_ref_id');
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw diagnosticError('structured_command_invalid_ref_id', 'structured_command_invalid_ref_id', { input_id: id, pattern: '^[A-Za-z0-9_-]{8,80}$' });
   return id;
 }
 
@@ -516,6 +537,29 @@ function parseArgs(argv) {
 function optionList(value) {
   if (value === undefined || value === null || value === true) return [];
   return Array.isArray(value) ? value.map(String) : [String(value)];
+}
+
+function diagnosticError(codeName, message, details: any = {}) {
+  return new StructuredCommandError(codeName, message, details);
+}
+
+function errorDiagnostic(error) {
+  if (error instanceof StructuredCommandError) {
+    return {
+      schema: 'narada.structured_command.error.v0',
+      code: error.codeName,
+      message: error.message,
+      details: error.details,
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const code = message.split(/[:\s]/)[0] || 'structured_command_error';
+  return {
+    schema: 'narada.structured_command.error.v0',
+    code,
+    message,
+    details: {},
+  };
 }
 
 function drainJsonRpcFrames(buffer) {

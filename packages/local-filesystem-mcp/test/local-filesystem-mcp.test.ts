@@ -79,6 +79,21 @@ trust_level = "untrusted"
   assert.ok(writeToolNames.includes('fs_move_path'));
 
   const readState = createServerState({ mode: 'read', rootsFromCodexConfig: configPath, outputRoot: tempRoot });
+  const initResponse = handleRequest({
+    jsonrpc: '2.0',
+    id: 1000,
+    method: 'initialize',
+    params: { protocolVersion: '2024-11-05' },
+  }, readState);
+  assert.equal(initResponse.result.serverInfo.name, 'local-filesystem-read');
+  const toolsListResponse = handleRequest({
+    jsonrpc: '2.0',
+    id: 1001,
+    method: 'tools/list',
+    params: {},
+  }, readState);
+  assert.equal(toolsListResponse.result.tools.some((tool) => tool.name === 'fs_read_file'), true);
+
   const readResponse = call(readState, 1, 'fs_read_file', { path: join(trusted, 'a.txt'), limit: 1 });
   assert.equal(readResponse.result.structuredContent.content, 'alpha');
   assert.equal(readResponse.result.structuredContent.next_offset, 2);
@@ -133,8 +148,17 @@ trust_level = "untrusted"
 
   const auditDir = join(tempRoot, 'audit');
   const writeState = createServerState({ mode: 'write', rootsFromCodexConfig: configPath, auditLogDir: auditDir, outputRoot: tempRoot });
+  const outsideWrite = call(writeState, 24, 'fs_write_file', { path: join(other, 'outside.txt'), content: 'blocked' });
+  assert.equal(outsideWrite.error.data.schema, 'local.filesystem.error.v1');
+  assert.equal(outsideWrite.error.data.code, 'path_outside_allowed_roots');
+  assert.equal(outsideWrite.error.data.details.operation, 'fs_write_file');
+  assert.equal(outsideWrite.error.data.details.requested_path, join(other, 'outside.txt'));
+  assert.deepEqual(outsideWrite.error.data.details.allowed_roots, roots);
+
   const writeResponse = call(writeState, 3, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'created' });
+  assert.equal(writeResponse.result.structuredContent.schema, 'local.filesystem.write_file.v1');
   assert.equal(writeResponse.result.structuredContent.status, 'written');
+  assert.equal(writeResponse.result.structuredContent.relative_path, 'b.txt');
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
@@ -168,13 +192,32 @@ trust_level = "untrusted"
   assert.equal(readFileSync(stdioWritePath, 'utf8'), 'framed\n');
 
   const replaceRangeResponse = call(writeState, 31, 'fs_replace_range', { path: join(trusted, 'b.txt'), start_line: 1, end_line: 1, replacement: 'range-edited' });
+  assert.equal(replaceRangeResponse.result.structuredContent.schema, 'local.filesystem.replace_range.v1');
   assert.equal(replaceRangeResponse.result.structuredContent.status, 'replaced_range');
+  assert.equal(typeof replaceRangeResponse.result.structuredContent.before_sha256, 'string');
   assert.equal(readFileSync(join(trusted, 'b.txt'), 'utf8'), 'range-edited');
 
   writeFileSync(join(trusted, 'patch.txt'), 'one\ntwo\n', 'utf8');
   const patchResponse = call(writeState, 32, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n` });
+  assert.equal(patchResponse.result.structuredContent.schema, 'local.filesystem.apply_patch.v1');
   assert.equal(patchResponse.result.structuredContent.status, 'patched');
+  assert.equal(patchResponse.result.structuredContent.changed_files[0].relative_path, 'patch.txt');
   assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\npatched\n');
+
+  writeFileSync(join(trusted, 'patch-header.txt'), 'old\n', 'utf8');
+  const headerPatchResponse = call(writeState, 34, 'fs_apply_patch', {
+    patch: `--- a/patch-header.txt\t2026-06-02\n+++ b/patch-header.txt\t2026-06-02\n@@ -1 +1 @@\n-old\n+new\n`,
+  });
+  assert.equal(headerPatchResponse.result.structuredContent.status, 'patched');
+  assert.equal(readFileSync(join(trusted, 'patch-header.txt'), 'utf8'), 'new\n');
+
+  const applyPatchGrammar = call(writeState, 35, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Update File: patch-header.txt\n@@\n-old\n+newer\n*** End Patch\n`,
+  });
+  assert.equal(applyPatchGrammar.error.data.schema, 'local.filesystem.error.v1');
+  assert.equal(applyPatchGrammar.error.data.code, 'patch_contains_no_files');
+  assert.equal(applyPatchGrammar.error.data.details.detected_format, 'codex_apply_patch');
+  assert.match(applyPatchGrammar.error.message, /expected unified diff/);
 
   writeFileSync(join(trusted, 'patch-a.txt'), 'one\ntwo\n', 'utf8');
   writeFileSync(join(trusted, 'patch-b.txt'), 'red\nblue\n', 'utf8');
@@ -184,8 +227,15 @@ trust_level = "untrusted"
   assert.equal(readFileSync(join(trusted, 'patch-b.txt'), 'utf8'), 'red\nblue\n');
 
   const moveResponse = call(writeState, 4, 'fs_move_path', { from: join(trusted, 'b.txt'), to: join(trusted, 'renamed.txt') });
+  assert.equal(moveResponse.result.structuredContent.schema, 'local.filesystem.move_path.v1');
   assert.equal(moveResponse.result.structuredContent.status, 'moved');
+  assert.equal(moveResponse.result.structuredContent.to.relative_path, 'renamed.txt');
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_move_path/);
+
+  const outsideMove = call(writeState, 25, 'fs_move_path', { from: join(trusted, 'renamed.txt'), to: join(other, 'outside-renamed.txt') });
+  assert.equal(outsideMove.error.data.code, 'path_outside_allowed_roots');
+  assert.equal(outsideMove.error.data.details.operation, 'fs_move_path');
+  assert.equal(outsideMove.error.data.details.field, 'to');
 
   const overwriteBlocked = call(writeState, 5, 'fs_move_path', { from: join(trusted, 'renamed.txt'), to: join(trusted, 'a.txt') });
   assert.match(overwriteBlocked.error.message, /move_destination_exists/);
