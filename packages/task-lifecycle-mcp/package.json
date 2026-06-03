@@ -5,38 +5,38 @@
   "type": "module",
   "description": "Task lifecycle MCP stdio runtime and tool dispatch surface.",
   "bin": {
-    "task-lifecycle-mcp": "./src/task-lifecycle/task-mcp-server.mjs"
+    "task-lifecycle-mcp": "./dist/src/task-lifecycle/task-mcp-server.js"
   },
   "exports": {
     ".": {
-      "default": "./src/task-lifecycle/task-mcp-server.mjs"
+      "default": "./dist/src/task-lifecycle/task-mcp-server.js"
     },
     "./task-lifecycle-mcp-server": {
-      "default": "./src/task-lifecycle/task-mcp-server.mjs"
+      "default": "./dist/src/task-lifecycle/task-mcp-server.js"
     },
-    "./task-lifecycle-runtime/agent-role-resolution": { "default": "./src/task-lifecycle/agent-role-resolution.mjs" },
-    "./task-lifecycle-runtime/closure-authority": { "default": "./src/task-lifecycle/closure-authority.mjs" },
-    "./task-lifecycle-runtime/emit-checkpoint": { "default": "./src/task-lifecycle/emit-checkpoint.mjs" },
-    "./task-lifecycle-runtime/follow-up-ledger-validation": { "default": "./src/task-lifecycle/follow-up-ledger-validation.mjs" },
-    "./task-lifecycle-runtime/follow-up-policy-service": { "default": "./src/task-lifecycle/follow-up-policy-service.mjs" },
-    "./task-lifecycle-runtime/inbox-bridge": { "default": "./src/task-lifecycle/inbox-bridge.mjs" },
-    "./task-lifecycle-runtime/inbox-workboard": { "default": "./src/task-lifecycle/inbox-workboard.mjs" },
-    "./task-lifecycle-runtime/operator-identity": { "default": "./src/task-lifecycle/operator-identity.mjs" },
-    "./task-lifecycle-runtime/recovery-truthfulness-guard": { "default": "./src/task-lifecycle/recovery-truthfulness-guard.mjs" },
-    "./task-lifecycle-runtime/self-certification-guard": { "default": "./src/task-lifecycle/self-certification-guard.mjs" },
-    "./task-lifecycle-runtime/task-lifecycle-mutation-services": { "default": "./src/task-lifecycle/task-lifecycle-mutation-services.mjs" },
-    "./task-lifecycle-runtime/task-relatedness": { "default": "./src/task-lifecycle/task-relatedness.mjs" },
-    "./task-lifecycle-runtime/unified-workboard": { "default": "./src/task-lifecycle/unified-workboard.mjs" },
-    "./task-lifecycle-runtime/workboard": { "default": "./src/task-lifecycle/workboard.mjs" }
+    "./task-lifecycle-runtime/agent-role-resolution": { "default": "./dist/src/task-lifecycle/agent-role-resolution.js" },
+    "./task-lifecycle-runtime/closure-authority": { "default": "./dist/src/task-lifecycle/closure-authority.js" },
+    "./task-lifecycle-runtime/emit-checkpoint": { "default": "./dist/src/task-lifecycle/emit-checkpoint.js" },
+    "./task-lifecycle-runtime/follow-up-ledger-validation": { "default": "./dist/src/task-lifecycle/follow-up-ledger-validation.js" },
+    "./task-lifecycle-runtime/follow-up-policy-service": { "default": "./dist/src/task-lifecycle/follow-up-policy-service.js" },
+    "./task-lifecycle-runtime/inbox-bridge": { "default": "./dist/src/task-lifecycle/inbox-bridge.js" },
+    "./task-lifecycle-runtime/inbox-workboard": { "default": "./dist/src/task-lifecycle/inbox-workboard.js" },
+    "./task-lifecycle-runtime/operator-identity": { "default": "./dist/src/task-lifecycle/operator-identity.js" },
+    "./task-lifecycle-runtime/recovery-truthfulness-guard": { "default": "./dist/src/task-lifecycle/recovery-truthfulness-guard.js" },
+    "./task-lifecycle-runtime/self-certification-guard": { "default": "./dist/src/task-lifecycle/self-certification-guard.js" },
+    "./task-lifecycle-runtime/task-lifecycle-mutation-services": { "default": "./dist/src/task-lifecycle/task-lifecycle-mutation-services.js" },
+    "./task-lifecycle-runtime/task-relatedness": { "default": "./dist/src/task-lifecycle/task-relatedness.js" },
+    "./task-lifecycle-runtime/unified-workboard": { "default": "./dist/src/task-lifecycle/unified-workboard.js" },
+    "./task-lifecycle-runtime/workboard": { "default": "./dist/src/task-lifecycle/workboard.js" }
   },
   "scripts": {
-    "build": "node test/syntax-check-all.mjs",
-    "typecheck": "tsc -b --pretty false && node test/syntax-check-all.mjs",
-    "test": "node test/syntax-check-all.mjs && node test/import-boundary.test.mjs && node test/handler-coverage.test.mjs && node test/stdio-smoke.test.mjs && node test/protocol-smoke.test.mjs"
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/import-boundary.test.js && node dist/test/handler-coverage.test.js && node dist/test/stdio-smoke.test.js && node dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*",
     "@narada2/task-governance-core": "workspace:*"
   },
-  "files": ["src/"]
+  "files": ["dist/"]
 }

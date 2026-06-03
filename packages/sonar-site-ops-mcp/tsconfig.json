@@ -2,9 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "allowJs": true,
-    "checkJs": false,
-    "noEmit": true
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["src/**/*.mjs", "test/**/*.mjs"]
+  "references": [
+    { "path": "../mcp-transport" },
+    { "path": "../task-lifecycle-mcp" }
+  ],
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

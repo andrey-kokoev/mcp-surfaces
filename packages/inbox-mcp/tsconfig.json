@@ -6,8 +6,5 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [
-    { "path": "../mcp-transport" }
-  ],
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

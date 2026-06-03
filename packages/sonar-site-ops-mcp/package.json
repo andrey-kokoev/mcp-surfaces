@@ -5,24 +5,24 @@
   "type": "module",
   "description": "Sonar site-ops MCP runtime and site loop tools.",
   "bin": {
-    "sonar-site-ops-mcp": "./src/site-ops-mcp-server.mjs"
+    "sonar-site-ops-mcp": "./dist/src/site-ops-mcp-server.js"
   },
   "exports": {
-    ".": { "default": "./src/site-ops-mcp-server.mjs" },
-    "./site-ops-mcp-server": { "default": "./src/site-ops-mcp-server.mjs" },
-    "./site-loop/sonar-email-resident-loop": { "default": "./src/site-loop/sonar-email-resident-loop.mjs" },
-    "./site-operating-loop/site-loop-store": { "default": "./src/site-operating-loop/site-loop-store.mjs" },
-    "./site-operating-loop/policy": { "default": "./src/site-operating-loop/policy.mjs" }
+    ".": { "default": "./dist/src/site-ops-mcp-server.js" },
+    "./site-ops-mcp-server": { "default": "./dist/src/site-ops-mcp-server.js" },
+    "./site-loop/sonar-email-resident-loop": { "default": "./dist/src/site-loop/sonar-email-resident-loop.js" },
+    "./site-operating-loop/site-loop-store": { "default": "./dist/src/site-operating-loop/site-loop-store.js" },
+    "./site-operating-loop/policy": { "default": "./dist/src/site-operating-loop/policy.js" }
   },
   "scripts": {
-    "build": "node test/syntax-check-all.mjs",
-    "typecheck": "tsc -b --pretty false && node test/syntax-check-all.mjs",
-    "test": "node test/syntax-check-all.mjs && node test/protocol-smoke.test.mjs"
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*",
     "@narada2/task-governance-core": "workspace:*",
     "@narada2/task-lifecycle-mcp": "workspace:*"
   },
-  "files": ["src/"]
+  "files": ["dist/"]
 }

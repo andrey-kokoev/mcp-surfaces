@@ -11,6 +11,7 @@ Current packages:
 - `@narada2/mcp-transport`: MCP payload/output-ref helpers.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
+- `@narada2/inbox-mcp`: governed inbox intake and triage MCP surface.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
 - `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface.
 - `@narada2/agent-context-mcp`: agent context MCP surface.
@@ -33,6 +34,7 @@ pnpm test
 pnpm test:mcp-transport
 pnpm test:local-filesystem
 pnpm test:structured-command
+pnpm test:inbox
 pnpm test:task-lifecycle
 pnpm test:sonar-site-ops
 pnpm test:agent-context
