@@ -1,4 +1,4 @@
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 const TARGET_CATEGORIES = Object.freeze([
   'architect_failure',

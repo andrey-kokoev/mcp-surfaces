@@ -1,4 +1,4 @@
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_self_certification_preflight",

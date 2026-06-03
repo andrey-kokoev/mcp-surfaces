@@ -1,4 +1,4 @@
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 const SERIOUS_FAILURE_STATES = Object.freeze([
   'inventory_in_progress',
@@ -179,10 +179,11 @@ export function recoveryTruthfulnessTriggerContract() {
 
 export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload = {}) {
   const triggers = [];
+  const capa = packet.capa && typeof packet.capa === 'object' ? packet.capa as TaskLifecyclePayload : {};
 
   if (packet.serious_failure_recovery === true) triggers.push('explicit_serious_failure_recovery');
-  if (SERIOUS_FAILURE_STATES.includes(packet.state)) triggers.push('explicit_recovery_state');
-  if (packet.capa?.severity === 'high' || packet.capa?.severity === 'critical' || packet.capa?.recurrence_count > 1 || packet.recurrent_capa === true) {
+  if (typeof packet.state === 'string' && SERIOUS_FAILURE_STATES.includes(packet.state)) triggers.push('explicit_recovery_state');
+  if (capa.severity === 'high' || capa.severity === 'critical' || (typeof capa.recurrence_count === 'number' && capa.recurrence_count > 1) || packet.recurrent_capa === true) {
     triggers.push('high_severity_or_recurrent_capa');
   }
   if (boolOrText(packet, 'operator_trust_or_deception_concern', /\b(deceiv|mislead|trust|false\s+complete|hidden\s+uncertainty|overstat(?:e|ed|ing))\b/i)) {
@@ -312,7 +313,7 @@ export function validateRecoveryTruthfulnessPacket(packet: TaskLifecyclePayload 
   if (missingFields.length > 0) {
     errors.push(`Missing recovery truthfulness fields: ${missingFields.join(', ')}.`);
   }
-  if (packet.state && !SERIOUS_FAILURE_STATES.includes(packet.state)) {
+  if (typeof packet.state === 'string' && !SERIOUS_FAILURE_STATES.includes(packet.state)) {
     errors.push(`Invalid recovery state '${packet.state}'. Use one of: ${SERIOUS_FAILURE_STATES.join(', ')}.`);
   }
   if (evaluation.triggers.includes('task_created_only_remediation') && /\b(corrected|fixed|resolved|complete)\b/i.test(text(packet.operator_summary ?? packet.summary)) && text(packet.remaining_work).trim().length === 0) {

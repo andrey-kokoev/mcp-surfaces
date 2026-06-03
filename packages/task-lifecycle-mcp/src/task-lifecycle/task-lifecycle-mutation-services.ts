@@ -72,7 +72,7 @@ export async function transitionLifecycleTask({ siteRoot, store, taskNumber, age
       message: `Cannot transition from '${lifecycle.status}' to '${toStatus}'.`,
     };
   }
-  const updates: Record<string, any> = { reason };
+  const updates: Record<string, unknown> = { reason };
   if (toStatus === 'opened' && ['closed', 'confirmed'].includes(lifecycle.status)) {
     updates.reopened_at = new Date().toISOString();
     updates.reopened_by = agentId;

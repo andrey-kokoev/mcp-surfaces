@@ -752,7 +752,7 @@ export function recordLoopEscalation(store, { loopId, directiveId, classificatio
 export function listLoopAttention(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, status = null, limit = 50 } = {}) {
   const max = Math.max(1, Math.min(500, Number(limit ?? 50)));
   const clauses = ['loop_id = ?'];
-  const params: any[] = [loopId];
+  const params: unknown[] = [loopId];
   if (status) {
     clauses.push('status = ?');
     params.push(status);

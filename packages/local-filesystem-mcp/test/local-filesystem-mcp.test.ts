@@ -7,13 +7,23 @@ import { fileURLToPath } from 'node:url';
 import { parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 
+type DynamicTestValue = string & DynamicTestValue[] & {
+  [key: string]: DynamicTestValue;
+  [index: number]: DynamicTestValue;
+};
+
+type JsonRpcTestResponse = DynamicTestValue & {
+  result: DynamicTestValue;
+  error: DynamicTestValue;
+};
+
 function call(state, id, name, args = {}) {
   return handleRequest({
     jsonrpc: '2.0',
     id,
     method: 'tools/call',
     params: { name, arguments: args },
-  }, state);
+  }, state) as unknown as JsonRpcTestResponse;
 }
 
 function parseFirstJsonRpcFrame(output) {

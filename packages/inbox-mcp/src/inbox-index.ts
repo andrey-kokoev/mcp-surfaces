@@ -7,12 +7,19 @@ const INBOX_DIR = '.ai/inbox-envelopes';
 const INDEX_PATH = '.ai/state/inbox-index.sqlite';
 const INDEX_SCHEMA_VERSION = 1;
 const ENVELOPE_ID_PATTERN = /^env_[A-Za-z0-9][A-Za-z0-9_-]*$/;
+type InboxRecord = Record<string, unknown>;
+type InboxIndex = { db: DatabaseSync; dbPath: string };
+type IndexedInbox = InboxRecord & { db: DatabaseSync; db_path: string };
+
+function asRecord(value: unknown): InboxRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as InboxRecord : {};
+}
 
 export function isValidEnvelopeId(envelopeId: unknown): boolean {
   return typeof envelopeId === 'string' && ENVELOPE_ID_PATTERN.test(envelopeId);
 }
 
-function openInboxIndex(siteRoot: string): any {
+function openInboxIndex(siteRoot: string): InboxIndex {
   const dbPath = join(resolve(siteRoot), INDEX_PATH);
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -62,32 +69,36 @@ function envelopeFiles(siteRoot: string): string[] {
   return readdirSync(envelopeDir).filter((fileName) => fileName.endsWith('.json')).map((fileName) => join(envelopeDir, fileName));
 }
 
-function readEnvelopeFile(filePath: string): any {
+function readEnvelopeFile(filePath: string): { envelope: InboxRecord; text: string } | null {
   try {
     const text = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
-    const envelope = JSON.parse(text);
-    if (!isValidEnvelopeId(envelope?.envelope_id)) return null;
+    const envelope = asRecord(JSON.parse(text));
+    if (!isValidEnvelopeId(envelope.envelope_id)) return null;
     return { envelope, text };
   } catch {
     return null;
   }
 }
 
-function effectiveStatus(envelope: any, latestEvents: Map<string, any>): string {
-  const latest = latestEvents.get(envelope.envelope_id);
+function effectiveStatus(envelope: InboxRecord, latestEvents: Map<string, InboxRecord>): string {
+  const latest = latestEvents.get(String(envelope.envelope_id));
   if (latest?.event_kind === 'envelope_acknowledged') return 'acknowledged';
   if (latest?.event_kind === 'envelope_dismissed') return 'dismissed';
   if (latest?.event_kind === 'envelope_promoted') return 'promoted';
-  return envelope.status ?? 'received';
+  return typeof envelope.status === 'string' ? envelope.status : 'received';
 }
 
-export function refreshInboxIndex(siteRoot: string, { evaluateEnvelopeSeverity }: any = {}): any {
+export function refreshInboxIndex(siteRoot: string, options: unknown = {}): IndexedInbox {
+  const optionsRecord = asRecord(options);
+  const severityEvaluator = typeof optionsRecord.evaluateEnvelopeSeverity === 'function'
+    ? optionsRecord.evaluateEnvelopeSeverity as (envelope: InboxRecord) => InboxRecord
+    : null;
   const { db, dbPath } = openInboxIndex(siteRoot);
   const now = new Date().toISOString();
   const latestEvents = getLatestEventsByEnvelope(siteRoot);
   const files = envelopeFiles(siteRoot);
   const seen = new Set<string>();
-  const invalidRecords: any[] = [];
+  const invalidRecords: unknown[] = [];
   const upsert = db.prepare(`
     INSERT INTO inbox_envelopes (
       envelope_id, file_path, status, kind, authority_level, title, summary,
@@ -124,18 +135,22 @@ export function refreshInboxIndex(siteRoot: string, { evaluateEnvelopeSeverity }
         continue;
       }
       const { envelope, text } = raw;
-      const severity = evaluateEnvelopeSeverity ? evaluateEnvelopeSeverity(envelope) : {};
-      seen.add(envelope.envelope_id);
+      const severity = severityEvaluator ? severityEvaluator(envelope) : {};
+      const authority = asRecord(envelope.authority);
+      const payload = asRecord(envelope.payload);
+      const source = asRecord(envelope.source);
+      const envelopeId = String(envelope.envelope_id);
+      seen.add(envelopeId);
       runStatement(upsert, {
-        envelope_id: envelope.envelope_id,
+        envelope_id: envelopeId,
         file_path: filePath,
         status: effectiveStatus(envelope, latestEvents),
         kind: envelope.kind ?? 'observation',
-        authority_level: envelope.authority?.level ?? 'agent_reported',
-        title: envelope.title ?? envelope.payload?.title ?? '(untitled)',
-        summary: envelope.summary ?? envelope.payload?.summary ?? null,
-        principal: envelope.principal ?? envelope.authority?.principal ?? envelope.payload?.principal ?? null,
-        source_ref: envelope.source_ref ?? envelope.source?.ref ?? null,
+        authority_level: authority.level ?? 'agent_reported',
+        title: envelope.title ?? payload.title ?? '(untitled)',
+        summary: envelope.summary ?? payload.summary ?? null,
+        principal: envelope.principal ?? authority.principal ?? payload.principal ?? null,
+        source_ref: envelope.source_ref ?? source.ref ?? null,
         received_at: envelope.received_at ?? null,
         target_role: severity.targetRole ?? envelope.target_role ?? null,
         severity: severity.severity ?? null,
@@ -160,17 +175,17 @@ export function refreshInboxIndex(siteRoot: string, { evaluateEnvelopeSeverity }
     db.exec('ROLLBACK');
     throw error;
   }
-  const total = db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get().count;
-  return { status: 'ok', storage: 'node_sqlite', db, db_path: dbPath, indexed_count: total, invalid_count: invalidRecords.length, invalid_records: invalidRecords, refreshed_at: now };
+  const totalRow = asRecord(db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get());
+  return { status: 'ok', storage: 'node_sqlite', db, db_path: dbPath, indexed_count: Number(totalRow.count ?? 0), invalid_count: invalidRecords.length, invalid_records: invalidRecords, refreshed_at: now };
 }
 
-function runStatement(statement: any, ...args: any[]): any {
+function runStatement(statement: { run: (...args: unknown[]) => unknown }, ...args: unknown[]): unknown {
   if (args.length === 0) return statement.run();
   if (args.length === 1) return statement.run(args[0]);
   return statement.run(...args);
 }
 
-export function readIndexedInboxBacklog(siteRoot: string, options: any = {}): any {
+export function readIndexedInboxBacklog(siteRoot: string, options: unknown = {}): unknown {
   const index = refreshInboxIndex(siteRoot, options);
   try {
     const rows = index.db.prepare(`
@@ -179,13 +194,13 @@ export function readIndexedInboxBacklog(siteRoot: string, options: any = {}): an
       WHERE status = 'received'
       ORDER BY COALESCE(severity, 0) DESC, COALESCE(received_at, '') ASC
     `).all();
-    return { ...index, rows: rows.map((row: any) => ({ ...row, envelope: JSON.parse(row.payload_json) })) };
+    return { ...index, rows: rows.map((row: unknown) => { const rowRecord = asRecord(row); return { ...rowRecord, envelope: JSON.parse(String(rowRecord.payload_json)) }; }) };
   } finally {
     index.db.close();
   }
 }
 
-export function readIndexedInboxRows(siteRoot: string, options: any = {}): any {
+export function readIndexedInboxRows(siteRoot: string, options: unknown = {}): unknown {
   const index = refreshInboxIndex(siteRoot, options);
   try {
     const rows = index.db.prepare(`
@@ -193,17 +208,17 @@ export function readIndexedInboxRows(siteRoot: string, options: any = {}): any {
       FROM inbox_envelopes
       ORDER BY COALESCE(severity, 0) DESC, COALESCE(received_at, '') ASC
     `).all();
-    return { ...index, rows: rows.map((row: any) => ({ ...row, envelope: JSON.parse(row.payload_json) })) };
+    return { ...index, rows: rows.map((row: unknown) => { const rowRecord = asRecord(row); return { ...rowRecord, envelope: JSON.parse(String(rowRecord.payload_json)) }; }) };
   } finally {
     index.db.close();
   }
 }
 
-export function readInboxIndexCounts(siteRoot: string, options: any = {}): any {
+export function readInboxIndexCounts(siteRoot: string, options: unknown = {}): unknown {
   const index = refreshInboxIndex(siteRoot, options);
   try {
     const receivedStatus = { status: 'received' };
-    const count = (where: string, params: any = {}) => index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params).count;
+    const count = (where: string, params: Record<string, string> = {}) => Number(asRecord(index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params)).count ?? 0);
     return {
       ...index,
       counts: {
@@ -220,7 +235,7 @@ export function readInboxIndexCounts(siteRoot: string, options: any = {}): any {
   }
 }
 
-export function readInboxEnvelopeById(siteRoot: string, envelopeId: string, options: any = {}): any {
+export function readInboxEnvelopeById(siteRoot: string, envelopeId: string, options: unknown = {}): unknown {
   const index = refreshInboxIndex(siteRoot, options);
   try {
     return index.db.prepare('SELECT * FROM inbox_envelopes WHERE envelope_id = ?').get(envelopeId) ?? null;

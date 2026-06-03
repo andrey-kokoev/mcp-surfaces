@@ -143,15 +143,19 @@ export function enforceInlinePayloadLimit({
   exemptFields = DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS,
   objectPayloadFields = DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS,
   allowPayloadCreation = false,
-}: any = {}) {
+}: Record<string, unknown> = {}) {
   const input = asRecord(args);
-  if (allowPayloadCreation && isPayloadWorkspaceTool(toolName)) return;
+  const currentToolName = typeof toolName === 'string' ? toolName : '';
+  const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT;
+  const exemptFieldSet = exemptFields instanceof Set ? exemptFields : DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS;
+  const objectPayloadFieldSet = objectPayloadFields instanceof Set ? objectPayloadFields : DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS;
+  if (allowPayloadCreation === true && isPayloadWorkspaceTool(currentToolName)) return;
   const violations = [];
-  visitInlinePayload(input, [], { limit, exemptFields, objectPayloadFields, violations });
-  if (violations.length === 0) return;
+  visitInlinePayload(input, [], { limit: inlineLimit, exemptFields: exemptFieldSet, objectPayloadFields: objectPayloadFieldSet, violations });
   const first = violations[0];
+  if (!first) return;
   throw new Error(
-    `inline_payload_too_long: field=${first.field} length=${first.length} threshold=${limit} remediation=call mcp_payload_create with {"payload":{...}} then call ${toolName} with {"payload_ref":"mcp_payload:<id>@v1"}`
+    `inline_payload_too_long: field=${first.field} length=${first.length} threshold=${inlineLimit} remediation=call mcp_payload_create with {"payload":{...}} then call ${currentToolName} with {"payload_ref":"mcp_payload:<id>@v1"}`
   );
 }
 
@@ -246,7 +250,12 @@ export function buildOutputRefToolContent({
   isError = false,
   limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
   createdBy = process.env.NARADA_AGENT_ID || null,
-}: any = {}) {
+}: Record<string, unknown> = {}) {
+  const outputSiteRoot = typeof siteRoot === 'string' ? siteRoot : process.cwd();
+  const outputToolName = typeof toolName === 'string' ? toolName : 'unknown_tool';
+  const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_OUTPUT_CHAR_LIMIT;
+  const outputCreatedBy = typeof createdBy === 'string' ? createdBy : null;
+  const valueRecord = isPlainObject(value) ? value as Record<string, unknown> : {};
   if (isOutputLocator(value)) {
     return { content: [{ type: 'text', text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) };
   }
@@ -255,32 +264,33 @@ export function buildOutputRefToolContent({
   }
 
   const fullText = JSON.stringify(value, null, 2);
-  if (fullText.length <= limit) {
+  if (fullText.length <= inlineLimit) {
     return { content: [{ type: 'text', text: fullText }], ...(isError ? { isError: true } : {}) };
   }
 
   const stored = outputCreate({
-    siteRoot,
-    toolName,
+    siteRoot: outputSiteRoot,
+    toolName: outputToolName,
     value,
     fullText,
-    inlineLimit: limit,
-    createdBy,
+    inlineLimit,
+    createdBy: outputCreatedBy,
   });
 
+  const payloadRef = typeof valueRecord.ref === 'string' && valueRecord.ref.startsWith('mcp_payload:') ? valueRecord.ref : null;
   const envelope = {
     status: outputStatus(value, isError),
     truncated: true,
-    ...(typeof value?.ref === 'string' && value.ref.startsWith('mcp_payload:') ? { payload_ref: value.ref } : {}),
+    ...(payloadRef ? { payload_ref: payloadRef } : {}),
     ref: stored.ref,
     output_ref: stored.ref,
     reader_tool: 'mcp_output_show',
     read_command: `mcp_output_show({"ref":"${stored.ref}","output_limit":10000})`,
     remediation: `Call mcp_output_show with ref="${stored.ref}" to read the full result. output_ref is accepted only as a compatibility alias.`,
-    inline_limit: limit,
+    inline_limit: inlineLimit,
     full_output_char_length: stored.full_output_char_length,
   };
-  return { content: [{ type: 'text', text: fitInlineJson(envelope, limit) }], ...(isError ? { isError: true } : {}) };
+  return { content: [{ type: 'text', text: fitInlineJson(envelope, inlineLimit) }], ...(isError ? { isError: true } : {}) };
 }
 
 export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {

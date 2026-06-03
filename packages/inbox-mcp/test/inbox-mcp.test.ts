@@ -4,11 +4,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
 
+type DynamicTestValue = string & DynamicTestValue[] & {
+  [key: string]: DynamicTestValue;
+  [index: number]: DynamicTestValue;
+};
+
+type JsonRpcTestResponse = {
+  error: DynamicTestValue;
+  result: {
+    structuredContent: DynamicTestValue;
+  };
+};
+
+const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+
 const root = mkdtempSync(join(tmpdir(), 'inbox-mcp-'));
 
 try {
   const state = createServerState({ siteRoot: root });
-  const submit = handleRequest({
+  const submit = rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -27,7 +41,7 @@ try {
   assert.equal(submitted.status, 'admitted');
   assert.equal(existsSync(submitted.envelope_path), true);
 
-  const next = handleRequest({
+  const next = rpc({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/call',
@@ -39,7 +53,7 @@ try {
   assert.equal(nextPayload.envelope.kind, 'incident');
   assert.equal(nextPayload.envelope.action, 'materialize');
 
-  const doctor = handleRequest({
+  const doctor = rpc({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
@@ -49,7 +63,7 @@ try {
   const doctorPayload = doctor.result.structuredContent;
   assert.equal(doctorPayload.storage_mode, 'node_sqlite');
 
-  const filtered = handleRequest({
+  const filtered = rpc({
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -73,7 +87,7 @@ try {
   assert.equal(filteredPayload.count, 1);
   assert.equal(filteredPayload.envelopes[0].envelope_id, submitted.envelope_id);
 
-  const rejected = handleRequest({
+  const rejected = rpc({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -81,7 +95,7 @@ try {
   }, state);
   assert.match(rejected.error.message, /kind_must_be_one_of/);
 
-  const queue = handleRequest({
+  const queue = rpc({
     jsonrpc: '2.0',
     id: 6,
     method: 'tools/call',

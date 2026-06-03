@@ -1,4 +1,4 @@
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 export const TASK_LIFECYCLE_ASSIGNMENT_TOOL_NAMES = Object.freeze([
   'task_lifecycle_claim',

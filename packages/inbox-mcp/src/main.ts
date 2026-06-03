@@ -21,6 +21,13 @@ const INBOX_ACTIONS = Object.freeze([
 ]);
 const TARGET_ROLES = Object.freeze(['architect', 'builder', 'operator']);
 
+type InboxRecord = Record<string, unknown>;
+type InboxServerState = InboxRecord & { siteRoot: string; serverName: string };
+
+function asRecord(value: unknown): InboxRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as InboxRecord : {};
+}
+
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -28,14 +35,14 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   });
 }
 
-export async function runStdioServer(options: any): Promise<void> {
+export async function runStdioServer(options: unknown): Promise<void> {
   const state = createServerState(options);
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) {
     buffer += chunk;
-    let requests: any[];
+    let requests: InboxRecord[];
     if (buffer.includes('Content-Length:')) {
       sawFramedInput = true;
       const drained = drainJsonRpcFrames(buffer);
@@ -44,7 +51,7 @@ export async function runStdioServer(options: any): Promise<void> {
     } else {
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? '';
-      requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
+      requests = lines.filter((line) => line.trim()).map((line) => asRecord(JSON.parse(line)));
     }
     for (const request of requests) {
       const response = handleRequest(request, state);
@@ -53,22 +60,26 @@ export async function runStdioServer(options: any): Promise<void> {
   }
 }
 
-export function createServerState(options: any = {}): any {
-  return { siteRoot: resolve(options.siteRoot ?? process.cwd()), serverName: options.serverName ?? SERVER_NAME };
+export function createServerState(options: unknown = {}): InboxServerState {
+  const optionsRecord = asRecord(options);
+  return {
+    siteRoot: resolve(String(optionsRecord.siteRoot ?? process.cwd())),
+    serverName: String(optionsRecord.serverName ?? SERVER_NAME),
+  };
 }
 
-export function handleRequest(request: any, state: any): any {
-  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
+export function handleRequest(request: InboxRecord, state: InboxServerState) {
+  if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = dispatchMethod(request.method, request.params ?? {}, state);
+    const result = dispatchMethod(String(request.method), asRecord(request.params), state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
-    return { jsonrpc: '2.0', id: request?.id ?? null, error: { code: -32000, message: diagnostic.message, data: diagnostic } };
+    return { jsonrpc: '2.0', id: request.id ?? null, error: { code: -32000, message: diagnostic.message, data: diagnostic } };
   }
 }
 
-function dispatchMethod(method: string, params: any, state: any): any {
+function dispatchMethod(method: string, params: InboxRecord, state: InboxServerState) {
   switch (method) {
     case 'initialize':
       return {
@@ -85,7 +96,7 @@ function dispatchMethod(method: string, params: any, state: any): any {
   }
 }
 
-export function listTools(): any[] {
+export function listTools(): unknown[] {
   return [
     tool('inbox_doctor', 'Inspect site-local inbox MCP readiness.', {}),
     tool('inbox_list', 'List site-local inbox envelopes ordered by actionability.', {
@@ -117,10 +128,10 @@ export function listTools(): any[] {
   ];
 }
 
-function callTool(params: any, state: any): any {
-  const name = params?.name;
-  const args = params?.arguments ?? {};
-  let result: any;
+function callTool(params: InboxRecord, state: InboxServerState) {
+  const name = params.name;
+  const args = asRecord(params.arguments);
+  let result: unknown;
   switch (name) {
     case 'inbox_doctor':
       result = inboxDoctor(state);
@@ -149,7 +160,7 @@ function callTool(params: any, state: any): any {
   return { structuredContent: result };
 }
 
-function inboxSubmit(args: any, state: any): any {
+function inboxSubmit(args: InboxRecord, state: InboxServerState): InboxRecord {
   const kind = assertKnownInboxEnvelopeKind(requiredString(args, 'kind'));
   const title = requiredString(args, 'title');
   const principal = requiredString(args, 'principal');
@@ -159,11 +170,11 @@ function inboxSubmit(args: any, state: any): any {
     summary: args.summary ?? null,
     status: 'received',
     target_role: args.target_role ?? null,
-    severity: Number.isFinite(args.severity) ? args.severity : undefined,
+    severity: Number.isFinite(args.severity) ? Number(args.severity) : undefined,
     authority: { level: 'agent_reported', principal },
     source: { kind: 'inbox_mcp_submit', principal },
     payload: {
-      ...(args.payload && typeof args.payload === 'object' ? args.payload : {}),
+      ...asRecord(args.payload),
       title,
       summary: args.summary ?? null,
       principal,
@@ -172,44 +183,46 @@ function inboxSubmit(args: any, state: any): any {
   const result = admitEnvelope(state.siteRoot, envelope);
   const index = refreshInboxIndex(state.siteRoot, { evaluateEnvelopeSeverity });
   index.db?.close();
+  const event = asRecord(result.event);
   return {
     status: 'admitted',
     site_root: state.siteRoot,
-    envelope_id: result.event.envelope_id,
+    envelope_id: event.envelope_id,
     envelope_path: result.envelopePath,
-    event_id: result.event.event_id,
-    event_sequence: result.event.event_sequence,
+    event_id: event.event_id,
+    event_sequence: event.event_sequence,
   };
 }
 
-function inboxDoctor(state: any): any {
+function inboxDoctor(state: InboxServerState): InboxRecord {
   const counts = readInboxIndexCounts(state.siteRoot, { evaluateEnvelopeSeverity });
+  const countRecord = asRecord(counts);
   return {
     status: 'ok',
     site_root: state.siteRoot,
-    db_path: counts.db_path,
-    storage_mode: counts.storage,
-    indexed_count: counts.indexed_count,
-    invalid_count: counts.invalid_count,
-    counts: counts.counts,
+    db_path: countRecord.db_path,
+    storage_mode: countRecord.storage,
+    indexed_count: countRecord.indexed_count,
+    invalid_count: countRecord.invalid_count,
+    counts: countRecord.counts,
     server_name: state.serverName,
   };
 }
 
-function inboxList(args: any, state: any): any {
+function inboxList(args: InboxRecord, state: InboxServerState): InboxRecord {
   const limit = boundedLimit(args.limit, 20);
   const status = optionalEnum(args.status ?? 'received', INBOX_STATUSES, 'status');
   const kind = optionalEnum(args.kind, INBOX_ENVELOPE_KINDS, 'kind');
   const targetRole = optionalEnum(args.target_role, TARGET_ROLES, 'target_role');
   const action = optionalEnum(args.action, INBOX_ACTIONS, 'action');
-  const index = readIndexedInboxRows(state.siteRoot, { evaluateEnvelopeSeverity });
-  const rows = index.rows.filter((row: any) => {
+  const index = asRecord(readIndexedInboxRows(state.siteRoot, { evaluateEnvelopeSeverity }));
+  const rows = Array.isArray(index.rows) ? index.rows.map(asRecord).filter((row) => {
     if (status && row.status !== status) return false;
     if (kind && row.kind !== kind) return false;
     if (targetRole && row.target_role !== targetRole) return false;
     if (action && row.action !== action) return false;
     return true;
-  });
+  }) : [];
   return {
     status: 'ok',
     site_root: state.siteRoot,
@@ -220,51 +233,57 @@ function inboxList(args: any, state: any): any {
   };
 }
 
-function inboxShow(args: any, state: any): any {
+function inboxShow(args: InboxRecord, state: InboxServerState): InboxRecord {
   const envelopeId = requiredString(args, 'envelope_id');
   const row = readInboxEnvelopeById(state.siteRoot, envelopeId, { evaluateEnvelopeSeverity });
   if (!row) return { status: 'not_found', envelope_id: envelopeId };
-  return { status: 'ok', site_root: state.siteRoot, envelope: { ...summarizeRow(row), payload: JSON.parse(row.payload_json) } };
+  const rowRecord = asRecord(row);
+  return { status: 'ok', site_root: state.siteRoot, envelope: { ...summarizeRow(rowRecord), payload: JSON.parse(String(rowRecord.payload_json)) } };
 }
 
-function inboxNext(args: any, state: any): any {
+function inboxNext(args: InboxRecord, state: InboxServerState): InboxRecord {
   const targetRole = args.target_role ?? null;
-  const rows = readIndexedInboxBacklog(state.siteRoot, { evaluateEnvelopeSeverity }).rows
-    .filter((row: any) => !targetRole || row.target_role === targetRole);
+  const backlog = asRecord(readIndexedInboxBacklog(state.siteRoot, { evaluateEnvelopeSeverity }));
+  const rows = Array.isArray(backlog.rows)
+    ? backlog.rows.map(asRecord).filter((row) => !targetRole || row.target_role === targetRole)
+    : [];
   return { status: rows.length > 0 ? 'ok' : 'empty', site_root: state.siteRoot, envelope: rows[0] ? summarizeRow(rows[0]) : null };
 }
 
-function capaQueue(args: any, state: any): any {
+function capaQueue(args: InboxRecord, state: InboxServerState): InboxRecord {
   const limit = boundedLimit(args.limit, 20);
-  const rows = readIndexedInboxBacklog(state.siteRoot, { evaluateEnvelopeSeverity }).rows
-    .filter((row: any) => row.action === 'review_capa_request' || row.kind === 'incident');
+  const backlog = asRecord(readIndexedInboxBacklog(state.siteRoot, { evaluateEnvelopeSeverity }));
+  const rows = Array.isArray(backlog.rows)
+    ? backlog.rows.map(asRecord).filter((row) => row.action === 'review_capa_request' || row.kind === 'incident')
+    : [];
   return { status: 'ok', site_root: state.siteRoot, count: rows.length, envelopes: rows.slice(0, limit).map(summarizeRow) };
 }
 
-function capabilityNext(state: any): any {
+function capabilityNext(state: InboxServerState): InboxRecord {
   const path = join(state.siteRoot, 'operator-surfaces', 'capability-announcements.json');
   if (!existsSync(path)) {
     return { status: 'not_configured', site_root: state.siteRoot, message: 'No local capability announcements file exists.' };
   }
-  const doc = JSON.parse(readFileSync(path, 'utf8'));
+  const doc = asRecord(JSON.parse(readFileSync(path, 'utf8')));
   const capabilities = Array.isArray(doc.capabilities) ? doc.capabilities : [];
-  const next = capabilities.find((item: any) => item.review_status !== 'completed') ?? null;
+  const next = capabilities.map(asRecord).find((item) => item.review_status !== 'completed') ?? null;
   return { status: next ? 'ok' : 'empty', site_root: state.siteRoot, capability: next };
 }
 
-function summarizeRow(row: any): any {
+function summarizeRow(row: unknown): InboxRecord {
+  const rowRecord = asRecord(row);
   return {
-    envelope_id: row.envelope_id,
-    status: row.status,
-    kind: row.kind,
-    title: row.title,
-    summary: row.summary,
-    received_at: row.received_at,
-    target_role: row.target_role,
-    severity: row.severity,
-    severity_reason: row.severity_reason,
-    action: row.action,
-    file_path: row.file_path,
+    envelope_id: rowRecord.envelope_id,
+    status: rowRecord.status,
+    kind: rowRecord.kind,
+    title: rowRecord.title,
+    summary: rowRecord.summary,
+    received_at: rowRecord.received_at,
+    target_role: rowRecord.target_role,
+    severity: rowRecord.severity,
+    severity_reason: rowRecord.severity_reason,
+    action: rowRecord.action,
+    file_path: rowRecord.file_path,
   };
 }
 
@@ -282,13 +301,13 @@ function optionalEnum(value: unknown, allowed: readonly string[], key: string): 
   return value;
 }
 
-function requiredString(args: any, key: string): string {
-  const value = args?.[key];
+function requiredString(args: unknown, key: string): string {
+  const value = asRecord(args)[key];
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${key}_required`);
   return value;
 }
 
-function tool(name: string, description: string, properties: any, required: string[] = []): any {
+function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {
   return {
     name,
     description,
@@ -301,8 +320,8 @@ function tool(name: string, description: string, properties: any, required: stri
   };
 }
 
-function parseArgs(argv: string[]): any {
-  const parsed: any = {};
+function parseArgs(argv: string[]): InboxRecord {
+  const parsed: InboxRecord = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -318,8 +337,8 @@ function parseArgs(argv: string[]): any {
   return parsed;
 }
 
-function drainJsonRpcFrames(buffer: string): any {
-  const requests: any[] = [];
+function drainJsonRpcFrames(buffer: string): { requests: InboxRecord[]; remaining: string } {
+  const requests: InboxRecord[] = [];
   let rest = buffer;
   while (true) {
     const headerEnd = rest.indexOf('\r\n\r\n');
@@ -332,19 +351,20 @@ function drainJsonRpcFrames(buffer: string): any {
     const length = Number(match[1]);
     const bodyStart = lfHeaderEnd + separatorLength;
     if (rest.length < bodyStart + length) break;
-    requests.push(JSON.parse(rest.slice(bodyStart, bodyStart + length)));
+    requests.push(asRecord(JSON.parse(rest.slice(bodyStart, bodyStart + length))));
     rest = rest.slice(bodyStart + length);
   }
   return { requests, remaining: rest };
 }
 
-function writeJsonRpcResponse(payload: any, options: any = {}): void {
+function writeJsonRpcResponse(payload: unknown, options: unknown = {}): void {
+  const optionsRecord = asRecord(options);
   const text = JSON.stringify(payload);
-  if (options.framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(text, 'utf8')}\r\n\r\n${text}`);
+  if (optionsRecord.framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(text, 'utf8')}\r\n\r\n${text}`);
   else process.stdout.write(`${text}\n`);
 }
 
-function errorDiagnostic(error: unknown): any {
+function errorDiagnostic(error: unknown): { schema: string; message: string } {
   return {
     schema: 'narada.inbox_mcp.error.v1',
     message: error instanceof Error ? error.message : String(error),

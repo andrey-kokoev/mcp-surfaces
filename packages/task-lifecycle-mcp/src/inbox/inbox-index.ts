@@ -7,7 +7,7 @@ const INBOX_DIR = '.ai/inbox-envelopes';
 const INDEX_PATH = '.ai/state/inbox-index.sqlite';
 const INDEX_SCHEMA_VERSION = 1;
 const ENVELOPE_ID_PATTERN = /^env_[A-Za-z0-9][A-Za-z0-9_-]*$/;
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 export function isValidEnvelopeId(envelopeId) {
   return typeof envelopeId === 'string' && ENVELOPE_ID_PATTERN.test(envelopeId);
@@ -87,8 +87,8 @@ function effectiveStatus(envelope, latestEvents) {
   if (latest?.event_kind === 'envelope_promoted') return 'promoted';
   return envelope.status ?? 'received';
 }
-
 export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
+  const severityEvaluator = typeof evaluateEnvelopeSeverity === 'function' ? evaluateEnvelopeSeverity as (envelope: TaskLifecyclePayload) => TaskLifecyclePayload : null;
   const { db, dbPath } = openInboxIndex(siteRoot);
   const now = new Date().toISOString();
   const latestEvents = getLatestEventsByEnvelope(siteRoot);
@@ -133,7 +133,7 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLi
         continue;
       }
       const { envelope, text } = raw;
-      const severity = evaluateEnvelopeSeverity ? evaluateEnvelopeSeverity(envelope) : {};
+      const severity = severityEvaluator ? severityEvaluator(envelope) : {};
       const envelopeId = envelope.envelope_id;
       seen.add(envelopeId);
       upsert.run({
@@ -193,7 +193,7 @@ export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: 
       ...index,
       rows: rows.map((row) => ({
         ...row,
-        envelope: JSON.parse(row.payload_json),
+        envelope: JSON.parse(String(row.payload_json)),
       })),
     };
   } finally {

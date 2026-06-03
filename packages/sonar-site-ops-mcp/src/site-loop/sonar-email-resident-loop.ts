@@ -50,7 +50,7 @@ import {
 
 export { SONAR_EMAIL_RESIDENT_LOOP_ID } from './sonar-email-resident-constants.js';
 const MAILBOX_PROOF_FRESHNESS_MS = 24 * 60 * 60_000;
-type SiteLoopPayload = Record<string, any>;
+type SiteLoopPayload = Record<string, unknown>;
 type SiteLoopOptions = SiteLoopPayload;
 type ResidentLoopStep = SiteLoopPayload;
 type ResidentCarrier = SiteLoopPayload;
@@ -60,6 +60,18 @@ type OperatorAttentionResult = SiteLoopPayload;
 type EnrichedProcessError = Error & SiteLoopPayload;
 type RecoveredDirectiveDelivery = SiteLoopPayload;
 
+function asRecord(value: unknown): SiteLoopPayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as SiteLoopPayload : {};
+}
+
+function stringValue(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
 export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = {}) {
   const siteRoot = resolve(cwd);
   const dryRun = options.dryRun === true || options.dry_run === true;
@@ -67,7 +79,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
   const threshold = options.threshold == null ? undefined : Number(options.threshold);
   const sourceSyncRequested = options.sourceSync === true || options.source_sync === true;
   const drain = options.drain === true;
-  const runId = options.runId ?? makeRunId();
+  const runId = typeof options.runId === 'string' ? options.runId : makeRunId();
   const startedAt = new Date().toISOString();
   const operatingPolicy = loadSonarEmailResidentOperatingPolicy(siteRoot).policy;
   const steps: ResidentLoopStep[] = [];
@@ -79,10 +91,11 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
   try {
     store = dryRun ? null : openSiteLoopStore(siteRoot);
     if (store) {
+      const lockTtlMs = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
       lock = acquireLoopLock(store, {
         loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
         runId,
-        ttlMs: Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms),
+        ttlMs: lockTtlMs,
       });
       if (lock.status === 'contended') {
         const health = getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
@@ -208,7 +221,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
           },
           stepId: 'ticket_task_reconciliation',
           inputRefs: [
-            ...(steps.find((step) => step.step_id === 'source_sync')?.output_refs ?? []),
+            ...(Array.isArray(steps.find((step) => step.step_id === 'source_sync')?.output_refs) ? steps.find((step) => step.step_id === 'source_sync')?.output_refs as unknown[] : []),
             { kind: 'mailbox_ticket_projection', ref: 'help-global-maxima' },
           ],
           execute: () => runTicketTaskReconcile(siteRoot, {
@@ -356,7 +369,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
           ...(bridge ? residentDirectiveRefs(bridge.result) : []),
           ...residentBacklogRecoveryDirectiveRefs(backlogRecovery),
         ],
-        execute: () => (options.dispatchRunner ?? dispatchPendingDirectives)({
+        execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
           cwd: siteRoot,
           agentId: RESIDENT_AGENT_ID,
           role: RESIDENT_ROLE,
@@ -379,7 +392,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         },
         stepId: 'resident_directive_dispatch',
         inputRefs: [],
-        execute: () => (options.dispatchRunner ?? dispatchPendingDirectives)({
+        execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
           cwd: siteRoot,
           agentId: RESIDENT_AGENT_ID,
           role: RESIDENT_ROLE,
@@ -502,7 +515,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
       recordLoopHealthFailure(store, {
         loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
         runId,
-        failingStep: failedStep?.step_id ?? null,
+        failingStep: stringOrNull(failedStep?.step_id),
         error: errorPayload,
         at: finishedAt,
       });
@@ -541,7 +554,7 @@ async function runSourceSync(siteRoot, { dryRun, runner }: SiteLoopPayload = {})
   });
   if (result.error) throw result.error;
   if ((result.status ?? 1) !== 0) {
-    const error: EnrichedProcessError = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`);
+    const error = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     throw error;
@@ -557,7 +570,8 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun, limit, preferredRole });
   }
-  const args = [
+  const role = typeof preferredRole === 'string' ? preferredRole : RESIDENT_ROLE;
+  const args: string[] = [
     'cli',
     '--',
     '--json',
@@ -565,7 +579,7 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
     'task',
     'reconcile',
     '--preferred-role',
-    preferredRole ?? RESIDENT_ROLE,
+    role,
   ];
   if (Number.isFinite(Number(limit))) args.push('--limit', String(Number(limit)));
   if (dryRun) args.push('--dry-run');
@@ -576,7 +590,7 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
   });
   if (result.error) throw result.error;
   if ((result.status ?? 1) !== 0) {
-    const error: EnrichedProcessError = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`);
+    const error = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     throw error;
@@ -592,13 +606,14 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
 
 export function listSonarEmailResidentLoopRuns(cwd, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd), { write: false });
+  const loopId = typeof options.loopId === 'string' ? options.loopId : SONAR_EMAIL_RESIDENT_LOOP_ID;
   try {
     return {
       schema: 'narada.sonar.site_loop_runs.v1',
-      loop_id: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loop_id: loopId,
       runs: listLoopRuns(store, {
         limit: Number(options.limit ?? 10),
-        loopId: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loopId,
       }),
     };
   } finally {
@@ -640,7 +655,8 @@ export function sonarEmailResidentLoopHealth(cwd) {
 
 export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
-  const nowMs = Date.parse(options.now ?? options.nowIso ?? options.now_iso ?? new Date().toISOString());
+  const nowIso = stringValue(options.now ?? options.nowIso ?? options.now_iso, new Date().toISOString());
+  const nowMs = Date.parse(nowIso);
   const loop = sonarEmailResidentLoopStatus(siteRoot);
   const resident = sonarResidentStatus(siteRoot);
   const pending = sonarResidentPending(siteRoot, { limit: options.limit ?? 25 });
@@ -658,7 +674,7 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
     nowMs,
     freshnessMs: mailboxProofFreshnessWindowMs,
   });
-  const latestSummary = loop.latest?.summary ?? {};
+  const latestSummary = asRecord(loop.latest?.summary);
   const health = loop.health ?? null;
   const openAttention = loop.attention?.open_count ?? health?.attention?.open_count ?? 0;
   const unresolved = health?.unresolved_backlog?.unresolved_count ?? 0;
@@ -671,10 +687,12 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
   const healthOk = ['healthy', 'unknown'].includes(health?.status ?? 'unknown');
   const carrierUsable = ['available', 'busy'].includes(resident.status);
   const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
-  const carrier: ResidentCarrier = resident.carrier ?? {};
-  const agentCliControlPath = carrier.preferred_interactive?.controlPath ?? (carrier.runtime === 'agent-cli' ? carrier.controlPath ?? null : null);
-  const agentCliReady = Boolean(agentCliControlPath && existsSync(agentCliControlPath))
-    && (carrier.preferred_interactive?.status === 'available' || carrier.runtime === 'agent-cli');
+  const carrier: ResidentCarrier = asRecord(resident.carrier);
+  const preferredInteractive = asRecord(carrier.preferred_interactive);
+  const agentCliControlPath = stringOrNull(preferredInteractive.controlPath)
+    ?? (carrier.runtime === 'agent-cli' ? stringOrNull(carrier.controlPath) : null);
+  const agentCliReady = Boolean(agentCliControlPath !== null && existsSync(agentCliControlPath))
+    && (preferredInteractive.status === 'available' || carrier.runtime === 'agent-cli');
   const primaryRuntimeReady = carrier.runtime === 'agent-cli'
     && carrier.preference === 'interactive_agent_cli'
     && proofDriver !== true;
@@ -794,11 +812,12 @@ export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) 
   const operating = sonarEmailResidentOperatingLayerStatus(siteRoot, options);
   const requireProduction = options.requireProduction === true || options.require_production === true;
   const requireMailboxProof = options.requireMailboxProof === true || options.require_mailbox_proof === true;
-  const projection = options.projectionDriftResult ?? runReadinessJsonCommand(siteRoot, [
+  const projection = asRecord(options.projectionDriftResult ?? runReadinessJsonCommand(siteRoot, [
     process.execPath,
     [join(siteRoot, 'tools', 'task-lifecycle', 'detect-projection-drift.js'), siteRoot],
-  ]);
-  const packageBoundary = options.packageBoundaryResult ?? checkTaskGovernancePackageBoundary(siteRoot);
+  ]));
+  const projectionPacket = asRecord(projection.packet);
+  const packageBoundary = asRecord(options.packageBoundaryResult ?? checkTaskGovernancePackageBoundary(siteRoot));
   const pending = Number(operating.backlog?.pending_directives ?? 0);
   const stalePending = Number(operating.backlog?.stale_pending_directives ?? 0);
   const openAttention = Number(operating.backlog?.open_attention ?? 0);
@@ -818,10 +837,10 @@ export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) 
       historical_count: operating.surface_policy_noise?.historical_count ?? null,
       repaired_historical_count: operating.surface_policy_noise?.repaired_historical_count ?? null,
     }),
-    readinessGate('projection_drift', projection.status === 'ok' && projection.packet?.status === 'ok', {
+    readinessGate('projection_drift', projection.status === 'ok' && projectionPacket.status === 'ok', {
       command_status: projection.status,
-      drift_count: projection.packet?.drift_count ?? null,
-      missing_sql: projection.packet?.missing_sql ?? null,
+      drift_count: projectionPacket.drift_count ?? null,
+      missing_sql: projectionPacket.missing_sql ?? null,
       error: projection.error ?? null,
     }),
     readinessGate('package_boundary', packageBoundary.status === 'ok', packageBoundary),
@@ -1052,7 +1071,13 @@ function checkTaskGovernancePackageBoundary(siteRoot) {
       naradaPackageRoot: join(naradaProperRoot, 'packages', 'task-governance'),
     },
   ];
-  const result: SiteLoopPayload = {
+  const result: SiteLoopPayload & {
+    status: string;
+    packages: SiteLoopPayload[];
+    block_codes?: string[];
+    remediation?: string;
+    error?: string;
+  } = {
     status: 'ok',
     packages: [],
   };
@@ -1147,7 +1172,7 @@ function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
   const declaredTools = loadSurfaceDeclaredTools(policyPath);
   const includeEvidence = options.includeEvidence === true || options.include_evidence === true;
   const repairedAtMs = existsSync(policyPath) ? statSync(policyPath).mtimeMs : 0;
-  const carrierStartedAtMs = Date.parse(options.carrierStartedAt ?? '');
+  const carrierStartedAtMs = Date.parse(stringValue(options.carrierStartedAt));
   const currentBaselineMs = Math.max(
     repairedAtMs,
     Number.isFinite(carrierStartedAtMs) ? carrierStartedAtMs : 0,
@@ -1358,9 +1383,11 @@ function sonarResidentPendingFromDb(db, options: SiteLoopPayload = {}) {
   const directiveStore = new SqliteDirectiveRuntimeStore({ db });
   directiveStore.initSchema();
   const limit = Number(options.limit ?? 25);
+  const agentId = stringValue(options.agentId, RESIDENT_AGENT_ID);
+  const role = stringValue(options.role, RESIDENT_ROLE);
   const pending = dedupeByDirectiveId([
-    ...directiveStore.listPending({ target: { kind: 'agent', id: options.agentId ?? RESIDENT_AGENT_ID }, limit }),
-    ...directiveStore.listPending({ target: { kind: 'role', id: options.role ?? RESIDENT_ROLE }, limit }),
+    ...directiveStore.listPending({ target: { kind: 'agent', id: agentId }, limit }),
+    ...directiveStore.listPending({ target: { kind: 'role', id: role }, limit }),
   ]).slice(0, limit);
   return {
     schema: 'narada.sonar.resident_pending_directives.v1',
@@ -1422,8 +1449,8 @@ export function sonarResidentOutcomes(cwd, options: SiteLoopPayload = {}) {
   try {
     const outcomes = listDirectiveOutcomes(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
-      outcome: options.outcome ?? null,
-      limit: options.limit ?? 50,
+      outcome: stringOrNull(options.outcome),
+      limit: Number(options.limit ?? 50),
     });
     return {
       schema: 'narada.sonar.resident_outcomes.v1',
@@ -1733,10 +1760,11 @@ function latestProductionReportedOutcome(outcomes) {
 }
 
 function stalePendingDirectives(directives, options: SiteLoopPayload = {}) {
-  const nowMs = Date.parse(options.now ?? new Date().toISOString());
+  const nowMs = Date.parse(stringValue(options.now, new Date().toISOString()));
   const thresholdMs = Number(options.thresholdMs ?? options.threshold_ms ?? 10 * 60_000);
   return directives.filter((directive) => {
-    const createdMs = Date.parse(directive.created_at ?? directive.createdAt ?? directive.admitted_at ?? '');
+    const directiveRecord = asRecord(directive);
+    const createdMs = Date.parse(stringValue(directiveRecord.created_at ?? directiveRecord.createdAt ?? directiveRecord.admitted_at));
     return Number.isFinite(nowMs) && Number.isFinite(createdMs) && nowMs - createdMs > thresholdMs;
   });
 }
@@ -1771,7 +1799,10 @@ function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stale
   return alerts;
 }
 
-function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date().toISOString(), requireFreshProductionProof = false }: SiteLoopPayload = {}) {
+function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload = {}) {
+  const runId = stringValue(options.runId);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
+  const requireFreshProductionProof = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
   const resident = sonarResidentStatus(siteRoot);
   const pending = sonarResidentPending(siteRoot, { limit: 500 });
   const dbHealth = taskLifecycleDbHealth(siteRoot);
@@ -1788,16 +1819,17 @@ function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date
     pending,
     stalePending,
     requireFreshProductionProof,
-    productionProofFresh: status.latest_activity?.production_proof_fresh,
+    productionProofFresh: asRecord(status.latest_activity).production_proof_fresh,
   })
-    .filter((item) => ['error', 'critical'].includes(item.severity));
-  const activeKinds = new Set(alerts.map((alert) => alert.kind));
+    .map((item) => asRecord(item))
+    .filter((item) => ['error', 'critical'].includes(stringValue(item.severity)));
+  const activeKinds = new Set(alerts.map((alert) => stringValue(alert.kind)));
   const resolved = [];
   for (const item of listLoopAttention(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, status: 'opened', limit: 500 })) {
     if (!String(item.directive_id ?? '').startsWith('operating-layer:')) continue;
     if (activeKinds.has(item.classification)) continue;
     const ack = acknowledgeLoopAttention(store, {
-      attentionId: item.escalation_id,
+      attentionId: stringValue(item.escalation_id),
       reason: 'operating_layer_alert_resolved',
       acknowledgedBy: 'sonar.site-loop',
       at: nowIso,
@@ -1806,18 +1838,20 @@ function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date
   }
   const created = [];
   for (const alert of alerts) {
-    const directiveId = `operating-layer:${alert.kind}`;
+    const alertKind = stringValue(alert.kind);
+    const alertSeverity = stringValue(alert.severity);
+    const directiveId = `operating-layer:${alertKind}`;
     const envelope = writeOperatorAttentionEnvelope(siteRoot, {
       directive_id: directiveId,
-      status: alert.kind,
+      status: alertKind,
       task_id: null,
-      reason: alert.detail ?? alert.kind,
-      severity: alert.severity,
+      reason: stringValue(alert.detail, alertKind),
+      severity: alertSeverity,
     }, { runId, nowIso });
     const escalation = recordLoopEscalation(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
       directiveId,
-      classification: alert.kind,
+      classification: alertKind,
       envelopeId: envelope.envelope_id,
       escalation: {
         schema: 'narada.sonar.operating_layer_alert.v1',
@@ -1828,10 +1862,10 @@ function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date
       at: nowIso,
     });
     created.push({
-      classification: alert.kind,
+      classification: alertKind,
       envelope_id: envelope.envelope_id,
       escalation_id: escalation?.escalation_id ?? null,
-      severity: alert.severity,
+      severity: alertSeverity,
     });
   }
   return {
@@ -1844,8 +1878,9 @@ function persistOperatingLayerAlerts(siteRoot, store, { runId, nowIso = new Date
 }
 
 export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
-  const directiveId = options.directiveId ?? options.directive_id;
-  const reason = options.reason;
+  const directiveId = stringValue(options.directiveId ?? options.directive_id);
+  const reason = stringValue(options.reason);
+  const agentId = stringValue(options.agentId, RESIDENT_AGENT_ID);
   if (!directiveId) return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'directive_required' };
   if (!reason || !String(reason).trim()) return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'reason_required' };
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(resolve(cwd));
@@ -1867,8 +1902,8 @@ export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
       };
     }
     const triage = directiveStore.recordTriage(directiveId, {
-      triaged_at: options.at ?? new Date().toISOString(),
-      agent_id: options.agentId ?? RESIDENT_AGENT_ID,
+      triaged_at: stringValue(options.at, new Date().toISOString()),
+      agent_id: agentId,
       status: 'refused',
       reason: String(reason),
       selected_work_ref: null,
@@ -1878,7 +1913,7 @@ export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
       directiveId,
       outcome: 'refused',
-      agentId: options.agentId ?? RESIDENT_AGENT_ID,
+      agentId,
       taskId,
       reason: String(reason),
       observedAt: triage.triaged_at,
@@ -1965,8 +2000,8 @@ function readResidentTaskLifecycleSurfacePolicy(siteRoot) {
 
 export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
-  const control = options.control ?? readLoopControlForSupervisor(siteRoot);
-  if (control?.paused) {
+  const control = asRecord(options.control ?? readLoopControlForSupervisor(siteRoot));
+  if (control.paused === true) {
     return {
       schema: 'narada.sonar.resident_supervisor.v1',
       status: 'blocked',
@@ -1997,7 +2032,7 @@ export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const restartPolicy = evaluateResidentRestartPolicy(siteRoot, {
     maxRestarts: policy.rate_limits?.max_restarts_per_window,
     windowMs: policy.rate_limits?.restart_window_ms,
-    ...(options.restartPolicy ?? {}),
+    ...asRecord(options.restartPolicy),
   });
   if (restartPolicy.status === 'blocked') {
     return {
@@ -2011,7 +2046,7 @@ export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
       launch: null,
     };
   }
-  const runner = options.runner ?? defaultResidentLaunchRunner;
+  const runner = typeof options.runner === 'function' ? options.runner : defaultResidentLaunchRunner;
   const launch = runner(siteRoot);
   const after = getResidentStatus(siteRoot, { agentId: RESIDENT_AGENT_ID, requireLiveCarrier: options.requireLiveCarrier !== false });
   return {
@@ -2330,8 +2365,9 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
         outcome_counts: finalOutcome?.counts ?? {},
         run_id: firstRun.run_id,
         production_proof: productionProof,
-      })
+    })
     : null;
+  const firstRunSummary = asRecord(firstRun.summary);
   return {
     schema: 'narada.sonar.resident_e2e.v1',
     status,
@@ -2366,10 +2402,10 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
       ? {
           controlled_source: controlledMailboxSource,
           controlled_source_status: controlledSourceStatus,
-          evaluated: firstRun.summary?.evaluated ?? 0,
-          materialized: firstRun.summary?.materialized ?? 0,
-          duplicates: firstRun.summary?.duplicates ?? 0,
-          bridge_errors: firstRun.summary?.bridge_errors ?? 0,
+          evaluated: firstRunSummary.evaluated ?? 0,
+          materialized: firstRunSummary.materialized ?? 0,
+          duplicates: firstRunSummary.duplicates ?? 0,
+          bridge_errors: firstRunSummary.bridge_errors ?? 0,
           new_directive_count: directiveIds.length,
         }
       : null,
@@ -2406,7 +2442,8 @@ function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, residen
   };
 }
 
-function simulateResidentFixtureCompletion(siteRoot, directiveIds, { at = new Date().toISOString() }: SiteLoopPayload = {}) {
+function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: SiteLoopPayload = {}) {
+  const at = stringValue(options.at, new Date().toISOString());
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
@@ -2460,15 +2497,16 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, { at = new Da
 
 export function listSonarLoopAttention(cwd, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd));
+  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
   try {
     return {
       schema: 'narada.sonar.loop_attention_list.v1',
-      loop_id: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID,
-      summary: getLoopAttentionSummary(store, { loopId: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID }),
+      loop_id: loopId,
+      summary: getLoopAttentionSummary(store, { loopId }),
       attention: listLoopAttention(store, {
-        loopId: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID,
-        status: options.status ?? null,
-        limit: options.limit ?? 50,
+        loopId,
+        status: stringOrNull(options.status),
+        limit: Number(options.limit ?? 50),
       }),
     };
   } finally {
@@ -2492,15 +2530,16 @@ export function showSonarLoopAttention(cwd, attentionId) {
 
 export function ackSonarLoopAttention(cwd, attentionId, options: SiteLoopPayload = {}) {
   const store = openSiteLoopStore(resolve(cwd));
+  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
   try {
     return {
       schema: 'narada.sonar.loop_attention_ack.v1',
       ...acknowledgeLoopAttention(store, {
         attentionId,
-        reason: options.reason,
-        acknowledgedBy: options.acknowledgedBy ?? 'operator',
+        reason: stringValue(options.reason),
+        acknowledgedBy: stringValue(options.acknowledgedBy, 'operator'),
       }),
-      health: getLoopHealth(store, options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID),
+      health: getLoopHealth(store, loopId),
     };
   } finally {
     store.close();
@@ -2546,13 +2585,15 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
       });
       recovered.push({ directive_id: directive.directive_id, retryable: true, previous_status: previousDelivery.status ?? 'leased' });
     }
-    const retired = retireResidentCarrier(siteRoot, resident.carrier_state?.carrier_session_id, { reason, at });
-    const attentionKind = resident.carrier_state.state === 'policy_stale'
+    const carrierState = asRecord(resident.carrier_state);
+    const carrierDirectiveId = stringValue(carrierState.carrier_session_id, 'resident_carrier');
+    const retired = retireResidentCarrier(siteRoot, carrierDirectiveId, { reason, at });
+    const attentionKind = carrierState.state === 'policy_stale'
       ? 'policy_drift'
       : 'stale_busy_carrier';
     const severity = loopAttentionSeverity(siteRoot, attentionKind);
     const envelope = writeOperatorAttentionEnvelope(siteRoot, {
-      directive_id: resident.carrier_state.carrier_session_id ?? 'resident_carrier',
+      directive_id: carrierDirectiveId,
       status: attentionKind,
       task_id: null,
       reason,
@@ -2560,7 +2601,7 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
     }, { runId: 'resident_recover_stale', nowIso: at });
     const escalation = recordLoopEscalation(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
-      directiveId: resident.carrier_state.carrier_session_id ?? 'resident_carrier',
+      directiveId: carrierDirectiveId,
       classification: attentionKind,
       envelopeId: envelope.envelope_id,
       escalation: {
@@ -2675,7 +2716,8 @@ export function sonarResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
     || (proofDriver && item.evidence?.production_proof !== true)).length;
   const productionReports = reportedOutcomes.filter((item) => item.evidence?.production_proof === true
     || item.evidence?.proof_mode === 'agent_reasoning').length;
-  const proofCarrier: SiteLoopPayload = resident.carrier ?? {};
+  const proofCarrier: SiteLoopPayload = asRecord(resident.carrier);
+  const proofPreferredInteractive = asRecord(proofCarrier.preferred_interactive);
   const primaryRuntimeReady = proofCarrier.runtime === 'agent-cli'
     && proofCarrier.preference === 'interactive_agent_cli'
     && proofDriver !== true;
@@ -2694,8 +2736,8 @@ export function sonarResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
       : 'attention_needed',
     mode: proofDriver ? 'proof_driver' : proofCarrier.runtime === 'agent-cli' ? 'agent_cli_reasoning' : proofCarrier.runtime === 'agent-runtime-server' ? 'agent_runtime_server_fallback_reasoning' : proofCarrier.legacy_runtime === 'nars' ? 'agent_runtime_server_fallback_reasoning' : 'no_live_carrier',
     primary_runtime_ready: primaryRuntimeReady,
-    agent_cli_ready: proofCarrier.preferred_interactive?.status === 'available' || primaryRuntimeReady,
-    agent_cli_control_path: proofCarrier.preferred_interactive?.controlPath ?? (primaryRuntimeReady ? proofCarrier.controlPath ?? null : null),
+    agent_cli_ready: proofPreferredInteractive.status === 'available' || primaryRuntimeReady,
+    agent_cli_control_path: stringOrNull(proofPreferredInteractive.controlPath) ?? (primaryRuntimeReady ? stringOrNull(proofCarrier.controlPath) : null),
     preferred_runtime_selected: proofCarrier.preference === 'interactive_agent_cli',
     production_ready: primaryRuntimeReady && productionProofFresh,
     production_proof_age_ms: productionProofAgeMs,
@@ -2782,17 +2824,18 @@ export function inspectSonarEmailResidentLoopSchema(cwd) {
 }
 
 export function resolveSonarResidentOutcome(cwd, options: SiteLoopPayload = {}) {
-  const directiveId = options.directiveId ?? options.directive_id;
+  const directiveId = stringValue(options.directiveId ?? options.directive_id);
+  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
   const store = openSiteLoopStore(resolve(cwd));
   try {
     return {
       ...resolveDirectiveOutcome(store, {
-        loopId: options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loopId,
         directiveId,
-        reason: options.reason ?? 'operator_cleanup',
-        resolvedBy: options.resolvedBy ?? 'operator',
+        reason: stringValue(options.reason, 'operator_cleanup'),
+        resolvedBy: stringValue(options.resolvedBy, 'operator'),
       }),
-      health: getLoopHealth(store, options.loopId ?? SONAR_EMAIL_RESIDENT_LOOP_ID),
+      health: getLoopHealth(store, loopId),
     };
   } finally {
     store.close();
@@ -3112,7 +3155,7 @@ function summarizeResidentBacklogRecovery(result) {
 }
 
 function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayload = {}) {
-  const nowIso = options.nowIso ?? new Date().toISOString();
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const limit = Math.max(0, Number(options.limit ?? 25));
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
@@ -3123,6 +3166,9 @@ function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayloa
     const emitted = [];
     const skipped = [];
     for (const candidate of candidates) {
+      const taskId = stringValue(candidate.task_id);
+      const taskNumber = Number(candidate.task_number);
+      const mailboxTicketId = stringOrNull(candidate.mailbox_ticket_id);
       if (emitted.length >= limit) {
         skipped.push({ task_id: candidate.task_id, task_number: candidate.task_number, reason: 'cycle_limit_reached' });
         continue;
@@ -3145,13 +3191,13 @@ function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayloa
         systemEmitterId: 'sonar.system.directive_emitter',
         residentAgentId: RESIDENT_AGENT_ID,
         residentRole: RESIDENT_ROLE,
-        taskId: candidate.task_id,
-        taskNumber: candidate.task_number,
-        sourceId: candidate.mailbox_ticket_id ?? undefined,
+        taskId,
+        taskNumber,
+        sourceId: mailboxTicketId ?? undefined,
         transitionId: `resident_backlog_recovery:${decision.reason}:${decision.directive_id ?? 'none'}:${staleBucket}`,
-        title: candidate.mailbox_ticket_id
-          ? `Mailbox ticket draft recovery: ${candidate.mailbox_ticket_id}`
-          : candidate.task_id,
+        title: mailboxTicketId
+          ? `Mailbox ticket draft recovery: ${mailboxTicketId}`
+          : taskId,
         admittedAt: nowIso,
       });
       const priorDirectiveId = decision.directive_id ?? null;
@@ -3461,38 +3507,49 @@ function summarizeReceiptReconciliation(result) {
 }
 
 function summarizeRun({ bridge, dispatch, steps }: SiteLoopPayload) {
-  const directEmissionCount = steps.find((step) => step.step_id === 'resident_directive_emission')?.evidence?.emitted_count ?? residentDirectiveRefs(bridge).length;
-  const backlogEmissionCount = steps.find((step) => step.step_id === 'resident_backlog_recovery_emission')?.evidence?.emitted_count ?? 0;
-  const ticketTaskReconciliation = steps.find((step) => step.step_id === 'ticket_task_reconciliation')?.evidence ?? null;
+  const bridgeRecord = asRecord(bridge);
+  const dispatchRecord = asRecord(dispatch);
+  const stepRecords = Array.isArray(steps) ? steps.map((step) => asRecord(step)) : [];
+  const stepEvidence = (stepId: string) => asRecord(stepRecords.find((step) => step.step_id === stepId)?.evidence);
+  const directEmissionEvidence = stepEvidence('resident_directive_emission');
+  const backlogEmissionEvidence = stepEvidence('resident_backlog_recovery_emission');
+  const ticketTaskReconciliation = stepEvidence('ticket_task_reconciliation');
+  const directEmissionCount = Number(directEmissionEvidence.emitted_count ?? residentDirectiveRefs(bridgeRecord).length);
+  const backlogEmissionCount = Number(backlogEmissionEvidence.emitted_count ?? 0);
+  const receiptReconciliation = asRecord(dispatchRecord.receipt_reconciliation);
+  const receiptsRecorded = Array.isArray(receiptReconciliation.recorded) ? receiptReconciliation.recorded.length : 0;
+  const staleEscalationCreated = stepEvidence('stale_escalation_reconciliation').created;
+  const escalationCount = Array.isArray(staleEscalationCreated) ? staleEscalationCreated.length : 0;
   return {
-    source_sync: steps.find((step) => step.step_id === 'source_sync')?.evidence ?? null,
+    source_sync: stepEvidence('source_sync'),
     ticket_task_reconciliation: ticketTaskReconciliation,
     ticket_tasks_created: ticketTaskReconciliation?.created ?? 0,
-    evaluated: bridge?.evaluated ?? 0,
-    materialized: bridge?.materialized ?? 0,
-    duplicates: bridge?.duplicates ?? 0,
-    bridge_errors: bridge?.errors ?? 0,
+    evaluated: bridgeRecord.evaluated ?? 0,
+    materialized: bridgeRecord.materialized ?? 0,
+    duplicates: bridgeRecord.duplicates ?? 0,
+    bridge_errors: bridgeRecord.errors ?? 0,
     resident_directives_emitted: directEmissionCount + backlogEmissionCount,
-    pending_directives: dispatch?.pending_count ?? 0,
-    directives_dispatched: dispatch?.dispatched?.length ?? 0,
-    directives_skipped: dispatch?.skipped?.length ?? 0,
-    receipts_recorded: dispatch?.receipt_reconciliation?.recorded?.length ?? 0,
-    resident_supervisor: steps.find((step) => step.step_id === 'resident_supervisor')?.evidence?.status ?? 'not_enabled',
-    agent_outcomes: steps.find((step) => step.step_id === 'agent_outcome_reconciliation')?.evidence?.counts ?? {},
-    escalations: steps.find((step) => step.step_id === 'stale_escalation_reconciliation')?.evidence?.created?.length ?? 0,
-    step_count: steps.length,
+    pending_directives: dispatchRecord.pending_count ?? 0,
+    directives_dispatched: Array.isArray(dispatchRecord.dispatched) ? dispatchRecord.dispatched.length : 0,
+    directives_skipped: Array.isArray(dispatchRecord.skipped) ? dispatchRecord.skipped.length : 0,
+    receipts_recorded: receiptsRecorded,
+    resident_supervisor: stepEvidence('resident_supervisor').status ?? 'not_enabled',
+    agent_outcomes: asRecord(stepEvidence('agent_outcome_reconciliation').counts),
+    escalations: escalationCount,
+    step_count: stepRecords.length,
   };
 }
 
 function sourceSyncRefs(result) {
+  const resultRecord = asRecord(result);
   return [
-    ...(result?.cursor_path ? [{ kind: 'sync_cursor', ref: result.cursor_path }] : []),
-    ...(result?.health_path ? [{ kind: 'sync_health', ref: result.health_path }] : []),
+    ...(resultRecord.cursor_path ? [{ kind: 'sync_cursor', ref: resultRecord.cursor_path }] : []),
+    ...(resultRecord.health_path ? [{ kind: 'sync_health', ref: resultRecord.health_path }] : []),
   ];
 }
 
 export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}) {
-  const nowIso = options.nowIso ?? new Date().toISOString();
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const nowMs = Date.parse(nowIso);
   const deliveryStaleMinutes = Number(options.deliveryStaleMinutes ?? 5);
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
@@ -3500,7 +3557,7 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
     ? options.directiveIds.map(String).filter(Boolean)
     : [];
   const includeBacklog = options.includeBacklog !== false;
-  const resident = options.resident ?? null;
+  const resident = asRecord(options.resident);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd);
   ensureSiteLoopTables(lifecycleStore.db);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
@@ -3566,7 +3623,7 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
       action_stale_minutes: actionStaleMinutes,
       scoped_directive_ids: directiveIds,
       include_backlog: includeBacklog,
-      resident_status: resident?.status ?? null,
+      resident_status: resident.status ?? null,
       counts,
       classifications,
       outcome_records: outcomeRecords,
@@ -3702,6 +3759,11 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
     const existing = latestDirectiveOutcome(store.db, classification.directive_id);
     if (existing?.outcome === 'superseded') return null;
   }
+  const observedAt = stringValue(nowIso, new Date().toISOString());
+  const eventAt = stringValue(
+    classification.reported_at ?? classification.triaged_at ?? classification.receipt_at ?? classification.created_at,
+    observedAt,
+  );
   return recordDirectiveOutcome(store, {
     loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
     directiveId: classification.directive_id,
@@ -3712,56 +3774,61 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
     receiptId: classification.receipt_id ?? null,
     reason: classification.reason ?? null,
     evidence: classification,
-    eventAt: classification.reported_at ?? classification.triaged_at ?? classification.receipt_at ?? classification.created_at ?? nowIso,
-    observedAt: nowIso,
+    eventAt,
+    observedAt,
     recordedAt: new Date().toISOString(),
   });
 }
 
-function reconcileLoopEscalations(siteRoot, store, outcome, { runId, nowIso = new Date().toISOString() }: SiteLoopPayload = {}) {
+function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPayload = {}) {
+  const runId = stringValue(options.runId);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const created = [];
   const cleared = [];
   const observed = [];
-  for (const item of outcome.classifications ?? []) {
+  const classifications = Array.isArray(outcome.classifications) ? outcome.classifications.map((item) => asRecord(item)) : [];
+  for (const item of classifications) {
+    const directiveId = stringValue(item.directive_id);
+    const classificationStatus = stringValue(item.status);
     const observation = recordLoopClassificationObservation(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
-      directiveId: item.directive_id,
-      classification: item.status,
+      directiveId,
+      classification: classificationStatus,
       observation: { ...item, run_id: runId },
       at: nowIso,
     });
     observed.push(observation);
-    if (['reported', 'refused', 'superseded'].includes(item.status)) {
+    if (['reported', 'refused', 'superseded'].includes(classificationStatus)) {
       for (const classification of ['delivery_stale', 'action_stale', 'blocked_no_carrier', 'stale_busy_carrier']) {
-        const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId: item.directive_id, classification });
+        const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId, classification });
         if (existing?.status === 'opened') {
-          const attentionId = existing.envelope_id ?? existing.escalation_id;
+          const attentionId = stringValue(existing.envelope_id ?? existing.escalation_id);
           const ack = acknowledgeLoopAttention(store, {
             attentionId,
-            reason: `cleared_by_directive_outcome:${item.status}`,
+            reason: `cleared_by_directive_outcome:${classificationStatus}`,
             acknowledgedBy: 'sonar.email-resident.loop',
             at: nowIso,
           });
-          cleared.push({ directive_id: item.directive_id, classification, outcome: item.status, attention_id: attentionId, status: ack.status });
+          cleared.push({ directive_id: directiveId, classification, outcome: classificationStatus, attention_id: attentionId, status: ack.status });
         }
       }
     }
-    if (!['delivery_stale', 'action_stale', 'blocked_no_carrier'].includes(item.status)) continue;
+    if (!['delivery_stale', 'action_stale', 'blocked_no_carrier'].includes(classificationStatus)) continue;
     const count = countRecentConsecutiveLoopClassificationObservations(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
-      directiveId: item.directive_id,
-      classification: item.status,
+      directiveId,
+      classification: classificationStatus,
       limit: 3,
     });
     if (count < 3) continue;
-    const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId: item.directive_id, classification: item.status });
+    const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId, classification: classificationStatus });
     if (existing?.status === 'opened') continue;
-    const severity = loopAttentionSeverity(siteRoot, item.status);
+    const severity = loopAttentionSeverity(siteRoot, classificationStatus);
     const envelope = writeOperatorAttentionEnvelope(siteRoot, { ...item, severity }, { runId, nowIso });
     const escalation = recordLoopEscalation(store, {
       loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
-      directiveId: item.directive_id,
-      classification: item.status,
+      directiveId,
+      classification: classificationStatus,
       envelopeId: envelope.envelope_id,
       escalation: { ...item, severity, run_id: runId, envelope_path: envelope.path },
       at: nowIso,
@@ -4267,7 +4334,7 @@ function fixtureDirectiveIds(siteRoot, envelopeId) {
   }
 }
 
-function mailboxProofDirectiveIds(siteRoot, run, beforeDirectiveIds: any[] = [], options: SiteLoopPayload = {}) {
+function mailboxProofDirectiveIds(siteRoot, run, beforeDirectiveIds: unknown[] = [], options: SiteLoopPayload = {}) {
   const before = new Set(beforeDirectiveIds.map(String));
   const ids = directiveIdsFromRun(run).filter((id) => !before.has(id));
   if (ids.length === 0) return [];
@@ -4341,8 +4408,8 @@ function controlledMailboxSourceStatus(siteRoot, controlledSource, options: Site
       }
     }
   }
-  const matchedDirectiveIds = (options.directiveIds ?? []).map(String);
-  const runSummary = options.run?.summary ?? {};
+  const matchedDirectiveIds = Array.isArray(options.directiveIds) ? options.directiveIds.map(String) : [];
+  const runSummary = asRecord(asRecord(options.run).summary);
   return {
     schema: 'narada.sonar.controlled_mailbox_source_status.v1',
     status: matchedDirectiveIds.length > 0

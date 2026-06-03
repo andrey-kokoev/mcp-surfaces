@@ -12,19 +12,24 @@ const DEFAULT_BLOCKED_COMMANDS = new Set([
   'wsl.exe',
 ]);
 
-export function createExecutionPolicy(options: any = {}): any {
-  const allowedRoots = normalizeAllowedRoots(options.allowedRoots);
-  const allowedCommands = new Set(normalizeList(options.allowedCommands).map((item) => item.toLowerCase()));
-  const allowedPrefixes = normalizeList(options.allowedPrefixes).map((prefix) => normalizePrefix(prefix));
-  const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(options.blockedCommands).map((item) => item.toLowerCase())]);
+export function createExecutionPolicy(options: unknown = {}) {
+  const optionsRecord = asRecord(options);
+  const allowedRoots = normalizeAllowedRoots(optionsRecord.allowedRoots);
+  const allowedCommands = new Set(normalizeList(optionsRecord.allowedCommands).map((item) => item.toLowerCase()));
+  const allowedPrefixes = normalizeList(optionsRecord.allowedPrefixes).map((prefix) => normalizePrefix(prefix));
+  const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(optionsRecord.blockedCommands).map((item) => item.toLowerCase())]);
   return {
     allowedRoots,
     allowedCommands,
     allowedPrefixes,
     blockedCommands,
-    maxTimeoutMs: clampInteger(options.maxTimeoutMs, 1, 300_000, 60_000),
-    maxOutputBytes: clampInteger(options.maxOutputBytes, 1, 20 * 1024 * 1024, 1024 * 1024),
+    maxTimeoutMs: clampInteger(optionsRecord.maxTimeoutMs, 1, 300_000, 60_000),
+    maxOutputBytes: clampInteger(optionsRecord.maxOutputBytes, 1, 20 * 1024 * 1024, 1024 * 1024),
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 export function parseTrustedProjectRootsFromTrustConfig(configPath) {

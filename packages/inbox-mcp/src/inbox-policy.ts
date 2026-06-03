@@ -1,15 +1,22 @@
+type InboxRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): InboxRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as InboxRecord : {};
+}
+
 export function normalizeTitle(title: unknown): string {
   return String(title ?? '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-export function classifyEnvelope(envelope: any): { categories: string[]; recommendation: string } {
-  const title = normalizeTitle(envelope.payload?.title ?? envelope.title ?? '');
-  const summary = normalizeTitle(envelope.payload?.summary ?? '');
+export function classifyEnvelope(envelope: unknown): { categories: string[]; recommendation: string } {
+  const envelopeRecord = asRecord(envelope);
+  const payload = asRecord(envelopeRecord.payload);
+  const title = normalizeTitle(payload.title ?? envelopeRecord.title ?? '');
+  const summary = normalizeTitle(payload.summary ?? '');
   const text = `${title} ${summary}`;
-  const kind = envelope.kind ?? 'unknown';
-  const recommendation = String(envelope.payload?.recommendation ?? '').toLowerCase();
-  const hasCapaRequest = envelope.payload?.capa_request && typeof envelope.payload.capa_request === 'object';
-  const categories: string[] = [];
+  const kind = envelopeRecord.kind ?? 'unknown';
+  const recommendation = String(payload.recommendation ?? '').toLowerCase();
+  const hasCapaRequest = payload.capa_request && typeof payload.capa_request === 'object';
   const keywordMap: Record<string, RegExp> = {
     review_request: /\breview\b.*\btask\b|\breview\b.*\brequest\b/,
     mcp_gap: /\bmcp gap\b|\bmcp.*missing\b|\bmcp.*lack\b/,
@@ -22,6 +29,7 @@ export function classifyEnvelope(envelope: any): { categories: string[]; recomme
     task_lifecycle: /\btask lifecycle\b|\btask governance\b/,
     builder_idle: /\bbuilder idle\b|\bno claimable\b|\bno tasks\b/,
   };
+  const categories: string[] = [];
   for (const [category, pattern] of Object.entries(keywordMap)) {
     if (pattern.test(text)) categories.push(category);
   }
@@ -36,21 +44,22 @@ export function classifyEnvelope(envelope: any): { categories: string[]; recomme
   return { categories, recommendation };
 }
 
-export function evaluateEnvelopeSeverity(envelope: any): any {
-  if (envelope.target_role) {
-    const explicitSeverity = envelope.severity ?? 50;
+export function evaluateEnvelopeSeverity(envelope: unknown): unknown {
+  const envelopeRecord = asRecord(envelope);
+  if (envelopeRecord.target_role) {
+    const explicitSeverity = typeof envelopeRecord.severity === 'number' ? envelopeRecord.severity : 50;
     return {
       severity: explicitSeverity,
       action: 'materialize',
-      targetRole: envelope.target_role,
+      targetRole: envelopeRecord.target_role,
       relativePriority: explicitSeverity,
       reason: 'explicit_target_role',
     };
   }
 
-  const kind = envelope.kind ?? 'observation';
-  const authority = envelope.authority?.level ?? 'agent_reported';
-  const payload = envelope.payload ?? {};
+  const kind = envelopeRecord.kind ?? 'observation';
+  const authority = asRecord(envelopeRecord.authority).level ?? 'agent_reported';
+  const payload = asRecord(envelopeRecord.payload);
   const recommendation = String(payload.recommendation ?? '');
   const proposals = Array.isArray(payload.proposal) ? payload.proposal : [];
 

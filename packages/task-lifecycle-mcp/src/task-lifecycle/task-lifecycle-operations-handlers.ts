@@ -275,7 +275,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
         results.push(result);
       }
       const failed = results.filter((result) => result.status !== 'passed');
-      const payload: Record<string, any> = {
+      const payload: Record<string, unknown> = {
         schema: 'narada.task_lifecycle.run_tests.v0',
         status: failed.length === 0 ? 'passed' : 'failed',
         selector,

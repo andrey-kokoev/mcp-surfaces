@@ -6,7 +6,11 @@ import { readIndexedInboxBacklog } from '../inbox/inbox-index.js';
 import { hasEnvelopeCoverageEvidence } from '../inbox/inbox-policy.js';
 import { evaluateEnvelopeSeverity } from './inbox-bridge.js';
 
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
+type InboxWorkboardItem = TaskLifecyclePayload & {
+  severity: number;
+  received_at: string | null;
+};
 
 function findExactLinkedTask(store, envelope) {
   if (!store || !envelope?.envelope_id) return null;
@@ -45,17 +49,17 @@ function findExactLinkedTask(store, envelope) {
   };
 }
 
-export function buildInboxWorkboard(siteRoot, { store }: Record<string, any> = {}) {
-  const index = readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity });
-  const rows = index.rows as TaskLifecyclePayload[];
-  const backlog: TaskLifecyclePayload[] = [];
+export function buildInboxWorkboard(siteRoot, { store }: Record<string, unknown> = {}) {
+  const index = readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }) as TaskLifecyclePayload;
+  const rows = Array.isArray(index.rows) ? index.rows as TaskLifecyclePayload[] : [];
+  const backlog: InboxWorkboardItem[] = [];
   const linkedTaskSuppressed = [];
   let highSeverity = 0;
 
   for (const row of rows) {
     const envelope = row.envelope;
     const linkedTask = findExactLinkedTask(store, envelope);
-    const item = {
+    const item: InboxWorkboardItem = {
       envelope_id: row.envelope_id,
       kind: row.kind,
       authority_level: row.authority_level,
@@ -63,8 +67,8 @@ export function buildInboxWorkboard(siteRoot, { store }: Record<string, any> = {
       summary: row.summary,
       principal: row.principal,
       source_ref: row.source_ref,
-      received_at: row.received_at,
-      severity: row.severity ?? 0,
+      received_at: typeof row.received_at === 'string' ? row.received_at : null,
+      severity: typeof row.severity === 'number' ? row.severity : 0,
       severity_reason: row.severity_reason,
       target_role: row.target_role,
       action: row.action,

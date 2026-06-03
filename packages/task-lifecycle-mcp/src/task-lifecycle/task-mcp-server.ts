@@ -131,7 +131,7 @@ export function configureTaskLifecycleMcpRuntime({
 
   runtimeStderr = stderr;
   SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
-  siteRoot = resolve(options.siteRoot ?? cwd);
+  siteRoot = resolve(String(options.siteRoot ?? cwd));
   try {
     store = openTaskLifecycleStore(siteRoot);
   } catch (error) {
@@ -152,7 +152,7 @@ function refreshStore() {
   ensureRuntimeConfigured();
   try {
     // This MCP process shares `store` across dispatch helpers. With node:sqlite,
-    // closing a handle immediately invalidates any helper still holding it, so
+    // closing a handle immediately invalidates helpers still holding it, so
     // refresh must be non-destructive.
     store = openTaskLifecycleStore(siteRoot);
     return true;
@@ -1647,7 +1647,7 @@ function testTargetsForSelector(selector) {
 }
 
 function parseArgs(argv) {
-  const parsed: Record<string, any> = { help: false };
+  const parsed: Record<string, unknown> = { help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -2214,7 +2214,7 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
         throw new Error('changed_files_conflicts_with_no_files_changed');
       }
       const autoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
-      const finishOptions: Record<string, any> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
+      const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
       if (finishChangedFiles) finishOptions.changedFiles = JSON.stringify(finishChangedFiles);
       if (!finishChangedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);
       if (noFilesChanged) finishOptions.changedFiles = JSON.stringify([NO_FILES_CHANGED_MARKER]);
@@ -2344,12 +2344,12 @@ function extractEnvelopeId(text) {
   return match ? match[0] : null;
 }
 
-function readIndexedEnvelope(siteRoot, envelopeId): Record<string, any> | null {
+function readIndexedEnvelope(siteRoot, envelopeId): Record<string, unknown> | null {
   const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
-    const row = index.db.prepare('SELECT * FROM inbox_envelopes WHERE envelope_id = ?').get(envelopeId) as Record<string, any>;
+    const row = index.db.prepare('SELECT * FROM inbox_envelopes WHERE envelope_id = ?').get(envelopeId) as Record<string, unknown>;
     if (!row) return null;
-    return { ...row, envelope: JSON.parse(row.payload_json) };
+    return { ...row, envelope: JSON.parse(String(row.payload_json)) };
   } finally {
     index.db.close();
   }
@@ -2541,7 +2541,7 @@ function listRecurringDefinitions(taskStore, { status = null, limit = 50 } = {})
   return rows.map(hydrateRecurringDefinition);
 }
 
-function listDueRecurringDefinitions(taskStore, { now, limit = 20 }: Record<string, any> = {}) {
+function listDueRecurringDefinitions(taskStore, { now, limit = 20 }: Record<string, unknown> = {}) {
   ensureRecurringTaskTables(taskStore);
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
   const rows = taskStore.db.prepare(`
@@ -2795,10 +2795,10 @@ function updateRecurringDefinitionStatus({ store, siteRoot, recurrenceId, actorA
 function requireRecurringAuthorityActor({ store, siteRoot, actorAgentId }) {
   const actorRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, actorAgentId);
   const actorRole = actorRoleResolution.role;
-  if (!['architect', 'operator'].includes(actorRole)) {
+  if (!['architect', 'operator'].includes(String(actorRole))) {
     throw new Error(`recurring_task_actor_not_authorized: ${actorAgentId}`);
   }
-  return actorRole;
+  return String(actorRole);
 }
 
 function normalizeRecurringAuthorityBasis(value) {
@@ -3129,12 +3129,12 @@ async function withAuthoredRosterJsonPreserved(root, fn) {
  * Returns the parsed tool result. Used to verify code changes without
  * restarting the long-lived session MCP server.
  */
-async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<string, any> = {}) {
+async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<string, unknown> = {}) {
   const fullServerPath = resolve(cwd, serverPath);
   const init = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test_mcp_tool', version: '1.0' } } });
   const req = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: toolName, arguments: toolArgs } });
   const stdin = init + '\n' + req + '\n';
-  const timeoutSeconds = Math.min(300, Math.max(1, Number.isFinite(options.timeoutSeconds) ? options.timeoutSeconds : 10));
+  const timeoutSeconds = Math.min(300, Math.max(1, typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) ? options.timeoutSeconds : 10));
   const timeoutMs = timeoutSeconds * 1000;
 
   return new Promise((res, rej) => {

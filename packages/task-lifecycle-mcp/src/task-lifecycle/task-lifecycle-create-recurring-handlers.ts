@@ -1,4 +1,8 @@
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
+
+function asPayload(value: unknown): TaskLifecyclePayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
+}
 
 export const TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES = Object.freeze([
   "task_lifecycle_roster_admit",
@@ -74,7 +78,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
 
 
     case 'task_lifecycle_create': {
-      const payloadSource = dispatchContext.payloadSource ?? null;
+      const payloadSource = asPayload(dispatchContext.payloadSource);
       const title = stringField(args, 'title');
       if (!title) throw new Error('title_required');
       const goal = stringField(args, 'goal') || title;
@@ -118,10 +122,10 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (targetRole) {
         frontMatterLines.push(`target_role: ${targetRole}`);
       }
-      if (payloadSource?.ref) {
+      if (payloadSource.ref) {
         frontMatterLines.push(`creation_payload_ref: ${payloadSource.ref}`);
       }
-      if (payloadSource?.sha256) {
+      if (payloadSource.sha256) {
         frontMatterLines.push(`creation_payload_sha256: ${payloadSource.sha256}`);
       }
       frontMatterLines.push('---');
@@ -177,8 +181,8 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         title,
         target_role: targetRole || preferredRole,
         preferred_role: preferredRole,
-        payload_ref: payloadSource?.ref ?? null,
-        payload_sha256: payloadSource?.sha256 ?? null,
+        payload_ref: payloadSource.ref ?? null,
+        payload_sha256: payloadSource.sha256 ?? null,
       }, payloadSource));
     }
 

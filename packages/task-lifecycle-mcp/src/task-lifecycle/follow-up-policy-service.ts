@@ -1,13 +1,13 @@
 const FOLLOW_UP_SCHEMA = 'narada.task.follow_up_policy.v0';
 const POST_CLOSEOUT_CONTINUATION_SCHEMA = 'narada.task.post_closeout_continuation.v0';
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 export function evaluatePostTransitionFollowups(input: TaskLifecyclePayload = {}) {
-  const event = input.event && typeof input.event === 'object' ? input.event : {};
-  const sourceTask = input.source_task && typeof input.source_task === 'object' ? input.source_task : {};
-  const result = input.result && typeof input.result === 'object' ? input.result : {};
-  const signals = input.signals && typeof input.signals === 'object' ? input.signals : {};
-  const actor = input.actor && typeof input.actor === 'object' ? input.actor : {};
+  const event = input.event && typeof input.event === 'object' ? input.event as TaskLifecyclePayload : {};
+  const sourceTask = input.source_task && typeof input.source_task === 'object' ? input.source_task as TaskLifecyclePayload : {};
+  const result = input.result && typeof input.result === 'object' ? input.result as TaskLifecyclePayload : {};
+  const signals = input.signals && typeof input.signals === 'object' ? input.signals as TaskLifecyclePayload : {};
+  const actor = input.actor && typeof input.actor === 'object' ? input.actor as TaskLifecyclePayload : {};
   const transitionKind = stringValue(event.transition_kind ?? event.kind ?? result.transition ?? result.close_action ?? 'unknown');
   const sourceTaskNumber = numberValue(sourceTask.task_number ?? event.task_number ?? result.task_number);
   const sourceTaskId = stringValue(sourceTask.task_id ?? event.task_id ?? result.task_id);
@@ -93,15 +93,17 @@ export function evaluatePostTransitionFollowups(input: TaskLifecyclePayload = {}
 }
 
 export function classifyPostCloseoutContinuation(input: TaskLifecyclePayload = {}) {
-  const workboard = input.workboard && typeof input.workboard === 'object' ? input.workboard : {};
-  const result = input.result && typeof input.result === 'object' ? input.result : {};
-  const pauseTrigger = input.pause_trigger && typeof input.pause_trigger === 'object' ? input.pause_trigger : null;
+  const workboard = input.workboard && typeof input.workboard === 'object' ? input.workboard as TaskLifecyclePayload : {};
+  const result = input.result && typeof input.result === 'object' ? input.result as TaskLifecyclePayload : {};
+  const pauseTrigger = input.pause_trigger && typeof input.pause_trigger === 'object' ? input.pause_trigger as TaskLifecyclePayload : null;
   const recommendation = workboard.recommendation ?? null;
   const environmentPressure = workboard.environment_pressure ?? null;
+  const environmentPressureRecord = environmentPressure && typeof environmentPressure === 'object' ? environmentPressure as TaskLifecyclePayload : {};
   const correctiveDebtReadiness = workboard.corrective_debt_readiness ?? null;
   const correctiveDebtPressure = classifyCorrectiveDebtPressure(correctiveDebtReadiness);
   const actionable = Boolean(workboard.agent_actionable_recommendation ?? workboard.executable_work_available ?? recommendation);
-  const downstreamCount = Number(workboard.counts?.downstream_role_followups ?? 0);
+  const counts = workboard.counts && typeof workboard.counts === 'object' ? workboard.counts as TaskLifecyclePayload : {};
+  const downstreamCount = Number(counts.downstream_role_followups ?? 0);
 
   if (pauseTrigger) {
     return baseContinuation({
@@ -124,11 +126,11 @@ export function classifyPostCloseoutContinuation(input: TaskLifecyclePayload = {
     });
   }
 
-  if (environmentPressure?.status === 'active') {
+  if (environmentPressureRecord.status === 'active') {
     return baseContinuation({
       status: 'terminal_blocked_no_next_action',
       expected_agent_behavior: 'report_blocker',
-      reason: environmentPressure.pressure?.reason ?? 'environment_pressure_active_without_agent_actionable_work',
+      reason: (environmentPressureRecord.pressure && typeof environmentPressureRecord.pressure === 'object' ? (environmentPressureRecord.pressure as TaskLifecyclePayload).reason : null) ?? 'environment_pressure_active_without_agent_actionable_work',
       workboard,
       result,
     });

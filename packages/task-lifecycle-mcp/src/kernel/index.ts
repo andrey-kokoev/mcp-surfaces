@@ -1,4 +1,4 @@
-export function normalizeToolName(name, aliases: Record<string, any> = {}) {
+export function normalizeToolName(name, aliases: Record<string, unknown> = {}) {
   return aliases[name] ?? name;
 }
 
@@ -6,7 +6,7 @@ export function tool(name, description, inputSchema) {
   return { name, description, inputSchema };
 }
 
-export function objectSchema(properties, required = [], options: Record<string, any> = {}) {
+export function objectSchema(properties, required = [], options: Record<string, unknown> = {}) {
   const schemaProperties = options.payloadRef === true
     ? {
       ...properties,
@@ -78,7 +78,7 @@ function validateValue(path, value, schema, errors) {
     for (const key of required) {
       if (!(key in record) || record[key] === undefined || record[key] === null) {
         const childPath = path ? `${path}.${key}` : key;
-        errors.push({ field: childPath, expected: props[key]?.type ?? 'any', received: 'missing', message: `Missing required field: ${childPath}` });
+        errors.push({ field: childPath, expected: props[key]?.type ?? 'unknown', received: 'missing', message: `Missing required field: ${childPath}` });
       }
     }
     for (const [key, childValue] of Object.entries(record)) {

@@ -15,9 +15,9 @@ let activeToolName: string | null = null;
 
 class McpToolError extends Error {
   codeName: string;
-  details: any;
+  details: unknown;
 
-  constructor(codeName: string, message: string, details: any = {}) {
+  constructor(codeName: string, message: string, details: unknown = {}) {
     super(message);
     this.name = 'McpToolError';
     this.codeName = codeName;
@@ -32,7 +32,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   });
 }
 
-export async function runStdioServer(options: any) {
+export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
   let buffer = '';
   let sawFramedInput = false;
@@ -57,24 +57,24 @@ export async function runStdioServer(options: any) {
   }
 }
 
-export function createServerState(options: any): any {
-  const mode = options.mode;
-  if (!['read', 'write'].includes(mode)) throw new Error('mode_must_be_read_or_write');
+export function createServerState(options: Record<string, unknown>): Record<string, unknown> {
+  const mode = typeof options.mode === 'string' ? options.mode : null;
+  if (!['read', 'write'].includes(mode ?? '')) throw new Error('mode_must_be_read_or_write');
   const allowedRoots = buildAllowedRoots({
-    codexConfigPath: options.rootsFromCodexConfig,
-    explicitRoots: options.allowedRoots,
-    rootsConfigPath: options.rootsConfig,
+    codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
+    explicitRoots: stringList(options.allowedRoots),
+    rootsConfigPath: stringOrNull(options.rootsConfig),
   });
-  const outputRoot = resolve(options.outputRoot ?? process.cwd());
+  const outputRoot = resolve(stringOrNull(options.outputRoot) ?? process.cwd());
   return {
     mode,
     allowedRoots,
     outputRoot,
-    auditLogDir: options.auditLogDir ? resolve(options.auditLogDir) : null,
+    auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
   };
 }
 
-export function handleRequest(request: any, state: any): any {
+export function handleRequest(request: Record<string, unknown>, state: Record<string, unknown>) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
     const result = dispatchMethod(request.method, request.params ?? {}, state);
@@ -476,7 +476,7 @@ function resolvePatchTarget(filePatch, state) {
   return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_path' });
 }
 
-function resolveAllowedToolPath(inputPath, allowedRoots, context: any = {}) {
+function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string, unknown> = {}) {
   try {
     return resolvePolicyAllowedPath(inputPath, allowedRoots);
   } catch (error) {
@@ -598,8 +598,8 @@ function objectSchema(properties, required = []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
-function parseArgs(argv: string[]): any {
-  const options: any = { mode: 'read', allowedRoots: [] };
+function parseArgs(argv: string[]): Record<string, unknown> {
+  const options: Record<string, unknown> & { allowedRoots: string[] } = { mode: 'read', allowedRoots: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
@@ -655,11 +655,11 @@ function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex');
 }
 
-function diagnosticError(codeName, message, details: any = {}) {
+function diagnosticError(codeName, message, details: unknown = {}) {
   return new McpToolError(codeName, message, details);
 }
 
-function patchDiagnosticError(codeName, patch, details: any = {}) {
+function patchDiagnosticError(codeName, patch, details: unknown = {}) {
   const firstNonEmptyLine = splitLines(patch)[0] ?? '';
   const detectedFormat = firstNonEmptyLine === '*** Begin Patch'
     ? 'codex_apply_patch'
@@ -669,7 +669,7 @@ function patchDiagnosticError(codeName, patch, details: any = {}) {
         ? 'unified_diff_incomplete'
         : 'unknown';
   return diagnosticError(codeName, `${codeName}: expected unified diff with ---/+++ file headers and @@ hunks`, {
-    ...details,
+    ...asRecord(details),
     detected_format: detectedFormat,
     first_non_empty_line: firstNonEmptyLine,
   });
@@ -693,22 +693,30 @@ function errorDiagnostic(error) {
     details: {},
   };
 }
-
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function stringField(record, key) {
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+function stringField(record: unknown, key: string): string | null {
   const value = asRecord(record)[key];
   return typeof value === 'string' ? value : null;
 }
 
-function integerField(record, key) {
+function integerField(record: unknown, key: string): number | null {
   const value = asRecord(record)[key];
-  return Number.isInteger(value) ? value : null;
+  return Number.isInteger(value) ? Number(value) : null;
 }
 
-function booleanField(record, key) {
+function booleanField(record: unknown, key: string): boolean | null {
   const value = asRecord(record)[key];
   return typeof value === 'boolean' ? value : null;
 }

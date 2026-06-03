@@ -20,7 +20,11 @@ import {
 
 const INBOX_DIR = '.ai/inbox-envelopes';
 const TASKS_DIR = '.ai/do-not-open/tasks';
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
+
+function asPayload(value: unknown): TaskLifecyclePayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
+}
 
 const AUTO_MATERIALIZE_THRESHOLD = 50;
 
@@ -184,7 +188,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
   const payload = envelope.payload ?? {};
   const title = `[From Inbox] ${payload.title ?? envelope.title ?? 'Untitled'}`;
   const goal = payload.summary ?? payload.description ?? '';
-  const routing = options.routing ?? deriveRoutingFromEnvelopePayload(envelope, severityResult, options.store ?? null);
+  const routing = asPayload(options.routing ?? deriveRoutingFromEnvelopePayload(envelope, severityResult, options.store ?? null));
 
   const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
   const proposals = Array.isArray(payload.proposal) ? payload.proposal : [];
@@ -196,7 +200,8 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     `**Authority:** ${envelope.authority?.level ?? 'unknown'} (${envelope.authority?.principal ?? 'unknown'})`,
     `**Source:** ${envelope.source?.ref ?? 'unknown'}`,
   ];
-  if (routing.preferredAgentId || routing.targetRole || routing.warnings.length > 0) {
+  const routingWarnings = Array.isArray(routing.warnings) ? routing.warnings : [];
+  if (routing.preferredAgentId || routing.targetRole || routingWarnings.length > 0) {
     contextLines.push(
       '',
       '**Lifecycle Routing:**',
@@ -204,7 +209,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
         target_role: routing.targetRole,
         preferred_agent_id: routing.preferredAgentId,
         source: routing.source,
-        warnings: routing.warnings,
+        warnings: routingWarnings,
       }, null, 2)
     );
   }
@@ -256,7 +261,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
 }
 
 /**
- * Build the read-side bridge decision before any write-side effects run.
+ * Build the read-side bridge decision before write-side effects run.
  * Outcome statuses are intentionally effect-free:
  * - ignored: severity/action says not to materialize
  * - duplicate: an existing task/mapping already covers the envelope
@@ -354,8 +359,17 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
   const store = openTaskLifecycleStore(cwd);
   const routing = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
   const spec = buildTaskSpecFromEnvelope(envelope, severityResult, { routing });
+  const specRecord = asPayload(spec);
+  const requiredWork = Array.isArray(specRecord.requiredWork) ? specRecord.requiredWork.map(String) : [];
+  const nonGoals = Array.isArray(specRecord.nonGoals) ? specRecord.nonGoals.map(String) : [];
+  const acceptanceCriteria = Array.isArray(specRecord.acceptanceCriteria) ? specRecord.acceptanceCriteria.map(String) : [];
+  const preferredRole = typeof specRecord.preferredRole === 'string' ? specRecord.preferredRole : null;
+  const targetRole = typeof specRecord.targetRole === 'string' ? specRecord.targetRole : null;
+  const preferredAgentId = typeof specRecord.preferredAgentId === 'string' ? specRecord.preferredAgentId : null;
+  const relativePriority = typeof specRecord.relativePriority === 'number' ? specRecord.relativePriority : 0;
+  const priorityReason = typeof specRecord.priorityReason === 'string' ? specRecord.priorityReason : null;
   const taskNumber = (await allocateTaskNumbers(cwd, 1))[0];
-  const slug = slugify(spec.title);
+  const slug = slugify(String(specRecord.title ?? 'inbox-task'));
   const taskId = `${todayYmd()}-${taskNumber}-${slug}`;
   const tasksDir = join(resolve(cwd), TASKS_DIR);
   const filePath = join(tasksDir, `${taskId}.md`);
@@ -378,13 +392,13 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
 
   const body = renderTaskBodyFromSpec({
     spec: {
-      title: spec.title,
-      goal: spec.goal,
-      context: spec.context,
-      chapter: spec.chapter ?? null,
-      required_work: spec.requiredWork,
-      non_goals: spec.nonGoals,
-      acceptance_criteria: spec.acceptanceCriteria,
+      title: String(specRecord.title ?? ''),
+      goal: String(specRecord.goal ?? ''),
+      context: String(specRecord.context ?? ''),
+      chapter: typeof specRecord.chapter === 'string' ? specRecord.chapter : null,
+      required_work: requiredWork.join('\n'),
+      non_goals: nonGoals.join('\n'),
+      acceptance_criteria: acceptanceCriteria,
     },
     executionNotes,
     verification: null,
@@ -393,21 +407,21 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
   const frontMatterLines = [
     '---',
     `number: ${taskNumber}`,
-    `governed_by: ${spec.preferredRole || 'unknown'}`,
+    `governed_by: ${preferredRole || 'unknown'}`,
     'status: opened',
   ];
-  if (spec.preferredRole) {
-    frontMatterLines.push(`preferred_role: ${spec.preferredRole}`);
-    frontMatterLines.push(`target_role: ${spec.targetRole}`);
+  if (preferredRole) {
+    frontMatterLines.push(`preferred_role: ${preferredRole}`);
+    frontMatterLines.push(`target_role: ${targetRole ?? preferredRole}`);
   }
-  if (spec.preferredAgentId) {
-    frontMatterLines.push(`preferred_agent_id: ${spec.preferredAgentId}`);
+  if (preferredAgentId) {
+    frontMatterLines.push(`preferred_agent_id: ${preferredAgentId}`);
   }
-  if (typeof spec.relativePriority === 'number') {
-    frontMatterLines.push(`relative_priority: ${spec.relativePriority}`);
+  if (relativePriority) {
+    frontMatterLines.push(`relative_priority: ${relativePriority}`);
   }
-  if (spec.priorityReason) {
-    frontMatterLines.push(`priority_reason: ${spec.priorityReason}`);
+  if (priorityReason) {
+    frontMatterLines.push(`priority_reason: ${priorityReason}`);
   }
   frontMatterLines.push('---');
 
@@ -420,30 +434,30 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
       task_id: taskId,
       task_number: taskNumber,
       status: 'opened',
-      governed_by: spec.preferredRole || null,
+      governed_by: preferredRole,
       closed_at: null,
       closed_by: null,
       reopened_at: null,
       reopened_by: null,
       continuation_packet_json: null,
       updated_at: now,
-      relative_priority: spec.relativePriority ?? 0,
-      priority_reason: spec.priorityReason ?? null,
+      relative_priority: relativePriority,
+      priority_reason: priorityReason,
     });
     store.upsertTaskSpec({
       task_id: taskId,
       task_number: taskNumber,
-      title: spec.title,
+      title: String(specRecord.title ?? ''),
       chapter_markdown: null,
-      goal_markdown: spec.goal,
-      context_markdown: spec.context,
-      required_work_markdown: spec.requiredWork,
-      non_goals_markdown: spec.nonGoals,
-      acceptance_criteria_json: JSON.stringify(spec.acceptanceCriteria),
+      goal_markdown: String(specRecord.goal ?? ''),
+      context_markdown: String(specRecord.context ?? ''),
+      required_work_markdown: requiredWork.join('\n'),
+      non_goals_markdown: nonGoals.join('\n'),
+      acceptance_criteria_json: JSON.stringify(acceptanceCriteria),
       dependencies_json: '[]',
       updated_at: now,
     });
-    if (spec.preferredRole || spec.preferredAgentId) {
+    if (preferredRole || preferredAgentId) {
       ensureTaskRolePreferencesTable(store);
       store.db.prepare(`
         INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
@@ -453,7 +467,7 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
           target_role = excluded.target_role,
           preferred_agent_id = excluded.preferred_agent_id,
           updated_at = excluded.updated_at
-      `).run(taskId, spec.preferredRole, spec.targetRole ?? spec.preferredRole, spec.preferredAgentId, now);
+      `).run(taskId, preferredRole, targetRole ?? preferredRole, preferredAgentId, now);
     }
   } finally {
     store.db.close();
@@ -723,7 +737,7 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
   const envelopeId = options.envelopeId ?? options.envelope_id;
   if (!envelopeId) throw new Error('envelope_id_required');
 
-  const dryRun = options.dryRun ?? options.dry_run ?? false;
+  const dryRun = Boolean(options.dryRun ?? options.dry_run ?? false);
   const disposition = options.disposition ?? 'materialize';
   const principal = options.principal ?? 'task-lifecycle-targeted-inbox';
   const reason = options.reason ?? null;
@@ -860,9 +874,9 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
  * Returns { evaluated, materialized, skipped, duplicates, errors }.
  */
 export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
-  const dryRun = options.dryRun ?? false;
+  const dryRun = Boolean(options.dryRun ?? false);
   const threshold = options.threshold ?? AUTO_MATERIALIZE_THRESHOLD;
-  const limit = options.limit ?? 20;
+  const limit = typeof options.limit === 'number' ? options.limit : 20;
 
   let envelopes = readUnprocessedEnvelopes(cwd);
   // Sort by severity descending so highest-priority items are processed first

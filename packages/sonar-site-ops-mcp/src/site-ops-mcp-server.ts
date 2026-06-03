@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 let siteLoopModulePromise = null;
-type SiteOpsServerArgs = Record<string, any>;
+type SiteOpsServerArgs = Record<string, unknown>;
 type SiteLoopToolArgs = SiteOpsServerArgs;
 type LoopControlToolArgs = SiteOpsServerArgs;
 
@@ -11,7 +11,7 @@ const SERVER_NAME = 'narada-sonar-site-ops-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
 const options = parseArgs(process.argv.slice(2));
-const siteRoot = resolve(options.siteRoot ?? process.cwd());
+const siteRoot = resolve(String(options.siteRoot ?? process.cwd()));
 const DOCS = [
   { path: 'AGENTS.md', description: 'Site-local agent instructions.' },
   { path: '.narada/site.json', description: 'Site identity and authority locus.' },

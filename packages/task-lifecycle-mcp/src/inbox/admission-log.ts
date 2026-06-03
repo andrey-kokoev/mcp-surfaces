@@ -17,7 +17,7 @@ const ENVELOPES_DIR = '.ai/inbox-envelopes';
 const DEFAULT_DISPOSITION_EXPORT_PATH = 'kb/operations/inbox-disposition-ledger.json';
 const DISPOSITION_EVENT_KINDS = new Set(['envelope_acknowledged', 'envelope_dismissed', 'envelope_promoted']);
 const ROTATION_THRESHOLD_BYTES = 10 * 1024 * 1024; // 10 MB
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 function logPath(cwd) {
   return join(resolve(cwd), LOG_DIR, LOG_FILE);
@@ -227,8 +227,8 @@ export function readAdmissionLog(cwd) {
 }
 
 export function exportDispositionLedger(cwd, options: TaskLifecyclePayload = {}) {
-  const outputPath = options.output_path ?? DEFAULT_DISPOSITION_EXPORT_PATH;
-  const siteId = options.site_id ?? 'Narada';
+  const outputPath = typeof options.output_path === 'string' ? options.output_path : DEFAULT_DISPOSITION_EXPORT_PATH;
+  const siteId = typeof options.site_id === 'string' ? options.site_id : 'Narada';
   const events = readAdmissionLog(cwd)
     .filter((event) => DISPOSITION_EVENT_KINDS.has(event.event_kind))
     .map((event) => ({

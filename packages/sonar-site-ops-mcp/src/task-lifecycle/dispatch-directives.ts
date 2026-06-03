@@ -11,7 +11,7 @@ import {
 import { openTaskLifecycleStoreWithDiscipline } from './sqlite-discipline.js';
 import { loadSonarEmailResidentOperatingPolicy } from '../site-loop/operating-loop-policy.js';
 
-type DirectiveDispatchPayload = Record<string, any>;
+type DirectiveDispatchPayload = Record<string, unknown>;
 type ResidentControlTarget = DirectiveDispatchPayload;
 type DirectiveDispatchEntry = DirectiveDispatchPayload;
 type ResidentSessionState = DirectiveDispatchPayload;
@@ -19,6 +19,14 @@ type ResidentCarrierStateInput = DirectiveDispatchPayload;
 type ResidentStatusOptions = DirectiveDispatchPayload;
 type RuntimeControlTargetOptions = DirectiveDispatchPayload;
 type DispatchCliArgs = DirectiveDispatchPayload;
+
+function asRecord(value: unknown): DirectiveDispatchPayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as DirectiveDispatchPayload : {};
+}
+
+function stringValue(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback;
+}
 
 export function dispatchPendingDirectives({
   cwd,
@@ -35,7 +43,7 @@ export function dispatchPendingDirectives({
   const receiptReconciliation = reconcileCarrierReceipts(cwd, store);
   const leaseRecovery = recoverExpiredLeases(store);
   const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as ResidentControlTarget | null;
-  const controlPath = carrier?.controlPath ?? null;
+  const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
   const pending = dedupeDirectives([
     ...store.listPending({ target: { kind: 'agent', id: agentId }, limit }),
     ...store.listPending({ target: { kind: 'role', id: role }, limit }),
@@ -61,8 +69,9 @@ export function dispatchPendingDirectives({
     };
   }
 
-  const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
-  const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
+  const carrierSessionId = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
+  const sessionState = carrierSessionId ? inferAgentCliSessionState(cwd, carrierSessionId) : { active_turn_state: 'unknown' };
+  const host = carrierSessionId ? readResidentHostEvidence(cwd, carrierSessionId) : null;
   const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
   const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy });
   if (blockBusyCarrier && ['busy', 'stale_busy', 'policy_stale'].includes(carrierState.state)) {
@@ -96,12 +105,12 @@ export function dispatchPendingDirectives({
       });
       continue;
     }
-    const carrierSessionId = carrier.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath) ?? 'agent-cli-control-jsonl';
+    const activeCarrierSessionId = stringValue(carrier.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath), 'agent-cli-control-jsonl');
     const lease = {
-      leaseId: leaseId(directive.directive_id, carrierSessionId),
+      leaseId: leaseId(directive.directive_id, activeCarrierSessionId),
       leasedUntil: leaseExpiryIso(5),
       transport: 'agent_cli_control_jsonl',
-      carrierSessionId,
+      carrierSessionId: activeCarrierSessionId,
     };
     if (dryRun) {
       skipped.push({ directive_id: directive.directive_id, reason: 'dry_run' });
@@ -228,8 +237,10 @@ function latestTerminalDirectiveOutcome(db, directiveId) {
 export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLiveCarrier = true }: ResidentStatusOptions = {}) {
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
   try {
-    const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as ResidentControlTarget | null;
-    const latestReceipt = latestResidentReceipt(lifecycleStore.db, agentId);
+    const agentIdString = stringValue(agentId, 'sonar.resident');
+    const requireLiveCarrierBool = requireLiveCarrier !== false;
+    const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentIdString, { requireLiveCarrier: requireLiveCarrierBool }) as ResidentControlTarget | null;
+    const latestReceipt = latestResidentReceipt(lifecycleStore.db, agentIdString);
     const latestReport = lifecycleStore.db.prepare(`
       SELECT report_id, task_id, agent_id, submitted_at, summary
       FROM task_reports
@@ -330,12 +341,14 @@ function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState 
 }
 
 function detectTerminalWorkInflight(db, { sessionState = {}, host = null }: ResidentCarrierStateInput = {}) {
-  if (sessionState.active_turn_state !== 'running') {
+  const sessionStateRecord = asRecord(sessionState);
+  const hostRecord = asRecord(host);
+  if (sessionStateRecord.active_turn_state !== 'running') {
     return { status: 'none', directive_id: null, outcome: null };
   }
-  const directiveId = runningTurnDirectiveId(host, sessionState)
-    ?? sameTurnDirectiveId(host?.last_protocol_event, sessionState)
-    ?? sameTurnDirectiveId(host?.last_host_event, sessionState)
+  const directiveId = runningTurnDirectiveId(hostRecord, sessionStateRecord)
+    ?? sameTurnDirectiveId(hostRecord.last_protocol_event, sessionStateRecord)
+    ?? sameTurnDirectiveId(hostRecord.last_host_event, sessionStateRecord)
     ?? null;
   if (!directiveId) return { status: 'unknown_running_directive', directive_id: null, outcome: null };
   const terminal = latestTerminalDirectiveOutcome(db, directiveId);
@@ -389,36 +402,40 @@ function residentStaleCarrierCount(carrier) {
 }
 
 export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null }: ResidentCarrierStateInput = {}) {
-  if (!carrier || carrier.status !== 'available') {
+  const carrierRecord = asRecord(carrier);
+  const sessionStateRecord = asRecord(sessionState);
+  const hostRecord = asRecord(host);
+  if (!carrier || carrierRecord.status !== 'available') {
     return {
       schema: 'narada.sonar.resident_carrier_state.v1',
       state: 'unavailable',
-      reason: carrier?.reason ?? 'no_carrier',
-      dispatch_skip_reason: carrier?.reason ?? 'no_live_resident_control_target',
+      reason: carrierRecord.reason ?? 'no_carrier',
+      dispatch_skip_reason: carrierRecord.reason ?? 'no_live_resident_control_target',
     };
   }
-  const policyLoaded = policy ?? loadSonarEmailResidentOperatingPolicy(process.cwd()).policy;
-  if (policyLoaded?.carrier?.require_policy_current !== false && carrierPolicyStale(carrier, host)) {
+  const policyLoaded = asRecord(policy ?? loadSonarEmailResidentOperatingPolicy(process.cwd()).policy);
+  const carrierPolicy = asRecord(policyLoaded.carrier);
+  if (carrierPolicy.require_policy_current !== false && carrierPolicyStale(carrierRecord, hostRecord)) {
     return {
       schema: 'narada.sonar.resident_carrier_state.v1',
       state: 'policy_stale',
-      runtime: carrier.runtime ?? null,
-      preference: carrier.preference ?? null,
-      carrier_session_id: carrier.carrierSessionId ?? null,
+      runtime: carrierRecord.runtime ?? null,
+      preference: carrierRecord.preference ?? null,
+      carrier_session_id: carrierRecord.carrierSessionId ?? null,
       dispatch_skip_reason: 'resident_carrier_policy_stale',
     };
   }
-  if (sessionState.active_turn_state === 'running') {
-    const startedAt = Date.parse(sessionState.turn_started_at ?? '');
+  if (sessionStateRecord.active_turn_state === 'running') {
+    const startedAt = Date.parse(stringValue(sessionStateRecord.turn_started_at));
     const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : null;
-    const timeoutMs = Number(policyLoaded?.cadence?.busy_turn_timeout_ms ?? 10 * 60_000);
+    const timeoutMs = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
     const stale = ageMs != null && ageMs > timeoutMs;
     return {
       schema: 'narada.sonar.resident_carrier_state.v1',
       state: stale ? 'stale_busy' : 'busy',
-      runtime: carrier.runtime ?? null,
-      preference: carrier.preference ?? null,
-      carrier_session_id: carrier.carrierSessionId ?? null,
+      runtime: carrierRecord.runtime ?? null,
+      preference: carrierRecord.preference ?? null,
+      carrier_session_id: carrierRecord.carrierSessionId ?? null,
       active_turn_age_ms: ageMs,
       busy_turn_timeout_ms: timeoutMs,
       dispatch_skip_reason: stale ? 'resident_carrier_stale_busy' : 'resident_carrier_busy',
@@ -427,9 +444,9 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
   return {
     schema: 'narada.sonar.resident_carrier_state.v1',
     state: 'available_idle',
-    runtime: carrier.runtime ?? null,
-    preference: carrier.preference ?? null,
-    carrier_session_id: carrier.carrierSessionId ?? null,
+    runtime: carrierRecord.runtime ?? null,
+    preference: carrierRecord.preference ?? null,
+    carrier_session_id: carrierRecord.carrierSessionId ?? null,
     dispatch_skip_reason: null,
   };
 }
@@ -916,8 +933,8 @@ const isEntrypoint = process.argv[1]
 if (isEntrypoint) {
   const cwd = resolve(process.argv[2] || process.cwd());
   const args = parseArgs(process.argv.slice(3));
-  const agentId = args.agent ?? 'sonar.resident';
-  const role = args.role ?? 'resident';
+  const agentId = stringValue(args.agent, 'sonar.resident');
+  const role = stringValue(args.role, 'resident');
   const limit = Number(args.limit ?? 25);
   const dryRun = args.dry_run === true;
   const requireLiveCarrier = args.require_live_carrier !== false;

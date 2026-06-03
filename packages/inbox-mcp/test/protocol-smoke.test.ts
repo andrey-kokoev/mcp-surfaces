@@ -4,11 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
 
+type ToolSummary = { name: string; inputSchema: { properties: Record<string, { enum?: string[]; default?: unknown }> } };
+type JsonRpcTestResponse = {
+  error?: { message: string };
+  result: {
+    serverInfo: { name: string };
+    tools: ToolSummary[];
+  };
+};
+const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+
 const root = mkdtempSync(join(tmpdir(), 'inbox-mcp-protocol-'));
 
 try {
   const state = createServerState({ siteRoot: root });
-  const init = handleRequest({
+  const init = rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'initialize',
@@ -17,9 +27,10 @@ try {
   assert.equal(init.error, undefined);
   assert.equal(init.result.serverInfo.name, 'narada-inbox-mcp');
 
-  const tools = handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
+  const tools = rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool: any) => tool.name);
+  const toolRows = tools.result.tools;
+  const names = toolRows.map((tool) => tool.name);
   assert.deepEqual(names, [
     'inbox_doctor',
     'inbox_list',
@@ -29,7 +40,8 @@ try {
     'capa_queue',
     'capability_next',
   ]);
-  const inboxList = tools.result.tools.find((tool: any) => tool.name === 'inbox_list');
+  const inboxList = toolRows.find((tool) => tool.name === 'inbox_list');
+  assert.ok(inboxList);
   assert.deepEqual(inboxList.inputSchema.properties.status.enum, ['received', 'acknowledged', 'dismissed', 'promoted']);
   assert.equal(inboxList.inputSchema.properties.status.default, 'received');
   assert.deepEqual(inboxList.inputSchema.properties.kind.enum, [
@@ -45,7 +57,8 @@ try {
   assert.deepEqual(inboxList.inputSchema.properties.target_role.enum, ['architect', 'builder', 'operator']);
   assert.equal(inboxList.inputSchema.properties.limit.default, 20);
 
-  const inboxSubmit = tools.result.tools.find((tool: any) => tool.name === 'inbox_submit');
+  const inboxSubmit = toolRows.find((tool) => tool.name === 'inbox_submit');
+  assert.ok(inboxSubmit);
   assert.deepEqual(inboxSubmit.inputSchema.properties.kind.enum, inboxList.inputSchema.properties.kind.enum);
   assert.equal(inboxSubmit.inputSchema.properties.payload.default && typeof inboxSubmit.inputSchema.properties.payload.default, 'object');
 

@@ -8,6 +8,21 @@ import {
   handleRequest,
 } from '../src/main.js';
 
+type DynamicTestValue = string & DynamicTestValue[] & {
+  [key: string]: DynamicTestValue;
+  [index: number]: DynamicTestValue;
+};
+
+type JsonRpcTestResponse = {
+  result: DynamicTestValue;
+  error: DynamicTestValue;
+};
+
+type ExecutionResult = Record<string, unknown> & {
+  status: string;
+  executed: boolean;
+  stdout: string;
+};
 const root = mkdtempSync(join(tmpdir(), 'structured-command-mcp-'));
 const auditLogDir = join(root, 'audit');
 const trustConfigPath = join(root, 'config.toml');
@@ -24,11 +39,13 @@ const stateFromTrustConfig = createServerState({
   allowCommand: ['node'],
   auditLogDir: join(root, 'audit-trust-config'),
 });
+const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: typeof state) => Promise<JsonRpcTestResponse>;
+const exec = executeStructuredCommand as unknown as (args: Record<string, unknown>, requestState: typeof state) => Promise<ExecutionResult>;
 
-const init = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
+const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 
-const tools = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
+const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
 const toolNames = tools.result.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames, [
   'structured_command_execute',
@@ -39,7 +56,7 @@ assert.deepEqual(toolNames, [
 const outputShowTool = tools.result.tools.find((tool) => tool.name === 'structured_command_output_show');
 assert.ok(outputShowTool.inputSchema.properties.limit);
 
-const ok = await executeStructuredCommand({
+const ok = await exec({
   command: 'node',
   args: ['--version'],
   working_directory: root,
@@ -48,7 +65,7 @@ assert.equal(ok.status, 'ok');
 assert.equal(ok.executed, true);
 assert.match(ok.stdout, /^v\d+/);
 
-const okFromTrustConfig = await executeStructuredCommand({
+const okFromTrustConfig = await exec({
   command: 'node',
   args: ['--version'],
   working_directory: root,
@@ -56,7 +73,7 @@ const okFromTrustConfig = await executeStructuredCommand({
 assert.equal(okFromTrustConfig.status, 'ok');
 assert.equal(okFromTrustConfig.executed, true);
 
-const refusedCommand = await executeStructuredCommand({
+const refusedCommand = await exec({
   command: 'pwsh',
   args: ['-NoProfile'],
   working_directory: root,
@@ -64,7 +81,7 @@ const refusedCommand = await executeStructuredCommand({
 assert.equal(refusedCommand.status, 'refused');
 assert.equal(refusedCommand.executed, false);
 
-const refusedRoot = await executeStructuredCommand({
+const refusedRoot = await exec({
   command: 'node',
   args: ['--version'],
   working_directory: tmpdir(),
@@ -72,7 +89,7 @@ const refusedRoot = await executeStructuredCommand({
 assert.equal(refusedRoot.status, 'refused');
 
 await assert.rejects(
-  () => executeStructuredCommand({
+  () => exec({
     command: 'node',
     args: ['x'.repeat(201)],
     working_directory: root,
@@ -80,7 +97,7 @@ await assert.rejects(
   /structured_command_input_too_long:arguments\.args\[0\]:201>200/,
 );
 
-const policy = await handleRequest({
+const policy = await rpc({
   jsonrpc: '2.0',
   id: 3,
   method: 'tools/call',
@@ -94,7 +111,7 @@ assert.ok(policy.result.content[0].text.length <= 4000);
 assert.equal(policy.result.structuredContent.truncated, false);
 assert.equal(policy.result.structuredContent.output_ref, undefined);
 
-const unknownTool = await handleRequest({
+const unknownTool = await rpc({
   jsonrpc: '2.0',
   id: 31,
   method: 'tools/call',
@@ -107,7 +124,7 @@ assert.equal(unknownTool.error.data.schema, 'narada.structured_command.error.v0'
 assert.equal(unknownTool.error.data.code, 'structured_command_unknown_tool');
 assert.equal(unknownTool.error.data.details.tool_name, 'structured_command_missing_tool');
 
-const input = await handleRequest({
+const input = await rpc({
   jsonrpc: '2.0',
   id: 4,
   method: 'tools/call',
@@ -121,7 +138,7 @@ assert.match(input.result.content[0].text, /structured_command\.input_create_res
 const inputRef = input.result.structuredContent.input_ref;
 assert.match(inputRef, /^structured_command_input:/);
 
-const badInputRef = await handleRequest({
+const badInputRef = await rpc({
   jsonrpc: '2.0',
   id: 41,
   method: 'tools/call',
@@ -134,7 +151,7 @@ assert.equal(badInputRef.error.data.schema, 'narada.structured_command.error.v0'
 assert.equal(badInputRef.error.data.code, 'structured_command_invalid_input_ref');
 assert.equal(badInputRef.error.data.details.expected_kind, 'input');
 
-const smallCall = await handleRequest({
+const smallCall = await rpc({
   jsonrpc: '2.0',
   id: 5,
   method: 'tools/call',
@@ -154,7 +171,7 @@ assert.match(smallCall.result.structuredContent.stdout, /^v\d+/);
 assert.equal(smallCall.result.structuredContent.stdout_ref, undefined);
 assert.equal(smallCall.result.structuredContent.output_ref, undefined);
 
-const largeCall = await handleRequest({
+const largeCall = await rpc({
   jsonrpc: '2.0',
   id: 6,
   method: 'tools/call',
@@ -178,7 +195,7 @@ assert.match(largeCall.result.structuredContent.stdout_ref, /^structured_command
 assert.equal(largeCall.result.structuredContent.stdout_next_offset, 1000);
 assert.equal(largeCall.result.structuredContent.output_ref, undefined);
 
-const stdoutPage1 = await handleRequest({
+const stdoutPage1 = await rpc({
   jsonrpc: '2.0',
   id: 7,
   method: 'tools/call',
@@ -196,7 +213,7 @@ assert.equal(stdoutPage1.result.structuredContent.next_offset, 4000);
 assert.equal(stdoutPage1.result.structuredContent.text_char_length, 4000);
 assert.equal(stdoutPage1.result.structuredContent.full_output_char_length, 6500);
 
-const stdoutCustomPage = await handleRequest({
+const stdoutCustomPage = await rpc({
   jsonrpc: '2.0',
   id: 8,
   method: 'tools/call',
@@ -210,7 +227,7 @@ assert.equal(stdoutCustomPage.result.structuredContent.offset, 1000);
 assert.equal(stdoutCustomPage.result.structuredContent.limit, 1200);
 assert.equal(stdoutCustomPage.result.structuredContent.next_offset, 2200);
 
-const stdoutFinalPage = await handleRequest({
+const stdoutFinalPage = await rpc({
   jsonrpc: '2.0',
   id: 9,
   method: 'tools/call',

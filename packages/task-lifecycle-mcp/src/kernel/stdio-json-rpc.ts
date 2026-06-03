@@ -12,21 +12,21 @@ export async function runJsonRpcStdioServer({
     buffer = drained.remaining;
     for (const request of drained.requests) {
       const response = await handleRequest(request);
-      if (response) writeJsonLine(stdout, response);
+      if (response) writeJsonResponse(stdout, response, drained.framed);
     }
   }
   const trailing = buffer.trim();
   if (trailing.length > 0) {
     for (const request of parseJsonRpcInput(trailing)) {
       const response = await handleRequest(request);
-      if (response) writeJsonLine(stdout, response);
+      if (response) writeJsonResponse(stdout, response, false);
     }
   }
 }
 
 export function drainBufferedRequests(buffer, parseJsonRpcInput) {
   if (buffer.includes('Content-Length:')) {
-    return drainJsonRpcFrames(buffer);
+    return { ...drainJsonRpcFrames(buffer), framed: true };
   }
   const lines = buffer.split(/\r?\n/);
   const remaining = lines.pop() ?? '';
@@ -39,7 +39,7 @@ export function drainBufferedRequests(buffer, parseJsonRpcInput) {
         return { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error', data: { line: line.slice(0, 200) } } };
       }
     });
-  return { requests, remaining };
+  return { requests, remaining, framed: false };
 }
 
 export function drainJsonRpcFrames(buffer) {
@@ -62,9 +62,14 @@ export function drainJsonRpcFrames(buffer) {
     }
     remaining = remaining.slice(start + length);
   }
-  return { requests, remaining };
+  return { requests, remaining, framed: false };
 }
 
-function writeJsonLine(stdout, response) {
-  stdout.write(`${JSON.stringify(response)}\n`);
+function writeJsonResponse(stdout, response, framed) {
+  const body = JSON.stringify(response);
+  if (framed) {
+    stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+    return;
+  }
+  stdout.write(`${body}\n`);
 }

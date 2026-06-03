@@ -240,9 +240,9 @@ export function evaluateEnvelopeSeverity(envelope) {
   };
 }
 
-export function matchNormalizedTitles(a, b, options: Record<string, any> = {}) {
-  const absoluteThreshold = options.absoluteThreshold ?? 10;
-  const normalizedThreshold = options.normalizedThreshold ?? 0.25;
+export function matchNormalizedTitles(a, b, options: Record<string, unknown> = {}) {
+  const absoluteThreshold = typeof options.absoluteThreshold === 'number' ? options.absoluteThreshold : 10;
+  const normalizedThreshold = typeof options.normalizedThreshold === 'number' ? options.normalizedThreshold : 0.25;
   const distance = levenshteinDistance(a, b);
   const maxLen = Math.max(a.length, b.length);
   const normalized = maxLen > 0 ? distance / maxLen : 0;

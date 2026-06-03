@@ -19,11 +19,36 @@ const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 200;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
+type StructuredCommandState = Record<string, unknown> & {
+  policy: {
+    allowedRoots: string[];
+    maxTimeoutMs: number;
+    maxOutputBytes: number;
+  };
+  auditLogDir: string | null;
+  storageRoot: string;
+};
+
+type SpawnStructuredOptions = {
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+};
+
+type SpawnStructuredResult = {
+  exit_code: number | null;
+  timed_out: boolean;
+  stdout: string;
+  stderr: string;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+};
+
 class StructuredCommandError extends Error {
   codeName: string;
-  details: any;
+  details: unknown;
 
-  constructor(codeName: string, message: string, details: any = {}) {
+  constructor(codeName: string, message: string, details: unknown = {}) {
     super(message);
     this.name = 'StructuredCommandError';
     this.codeName = codeName;
@@ -38,7 +63,7 @@ if (isMainModule()) {
   });
 }
 
-export async function runStdioServer(options: any) {
+export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
   let buffer = '';
   process.stdin.setEncoding('utf8');
@@ -55,13 +80,13 @@ export async function runStdioServer(options: any) {
       requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
     }
     for (const request of requests) {
-      const response = await handleRequest(request, state);
+      const response = await handleRequest(asRecord(request), state);
       if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
     }
   }
 }
 
-export function createServerState(options: any = {}): any {
+export function createServerState(options: Record<string, unknown> = {}): StructuredCommandState {
   const allowedRoots = buildAllowedRoots({
     trustConfigPaths: optionList(options.rootsFromTrustConfig),
     explicitRoots: [...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
@@ -76,15 +101,15 @@ export function createServerState(options: any = {}): any {
       maxTimeoutMs: options.maxTimeoutMs,
       maxOutputBytes: options.maxOutputBytes,
     }),
-    auditLogDir: options.auditLogDir ? resolve(options.auditLogDir) : null,
-    storageRoot: resolve(options.storageRoot ?? join(allowedRoots[0], '.structured-command-mcp')),
+    auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
+    storageRoot: resolve(String(options.storageRoot ?? allowedRoots[0])),
   };
 }
 
-export async function handleRequest(request: any, state: any): Promise<any> {
+export async function handleRequest(request: Record<string, unknown>, state: StructuredCommandState) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = await dispatchMethod(request.method, request.params ?? {}, state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -100,7 +125,7 @@ export async function handleRequest(request: any, state: any): Promise<any> {
   }
 }
 
-async function dispatchMethod(method: string, params: any, state: any): Promise<any> {
+async function dispatchMethod(method: string, params: Record<string, unknown>, state: StructuredCommandState): Promise<unknown> {
   if (method === 'initialize') {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
@@ -154,9 +179,9 @@ export function listTools() {
   ];
 }
 
-async function callTool(params, state) {
+async function callTool(params: Record<string, unknown>, state: StructuredCommandState) {
   const name = params?.name;
-  const args = params?.arguments && typeof params.arguments === 'object' ? params.arguments : {};
+  const args = asRecord(params.arguments);
   enforceInputCharLimit(args);
   if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
   if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state), state);
@@ -165,9 +190,10 @@ async function callTool(params, state) {
   throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
 }
 
-export async function executeStructuredCommand(args: any, state: any): Promise<any> {
-  enforceInputCharLimit(args);
-  const effectiveArgs = args.input_ref ? readStructuredCommandInput(args.input_ref, state).input : args;
+export async function executeStructuredCommand(args: unknown, state: StructuredCommandState): Promise<unknown> {
+  const argsRecord = asRecord(args);
+  enforceInputCharLimit(argsRecord);
+  const effectiveArgs = argsRecord.input_ref ? asRecord(readStructuredCommandInput(String(argsRecord.input_ref), state).input) : argsRecord;
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
   const workingDirectory = effectiveArgs.working_directory ? resolve(String(effectiveArgs.working_directory)) : state.policy.allowedRoots[0];
   const decision = decideStructuredCommandExecution({
@@ -207,7 +233,7 @@ export async function executeStructuredCommand(args: any, state: any): Promise<a
     stdout_truncated: result.stdout_truncated,
     stderr_truncated: result.stderr_truncated,
     timed_out: result.timed_out,
-    input_ref: args.input_ref ?? null,
+    input_ref: argsRecord.input_ref ?? null,
   };
   audit(state, payload);
   return payload;
@@ -257,7 +283,7 @@ export function showStructuredCommandOutput(args, state) {
   };
 }
 
-function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes }: any): Promise<any> {
+function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
   return new Promise((resolvePromise) => {
     const child = spawn(command, args, {
       cwd,
@@ -534,12 +560,16 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function optionList(value) {
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function optionList(value: unknown): string[] {
   if (value === undefined || value === null || value === true) return [];
   return Array.isArray(value) ? value.map(String) : [String(value)];
 }
 
-function diagnosticError(codeName, message, details: any = {}) {
+function diagnosticError(codeName, message, details: unknown = {}) {
   return new StructuredCommandError(codeName, message, details);
 }
 

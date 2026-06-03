@@ -66,7 +66,7 @@ export function createTaskLifecycleNavigationHandlers({
       const identityBanner = `>>> YOU ARE QUERYING AS: ${agentId}${agentRole ? ` (${agentRole})` : ''} <<<`;
       const identityWarning = verifySessionIdentity(agentId);
       const responseGeneratedAt = new Date().toISOString();
-      const responsePayload: Record<string, any> = {
+      const responsePayload: Record<string, unknown> = {
         status: 'ok',
         agent_id: agentId,
         agent_role: agentRole,

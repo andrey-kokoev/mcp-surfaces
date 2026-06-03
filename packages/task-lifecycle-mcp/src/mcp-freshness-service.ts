@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, wri
 import { createHash } from 'node:crypto';
 import { join, relative, resolve, sep } from 'node:path';
 
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
+
+function asPayload(value: unknown): TaskLifecyclePayload {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
+}
 
 export function readJsonFile(filePath) {
   if (!existsSync(filePath)) return null;
@@ -104,18 +108,24 @@ export function writeMcpRuntimeInstanceObservation({
 }: TaskLifecyclePayload = {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!surfaceId) throw new Error('surfaceId is required');
-  const observedAt = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
-  const pcRoot = resolve(pcSiteRoot);
+  const siteRootString = String(siteRoot);
+  const surfaceIdString = String(surfaceId);
+  const pcSiteRootString = String(pcSiteRoot);
+  const watchedPathList = Array.isArray(watchedPaths) ? watchedPaths.map(String) : [];
+  const observedAt = now instanceof Date
+    ? now.toISOString()
+    : new Date(typeof now === 'string' || typeof now === 'number' ? now : Date.now()).toISOString();
+  const pcRoot = resolve(pcSiteRootString);
   const registryPath = join(pcRoot, 'runtime', 'mcp-runtime-instances.json');
-  const registry = readJsonFile(registryPath) ?? {
+  const registry = asPayload(readJsonFile(registryPath) ?? {
     schema: 'narada.pc_runtime.mcp_runtime_instance_registry.v0',
     instances: [],
-  };
+  });
   const instances = Array.isArray(registry.instances) ? registry.instances : [];
-  const sourceEvidence = collectSourceEvidence({ siteRoot, watchedPaths });
-  const baseline = readJsonFile(baselinePath);
-  const restartRequestPayload = readJsonFile(restartRequestPath);
-  const baselineMtime = Number.isFinite(baseline?.baseline_mtime) ? baseline.baseline_mtime : null;
+  const sourceEvidence = collectSourceEvidence({ siteRoot: siteRootString, watchedPaths: watchedPathList });
+  const baseline = asPayload(typeof baselinePath === 'string' ? readJsonFile(baselinePath) : null);
+  const restartRequestPayload = asPayload(typeof restartRequestPath === 'string' ? readJsonFile(restartRequestPath) : null);
+  const baselineMtime = typeof baseline.baseline_mtime === 'number' && Number.isFinite(baseline.baseline_mtime) ? baseline.baseline_mtime : null;
   const sourceDigestComparison = compareSourceDigest({ sourceEvidence, baseline });
   const sourceNewerThanBaseline = Number.isFinite(baselineMtime)
     ? sourceEvidence.current_max_mtime > baselineMtime
@@ -123,9 +133,9 @@ export function writeMcpRuntimeInstanceObservation({
   const sourceChangedSinceBaseline = sourceDigestComparison.source_digest_changed ?? sourceNewerThanBaseline;
   const inheritedCarrierSession = readInheritedCarrierSession({ pcRoot });
   const entry = {
-    surface_id: surfaceId,
+    surface_id: surfaceIdString,
     server_name: serverName ?? null,
-    site_root: resolve(siteRoot),
+    site_root: resolve(siteRootString),
     carrier_session_owner: process.env.NARADA_AGENT_ID?.trim() || 'carrier_session_unknown',
     carrier_owner: process.env.NARADA_AGENT_ID?.trim() || 'carrier_session_unknown',
     carrier_session_id: inheritedCarrierSession.carrier_session_id,
@@ -160,7 +170,7 @@ export function writeMcpRuntimeInstanceObservation({
       source_digest: sourceEvidence.source_digest,
       source_digest_algorithm: sourceEvidence.source_digest_algorithm,
       source_manifest_paths: sourceEvidence.source_manifest_paths,
-      watched_path_summary: watchedPaths.join(', '),
+      watched_path_summary: watchedPathList.join(', '),
       source_newer_than_baseline: sourceNewerThanBaseline,
       source_digest_changed: sourceDigestComparison.source_digest_changed,
       freshness_basis: sourceDigestComparison.freshness_basis,
@@ -657,29 +667,33 @@ export function validateMcpRestartAcknowledgement({
   expectedTools = [],
   registeredTools = [],
 }: TaskLifecyclePayload = {}) {
-  if (!restartRequest || restartRequest.status === 'unreadable') {
+  const restartRequestRecord = asPayload(restartRequest);
+  const pcSiteRootString = String(pcSiteRoot);
+  const expectedToolNames = Array.isArray(expectedTools) ? expectedTools.map(String) : [];
+  const registeredToolNames = Array.isArray(registeredTools) ? registeredTools.map(String) : [];
+  if (!restartRequest || restartRequestRecord.status === 'unreadable') {
     return {
       status: 'rejected',
       reason: 'restart_request_marker_missing',
       detail: 'A restart marker must be present; deleting or clearing it is not proof of restart.',
     };
   }
-  const requestedAt = Date.parse(restartRequest.requested_at ?? '');
+  const requestedAt = Date.parse(String(restartRequestRecord.requested_at ?? ''));
   if (!Number.isFinite(requestedAt)) {
     return {
       status: 'rejected',
       reason: 'restart_request_timestamp_missing',
       detail: 'Restart acknowledgement requires a parseable restart request timestamp.',
-      restart_request: restartRequest,
+      restart_request: restartRequestRecord,
     };
   }
 
-  const registryPath = join(resolve(pcSiteRoot), 'runtime', 'mcp-runtime-instances.json');
-  const registry = readJsonFile(registryPath);
+  const registryPath = join(resolve(pcSiteRootString), 'runtime', 'mcp-runtime-instances.json');
+  const registry = asPayload(readJsonFile(registryPath));
   const instances = Array.isArray(registry?.instances) ? registry.instances : [];
-  const instance = instances.find((entry) => entry?.surface_id === targetSurface
-    || entry?.server_entrypoint === targetEntrypoint
-    || entry?.server_entry_point === targetEntrypoint);
+  const instance = instances.map(asPayload).find((entry) => entry.surface_id === targetSurface
+    || entry.server_entrypoint === targetEntrypoint
+    || entry.server_entry_point === targetEntrypoint);
   if (!instance) {
     return {
       status: 'rejected',
@@ -689,23 +703,23 @@ export function validateMcpRestartAcknowledgement({
     };
   }
 
-  const processEvidence = instance.process_identity_evidence ?? {};
+  const processEvidence = asPayload(instance.process_identity_evidence);
   const bootedAtRaw = processEvidence.booted_at ?? instance.booted_at ?? null;
-  const bootedAt = Date.parse(bootedAtRaw ?? '');
+  const bootedAt = Date.parse(String(bootedAtRaw ?? ''));
   if (!Number.isFinite(bootedAt) || bootedAt <= requestedAt) {
     return {
       status: 'rejected',
       reason: 'post_request_boot_evidence_missing',
       detail: 'Target MCP child boot evidence must be newer than the restart request.',
-      requested_at: restartRequest.requested_at,
+      requested_at: restartRequestRecord.requested_at,
       observed_booted_at: bootedAtRaw,
       observed_pid: processEvidence.pid ?? instance.pid ?? null,
     };
   }
 
-  const binding = instance.carrier_session_binding ?? {};
+  const binding = asPayload(instance.carrier_session_binding);
   const carrierSessionId = instance.carrier_session_id ?? processEvidence.carrier_session_id ?? null;
-  const bindingStatus = binding.status ?? (carrierSessionId ? 'bound_to_parent_carrier_session' : 'legacy_unbound');
+  const bindingStatus = String(binding.status ?? (carrierSessionId ? 'bound_to_parent_carrier_session' : 'legacy_unbound'));
   if (!carrierSessionId || ['legacy_unbound', 'terminal_missing_embodiment_authority'].includes(bindingStatus)) {
     return {
       status: 'rejected',
@@ -716,26 +730,30 @@ export function validateMcpRestartAcknowledgement({
     };
   }
 
-  const sourceFreshness = instance.source_freshness ?? {};
+  const sourceFreshness = asPayload(instance.source_freshness);
+  const sourceEvidenceRecord = asPayload(sourceEvidence);
+  const instanceSource = asPayload(instance.source);
+  const instanceBaseline = asPayload(instance.baseline);
   const sourceDigestComparison = compareSourceDigest({
-    sourceEvidence,
+    sourceEvidence: sourceEvidenceRecord,
     baseline: instance.baseline ?? instance.source_baseline ?? {},
   });
   const sourceNewerThanBaseline = sourceFreshness.source_newer_than_baseline
     ?? instance.source_newer_than_baseline
-    ?? (Number.isFinite(instance.source?.current_max_mtime) && Number.isFinite(instance.baseline?.baseline_mtime)
-      ? instance.source.current_max_mtime > instance.baseline.baseline_mtime
+    ?? (typeof instanceSource.current_max_mtime === 'number' && Number.isFinite(instanceSource.current_max_mtime)
+      && typeof instanceBaseline.baseline_mtime === 'number' && Number.isFinite(instanceBaseline.baseline_mtime)
+      ? instanceSource.current_max_mtime > instanceBaseline.baseline_mtime
       : null);
   const pendingRestart = sourceFreshness.pending_restart ?? instance.pending_restart ?? null;
 
-  const missingExpectedTools = expectedTools.filter((name) => !registeredTools.includes(name));
-  if (expectedTools.length > 0 && missingExpectedTools.length > 0) {
+  const missingExpectedTools = expectedToolNames.filter((name) => !registeredToolNames.includes(name));
+  if (expectedToolNames.length > 0 && missingExpectedTools.length > 0) {
     return {
       status: 'rejected',
       reason: 'tool_readiness_unproven',
       detail: 'Registered live tool surface does not contain all expected tools.',
-      expected_count: expectedTools.length,
-      registered_count: registeredTools.length,
+      expected_count: expectedToolNames.length,
+      registered_count: registeredToolNames.length,
       missing_expected_tools: missingExpectedTools,
     };
   }
@@ -743,7 +761,7 @@ export function validateMcpRestartAcknowledgement({
   return {
     status: 'acknowledgeable',
     schema: 'narada.mcp.restart_acknowledgement_validation.v0',
-    requested_at: restartRequest.requested_at,
+    requested_at: restartRequestRecord.requested_at,
     target_surface: targetSurface,
     target_entrypoint: targetEntrypoint,
     post_restart_process_identity: {
@@ -755,17 +773,17 @@ export function validateMcpRestartAcknowledgement({
     carrier_session_binding: binding,
     source_freshness: {
       source_newer_than_baseline: sourceNewerThanBaseline,
-      source_digest: sourceEvidence?.source_digest ?? null,
+      source_digest: sourceEvidenceRecord.source_digest ?? null,
       baseline_source_digest: sourceDigestComparison.baseline_source_digest,
       source_digest_algorithm: sourceDigestComparison.source_digest_algorithm,
       source_digest_changed: sourceDigestComparison.source_digest_changed,
       freshness_basis: sourceDigestComparison.freshness_basis,
       pending_restart: pendingRestart,
-      source_max_mtime: sourceEvidence?.current_max_mtime ?? null,
+      source_max_mtime: sourceEvidenceRecord.current_max_mtime ?? null,
     },
     tool_readiness: {
-      expected_count: expectedTools.length,
-      registered_count: registeredTools.length,
+      expected_count: expectedToolNames.length,
+      registered_count: registeredToolNames.length,
       missing_expected_tools: missingExpectedTools,
     },
   };
@@ -896,7 +914,7 @@ function buildHostRuntimeReference({ serverName, serverEntryPoint, restartReques
     registry_tool: 'operator_surface_mcp_runtime_registry_status',
     coordinator_tool: 'operator_surface_mcp_restart_request',
     authority_locus: 'pc_site_runtime',
-    rule: 'Use host registry/coordinator evidence for fleet-level restart planning; do not treat a restart request marker as proof that any carrier was restarted.',
+    rule: 'Use host registry/coordinator evidence for fleet-level restart planning; do not treat a restart request marker as proof that each carrier was restarted.',
   };
 }
 

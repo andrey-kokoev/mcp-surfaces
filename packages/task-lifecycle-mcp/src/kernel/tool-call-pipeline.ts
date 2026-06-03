@@ -11,7 +11,7 @@ export function createTaskLifecycleToolCaller({
   resolveToolPayloadArgs,
   enforceInlinePayloadLimit,
   locusGuardedMutationTools,
-  setActiveOutputToolName = (_name?: any) => {},
+  setActiveOutputToolName = (_name?: unknown) => {},
   env = process.env,
 }) {
   return async function callTaskLifecycleTool(params) {

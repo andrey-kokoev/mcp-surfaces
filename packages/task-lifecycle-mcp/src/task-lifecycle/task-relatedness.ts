@@ -17,16 +17,27 @@ function tokenize(text) {
     .split(/\s+/)
     .filter((t) => t.length > 2 && !STOP_WORDS.has(t) && !/^\d+$/.test(t));
 }
+interface TaskTagInfo {
+  task_number: number | null;
+  tags: string[];
+  title: string | null;
+}
 
-function extractFrontmatter(text) {
+interface TaskFrontmatter {
+  number?: string;
+  tags?: string;
+  title?: string;
+}
+
+function extractFrontmatter(text): TaskFrontmatter {
   if (!text.startsWith('---')) return {};
   const end = text.indexOf('---', 3);
   if (end === -1) return {};
   const fm = text.slice(3, end).trim();
-  const result: Record<string, any> = {};
+  const result: TaskFrontmatter = {};
   for (const line of fm.split('\n')) {
     const m = line.match(/^([a-z_]+):\s*(.*)$/);
-    if (m) result[m[1]] = m[2].trim();
+    if (m && (m[1] === 'number' || m[1] === 'tags' || m[1] === 'title')) result[m[1]] = m[2].trim();
   }
   return result;
 }
@@ -92,7 +103,7 @@ export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8 }) {
   const dir = resolve(tasksDir);
   const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
 
-  const allTags: any[] = [];
+  const allTags: TaskTagInfo[] = [];
   for (const f of files) {
     const info = extractTaskTags(join(dir, f));
     if (info.task_number) allTags.push(info);

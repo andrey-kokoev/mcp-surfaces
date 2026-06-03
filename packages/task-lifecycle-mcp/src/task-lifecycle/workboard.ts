@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { detectSameOperatorReview, detectSelfReview } from './operator-identity.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 
-type TaskLifecyclePayload = Record<string, any>;
+type TaskLifecyclePayload = Record<string, unknown>;
 
 export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, allTasks }) {
   const all_in_review: TaskLifecyclePayload[] = [];
@@ -73,13 +73,14 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
     item.parent_coordinator_actionability = deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber });
     item.closure_authority = deriveClosureAuthority(task);
     item.pre_claim_warnings = buildPreClaimWarnings({ item, assignment, agentId });
+    const closureAuthority = item.closure_authority && typeof item.closure_authority === 'object' ? item.closure_authority as TaskLifecyclePayload : {};
 
-    if (item.closure_authority.closure_dominates) {
+    if (closureAuthority.closure_dominates) {
       closure_authority_conflicts.push({
         ...item,
         visibility: 'closure_authority_conflict',
         claim_authority: 'not_claimable_closed_evidence_dominates',
-        reason: item.closure_authority.reason,
+        reason: closureAuthority.reason,
       });
       continue;
     }
@@ -115,14 +116,15 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       if (agentId && assignment?.agent_id !== agentId) continue;
       needs_continuation.push(item);
     } else if (task.status === 'opened') {
-      if (item.parent_coordinator_actionability.status === 'non_actionable_parent') {
+      const parentActionability = item.parent_coordinator_actionability && typeof item.parent_coordinator_actionability === 'object' ? item.parent_coordinator_actionability as TaskLifecyclePayload : {};
+      if (parentActionability.status === 'non_actionable_parent') {
         non_actionable_parent_followups.push({
           ...item,
           visibility: 'parent_coordinator_context',
           claim_authority: 'not_recommended_parent_waiting_on_children',
-          reason: item.parent_coordinator_actionability.reason,
-          child_task_numbers: item.parent_coordinator_actionability.child_task_numbers,
-          active_child_task_numbers: item.parent_coordinator_actionability.active_child_task_numbers,
+          reason: parentActionability.reason,
+          child_task_numbers: parentActionability.child_task_numbers,
+          active_child_task_numbers: parentActionability.active_child_task_numbers,
         });
         continue;
       }
