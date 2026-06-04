@@ -1485,7 +1485,7 @@ function legacyTaskLifecycleToolsSnapshot() {
         task_number: numberSchema('Task number to review.'),
         agent_id: stringSchema('Reviewer agent id.'),
         verdict: stringSchema('Verdict: accepted, accepted_with_notes, rejected.'),
-        findings: { type: 'array', description: 'Array of finding objects: {severity, description, location?}' },
+        findings: { type: 'array', description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
         single_operator_review: { type: 'boolean', description: 'Set to true to allow and annotate a same-operator review (reviewer and finisher share operator_identity).' },
       }, ['task_number', 'agent_id', 'verdict']),
     },
@@ -2215,6 +2215,7 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
       }
       const autoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
       const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
+      if (proveCriteria) finishOptions.proveCriteria = true;
       if (finishChangedFiles) finishOptions.changedFiles = JSON.stringify(finishChangedFiles);
       if (!finishChangedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);
       if (noFilesChanged) finishOptions.changedFiles = JSON.stringify([NO_FILES_CHANGED_MARKER]);

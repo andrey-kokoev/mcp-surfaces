@@ -1,5 +1,112 @@
 type TaskLifecyclePayload = Record<string, unknown>;
 
+const ACTIVE_REMEDIATION_TASK_STATUSES = new Set(['opened', 'claimed', 'in_review', 'deferred']);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function positiveTaskNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return null;
+}
+
+function taskNumberFromDisposition(value: unknown): number | null {
+  const direct = positiveTaskNumber(value);
+  if (direct) return direct;
+  const record = asRecord(value);
+  if (!record) return null;
+  return positiveTaskNumber(record.task_number)
+    ?? positiveTaskNumber(record.taskNumber)
+    ?? positiveTaskNumber(record.created_task_number)
+    ?? positiveTaskNumber(record.reopened_task_number)
+    ?? positiveTaskNumber(record.routed_task_number);
+}
+
+function dispositionString(value: unknown): string | null {
+  const direct = nonEmptyString(value);
+  if (direct) return direct;
+  const record = asRecord(value);
+  if (!record) return null;
+  return nonEmptyString(record.reason)
+    ?? nonEmptyString(record.summary)
+    ?? nonEmptyString(record.rationale)
+    ?? nonEmptyString(record.question);
+}
+
+function validateBlockingFindingDispositions(findings: unknown, store): { ok: true } | { ok: false; errors: string[]; examples: Record<string, unknown> } {
+  if (!Array.isArray(findings)) return { ok: true };
+  const errors: string[] = [];
+  findings.forEach((finding, index) => {
+    const record = asRecord(finding);
+    if (!record || record.severity !== 'blocking') return;
+
+    const taskBacked = [
+      ['remediation_task', record.remediation_task],
+      ['created_task_number', record.created_task_number],
+      ['reopened_task_number', record.reopened_task_number],
+      ['covered_by_existing_task', record.covered_by_existing_task],
+    ] as const;
+    const taskDisposition = taskBacked.find(([, value]) => taskNumberFromDisposition(value) !== null);
+    if (taskDisposition) {
+      const taskNumber = taskNumberFromDisposition(taskDisposition[1])!;
+      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      if (!lifecycle) {
+        errors.push(`findings[${index}] ${taskDisposition[0]} references missing task #${taskNumber}.`);
+        return;
+      }
+      if (!ACTIVE_REMEDIATION_TASK_STATUSES.has(String(lifecycle.status))) {
+        errors.push(`findings[${index}] ${taskDisposition[0]} references task #${taskNumber} in non-actionable status '${lifecycle.status}'.`);
+      }
+      return;
+    }
+
+    const obligationId = nonEmptyString(record.routed_obligation_id)
+      ?? nonEmptyString(asRecord(record.routed_obligation)?.obligation_id);
+    if (obligationId) {
+      const obligation = store.getDirectedObligation(obligationId);
+      if (!obligation) {
+        errors.push(`findings[${index}] routed_obligation_id '${obligationId}' does not exist.`);
+        return;
+      }
+      if (obligation.status !== 'open') {
+        errors.push(`findings[${index}] routed_obligation_id '${obligationId}' is not open; status is '${obligation.status}'.`);
+      }
+      return;
+    }
+
+    if (dispositionString(record.operator_decision_required)) return;
+    if (dispositionString(record.operator_deferred_reason)) return;
+
+    const outOfScope = asRecord(record.out_of_scope_or_rejected);
+    if (outOfScope && dispositionString(outOfScope) && asRecord(outOfScope.authority_basis)) return;
+
+    errors.push(`findings[${index}] is blocking but has no executable or explicitly deferred disposition.`);
+  });
+
+  if (errors.length === 0) return { ok: true };
+  return {
+    ok: false,
+    errors,
+    examples: {
+      remediation_task: { task_number: 123, responsible_role: 'builder' },
+      covered_by_existing_task: { task_number: 123, rationale: 'Existing opened task covers the finding.' },
+      routed_obligation_id: 'obl_review_example',
+      operator_decision_required: { owner: 'operator', question: 'Clarify intended product behavior.' },
+      operator_deferred_reason: 'Blocked until operator selects the product direction.',
+      out_of_scope_or_rejected: {
+        reason: 'Finding is outside this review scope.',
+        authority_basis: { kind: 'operator_direct_instruction', summary: 'Operator narrowed review scope.' },
+      },
+    },
+  };
+}
+
 export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_self_certification_preflight",
   "task_lifecycle_admit_evidence",
@@ -498,6 +605,19 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         } catch {
           parsedFindings = null;
         }
+      }
+      const blockingDispositionValidation = validateBlockingFindingDispositions(parsedFindings, store);
+      if (blockingDispositionValidation.ok === false) {
+        return jsonToolResult({
+          status: 'blocked',
+          error: 'blocking_review_finding_disposition_required',
+          close_blocked: true,
+          task_number: taskNumber,
+          schema: 'narada.task.mcp.review.blocking_finding_disposition_gate.v0',
+          close_blockers: blockingDispositionValidation.errors,
+          remediation: 'Every blocking review finding must name an executable or explicitly deferred disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.',
+          examples: blockingDispositionValidation.examples,
+        }, true);
       }
       if (isStructuralReview && args.single_operator_review) {
         const annotation = {
