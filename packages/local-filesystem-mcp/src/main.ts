@@ -10,7 +10,7 @@ import {
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
 import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';
-import { grepMatchObject as buildGrepMatchObject, runRipgrepLines } from './search.js';
+import { grepMatchObject as buildGrepMatchObject, runRipgrepPage } from './search.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
@@ -205,7 +205,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_apply_patch',
-      description: 'Apply a unified diff patch to files under allowed roots and append an audit record.',
+      description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots and append an audit record.',
       inputSchema: objectSchema({ patch: { type: 'string' } }, ['patch']),
     },
     {
@@ -331,7 +331,7 @@ function globSearchTool(args, state) {
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '--sort', 'path', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
-  return cappedSearchResult({ state, kind: 'glob', args, lines: runRipgrepLines(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0 }), offset, limit });
+  return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, diagnosticError }), offset, limit });
 }
 
 function readSummary(value) {
@@ -355,19 +355,19 @@ function grepSearchTool(args, state) {
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, lines: runRipgrepLines([pattern, path, ...modeArgs, '--sort', 'path'], { operation: 'fs_grep_search', noMatchStatus: 1 }), offset, limit });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage([pattern, path, ...modeArgs, '--sort', 'path'], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, diagnosticError }), offset, limit });
 }
 
-function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
-  const matches = lines.slice(offset, offset + limit);
-  const nextOffset = offset + matches.length < lines.length ? offset + matches.length : null;
+function cappedSearchResult({ state, kind, args, page, offset, limit }) {
+  const matches = page.matches;
+  const nextOffset = offset + matches.length < page.count ? offset + matches.length : null;
   const value = {
     schema: `local.filesystem.${kind}.v1`,
     status: 'ok',
     ...(kind === 'grep' ? { output_mode: stringField(args, 'output_mode') ?? 'files_with_matches' } : {}),
     offset,
     limit,
-    count: lines.length,
+    count: page.count,
     returned: matches.length,
     truncated: nextOffset !== null,
     next_offset: nextOffset,
@@ -466,7 +466,7 @@ function replaceRangeTool(args, state) {
 function applyPatchTool(args, state) {
   const patch = stringField(args, 'patch');
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
-  const files = parseToolPatch(patch);
+  const files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError });
   if (files.length === 0) {
     throw patchDiagnosticError('patch_contains_no_files', patch, {
       expected_format: 'unified_diff_or_codex_apply_patch',
@@ -477,7 +477,7 @@ function applyPatchTool(args, state) {
     const source = resolvePatchSource(filePatch, state);
     const target = resolvePatchTarget(filePatch, state);
     const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
-    const patchContext = { diagnosticError, sha256 };
+    const patchContext = { diagnosticError };
     const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
     return { filePatch, source, target, before, after };
   });
@@ -845,7 +845,7 @@ function patchDiagnosticError(codeName, patch, details: unknown = {}) {
       : firstNonEmptyLine.startsWith('--- ')
         ? 'unified_diff_incomplete'
         : 'unknown';
-  return diagnosticError(codeName, `${codeName}: expected unified diff with ---/+++ file headers and @@ hunks`, {
+  return diagnosticError(codeName, `${codeName}: expected unified diff headers or Codex-style apply_patch markers`, {
     ...asRecord(details),
     detected_format: detectedFormat,
     first_non_empty_line: firstNonEmptyLine,

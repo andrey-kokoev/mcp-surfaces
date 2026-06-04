@@ -102,6 +102,8 @@ trust_level = "untrusted"
   assert.ok(writeToolNames.includes('fs_create_directory'));
   assert.ok(writeToolNames.includes('fs_rename_directory'));
   assert.ok(writeToolNames.includes('fs_delete_directory'));
+  const applyPatchToolDescription = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.description;
+  assert.match(String(applyPatchToolDescription), /unified diff or Codex-style apply_patch/);
 
   const readState = createServerState({ mode: 'read', rootsFromCodexConfig: configPath, outputRoot: tempRoot });
   const initResponse = handleRequest({
@@ -218,6 +220,9 @@ trust_level = "untrusted"
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
   assert.equal(badGrepPattern.error.data.code, 'fs_grep_search_failed');
+  assert.equal(badGrepPattern.error.data.details.operation, 'fs_grep_search');
+  assert.equal(typeof badGrepPattern.error.data.details.status, 'number');
+  assert.match(String(badGrepPattern.error.data.details.stderr), /regex parse error|unclosed character class/i);
 
   const blockedWrite = call(readState, 2, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'x' });
   assert.match(blockedWrite.error.message, /tool_not_available_in_read_mode/);
@@ -343,6 +348,18 @@ trust_level = "untrusted"
   assert.equal(movePatchResponse.result.structuredContent.status, 'patched');
   assert.equal(existsSync(join(trusted, 'move-codex.txt')), false);
   assert.equal(readFileSync(join(trusted, 'moved-codex.txt'), 'utf8'), 'move me\n');
+
+  const malformedUnifiedPatch = call(writeState, 356, 'fs_apply_patch', {
+    patch: `+++ malformed.txt\n@@ -1 +1 @@\n-old\n+new\n`,
+  });
+  assert.equal(malformedUnifiedPatch.error.data.code, 'patch_new_file_without_old_file_header');
+  assert.equal(malformedUnifiedPatch.error.data.details.expected_format, 'unified_diff_or_codex_apply_patch');
+
+  const malformedCodexPatch = call(writeState, 357, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Move to: missing-update.txt\n*** End Patch\n`,
+  });
+  assert.equal(malformedCodexPatch.error.data.code, 'patch_move_without_update_file');
+  assert.equal(malformedCodexPatch.error.data.details.expected_format, 'codex_apply_patch');
 
   writeFileSync(join(trusted, 'patch-a.txt'), 'one\ntwo\n', 'utf8');
   writeFileSync(join(trusted, 'patch-b.txt'), 'red\nblue\n', 'utf8');

@@ -20,11 +20,7 @@ const TOOL_INPUT_CHAR_LIMIT = 8192;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
 type StructuredCommandState = Record<string, unknown> & {
-  policy: {
-    allowedRoots: string[];
-    maxTimeoutMs: number;
-    maxOutputBytes: number;
-  };
+  policy: ReturnType<typeof createExecutionPolicy>;
   auditLogDir: string | null;
   storageRoot: string;
 };

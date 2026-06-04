@@ -1,10 +1,10 @@
-export function parsePatch(patch) {
+export function parsePatch(patch, { diagnosticError }) {
   const firstNonEmptyLine = splitLines(patch)[0] ?? '';
-  if (firstNonEmptyLine === '*** Begin Patch') return parseCodexApplyPatch(patch);
-  return parseUnifiedPatch(patch);
+  if (firstNonEmptyLine === '*** Begin Patch') return parseCodexApplyPatch(patch, { diagnosticError });
+  return parseUnifiedPatch(patch, { diagnosticError });
 }
 
-export function applyFilePatch(before, filePatch, { diagnosticError, sha256 }) {
+export function applyFilePatch(before, filePatch, { diagnosticError }) {
   if (filePatch.kind === 'codex_add') return applyCodexAddPatch(filePatch, { diagnosticError });
   if (filePatch.kind === 'codex_update') return applyCodexUpdatePatch(before, filePatch, { diagnosticError });
   const hadTrailingNewline = /\r?\n$/.test(before);
@@ -67,7 +67,7 @@ export function applyDeletePatch(before, filePatch, { diagnosticError }) {
   return null;
 }
 
-function parseUnifiedPatch(patch) {
+function parseUnifiedPatch(patch, { diagnosticError }) {
   const lines = patch.split(/\r?\n/);
   const files = [];
   let current = null;
@@ -80,13 +80,19 @@ function parseUnifiedPatch(patch) {
       continue;
     }
     if (line.startsWith('+++ ')) {
-      if (!current) throw new Error('patch_new_file_without_old_file_header');
+      if (!current) throw diagnosticError('patch_new_file_without_old_file_header', patch, {
+        expected_format: 'unified_diff_or_codex_apply_patch',
+        expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@'],
+      });
       current.newPath = parsePatchHeaderPath(line.slice(4));
       continue;
     }
     const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
     if (hunkMatch) {
-      if (!current?.newPath) throw new Error('patch_hunk_without_file_header');
+      if (!current?.newPath) throw diagnosticError('patch_hunk_without_file_header', patch, {
+        expected_format: 'unified_diff_or_codex_apply_patch',
+        expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@'],
+      });
       currentHunk = {
         oldStart: Number(hunkMatch[1]),
         oldCount: Number(hunkMatch[2] ?? '1'),
@@ -106,7 +112,7 @@ function parseUnifiedPatch(patch) {
     .map((file) => ({ ...file, deleteFile: file.newPath === '/dev/null' }));
 }
 
-function parseCodexApplyPatch(patch) {
+function parseCodexApplyPatch(patch, { diagnosticError }) {
   const lines = patch.split(/\r?\n/);
   const files = [];
   let current = null;
@@ -132,12 +138,18 @@ function parseCodexApplyPatch(patch) {
       continue;
     }
     if (line.startsWith('*** Move to: ')) {
-      if (!current || current.kind !== 'codex_update') throw new Error('patch_move_without_update_file');
+      if (!current || current.kind !== 'codex_update') throw diagnosticError('patch_move_without_update_file', patch, {
+        expected_format: 'codex_apply_patch',
+        expected_headers: ['*** Begin Patch', '*** Update File: <path>', '*** Move to: <path>', '*** End Patch'],
+      });
       current.newPath = normalizePatchPath(line.slice(13).trim());
       continue;
     }
     if (line === '@@' || line.startsWith('@@ ')) {
-      if (!current || current.kind !== 'codex_update') throw new Error('patch_hunk_without_file_header');
+      if (!current || current.kind !== 'codex_update') throw diagnosticError('patch_hunk_without_file_header', patch, {
+        expected_format: 'unified_diff_or_codex_apply_patch',
+        expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@', '*** Begin Patch', '*** Update File: <path>'],
+      });
       currentHunk = { kind: 'codex_update', lines: [] };
       current.hunks.push(currentHunk);
       continue;
