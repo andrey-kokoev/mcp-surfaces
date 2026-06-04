@@ -145,12 +145,15 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(payload.status, 'prepared');
   assert.ok(payload.finish_result, JSON.stringify(payload, null, 2));
   assert.equal(payload.finish_result.status, 'success');
-  assert.equal(payload.finish_result.close_action, 'skipped');
-  assert.equal(payload.finish_result.new_status, 'in_review');
+  assert.equal(payload.finish_result.close_action, 'closed');
+  assert.equal(payload.finish_result.new_status, 'closed');
+  assert.equal(payload.finish_result.ready_for_review, false);
+  assert.equal(payload.finish_result.obligation_id, null);
 
   const verifyStore = openTaskLifecycleStore(siteRoot);
   try {
-    assert.equal(verifyStore.getLifecycle(taskId)?.status, 'in_review');
+    assert.equal(verifyStore.getLifecycle(taskId)?.status, 'closed');
+    assert.equal(verifyStore.listDirectedObligationsForTask(taskId).length, 0);
   } finally {
     verifyStore.db.close();
   }
