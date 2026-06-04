@@ -2,15 +2,18 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import {
   buildOutputRefToolContent,
   listOutputTools,
   outputShow,
 } from '@narada2/mcp-transport';
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
+import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
+import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';
+import { grepMatchObject as buildGrepMatchObject, runRipgrepLines } from './search.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
+const INLINE_RESULT_CHAR_LIMIT = 6000;
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/.git/**',
   '**/node_modules/**',
@@ -176,7 +179,13 @@ export function listTools(mode) {
     {
       name: 'fs_write_file',
       description: 'Write a text file under an allowed root and append an audit record.',
-      inputSchema: objectSchema({ path: { type: 'string' }, content: { type: 'string' } }, ['path', 'content']),
+      inputSchema: objectSchema({
+        path: { type: 'string' },
+        content: { type: 'string' },
+        overwrite: { type: 'boolean', default: true },
+        create_only: { type: 'boolean', default: false },
+        expected_sha256: { type: 'string', description: 'Optional expected current file sha256 before overwriting.' },
+      }, ['path', 'content']),
     },
     {
       name: 'fs_str_replace_file',
@@ -191,6 +200,7 @@ export function listTools(mode) {
         start_line: { type: 'integer' },
         end_line: { type: 'integer' },
         replacement: { type: 'string' },
+        expected_sha256: { type: 'string', description: 'Optional expected current file sha256 before editing.' },
       }, ['path', 'start_line', 'end_line', 'replacement']),
     },
     {
@@ -265,7 +275,8 @@ function readFileTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
-  return readFileRange({ path, root, offset, limit });
+  const value = readFileRange({ path, root, offset, limit });
+  return cappedToolValue({ state, value, summary: readSummary(value) });
 }
 
 function readFileRangeTool(args, state) {
@@ -274,11 +285,15 @@ function readFileRangeTool(args, state) {
   if (!Number.isInteger(startLine) || startLine < 1) throw new Error('start_line_must_be_positive_integer');
   if (!Number.isInteger(endLine) || endLine < startLine) throw new Error('end_line_must_be_greater_than_or_equal_start_line');
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
-  return readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
+  const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
+  return cappedToolValue({ state, value, summary: readSummary(value) });
 }
 
 function readFileRange({ path, root, offset, limit }) {
-  const lines = readFileSync(path, 'utf8').split(/\r?\n/);
+  const buffer = readFileSync(path);
+  if (buffer.includes(0)) throw diagnosticError('binary_file_not_supported', `binary_file_not_supported: ${path}`, pathMetadata(path, root));
+  const text = buffer.toString('utf8');
+  const lines = splitFileLines(text);
   const selected = lines.slice(offset - 1, offset - 1 + limit);
   const nextOffset = offset + selected.length <= lines.length ? offset + selected.length : null;
   return {
@@ -298,6 +313,7 @@ function statTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_stat' });
   const stat = statSync(path);
   return {
+    schema: 'local.filesystem.stat.v1',
     path,
     root,
     relative_path: relative(root, path).replace(/\\/g, '/'),
@@ -314,9 +330,20 @@ function globSearchTool(args, state) {
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
-  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
-  const rg = spawnSync('rg', rgArgs, { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
-  return cappedSearchResult({ state, kind: 'glob', args, lines: splitLines(rg.stdout), offset, limit });
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '--sort', 'path', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  return cappedSearchResult({ state, kind: 'glob', args, lines: runRipgrepLines(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0 }), offset, limit });
+}
+
+function readSummary(value) {
+  return {
+    path: value.path,
+    relative_path: value.relative_path,
+    offset: value.offset,
+    limit: value.limit,
+    returned_lines: value.returned_lines,
+    next_offset: value.next_offset,
+    total_lines: value.total_lines,
+  };
 }
 
 function grepSearchTool(args, state) {
@@ -328,8 +355,7 @@ function grepSearchTool(args, state) {
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
-  const rg = spawnSync('rg', [pattern, path, ...modeArgs, '--max-count', String(limit + offset)], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, lines: splitLines(rg.stdout), offset, limit });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, lines: runRipgrepLines([pattern, path, ...modeArgs, '--sort', 'path'], { operation: 'fs_grep_search', noMatchStatus: 1 }), offset, limit });
 }
 
 function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
@@ -338,6 +364,7 @@ function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
   const value = {
     schema: `local.filesystem.${kind}.v1`,
     status: 'ok',
+    ...(kind === 'grep' ? { output_mode: stringField(args, 'output_mode') ?? 'files_with_matches' } : {}),
     offset,
     limit,
     count: lines.length,
@@ -345,18 +372,36 @@ function cappedSearchResult({ state, kind, args, lines, offset, limit }) {
     truncated: nextOffset !== null,
     next_offset: nextOffset,
     matches,
+    ...(kind === 'grep' ? { match_objects: matches.map((match) => buildGrepMatchObject(match, stringField(args, 'output_mode') ?? 'files_with_matches')) } : {}),
   };
-  if (JSON.stringify(value).length <= 6000) return value;
-  return buildOutputRefToolContent({ siteRoot: state.outputRoot, toolName: activeToolName, value, isError: false });
+  return cappedToolValue({ state, value, summary: { count: value.count, returned: value.returned, next_offset: value.next_offset } });
+}
+
+function cappedToolValue({ state, value, summary = {} }) {
+  if (JSON.stringify(value).length <= INLINE_RESULT_CHAR_LIMIT) return value;
+  const result = buildOutputRefToolContent({ siteRoot: state.outputRoot, toolName: activeToolName, value, isError: false });
+  const envelope = parseToolResultStructuredContent(result);
+  if (!envelope) return result;
+  const structuredContent = { ...envelope, ...summary };
+  return {
+    ...result,
+    content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
+  };
 }
 
 function writeFileTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
   const content = stringField(args, 'content') ?? '';
+  const overwrite = booleanField(args, 'overwrite') ?? true;
+  const createOnly = booleanField(args, 'create_only') ?? false;
+  const before = existsSync(path) ? readFileSync(path, 'utf8') : null;
+  if (before !== null && createOnly) throw diagnosticError('write_file_destination_exists', `write_file_destination_exists: ${path}`, pathMetadata(path, root));
+  if (before !== null && !overwrite) throw diagnosticError('write_file_overwrite_refused', `write_file_overwrite_refused: ${path}`, pathMetadata(path, root));
+  assertExpectedSha256(args, before, { operation: 'fs_write_file', path, root });
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, 'utf8');
-  appendAudit(state, 'fs_write_file', path, root, { size: content.length });
-  return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length };
+  appendAudit(state, 'fs_write_file', path, root, { size: content.length, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) });
+  return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) };
 }
 
 function strReplaceTool(args, state) {
@@ -367,7 +412,13 @@ function strReplaceTool(args, state) {
   const before = readFileSync(path, 'utf8');
   const count = before.split(oldText).length - 1;
   if (count === 0) throw new Error('str_replace_not_found');
-  if (count > 1) throw new Error(`str_replace_ambiguous: ${count}`);
+  if (count > 1) {
+    throw diagnosticError('str_replace_ambiguous', `str_replace_ambiguous: ${count}`, {
+      ...pathMetadata(path, root),
+      occurrences: count,
+      matches: findTextOccurrences(before, oldText).slice(0, 20),
+    });
+  }
   const after = before.replace(oldText, newText);
   writeFileSync(path, after, 'utf8');
   appendAudit(state, 'fs_str_replace_file', path, root, { old_length: oldText.length, new_length: newText.length, before_sha256: sha256(before), after_sha256: sha256(after) });
@@ -389,6 +440,7 @@ function replaceRangeTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_replace_range' });
   const replacement = stringField(args, 'replacement') ?? '';
   const before = readFileSync(path, 'utf8');
+  assertExpectedSha256(args, before, { operation: 'fs_replace_range', path, root });
   const hasTrailingNewline = /\r?\n$/.test(before);
   const newline = before.includes('\r\n') ? '\r\n' : '\n';
   const lines = before.replace(/\r?\n$/, '').split(/\r?\n/);
@@ -414,25 +466,45 @@ function replaceRangeTool(args, state) {
 function applyPatchTool(args, state) {
   const patch = stringField(args, 'patch');
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
-  const files = parseUnifiedPatch(patch);
+  const files = parseToolPatch(patch);
   if (files.length === 0) {
     throw patchDiagnosticError('patch_contains_no_files', patch, {
-      expected_format: 'unified_diff',
-      expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@'],
+      expected_format: 'unified_diff_or_codex_apply_patch',
+      expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@', '*** Begin Patch', '*** Update File: <path>'],
     });
   }
   const planned = files.map((filePatch) => {
+    const source = resolvePatchSource(filePatch, state);
     const target = resolvePatchTarget(filePatch, state);
-    const before = existsSync(target.path) ? readFileSync(target.path, 'utf8') : '';
-    const after = applyFilePatch(before, filePatch);
-    return { filePatch, target, before, after };
+    const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
+    const patchContext = { diagnosticError, sha256 };
+    const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
+    return { filePatch, source, target, before, after };
   });
   const changed = [];
-  for (const item of planned) {
-    mkdirSync(dirname(item.target.path), { recursive: true });
-    writeFileSync(item.target.path, item.after, 'utf8');
-    appendAudit(state, 'fs_apply_patch', item.target.path, item.target.root, { patch_sha256: sha256(patch), before_sha256: sha256(item.before), after_sha256: sha256(item.after), hunks: item.filePatch.hunks.length });
-    changed.push({ ...pathMetadata(item.target.path, item.target.root), hunks: item.filePatch.hunks.length, before_sha256: sha256(item.before), after_sha256: sha256(item.after) });
+  const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
+  const backups = backupPaths.map((path) => ({
+    path,
+    existed: existsSync(path),
+    content: existsSync(path) ? readFileSync(path, 'utf8') : null,
+  }));
+  try {
+    for (const item of planned) {
+      if (item.filePatch.deleteFile) {
+        if (!existsSync(item.source.path)) throw diagnosticError('patch_delete_target_not_found', `patch_delete_target_not_found: ${item.source.path}`, pathMetadata(item.source.path, item.source.root));
+        rmSync(item.source.path, { force: false });
+      } else {
+        mkdirSync(dirname(item.target.path), { recursive: true });
+        writeFileSync(item.target.path, item.after, 'utf8');
+        if (!samePath(item.source.path, item.target.path) && existsSync(item.source.path)) rmSync(item.source.path, { force: false });
+      }
+      const afterSha256 = item.filePatch.deleteFile ? null : sha256(item.after);
+      appendAudit(state, 'fs_apply_patch', item.target.path, item.target.root, { patch_sha256: sha256(patch), before_sha256: sha256(item.before), after_sha256: afterSha256, hunks: item.filePatch.hunks.length });
+      changed.push({ ...pathMetadata(item.target.path, item.target.root), hunks: item.filePatch.hunks.length, deleted: item.filePatch.deleteFile === true, before_sha256: sha256(item.before), after_sha256: afterSha256 });
+    }
+  } catch (error) {
+    rollbackPatch(backups);
+    throw error;
   }
   return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', changed_files: changed };
 }
@@ -449,7 +521,14 @@ function createDirectoryTool(args, state) {
   const recursive = booleanField(args, 'recursive') ?? false;
   if (existsSync(target.path)) {
     if (!statSync(target.path).isDirectory()) throw new Error(`create_directory_destination_not_directory: ${target.path}`);
-    throw new Error(`create_directory_destination_exists: ${target.path}`);
+    appendAudit(state, 'fs_create_directory', target.path, target.root, { recursive, created: false });
+    return {
+      schema: 'local.filesystem.create_directory.v1',
+      status: 'exists',
+      ...pathMetadata(target.path, target.root),
+      recursive,
+      created: false,
+    };
   }
   mkdirSync(target.path, { recursive });
   appendAudit(state, 'fs_create_directory', target.path, target.root, { recursive });
@@ -458,6 +537,7 @@ function createDirectoryTool(args, state) {
     status: 'created',
     ...pathMetadata(target.path, target.root),
     recursive,
+    created: true,
   };
 }
 
@@ -495,10 +575,20 @@ function movePath({ state, operation, from, to, overwrite, directoryOnly }) {
     if (!overwrite) throw new Error(`move_destination_exists: ${to.path}`);
     const toStat = statSync(to.path);
     if (fromStat.isDirectory() !== toStat.isDirectory()) throw new Error(`move_destination_type_mismatch: ${to.path}`);
-    rmSync(to.path, { recursive: true, force: true });
+    const backupPath = uniqueSiblingPath(to.path, 'overwrite-backup');
+    renameSync(to.path, backupPath);
+    try {
+      mkdirSync(dirname(to.path), { recursive: true });
+      renameSync(from.path, to.path);
+      rmSync(backupPath, { recursive: true, force: true });
+    } catch (error) {
+      if (!existsSync(to.path) && existsSync(backupPath)) renameSync(backupPath, to.path);
+      throw error;
+    }
+  } else {
+    mkdirSync(dirname(to.path), { recursive: true });
+    renameSync(from.path, to.path);
   }
-  mkdirSync(dirname(to.path), { recursive: true });
-  renameSync(from.path, to.path);
   appendAudit(state, operation, to.path, to.root, {
     from: from.path,
     from_root: from.root,
@@ -523,41 +613,9 @@ function pathMetadata(path, root) {
   };
 }
 
-function parseUnifiedPatch(patch) {
-  const lines = patch.split(/\r?\n/);
-  const files = [];
-  let current = null;
-  let currentHunk = null;
-  for (const line of lines) {
-    if (line.startsWith('--- ')) {
-      current = { oldPath: parsePatchHeaderPath(line.slice(4)), newPath: null, hunks: [] };
-      files.push(current);
-      currentHunk = null;
-      continue;
-    }
-    if (line.startsWith('+++ ')) {
-      if (!current) throw diagnosticError('patch_new_file_without_old_file_header', 'Patch has a new-file header before an old-file header.');
-      current.newPath = parsePatchHeaderPath(line.slice(4));
-      continue;
-    }
-    const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-    if (hunkMatch) {
-      if (!current?.newPath) throw diagnosticError('patch_hunk_without_file_header', 'Patch hunk appears before complete file headers.');
-      currentHunk = {
-        oldStart: Number(hunkMatch[1]),
-        oldCount: Number(hunkMatch[2] ?? '1'),
-        newStart: Number(hunkMatch[3]),
-        newCount: Number(hunkMatch[4] ?? '1'),
-        lines: [],
-      };
-      current.hunks.push(currentHunk);
-      continue;
-    }
-    if (currentHunk && (/^[ +\-]/.test(line) || line === '\\ No newline at end of file')) {
-      if (line !== '\\ No newline at end of file') currentHunk.lines.push(line);
-    }
-  }
-  return files.filter((file) => file.newPath && file.hunks.length > 0);
+function resolvePatchSource(filePatch, state) {
+  const patchPath = stripPatchPrefix(filePatch.oldPath === '/dev/null' ? filePatch.newPath : filePatch.oldPath);
+  return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_source_path' });
 }
 
 function resolvePatchTarget(filePatch, state) {
@@ -588,49 +646,33 @@ function stripPatchPrefix(path) {
   return cleaned;
 }
 
-function parsePatchHeaderPath(value) {
-  const trimmed = String(value ?? '').trim();
-  if (trimmed === '/dev/null') return trimmed;
-  const quoted = trimmed.match(/^"((?:\\.|[^"])*)"/);
-  if (quoted) return quoted[1].replace(/\\"/g, '"');
-  const tabIndex = trimmed.indexOf('\t');
-  if (tabIndex >= 0) return trimmed.slice(0, tabIndex);
-  return trimmed.split(/\s+/)[0] ?? '';
-}
-
 function normalizePatchPath(path) {
   if (/^[A-Za-z]:\//.test(path)) return path;
   if (/^[A-Za-z]:\\/.test(path)) return path.replace(/\\/g, '/');
   return path.replace(/\\/g, '/');
 }
 
-function applyFilePatch(before, filePatch) {
-  const hadTrailingNewline = /\r?\n$/.test(before);
-  const newline = before.includes('\r\n') ? '\r\n' : '\n';
-  const source = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
-  const output = [];
-  let sourceIndex = 0;
-  for (const hunk of filePatch.hunks) {
-    const hunkStart = hunk.oldStart - 1;
-    while (sourceIndex < hunkStart) output.push(source[sourceIndex++]);
-    for (const line of hunk.lines) {
-      const kind = line[0];
-      const text = line.slice(1);
-      if (kind === ' ') {
-        if (source[sourceIndex] !== text) throw diagnosticError('patch_context_mismatch', `patch_context_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`, { expected: text, actual: source[sourceIndex] ?? null });
-        output.push(source[sourceIndex++]);
-      } else if (kind === '-') {
-        if (source[sourceIndex] !== text) throw diagnosticError('patch_remove_mismatch', `patch_remove_mismatch: expected ${JSON.stringify(text)} got ${JSON.stringify(source[sourceIndex])}`, { expected: text, actual: source[sourceIndex] ?? null });
-        sourceIndex += 1;
-      } else if (kind === '+') {
-        output.push(text);
-      } else {
-        throw diagnosticError('patch_line_kind_unsupported', `patch_line_kind_unsupported: ${kind}`, { kind });
-      }
+function rollbackPatch(backups) {
+  for (const backup of backups) {
+    if (backup.existed) {
+      mkdirSync(dirname(backup.path), { recursive: true });
+      writeFileSync(backup.path, backup.content, 'utf8');
+    } else if (existsSync(backup.path)) {
+      rmSync(backup.path, { recursive: true, force: true });
     }
   }
-  while (sourceIndex < source.length) output.push(source[sourceIndex++]);
-  return `${output.join(newline)}${hadTrailingNewline ? newline : ''}`;
+}
+
+function uniquePaths(paths) {
+  const seen = new Set();
+  const out = [];
+  for (const path of paths) {
+    const key = resolve(path).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(path);
+  }
+  return out;
 }
 
 function appendAudit(state, operation, path, root, detail) {
@@ -652,119 +694,14 @@ function toolResult(value, renderContext: Record<string, unknown> = {}) {
     const structuredContent = value.structuredContent ?? parseToolResultStructuredContent(value);
     return {
       ...value,
-      content: [{ type: 'text', text: renderToolResultText(structuredContent, renderContext) }],
+      content: [{ type: 'text', text: renderFilesystemToolResultText(structuredContent, renderContext) }],
       structuredContent,
     };
   }
   return {
-    content: [{ type: 'text', text: renderToolResultText(value, renderContext) }],
+    content: [{ type: 'text', text: renderFilesystemToolResultText(value, renderContext) }],
     structuredContent: value,
   };
-}
-
-function renderToolResultText(value, renderContext: Record<string, unknown> = {}) {
-  const record = asRecord(value);
-  if (record.schema === 'narada.mcp_output_show.v1') return String(record.output_text ?? '');
-  if (record.schema === 'narada.mcp_output_locator.v1' || typeof record.output_ref === 'string') {
-    return compactLines([
-      `status: ${record.status ?? 'ok'}`,
-      'result: materialized',
-      `output_ref: ${record.output_ref ?? record.ref ?? ''}`,
-      `reader_tool: ${record.reader_tool ?? 'mcp_output_show'}`,
-      `truncated: ${record.truncated ?? record.original_truncated ?? true}`,
-      record.full_output_char_length !== undefined ? `full_output_char_length: ${record.full_output_char_length}` : null,
-    ]);
-  }
-  if (isReadFileResult(record)) return renderReadFileResult(record);
-  if (record.schema === 'local.filesystem.glob.v1') return renderSearchResult('fs_glob_search', record);
-  if (record.schema === 'local.filesystem.grep.v1') return renderSearchResult('fs_grep_search', record, renderContext);
-  if (record.schema === 'local.filesystem.apply_patch.v1') {
-    const changedFiles = Array.isArray(record.changed_files) ? record.changed_files : [];
-    return compactLines([
-      `fs_apply_patch: ${record.status ?? 'ok'}`,
-      `changed_files: ${changedFiles.length}`,
-      ...changedFiles.map((file) => `- ${asRecord(file).relative_path ?? asRecord(file).path ?? ''}`),
-    ]);
-  }
-  if (record.schema || record.status || record.path || record.relative_path || record.type) return renderCompactRecord(record);
-  return JSON.stringify(value, null, 2);
-}
-
-function isReadFileResult(record) {
-  return typeof record.path === 'string'
-    && typeof record.content === 'string'
-    && typeof record.offset === 'number'
-    && typeof record.returned_lines === 'number'
-    && typeof record.total_lines === 'number';
-}
-
-function renderReadFileResult(record) {
-  const startLine = Number(record.offset);
-  const returnedLines = Number(record.returned_lines);
-  const endLine = returnedLines > 0 ? startLine + returnedLines - 1 : startLine - 1;
-  return [
-    `path: ${record.path}`,
-    `lines: ${startLine}-${endLine} of ${record.total_lines}`,
-    `returned_lines: ${record.returned_lines}`,
-    `next_offset: ${record.next_offset ?? 'null'}`,
-    'content:',
-    String(record.content ?? ''),
-  ].join('\n');
-}
-
-function renderSearchResult(toolName, record, renderContext: Record<string, unknown> = {}) {
-  const matches = Array.isArray(record.matches) ? record.matches.map(String) : [];
-  const mode = toolName === 'fs_grep_search' ? [`mode: ${renderContext.grepOutputMode ?? 'files_with_matches'}`] : [];
-  return [
-    `${toolName}: ${record.status ?? 'ok'}`,
-    ...mode,
-    `count: ${record.count ?? matches.length}`,
-    `returned: ${record.returned ?? matches.length}`,
-    `truncated: ${record.truncated ?? false}`,
-    `next_offset: ${record.next_offset ?? 'null'}`,
-    'matches:',
-    ...matches,
-  ].join('\n');
-}
-
-function renderCompactRecord(record) {
-  if (record.schema === 'local.filesystem.stat.v1' || record.type) {
-    return compactLines([
-      'fs_stat: ok',
-      `path: ${record.path ?? ''}`,
-      record.relative_path !== undefined ? `relative_path: ${record.relative_path}` : null,
-      record.type !== undefined ? `type: ${record.type}` : null,
-      record.size !== undefined ? `size: ${record.size}` : null,
-      record.mtime !== undefined ? `mtime: ${record.mtime}` : null,
-    ]);
-  }
-  const lines = [
-    `${filesystemToolLabel(record)}: ${record.status ?? 'ok'}`,
-    record.path !== undefined ? `path: ${record.path}` : null,
-    record.relative_path !== undefined ? `relative_path: ${record.relative_path}` : null,
-    record.size !== undefined ? `size: ${record.size}` : null,
-    record.occurrences !== undefined ? `occurrences: ${record.occurrences}` : null,
-    record.start_line !== undefined ? `start_line: ${record.start_line}` : null,
-    record.end_line !== undefined ? `end_line: ${record.end_line}` : null,
-    record.inserted_lines !== undefined ? `inserted_lines: ${record.inserted_lines}` : null,
-    record.recursive !== undefined ? `recursive: ${record.recursive}` : null,
-    record.overwrite !== undefined ? `overwrite: ${record.overwrite}` : null,
-  ];
-  const from = asRecord(record.from);
-  const to = asRecord(record.to);
-  if (from.path || from.relative_path) lines.push(`from: ${from.relative_path ?? from.path}`);
-  if (to.path || to.relative_path) lines.push(`to: ${to.relative_path ?? to.path}`);
-  return compactLines(lines);
-}
-
-function filesystemToolLabel(record) {
-  const schema = typeof record.schema === 'string' ? record.schema : '';
-  const match = schema.match(/^local\.filesystem\.(.+)\.v1$/);
-  return match ? `fs_${match[1]}` : 'fs_result';
-}
-
-function compactLines(lines) {
-  return lines.filter((line) => typeof line === 'string' && line.length > 0).join('\n');
 }
 
 function isToolResult(value) {
@@ -783,6 +720,14 @@ function parseToolResultStructuredContent(value) {
 
 function samePath(left, right) {
   return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+}
+
+function uniqueSiblingPath(path, label) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const candidate = `${path}.mcp-${label}-${process.pid}-${Date.now()}-${attempt}`;
+    if (!existsSync(candidate)) return candidate;
+  }
+  throw new Error(`temporary_path_unavailable: ${path}`);
 }
 
 function isPathInside(path, root) {
@@ -845,6 +790,42 @@ function writeJsonRpcResponse(response, { framed = false } = {}) {
 
 function splitLines(value) {
   return String(value ?? '').split(/\r?\n/).filter((line) => line.trim().length > 0);
+}
+
+function splitFileLines(value) {
+  const text = String(value ?? '');
+  if (text.length === 0) return [];
+  return text.replace(/\r?\n$/, '').split(/\r?\n/);
+}
+
+function assertExpectedSha256(args, before, { operation, path, root }) {
+  const expected = stringField(args, 'expected_sha256');
+  if (!expected) return;
+  const actual = before === null ? null : sha256(before);
+  if (actual !== expected) {
+    throw diagnosticError(`${operation}_expected_sha256_mismatch`, `${operation}_expected_sha256_mismatch: ${path}`, {
+      ...pathMetadata(path, root),
+      expected_sha256: expected,
+      actual_sha256: actual,
+    });
+  }
+}
+
+function findTextOccurrences(text, needle) {
+  const matches = [];
+  let index = 0;
+  while (matches.length < 100) {
+    const found = text.indexOf(needle, index);
+    if (found < 0) break;
+    const before = text.slice(0, found);
+    const line = before.split(/\r?\n/).length;
+    const lineStart = Math.max(0, text.lastIndexOf('\n', found - 1) + 1);
+    const lineEndRaw = text.indexOf('\n', found);
+    const lineEnd = lineEndRaw < 0 ? text.length : lineEndRaw;
+    matches.push({ line, column: found - lineStart + 1, line_text: text.slice(lineStart, lineEnd) });
+    index = found + Math.max(needle.length, 1);
+  }
+  return matches;
 }
 
 function sha256(value) {

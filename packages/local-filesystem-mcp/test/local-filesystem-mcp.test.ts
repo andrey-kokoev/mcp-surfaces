@@ -44,6 +44,8 @@ try {
   mkdirSync(trusted, { recursive: true });
   mkdirSync(other, { recursive: true });
   writeFileSync(join(trusted, 'a.txt'), 'alpha\nbeta\n', 'utf8');
+  writeFileSync(join(trusted, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
+  writeFileSync(join(trusted, 'large-read.txt'), `${'x'.repeat(7000)}\n`, 'utf8');
   writeFileSync(join(trusted, 'grep-one.txt'), 'alpha\nneedle one\n', 'utf8');
   writeFileSync(join(trusted, 'grep-two.txt'), 'needle two\nplain\n', 'utf8');
 
@@ -121,18 +123,34 @@ trust_level = "untrusted"
   assert.equal(readResponse.result.structuredContent.content, 'alpha');
   assert.equal(readResponse.result.structuredContent.next_offset, 2);
   assert.equal(readResponse.result.content[0].text.startsWith(`path: ${join(trusted, 'a.txt')}`), true);
-  assert.match(readResponse.result.content[0].text, /lines: 1-1 of 3/);
+  assert.match(readResponse.result.content[0].text, /lines: 1-1 of 2/);
   assert.match(readResponse.result.content[0].text, /content:\nalpha$/);
 
   const rangeResponse = call(readState, 11, 'fs_read_file_range', { path: join(trusted, 'a.txt'), start_line: 2, end_line: 2 });
   assert.equal(rangeResponse.result.structuredContent.content, 'beta');
-  assert.equal(rangeResponse.result.structuredContent.next_offset, 3);
-  assert.match(rangeResponse.result.content[0].text, /lines: 2-2 of 3/);
+  assert.equal(rangeResponse.result.structuredContent.next_offset, null);
+  assert.match(rangeResponse.result.content[0].text, /lines: 2-2 of 2/);
   assert.match(rangeResponse.result.content[0].text, /content:\nbeta$/);
 
   const revolutionConfigPath = join(revolutionRoot, 'config', 'config.json');
   const revolutionReadResponse = call(readState, 12, 'fs_read_file', { path: revolutionConfigPath });
   assert.equal(revolutionReadResponse.result.structuredContent.relative_path.endsWith('!Revolution/.narada/config/config.json'), true);
+
+  const largeRead = call(readState, 121, 'fs_read_file', { path: join(trusted, 'large-read.txt') });
+  assert.match(largeRead.result.structuredContent.output_ref, /^mcp_output:/);
+  assert.equal(largeRead.result.structuredContent.reader_tool, 'mcp_output_show');
+  assert.equal(largeRead.result.structuredContent.relative_path, 'large-read.txt');
+  assert.equal(largeRead.result.structuredContent.returned_lines, 1);
+  assert.equal(largeRead.result.structuredContent.next_offset, null);
+  assert.match(largeRead.result.content[0].text, /result: materialized/);
+  const shownLargeRead = call(readState, 122, 'mcp_output_show', { ref: largeRead.result.structuredContent.output_ref, output_limit: 20000 });
+  const shownLargeReadPayload = JSON.parse(shownLargeRead.result.content[0].text);
+  assert.equal(shownLargeReadPayload.content, `${'x'.repeat(7000)}`);
+
+  const statResponse = call(readState, 123, 'fs_stat', { path: join(trusted, 'a.txt') });
+  assert.equal(statResponse.result.structuredContent.schema, 'local.filesystem.stat.v1');
+  const binaryRead = call(readState, 124, 'fs_read_file', { path: join(trusted, 'binary.bin') });
+  assert.equal(binaryRead.error.data.code, 'binary_file_not_supported');
 
   for (const [id, pattern] of [[13, '**/*config*'], [14, '**/*.json'], [15, '**/*.{json,yaml,yml}']]) {
     const globResponse = call(readState, id, 'fs_glob_search', { directory: revolutionRoot, pattern });
@@ -158,7 +176,7 @@ trust_level = "untrusted"
   assert.equal(pagedGlob.result.structuredContent.truncated, true);
   assert.equal(pagedGlob.result.structuredContent.next_offset, 5);
   assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: 120\nreturned: 5\ntruncated: true/);
-  assert.equal(pagedGlob.result.content[0].text.includes(pagedGlob.result.structuredContent.matches[0]), true);
+  assert.equal(pagedGlob.result.structuredContent.matches.length, 5);
   const pagedGlobSecond = call(readState, 17, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 5, limit: 5 });
   assert.equal(pagedGlobSecond.result.structuredContent.offset, 5);
   assert.equal(pagedGlobSecond.result.structuredContent.returned, 5);
@@ -167,8 +185,12 @@ trust_level = "untrusted"
   assert.equal(largeGlob.result.structuredContent.truncated, true);
   assert.match(largeGlob.result.structuredContent.output_ref, /^mcp_output:/);
   assert.equal(largeGlob.result.structuredContent.reader_tool, 'mcp_output_show');
+  assert.equal(largeGlob.result.structuredContent.count, 120);
+  assert.equal(largeGlob.result.structuredContent.returned, 120);
+  assert.equal(largeGlob.result.structuredContent.next_offset, null);
   assert.equal(largeGlob.result.content[0].text.includes('content'), false);
   assert.match(largeGlob.result.content[0].text, /result: materialized/);
+  assert.match(largeGlob.result.content[0].text, /count: 120/);
   assert.match(largeGlob.result.content[0].text, /reader_tool: mcp_output_show/);
   const shownLargeGlob = call(readState, 19, 'mcp_output_show', { ref: largeGlob.result.structuredContent.output_ref, output_limit: 50000 });
   assert.equal(shownLargeGlob.result.content[0].text, shownLargeGlob.result.structuredContent.output_text);
@@ -178,16 +200,24 @@ trust_level = "untrusted"
 
   const grepFiles = call(readState, 20, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'files_with_matches', limit: 10 });
   assert.equal(grepFiles.result.structuredContent.schema, 'local.filesystem.grep.v1');
+  assert.equal(grepFiles.result.structuredContent.output_mode, 'files_with_matches');
   assert.equal(grepFiles.result.structuredContent.matches.some((match) => match.includes('grep-one.txt')), true);
+  assert.equal(grepFiles.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt')), true);
   assert.match(grepFiles.result.content[0].text, /fs_grep_search: ok\nmode: files_with_matches\ncount: /);
   assert.equal(grepFiles.result.content[0].text.includes('grep-one.txt'), true);
   const grepContent = call(readState, 21, 'fs_grep_search', { path: trusted, pattern: 'needle one', output_mode: 'content', limit: 10 });
+  assert.equal(grepContent.result.structuredContent.output_mode, 'content');
   assert.equal(grepContent.result.structuredContent.matches.some((match) => match.includes('needle one')), true);
+  assert.equal(grepContent.result.structuredContent.match_objects.some((match) => Number(match.line) === 2 && String(match.text) === 'needle one'), true);
   assert.equal(grepContent.result.content[0].text.includes('needle one'), true);
   const grepCounts = call(readState, 22, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'count_matches', limit: 10 });
+  assert.equal(grepCounts.result.structuredContent.output_mode, 'count_matches');
+  assert.equal(grepCounts.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt') && Number(match.count) === 1), true);
   assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt.*1/.test(match.replace(/\\/g, '/'))), true);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
+  const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
+  assert.equal(badGrepPattern.error.data.code, 'fs_grep_search_failed');
 
   const blockedWrite = call(readState, 2, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'x' });
   assert.match(blockedWrite.error.message, /tool_not_available_in_read_mode/);
@@ -212,6 +242,12 @@ trust_level = "untrusted"
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
+  const createOnlyBlocked = call(writeState, 301, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'blocked', create_only: true });
+  assert.equal(createOnlyBlocked.error.data.code, 'write_file_destination_exists');
+  const overwriteBlockedWrite = call(writeState, 302, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'blocked', overwrite: false });
+  assert.equal(overwriteBlockedWrite.error.data.code, 'write_file_overwrite_refused');
+  const staleWrite = call(writeState, 303, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'blocked', expected_sha256: 'bad' });
+  assert.equal(staleWrite.error.data.code, 'fs_write_file_expected_sha256_mismatch');
 
   const stdioWritePath = join(trusted, 'stdio-framed-write.txt');
   const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -246,6 +282,14 @@ trust_level = "untrusted"
   assert.equal(replaceRangeResponse.result.structuredContent.status, 'replaced_range');
   assert.equal(typeof replaceRangeResponse.result.structuredContent.before_sha256, 'string');
   assert.equal(readFileSync(join(trusted, 'b.txt'), 'utf8'), 'range-edited');
+  const staleRangeResponse = call(writeState, 311, 'fs_replace_range', { path: join(trusted, 'b.txt'), start_line: 1, end_line: 1, replacement: 'blocked', expected_sha256: 'bad' });
+  assert.equal(staleRangeResponse.error.data.code, 'fs_replace_range_expected_sha256_mismatch');
+
+  writeFileSync(join(trusted, 'ambiguous.txt'), 'same\nsame\n', 'utf8');
+  const ambiguousReplace = call(writeState, 312, 'fs_str_replace_file', { path: join(trusted, 'ambiguous.txt'), old: 'same', new: 'different' });
+  assert.equal(ambiguousReplace.error.data.code, 'str_replace_ambiguous');
+  assert.equal(ambiguousReplace.error.data.details.occurrences, 2);
+  assert.equal(ambiguousReplace.error.data.details.matches[0].line, 1);
 
   writeFileSync(join(trusted, 'patch.txt'), 'one\ntwo\n', 'utf8');
   const patchResponse = call(writeState, 32, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n` });
@@ -262,12 +306,43 @@ trust_level = "untrusted"
   assert.equal(readFileSync(join(trusted, 'patch-header.txt'), 'utf8'), 'new\n');
 
   const applyPatchGrammar = call(writeState, 35, 'fs_apply_patch', {
-    patch: `*** Begin Patch\n*** Update File: patch-header.txt\n@@\n-old\n+newer\n*** End Patch\n`,
+    patch: `*** Begin Patch\n*** Update File: patch-header.txt\n@@\n-new\n+newer\n*** End Patch\n`,
   });
-  assert.equal(applyPatchGrammar.error.data.schema, 'local.filesystem.error.v1');
-  assert.equal(applyPatchGrammar.error.data.code, 'patch_contains_no_files');
-  assert.equal(applyPatchGrammar.error.data.details.detected_format, 'codex_apply_patch');
-  assert.match(applyPatchGrammar.error.message, /expected unified diff/);
+  assert.equal(applyPatchGrammar.result.structuredContent.status, 'patched');
+  assert.equal(readFileSync(join(trusted, 'patch-header.txt'), 'utf8'), 'newer\n');
+
+  const addPatchResponse = call(writeState, 351, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Add File: codex-added.txt\n+added\n+file\n*** End Patch\n`,
+  });
+  assert.equal(addPatchResponse.result.structuredContent.status, 'patched');
+  assert.equal(readFileSync(join(trusted, 'codex-added.txt'), 'utf8'), 'added\nfile\n');
+
+  const deletePatchResponse = call(writeState, 352, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Delete File: codex-added.txt\n*** End Patch\n`,
+  });
+  assert.equal(deletePatchResponse.result.structuredContent.changed_files[0].deleted, true);
+  assert.equal(existsSync(join(trusted, 'codex-added.txt')), false);
+
+  writeFileSync(join(trusted, 'delete-unified.txt'), 'gone\n', 'utf8');
+  const unifiedDeletePatchResponse = call(writeState, 353, 'fs_apply_patch', {
+    patch: `--- delete-unified.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n`,
+  });
+  assert.equal(unifiedDeletePatchResponse.result.structuredContent.changed_files[0].deleted, true);
+  assert.equal(existsSync(join(trusted, 'delete-unified.txt')), false);
+
+  writeFileSync(join(trusted, 'delete-stale.txt'), 'changed\n', 'utf8');
+  const staleDeletePatchResponse = call(writeState, 354, 'fs_apply_patch', {
+    patch: `--- delete-stale.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n`,
+  });
+  assert.equal(staleDeletePatchResponse.error.data.code, 'patch_delete_content_mismatch');
+
+  writeFileSync(join(trusted, 'move-codex.txt'), 'move me\n', 'utf8');
+  const movePatchResponse = call(writeState, 355, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Update File: move-codex.txt\n*** Move to: moved-codex.txt\n@@\n move me\n*** End Patch\n`,
+  });
+  assert.equal(movePatchResponse.result.structuredContent.status, 'patched');
+  assert.equal(existsSync(join(trusted, 'move-codex.txt')), false);
+  assert.equal(readFileSync(join(trusted, 'moved-codex.txt'), 'utf8'), 'move me\n');
 
   writeFileSync(join(trusted, 'patch-a.txt'), 'one\ntwo\n', 'utf8');
   writeFileSync(join(trusted, 'patch-b.txt'), 'red\nblue\n', 'utf8');
@@ -314,7 +389,9 @@ trust_level = "untrusted"
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_create_directory/);
 
   const createExistingDirectory = call(writeState, 41, 'fs_create_directory', { path: join(trusted, 'folders', 'created') });
-  assert.match(createExistingDirectory.error.message, /create_directory_destination_exists/);
+  assert.equal(createExistingDirectory.result.structuredContent.status, 'exists');
+  assert.equal(createExistingDirectory.result.structuredContent.created, false);
+  assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /"created":false/);
 
   const createOverFile = call(writeState, 42, 'fs_create_directory', { path: join(trusted, 'a.txt') });
   assert.match(createOverFile.error.message, /create_directory_destination_not_directory/);
