@@ -49,11 +49,24 @@ const stateFromTrustConfig = createServerState({
   allowCommand: ['node'],
   auditLogDir: join(root, 'audit-trust-config'),
 });
+const stateWithDefaultCommands = createServerState({
+  allowedRoot: root,
+  auditLogDir: join(root, 'audit-default-commands'),
+});
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: typeof state) => Promise<JsonRpcTestResponse>;
 const exec = executeStructuredCommand as unknown as (args: Record<string, unknown>, requestState: typeof state) => Promise<ExecutionResult>;
 
 assert.equal(state.policy.maxTimeoutMs, 300_000);
 
+for (const command of ['railway', 'wrangler']) {
+  const decision = decideStructuredCommandExecution({
+    command,
+    args: ['--version'],
+    workingDirectory: root,
+  }, stateWithDefaultCommands.policy);
+  assert.equal(decision.status, 'allowed');
+  assert.deepEqual(decision.reasons, []);
+}
 
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
@@ -180,6 +193,11 @@ assert.match(policy.result.content[0].text, /structured_command\.execution_polic
 assert.ok(policy.result.content[0].text.length <= 4000);
 assert.equal(policy.result.structuredContent.truncated, false);
 assert.equal(policy.result.structuredContent.output_ref, undefined);
+assert.equal(policy.result.structuredContent.allowed_commands.includes('railway'), true);
+assert.equal(policy.result.structuredContent.allowed_commands.includes('wrangler'), true);
+assert.deepEqual(policy.result.structuredContent.default_allowed_commands, ['railway', 'wrangler']);
+assert.equal(policy.result.structuredContent.shell_interpolation, false);
+assert.deepEqual(policy.result.structuredContent.allowed_roots, [root]);
 
 const unknownTool = await rpc({
   jsonrpc: '2.0',
@@ -207,6 +225,8 @@ assert.match(input.result.content[0].text, /structured_command\.input_create_res
 
 const inputRef = input.result.structuredContent.input_ref;
 assert.match(inputRef, /^structured_command_input:/);
+assert.equal(input.result.structuredContent.status, 'created');
+assert.equal(typeof input.result.structuredContent.sha256, 'string');
 
 const badInputRef = await rpc({
   jsonrpc: '2.0',

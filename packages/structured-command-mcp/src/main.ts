@@ -374,6 +374,24 @@ function buildStructuredContent(payload, { truncated, outputRef, renderedTextLen
       truncated,
     };
   }
+  if (payload?.schema === 'narada.structured_command.execution_policy.v0') {
+    return {
+      ...payload,
+      truncated,
+      ...(outputRef ? { output_ref: outputRef } : {}),
+      rendered_text_char_length: renderedTextLength,
+      full_output_char_length: fullTextLength,
+    };
+  }
+  if (payload?.schema === 'narada.structured_command.input_create_result.v0') {
+    return {
+      ...payload,
+      truncated,
+      ...(outputRef ? { output_ref: outputRef } : {}),
+      rendered_text_char_length: renderedTextLength,
+      full_output_char_length: fullTextLength,
+    };
+  }
   return {
     schema: payload?.schema,
     status: payload?.status,

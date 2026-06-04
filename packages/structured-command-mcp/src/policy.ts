@@ -13,15 +13,21 @@ const DEFAULT_BLOCKED_COMMANDS = new Set([
   'wsl.exe',
 ]);
 
+const DEFAULT_ALLOWED_COMMANDS = new Set([
+  'railway',
+  'wrangler',
+]);
+
 export function createExecutionPolicy(options: unknown = {}) {
   const optionsRecord = asRecord(options);
   const allowedRoots = normalizeAllowedRoots(optionsRecord.allowedRoots);
-  const allowedCommands = new Set(normalizeList(optionsRecord.allowedCommands).map((item) => item.toLowerCase()));
+  const allowedCommands = new Set([...DEFAULT_ALLOWED_COMMANDS, ...normalizeList(optionsRecord.allowedCommands).map((item) => item.toLowerCase())]);
   const allowedPrefixes = normalizeList(optionsRecord.allowedPrefixes).map((prefix) => normalizePrefix(prefix));
   const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(optionsRecord.blockedCommands).map((item) => item.toLowerCase())]);
   return {
     allowedRoots,
     allowedCommands,
+    defaultAllowedCommands: DEFAULT_ALLOWED_COMMANDS,
     allowedPrefixes,
     blockedCommands,
     maxTimeoutMs: clampInteger(optionsRecord.maxTimeoutMs, 1, DEFAULT_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
@@ -106,6 +112,7 @@ export function publicExecutionPolicy(policy) {
     schema: 'narada.structured_command.execution_policy.v0',
     allowed_roots: policy.allowedRoots,
     allowed_commands: [...policy.allowedCommands].sort(),
+    default_allowed_commands: [...(policy.defaultAllowedCommands ?? [])].sort(),
     allowed_prefixes: policy.allowedPrefixes.map((prefix) => prefix.join(' ')),
     blocked_commands: [...policy.blockedCommands].sort(),
     max_timeout_ms: policy.maxTimeoutMs,
