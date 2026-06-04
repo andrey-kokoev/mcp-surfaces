@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
+const DEFAULT_MAX_TIMEOUT_MS = 300_000;
+
 const DEFAULT_BLOCKED_COMMANDS = new Set([
   'cmd',
   'cmd.exe',
+
   'powershell',
   'powershell.exe',
-  'pwsh',
-  'pwsh.exe',
   'wsl',
   'wsl.exe',
 ]);
@@ -23,9 +24,10 @@ export function createExecutionPolicy(options: unknown = {}) {
     allowedCommands,
     allowedPrefixes,
     blockedCommands,
-    maxTimeoutMs: clampInteger(optionsRecord.maxTimeoutMs, 1, 300_000, 60_000),
+    maxTimeoutMs: clampInteger(optionsRecord.maxTimeoutMs, 1, DEFAULT_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
     maxOutputBytes: clampInteger(optionsRecord.maxOutputBytes, 1, 20 * 1024 * 1024, 1024 * 1024),
   };
+
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -116,7 +118,20 @@ function isCommandAllowed(argv, policy) {
   const command = argv[0]?.toLowerCase();
   if (!command) return false;
   if (policy.allowedCommands.has(command)) return true;
-  return policy.allowedPrefixes.some((prefix) => prefix.every((part, index) => argv[index]?.toLowerCase() === part));
+  return policy.allowedPrefixes.some((prefix) => prefix.every((part, index) => commandPartMatches(argv[index], part, index)));
+}
+
+function commandPartMatches(actual, expected, index) {
+  const normalizedActual = String(actual ?? '').toLowerCase();
+  const normalizedExpected = String(expected ?? '').toLowerCase();
+  if (normalizedActual === normalizedExpected) return true;
+  if (index !== 0) return false;
+  return normalizeExecutableAlias(normalizedActual) === normalizeExecutableAlias(normalizedExpected);
+}
+
+function normalizeExecutableAlias(value) {
+  if (value === 'pwsh.exe') return 'pwsh';
+  return value;
 }
 
 function isInsideAnyRoot(path, roots) {

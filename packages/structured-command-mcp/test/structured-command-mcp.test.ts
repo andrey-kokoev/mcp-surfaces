@@ -7,7 +7,7 @@ import {
   executeStructuredCommand,
   handleRequest,
 } from '../src/main.js';
-
+import { decideStructuredCommandExecution } from '../src/policy.js';
 type DynamicTestValue = string & DynamicTestValue[] & {
   [key: string]: DynamicTestValue;
   [index: number]: DynamicTestValue;
@@ -34,6 +34,16 @@ const state = createServerState({
   allowPrefix: ['git status'],
   auditLogDir,
 });
+const stateWithPwsh = createServerState({
+  allowedRoot: root,
+  allowCommand: ['node', 'pwsh', 'pwsh.exe', 'powershell.exe'],
+  auditLogDir: join(root, 'audit-pwsh'),
+});
+const stateWithPwshPrefix = createServerState({
+  allowedRoot: root,
+  allowPrefix: ['pwsh -File'],
+  auditLogDir: join(root, 'audit-pwsh-prefix'),
+});
 const stateFromTrustConfig = createServerState({
   rootsFromTrustConfig: trustConfigPath,
   allowCommand: ['node'],
@@ -41,6 +51,9 @@ const stateFromTrustConfig = createServerState({
 });
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: typeof state) => Promise<JsonRpcTestResponse>;
 const exec = executeStructuredCommand as unknown as (args: Record<string, unknown>, requestState: typeof state) => Promise<ExecutionResult>;
+
+assert.equal(state.policy.maxTimeoutMs, 300_000);
+
 
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
@@ -64,22 +77,54 @@ const ok = await exec({
 assert.equal(ok.status, 'ok');
 assert.equal(ok.executed, true);
 assert.match(ok.stdout, /^v\d+/);
-
+const okWithLongerTimeout = await exec({
+  command: 'node',
+  args: ['--version'],
+  working_directory: root,
+  timeout_ms: 120_000,
+}, state);
+assert.equal(okWithLongerTimeout.status, 'ok');
+assert.equal(okWithLongerTimeout.timeout_ms, 120_000);
 const okFromTrustConfig = await exec({
   command: 'node',
   args: ['--version'],
   working_directory: root,
 }, stateFromTrustConfig);
 assert.equal(okFromTrustConfig.status, 'ok');
+
 assert.equal(okFromTrustConfig.executed, true);
 
-const refusedCommand = await exec({
+const allowedPwsh = decideStructuredCommandExecution({
   command: 'pwsh',
   args: ['-NoProfile'],
-  working_directory: root,
-}, state);
-assert.equal(refusedCommand.status, 'refused');
-assert.equal(refusedCommand.executed, false);
+  workingDirectory: root,
+}, stateWithPwsh.policy);
+assert.equal(allowedPwsh.status, 'allowed');
+assert.deepEqual(allowedPwsh.reasons, []);
+
+const allowedPwshExe = decideStructuredCommandExecution({
+  command: 'pwsh.exe',
+  args: ['-NoProfile'],
+  workingDirectory: root,
+}, stateWithPwsh.policy);
+assert.equal(allowedPwshExe.status, 'allowed');
+assert.deepEqual(allowedPwshExe.reasons, []);
+
+const allowedPwshExeByPwshPrefix = decideStructuredCommandExecution({
+  command: 'pwsh.exe',
+  args: ['-File', join(root, 'tool.ps1')],
+  workingDirectory: root,
+}, stateWithPwshPrefix.policy);
+assert.equal(allowedPwshExeByPwshPrefix.status, 'allowed');
+assert.deepEqual(allowedPwshExeByPwshPrefix.reasons, []);
+
+const blockedWindowsPowerShell = decideStructuredCommandExecution({
+  command: 'powershell.exe',
+  args: ['-NoProfile'],
+  workingDirectory: root,
+}, stateWithPwsh.policy);
+assert.equal(blockedWindowsPowerShell.status, 'refused');
+assert.ok(blockedWindowsPowerShell.reasons.includes('blocked_command:powershell.exe'));
 
 const refusedRoot = await exec({
   command: 'node',
@@ -88,13 +133,38 @@ const refusedRoot = await exec({
 }, state);
 assert.equal(refusedRoot.status, 'refused');
 
+const refusedCall = await rpc({
+  jsonrpc: '2.0',
+  id: 32,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: { command: 'pwsh.exe', args: ['-File', join(root, 'tool.ps1')], working_directory: root },
+  },
+}, state);
+assert.match(refusedCall.result.content[0].text, /structured_command_execute: refused/);
+assert.match(refusedCall.result.content[0].text, /refusal_reasons: command_not_allowed/);
+assert.equal(refusedCall.result.structuredContent.status, 'refused');
+assert.equal(refusedCall.result.structuredContent.executed, false);
+assert.ok(refusedCall.result.structuredContent.refusal_reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
+
+const longInlineScript = `${' '.repeat(318)}process.stdout.write('long-inline-ok')`;
+const okLongInlineArg = await exec({
+  command: 'node',
+  args: ['-e', longInlineScript],
+  working_directory: root,
+}, state);
+assert.equal(okLongInlineArg.status, 'ok');
+assert.equal(okLongInlineArg.executed, true);
+assert.equal(okLongInlineArg.stdout, 'long-inline-ok');
+
 await assert.rejects(
   () => exec({
     command: 'node',
-    args: ['x'.repeat(201)],
+    args: ['x'.repeat(8193)],
     working_directory: root,
   }, state),
-  /structured_command_input_too_long:arguments\.args\[0\]:201>200/,
+  /structured_command_input_too_long:arguments\.args\[0\]:8193>8192/,
 );
 
 const policy = await rpc({

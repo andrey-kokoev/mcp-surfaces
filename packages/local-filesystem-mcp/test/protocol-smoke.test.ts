@@ -32,6 +32,9 @@ try {
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('fs_read_file'), true);
   assert.equal(names.includes('fs_write_file'), true);
+  assert.equal(names.includes('fs_create_directory'), true);
+  assert.equal(names.includes('fs_rename_directory'), true);
+  assert.equal(names.includes('fs_delete_directory'), true);
   assert.equal(names.includes('mcp_output_show'), true);
 
   console.log('local-filesystem-mcp protocol smoke ok');

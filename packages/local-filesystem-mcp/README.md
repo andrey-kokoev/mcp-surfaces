@@ -13,6 +13,15 @@ Read mode tools:
 
 Write mode tools are exposed only when launched with `--mode write`.
 
+- `fs_write_file`
+- `fs_str_replace_file`
+- `fs_replace_range`
+- `fs_apply_patch`
+- `fs_move_path`
+- `fs_create_directory`
+- `fs_rename_directory`
+- `fs_delete_directory`
+
 Example:
 
 ```powershell

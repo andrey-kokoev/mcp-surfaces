@@ -16,7 +16,7 @@ const TOOL_RESULT_CHAR_LIMIT = 4000;
 const STREAM_PREVIEW_CHAR_LIMIT = 1000;
 const TOOL_OUTPUT_SHOW_DEFAULT_LIMIT = 4000;
 const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
-const TOOL_INPUT_CHAR_LIMIT = 200;
+const TOOL_INPUT_CHAR_LIMIT = 8192;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
 
 type StructuredCommandState = Record<string, unknown> & {
@@ -206,6 +206,10 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
       schema: 'narada.structured_command.execution_result.v0',
       status: 'refused',
       decision,
+      refusal_reasons: decision.reasons,
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
       executed: false,
     };
   }
@@ -383,6 +387,22 @@ function buildStructuredContent(payload, { truncated, outputRef, renderedTextLen
 }
 
 function buildExecutionStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
+  if (payload.executed === false) {
+    return {
+      schema: payload.schema,
+      status: payload.status,
+      executed: false,
+      command: payload.command,
+      args: payload.args,
+      working_directory: payload.working_directory,
+      refusal_reasons: payload.refusal_reasons ?? payload.decision?.reasons ?? [],
+      decision: payload.decision ?? null,
+      truncated,
+      ...(outputRef ? { output_ref: outputRef } : {}),
+      rendered_text_char_length: renderedTextLength,
+      full_output_char_length: fullTextLength,
+    };
+  }
   const stdout = String(payload.stdout ?? '');
   const stderr = String(payload.stderr ?? '');
   const stdoutNeedsRef = stdout.length > STREAM_PREVIEW_CHAR_LIMIT || payload.stdout_truncated;
@@ -416,6 +436,15 @@ function buildExecutionStructuredContent(payload, { truncated, outputRef, render
 }
 
 function renderToolResultText(payload) {
+  if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === false) {
+    const reasons = payload.refusal_reasons ?? payload.decision?.reasons ?? [];
+    return [
+      `structured_command_execute: ${payload.status}`,
+      `command: ${payload.command ?? ''}`,
+      `working_directory: ${payload.working_directory ?? ''}`,
+      `refusal_reasons: ${Array.isArray(reasons) && reasons.length ? reasons.join('; ') : 'none'}`,
+    ].join('\n');
+  }
   if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === true) {
     const lines = [
       `structured_command_execute: ${payload.status}`,

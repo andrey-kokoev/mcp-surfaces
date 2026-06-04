@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,19 @@ import {
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
+const DEFAULT_GLOB_IGNORE_PATTERNS = [
+  '**/.git/**',
+  '**/node_modules/**',
+  '**/dist/**',
+  '**/build/**',
+  '**/coverage/**',
+  '**/.next/**',
+  '**/.turbo/**',
+  '**/.cache/**',
+  '**/.venv/**',
+  '**/__pycache__/**',
+  '**/target/**',
+];
 let activeToolName: string | null = null;
 
 class McpToolError extends Error {
@@ -141,6 +154,7 @@ export function listTools(mode) {
       inputSchema: objectSchema({
         pattern: { type: 'string' },
         directory: { type: 'string', default: '.' },
+        ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude. Defaults also exclude generated dependency/build directories.' },
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 100 },
       }, ['pattern']),
@@ -193,6 +207,30 @@ export function listTools(mode) {
         overwrite: { type: 'boolean', default: false },
       }, ['from', 'to']),
     },
+    {
+      name: 'fs_create_directory',
+      description: 'Create a directory under an allowed root and append an audit record. Parent creation requires recursive true.',
+      inputSchema: objectSchema({
+        path: { type: 'string' },
+        recursive: { type: 'boolean', default: false },
+      }, ['path']),
+    },
+    {
+      name: 'fs_rename_directory',
+      description: 'Rename or move a directory under allowed roots and append an audit record. Refuses existing destinations.',
+      inputSchema: objectSchema({
+        from: { type: 'string' },
+        to: { type: 'string' },
+      }, ['from', 'to']),
+    },
+    {
+      name: 'fs_delete_directory',
+      description: 'Delete a directory under an allowed root and append an audit record. Non-empty deletion requires recursive true.',
+      inputSchema: objectSchema({
+        path: { type: 'string' },
+        recursive: { type: 'boolean', default: false },
+      }, ['path']),
+    },
   ];
   return mode === 'read' ? readTools : [...readTools, ...writeTools];
 }
@@ -209,13 +247,16 @@ function callTool(params, state) {
     case 'fs_read_file_range': return toolResult(readFileRangeTool(args, state));
     case 'fs_stat': return toolResult(statTool(args, state));
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
-    case 'fs_grep_search': return toolResult(grepSearchTool(args, state));
+    case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'mcp_output_show': return toolResult(outputShow({ siteRoot: state.outputRoot, args }));
     case 'fs_write_file': return toolResult(writeFileTool(args, state));
     case 'fs_str_replace_file': return toolResult(strReplaceTool(args, state));
     case 'fs_replace_range': return toolResult(replaceRangeTool(args, state));
     case 'fs_apply_patch': return toolResult(applyPatchTool(args, state));
     case 'fs_move_path': return toolResult(movePathTool(args, state));
+    case 'fs_create_directory': return toolResult(createDirectoryTool(args, state));
+    case 'fs_rename_directory': return toolResult(renameDirectoryTool(args, state));
+    case 'fs_delete_directory': return toolResult(deleteDirectoryTool(args, state));
     default: throw new Error(`unknown_tool: ${name}`);
   }
 }
@@ -272,7 +313,9 @@ function globSearchTool(args, state) {
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
-  const rg = spawnSync('rg', ['--files', '--hidden', '--no-ignore', '-g', pattern, directory], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
+  const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  const rg = spawnSync('rg', rgArgs, { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024 });
   return cappedSearchResult({ state, kind: 'glob', args, lines: splitLines(rg.stdout), offset, limit });
 }
 
@@ -398,9 +441,55 @@ function movePathTool(args, state) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_move_path', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_move_path', field: 'to' });
   const overwrite = booleanField(args, 'overwrite') ?? false;
+  return movePath({ state, operation: 'fs_move_path', from, to, overwrite, directoryOnly: false });
+}
+
+function createDirectoryTool(args, state) {
+  const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_create_directory' });
+  const recursive = booleanField(args, 'recursive') ?? false;
+  if (existsSync(target.path)) {
+    if (!statSync(target.path).isDirectory()) throw new Error(`create_directory_destination_not_directory: ${target.path}`);
+    throw new Error(`create_directory_destination_exists: ${target.path}`);
+  }
+  mkdirSync(target.path, { recursive });
+  appendAudit(state, 'fs_create_directory', target.path, target.root, { recursive });
+  return {
+    schema: 'local.filesystem.create_directory.v1',
+    status: 'created',
+    ...pathMetadata(target.path, target.root),
+    recursive,
+  };
+}
+
+function renameDirectoryTool(args, state) {
+  const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'from' });
+  const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'to' });
+  return movePath({ state, operation: 'fs_rename_directory', from, to, overwrite: false, directoryOnly: true });
+}
+
+function deleteDirectoryTool(args, state) {
+  const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_delete_directory' });
+  const recursive = booleanField(args, 'recursive') ?? false;
+  if (!existsSync(target.path)) throw new Error(`delete_directory_not_found: ${target.path}`);
+  const targetStat = statSync(target.path);
+  if (!targetStat.isDirectory()) throw new Error(`delete_directory_target_not_directory: ${target.path}`);
+  const entryCount = readdirSync(target.path).length;
+  if (entryCount > 0 && !recursive) throw new Error(`delete_directory_not_empty: ${target.path}`);
+  rmSync(target.path, { recursive, force: false });
+  appendAudit(state, 'fs_delete_directory', target.path, target.root, { recursive, entry_count: entryCount });
+  return {
+    schema: 'local.filesystem.delete_directory.v1',
+    status: 'deleted',
+    ...pathMetadata(target.path, target.root),
+    recursive,
+  };
+}
+
+function movePath({ state, operation, from, to, overwrite, directoryOnly }) {
   if (samePath(from.path, to.path)) throw new Error(`move_source_and_destination_same: ${from.path}`);
   if (!existsSync(from.path)) throw new Error(`move_source_not_found: ${from.path}`);
   const fromStat = statSync(from.path);
+  if (directoryOnly && !fromStat.isDirectory()) throw new Error(`rename_directory_source_not_directory: ${from.path}`);
   if (fromStat.isDirectory() && isPathInside(to.path, from.path)) throw new Error(`move_destination_inside_source: ${to.path}`);
   if (existsSync(to.path)) {
     if (!overwrite) throw new Error(`move_destination_exists: ${to.path}`);
@@ -410,7 +499,7 @@ function movePathTool(args, state) {
   }
   mkdirSync(dirname(to.path), { recursive: true });
   renameSync(from.path, to.path);
-  appendAudit(state, 'fs_move_path', to.path, to.root, {
+  appendAudit(state, operation, to.path, to.root, {
     from: from.path,
     from_root: from.root,
     to: to.path,
@@ -418,7 +507,7 @@ function movePathTool(args, state) {
     overwrite,
   });
   return {
-    schema: 'local.filesystem.move_path.v1',
+    schema: operation === 'fs_rename_directory' ? 'local.filesystem.rename_directory.v1' : 'local.filesystem.move_path.v1',
     status: 'moved',
     from: pathMetadata(from.path, from.root),
     to: pathMetadata(to.path, to.root),
@@ -558,17 +647,124 @@ function appendAudit(state, operation, path, root, detail) {
   })}\n`, 'utf8');
 }
 
-function toolResult(value) {
+function toolResult(value, renderContext: Record<string, unknown> = {}) {
   if (isToolResult(value)) {
+    const structuredContent = value.structuredContent ?? parseToolResultStructuredContent(value);
     return {
       ...value,
-      structuredContent: value.structuredContent ?? parseToolResultStructuredContent(value),
+      content: [{ type: 'text', text: renderToolResultText(structuredContent, renderContext) }],
+      structuredContent,
     };
   }
   return {
-    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    content: [{ type: 'text', text: renderToolResultText(value, renderContext) }],
     structuredContent: value,
   };
+}
+
+function renderToolResultText(value, renderContext: Record<string, unknown> = {}) {
+  const record = asRecord(value);
+  if (record.schema === 'narada.mcp_output_show.v1') return String(record.output_text ?? '');
+  if (record.schema === 'narada.mcp_output_locator.v1' || typeof record.output_ref === 'string') {
+    return compactLines([
+      `status: ${record.status ?? 'ok'}`,
+      'result: materialized',
+      `output_ref: ${record.output_ref ?? record.ref ?? ''}`,
+      `reader_tool: ${record.reader_tool ?? 'mcp_output_show'}`,
+      `truncated: ${record.truncated ?? record.original_truncated ?? true}`,
+      record.full_output_char_length !== undefined ? `full_output_char_length: ${record.full_output_char_length}` : null,
+    ]);
+  }
+  if (isReadFileResult(record)) return renderReadFileResult(record);
+  if (record.schema === 'local.filesystem.glob.v1') return renderSearchResult('fs_glob_search', record);
+  if (record.schema === 'local.filesystem.grep.v1') return renderSearchResult('fs_grep_search', record, renderContext);
+  if (record.schema === 'local.filesystem.apply_patch.v1') {
+    const changedFiles = Array.isArray(record.changed_files) ? record.changed_files : [];
+    return compactLines([
+      `fs_apply_patch: ${record.status ?? 'ok'}`,
+      `changed_files: ${changedFiles.length}`,
+      ...changedFiles.map((file) => `- ${asRecord(file).relative_path ?? asRecord(file).path ?? ''}`),
+    ]);
+  }
+  if (record.schema || record.status || record.path || record.relative_path || record.type) return renderCompactRecord(record);
+  return JSON.stringify(value, null, 2);
+}
+
+function isReadFileResult(record) {
+  return typeof record.path === 'string'
+    && typeof record.content === 'string'
+    && typeof record.offset === 'number'
+    && typeof record.returned_lines === 'number'
+    && typeof record.total_lines === 'number';
+}
+
+function renderReadFileResult(record) {
+  const startLine = Number(record.offset);
+  const returnedLines = Number(record.returned_lines);
+  const endLine = returnedLines > 0 ? startLine + returnedLines - 1 : startLine - 1;
+  return [
+    `path: ${record.path}`,
+    `lines: ${startLine}-${endLine} of ${record.total_lines}`,
+    `returned_lines: ${record.returned_lines}`,
+    `next_offset: ${record.next_offset ?? 'null'}`,
+    'content:',
+    String(record.content ?? ''),
+  ].join('\n');
+}
+
+function renderSearchResult(toolName, record, renderContext: Record<string, unknown> = {}) {
+  const matches = Array.isArray(record.matches) ? record.matches.map(String) : [];
+  const mode = toolName === 'fs_grep_search' ? [`mode: ${renderContext.grepOutputMode ?? 'files_with_matches'}`] : [];
+  return [
+    `${toolName}: ${record.status ?? 'ok'}`,
+    ...mode,
+    `count: ${record.count ?? matches.length}`,
+    `returned: ${record.returned ?? matches.length}`,
+    `truncated: ${record.truncated ?? false}`,
+    `next_offset: ${record.next_offset ?? 'null'}`,
+    'matches:',
+    ...matches,
+  ].join('\n');
+}
+
+function renderCompactRecord(record) {
+  if (record.schema === 'local.filesystem.stat.v1' || record.type) {
+    return compactLines([
+      'fs_stat: ok',
+      `path: ${record.path ?? ''}`,
+      record.relative_path !== undefined ? `relative_path: ${record.relative_path}` : null,
+      record.type !== undefined ? `type: ${record.type}` : null,
+      record.size !== undefined ? `size: ${record.size}` : null,
+      record.mtime !== undefined ? `mtime: ${record.mtime}` : null,
+    ]);
+  }
+  const lines = [
+    `${filesystemToolLabel(record)}: ${record.status ?? 'ok'}`,
+    record.path !== undefined ? `path: ${record.path}` : null,
+    record.relative_path !== undefined ? `relative_path: ${record.relative_path}` : null,
+    record.size !== undefined ? `size: ${record.size}` : null,
+    record.occurrences !== undefined ? `occurrences: ${record.occurrences}` : null,
+    record.start_line !== undefined ? `start_line: ${record.start_line}` : null,
+    record.end_line !== undefined ? `end_line: ${record.end_line}` : null,
+    record.inserted_lines !== undefined ? `inserted_lines: ${record.inserted_lines}` : null,
+    record.recursive !== undefined ? `recursive: ${record.recursive}` : null,
+    record.overwrite !== undefined ? `overwrite: ${record.overwrite}` : null,
+  ];
+  const from = asRecord(record.from);
+  const to = asRecord(record.to);
+  if (from.path || from.relative_path) lines.push(`from: ${from.relative_path ?? from.path}`);
+  if (to.path || to.relative_path) lines.push(`to: ${to.relative_path ?? to.path}`);
+  return compactLines(lines);
+}
+
+function filesystemToolLabel(record) {
+  const schema = typeof record.schema === 'string' ? record.schema : '';
+  const match = schema.match(/^local\.filesystem\.(.+)\.v1$/);
+  return match ? `fs_${match[1]}` : 'fs_result';
+}
+
+function compactLines(lines) {
+  return lines.filter((line) => typeof line === 'string' && line.length > 0).join('\n');
 }
 
 function isToolResult(value) {
@@ -674,7 +870,6 @@ function patchDiagnosticError(codeName, patch, details: unknown = {}) {
     first_non_empty_line: firstNonEmptyLine,
   });
 }
-
 function errorDiagnostic(error) {
   if (error instanceof McpToolError) {
     return {
@@ -693,12 +888,17 @@ function errorDiagnostic(error) {
     details: {},
   };
 }
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function negateGlob(pattern: string): string {
+  return pattern.startsWith('!') ? pattern : `!${pattern}`;
 }
 
 function stringList(value: unknown): string[] {
