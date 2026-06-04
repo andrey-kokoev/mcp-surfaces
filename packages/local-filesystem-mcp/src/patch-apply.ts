@@ -116,14 +116,16 @@ function parseUnifiedPatch(patch, { diagnosticError }) {
 
 function parseCodexApplyPatch(patch, { diagnosticError }) {
   const lines = patch.split(/\r?\n/);
+  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
   const files = [];
   let current = null;
   let currentHunk = null;
   for (let lineNumber = 1; lineNumber <= lines.length; lineNumber += 1) {
     const line = lines[lineNumber - 1];
     if (line === '' && lineNumber === lines.length) continue;
+    if (line.trim().length === 0 && lineNumber - 1 < firstContentIndex) continue;
     if (line === '*** Begin Patch') {
-      if (lineNumber !== 1) throw codexLineDiagnostic(diagnosticError, 'patch_begin_marker_not_first', patch, line, lineNumber);
+      if (lineNumber - 1 !== firstContentIndex) throw codexLineDiagnostic(diagnosticError, 'patch_begin_marker_not_first', patch, line, lineNumber);
       continue;
     }
     if (line === '*** End Patch') {

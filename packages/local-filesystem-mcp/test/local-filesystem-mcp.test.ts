@@ -86,6 +86,7 @@ trust_level = "untrusted"
   assert.equal(resolveAllowedPath(join(trusted, 'a.txt'), roots).path, resolve(join(trusted, 'a.txt')));
   assert.throws(() => resolveAllowedPath(join(other, 'x.txt'), roots), /path_outside_allowed_roots/);
   assert.throws(() => parsePatch(`*** Begin Patch\n*** Move to: missing-update.txt\n*** End Patch\n`), /patch_move_without_update_file/);
+  assert.equal(parsePatch(`\n\n*** Begin Patch\n*** Add File: blank-leading.txt\n+ok\n*** End Patch\n`).length, 1);
   const windowsCountMatch = grepMatchObject(`C:/repo/file.txt${RIPGREP_FIELD_SEPARATOR}12`, 'count_matches');
   assert.equal(windowsCountMatch.path, 'C:/repo/file.txt');
   assert.equal(windowsCountMatch.count, 12);
@@ -185,13 +186,21 @@ trust_level = "untrusted"
   assert.equal(pagedGlob.result.structuredContent.truncated, undefined);
   assert.equal(pagedGlob.result.structuredContent.count, null);
   assert.equal(pagedGlob.result.structuredContent.count_exact, false);
+  assert.equal(pagedGlob.result.structuredContent.order, 'ripgrep_traversal');
+  assert.equal(pagedGlob.result.structuredContent.cache_hit, false);
   assert.equal(pagedGlob.result.structuredContent.next_offset, 5);
   assert.ok(Number(pagedGlob.result.structuredContent.scanned) < 20);
-  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\nhas_more: true/);
+  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\norder: ripgrep_traversal\ncache_hit: false\nhas_more: true/);
   assert.equal(pagedGlob.result.structuredContent.matches.length, 5);
   const pagedGlobSecond = call(readState, 17, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 5, limit: 5 });
   assert.equal(pagedGlobSecond.result.structuredContent.offset, 5);
   assert.equal(pagedGlobSecond.result.structuredContent.returned, 5);
+  assert.equal(pagedGlobSecond.result.structuredContent.count_exact, true);
+  assert.equal(pagedGlobSecond.result.structuredContent.cache_hit, true);
+  assert.equal(pagedGlobSecond.result.structuredContent.count, 120);
+  const pagedGlobThird = call(readState, 171, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 10, limit: 5 });
+  assert.equal(pagedGlobThird.result.structuredContent.cache_hit, true);
+  assert.equal(pagedGlobThird.result.structuredContent.returned, 5);
 
   const largeGlob = call(readState, 18, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 120 });
   assert.equal(largeGlob.result.structuredContent.has_more, false);

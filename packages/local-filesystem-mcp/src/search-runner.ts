@@ -13,12 +13,14 @@ async function run() {
   const args = Array.isArray(input.args) ? input.args.map(String) : [];
   const offset = Math.max(0, Number(input.offset ?? 0));
   const limit = Math.max(1, Number(input.limit ?? 1));
-  const result = await collectRipgrepPage(args, { offset, limit });
+  const complete = input.complete === true;
+  const result = await collectRipgrepPage(args, { offset, limit, complete });
   process.stdout.write(JSON.stringify(result));
 }
 
-function collectRipgrepPage(args: string[], { offset, limit }: { offset: number; limit: number }) {
+function collectRipgrepPage(args: string[], { offset, limit, complete }: { offset: number; limit: number; complete: boolean }) {
   return new Promise((resolvePromise) => {
+    let resolved = false;
     const child = spawn('rg', args, {
       shell: false,
       windowsHide: true,
@@ -47,10 +49,17 @@ function collectRipgrepPage(args: string[], { offset, limit }: { offset: number;
     });
     child.on('error', (error) => {
       childError = error;
+      finish({ status: null, signal: null });
     });
     child.on('close', (status, signal) => {
+      finish({ status, signal });
+    });
+
+    function finish({ status, signal }: { status: number | null; signal: NodeJS.Signals | null }) {
+      if (resolved) return;
+      resolved = true;
       if (pending.trim() && !stoppedEarly) consumeLine(pending);
-      const hasMore = matches.length > limit;
+      const hasMore = !complete && matches.length > limit;
       resolvePromise({
         status,
         signal,
@@ -61,15 +70,15 @@ function collectRipgrepPage(args: string[], { offset, limit }: { offset: number;
         count_exact: !stoppedEarly,
         scanned: seen,
         has_more: hasMore,
-        matches: matches.slice(0, limit),
+        matches: complete ? matches : matches.slice(0, limit),
       });
-    });
+    }
 
     function consumeLine(line: string) {
       if (!line.trim()) return;
-      if (seen >= offset && matches.length <= limit) matches.push(line);
+      if (complete || (seen >= offset && matches.length <= limit)) matches.push(line);
       seen += 1;
-      if (matches.length > limit && !stoppedEarly) {
+      if (!complete && matches.length > limit && !stoppedEarly) {
         stoppedEarly = true;
         child.kill();
       }

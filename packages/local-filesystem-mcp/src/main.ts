@@ -382,12 +382,14 @@ function cappedSearchResult({ state, kind, args, page, offset, limit }) {
     count_exact: page.count_exact,
     scanned: page.scanned,
     returned: matches.length,
+    order: 'ripgrep_traversal',
+    cache_hit: page.cache_hit === true,
     has_more: page.has_more,
     next_offset: nextOffset,
     matches,
     ...(kind === 'grep' ? { match_objects: matches.map((match) => buildGrepMatchObject(match, stringField(args, 'output_mode') ?? 'files_with_matches')) } : {}),
   };
-  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, has_more: value.has_more, next_offset: value.next_offset } });
+  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, order: value.order, cache_hit: value.cache_hit, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
 function cappedToolValue({ state, value, summary = {} }) {
