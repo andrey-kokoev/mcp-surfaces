@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
+import { parsePatch } from '../src/patch-apply.js';
+import { RIPGREP_FIELD_SEPARATOR, grepMatchObject } from '../src/search.js';
 
 type DynamicTestValue = string & DynamicTestValue[] & {
   [key: string]: DynamicTestValue;
@@ -83,6 +85,10 @@ trust_level = "untrusted"
   assert.deepEqual(roots, [resolve(trusted)]);
   assert.equal(resolveAllowedPath(join(trusted, 'a.txt'), roots).path, resolve(join(trusted, 'a.txt')));
   assert.throws(() => resolveAllowedPath(join(other, 'x.txt'), roots), /path_outside_allowed_roots/);
+  assert.throws(() => parsePatch(`*** Begin Patch\n*** Move to: missing-update.txt\n*** End Patch\n`), /patch_move_without_update_file/);
+  const windowsCountMatch = grepMatchObject(`C:/repo/file.txt${RIPGREP_FIELD_SEPARATOR}12`, 'count_matches');
+  assert.equal(windowsCountMatch.path, 'C:/repo/file.txt');
+  assert.equal(windowsCountMatch.count, 12);
 
   const readToolNames = listTools('read').map((tool) => tool.name);
   assert.ok(readToolNames.includes('fs_read_file'));
@@ -175,24 +181,32 @@ trust_level = "untrusted"
 
   const pagedGlob = call(readState, 16, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 5 });
   assert.equal(pagedGlob.result.structuredContent.returned, 5);
-  assert.equal(pagedGlob.result.structuredContent.truncated, true);
+  assert.equal(pagedGlob.result.structuredContent.has_more, true);
+  assert.equal(pagedGlob.result.structuredContent.truncated, undefined);
+  assert.equal(pagedGlob.result.structuredContent.count, null);
+  assert.equal(pagedGlob.result.structuredContent.count_exact, false);
   assert.equal(pagedGlob.result.structuredContent.next_offset, 5);
-  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: 120\nreturned: 5\ntruncated: true/);
+  assert.ok(Number(pagedGlob.result.structuredContent.scanned) < 20);
+  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\nhas_more: true/);
   assert.equal(pagedGlob.result.structuredContent.matches.length, 5);
   const pagedGlobSecond = call(readState, 17, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 5, limit: 5 });
   assert.equal(pagedGlobSecond.result.structuredContent.offset, 5);
   assert.equal(pagedGlobSecond.result.structuredContent.returned, 5);
 
   const largeGlob = call(readState, 18, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 120 });
-  assert.equal(largeGlob.result.structuredContent.truncated, true);
+  assert.equal(largeGlob.result.structuredContent.has_more, false);
+  assert.equal(largeGlob.result.structuredContent.render_truncated, true);
+  assert.equal(largeGlob.result.structuredContent.truncated, undefined);
   assert.match(largeGlob.result.structuredContent.output_ref, /^mcp_output:/);
   assert.equal(largeGlob.result.structuredContent.reader_tool, 'mcp_output_show');
   assert.equal(largeGlob.result.structuredContent.count, 120);
+  assert.equal(largeGlob.result.structuredContent.count_exact, true);
   assert.equal(largeGlob.result.structuredContent.returned, 120);
   assert.equal(largeGlob.result.structuredContent.next_offset, null);
   assert.equal(largeGlob.result.content[0].text.includes('content'), false);
   assert.match(largeGlob.result.content[0].text, /result: materialized/);
   assert.match(largeGlob.result.content[0].text, /count: 120/);
+  assert.match(largeGlob.result.content[0].text, /render_truncated: true/);
   assert.match(largeGlob.result.content[0].text, /reader_tool: mcp_output_show/);
   const shownLargeGlob = call(readState, 19, 'mcp_output_show', { ref: largeGlob.result.structuredContent.output_ref, output_limit: 50000 });
   assert.equal(shownLargeGlob.result.content[0].text, shownLargeGlob.result.structuredContent.output_text);
@@ -212,10 +226,10 @@ trust_level = "untrusted"
   assert.equal(grepContent.result.structuredContent.matches.some((match) => match.includes('needle one')), true);
   assert.equal(grepContent.result.structuredContent.match_objects.some((match) => Number(match.line) === 2 && String(match.text) === 'needle one'), true);
   assert.equal(grepContent.result.content[0].text.includes('needle one'), true);
-  const grepCounts = call(readState, 22, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'count_matches', limit: 10 });
+  const grepCounts = call(readState, 22, 'fs_grep_search', { path: join(trusted, 'grep-one.txt'), pattern: 'needle', output_mode: 'count_matches', limit: 10 });
   assert.equal(grepCounts.result.structuredContent.output_mode, 'count_matches');
   assert.equal(grepCounts.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt') && Number(match.count) === 1), true);
-  assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt.*1/.test(match.replace(/\\/g, '/'))), true);
+  assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt.*1/.test(match.replace(/\u001f/g, ':').replace(/\\/g, '/'))), true);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
@@ -360,6 +374,18 @@ trust_level = "untrusted"
   });
   assert.equal(malformedCodexPatch.error.data.code, 'patch_move_without_update_file');
   assert.equal(malformedCodexPatch.error.data.details.expected_format, 'codex_apply_patch');
+
+  const malformedCodexAddPatch = call(writeState, 358, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Add File: malformed-add.txt\nmissing-plus\n*** End Patch\n`,
+  });
+  assert.equal(malformedCodexAddPatch.error.data.code, 'patch_add_line_kind_unsupported');
+  assert.equal(malformedCodexAddPatch.error.data.details.line, 'missing-plus');
+
+  const missingSourcePatch = call(writeState, 359, 'fs_apply_patch', {
+    patch: `--- missing-source.txt\n+++ missing-source.txt\n@@ -1 +1 @@\n-old\n+new\n`,
+  });
+  assert.equal(missingSourcePatch.error.data.code, 'patch_source_not_found');
+  assert.equal(missingSourcePatch.error.data.details.expected_format_for_new_files, 'unified diff with --- /dev/null or Codex *** Add File');
 
   writeFileSync(join(trusted, 'patch-a.txt'), 'one\ntwo\n', 'utf8');
   writeFileSync(join(trusted, 'patch-b.txt'), 'red\nblue\n', 'utf8');

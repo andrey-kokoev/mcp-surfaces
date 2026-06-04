@@ -7,9 +7,12 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
       'result: materialized',
       `output_ref: ${record.output_ref ?? record.ref ?? ''}`,
       `reader_tool: ${record.reader_tool ?? 'mcp_output_show'}`,
-      `truncated: ${record.truncated ?? record.original_truncated ?? true}`,
-      record.count !== undefined ? `count: ${record.count}` : null,
+      `render_truncated: ${record.render_truncated ?? record.truncated ?? record.original_truncated ?? true}`,
+      record.count !== undefined ? `count: ${record.count ?? 'unknown'}` : null,
+      record.count_exact !== undefined ? `count_exact: ${record.count_exact}` : null,
+      record.scanned !== undefined ? `scanned: ${record.scanned}` : null,
       record.returned !== undefined ? `returned: ${record.returned}` : null,
+      record.has_more !== undefined ? `has_more: ${record.has_more}` : null,
       record.next_offset !== undefined ? `next_offset: ${record.next_offset ?? 'null'}` : null,
       record.full_output_char_length !== undefined ? `full_output_char_length: ${record.full_output_char_length}` : null,
     ]);
@@ -57,16 +60,18 @@ function renderReadFileResult(record) {
 function renderSearchResult(toolName, record, renderContext: Record<string, unknown> = {}) {
   const matches = Array.isArray(record.matches) ? record.matches.map(String) : [];
   const mode = toolName === 'fs_grep_search' ? [`mode: ${record.output_mode ?? renderContext.grepOutputMode ?? 'files_with_matches'}`] : [];
-  return [
+  return compactLines([
     `${toolName}: ${record.status ?? 'ok'}`,
     ...mode,
-    `count: ${record.count ?? matches.length}`,
+    `count: ${record.count ?? 'unknown'}`,
+    `count_exact: ${record.count_exact ?? true}`,
+    record.scanned !== undefined ? `scanned: ${record.scanned}` : null,
     `returned: ${record.returned ?? matches.length}`,
-    `truncated: ${record.truncated ?? false}`,
+    `has_more: ${record.has_more ?? record.truncated ?? false}`,
     `next_offset: ${record.next_offset ?? 'null'}`,
     'matches:',
     ...matches,
-  ].join('\n');
+  ]);
 }
 
 function renderCompactRecord(record) {

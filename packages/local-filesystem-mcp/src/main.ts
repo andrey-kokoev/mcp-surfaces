@@ -10,7 +10,7 @@ import {
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
 import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';
-import { grepMatchObject as buildGrepMatchObject, runRipgrepPage } from './search.js';
+import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRipgrepPage } from './search.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
@@ -75,12 +75,23 @@ export async function runStdioServer(options: Record<string, unknown>) {
 
 export function createServerState(options: Record<string, unknown>): Record<string, unknown> {
   const mode = typeof options.mode === 'string' ? options.mode : null;
-  if (!['read', 'write'].includes(mode ?? '')) throw new Error('mode_must_be_read_or_write');
-  const allowedRoots = buildAllowedRoots({
-    codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
-    explicitRoots: stringList(options.allowedRoots),
-    rootsConfigPath: stringOrNull(options.rootsConfig),
-  });
+  if (!['read', 'write'].includes(mode ?? '')) throw diagnosticError('mode_must_be_read_or_write', 'mode_must_be_read_or_write', { mode });
+  let allowedRoots;
+  try {
+    allowedRoots = buildAllowedRoots({
+      codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
+      explicitRoots: stringList(options.allowedRoots),
+      rootsConfigPath: stringOrNull(options.rootsConfig),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const codeName = message.split(/[:\s]/)[0] || 'allowed_roots_failed';
+    throw diagnosticError(codeName, message, {
+      roots_from_codex_config: stringOrNull(options.rootsFromCodexConfig),
+      roots_config: stringOrNull(options.rootsConfig),
+      allowed_roots: stringList(options.allowedRoots),
+    });
+  }
   const outputRoot = resolve(stringOrNull(options.outputRoot) ?? process.cwd());
   return {
     mode,
@@ -122,7 +133,7 @@ function dispatchMethod(method, params, state) {
     case 'tools/call':
       return callTool(params, state);
     default:
-      throw new Error(`unsupported_mcp_method: ${method}`);
+      throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method: ${method}`, { method });
   }
 }
 
@@ -250,8 +261,8 @@ function callTool(params, state) {
   const name = stringField(record, 'name');
   const args = asRecord(record.arguments);
   activeToolName = name;
-  if (!name) throw new Error('tools_call_requires_name');
-  if (!listTools(state.mode).some((tool) => tool.name === name)) throw new Error(`tool_not_available_in_${state.mode}_mode: ${name}`);
+  if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
+  if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
   switch (name) {
     case 'fs_read_file': return toolResult(readFileTool(args, state));
     case 'fs_read_file_range': return toolResult(readFileRangeTool(args, state));
@@ -267,7 +278,7 @@ function callTool(params, state) {
     case 'fs_create_directory': return toolResult(createDirectoryTool(args, state));
     case 'fs_rename_directory': return toolResult(renameDirectoryTool(args, state));
     case 'fs_delete_directory': return toolResult(deleteDirectoryTool(args, state));
-    default: throw new Error(`unknown_tool: ${name}`);
+    default: throw diagnosticError('unknown_tool', `unknown_tool: ${name}`, { tool_name: name });
   }
 }
 
@@ -282,8 +293,8 @@ function readFileTool(args, state) {
 function readFileRangeTool(args, state) {
   const startLine = integerField(args, 'start_line');
   const endLine = integerField(args, 'end_line');
-  if (!Number.isInteger(startLine) || startLine < 1) throw new Error('start_line_must_be_positive_integer');
-  if (!Number.isInteger(endLine) || endLine < startLine) throw new Error('end_line_must_be_greater_than_or_equal_start_line');
+  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
   const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
   return cappedToolValue({ state, value, summary: readSummary(value) });
@@ -325,12 +336,12 @@ function statTool(args, state) {
 
 function globSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
-  if (!pattern) throw new Error('glob_requires_pattern');
+  if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
-  const rgArgs = ['--files', '--hidden', '--no-ignore', '--sort', 'path', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
   return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, diagnosticError }), offset, limit });
 }
 
@@ -348,19 +359,19 @@ function readSummary(value) {
 
 function grepSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
-  if (!pattern) throw new Error('grep_requires_pattern');
+  if (!pattern) throw diagnosticError('grep_requires_pattern', 'grep_requires_pattern');
   const { path } = resolveAllowedToolPath(stringField(args, 'path') ?? '.', state.allowedRoots, { operation: 'fs_grep_search' });
   const mode = stringField(args, 'output_mode') ?? 'files_with_matches';
-  if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw new Error(`grep_output_mode_unsupported: ${mode}`);
+  if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw diagnosticError('grep_output_mode_unsupported', `grep_output_mode_unsupported: ${mode}`, { output_mode: mode });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage([pattern, path, ...modeArgs, '--sort', 'path'], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, diagnosticError }), offset, limit });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, diagnosticError }), offset, limit });
 }
 
 function cappedSearchResult({ state, kind, args, page, offset, limit }) {
   const matches = page.matches;
-  const nextOffset = offset + matches.length < page.count ? offset + matches.length : null;
+  const nextOffset = page.has_more ? offset + matches.length : null;
   const value = {
     schema: `local.filesystem.${kind}.v1`,
     status: 'ok',
@@ -368,13 +379,15 @@ function cappedSearchResult({ state, kind, args, page, offset, limit }) {
     offset,
     limit,
     count: page.count,
+    count_exact: page.count_exact,
+    scanned: page.scanned,
     returned: matches.length,
-    truncated: nextOffset !== null,
+    has_more: page.has_more,
     next_offset: nextOffset,
     matches,
     ...(kind === 'grep' ? { match_objects: matches.map((match) => buildGrepMatchObject(match, stringField(args, 'output_mode') ?? 'files_with_matches')) } : {}),
   };
-  return cappedToolValue({ state, value, summary: { count: value.count, returned: value.returned, next_offset: value.next_offset } });
+  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
 function cappedToolValue({ state, value, summary = {} }) {
@@ -382,9 +395,11 @@ function cappedToolValue({ state, value, summary = {} }) {
   const result = buildOutputRefToolContent({ siteRoot: state.outputRoot, toolName: activeToolName, value, isError: false });
   const envelope = parseToolResultStructuredContent(result);
   if (!envelope) return result;
-  const structuredContent = { ...envelope, ...summary };
+  const { truncated, ...locator } = envelope;
+  const structuredContent = { ...locator, render_truncated: truncated, ...summary };
   return {
     ...result,
+    structuredContent,
     content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
   };
 }
@@ -408,10 +423,10 @@ function strReplaceTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_str_replace_file' });
   const oldText = stringField(args, 'old') ?? '';
   const newText = stringField(args, 'new') ?? '';
-  if (!oldText) throw new Error('str_replace_requires_old');
+  if (!oldText) throw diagnosticError('str_replace_requires_old', 'str_replace_requires_old', pathMetadata(path, root));
   const before = readFileSync(path, 'utf8');
   const count = before.split(oldText).length - 1;
-  if (count === 0) throw new Error('str_replace_not_found');
+  if (count === 0) throw diagnosticError('str_replace_not_found', 'str_replace_not_found', pathMetadata(path, root));
   if (count > 1) {
     throw diagnosticError('str_replace_ambiguous', `str_replace_ambiguous: ${count}`, {
       ...pathMetadata(path, root),
@@ -435,8 +450,8 @@ function strReplaceTool(args, state) {
 function replaceRangeTool(args, state) {
   const startLine = integerField(args, 'start_line');
   const endLine = integerField(args, 'end_line');
-  if (!Number.isInteger(startLine) || startLine < 1) throw new Error('start_line_must_be_positive_integer');
-  if (!Number.isInteger(endLine) || endLine < startLine) throw new Error('end_line_must_be_greater_than_or_equal_start_line');
+  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_replace_range' });
   const replacement = stringField(args, 'replacement') ?? '';
   const before = readFileSync(path, 'utf8');
@@ -444,8 +459,8 @@ function replaceRangeTool(args, state) {
   const hasTrailingNewline = /\r?\n$/.test(before);
   const newline = before.includes('\r\n') ? '\r\n' : '\n';
   const lines = before.replace(/\r?\n$/, '').split(/\r?\n/);
-  if (startLine > lines.length + 1) throw new Error(`start_line_out_of_range: ${startLine}`);
-  if (endLine > lines.length) throw new Error(`end_line_out_of_range: ${endLine}`);
+  if (startLine > lines.length + 1) throw diagnosticError('start_line_out_of_range', `start_line_out_of_range: ${startLine}`, { ...pathMetadata(path, root), start_line: startLine, total_lines: lines.length });
+  if (endLine > lines.length) throw diagnosticError('end_line_out_of_range', `end_line_out_of_range: ${endLine}`, { ...pathMetadata(path, root), end_line: endLine, total_lines: lines.length });
   const replacementLines = replacement.length === 0 ? [] : replacement.split(/\r?\n/);
   const afterLines = [...lines.slice(0, startLine - 1), ...replacementLines, ...lines.slice(endLine)];
   const after = `${afterLines.join(newline)}${hasTrailingNewline ? newline : ''}`;
@@ -476,6 +491,12 @@ function applyPatchTool(args, state) {
   const planned = files.map((filePatch) => {
     const source = resolvePatchSource(filePatch, state);
     const target = resolvePatchTarget(filePatch, state);
+    if (filePatch.oldPath !== '/dev/null' && !existsSync(source.path)) {
+      throw diagnosticError('patch_source_not_found', `patch_source_not_found: ${source.path}`, {
+        ...pathMetadata(source.path, source.root),
+        expected_format_for_new_files: 'unified diff with --- /dev/null or Codex *** Add File',
+      });
+    }
     const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
     const patchContext = { diagnosticError };
     const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
@@ -520,7 +541,7 @@ function createDirectoryTool(args, state) {
   const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_create_directory' });
   const recursive = booleanField(args, 'recursive') ?? false;
   if (existsSync(target.path)) {
-    if (!statSync(target.path).isDirectory()) throw new Error(`create_directory_destination_not_directory: ${target.path}`);
+    if (!statSync(target.path).isDirectory()) throw diagnosticError('create_directory_destination_not_directory', `create_directory_destination_not_directory: ${target.path}`, pathMetadata(target.path, target.root));
     appendAudit(state, 'fs_create_directory', target.path, target.root, { recursive, created: false });
     return {
       schema: 'local.filesystem.create_directory.v1',
@@ -550,11 +571,11 @@ function renameDirectoryTool(args, state) {
 function deleteDirectoryTool(args, state) {
   const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_delete_directory' });
   const recursive = booleanField(args, 'recursive') ?? false;
-  if (!existsSync(target.path)) throw new Error(`delete_directory_not_found: ${target.path}`);
+  if (!existsSync(target.path)) throw diagnosticError('delete_directory_not_found', `delete_directory_not_found: ${target.path}`, pathMetadata(target.path, target.root));
   const targetStat = statSync(target.path);
-  if (!targetStat.isDirectory()) throw new Error(`delete_directory_target_not_directory: ${target.path}`);
+  if (!targetStat.isDirectory()) throw diagnosticError('delete_directory_target_not_directory', `delete_directory_target_not_directory: ${target.path}`, pathMetadata(target.path, target.root));
   const entryCount = readdirSync(target.path).length;
-  if (entryCount > 0 && !recursive) throw new Error(`delete_directory_not_empty: ${target.path}`);
+  if (entryCount > 0 && !recursive) throw diagnosticError('delete_directory_not_empty', `delete_directory_not_empty: ${target.path}`, { ...pathMetadata(target.path, target.root), entry_count: entryCount });
   rmSync(target.path, { recursive, force: false });
   appendAudit(state, 'fs_delete_directory', target.path, target.root, { recursive, entry_count: entryCount });
   return {
@@ -566,15 +587,15 @@ function deleteDirectoryTool(args, state) {
 }
 
 function movePath({ state, operation, from, to, overwrite, directoryOnly }) {
-  if (samePath(from.path, to.path)) throw new Error(`move_source_and_destination_same: ${from.path}`);
-  if (!existsSync(from.path)) throw new Error(`move_source_not_found: ${from.path}`);
+  if (samePath(from.path, to.path)) throw diagnosticError('move_source_and_destination_same', `move_source_and_destination_same: ${from.path}`, { operation, from: pathMetadata(from.path, from.root), to: pathMetadata(to.path, to.root) });
+  if (!existsSync(from.path)) throw diagnosticError('move_source_not_found', `move_source_not_found: ${from.path}`, { operation, ...pathMetadata(from.path, from.root) });
   const fromStat = statSync(from.path);
-  if (directoryOnly && !fromStat.isDirectory()) throw new Error(`rename_directory_source_not_directory: ${from.path}`);
-  if (fromStat.isDirectory() && isPathInside(to.path, from.path)) throw new Error(`move_destination_inside_source: ${to.path}`);
+  if (directoryOnly && !fromStat.isDirectory()) throw diagnosticError('rename_directory_source_not_directory', `rename_directory_source_not_directory: ${from.path}`, pathMetadata(from.path, from.root));
+  if (fromStat.isDirectory() && isPathInside(to.path, from.path)) throw diagnosticError('move_destination_inside_source', `move_destination_inside_source: ${to.path}`, { operation, from: pathMetadata(from.path, from.root), to: pathMetadata(to.path, to.root) });
   if (existsSync(to.path)) {
-    if (!overwrite) throw new Error(`move_destination_exists: ${to.path}`);
+    if (!overwrite) throw diagnosticError('move_destination_exists', `move_destination_exists: ${to.path}`, { operation, ...pathMetadata(to.path, to.root) });
     const toStat = statSync(to.path);
-    if (fromStat.isDirectory() !== toStat.isDirectory()) throw new Error(`move_destination_type_mismatch: ${to.path}`);
+    if (fromStat.isDirectory() !== toStat.isDirectory()) throw diagnosticError('move_destination_type_mismatch', `move_destination_type_mismatch: ${to.path}`, { operation, ...pathMetadata(to.path, to.root) });
     const backupPath = uniqueSiblingPath(to.path, 'overwrite-backup');
     renameSync(to.path, backupPath);
     try {
@@ -727,7 +748,7 @@ function uniqueSiblingPath(path, label) {
     const candidate = `${path}.mcp-${label}-${process.pid}-${Date.now()}-${attempt}`;
     if (!existsSync(candidate)) return candidate;
   }
-  throw new Error(`temporary_path_unavailable: ${path}`);
+  throw diagnosticError('temporary_path_unavailable', `temporary_path_unavailable: ${path}`, { path, label });
 }
 
 function isPathInside(path, root) {

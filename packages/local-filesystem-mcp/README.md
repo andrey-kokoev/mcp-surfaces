@@ -2,7 +2,7 @@
 
 Canonical local filesystem MCP server.
 
-Tool results use `structuredContent` as the authoritative machine payload. The text content is a deterministic, compact rendering for agent transcripts. Large read and search results are materialized as `mcp_output:*` refs; call `mcp_output_show` with the returned `output_ref` to read the full stored JSON payload.
+Tool results use `structuredContent` as the authoritative machine payload. The text content is a deterministic, compact rendering for agent transcripts. Large read and search results are materialized as `mcp_output:*` refs; in that case `structuredContent` is the authoritative locator payload and `mcp_output_show` returns the full stored domain payload.
 
 Read mode tools:
 
@@ -27,7 +27,7 @@ Write mode tools are exposed only when launched with `--mode write`.
 Behavior notes:
 
 - `fs_read_file` and `fs_read_file_range` return line-window metadata plus file content; large windows are returned through `mcp_output_show`.
-- `fs_glob_search` and `fs_grep_search` return newline-separated matches in text and stable match arrays in `structuredContent`.
+- `fs_glob_search` and `fs_grep_search` return newline-separated matches in text and bounded match arrays in `structuredContent`. Search paging uses `has_more` and `next_offset`; `count_exact: false` means ripgrep was stopped after the requested page plus lookahead.
 - `fs_grep_search` includes `output_mode` and parsed `match_objects` in `structuredContent` so callers can interpret matches without parsing ripgrep text.
 - `fs_write_file` supports `overwrite`, `create_only`, and `expected_sha256` guards.
 - `fs_replace_range` supports an `expected_sha256` guard for stale-file detection.

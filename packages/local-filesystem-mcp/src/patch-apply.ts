@@ -1,4 +1,6 @@
-export function parsePatch(patch, { diagnosticError }) {
+export function parsePatch(patch, context = {}) {
+  const contextRecord = context as { diagnosticError?: unknown };
+  const diagnosticError = typeof contextRecord.diagnosticError === 'function' ? contextRecord.diagnosticError : defaultDiagnosticError;
   const firstNonEmptyLine = splitLines(patch)[0] ?? '';
   if (firstNonEmptyLine === '*** Begin Patch') return parseCodexApplyPatch(patch, { diagnosticError });
   return parseUnifiedPatch(patch, { diagnosticError });
@@ -117,8 +119,23 @@ function parseCodexApplyPatch(patch, { diagnosticError }) {
   const files = [];
   let current = null;
   let currentHunk = null;
-  for (const line of lines) {
-    if (line === '*** Begin Patch' || line === '*** End Patch' || line === '*** End of File') continue;
+  for (let lineNumber = 1; lineNumber <= lines.length; lineNumber += 1) {
+    const line = lines[lineNumber - 1];
+    if (line === '' && lineNumber === lines.length) continue;
+    if (line === '*** Begin Patch') {
+      if (lineNumber !== 1) throw codexLineDiagnostic(diagnosticError, 'patch_begin_marker_not_first', patch, line, lineNumber);
+      continue;
+    }
+    if (line === '*** End Patch') {
+      if (lineNumber !== lines.length && !(lineNumber === lines.length - 1 && lines[lineNumber] === '')) {
+        throw codexLineDiagnostic(diagnosticError, 'patch_trailing_content_after_end_patch', patch, line, lineNumber);
+      }
+      continue;
+    }
+    if (line === '*** End of File') {
+      if (!current || current.kind !== 'codex_update') throw codexLineDiagnostic(diagnosticError, 'patch_end_of_file_without_update_file', patch, line, lineNumber);
+      continue;
+    }
     if (line.startsWith('*** Add File: ')) {
       current = { kind: 'codex_add', oldPath: '/dev/null', newPath: normalizePatchPath(line.slice(14).trim()), hunks: [{ kind: 'codex_add', lines: [] }], deleteFile: false };
       currentHunk = current.hunks[0];
@@ -154,12 +171,17 @@ function parseCodexApplyPatch(patch, { diagnosticError }) {
       current.hunks.push(currentHunk);
       continue;
     }
-    if (!currentHunk) continue;
+    if (!currentHunk) throw codexLineDiagnostic(diagnosticError, 'patch_unexpected_line_outside_hunk', patch, line, lineNumber);
     if (current.kind === 'codex_add') {
-      if (line.startsWith('+')) currentHunk.lines.push(line);
+      if (!line.startsWith('+')) throw codexLineDiagnostic(diagnosticError, 'patch_add_line_kind_unsupported', patch, line, lineNumber);
+      currentHunk.lines.push(line);
       continue;
     }
-    if (/^[ +\-]/.test(line)) currentHunk.lines.push(line);
+    if (/^[ +\-]/.test(line)) {
+      currentHunk.lines.push(line);
+      continue;
+    }
+    throw codexLineDiagnostic(diagnosticError, 'patch_line_kind_unsupported', patch, line, lineNumber);
   }
   return files.filter((file) => file.deleteFile || file.hunks.length > 0);
 }
@@ -222,6 +244,25 @@ function normalizePatchPath(path) {
   if (/^[A-Za-z]:\//.test(path)) return path;
   if (/^[A-Za-z]:\\/.test(path)) return path.replace(/\\/g, '/');
   return path.replace(/\\/g, '/');
+}
+
+function codexLineDiagnostic(diagnosticError, codeName, patch, line, lineNumber) {
+  throw diagnosticError(codeName, patch, {
+    expected_format: 'codex_apply_patch',
+    line,
+    line_number: lineNumber,
+  });
+}
+
+function defaultDiagnosticError(codeName, patch, details = {}) {
+  const error = new Error(`${codeName}: invalid patch syntax`) as Error & { codeName?: string; details?: unknown };
+  error.name = 'PatchApplyError';
+  error.codeName = codeName;
+  error.details = {
+    ...details,
+    patch_length: String(patch ?? '').length,
+  };
+  return error;
 }
 
 function splitLines(value) {
