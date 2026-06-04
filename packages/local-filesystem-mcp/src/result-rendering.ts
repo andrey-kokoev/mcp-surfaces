@@ -52,8 +52,11 @@ function renderReadFileResult(record) {
     `path: ${record.path}`,
     `lines: ${startLine}-${endLine} of ${record.total_lines ?? 'unknown'}`,
     record.total_lines_exact !== undefined ? `total_lines_exact: ${record.total_lines_exact}` : null,
+    record.total_lines_status !== undefined ? `total_lines_status: ${record.total_lines_status}` : null,
+    record.line_window_complete !== undefined ? `line_window_complete: ${record.line_window_complete}` : null,
     `returned_lines: ${record.returned_lines}`,
     `next_offset: ${record.next_offset ?? 'null'}`,
+    record.content_sha256 !== undefined ? `content_sha256: ${record.content_sha256}` : null,
     'content:',
     String(record.content ?? ''),
   ].filter((line) => line !== null).join('\n');
@@ -71,15 +74,33 @@ function renderSearchResult(toolName, record, renderContext: Record<string, unkn
     `returned: ${record.returned ?? matches.length}`,
     record.order !== undefined ? `order: ${record.order}` : null,
     record.cache_hit !== undefined ? `cache_hit: ${record.cache_hit}` : null,
+    record.cache_policy !== undefined ? `cache_policy: ${record.cache_policy}` : null,
     record.snapshot_id !== undefined ? `snapshot_id: ${record.snapshot_id ?? 'null'}` : null,
+    record.requested_snapshot_id !== undefined ? `requested_snapshot_id: ${record.requested_snapshot_id ?? 'null'}` : null,
     record.snapshot_complete !== undefined ? `snapshot_complete: ${record.snapshot_complete}` : null,
     record.cache_memory_bytes !== undefined ? `cache_memory_bytes: ${record.cache_memory_bytes ?? 'null'}` : null,
     record.timeout_ms !== undefined ? `timeout_ms: ${record.timeout_ms ?? 'null'}` : null,
+    renderFreshnessLine(record.freshness),
+    record.matches_format !== undefined ? `matches_format: ${record.matches_format}` : null,
+    record.match_objects_authoritative !== undefined ? `match_objects_authoritative: ${record.match_objects_authoritative}` : null,
     `has_more: ${record.has_more ?? false}`,
     `next_offset: ${record.next_offset ?? 'null'}`,
     'matches:',
     ...matches,
   ]);
+}
+
+function renderFreshnessLine(value) {
+  const freshness = asRecord(value);
+  if (!freshness.type && !freshness.sha256 && !freshness.tree_sha256) return null;
+  const parts = [
+    freshness.type ? `type=${freshness.type}` : null,
+    freshness.sha256 ? `sha256=${freshness.sha256}` : null,
+    freshness.tree_sha256 ? `tree_sha256=${freshness.tree_sha256}` : null,
+    freshness.tree_entry_count !== undefined ? `tree_entry_count=${freshness.tree_entry_count}` : null,
+    freshness.tree_truncated !== undefined ? `tree_truncated=${freshness.tree_truncated}` : null,
+  ].filter((part) => typeof part === 'string');
+  return parts.length > 0 ? `freshness: ${parts.join(' ')}` : null;
 }
 
 function renderCompactRecord(record) {
@@ -89,8 +110,13 @@ function renderCompactRecord(record) {
       `path: ${record.path ?? ''}`,
       record.relative_path !== undefined ? `relative_path: ${record.relative_path}` : null,
       record.type !== undefined ? `type: ${record.type}` : null,
-      record.size !== undefined ? `size: ${record.size}` : null,
-      record.mtime !== undefined ? `mtime: ${record.mtime}` : null,
+    record.size !== undefined ? `size: ${record.size}` : null,
+    record.mtime !== undefined ? `mtime: ${record.mtime}` : null,
+      record.sha256 !== undefined ? `sha256: ${record.sha256}` : null,
+      record.entry_count !== undefined ? `entry_count: ${record.entry_count}` : null,
+      record.tree_entry_count !== undefined ? `tree_entry_count: ${record.tree_entry_count}` : null,
+      record.tree_truncated !== undefined ? `tree_truncated: ${record.tree_truncated}` : null,
+      record.tree_sha256 !== undefined ? `tree_sha256: ${record.tree_sha256}` : null,
     ]);
   }
   const lines = [
@@ -104,6 +130,8 @@ function renderCompactRecord(record) {
     record.inserted_lines !== undefined ? `inserted_lines: ${record.inserted_lines}` : null,
     record.recursive !== undefined ? `recursive: ${record.recursive}` : null,
     record.created !== undefined ? `created: ${record.created}` : null,
+    record.create_parent_directories !== undefined ? `create_parent_directories: ${record.create_parent_directories}` : null,
+    record.operation !== undefined ? `operation: ${record.operation}` : null,
     record.overwrite !== undefined ? `overwrite: ${record.overwrite}` : null,
     record.before_sha256 !== undefined ? `before_sha256: ${record.before_sha256}` : null,
     record.after_sha256 !== undefined ? `after_sha256: ${record.after_sha256}` : null,
