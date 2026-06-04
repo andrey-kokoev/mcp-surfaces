@@ -285,8 +285,8 @@ export function buildOutputRefToolContent({
     ref: stored.ref,
     output_ref: stored.ref,
     reader_tool: 'mcp_output_show',
-    read_command: `mcp_output_show({"ref":"${stored.ref}","output_limit":10000})`,
-    remediation: `Call mcp_output_show with ref="${stored.ref}" to read the full result. output_ref is accepted only as a compatibility alias.`,
+    read_command: `mcp_output_show({"output_ref":"${stored.ref}","limit":10000})`,
+    remediation: `Call mcp_output_show with output_ref="${stored.ref}" to read the full result. ref and output_limit are accepted as compatibility aliases.`,
     inline_limit: inlineLimit,
     full_output_char_length: stored.full_output_char_length,
   };
@@ -297,7 +297,8 @@ export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES
   const input = asRecord(args);
   const record = readOutputRecord({ siteRoot, ref: requireOutputRef(input, 'output_show_requires_ref'), maxBytes, outputDir });
   return publicOutputShowRecord(record, {
-    outputLimit: normalizeOutputShowLimit(input.output_limit),
+    outputLimit: normalizeOutputShowLimit(input.limit ?? input.output_limit),
+    offset: normalizeOutputShowOffset(input.offset),
   });
 }
 
@@ -305,15 +306,17 @@ export function listOutputTools() {
   return [
     {
       name: 'mcp_output_show',
-      description: 'Show an MCP output ref inline up to output_limit characters. Defaults to 10000 characters.',
+      description: 'Show an MCP output ref inline with bounded pagination.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
-        required: ['ref'],
+        required: [],
         properties: {
-          ref: { type: 'string', description: 'Output ref, e.g. mcp_output:<id>.' },
-          output_ref: { type: 'string', description: 'Compatibility alias accepted at runtime. Prefer ref; some tool providers reject alias-only schemas.' },
-          output_limit: { type: 'integer', description: 'Maximum characters of stored output to inline. Defaults to 10000.' },
+          output_ref: { type: 'string', description: 'Output ref, e.g. mcp_output:<id>.' },
+          ref: { type: 'string', description: 'Compatibility alias for output_ref.' },
+          offset: { type: 'integer', description: 'Character offset, default 0.' },
+          limit: { type: 'integer', description: 'Maximum characters to inline. Defaults to 10000.' },
+          output_limit: { type: 'integer', description: 'Compatibility alias for limit.' },
         },
       },
     },
@@ -384,9 +387,10 @@ function publicOutputRecord(record) {
   };
 }
 
-function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT } = {}) {
+function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, offset = 0 } = {}) {
   const outputText = JSON.stringify(record.full_output, null, 2);
-  const outputTruncated = outputText.length > outputLimit;
+  const chunk = outputText.slice(offset, offset + outputLimit);
+  const outputTruncated = offset + chunk.length < outputText.length;
   return {
     schema: 'narada.mcp_output_show.v1',
     status: 'ok',
@@ -396,9 +400,12 @@ function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR
     byte_size: record.byte_size ?? null,
     original_truncated: record.truncated === true,
     path: record.output_path ?? normalizePath(`${DEFAULT_OUTPUT_DIR}/${DEFAULT_WORKSPACE_DIR}/${record.output_id}.json`),
+    offset,
+    limit: outputLimit,
+    next_offset: outputTruncated ? offset + chunk.length : null,
     output_limit: outputLimit,
     output_truncated: outputTruncated,
-    output_text: outputTruncated ? outputText.slice(0, outputLimit) : outputText,
+    output_text: chunk,
   };
 }
 
@@ -430,6 +437,15 @@ function normalizeOutputShowLimit(value) {
     throw new Error('output_limit_must_be_non_negative_integer');
   }
   return Math.min(numeric, DEFAULT_OUTPUT_MAX_BYTES);
+}
+
+function normalizeOutputShowOffset(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const numeric = Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0) {
+    throw new Error('offset_must_be_non_negative_integer');
+  }
+  return numeric;
 }
 
 function parseOutputRef(ref) {

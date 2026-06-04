@@ -41,8 +41,7 @@ function isReadFileResult(record) {
   return typeof record.path === 'string'
     && typeof record.content === 'string'
     && typeof record.offset === 'number'
-    && typeof record.returned_lines === 'number'
-    && typeof record.total_lines === 'number';
+    && typeof record.returned_lines === 'number';
 }
 
 function renderReadFileResult(record) {
@@ -51,12 +50,13 @@ function renderReadFileResult(record) {
   const endLine = returnedLines > 0 ? startLine + returnedLines - 1 : startLine - 1;
   return [
     `path: ${record.path}`,
-    `lines: ${startLine}-${endLine} of ${record.total_lines}`,
+    `lines: ${startLine}-${endLine} of ${record.total_lines ?? 'unknown'}`,
+    record.total_lines_exact !== undefined ? `total_lines_exact: ${record.total_lines_exact}` : null,
     `returned_lines: ${record.returned_lines}`,
     `next_offset: ${record.next_offset ?? 'null'}`,
     'content:',
     String(record.content ?? ''),
-  ].join('\n');
+  ].filter((line) => line !== null).join('\n');
 }
 
 function renderSearchResult(toolName, record, renderContext: Record<string, unknown> = {}) {
@@ -71,6 +71,10 @@ function renderSearchResult(toolName, record, renderContext: Record<string, unkn
     `returned: ${record.returned ?? matches.length}`,
     record.order !== undefined ? `order: ${record.order}` : null,
     record.cache_hit !== undefined ? `cache_hit: ${record.cache_hit}` : null,
+    record.snapshot_id !== undefined ? `snapshot_id: ${record.snapshot_id ?? 'null'}` : null,
+    record.snapshot_complete !== undefined ? `snapshot_complete: ${record.snapshot_complete}` : null,
+    record.cache_memory_bytes !== undefined ? `cache_memory_bytes: ${record.cache_memory_bytes ?? 'null'}` : null,
+    record.timeout_ms !== undefined ? `timeout_ms: ${record.timeout_ms ?? 'null'}` : null,
     `has_more: ${record.has_more ?? false}`,
     `next_offset: ${record.next_offset ?? 'null'}`,
     'matches:',

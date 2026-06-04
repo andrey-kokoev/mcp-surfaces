@@ -26,13 +26,15 @@ Write mode tools are exposed only when launched with `--mode write`.
 
 Behavior notes:
 
-- `fs_read_file` and `fs_read_file_range` return line-window metadata plus file content; large windows are returned through `mcp_output_show`.
-- `fs_glob_search` and `fs_grep_search` return newline-separated matches in text and bounded match arrays in `structuredContent`. Search paging uses `has_more` and `next_offset`; `count_exact: false` means ripgrep was stopped after the requested page plus lookahead. Non-initial offset pages materialize and cache a complete result snapshot for the same search arguments, so repeated deep pages are served from cache. `order: "ripgrep_traversal"` means page order follows ripgrep emission order, not sorted path order.
+- `fs_read_file` and `fs_read_file_range` return line-window metadata plus file content without reading the whole file just to satisfy small windows. `total_lines_exact: false` means the tool stopped after the requested page plus lookahead. Large windows are returned through `mcp_output_show`.
+- `fs_glob_search` and `fs_grep_search` return newline-separated matches in text and bounded match arrays in `structuredContent`. Search paging uses `has_more` and `next_offset`; `count_exact: false` means ripgrep was stopped after the requested page plus lookahead. Non-initial offset pages materialize and cache a complete result snapshot keyed by the search arguments and target freshness metadata. Complete snapshots that exceed the cache memory cap are returned for the current call but not retained. `order: "ripgrep_traversal"` means page order follows ripgrep emission order, not sorted path order.
 - `fs_grep_search` includes `output_mode` and parsed `match_objects` in `structuredContent` so callers can interpret matches without parsing ripgrep text.
 - `fs_write_file` supports `overwrite`, `create_only`, and `expected_sha256` guards.
+- `fs_str_replace_file` supports `expected_sha256` for stale-file detection.
 - `fs_replace_range` supports an `expected_sha256` guard for stale-file detection.
 - `fs_create_directory` is idempotent for existing directories and returns `status: "exists"`.
-- `fs_apply_patch` accepts unified diffs and Codex-style `*** Begin Patch` patches, including delete and move targets.
+- `fs_apply_patch` accepts unified diffs and Codex-style `*** Begin Patch` patches, including delete and move targets. It supports `dry_run: true` and an `expected_sha256` map keyed by patch path or resolved path.
+- `fs_move_path`, `fs_rename_directory`, and `fs_delete_directory` support optional expected metadata guards for stale-path detection.
 
 Example:
 

@@ -14,11 +14,12 @@ async function run() {
   const offset = Math.max(0, Number(input.offset ?? 0));
   const limit = Math.max(1, Number(input.limit ?? 1));
   const complete = input.complete === true;
-  const result = await collectRipgrepPage(args, { offset, limit, complete });
+  const maxMatchBytes = Math.max(1, Number(input.max_match_bytes ?? 2 * 1024 * 1024));
+  const result = await collectRipgrepPage(args, { offset, limit, complete, maxMatchBytes });
   process.stdout.write(JSON.stringify(result));
 }
 
-function collectRipgrepPage(args: string[], { offset, limit, complete }: { offset: number; limit: number; complete: boolean }) {
+function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchBytes }: { offset: number; limit: number; complete: boolean; maxMatchBytes: number }) {
   return new Promise((resolvePromise) => {
     let resolved = false;
     const child = spawn('rg', args, {
@@ -27,10 +28,13 @@ function collectRipgrepPage(args: string[], { offset, limit, complete }: { offse
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const matches = [];
+    const pageMatches = [];
     let seen = 0;
     let pending = '';
     let stderr = '';
     let stoppedEarly = false;
+    let completeMemoryExceeded = false;
+    let matchBytes = 0;
     let childError = null;
 
     child.stdout.setEncoding('utf8');
@@ -59,26 +63,38 @@ function collectRipgrepPage(args: string[], { offset, limit, complete }: { offse
       if (resolved) return;
       resolved = true;
       if (pending.trim() && !stoppedEarly) consumeLine(pending);
-      const hasMore = !complete && matches.length > limit;
+      const countExact = !stoppedEarly && !completeMemoryExceeded;
+      const outputMatches = complete && !completeMemoryExceeded ? matches : pageMatches.slice(0, limit);
+      const hasMore = pageMatches.length > limit || (completeMemoryExceeded && stoppedEarly);
       resolvePromise({
         status,
         signal,
         stderr,
         error: childError ? childError.message : null,
         stopped_early: stoppedEarly,
-        count: stoppedEarly ? null : seen,
-        count_exact: !stoppedEarly,
+        count: countExact ? seen : null,
+        count_exact: countExact,
         scanned: seen,
         has_more: hasMore,
-        matches: complete ? matches : matches.slice(0, limit),
+        matches: outputMatches,
       });
     }
 
     function consumeLine(line: string) {
       if (!line.trim()) return;
-      if (complete || (seen >= offset && matches.length <= limit)) matches.push(line);
+      if (seen >= offset && pageMatches.length <= limit) pageMatches.push(line);
+      if (complete && !completeMemoryExceeded) {
+        matchBytes += Buffer.byteLength(line, 'utf8');
+        if (matchBytes > maxMatchBytes) {
+          completeMemoryExceeded = true;
+          matches.length = 0;
+        }
+      }
+      if (complete && !completeMemoryExceeded) {
+        matches.push(line);
+      }
       seen += 1;
-      if (!complete && matches.length > limit && !stoppedEarly) {
+      if ((!complete || completeMemoryExceeded) && pageMatches.length > limit && !stoppedEarly) {
         stoppedEarly = true;
         child.kill();
       }

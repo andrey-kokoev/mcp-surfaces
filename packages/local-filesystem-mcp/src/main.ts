@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
 import {
   buildOutputRefToolContent,
   listOutputTools,
@@ -14,6 +15,7 @@ import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRi
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
+const READ_BUFFER_BYTES = 64 * 1024;
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/.git/**',
   '**/node_modules/**',
@@ -171,6 +173,7 @@ export function listTools(mode) {
         ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude. Defaults also exclude generated dependency/build directories.' },
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 100 },
+        timeout_ms: { type: 'integer', description: 'Optional search timeout in milliseconds.' },
       }, ['pattern']),
     },
     {
@@ -182,6 +185,7 @@ export function listTools(mode) {
         output_mode: { type: 'string', enum: ['files_with_matches', 'count_matches', 'content'], default: 'files_with_matches' },
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 80 },
+        timeout_ms: { type: 'integer', description: 'Optional search timeout in milliseconds.' },
       }, ['pattern']),
     },
     ...listOutputTools(),
@@ -201,7 +205,12 @@ export function listTools(mode) {
     {
       name: 'fs_str_replace_file',
       description: 'Replace exactly one string occurrence in a text file under an allowed root and append an audit record.',
-      inputSchema: objectSchema({ path: { type: 'string' }, old: { type: 'string' }, new: { type: 'string' } }, ['path', 'old', 'new']),
+      inputSchema: objectSchema({
+        path: { type: 'string' },
+        old: { type: 'string' },
+        new: { type: 'string' },
+        expected_sha256: { type: 'string', description: 'Optional expected current file sha256 before editing.' },
+      }, ['path', 'old', 'new']),
     },
     {
       name: 'fs_replace_range',
@@ -217,7 +226,11 @@ export function listTools(mode) {
     {
       name: 'fs_apply_patch',
       description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots and append an audit record.',
-      inputSchema: objectSchema({ patch: { type: 'string' } }, ['patch']),
+      inputSchema: objectSchema({
+        patch: { type: 'string' },
+        dry_run: { type: 'boolean', default: false },
+        expected_sha256: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional map from patch paths to expected current file sha256 values.' },
+      }, ['patch']),
     },
     {
       name: 'fs_move_path',
@@ -226,6 +239,11 @@ export function listTools(mode) {
         from: { type: 'string' },
         to: { type: 'string' },
         overwrite: { type: 'boolean', default: false },
+        expected_from_mtime: { type: 'string', description: 'Optional expected source mtime ISO string.' },
+        expected_from_size: { type: 'integer', description: 'Optional expected source byte size.' },
+        expected_from_sha256: { type: 'string', description: 'Optional expected source sha256 for file sources.' },
+        expected_to_mtime: { type: 'string', description: 'Optional expected destination mtime ISO string when overwriting.' },
+        expected_to_size: { type: 'integer', description: 'Optional expected destination byte size when overwriting.' },
       }, ['from', 'to']),
     },
     {
@@ -242,6 +260,10 @@ export function listTools(mode) {
       inputSchema: objectSchema({
         from: { type: 'string' },
         to: { type: 'string' },
+        expected_from_mtime: { type: 'string', description: 'Optional expected source mtime ISO string.' },
+        expected_from_size: { type: 'integer', description: 'Optional expected source byte size.' },
+        expected_to_mtime: { type: 'string', description: 'Optional expected destination mtime ISO string if it exists.' },
+        expected_to_size: { type: 'integer', description: 'Optional expected destination byte size if it exists.' },
       }, ['from', 'to']),
     },
     {
@@ -250,6 +272,8 @@ export function listTools(mode) {
       inputSchema: objectSchema({
         path: { type: 'string' },
         recursive: { type: 'boolean', default: false },
+        expected_mtime: { type: 'string', description: 'Optional expected directory mtime ISO string before deletion.' },
+        expected_size: { type: 'integer', description: 'Optional expected directory byte size before deletion.' },
       }, ['path']),
     },
   ];
@@ -269,7 +293,7 @@ function callTool(params, state) {
     case 'fs_stat': return toolResult(statTool(args, state));
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
     case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
-    case 'mcp_output_show': return toolResult(outputShow({ siteRoot: state.outputRoot, args }));
+    case 'mcp_output_show': return toolResult(outputShow({ siteRoot: state.outputRoot, args: normalizeOutputShowArgs(args) }));
     case 'fs_write_file': return toolResult(writeFileTool(args, state));
     case 'fs_str_replace_file': return toolResult(strReplaceTool(args, state));
     case 'fs_replace_range': return toolResult(replaceRangeTool(args, state));
@@ -301,22 +325,18 @@ function readFileRangeTool(args, state) {
 }
 
 function readFileRange({ path, root, offset, limit }) {
-  const buffer = readFileSync(path);
-  if (buffer.includes(0)) throw diagnosticError('binary_file_not_supported', `binary_file_not_supported: ${path}`, pathMetadata(path, root));
-  const text = buffer.toString('utf8');
-  const lines = splitFileLines(text);
-  const selected = lines.slice(offset - 1, offset - 1 + limit);
-  const nextOffset = offset + selected.length <= lines.length ? offset + selected.length : null;
+  const window = readTextLineWindow({ path, root, offset, limit });
   return {
     path,
     root,
     relative_path: relative(root, path).replace(/\\/g, '/'),
-    total_lines: lines.length,
+    total_lines: window.totalLines,
+    total_lines_exact: window.totalLinesExact,
     offset,
     limit,
-    returned_lines: selected.length,
-    next_offset: nextOffset,
-    content: selected.join('\n'),
+    returned_lines: window.selected.length,
+    next_offset: window.nextOffset,
+    content: window.selected.join('\n'),
   };
 }
 
@@ -340,9 +360,11 @@ function globSearchTool(args, state) {
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
+  const timeoutMs = searchTimeoutMs(args);
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
-  return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, diagnosticError }), offset, limit });
+  const freshness = searchFreshness(directory);
+  return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, timeoutMs, freshness, diagnosticError }), offset, limit, freshness });
 }
 
 function readSummary(value) {
@@ -354,6 +376,7 @@ function readSummary(value) {
     returned_lines: value.returned_lines,
     next_offset: value.next_offset,
     total_lines: value.total_lines,
+    total_lines_exact: value.total_lines_exact,
   };
 }
 
@@ -365,11 +388,13 @@ function grepSearchTool(args, state) {
   if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw diagnosticError('grep_output_mode_unsupported', `grep_output_mode_unsupported: ${mode}`, { output_mode: mode });
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
+  const timeoutMs = searchTimeoutMs(args);
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, diagnosticError }), offset, limit });
+  const freshness = searchFreshness(path);
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, diagnosticError }), offset, limit, freshness });
 }
 
-function cappedSearchResult({ state, kind, args, page, offset, limit }) {
+function cappedSearchResult({ state, kind, args, page, offset, limit, freshness }) {
   const matches = page.matches;
   const nextOffset = page.has_more ? offset + matches.length : null;
   const value = {
@@ -384,12 +409,17 @@ function cappedSearchResult({ state, kind, args, page, offset, limit }) {
     returned: matches.length,
     order: 'ripgrep_traversal',
     cache_hit: page.cache_hit === true,
+    snapshot_id: page.snapshot_id ?? null,
+    snapshot_complete: page.snapshot_complete === true,
+    cache_memory_bytes: page.cache_memory_bytes ?? null,
+    timeout_ms: page.timeout_ms ?? null,
+    freshness,
     has_more: page.has_more,
     next_offset: nextOffset,
-    matches,
+    matches: kind === 'grep' ? matches.map((match) => renderGrepMatch(match, stringField(args, 'output_mode') ?? 'files_with_matches')) : matches,
     ...(kind === 'grep' ? { match_objects: matches.map((match) => buildGrepMatchObject(match, stringField(args, 'output_mode') ?? 'files_with_matches')) } : {}),
   };
-  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, order: value.order, cache_hit: value.cache_hit, has_more: value.has_more, next_offset: value.next_offset } });
+  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, order: value.order, cache_hit: value.cache_hit, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, timeout_ms: value.timeout_ms, freshness: value.freshness, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
 function cappedToolValue({ state, value, summary = {} }) {
@@ -427,6 +457,7 @@ function strReplaceTool(args, state) {
   const newText = stringField(args, 'new') ?? '';
   if (!oldText) throw diagnosticError('str_replace_requires_old', 'str_replace_requires_old', pathMetadata(path, root));
   const before = readFileSync(path, 'utf8');
+  assertExpectedSha256(args, before, { operation: 'fs_str_replace_file', path, root });
   const count = before.split(oldText).length - 1;
   if (count === 0) throw diagnosticError('str_replace_not_found', 'str_replace_not_found', pathMetadata(path, root));
   if (count > 1) {
@@ -483,6 +514,8 @@ function replaceRangeTool(args, state) {
 function applyPatchTool(args, state) {
   const patch = stringField(args, 'patch');
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
+  const dryRun = booleanField(args, 'dry_run') ?? false;
+  const expectedSha256 = expectedSha256Map(args);
   const files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError });
   if (files.length === 0) {
     throw patchDiagnosticError('patch_contains_no_files', patch, {
@@ -500,10 +533,25 @@ function applyPatchTool(args, state) {
       });
     }
     const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
+    assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before);
     const patchContext = { diagnosticError };
     const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
     return { filePatch, source, target, before, after };
   });
+  if (dryRun) {
+    return {
+      schema: 'local.filesystem.apply_patch.v1',
+      status: 'checked',
+      dry_run: true,
+      changed_files: planned.map((item) => ({
+        ...pathMetadata(item.target.path, item.target.root),
+        hunks: item.filePatch.hunks.length,
+        deleted: item.filePatch.deleteFile === true,
+        before_sha256: sha256(item.before),
+        after_sha256: item.filePatch.deleteFile ? null : sha256(item.after),
+      })),
+    };
+  }
   const changed = [];
   const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
   const backups = backupPaths.map((path) => ({
@@ -536,7 +584,7 @@ function movePathTool(args, state) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_move_path', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_move_path', field: 'to' });
   const overwrite = booleanField(args, 'overwrite') ?? false;
-  return movePath({ state, operation: 'fs_move_path', from, to, overwrite, directoryOnly: false });
+  return movePath({ state, operation: 'fs_move_path', args, from, to, overwrite, directoryOnly: false });
 }
 
 function createDirectoryTool(args, state) {
@@ -553,6 +601,14 @@ function createDirectoryTool(args, state) {
       created: false,
     };
   }
+  const parent = dirname(target.path);
+  if (!recursive && !existsSync(parent)) {
+    throw diagnosticError('create_directory_parent_not_found', `create_directory_parent_not_found: ${parent}`, {
+      operation: 'fs_create_directory',
+      requested_path: target.path,
+      parent: pathMetadata(parent, target.root),
+    });
+  }
   mkdirSync(target.path, { recursive });
   appendAudit(state, 'fs_create_directory', target.path, target.root, { recursive });
   return {
@@ -567,7 +623,7 @@ function createDirectoryTool(args, state) {
 function renameDirectoryTool(args, state) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'to' });
-  return movePath({ state, operation: 'fs_rename_directory', from, to, overwrite: false, directoryOnly: true });
+  return movePath({ state, operation: 'fs_rename_directory', args, from, to, overwrite: false, directoryOnly: true });
 }
 
 function deleteDirectoryTool(args, state) {
@@ -576,6 +632,7 @@ function deleteDirectoryTool(args, state) {
   if (!existsSync(target.path)) throw diagnosticError('delete_directory_not_found', `delete_directory_not_found: ${target.path}`, pathMetadata(target.path, target.root));
   const targetStat = statSync(target.path);
   if (!targetStat.isDirectory()) throw diagnosticError('delete_directory_target_not_directory', `delete_directory_target_not_directory: ${target.path}`, pathMetadata(target.path, target.root));
+  assertExpectedMetadata(args, target, { operation: 'fs_delete_directory', mtimeKey: 'expected_mtime', sizeKey: 'expected_size' });
   const entryCount = readdirSync(target.path).length;
   if (entryCount > 0 && !recursive) throw diagnosticError('delete_directory_not_empty', `delete_directory_not_empty: ${target.path}`, { ...pathMetadata(target.path, target.root), entry_count: entryCount });
   rmSync(target.path, { recursive, force: false });
@@ -588,16 +645,18 @@ function deleteDirectoryTool(args, state) {
   };
 }
 
-function movePath({ state, operation, from, to, overwrite, directoryOnly }) {
+function movePath({ state, operation, args, from, to, overwrite, directoryOnly }) {
   if (samePath(from.path, to.path)) throw diagnosticError('move_source_and_destination_same', `move_source_and_destination_same: ${from.path}`, { operation, from: pathMetadata(from.path, from.root), to: pathMetadata(to.path, to.root) });
   if (!existsSync(from.path)) throw diagnosticError('move_source_not_found', `move_source_not_found: ${from.path}`, { operation, ...pathMetadata(from.path, from.root) });
   const fromStat = statSync(from.path);
   if (directoryOnly && !fromStat.isDirectory()) throw diagnosticError('rename_directory_source_not_directory', `rename_directory_source_not_directory: ${from.path}`, pathMetadata(from.path, from.root));
+  assertExpectedMetadata(args, from, { operation, mtimeKey: 'expected_from_mtime', sizeKey: 'expected_from_size', shaKey: 'expected_from_sha256' });
   if (fromStat.isDirectory() && isPathInside(to.path, from.path)) throw diagnosticError('move_destination_inside_source', `move_destination_inside_source: ${to.path}`, { operation, from: pathMetadata(from.path, from.root), to: pathMetadata(to.path, to.root) });
   if (existsSync(to.path)) {
     if (!overwrite) throw diagnosticError('move_destination_exists', `move_destination_exists: ${to.path}`, { operation, ...pathMetadata(to.path, to.root) });
     const toStat = statSync(to.path);
     if (fromStat.isDirectory() !== toStat.isDirectory()) throw diagnosticError('move_destination_type_mismatch', `move_destination_type_mismatch: ${to.path}`, { operation, ...pathMetadata(to.path, to.root) });
+    assertExpectedMetadata(args, to, { operation, mtimeKey: 'expected_to_mtime', sizeKey: 'expected_to_size' });
     const backupPath = uniqueSiblingPath(to.path, 'overwrite-backup');
     renameSync(to.path, backupPath);
     try {
@@ -634,6 +693,89 @@ function pathMetadata(path, root) {
     root,
     relative_path: relative(root, path).replace(/\\/g, '/'),
   };
+}
+
+function readTextLineWindow({ path, root, offset, limit }) {
+  const fd = openSync(path, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  const selected = [];
+  let pending = '';
+  let lineNumber = 0;
+  let reachedEof = false;
+  let nextOffset = null;
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        reachedEof = true;
+        break;
+      }
+      const chunk = buffer.subarray(0, bytesRead);
+      if (chunk.includes(0)) throw diagnosticError('binary_file_not_supported', `binary_file_not_supported: ${path}`, pathMetadata(path, root));
+      pending += decoder.write(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        lineNumber += 1;
+        if (lineNumber >= offset && selected.length < limit) selected.push(line);
+        else if (lineNumber >= offset + limit) {
+          nextOffset = lineNumber;
+          return {
+            selected,
+            nextOffset,
+            totalLines: null,
+            totalLinesExact: false,
+          };
+        }
+      }
+    }
+    pending += decoder.end();
+    if (pending.length > 0) {
+      lineNumber += 1;
+      if (lineNumber >= offset && selected.length < limit) selected.push(pending);
+      else if (lineNumber >= offset + limit) nextOffset = lineNumber;
+    }
+    return {
+      selected,
+      nextOffset,
+      totalLines: reachedEof ? lineNumber : null,
+      totalLinesExact: reachedEof,
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function searchTimeoutMs(args) {
+  const value = integerField(args, 'timeout_ms');
+  if (value === null) return undefined;
+  return Math.min(300_000, Math.max(1, value));
+}
+
+function searchFreshness(path) {
+  const stat = statSync(path);
+  return {
+    path,
+    type: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
+    size: stat.size,
+    mtime: stat.mtime.toISOString(),
+    mtime_ms: Math.trunc(stat.mtimeMs),
+  };
+}
+
+function renderGrepMatch(match, mode) {
+  const parsed = buildGrepMatchObject(match, mode);
+  if (mode === 'count_matches') return `${parsed.path}: ${parsed.count ?? 'unknown'}`;
+  if (mode === 'content') return `${parsed.path}:${parsed.line ?? '?'}:${parsed.text ?? ''}`;
+  return String(parsed.path ?? match);
+}
+
+function normalizeOutputShowArgs(args) {
+  const record = { ...asRecord(args) };
+  if (record.output_ref && !record.ref) record.ref = record.output_ref;
+  if (record.limit !== undefined && record.output_limit === undefined) record.output_limit = record.limit;
+  return record;
 }
 
 function resolvePatchSource(filePatch, state) {
@@ -832,6 +974,80 @@ function assertExpectedSha256(args, before, { operation, path, root }) {
       actual_sha256: actual,
     });
   }
+}
+
+function expectedSha256Map(args) {
+  const value = asRecord(args).expected_sha256;
+  if (value === undefined || value === null) return new Map();
+  const record = asRecord(value);
+  if (record !== value) throw diagnosticError('expected_sha256_must_be_object', 'expected_sha256_must_be_object');
+  const entries = Object.entries(record);
+  for (const [key, entryValue] of entries) {
+    if (typeof entryValue !== 'string' || entryValue.trim().length === 0) {
+      throw diagnosticError('expected_sha256_value_must_be_string', `expected_sha256_value_must_be_string: ${key}`, { key });
+    }
+  }
+  return new Map(entries);
+}
+
+function assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before) {
+  if (expectedSha256.size === 0) return;
+  const keys = [
+    relative(source.root, source.path).replace(/\\/g, '/'),
+    relative(target.root, target.path).replace(/\\/g, '/'),
+    stripPatchPrefix(filePatch.oldPath),
+    stripPatchPrefix(filePatch.newPath),
+    normalizePathKey(source.path),
+    normalizePathKey(target.path),
+  ].filter((key) => key && key !== '/dev/null');
+  const matchedKey = keys.find((key) => expectedSha256.has(key));
+  if (!matchedKey) return;
+  const expected = expectedSha256.get(matchedKey);
+  const actual = source.path && existsSync(source.path) ? sha256(before) : null;
+  if (actual !== expected) {
+    throw diagnosticError('fs_apply_patch_expected_sha256_mismatch', `fs_apply_patch_expected_sha256_mismatch: ${source.path}`, {
+      ...pathMetadata(source.path, source.root),
+      expected_sha256: expected,
+      actual_sha256: actual,
+      expected_sha256_key: matchedKey,
+    });
+  }
+}
+
+function assertExpectedMetadata(args, target, { operation, mtimeKey, sizeKey, shaKey = null }) {
+  const expectedMtime = stringField(args, mtimeKey);
+  const expectedSize = integerField(args, sizeKey);
+  const expectedSha = shaKey ? stringField(args, shaKey) : null;
+  if (!expectedMtime && expectedSize === null && !expectedSha) return;
+  const stat = statSync(target.path);
+  const actualMtime = stat.mtime.toISOString();
+  const actualSize = stat.size;
+  const details = {
+    ...pathMetadata(target.path, target.root),
+    expected_mtime: expectedMtime,
+    actual_mtime: actualMtime,
+    expected_size: expectedSize,
+    actual_size: actualSize,
+  };
+  if (expectedMtime && actualMtime !== expectedMtime) {
+    throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, details);
+  }
+  if (expectedSize !== null && actualSize !== expectedSize) {
+    throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, details);
+  }
+  if (expectedSha) {
+    if (!stat.isFile()) {
+      throw diagnosticError(`${operation}_expected_sha256_not_supported`, `${operation}_expected_sha256_not_supported: ${target.path}`, { ...details, type: stat.isDirectory() ? 'directory' : 'other' });
+    }
+    const actualSha = createHash('sha256').update(readFileSync(target.path)).digest('hex');
+    if (actualSha !== expectedSha) {
+      throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, { ...details, expected_sha256: expectedSha, actual_sha256: actualSha });
+    }
+  }
+}
+
+function normalizePathKey(path) {
+  return String(path ?? '').replace(/\\/g, '/');
 }
 
 function findTextOccurrences(text, needle) {

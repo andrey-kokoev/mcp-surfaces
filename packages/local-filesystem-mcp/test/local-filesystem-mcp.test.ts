@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -37,6 +38,10 @@ function parseFirstJsonRpcFrame(output) {
   const bodyStart = headerEnd + 4;
   const body = output.slice(bodyStart, bodyStart + Number(match[1]));
   return JSON.parse(body);
+}
+
+function sha256(value) {
+  return createHash('sha256').update(String(value)).digest('hex');
 }
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'local-filesystem-mcp-'));
@@ -131,13 +136,18 @@ trust_level = "untrusted"
   const readResponse = call(readState, 1, 'fs_read_file', { path: join(trusted, 'a.txt'), limit: 1 });
   assert.equal(readResponse.result.structuredContent.content, 'alpha');
   assert.equal(readResponse.result.structuredContent.next_offset, 2);
+  assert.equal(readResponse.result.structuredContent.total_lines, null);
+  assert.equal(readResponse.result.structuredContent.total_lines_exact, false);
   assert.equal(readResponse.result.content[0].text.startsWith(`path: ${join(trusted, 'a.txt')}`), true);
-  assert.match(readResponse.result.content[0].text, /lines: 1-1 of 2/);
+  assert.match(readResponse.result.content[0].text, /lines: 1-1 of unknown/);
+  assert.match(readResponse.result.content[0].text, /total_lines_exact: false/);
   assert.match(readResponse.result.content[0].text, /content:\nalpha$/);
 
   const rangeResponse = call(readState, 11, 'fs_read_file_range', { path: join(trusted, 'a.txt'), start_line: 2, end_line: 2 });
   assert.equal(rangeResponse.result.structuredContent.content, 'beta');
   assert.equal(rangeResponse.result.structuredContent.next_offset, null);
+  assert.equal(rangeResponse.result.structuredContent.total_lines, 2);
+  assert.equal(rangeResponse.result.structuredContent.total_lines_exact, true);
   assert.match(rangeResponse.result.content[0].text, /lines: 2-2 of 2/);
   assert.match(rangeResponse.result.content[0].text, /content:\nbeta$/);
 
@@ -152,7 +162,7 @@ trust_level = "untrusted"
   assert.equal(largeRead.result.structuredContent.returned_lines, 1);
   assert.equal(largeRead.result.structuredContent.next_offset, null);
   assert.match(largeRead.result.content[0].text, /result: materialized/);
-  const shownLargeRead = call(readState, 122, 'mcp_output_show', { ref: largeRead.result.structuredContent.output_ref, output_limit: 20000 });
+  const shownLargeRead = call(readState, 122, 'mcp_output_show', { output_ref: largeRead.result.structuredContent.output_ref, limit: 20000 });
   const shownLargeReadPayload = JSON.parse(shownLargeRead.result.content[0].text);
   assert.equal(shownLargeReadPayload.content, `${'x'.repeat(7000)}`);
 
@@ -188,15 +198,21 @@ trust_level = "untrusted"
   assert.equal(pagedGlob.result.structuredContent.count_exact, false);
   assert.equal(pagedGlob.result.structuredContent.order, 'ripgrep_traversal');
   assert.equal(pagedGlob.result.structuredContent.cache_hit, false);
+  assert.equal(pagedGlob.result.structuredContent.timeout_ms, 60000);
+  assert.equal(pagedGlob.result.structuredContent.snapshot_complete, false);
+  assert.equal(pagedGlob.result.structuredContent.freshness.type, 'directory');
   assert.equal(pagedGlob.result.structuredContent.next_offset, 5);
   assert.ok(Number(pagedGlob.result.structuredContent.scanned) < 20);
-  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\norder: ripgrep_traversal\ncache_hit: false\nhas_more: true/);
+  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\norder: ripgrep_traversal\ncache_hit: false\nsnapshot_id: null\nsnapshot_complete: false\ncache_memory_bytes: null\ntimeout_ms: 60000\nhas_more: true/);
   assert.equal(pagedGlob.result.structuredContent.matches.length, 5);
   const pagedGlobSecond = call(readState, 17, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 5, limit: 5 });
   assert.equal(pagedGlobSecond.result.structuredContent.offset, 5);
   assert.equal(pagedGlobSecond.result.structuredContent.returned, 5);
   assert.equal(pagedGlobSecond.result.structuredContent.count_exact, true);
   assert.equal(pagedGlobSecond.result.structuredContent.cache_hit, true);
+  assert.equal(pagedGlobSecond.result.structuredContent.snapshot_complete, true);
+  assert.match(pagedGlobSecond.result.structuredContent.snapshot_id, /^[0-9a-f]{24}$/);
+  assert.equal(typeof pagedGlobSecond.result.structuredContent.cache_memory_bytes, 'number');
   assert.equal(pagedGlobSecond.result.structuredContent.count, 120);
   const pagedGlobThird = call(readState, 171, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 10, limit: 5 });
   assert.equal(pagedGlobThird.result.structuredContent.cache_hit, true);
@@ -217,7 +233,7 @@ trust_level = "untrusted"
   assert.match(largeGlob.result.content[0].text, /count: 120/);
   assert.match(largeGlob.result.content[0].text, /render_truncated: true/);
   assert.match(largeGlob.result.content[0].text, /reader_tool: mcp_output_show/);
-  const shownLargeGlob = call(readState, 19, 'mcp_output_show', { ref: largeGlob.result.structuredContent.output_ref, output_limit: 50000 });
+  const shownLargeGlob = call(readState, 19, 'mcp_output_show', { output_ref: largeGlob.result.structuredContent.output_ref, limit: 50000 });
   assert.equal(shownLargeGlob.result.content[0].text, shownLargeGlob.result.structuredContent.output_text);
   const shownGlobPayload = JSON.parse(shownLargeGlob.result.structuredContent.output_text);
   assert.equal(shownGlobPayload.schema, 'local.filesystem.glob.v1');
@@ -238,7 +254,8 @@ trust_level = "untrusted"
   const grepCounts = call(readState, 22, 'fs_grep_search', { path: join(trusted, 'grep-one.txt'), pattern: 'needle', output_mode: 'count_matches', limit: 10 });
   assert.equal(grepCounts.result.structuredContent.output_mode, 'count_matches');
   assert.equal(grepCounts.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt') && Number(match.count) === 1), true);
-  assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt.*1/.test(match.replace(/\u001f/g, ':').replace(/\\/g, '/'))), true);
+  assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt: 1/.test(match.replace(/\\/g, '/'))), true);
+  assert.equal(grepCounts.result.structuredContent.matches.some((match) => match.includes('\u001f')), false);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
@@ -314,13 +331,21 @@ trust_level = "untrusted"
   assert.equal(staleRangeResponse.error.data.code, 'fs_replace_range_expected_sha256_mismatch');
 
   writeFileSync(join(trusted, 'ambiguous.txt'), 'same\nsame\n', 'utf8');
+  const staleStrReplace = call(writeState, 313, 'fs_str_replace_file', { path: join(trusted, 'ambiguous.txt'), old: 'same', new: 'different', expected_sha256: 'bad' });
+  assert.equal(staleStrReplace.error.data.code, 'fs_str_replace_file_expected_sha256_mismatch');
   const ambiguousReplace = call(writeState, 312, 'fs_str_replace_file', { path: join(trusted, 'ambiguous.txt'), old: 'same', new: 'different' });
   assert.equal(ambiguousReplace.error.data.code, 'str_replace_ambiguous');
   assert.equal(ambiguousReplace.error.data.details.occurrences, 2);
   assert.equal(ambiguousReplace.error.data.details.matches[0].line, 1);
 
   writeFileSync(join(trusted, 'patch.txt'), 'one\ntwo\n', 'utf8');
-  const patchResponse = call(writeState, 32, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n` });
+  const patchDryRun = call(writeState, 321, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, dry_run: true, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
+  assert.equal(patchDryRun.result.structuredContent.status, 'checked');
+  assert.equal(patchDryRun.result.structuredContent.dry_run, true);
+  assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\ntwo\n');
+  const stalePatchGuard = call(writeState, 322, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, expected_sha256: { 'patch.txt': 'bad' } });
+  assert.equal(stalePatchGuard.error.data.code, 'fs_apply_patch_expected_sha256_mismatch');
+  const patchResponse = call(writeState, 32, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
   assert.equal(patchResponse.result.structuredContent.schema, 'local.filesystem.apply_patch.v1');
   assert.equal(patchResponse.result.structuredContent.status, 'patched');
   assert.equal(patchResponse.result.structuredContent.changed_files[0].relative_path, 'patch.txt');
@@ -403,7 +428,16 @@ trust_level = "untrusted"
   assert.equal(readFileSync(join(trusted, 'patch-a.txt'), 'utf8'), 'one\ntwo\n');
   assert.equal(readFileSync(join(trusted, 'patch-b.txt'), 'utf8'), 'red\nblue\n');
 
-  const moveResponse = call(writeState, 4, 'fs_move_path', { from: join(trusted, 'b.txt'), to: join(trusted, 'renamed.txt') });
+  const staleMoveGuard = call(writeState, 401, 'fs_move_path', { from: join(trusted, 'b.txt'), to: join(trusted, 'renamed.txt'), expected_from_sha256: 'bad' });
+  assert.equal(staleMoveGuard.error.data.code, 'fs_move_path_expected_metadata_mismatch');
+  const moveSourceStat = statSync(join(trusted, 'b.txt'));
+  const moveResponse = call(writeState, 4, 'fs_move_path', {
+    from: join(trusted, 'b.txt'),
+    to: join(trusted, 'renamed.txt'),
+    expected_from_mtime: moveSourceStat.mtime.toISOString(),
+    expected_from_size: moveSourceStat.size,
+    expected_from_sha256: sha256('range-edited'),
+  });
   assert.equal(moveResponse.result.structuredContent.schema, 'local.filesystem.move_path.v1');
   assert.equal(moveResponse.result.structuredContent.status, 'moved');
   assert.equal(moveResponse.result.structuredContent.to.relative_path, 'renamed.txt');
@@ -418,7 +452,14 @@ trust_level = "untrusted"
   assert.match(overwriteBlocked.error.message, /move_destination_exists/);
   writeFileSync(join(trusted, 'overwrite-source.txt'), 'source', 'utf8');
   writeFileSync(join(trusted, 'overwrite-dest.txt'), 'dest', 'utf8');
-  const overwriteMove = call(writeState, 6, 'fs_move_path', { from: join(trusted, 'overwrite-source.txt'), to: join(trusted, 'overwrite-dest.txt'), overwrite: true });
+  const overwriteDestStat = statSync(join(trusted, 'overwrite-dest.txt'));
+  const overwriteMove = call(writeState, 6, 'fs_move_path', {
+    from: join(trusted, 'overwrite-source.txt'),
+    to: join(trusted, 'overwrite-dest.txt'),
+    overwrite: true,
+    expected_to_mtime: overwriteDestStat.mtime.toISOString(),
+    expected_to_size: overwriteDestStat.size,
+  });
   assert.equal(overwriteMove.result.structuredContent.overwrite, true);
   assert.equal(readFileSync(join(trusted, 'overwrite-dest.txt'), 'utf8'), 'source');
 
@@ -452,7 +493,19 @@ trust_level = "untrusted"
   assert.equal(outsideCreateDirectory.error.data.code, 'path_outside_allowed_roots');
   assert.equal(outsideCreateDirectory.error.data.details.operation, 'fs_create_directory');
 
-  const renameDirectoryResponse = call(writeState, 44, 'fs_rename_directory', { from: join(trusted, 'folders', 'created'), to: join(trusted, 'folders', 'renamed') });
+  const missingParentCreateDirectory = call(writeState, 431, 'fs_create_directory', { path: join(trusted, 'missing-parent', 'child') });
+  assert.equal(missingParentCreateDirectory.error.data.code, 'create_directory_parent_not_found');
+  assert.equal(missingParentCreateDirectory.error.data.details.parent.relative_path, 'missing-parent');
+
+  const renameSourceStat = statSync(join(trusted, 'folders', 'created'));
+  const staleRenameGuard = call(writeState, 432, 'fs_rename_directory', { from: join(trusted, 'folders', 'created'), to: join(trusted, 'folders', 'renamed'), expected_from_size: renameSourceStat.size + 1 });
+  assert.equal(staleRenameGuard.error.data.code, 'fs_rename_directory_expected_metadata_mismatch');
+  const renameDirectoryResponse = call(writeState, 44, 'fs_rename_directory', {
+    from: join(trusted, 'folders', 'created'),
+    to: join(trusted, 'folders', 'renamed'),
+    expected_from_mtime: renameSourceStat.mtime.toISOString(),
+    expected_from_size: renameSourceStat.size,
+  });
   assert.equal(renameDirectoryResponse.result.structuredContent.schema, 'local.filesystem.rename_directory.v1');
   assert.equal(renameDirectoryResponse.result.structuredContent.status, 'moved');
   assert.equal(renameDirectoryResponse.result.structuredContent.to.relative_path, 'folders/renamed');
@@ -472,7 +525,15 @@ trust_level = "untrusted"
   assert.match(deleteNonEmptyDirectory.error.message, /delete_directory_not_empty/);
   assert.equal(existsSync(join(trusted, 'folders', 'renamed')), true);
 
-  const deleteDirectoryResponse = call(writeState, 48, 'fs_delete_directory', { path: join(trusted, 'folders', 'renamed'), recursive: true });
+  const deleteStat = statSync(join(trusted, 'folders', 'renamed'));
+  const staleDeleteGuard = call(writeState, 471, 'fs_delete_directory', { path: join(trusted, 'folders', 'renamed'), recursive: true, expected_size: deleteStat.size + 1 });
+  assert.equal(staleDeleteGuard.error.data.code, 'fs_delete_directory_expected_metadata_mismatch');
+  const deleteDirectoryResponse = call(writeState, 48, 'fs_delete_directory', {
+    path: join(trusted, 'folders', 'renamed'),
+    recursive: true,
+    expected_mtime: deleteStat.mtime.toISOString(),
+    expected_size: deleteStat.size,
+  });
   assert.equal(deleteDirectoryResponse.result.structuredContent.schema, 'local.filesystem.delete_directory.v1');
   assert.equal(deleteDirectoryResponse.result.structuredContent.status, 'deleted');
   assert.equal(deleteDirectoryResponse.result.structuredContent.relative_path, 'folders/renamed');

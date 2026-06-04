@@ -36,7 +36,11 @@ assert.doesNotThrow(() => enforceInlinePayloadLimit({
 const outputShowTool = listOutputTools().find((tool) => tool.name === 'mcp_output_show');
 assert.ok(outputShowTool);
 const outputShowSchema = outputShowTool.inputSchema as Record<string, unknown>;
-assert.deepEqual(outputShowSchema.required, ['ref']);
+assert.deepEqual(outputShowSchema.required, []);
+const outputShowProperties = outputShowSchema.properties as Record<string, unknown>;
+assert.equal(Boolean(outputShowProperties.output_ref), true);
+assert.equal(Boolean(outputShowProperties.limit), true);
+assert.equal(Boolean(outputShowProperties.offset), true);
 assert.equal(outputShowSchema.anyOf, undefined);
 assert.equal(outputShowSchema.oneOf, undefined);
 assert.equal(outputShowSchema.allOf, undefined);
@@ -65,6 +69,13 @@ try {
 
   const shownByAlias = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref } });
   assert.deepEqual(JSON.parse(shownByAlias.output_text), longValue);
+
+  const paged = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref, offset: 10, limit: 25 } });
+  assert.equal(paged.offset, 10);
+  assert.equal(paged.limit, 25);
+  assert.equal(paged.output_text.length, 25);
+  assert.equal(paged.next_offset, 35);
+  assert.equal(paged.output_truncated, true);
 
   assert.throws(
     () => payloadShow({ siteRoot: tempRoot, args: { ref: envelope.output_ref } }),
