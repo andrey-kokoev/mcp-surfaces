@@ -104,6 +104,12 @@ assert.equal(allowedConfigRun.result?.structuredContent.status, 'completed');
 assert.equal(allowedConfigRun.result?.structuredContent.worker_session_id, 'thread-created');
 assert.equal(allowedConfigRun.result?.structuredContent.summary, 'worker ok');
 const completedRunDir = allowedConfigRun.result?.structuredContent.run_dir;
+const promptArtifactLink = allowedConfigRun.result?.content.find((item) => item.type === 'resource_link' && String(item.uri).startsWith('worker-artifact:') && item.name.endsWith('/worker_prompt.txt'));
+assert.ok(promptArtifactLink);
+const listedResources = await rpc({ jsonrpc: '2.0', id: 51, method: 'resources/list', params: {} }, state);
+assert.equal(listedResources.result?.resources.some((resource) => resource.uri === promptArtifactLink.uri), true);
+const promptResource = await rpc({ jsonrpc: '2.0', id: 52, method: 'resources/read', params: { uri: promptArtifactLink.uri } }, state);
+assert.match(promptResource.result?.contents[0].text, /Do not call any worker_\* MCP tools\./);
 for (const file of ['request.json', 'executor_request.json', 'resolved_worker_config.json', 'worker_prompt.txt', 'worker_invocation.json', 'events.jsonl', 'diagnostic.log', 'last_message.json', 'result.json', 'worker_output.schema.json']) {
   assert.equal(existsSync(join(completedRunDir, file)), true, file);
 }

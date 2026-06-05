@@ -6,7 +6,7 @@ import { renderToolResultText } from './result-rendering.js';
 import { materializeOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -266,19 +266,8 @@ function workerArtifactMimeType(name: string) {
 }
 
 function isPathInside(candidate: string, root: string): boolean {
-  const relativePath = resolve(candidate).slice(resolve(root).length);
-  return resolve(candidate) === resolve(root) || (!relativePath.startsWith('..') && !relativePath.includes('..\\'));
-}
-
-function legacyListWorkerResources(state: WorkerMcpState) {
-  const dir = resolve(state.policy.runRoot, 'outputs');
-  if (!existsSync(dir)) return { resources: [] };
-  return {
-    resources: readdirSync(dir).filter((name) => name.endsWith('.txt')).sort().map((name) => {
-      const outputRef = name.replace(/^worker_output_/, 'worker_output:').replace(/\.txt$/, '');
-      return { uri: workerOutputResourceUri(outputRef), name: outputRef, title: outputRef, description: 'Materialized worker output.', mimeType: 'text/plain' };
-    }),
-  };
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
 
 function workerOutputResourceUri(outputRef: string) {
