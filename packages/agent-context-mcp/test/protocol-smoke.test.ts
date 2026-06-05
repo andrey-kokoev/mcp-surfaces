@@ -73,6 +73,7 @@ try {
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('agent_context_start_session'), true);
   assert.equal(names.includes('agent_context_hydrate_current'), true);
+  assert.equal(names.includes('agent_context_startup_sequence'), true);
   assert.equal(names.includes('startup_sequence'), true);
 
   console.log('agent-context-mcp protocol smoke ok');

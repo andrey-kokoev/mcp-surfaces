@@ -151,6 +151,17 @@ const TOOLS = [
     },
   },
   {
+    name: 'agent_context_startup_sequence',
+    description: 'Canonical alias for agent_context_hydrate_current.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        checkpoint_startup: { type: 'boolean' },
+        output: { type: 'string' },
+      },
+    },
+  },
+  {
     name: 'agent_context_list_sessions',
     description: 'List Sonar-local agent start sessions.',
     inputSchema: {
@@ -306,6 +317,7 @@ function callTool(name, toolArgs) {
     case 'agent_context_rehydrate':
       return rehydrate(toolArgs);
     case 'agent_context_hydrate_current':
+    case 'agent_context_startup_sequence':
     case 'startup_sequence':
       return hydrateCurrent(toolArgs);
     case 'agent_context_list_sessions':
