@@ -103,6 +103,8 @@ assert.throws(() => createServerState({ config: badConfigPath, allowedRoot: root
 assert.throws(() => createServerState({ allowedRoot: root, maxOutputBytes: 'nope' }), hasCode('worker_invalid_config_value'));
 assert.throws(() => createServerState({ allowedRoot: root, ephemeral: 'treu' }), hasCode('worker_invalid_config_value'));
 assert.throws(() => parseArgs(['--allowed-root']), hasCode('worker_invalid_cli_args'));
+assert.throws(() => parseArgs(['--codex-command-arg']), hasCode('worker_invalid_cli_args'));
+assert.deepEqual(parseArgs(['--codex-command-arg', 'codex.js', '--codex-command-arg', 'arg2']).codexCommandArgs, ['codex.js', 'arg2']);
 
 const allowedConfigRun = await rpc({
   jsonrpc: '2.0',
@@ -132,6 +134,7 @@ const resolvedConfig = JSON.parse(readFileSync(join(completedRunDir, 'resolved_w
 assert.equal(resolvedConfig.runtime, 'codex');
 assert.equal(resolvedConfig.profile, 'default');
 assert.equal(resolvedConfig.command, process.execPath);
+assert.deepEqual(resolvedConfig.command_args, []);
 assert.equal(resolvedConfig.config.model, 'gpt-test');
 assert.equal(resolvedConfig.config.model_reasoning_effort, 'low');
 assert.deepEqual(resolvedConfig.environment_keys, ['PATH']);
@@ -145,6 +148,19 @@ const invocation = JSON.parse(readFileSync(join(completedRunDir, 'worker_invocat
 assert.equal(invocation.argv[0], 'exec');
 assert.equal(invocation.argv.includes('--json'), true);
 assert.equal(invocation.argv.at(-1), '-');
+
+const prefixedState = createServerState({ allowedRoot: root, runRoot: join(root, 'prefixed'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const prefixedRun = await rpc({
+  jsonrpc: '2.0',
+  id: 53,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('run with command args') },
+}, prefixedState);
+assert.equal(prefixedRun.result?.structuredContent.status, 'completed');
+const prefixedInvocation = JSON.parse(readFileSync(join(prefixedRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
+assert.equal(prefixedInvocation.command, process.execPath);
+assert.equal(prefixedInvocation.argv[0], fakeCodexScript);
+assert.equal(prefixedInvocation.argv[1], 'exec');
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Do not call any worker_\* MCP tools\./);
 assert.match(readFileSync(join(completedRunDir, 'events.jsonl'), 'utf8'), /thread-created/);
 assert.equal(readdirSync(runRoot).some((name) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);

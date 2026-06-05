@@ -25,6 +25,7 @@ export type WorkerPolicy = {
   runtimes: {
     codex: {
       command: string;
+      commandArgs: string[];
       defaultSandbox: SandboxMode;
       defaultReasoningEffort: string;
       ephemeral: boolean;
@@ -63,6 +64,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   if (allowedRoots.length === 0) throw diagnosticError('worker_cwd_outside_allowed_roots', 'worker_cwd_outside_allowed_roots', { reason: 'allowed_root_set_empty' });
 
   const codexCommand = stringValue(merged.codexCommand ?? codex.command ?? 'codex');
+  const codexCommandArgs = stringList(merged.codexCommandArg ?? merged.codexCommandArgs ?? codex.command_args);
   const codexDefaultSandbox = validateSandbox(merged.defaultSandbox ?? codex.default_sandbox ?? 'read-only');
   if (!allowedSandboxes.includes(codexDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: codexDefaultSandbox });
 
@@ -86,6 +88,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     runtimes: {
       codex: {
         command: codexCommand,
+        commandArgs: codexCommandArgs,
         defaultSandbox: codexDefaultSandbox,
         defaultReasoningEffort: stringValue(merged.defaultReasoningEffort ?? codex.default_reasoning_effort ?? 'medium'),
         ephemeral: booleanValue(merged.ephemeral ?? codex.ephemeral, true),
@@ -124,6 +127,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     runtimes: {
       codex: {
         command: policy.runtimes.codex.command,
+        command_args: policy.runtimes.codex.commandArgs,
         default_sandbox: policy.runtimes.codex.defaultSandbox,
         default_reasoning_effort: policy.runtimes.codex.defaultReasoningEffort,
         ephemeral: policy.runtimes.codex.ephemeral,

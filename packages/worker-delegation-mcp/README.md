@@ -56,6 +56,7 @@ Common flags:
 - `--run-root <path>`: directory for run records and output refs.
 - `--audit-log-dir <path>`: append worker delegation audit events.
 - `--codex-command <command>`: Codex executable, default `codex`.
+- `--codex-command-arg <arg>`: prepend a fixed argument to the Codex runtime invocation; repeatable. Useful for `node <codex.js>` on Windows.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable.
 - `--max-run-ms <ms>`, `--max-prompt-bytes <bytes>`, `--max-output-bytes <bytes>`: set limits.

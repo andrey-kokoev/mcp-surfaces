@@ -41,7 +41,7 @@ export function buildCodexArgv(options: {
 export function buildInvocation(resolvedWorkerConfig: ResolvedWorkerConfig, environment: Record<string, string>): Invocation {
   return {
     command: resolvedWorkerConfig.command,
-    argv: resolvedWorkerConfig.argv,
+    argv: [...resolvedWorkerConfig.command_args, ...resolvedWorkerConfig.argv],
     cwd: resolvedWorkerConfig.cwd,
     environment,
   };

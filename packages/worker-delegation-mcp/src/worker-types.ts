@@ -28,6 +28,7 @@ export type WorkerResolvedExecutionPolicy = {
   runtime: 'codex';
   profile: string;
   command: string;
+  command_args: string[];
   argv: string[];
   cwd: string;
   sandbox: SandboxMode;

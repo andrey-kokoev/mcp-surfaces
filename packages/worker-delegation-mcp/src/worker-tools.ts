@@ -53,6 +53,7 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
     runtime,
     profile,
     command: codexRuntime.command,
+    command_args: codexRuntime.commandArgs,
     argv,
     cwd,
     sandbox,
