@@ -64,14 +64,14 @@ async function callTool(params: Record<string, unknown>, state: WorkerMcpState) 
 
 function toolResult(value: unknown, state: WorkerMcpState, toolName: string) {
   const text = renderToolResultText(value);
-  if (asRecord(value).schema === 'narada.worker.output_show.v1') return { content: [{ type: 'text', text }], structuredContent: value };
+  if (asRecord(value).schema === 'narada.worker.output_show.v1') return { content: [assistantTextContent(text)], structuredContent: value };
   const structuredText = JSON.stringify(value, null, 2);
   if (Buffer.byteLength(text, 'utf8') <= state.policy.maxOutputBytes && Buffer.byteLength(structuredText, 'utf8') <= state.policy.maxOutputBytes) {
-    return { content: [{ type: 'text', text }], structuredContent: value };
+    return { content: [assistantTextContent(text)], structuredContent: value };
   }
   const locator = materializeOutput(state.policy, toolName, structuredText);
   return {
-    content: [{ type: 'text', text: renderToolResultText(locator) }],
+    content: [assistantTextContent(renderToolResultText(locator))],
     structuredContent: {
       result_materialized: true,
       output_ref: locator.output_ref,
@@ -79,6 +79,10 @@ function toolResult(value: unknown, state: WorkerMcpState, toolName: string) {
       full_output_byte_length: locator.full_output_byte_length,
     },
   };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 export function parseArgs(argv: string[]): Record<string, unknown> {

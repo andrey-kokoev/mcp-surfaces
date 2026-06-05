@@ -471,7 +471,7 @@ function cappedToolValue({ state, value, summary = {} }) {
   return {
     ...result,
     structuredContent,
-    content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
+    content: [assistantTextContent(JSON.stringify(structuredContent, null, 2))],
   };
 }
 
@@ -955,14 +955,18 @@ function toolResult(value, renderContext: Record<string, unknown> = {}) {
     const structuredContent = value.structuredContent ?? parseToolResultStructuredContent(value);
     return {
       ...value,
-      content: [{ type: 'text', text: renderFilesystemToolResultText(structuredContent, renderContext) }],
+      content: [assistantTextContent(renderFilesystemToolResultText(structuredContent, renderContext))],
       structuredContent,
     };
   }
   return {
-    content: [{ type: 'text', text: renderFilesystemToolResultText(value, renderContext) }],
+    content: [assistantTextContent(renderFilesystemToolResultText(value, renderContext))],
     structuredContent: value,
   };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function isToolResult(value) {

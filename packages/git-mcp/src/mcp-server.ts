@@ -91,12 +91,12 @@ async function callTool(params: Record<string, unknown>, state: GitMcpState) {
 function toolResult(value: unknown, state: GitMcpState, toolName: string) {
   const text = renderToolResultText(value);
   if (asRecord(value).schema === 'narada.mcp_output_show.v1') {
-    return { content: [{ type: 'text', text }], structuredContent: value };
+    return { content: [assistantTextContent(text)], structuredContent: value };
   }
   const structuredText = JSON.stringify(value, null, 2);
   const structuredTextLength = structuredText.length;
   if (utf8ByteLength(text) <= INLINE_RESULT_BYTE_LIMIT && utf8ByteLength(structuredText) <= INLINE_RESULT_BYTE_LIMIT) {
-    return { content: [{ type: 'text', text }], structuredContent: value };
+    return { content: [assistantTextContent(text)], structuredContent: value };
   }
   const refResult = buildOutputRefToolContent({
     siteRoot: state.outputRoot,
@@ -106,7 +106,7 @@ function toolResult(value: unknown, state: GitMcpState, toolName: string) {
   });
   const locator = requireOutputLocator(refResult);
   return {
-    content: [{ type: 'text', text: renderToolResultText({ ...locator, tool_name: toolName, result_materialized: true }) }],
+    content: [assistantTextContent(renderToolResultText({ ...locator, tool_name: toolName, result_materialized: true }))],
     structuredContent: {
       ...boundedStructuredContent(value),
       result_materialized: true,
@@ -115,6 +115,10 @@ function toolResult(value: unknown, state: GitMcpState, toolName: string) {
       full_output_char_length: locator.full_output_char_length ?? structuredTextLength,
     },
   };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function utf8ByteLength(value: string): number {

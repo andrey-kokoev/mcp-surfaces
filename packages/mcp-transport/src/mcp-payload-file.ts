@@ -257,15 +257,15 @@ export function buildOutputRefToolContent({
   const outputCreatedBy = typeof createdBy === 'string' ? createdBy : null;
   const valueRecord = isPlainObject(value) ? value as Record<string, unknown> : {};
   if (isOutputLocator(value)) {
-    return { content: [{ type: 'text', text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}) };
+    return { content: [assistantTextContent(JSON.stringify(value))], ...(isError ? { isError: true } : {}) };
   }
   if (isOutputShowResult(value)) {
-    return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) };
+    return { content: [assistantTextContent(JSON.stringify(value, null, 2))], ...(isError ? { isError: true } : {}) };
   }
 
   const fullText = JSON.stringify(value, null, 2);
   if (fullText.length <= inlineLimit) {
-    return { content: [{ type: 'text', text: fullText }], ...(isError ? { isError: true } : {}) };
+    return { content: [assistantTextContent(fullText)], ...(isError ? { isError: true } : {}) };
   }
 
   const stored = outputCreate({
@@ -290,7 +290,11 @@ export function buildOutputRefToolContent({
     inline_limit: inlineLimit,
     full_output_char_length: stored.full_output_char_length,
   };
-  return { content: [{ type: 'text', text: fitInlineJson(envelope, inlineLimit) }], ...(isError ? { isError: true } : {}) };
+  return { content: [assistantTextContent(fitInlineJson(envelope, inlineLimit))], ...(isError ? { isError: true } : {}) };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {

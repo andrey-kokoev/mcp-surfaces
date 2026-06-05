@@ -341,7 +341,7 @@ function toolResult(payload, state) {
   const outputRef = truncated ? createStructuredCommandOutput(text, state, 'rendered') : null;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {
-    content: [{ type: 'text', text: rendered }],
+    content: [assistantTextContent(rendered)],
     structuredContent: buildStructuredContent(payload, {
       truncated,
       outputRef,
@@ -350,6 +350,10 @@ function toolResult(payload, state) {
       state,
     }),
   };
+}
+
+function assistantTextContent(text) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function buildStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {

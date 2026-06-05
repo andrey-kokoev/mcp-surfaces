@@ -157,7 +157,11 @@ function callTool(params: InboxRecord, state: InboxServerState) {
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
-  return { structuredContent: result };
+  return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function inboxSubmit(args: InboxRecord, state: InboxServerState): InboxRecord {

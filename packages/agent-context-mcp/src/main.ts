@@ -284,13 +284,17 @@ function handleMessage(message) {
       const name = message.params?.name;
       const toolArgs = message.params?.arguments ?? {};
       const result = callTool(name, toolArgs);
-      respond(id, { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] });
+      respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
       return;
     }
     respondError(id, new Error(`unsupported_method: ${message.method}`));
   } catch (error) {
     respondError(id, error);
   }
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function callTool(name, toolArgs) {
