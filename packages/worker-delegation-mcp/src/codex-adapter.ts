@@ -55,8 +55,12 @@ export async function runCodexInvocation(options: {
   lastMessagePath: string;
   maxRunMs: number;
   abortSignal?: AbortSignal;
-}): Promise<{ exit_code: number | null; signal: string | null; cancelled: boolean; worker_session_id: string | null; error: string | null; event_error: string | null }> {
+}): Promise<{ exit_code: number | null; signal: string | null; cancelled: boolean; worker_session_id: string | null; error: string | null; event_error: string | null; runtime_error: string | null }> {
   return new Promise((resolvePromise) => {
+    if (options.abortSignal?.aborted) {
+      resolvePromise({ exit_code: null, signal: null, cancelled: true, worker_session_id: null, error: null, event_error: null, runtime_error: null });
+      return;
+    }
     const child = spawn(options.invocation.command, options.invocation.argv, {
       cwd: options.invocation.cwd,
       env: options.invocation.environment,
@@ -71,6 +75,7 @@ export async function runCodexInvocation(options: {
     let settled = false;
     let cancelled = false;
     let eventError: string | null = null;
+    let runtimeError: string | null = null;
 
     const timer = setTimeout(() => {
       cancelled = true;
@@ -98,6 +103,7 @@ export async function runCodexInvocation(options: {
         try {
           const parsed = JSON.parse(line);
           workerSessionId ||= findSessionId(parsed);
+          runtimeError ||= findRuntimeError(parsed);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           eventError ||= `invalid json event: ${message}`;
@@ -112,7 +118,7 @@ export async function runCodexInvocation(options: {
       events.end();
       diagnostics.end();
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
-      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: workerSessionId, error: error.message, event_error: eventError });
+      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: workerSessionId, error: error.message, event_error: eventError, runtime_error: runtimeError });
     });
     child.on('close', (code, signal) => {
       if (settled) return;
@@ -122,7 +128,7 @@ export async function runCodexInvocation(options: {
       diagnostics.end();
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
       if (stdoutBuffer.trim()) eventError ||= 'unterminated json event';
-      resolvePromise({ exit_code: code, signal, cancelled, worker_session_id: workerSessionId, error: null, event_error: eventError });
+      resolvePromise({ exit_code: code, signal, cancelled, worker_session_id: workerSessionId, error: null, event_error: eventError, runtime_error: runtimeError });
     });
     if (child.stdin) child.stdin.end(options.prompt, 'utf8');
   });
@@ -157,13 +163,41 @@ export function parseResult(runRecord: { lastMessagePath: string }): WorkerOutpu
   return parseLastMessage(runRecord.lastMessagePath);
 }
 
-export function resultStatus(codexResult: { exit_code: number | null; cancelled: boolean; error: string | null; event_error?: string | null }, parsed: WorkerOutputParseResult): { status: 'completed' | 'failed' | 'cancelled'; error: string | null } {
+export function resultStatus(codexResult: { exit_code: number | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null }, parsed: WorkerOutputParseResult): { status: 'completed' | 'failed' | 'cancelled'; error: string | null } {
   if (codexResult.cancelled) return { status: 'cancelled', error: 'cancelled' };
   if (codexResult.error) return { status: 'failed', error: codexResult.error };
   if (codexResult.event_error) return { status: 'failed', error: codexResult.event_error };
+  if (codexResult.runtime_error) return { status: 'failed', error: codexResult.runtime_error };
   if (codexResult.exit_code !== 0) return { status: 'failed', error: `worker runtime exited with code ${codexResult.exit_code}` };
   if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}` };
   return { status: 'completed', error: null };
+}
+
+function findRuntimeError(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (record.type === 'error') {
+    const direct = stringField(record, 'message') ?? nestedErrorMessage(record.error);
+    if (direct) return direct;
+  }
+  const nested = nestedErrorMessage(record.error);
+  if (nested) return nested;
+  for (const item of Object.values(record)) {
+    const found = findRuntimeError(item);
+    if (found) return found;
+  }
+  return null;
+}
+
+function nestedErrorMessage(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return stringField(record, 'message') ?? stringField(record, 'error') ?? null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | null {
+  return typeof record[key] === 'string' && record[key].trim() ? record[key].trim() : null;
 }
 
 function tomlValue(value: string | number | boolean): string {

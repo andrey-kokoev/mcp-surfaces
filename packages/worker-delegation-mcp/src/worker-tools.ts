@@ -2,11 +2,11 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig } from './codex-adapter.js';
 import { defaultSandboxForProfile, environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
-import { audit, createRunRecord, writeJson, writeText, writeWorkerOutputSchema } from './run-record.js';
+import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
 import type { PrimitiveConfigValue } from './policy.js';
-import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerExecutorRequest, WorkerIntent, WorkerRunToolInput } from './worker-types.js';
+import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerEditToolInput, WorkerExecutorRequest, WorkerIntent, WorkerRunToolInput } from './worker-types.js';
 
 export type WorkerRequestContext = {
   abortSignal?: AbortSignal;
@@ -14,16 +14,19 @@ export type WorkerRequestContext = {
 
 export async function callWorkerTool(name: string, args: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext = {}): Promise<unknown> {
   if (name === 'worker_policy_inspect') return publicWorkerPolicy(state.policy);
-  if (name === 'worker_run') return workerRun(args, state, null, context);
-  if (name === 'worker_resume') return workerRun(args, state, requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported'), context);
+  if (name === 'worker_run') return workerRun(args, state, null, context, 'worker_run');
+  if (name === 'worker_edit') return workerRun(workerEditRunArgs(args, state), state, null, context, 'worker_edit');
+  if (name === 'worker_resume') return workerRun(args, state, requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported'), context, 'worker_resume');
   if (name === 'worker_output_show') return showOutput(state.policy, args);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
 }
 
-export async function workerRun(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext = {}): Promise<Record<string, unknown>> {
+export async function workerRun(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext = {}, auditTool = resumeSessionId ? 'worker_resume' : 'worker_run'): Promise<Record<string, unknown>> {
   const startedAt = new Date();
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
   const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
+  const inheritedSession = resumeSessionId ? readWorkerSessionRecord(state.policy, resumeSessionId) : null;
+  if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
   const profile = resolveProfile(request.constraints.profile, state.policy);
   const overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
@@ -31,6 +34,8 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForProfile(profile), state.policy);
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd });
+  const resumable = resumeSessionId !== null || request.constraints.resumable === true;
+  const ephemeral = !resumable;
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
 
@@ -44,7 +49,7 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
     schemaPath: runRecord.schemaPath,
     lastMessagePath: runRecord.lastMessagePath,
     workerSessionId: resumeSessionId ?? undefined,
-    ephemeral: codexRuntime.ephemeral,
+    ephemeral,
     skipGitRepoCheck,
     config: resolvedConfigInput.config,
   });
@@ -61,7 +66,8 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
     reasoning_effort: resolvedConfigInput.reasoning_effort,
     config: resolvedConfigInput.config,
     skip_git_repo_check: skipGitRepoCheck,
-    ephemeral: codexRuntime.ephemeral,
+    resumable,
+    ephemeral,
     json_events: codexRuntime.jsonEvents,
     prompt_byte_length: promptBytes,
     max_output_bytes: state.policy.maxOutputBytes,
@@ -130,10 +136,82 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
     ...(parsed.ok === false ? { worker_output_error: { reason: parsed.reason, message: parsed.message } } : {}),
   };
   writeJson(runRecord.resultPath, payload);
-  audit(state.policy, { tool: resumeSessionId ? 'worker_resume' : 'worker_run', payload });
+  const workerSessionId = codexResult.worker_session_id ?? resumeSessionId;
+  if (workerSessionId && outcome.status === 'completed' && resumable) {
+    writeWorkerSessionRecord(state.policy, {
+      schema: 'narada.worker.session.v1',
+      worker_session_id: workerSessionId,
+      origin_tool: inheritedSession?.origin_tool ?? auditTool,
+      created_run_id: inheritedSession?.created_run_id ?? runRecord.runId,
+      updated_run_id: runRecord.runId,
+      resolved_worker_config: resolvedWorkerConfig,
+      updated_at: finishedAt.toISOString(),
+    });
+  }
+  audit(state.policy, { tool: auditTool, payload });
   if (outcome.status === 'failed') throw diagnosticError('worker_runtime_failed', 'worker_runtime_failed', { error: outcome.error, run_id: runRecord.runId, run_dir: runRecord.runDir });
-  if (outcome.status === 'cancelled') throw diagnosticError('worker_runtime_timed_out', 'worker_runtime_timed_out', { run_id: runRecord.runId, run_dir: runRecord.runDir });
+  if (outcome.status === 'cancelled') throw diagnosticError('worker_runtime_cancelled', 'worker_runtime_cancelled', { run_id: runRecord.runId, run_dir: runRecord.runDir });
   return payload;
+}
+
+function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {
+  if (request.constraints.profile === undefined || request.constraints.profile === 'default') request.constraints.profile = inherited.profile;
+  const overrides = { ...(request.constraints.overrides ?? {}) };
+  const config = { ...(overrides.config ?? {}) };
+  if (overrides.runtime === undefined) overrides.runtime = inherited.runtime;
+  if (overrides.sandbox === undefined) overrides.sandbox = inherited.sandbox;
+  if (overrides.model === undefined && config.model === undefined && inherited.model) overrides.model = inherited.model;
+  if (overrides.reasoning_effort === undefined && config.model_reasoning_effort === undefined && inherited.reasoning_effort) {
+    overrides.reasoning_effort = inherited.reasoning_effort;
+  }
+  for (const [key, value] of Object.entries(inherited.config)) {
+    if (config[key] === undefined && key !== 'model' && key !== 'model_reasoning_effort') config[key] = value;
+  }
+  if (Object.keys(config).length > 0) overrides.config = config;
+  if (Object.keys(overrides).length > 0) request.constraints.overrides = overrides;
+}
+
+function workerEditRunArgs(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  const editInput = normalizeWorkerEditToolInput(args);
+  const overrides = applyEditDefaults(editInput.overrides ?? {}, state);
+  return {
+    intent: { instruction: editInput.instruction },
+    constraints: {
+      cwd: editInput.cwd,
+      profile: 'delegating-agent-write',
+      ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+    },
+  };
+}
+
+function applyEditDefaults(overrides: WorkerConstraintOverrides, state: WorkerMcpState): WorkerConstraintOverrides {
+  const config = { ...(overrides.config ?? {}) };
+  const result: WorkerConstraintOverrides = { ...overrides, ...(Object.keys(config).length > 0 ? { config } : {}) };
+  if (state.policy.editDefaults.model && result.model === undefined && config.model === undefined) result.model = state.policy.editDefaults.model;
+  if (state.policy.editDefaults.reasoningEffort && result.reasoning_effort === undefined && config.model_reasoning_effort === undefined) {
+    result.reasoning_effort = state.policy.editDefaults.reasoningEffort;
+  }
+  return result;
+}
+
+function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEditToolInput {
+  const overridesInput = asRecord(args.overrides);
+  const editInput: WorkerEditToolInput = {
+    cwd: requiredNonEmptyString(args.cwd, 'worker_cwd_required'),
+    instruction: requiredNonEmptyString(args.instruction, 'worker_prompt_too_large'),
+  };
+  if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);
+  const overrides: NonNullable<WorkerEditToolInput['overrides']> = {};
+  copyString(overrides, 'runtime', overridesInput.runtime);
+  copyString(overrides, 'sandbox', overridesInput.sandbox);
+  copyString(overrides, 'model', overridesInput.model);
+  copyString(overrides, 'reasoning_effort', overridesInput.reasoning_effort);
+  const config = primitiveConfigRecord(overridesInput.config);
+  if (Object.keys(config).length > 0) overrides.config = config;
+  if (overridesInput.skip_git_repo_check !== undefined) overrides.skip_git_repo_check = Boolean(overridesInput.skip_git_repo_check);
+  if (Object.keys(overrides).length > 0) editInput.overrides = overrides;
+  return editInput;
 }
 
 function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string }): string {
@@ -170,6 +248,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
     cwd: requiredNonEmptyString(constraintsInput.cwd ?? args.cwd, 'worker_cwd_required'),
     profile: String(constraintsInput.profile ?? args.profile ?? 'default').trim() || 'default',
   };
+  if (constraintsInput.resumable !== undefined || args.resumable !== undefined) constraints.resumable = Boolean(constraintsInput.resumable ?? args.resumable);
   const overrides: NonNullable<WorkerConstraintRequest['overrides']> = {};
   copyString(overrides, 'runtime', overridesInput.runtime ?? constraintsInput.runtime ?? args.runtime);
   copyString(overrides, 'sandbox', overridesInput.sandbox ?? constraintsInput.sandbox ?? args.sandbox);

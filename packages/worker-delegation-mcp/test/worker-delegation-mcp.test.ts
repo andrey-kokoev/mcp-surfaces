@@ -34,6 +34,7 @@ process.stdin.on('end', () => {
 });
 `, 'utf8');
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
+const rpcWithContext = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>, context: { abortSignal?: AbortSignal }) => Promise<RpcResponse>;
 const state = createServerState({
   allowedRoot: root,
   runRoot,
@@ -46,9 +47,30 @@ const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {
 assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_policy_inspect',
   'worker_run',
+  'worker_edit',
   'worker_resume',
   'worker_output_show',
 ]);
+for (const tool of tools.result?.tools ?? []) {
+  assert.equal(tool.outputSchema?.type, 'object', tool.name);
+  assert.equal(typeof tool.annotations?.title, 'string', tool.name);
+  assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', tool.name);
+}
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_output_show')?.outputSchema?.properties?.schema?.const, 'narada.worker.output_show.v1');
+
+const initialize = await rpc({ jsonrpc: '2.0', id: 11, method: 'initialize', params: {} }, state);
+assert.deepEqual(Object.keys(initialize.result?.capabilities ?? {}).sort(), ['completions', 'logging', 'prompts', 'resources', 'tools']);
+const prompts = await rpc({ jsonrpc: '2.0', id: 12, method: 'prompts/list', params: {} }, state);
+assert.equal(prompts.result?.prompts[0].name, 'worker_delegation_task');
+const prompt = await rpc({ jsonrpc: '2.0', id: 13, method: 'prompts/get', params: { name: 'worker_delegation_task' } }, state);
+assert.match(prompt.result?.messages[0].content.text, /Delegate bounded work/);
+const logging = await rpc({ jsonrpc: '2.0', id: 14, method: 'logging/setLevel', params: { level: 'debug' } }, state);
+assert.deepEqual(logging.result, {});
 
 const policy = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, state);
 assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1');
@@ -57,6 +79,8 @@ assert.equal(policy.result?.structuredContent.default_profile, 'default');
 assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex']);
 assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
+assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
+assert.deepEqual(policy.result?.structuredContent.edit_defaults, { model: 'gpt-5.4-mini', reasoning_effort: 'low' });
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
 assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
@@ -105,6 +129,7 @@ assert.throws(() => createServerState({ allowedRoot: root, ephemeral: 'treu' }),
 assert.throws(() => parseArgs(['--allowed-root']), hasCode('worker_invalid_cli_args'));
 assert.throws(() => parseArgs(['--codex-command-arg']), hasCode('worker_invalid_cli_args'));
 assert.deepEqual(parseArgs(['--codex-command-arg', 'codex.js', '--codex-command-arg', 'arg2']).codexCommandArgs, ['codex.js', 'arg2']);
+assert.equal(parseArgs(['--edit-default-reasoning-effort', 'minimal']).editDefaultReasoningEffort, 'minimal');
 
 const allowedConfigRun = await rpc({
   jsonrpc: '2.0',
@@ -129,12 +154,15 @@ const request = JSON.parse(readFileSync(join(completedRunDir, 'request.json'), '
 assert.equal(request.intent.instruction, 'run with allowed config');
 assert.equal(request.constraints.cwd, root);
 assert.equal(request.constraints.profile, 'default');
+assert.equal(request.constraints.resumable, undefined);
 assert.equal(request.constraints.overrides.model, 'gpt-test');
 const resolvedConfig = JSON.parse(readFileSync(join(completedRunDir, 'resolved_worker_config.json'), 'utf8'));
 assert.equal(resolvedConfig.runtime, 'codex');
 assert.equal(resolvedConfig.profile, 'default');
 assert.equal(resolvedConfig.command, process.execPath);
 assert.deepEqual(resolvedConfig.command_args, []);
+assert.equal(resolvedConfig.resumable, false);
+assert.equal(resolvedConfig.ephemeral, true);
 assert.equal(resolvedConfig.config.model, 'gpt-test');
 assert.equal(resolvedConfig.config.model_reasoning_effort, 'low');
 assert.deepEqual(resolvedConfig.environment_keys, ['PATH']);
@@ -146,6 +174,7 @@ assert.equal(executorRequest.resolved_execution_policy.cwd, root);
 assert.equal(executorRequest.resolved_execution_policy.profile, 'default');
 const invocation = JSON.parse(readFileSync(join(completedRunDir, 'worker_invocation.json'), 'utf8'));
 assert.equal(invocation.argv[0], 'exec');
+assert.equal(invocation.argv.includes('--ephemeral'), true);
 assert.equal(invocation.argv.includes('--json'), true);
 assert.equal(invocation.argv.at(-1), '-');
 
@@ -183,6 +212,89 @@ const commandProfile = await rpc({
   params: { name: 'worker_run', arguments: runArgs('command profile', {}, 'delegating-agent-command') },
 }, state);
 assert.equal(commandProfile.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
+
+const editRun = await rpc({
+  jsonrpc: '2.0',
+  id: 561,
+  method: 'tools/call',
+  params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'edit profile shortcut', overrides: { model: 'gpt-edit-test' } } },
+}, state);
+assert.equal(editRun.result?.structuredContent.status, 'completed');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.profile, 'delegating-agent-write');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-test');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+const editRequest = JSON.parse(readFileSync(join(editRun.result?.structuredContent.run_dir, 'request.json'), 'utf8'));
+assert.equal(editRequest.intent.instruction, 'edit profile shortcut');
+assert.equal(editRequest.constraints.profile, 'delegating-agent-write');
+assert.equal(editRequest.constraints.resumable, undefined);
+assert.equal(editRequest.constraints.overrides.model, 'gpt-edit-test');
+assert.equal(editRequest.constraints.overrides.reasoning_effort, 'low');
+
+const defaultEditRun = await rpc({
+  jsonrpc: '2.0',
+  id: 5611,
+  method: 'tools/call',
+  params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'default edit profile shortcut' } },
+}, state);
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+
+const customEditDefaultsState = createServerState({ allowedRoot: root, runRoot: join(root, 'edit-defaults'), codexCommand: process.execPath, editDefaultModel: 'gpt-edit-default', editDefaultReasoningEffort: 'minimal' });
+const customEditDefaults = await rpc({
+  jsonrpc: '2.0',
+  id: 562,
+  method: 'tools/call',
+  params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'custom edit defaults' } },
+}, customEditDefaultsState);
+assert.equal(customEditDefaults.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-default');
+assert.equal(customEditDefaults.result?.structuredContent.resolved_worker_config.reasoning_effort, 'minimal');
+
+const callerEditOverride = await rpc({
+  jsonrpc: '2.0',
+  id: 563,
+  method: 'tools/call',
+  params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'caller edit override', overrides: { reasoning_effort: 'high' } } },
+}, customEditDefaultsState);
+assert.equal(callerEditOverride.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-default');
+assert.equal(callerEditOverride.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+
+const resumableEdit = await rpc({
+  jsonrpc: '2.0',
+  id: 564,
+  method: 'tools/call',
+  params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'resumable edit inheritance', resumable: true } },
+}, state);
+assert.equal(resumableEdit.result?.structuredContent.worker_session_id, 'thread-created');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.ephemeral, false);
+const editSessionRecord = JSON.parse(readFileSync(join(runRoot, 'sessions', `${encodeURIComponent('thread-created')}.json`), 'utf8'));
+assert.equal(editSessionRecord.origin_tool, 'worker_edit');
+assert.equal(editSessionRecord.resolved_worker_config.model, 'gpt-5.4-mini');
+const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath }, { PATH: process.env.PATH });
+const resumedEdit = await rpc({
+  jsonrpc: '2.0',
+  id: 565,
+  method: 'tools/call',
+  params: { name: 'worker_resume', arguments: { worker_session_id: 'thread-created', constraints: { cwd: root } } },
+}, restartedState);
+assert.equal(resumedEdit.result?.structuredContent.status, 'completed');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.profile, 'delegating-agent-write');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.argv.includes('--ephemeral'), false);
+
+const resumableRun = await rpc({
+  jsonrpc: '2.0',
+  id: 57,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'resumable run' }, constraints: { cwd: root, profile: 'delegating-agent-read', resumable: true } } },
+}, state);
+assert.equal(resumableRun.result?.structuredContent.resolved_worker_config.resumable, true);
+assert.equal(resumableRun.result?.structuredContent.resolved_worker_config.ephemeral, false);
+const resumableInvocation = JSON.parse(readFileSync(join(resumableRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
+assert.equal(resumableInvocation.argv.includes('--ephemeral'), false);
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Do not call any worker_\* MCP tools\./);
 assert.match(readFileSync(join(completedRunDir, 'events.jsonl'), 'utf8'), /thread-created/);
 assert.equal(readdirSync(runRoot).some((name) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);
@@ -212,6 +324,8 @@ const resume = await rpc({
 assert.equal(resume.result?.structuredContent.status, 'completed');
 assert.equal(resume.result?.structuredContent.worker_session_id, 'thread-resumed');
 const resumeConfig = JSON.parse(readFileSync(join(resume.result?.structuredContent.run_dir, 'resolved_worker_config.json'), 'utf8'));
+assert.equal(resumeConfig.resumable, true);
+assert.equal(resumeConfig.ephemeral, false);
 assert.equal(resumeConfig.argv.includes('resume'), true);
 assert.equal(resumeConfig.argv.includes('thread-existing'), true);
 
@@ -256,11 +370,36 @@ const badEvent = await rpc({
 assert.equal(badEvent.error?.data.code, 'worker_runtime_failed');
 assert.match(badEvent.error?.data.details.error, /invalid json event/);
 
+const runtimeErrorRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-runtime-error-'));
+writeFileSync(join(runtimeErrorRoot, 'exec'), `
+process.stdin.resume();
+process.stdin.on('end', () => {
+  process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'thread-runtime-error' }) + '\\n');
+  process.stdout.write(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'model not available for account' } }) + '\\n');
+  process.exit(1);
+});
+`, 'utf8');
+const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), codexCommand: process.execPath });
+const runtimeError = await rpc({
+  jsonrpc: '2.0',
+  id: 63,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'runtime error' }, constraints: { cwd: runtimeErrorRoot } } },
+}, runtimeErrorState);
+assert.equal(runtimeError.error?.data.code, 'worker_runtime_failed');
+assert.equal(runtimeError.error?.data.details.error, 'model not available for account');
+
 const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 120 });
 const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
 assert.equal(materialized.result?.structuredContent.result_materialized, true);
 assert.equal(materialized.result?.structuredContent.reader_tool, 'worker_output_show');
 assert.match(materialized.result?.content[0].text, /worker_policy_inspect: materialized/);
+const materializedResourceLink = materialized.result?.content.find((item) => item.type === 'resource_link' && String(item.uri).startsWith('worker-output:'));
+assert.ok(materializedResourceLink);
+const materializedResources = await rpc({ jsonrpc: '2.0', id: 71, method: 'resources/list', params: {} }, materializedState);
+assert.equal(materializedResources.result?.resources.some((resource) => resource.uri === materializedResourceLink.uri), true);
+const materializedResource = await rpc({ jsonrpc: '2.0', id: 72, method: 'resources/read', params: { uri: materializedResourceLink.uri } }, materializedState);
+assert.match(materializedResource.result?.contents[0].text, /narada.worker.policy.v1/);
 const shown = await rpc({
   jsonrpc: '2.0',
   id: 8,
@@ -277,6 +416,16 @@ const badSlice = await rpc({
   params: { name: 'worker_output_show', arguments: { output_ref: materialized.result?.structuredContent.output_ref, offset: 'nope', limit: 20 } },
 }, materializedState);
 assert.equal(badSlice.error?.data.code, 'worker_invalid_config_value');
+
+const cancelled = new AbortController();
+cancelled.abort();
+const cancelledRun = await rpcWithContext({
+  jsonrpc: '2.0',
+  id: 82,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('cancel before runtime starts') },
+}, state, { abortSignal: cancelled.signal });
+assert.equal(cancelledRun.error?.data.code, 'worker_runtime_cancelled');
 
 const unknown = await rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'worker_autopilot', arguments: {} } }, state);
 assert.equal(unknown.error?.data.code, 'worker_unknown_tool');

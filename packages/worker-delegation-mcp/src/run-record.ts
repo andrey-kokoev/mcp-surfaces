@@ -1,7 +1,8 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { WorkerPolicy } from './policy.js';
+import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
 
 export type RunRecordPaths = {
   runId: string;
@@ -16,6 +17,16 @@ export type RunRecordPaths = {
   lastMessagePath: string;
   resultPath: string;
   schemaPath: string;
+};
+
+export type WorkerSessionRecord = {
+  schema: 'narada.worker.session.v1';
+  worker_session_id: string;
+  origin_tool: string;
+  created_run_id: string;
+  updated_run_id: string;
+  resolved_worker_config: WorkerResolvedExecutionPolicy;
+  updated_at: string;
 };
 
 export function createRunRecord(policy: WorkerPolicy): RunRecordPaths {
@@ -67,4 +78,34 @@ export function audit(policy: WorkerPolicy, payload: unknown): void {
   if (!policy.auditLogDir) return;
   mkdirSync(policy.auditLogDir, { recursive: true });
   appendFileSync(join(policy.auditLogDir, 'worker-delegation-mcp.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+export function readWorkerSessionRecord(policy: WorkerPolicy, workerSessionId: string): WorkerSessionRecord | null {
+  try {
+    const parsed = JSON.parse(readFileSync(workerSessionRecordPath(policy, workerSessionId), 'utf8')) as unknown;
+    return isWorkerSessionRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeWorkerSessionRecord(policy: WorkerPolicy, record: WorkerSessionRecord): void {
+  const dir = join(policy.runRoot, 'sessions');
+  mkdirSync(dir, { recursive: true });
+  writeJson(join(dir, `${encodeURIComponent(record.worker_session_id)}.json`), record);
+}
+
+function workerSessionRecordPath(policy: WorkerPolicy, workerSessionId: string): string {
+  return join(policy.runRoot, 'sessions', `${encodeURIComponent(workerSessionId)}.json`);
+}
+
+function isWorkerSessionRecord(value: unknown): value is WorkerSessionRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.schema === 'narada.worker.session.v1'
+    && typeof record.worker_session_id === 'string'
+    && typeof record.origin_tool === 'string'
+    && typeof record.created_run_id === 'string'
+    && typeof record.updated_run_id === 'string'
+    && Boolean(record.resolved_worker_config && typeof record.resolved_worker_config === 'object' && !Array.isArray(record.resolved_worker_config));
 }

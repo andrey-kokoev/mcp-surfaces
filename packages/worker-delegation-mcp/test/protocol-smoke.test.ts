@@ -29,7 +29,7 @@ const initialMessages = outputText.trim().split(/\r?\n/).filter(Boolean).map((li
 const rootsRequest = initialMessages.find((message) => message.method === 'roots/list');
 assert.ok(rootsRequest);
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: rootsRequest.id, result: { roots: [{ uri: pathToFileURL(root).href, name: 'worker-root' }] } })}\n`);
-child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { _meta: { progressToken: 'worker-progress' }, name: 'worker_policy_inspect', arguments: {} } })}\n`);
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'completion/complete', params: { argument: { name: 'cwd' } } })}\n`);
 child.stdin.end();
 
@@ -41,6 +41,7 @@ assert.equal(initializeResponse.result.serverInfo.name, 'worker-delegation-mcp')
 const policyResponse = responses.find((message) => message.id === 2);
 assert.equal(policyResponse.result.structuredContent.schema, 'narada.worker.policy.v1');
 assert.match(policyResponse.result.content[0].text, /worker_policy: ok/);
+assert.equal(responses.some((message) => message.method === 'notifications/progress' && message.params?.progressToken === 'worker-progress'), true);
 const completionResponse = responses.find((message) => message.id === 3);
 assert.equal(completionResponse.result.completion.values.includes(root), true);
 

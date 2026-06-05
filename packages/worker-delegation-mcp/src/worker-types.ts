@@ -7,6 +7,7 @@ export type WorkerIntent = {
 export type WorkerConstraintRequest = {
   cwd: string;
   profile?: string;
+  resumable?: boolean;
   overrides?: WorkerConstraintOverrides;
 };
 
@@ -24,6 +25,13 @@ export type WorkerRunToolInput = {
   constraints: WorkerConstraintRequest;
 };
 
+export type WorkerEditToolInput = {
+  cwd: string;
+  instruction: string;
+  resumable?: boolean;
+  overrides?: WorkerConstraintOverrides;
+};
+
 export type WorkerResolvedExecutionPolicy = {
   runtime: 'codex';
   profile: WorkerProfile;
@@ -36,6 +44,7 @@ export type WorkerResolvedExecutionPolicy = {
   reasoning_effort: string | null;
   config: Record<string, PrimitiveConfigValue>;
   skip_git_repo_check: boolean;
+  resumable: boolean;
   ephemeral: boolean;
   json_events: boolean;
   prompt_byte_length: number;

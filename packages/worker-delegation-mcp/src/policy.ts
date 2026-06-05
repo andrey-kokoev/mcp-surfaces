@@ -23,6 +23,10 @@ export type WorkerPolicy = {
   maxPromptBytes: number;
   maxOutputBytes: number;
   maxRunMs: number;
+  editDefaults: {
+    model: string | null;
+    reasoningEffort: string | null;
+  };
   runtimes: {
     codex: {
       command: string;
@@ -47,6 +51,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const worker = asRecord(merged.worker);
   const roots = asRecord(worker.roots);
   const policy = asRecord(worker.policy);
+  const editDefaults = asRecord(worker.edit_defaults);
   const runtimes = asRecord(worker.runtimes);
   const codex = asRecord(runtimes.codex);
 
@@ -87,6 +92,10 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     maxPromptBytes: strictInteger(merged.maxPromptBytes ?? policy.max_prompt_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_PROMPT_BYTES, 'max_prompt_bytes'),
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
+    editDefaults: {
+      model: stringOrNull(merged.editDefaultModel ?? editDefaults.model ?? 'gpt-5.4-mini'),
+      reasoningEffort: stringOrNull(merged.editDefaultReasoningEffort ?? editDefaults.reasoning_effort ?? 'low'),
+    },
     runtimes: {
       codex: {
         command: codexCommand,
@@ -131,6 +140,10 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     max_prompt_bytes: policy.maxPromptBytes,
     max_output_bytes: policy.maxOutputBytes,
     max_run_ms: policy.maxRunMs,
+    edit_defaults: {
+      model: policy.editDefaults.model,
+      reasoning_effort: policy.editDefaults.reasoningEffort,
+    },
     runtimes: {
       codex: {
         command: policy.runtimes.codex.command,
