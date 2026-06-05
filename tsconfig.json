@@ -4,6 +4,7 @@
     { "path": "./packages/mcp-transport" },
     { "path": "./packages/local-filesystem-mcp" },
     { "path": "./packages/structured-command-mcp" },
+    { "path": "./packages/git-mcp" },
     { "path": "./packages/inbox-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },
     { "path": "./packages/sonar-site-ops-mcp" },

@@ -29,6 +29,14 @@ importers:
 
   packages/agent-context-mcp: {}
 
+  packages/git-mcp:
+    dependencies:
+      '@narada2/mcp-transport':
+        specifier: workspace:*
+        version: link:../mcp-transport
+
+  packages/inbox-mcp: {}
+
   packages/local-filesystem-mcp:
     dependencies:
       '@narada2/mcp-transport':

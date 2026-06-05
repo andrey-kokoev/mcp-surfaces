@@ -11,6 +11,7 @@
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
+    "test:git": "pnpm --filter @narada2/git-mcp test",
     "test:inbox": "pnpm --filter @narada2/inbox-mcp test",
     "test:task-lifecycle": "pnpm --filter @narada2/task-lifecycle-mcp test",
     "test:sonar-site-ops": "pnpm --filter @narada2/sonar-site-ops-mcp test",
