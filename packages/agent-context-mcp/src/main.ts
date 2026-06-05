@@ -140,17 +140,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'startup_sequence',
-    description: 'Alias for agent_context_hydrate_current.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        checkpoint_startup: { type: 'boolean' },
-        output: { type: 'string' },
-      },
-    },
-  },
-  {
     name: 'agent_context_startup_sequence',
     description: 'Canonical alias for agent_context_hydrate_current.',
     inputSchema: {
@@ -318,7 +307,6 @@ function callTool(name, toolArgs) {
       return rehydrate(toolArgs);
     case 'agent_context_hydrate_current':
     case 'agent_context_startup_sequence':
-    case 'startup_sequence':
       return hydrateCurrent(toolArgs);
     case 'agent_context_list_sessions':
       return listSessions(toolArgs);
