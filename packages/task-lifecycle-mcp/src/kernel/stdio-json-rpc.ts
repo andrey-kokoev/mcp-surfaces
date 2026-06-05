@@ -11,14 +11,18 @@ export async function runJsonRpcStdioServer({
     const drained = drainBufferedRequests(buffer, parseJsonRpcInput);
     buffer = drained.remaining;
     for (const request of drained.requests) {
+      writeProgress(stdout, request, 0, 'started', drained.framed);
       const response = await handleRequest(request);
+      writeProgress(stdout, request, 1, 'completed', drained.framed);
       if (response) writeJsonResponse(stdout, response, drained.framed);
     }
   }
   const trailing = buffer.trim();
   if (trailing.length > 0) {
     for (const request of parseJsonRpcInput(trailing)) {
+      writeProgress(stdout, request, 0, 'started', false);
       const response = await handleRequest(request);
+      writeProgress(stdout, request, 1, 'completed', false);
       if (response) writeJsonResponse(stdout, response, false);
     }
   }
@@ -72,4 +76,14 @@ function writeJsonResponse(stdout, response, framed) {
     return;
   }
   stdout.write(`${body}\n`);
+}
+
+function writeProgress(stdout, request, progress, message, framed) {
+  const progressToken = request?.params?._meta?.progressToken;
+  if (progressToken === undefined) return;
+  writeJsonResponse(stdout, {
+    jsonrpc: '2.0',
+    method: 'notifications/progress',
+    params: { progressToken, progress, total: 1, message },
+  }, framed);
 }

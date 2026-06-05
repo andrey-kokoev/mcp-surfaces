@@ -36,6 +36,13 @@ const state = createServerState({ allowedRoot: root, outputRoot: root, mode: 'wr
 const readState = createServerState({ allowedRoot: root, outputRoot: root, mode: 'read' });
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
 
+const abortController = new AbortController();
+abortController.abort();
+const cancelledGit = await runGit(repo, ['status'], state.policy, { abortSignal: abortController.signal });
+assert.equal(cancelledGit.cancelled, true);
+assert.equal(cancelledGit.timed_out, false);
+assert.equal(cancelledGit.exit_code, null);
+
 const unbornRepo = join(root, 'unborn');
 git(root, ['init', '--initial-branch=main', unbornRepo]);
 const unbornStatus = await gitStatus({ working_directory: unbornRepo }, state);
@@ -245,6 +252,8 @@ assert.equal(materialized.result?.structuredContent.diff, undefined);
 assert.match(materialized.result?.structuredContent.diff_preview, /^diff --git/);
 assert.match(materialized.result?.content[0].text, /git_diff: materialized/);
 assert.match(materialized.result?.content[0].text, /reader_tool: mcp_output_show/);
+assert.equal(materialized.result?.content[1].type, 'resource_link');
+assert.equal(materialized.result?.content[1].uri, `mcp-output:${encodeURIComponent(String(materialized.result?.structuredContent.output_ref))}`);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });

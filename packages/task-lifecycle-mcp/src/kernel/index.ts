@@ -3,7 +3,22 @@ export function normalizeToolName(name, aliases: Record<string, unknown> = {}) {
 }
 
 export function tool(name, description, inputSchema) {
-  return { name, description, inputSchema };
+  return { name, description, inputSchema, annotations: toolAnnotations(name), outputSchema: genericToolOutputSchema() };
+}
+
+function toolAnnotations(name) {
+  const writes = /create|claim|handoff|finish|accept|reject|close|defer|reopen|review|submit|bridge|target|assign|update|admit|derive/.test(String(name));
+  return {
+    title: String(name),
+    readOnlyHint: !writes,
+    destructiveHint: /reject|close|defer/.test(String(name)),
+    idempotentHint: /status|show|inspect|list|workboard|doctor|search|next/.test(String(name)),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
 }
 
 export function objectSchema(properties, required = [], options: Record<string, unknown> = {}) {

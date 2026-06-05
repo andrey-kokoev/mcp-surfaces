@@ -161,7 +161,22 @@ const TOOLS = [
       },
     },
   },
-];
+].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+
+function toolAnnotations(name: string) {
+  const writes = /start_session|checkpoint/.test(name);
+  return {
+    title: name,
+    readOnlyHint: !writes,
+    destructiveHint: false,
+    idempotentHint: /doctor|whoami|rehydrate|hydrate|startup|list/.test(name),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
+}
 
 assertSiteRoot();
 traceStartup('site_root_ok');
@@ -260,16 +275,27 @@ function respondError(id, error) {
   });
 }
 
+function sendProgress(message, progress, progressMessage) {
+  const progressToken = message?.params?._meta?.progressToken;
+  if (progressToken === undefined) return;
+  send({
+    jsonrpc: '2.0',
+    method: 'notifications/progress',
+    params: { progressToken, progress, total: 1, message: progressMessage },
+  });
+}
+
 function handleMessage(message) {
   if (!message || typeof message !== 'object') return;
   if (message.error) return;
   const id = message.id ?? null;
   try {
+    sendProgress(message, 0, 'started');
     if (message.method === 'initialize') {
       traceStartup('initialize');
       respond(id, {
         protocolVersion: message.params?.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       });
       return;
@@ -287,10 +313,47 @@ function handleMessage(message) {
       respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
       return;
     }
+    if (message.method === 'prompts/list') {
+      respond(id, { prompts: listPrompts() });
+      return;
+    }
+    if (message.method === 'prompts/get') {
+      respond(id, promptGet(message.params ?? {}));
+      return;
+    }
+    if (message.method === 'completion/complete') {
+      respond(id, completeArgument(message.params ?? {}));
+      return;
+    }
+    if (message.method === 'logging/setLevel') {
+      respond(id, {});
+      return;
+    }
     respondError(id, new Error(`unsupported_method: ${message.method}`));
   } catch (error) {
     respondError(id, error);
+  } finally {
+    sendProgress(message, 1, 'completed');
   }
+}
+
+function listPrompts() {
+  return [{ name: 'agent_context_startup', title: 'Agent Context Startup', description: 'Guidance for hydrating and checkpointing agent context.', arguments: [] }];
+}
+
+function promptGet(params) {
+  const name = String(params.name ?? '');
+  if (name !== 'agent_context_startup') throw new Error(`unknown_prompt: ${name}`);
+  return {
+    description: 'Guidance for hydrating and checkpointing agent context.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use agent_context_hydrate_current at startup, checkpoint meaningful state transitions, and rehydrate before resuming long-running work.' } }],
+  };
+}
+
+function completeArgument(params) {
+  const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
+  const values = argumentName === 'name' ? TOOLS.map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
 }
 
 function assistantTextContent(text: string) {

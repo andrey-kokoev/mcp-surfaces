@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildAllowedRoots,
   createExecutionPolicy,
@@ -18,26 +18,39 @@ const TOOL_OUTPUT_SHOW_DEFAULT_LIMIT = 4000;
 const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 8192;
 const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
+const ROOTS_LIST_REQUEST_PREFIX = 'structured_command_roots_';
 
 type StructuredCommandState = Record<string, unknown> & {
   policy: ReturnType<typeof createExecutionPolicy>;
   auditLogDir: string | null;
   storageRoot: string;
+  clientRoots: {
+    supported: boolean;
+    roots: Array<{ uri: string; name?: string }>;
+    lastUpdatedAt: string | null;
+  };
 };
 
 type SpawnStructuredOptions = {
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  abortSignal?: AbortSignal;
 };
 
 type SpawnStructuredResult = {
   exit_code: number | null;
   timed_out: boolean;
+  cancelled: boolean;
   stdout: string;
   stderr: string;
   stdout_truncated: boolean;
   stderr_truncated: boolean;
+};
+
+type RequestContext = {
+  abortSignal?: AbortSignal;
+  progress?: (progress: number, message: string) => void;
 };
 
 class StructuredCommandError extends Error {
@@ -61,12 +74,17 @@ if (isMainModule()) {
 
 export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
+  const activeRequests = new Map<string, AbortController>();
+  const pendingServerRequests = new Map<string, (message: Record<string, unknown>) => void>();
+  let nextServerRequestId = 1;
   let buffer = '';
+  let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
   for await (const chunk of process.stdin) {
     buffer += chunk;
     let requests = [];
     if (buffer.includes('Content-Length:')) {
+      sawFramedInput = true;
       const drained = drainJsonRpcFrames(buffer);
       buffer = drained.remaining;
       requests = drained.requests;
@@ -76,8 +94,29 @@ export async function runStdioServer(options: Record<string, unknown>) {
       requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
     }
     for (const request of requests) {
-      const response = await handleRequest(asRecord(request), state);
-      if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
+      const record = asRecord(request);
+      if (record.method === undefined && record.id !== undefined) {
+        const handler = pendingServerRequests.get(String(record.id));
+        if (handler) {
+          pendingServerRequests.delete(String(record.id));
+          handler(record);
+        }
+        continue;
+      }
+      if (!record.id && record.method === 'notifications/roots/list_changed' && state.clientRoots.supported) {
+        requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        continue;
+      }
+      if (record.method === 'initialize') {
+        const response = await handleRequest(record, state);
+        if (response) writeJsonRpcMessage(response, { framed: sawFramedInput });
+        if (clientSupportsRoots(asRecord(record.params))) {
+          state.clientRoots.supported = true;
+          requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        }
+        continue;
+      }
+      processStdioRequest(record, state, activeRequests, { framed: sawFramedInput });
     }
   }
 }
@@ -99,13 +138,42 @@ export function createServerState(options: Record<string, unknown> = {}): Struct
     }),
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
     storageRoot: resolve(String(options.storageRoot ?? allowedRoots[0])),
+    clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
 }
 
-export async function handleRequest(request: Record<string, unknown>, state: StructuredCommandState) {
+async function processStdioRequest(request: Record<string, unknown>, state: StructuredCommandState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
+  if (!request?.id && request.method === 'notifications/cancelled') {
+    const requestId = String(asRecord(request.params).requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return;
+  const requestId = String(request.id ?? '');
+  const abortController = new AbortController();
+  activeRequests.set(requestId, abortController);
+  const progressToken = asRecord(asRecord(request.params)._meta).progressToken;
+  const progress = (progressValue: number, message: string) => {
+    if (progressToken === undefined) return;
+    writeJsonRpcMessage({
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: { progressToken, progress: progressValue, total: 1, message },
+    }, options);
+  };
+  progress(0, 'started');
+  handleRequest(request, state, { abortSignal: abortController.signal, progress }).then((response) => {
+    progress(abortController.signal.aborted ? 1 : 1, abortController.signal.aborted ? 'cancelled' : 'completed');
+    if (response) writeJsonRpcMessage(response, options);
+  }).finally(() => {
+    activeRequests.delete(requestId);
+  });
+}
+
+export async function handleRequest(request: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state, context);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -121,21 +189,48 @@ export async function handleRequest(request: Record<string, unknown>, state: Str
   }
 }
 
-async function dispatchMethod(method: string, params: Record<string, unknown>, state: StructuredCommandState): Promise<unknown> {
+async function dispatchMethod(method: string, params: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {
   if (method === 'initialize') {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {}, prompts: {}, completions: {}, logging: {} },
       serverInfo: { name: 'structured-command-mcp', version: '0.1.0' },
     };
   }
   if (method === 'tools/list') return { tools: listTools() };
-  if (method === 'tools/call') return callTool(params, state);
+  if (method === 'tools/call') return callTool(params, state, context);
+  if (method === 'resources/list') return listStructuredCommandResources(state);
+  if (method === 'resources/read') return readStructuredCommandResource(params, state);
+  if (method === 'prompts/list') return { prompts: listPrompts() };
+  if (method === 'prompts/get') return promptGet(params);
+  if (method === 'completion/complete') return completeArgument(params, state);
+  if (method === 'logging/setLevel') return {};
   throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method:${method}`, { method });
 }
 
+function listPrompts() {
+  return [{ name: 'structured_command_safe_execution', title: 'Structured Command Safe Execution', description: 'Guidance for argv-only command execution.', arguments: [] }];
+}
+
+function promptGet(params: Record<string, unknown>) {
+  const name = String(params.name ?? '');
+  if (name !== 'structured_command_safe_execution') throw diagnosticError('unknown_prompt', `unknown_prompt:${name}`, { name });
+  return {
+    description: 'Guidance for argv-only command execution.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use structured_command_execute with explicit argv arrays only. Inspect policy before relying on command availability, and use output refs for long results.' } }],
+  };
+}
+
+function completeArgument(params: Record<string, unknown>, state: StructuredCommandState) {
+  const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
+  const values = argumentName === 'name'
+    ? listTools().map((tool) => tool.name).filter(Boolean).slice(0, 100)
+    : ['working_directory', 'cwd', 'directory'].includes(argumentName) ? clientRootCompletionValues(state) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
+}
+
 export function listTools() {
-  return [
+  return decorateTools([
     {
       name: 'structured_command_execution_policy_inspect',
       description: 'Inspect the policy governing structured command execution.',
@@ -172,21 +267,21 @@ export function listTools() {
         limit: { type: 'integer', description: `Characters to read, default ${TOOL_OUTPUT_SHOW_DEFAULT_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
       }, ['output_ref']),
     },
-  ];
+  ]);
 }
 
-async function callTool(params: Record<string, unknown>, state: StructuredCommandState) {
+async function callTool(params: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}) {
   const name = params?.name;
   const args = asRecord(params.arguments);
   enforceInputCharLimit(args);
   if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
-  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state), state);
+  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state, context), state);
   if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
   if (name === 'structured_command_output_show') return toolResult(showStructuredCommandOutput(args, state), state);
   throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
 }
 
-export async function executeStructuredCommand(args: unknown, state: StructuredCommandState): Promise<unknown> {
+export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {
   const argsRecord = asRecord(args);
   enforceInputCharLimit(argsRecord);
   const effectiveArgs = argsRecord.input_ref ? asRecord(readStructuredCommandInput(String(argsRecord.input_ref), state).input) : argsRecord;
@@ -211,15 +306,17 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
   }
 
   const startedAt = new Date().toISOString();
+  context.progress?.(0.1, 'executing');
   const result = await spawnStructured(decision.command, decision.args, {
     cwd: decision.working_directory,
     timeoutMs,
     maxOutputBytes: state.policy.maxOutputBytes,
+    abortSignal: context.abortSignal,
   });
   const finishedAt = new Date().toISOString();
   const payload = {
     schema: 'narada.structured_command.execution_result.v0',
-    status: result.timed_out ? 'timed_out' : result.exit_code === 0 ? 'ok' : 'failed',
+    status: result.cancelled ? 'cancelled' : result.timed_out ? 'timed_out' : result.exit_code === 0 ? 'ok' : 'failed',
     executed: true,
     command: decision.command,
     args: decision.args,
@@ -233,6 +330,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     stdout_truncated: result.stdout_truncated,
     stderr_truncated: result.stderr_truncated,
     timed_out: result.timed_out,
+    cancelled: result.cancelled,
     input_ref: argsRecord.input_ref ?? null,
   };
   audit(state, payload);
@@ -283,8 +381,20 @@ export function showStructuredCommandOutput(args, state) {
   };
 }
 
-function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
+function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
   return new Promise((resolvePromise) => {
+    if (abortSignal?.aborted) {
+      resolvePromise({
+        exit_code: null,
+        stdout: '',
+        stderr: '',
+        stdout_truncated: false,
+        stderr_truncated: false,
+        timed_out: false,
+        cancelled: true,
+      });
+      return;
+    }
     const child = spawn(command, args, {
       cwd,
       shell: false,
@@ -296,10 +406,17 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
     let stdoutTruncated = false;
     let stderrTruncated = false;
     let timedOut = false;
+    let cancelled = false;
+    let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
     }, timeoutMs);
+    const abortHandler = () => {
+      cancelled = true;
+      child.kill();
+    };
+    abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout.on('data', (chunk) => {
       const next = stdout + chunk.toString();
       stdoutTruncated ||= Buffer.byteLength(next, 'utf8') > maxOutputBytes;
@@ -311,7 +428,10 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
       stderr = truncateUtf8(next, maxOutputBytes);
     });
     child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', abortHandler);
       resolvePromise({
         exit_code: null,
         stdout,
@@ -319,10 +439,14 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
         stdout_truncated: stdoutTruncated,
         stderr_truncated: stderrTruncated,
         timed_out: timedOut,
+        cancelled,
       });
     });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', abortHandler);
       resolvePromise({
         exit_code: code,
         stdout,
@@ -330,6 +454,7 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
         stdout_truncated: stdoutTruncated,
         stderr_truncated: stderrTruncated,
         timed_out: timedOut,
+        cancelled,
       });
     });
   });
@@ -341,7 +466,7 @@ function toolResult(payload, state) {
   const outputRef = truncated ? createStructuredCommandOutput(text, state, 'rendered') : null;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {
-    content: [assistantTextContent(rendered)],
+    content: outputRef ? [assistantTextContent(rendered), structuredCommandOutputResourceLink(outputRef)] : [assistantTextContent(rendered)],
     structuredContent: buildStructuredContent(payload, {
       truncated,
       outputRef,
@@ -354,6 +479,17 @@ function toolResult(payload, state) {
 
 function assistantTextContent(text) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
+}
+
+function structuredCommandOutputResourceLink(ref) {
+  return {
+    type: 'resource_link',
+    uri: structuredCommandOutputUri(ref),
+    name: ref,
+    description: 'Structured command materialized output.',
+    mimeType: 'text/plain',
+    annotations: { audience: ['assistant'], priority: 0.8 },
+  };
 }
 
 function buildStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
@@ -437,6 +573,7 @@ function buildExecutionStructuredContent(payload, { truncated, outputRef, render
     timeout_ms: payload.timeout_ms,
     exit_code: payload.exit_code,
     timed_out: payload.timed_out,
+    cancelled: payload.cancelled,
     stdout: stdoutNeedsRef ? stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stdout,
     stderr: stderrNeedsRef ? stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stderr,
     stdout_truncated: payload.stdout_truncated,
@@ -549,6 +686,34 @@ function outputPath(state, id) {
   return join(state.storageRoot, 'outputs', `${id}.json`);
 }
 
+function listStructuredCommandResources(state) {
+  const dir = join(state.storageRoot, 'outputs');
+  if (!existsSync(dir)) return { resources: [] };
+  return {
+    resources: readdirSync(dir).filter((name) => name.endsWith('.json')).sort().map((name) => {
+      const id = name.replace(/\.json$/, '');
+      const ref = `structured_command_output:${id}`;
+      return { uri: structuredCommandOutputUri(ref), name: ref, title: ref, description: 'Structured command output artifact.', mimeType: 'text/plain' };
+    }),
+  };
+}
+
+function readStructuredCommandResource(params, state) {
+  const ref = structuredCommandOutputRefFromUri(String(params.uri ?? ''));
+  const { id } = parseRef(ref, 'output');
+  const record = readJsonRecord(outputPath(state, id));
+  return { contents: [{ uri: params.uri, mimeType: 'text/plain', text: String(record.text ?? '') }] };
+}
+
+function structuredCommandOutputUri(ref) {
+  return `structured-command-output:${encodeURIComponent(ref)}`;
+}
+
+function structuredCommandOutputRefFromUri(uri) {
+  if (!uri.startsWith('structured-command-output:')) throw diagnosticError('structured_command_resource_uri_invalid', 'structured_command_resource_uri_invalid', { uri });
+  return decodeURIComponent(uri.slice('structured-command-output:'.length));
+}
+
 function writeJsonRecord(path, record) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
@@ -587,6 +752,24 @@ function truncateUtf8(value, maxBytes) {
 
 function objectSchema(properties, required = []) {
   return { type: 'object', properties, required, additionalProperties: false };
+}
+
+function decorateTools(tools) {
+  return tools.map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+}
+
+function toolAnnotations(name) {
+  return {
+    title: String(name),
+    readOnlyHint: !/execute|create/.test(String(name)),
+    destructiveHint: false,
+    idempotentHint: /inspect|show/.test(String(name)),
+    openWorldHint: true,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
 }
 
 function parseArgs(argv) {
@@ -653,6 +836,50 @@ function drainJsonRpcFrames(buffer) {
     remaining = remaining.slice(headerLength + length);
   }
   return { requests, remaining };
+}
+
+function writeJsonRpcMessage(message: unknown, options: { framed: boolean }) {
+  const body = JSON.stringify(message);
+  if (options.framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+  else process.stdout.write(`${body}\n`);
+}
+
+function clientSupportsRoots(initializeParams: Record<string, unknown>): boolean {
+  return Boolean(asRecord(asRecord(initializeParams).capabilities).roots);
+}
+
+function requestClientRoots(state: StructuredCommandState, pendingServerRequests: Map<string, (message: Record<string, unknown>) => void>, nextId: () => string, options: { framed: boolean }): void {
+  const id = nextId();
+  pendingServerRequests.set(id, (message) => {
+    updateClientRoots(state, asRecord(message.result));
+  });
+  writeJsonRpcMessage({ jsonrpc: '2.0', id, method: 'roots/list', params: {} }, options);
+}
+
+function updateClientRoots(state: StructuredCommandState, result: Record<string, unknown>): void {
+  const roots = Array.isArray(result.roots) ? result.roots.map((root) => asRecord(root)).filter((root) => typeof root.uri === 'string') : [];
+  state.clientRoots = {
+    supported: true,
+    roots: roots.map((root) => ({
+      uri: String(root.uri),
+      ...(typeof root.name === 'string' ? { name: root.name } : {}),
+    })),
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
+function clientRootCompletionValues(state: StructuredCommandState): string[] {
+  return state.clientRoots.roots.map((root) => {
+    const uri = root.uri;
+    if (uri.startsWith('file:')) {
+      try {
+        return fileURLToPath(uri);
+      } catch {
+        return uri;
+      }
+    }
+    return uri;
+  }).filter(Boolean).slice(0, 100);
 }
 
 function isMainModule() {

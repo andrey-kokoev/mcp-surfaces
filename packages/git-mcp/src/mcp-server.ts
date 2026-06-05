@@ -1,11 +1,14 @@
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
+  listOutputResources,
   outputShow,
+  readOutputResource,
 } from '@narada2/mcp-transport';
 import { diagnosticError, GitMcpError } from './git-errors.js';
 import { createGitPolicy, GitPolicyError } from './policy.js';
-import { callGitTool } from './git-tools.js';
+import { callGitTool, type GitRequestContext } from './git-tools.js';
 import { listTools } from './git-tool-list.js';
 import { renderToolResultText } from './result-rendering.js';
 import type { GitMcpState } from './state.js';
@@ -13,9 +16,13 @@ import type { GitMcpState } from './state.js';
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_BYTE_LIMIT = 6000;
 const PREVIEW_CHAR_LIMIT = 1000;
+const ROOTS_LIST_REQUEST_PREFIX = 'git_roots_';
 
 export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
+  const activeRequests = new Map<string, AbortController>();
+  const pendingServerRequests = new Map<string, (message: Record<string, unknown>) => void>();
+  let nextServerRequestId = 1;
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
@@ -33,8 +40,29 @@ export async function runStdioServer(options: Record<string, unknown>) {
       requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
     }
     for (const request of requests) {
-      const response = await handleRequest(asRecord(request), state);
-      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+      const record = asRecord(request);
+      if (record.method === undefined && record.id !== undefined) {
+        const handler = pendingServerRequests.get(String(record.id));
+        if (handler) {
+          pendingServerRequests.delete(String(record.id));
+          handler(record);
+        }
+        continue;
+      }
+      if (!record.id && record.method === 'notifications/roots/list_changed' && state.clientRoots?.supported) {
+        requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        continue;
+      }
+      if (record.method === 'initialize') {
+        const response = await handleRequest(record, state);
+        if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+        if (clientSupportsRoots(asRecord(record.params))) {
+          state.clientRoots = { supported: true, roots: [], lastUpdatedAt: null };
+          requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        }
+        continue;
+      }
+      processStdioRequest(record, state, activeRequests, { framed: sawFramedInput });
     }
   }
 }
@@ -45,13 +73,42 @@ export function createServerState(options: Record<string, unknown> = {}): GitMcp
     policy,
     outputRoot: resolve(String(options.outputRoot ?? policy.allowedRoots[0])),
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
+    clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
 }
 
-export async function handleRequest(request: Record<string, unknown>, state: GitMcpState) {
+async function processStdioRequest(request: Record<string, unknown>, state: GitMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
+  if (!request?.id && request.method === 'notifications/cancelled') {
+    const requestId = String(asRecord(request.params).requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return;
+  const requestId = String(request.id ?? '');
+  const abortController = new AbortController();
+  activeRequests.set(requestId, abortController);
+  const progressToken = asRecord(asRecord(request.params)._meta).progressToken;
+  const progress = (progressValue: number, message: string) => {
+    if (progressToken === undefined) return;
+    writeJsonRpcResponse({
+      jsonrpc: '2.0',
+      method: 'notifications/progress',
+      params: { progressToken, progress: progressValue, total: 1, message },
+    }, options);
+  };
+  progress(0, 'started');
+  handleRequest(request, state, { abortSignal: abortController.signal }).then((response) => {
+    progress(1, abortController.signal.aborted ? 'cancelled' : 'completed');
+    if (response) writeJsonRpcResponse(response, options);
+  }).finally(() => {
+    activeRequests.delete(requestId);
+  });
+}
+
+export async function handleRequest(request: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state, context);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -67,24 +124,51 @@ export async function handleRequest(request: Record<string, unknown>, state: Git
   }
 }
 
-async function dispatchMethod(method: string, params: Record<string, unknown>, state: GitMcpState): Promise<unknown> {
+async function dispatchMethod(method: string, params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<unknown> {
   if (method === 'initialize') {
     return {
       protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {}, prompts: {}, completions: {}, logging: {} },
       serverInfo: { name: 'git-mcp', version: '0.1.0' },
     };
   }
   if (method === 'tools/list') return { tools: listTools(state.policy.mode) };
-  if (method === 'tools/call') return callTool(params, state);
+  if (method === 'tools/call') return callTool(params, state, context);
+  if (method === 'resources/list') return listOutputResources({ siteRoot: state.outputRoot });
+  if (method === 'resources/read') return readOutputResource({ siteRoot: state.outputRoot, uri: params.uri });
+  if (method === 'prompts/list') return { prompts: listPrompts() };
+  if (method === 'prompts/get') return promptGet(params);
+  if (method === 'completion/complete') return completeArgument(params, state);
+  if (method === 'logging/setLevel') return {};
   throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method:${method}`, { method });
 }
 
-async function callTool(params: Record<string, unknown>, state: GitMcpState) {
+function listPrompts() {
+  return [{ name: 'git_mcp_workflow', title: 'Git MCP Workflow', description: 'Guidance for inspect-stage-commit-push workflows.', arguments: [] }];
+}
+
+function promptGet(params: Record<string, unknown>) {
+  const name = String(params.name ?? '');
+  if (name !== 'git_mcp_workflow') throw diagnosticError('unknown_prompt', `unknown_prompt:${name}`, { name });
+  return {
+    description: 'Guidance for inspect-stage-commit-push workflows.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use git_status and git_diff before git_add, git_commit, or git_push. Keep commits scoped and do not force push.' } }],
+  };
+}
+
+function completeArgument(params: Record<string, unknown>, state: GitMcpState) {
+  const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
+  const values = argumentName === 'name'
+    ? listTools(state.policy.mode).map((tool) => tool.name).filter(Boolean).slice(0, 100)
+    : ['path', 'working_directory', 'directory'].includes(argumentName) ? clientRootCompletionValues(state) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
+}
+
+async function callTool(params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   if (name === 'mcp_output_show') return toolResult(outputShow({ siteRoot: state.outputRoot, args }), state, name);
-  const result = await callGitTool(name, args, state);
+  const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);
 }
 
@@ -106,7 +190,10 @@ function toolResult(value: unknown, state: GitMcpState, toolName: string) {
   });
   const locator = requireOutputLocator(refResult);
   return {
-    content: [assistantTextContent(renderToolResultText({ ...locator, tool_name: toolName, result_materialized: true }))],
+    content: [
+      assistantTextContent(renderToolResultText({ ...locator, tool_name: toolName, result_materialized: true })),
+      ...resourceLinksFromToolResult(refResult),
+    ],
     structuredContent: {
       ...boundedStructuredContent(value),
       result_materialized: true,
@@ -115,6 +202,12 @@ function toolResult(value: unknown, state: GitMcpState, toolName: string) {
       full_output_char_length: locator.full_output_char_length ?? structuredTextLength,
     },
   };
+}
+
+function resourceLinksFromToolResult(value: unknown): unknown[] {
+  const contentValue = asRecord(value).content;
+  const content = Array.isArray(contentValue) ? contentValue : [];
+  return content.filter((item) => asRecord(item).type === 'resource_link');
 }
 
 function assistantTextContent(text: string) {
@@ -249,6 +342,45 @@ function writeJsonRpcResponse(response: unknown, options: { framed: boolean }): 
   } else {
     process.stdout.write(`${body}\n`);
   }
+}
+
+function clientSupportsRoots(initializeParams: Record<string, unknown>): boolean {
+  return Boolean(asRecord(asRecord(initializeParams).capabilities).roots);
+}
+
+function requestClientRoots(state: GitMcpState, pendingServerRequests: Map<string, (message: Record<string, unknown>) => void>, nextId: () => string, options: { framed: boolean }): void {
+  const id = nextId();
+  pendingServerRequests.set(id, (message) => {
+    updateClientRoots(state, asRecord(message.result));
+  });
+  writeJsonRpcResponse({ jsonrpc: '2.0', id, method: 'roots/list', params: {} }, options);
+}
+
+function updateClientRoots(state: GitMcpState, result: Record<string, unknown>): void {
+  const roots = Array.isArray(result.roots) ? result.roots.map((root) => asRecord(root)).filter((root) => typeof root.uri === 'string') : [];
+  state.clientRoots = {
+    supported: true,
+    roots: roots.map((root) => ({
+      uri: String(root.uri),
+      ...(typeof root.name === 'string' ? { name: root.name } : {}),
+    })),
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
+function clientRootCompletionValues(state: GitMcpState): string[] {
+  const roots = Array.isArray(state.clientRoots?.roots) ? state.clientRoots.roots : [];
+  return roots.map((root) => {
+    const uri = root.uri;
+    if (uri.startsWith('file:')) {
+      try {
+        return fileURLToPath(uri);
+      } catch {
+        return uri;
+      }
+    }
+    return uri;
+  }).filter(Boolean).slice(0, 100);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

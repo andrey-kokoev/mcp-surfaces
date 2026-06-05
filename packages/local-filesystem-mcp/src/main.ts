@@ -3,10 +3,13 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSyn
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
+  listOutputResources,
   listOutputTools,
   outputShow,
+  readOutputResource,
 } from '@narada2/mcp-transport';
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
@@ -16,6 +19,7 @@ import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRi
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
 const READ_BUFFER_BYTES = 64 * 1024;
+const ROOTS_LIST_REQUEST_PREFIX = 'local_filesystem_roots_';
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/.git/**',
   '**/node_modules/**',
@@ -52,6 +56,8 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
 
 export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
+  const pendingServerRequests = new Map<string, (message: Record<string, unknown>) => void>();
+  let nextServerRequestId = 1;
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
@@ -69,8 +75,27 @@ export async function runStdioServer(options: Record<string, unknown>) {
       requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
     }
     for (const request of requests) {
-      const response = handleRequest(request, state);
+      const record = asRecord(request);
+      if (record.method === undefined && record.id !== undefined) {
+        const handler = pendingServerRequests.get(String(record.id));
+        if (handler) {
+          pendingServerRequests.delete(String(record.id));
+          handler(record);
+        }
+        continue;
+      }
+      if (!record.id && record.method === 'notifications/roots/list_changed' && asRecord(state.clientRoots).supported) {
+        requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        continue;
+      }
+      sendProgress(record, 0, 'started', { framed: sawFramedInput });
+      const response = handleRequest(record, state);
+      sendProgress(record, 1, 'completed', { framed: sawFramedInput });
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+      if (record.method === 'initialize' && clientSupportsRoots(asRecord(record.params))) {
+        asRecord(state.clientRoots).supported = true;
+        requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+      }
     }
   }
 }
@@ -100,6 +125,7 @@ export function createServerState(options: Record<string, unknown>): Record<stri
     allowedRoots,
     outputRoot,
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
+    clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
 }
 
@@ -127,16 +153,57 @@ function dispatchMethod(method, params, state) {
     case 'initialize':
       return {
         protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: `local-filesystem-${state.mode}`, version: '0.1.0' },
       };
     case 'tools/list':
       return { tools: listTools(state.mode) };
     case 'tools/call':
       return callTool(params, state);
+    case 'resources/list':
+      return listOutputResources({ siteRoot: state.outputRoot });
+    case 'resources/read':
+      return readOutputResource({ siteRoot: state.outputRoot, uri: params.uri });
+    case 'prompts/list':
+      return { prompts: listPrompts(state.mode) };
+    case 'prompts/get':
+      return promptGet(params, state);
+    case 'completion/complete':
+      return completeArgument(params, state);
+    case 'logging/setLevel':
+      return {};
     default:
       throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method: ${method}`, { method });
   }
+}
+
+function listPrompts(mode) {
+  return [{
+    name: 'local_filesystem_tool_usage',
+    title: 'Local Filesystem Tool Usage',
+    description: `Guidance for using local-filesystem-${mode} tools safely.`,
+    arguments: [],
+  }];
+}
+
+function promptGet(params, state) {
+  const name = stringField(params, 'name');
+  if (name !== 'local_filesystem_tool_usage') throw diagnosticError('unknown_prompt', `unknown_prompt: ${name}`, { name });
+  return {
+    description: `Guidance for using local-filesystem-${state.mode} tools safely.`,
+    messages: [{
+      role: 'user',
+      content: { type: 'text', text: `Use local-filesystem-${state.mode} tools only within allowed roots. Prefer read/search tools before mutation and preserve structuredContent as authoritative.` },
+    }],
+  };
+}
+
+function completeArgument(params, state) {
+  const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
+  const values = argumentName === 'name'
+    ? listTools(state.mode).map((tool) => tool.name).filter(Boolean).slice(0, 100)
+    : ['path', 'directory'].includes(argumentName) ? clientRootCompletionValues(state) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
 }
 
 export function listTools(mode) {
@@ -297,7 +364,7 @@ export function listTools(mode) {
       }, ['path']),
     },
   ];
-  return mode === 'read' ? readTools : [...readTools, ...writeTools];
+  return decorateTools(mode === 'read' ? readTools : [...readTools, ...writeTools]);
 }
 
 function callTool(params, state) {
@@ -1004,6 +1071,25 @@ function objectSchema(properties, required = []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
+function decorateTools(tools) {
+  return tools.map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+}
+
+function toolAnnotations(name) {
+  const write = /^fs_(write|str_replace|replace|apply|move|create|rename|delete)/.test(String(name));
+  return {
+    title: String(name),
+    readOnlyHint: !write,
+    destructiveHint: /^fs_(str_replace|replace|apply|move|rename|delete)/.test(String(name)),
+    idempotentHint: /^fs_(read|stat|glob|grep)|mcp_output_show/.test(String(name)),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
+}
+
 function expectedMetadataSchemaProperties() {
   return {
     mtime: { type: 'string' },
@@ -1061,6 +1147,57 @@ function writeJsonRpcResponse(response, { framed = false } = {}) {
     return;
   }
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+}
+
+function sendProgress(request, progress, message, options) {
+  const progressToken = asRecord(asRecord(request.params)._meta).progressToken;
+  if (progressToken === undefined) return;
+  writeJsonRpcResponse({
+    jsonrpc: '2.0',
+    method: 'notifications/progress',
+    params: { progressToken, progress, total: 1, message },
+  }, options);
+}
+
+function clientSupportsRoots(initializeParams) {
+  return Boolean(asRecord(asRecord(initializeParams).capabilities).roots);
+}
+
+function requestClientRoots(state, pendingServerRequests, nextId, options) {
+  const id = nextId();
+  pendingServerRequests.set(id, (message) => {
+    updateClientRoots(state, asRecord(message.result));
+  });
+  writeJsonRpcResponse({ jsonrpc: '2.0', id, method: 'roots/list', params: {} }, options);
+}
+
+function updateClientRoots(state, result) {
+  const roots = Array.isArray(result.roots) ? result.roots.map((root) => asRecord(root)).filter((root) => typeof root.uri === 'string') : [];
+  state.clientRoots = {
+    supported: true,
+    roots: roots.map((root) => ({
+      uri: String(root.uri),
+      ...(typeof root.name === 'string' ? { name: root.name } : {}),
+    })),
+    lastUpdatedAt: new Date().toISOString(),
+  };
+}
+
+function clientRootCompletionValues(state) {
+  const rootsValue = asRecord(state.clientRoots).roots;
+  const roots = Array.isArray(rootsValue) ? rootsValue : [];
+  return roots.map((root) => {
+    const uri = String(asRecord(root).uri ?? '');
+    if (!uri) return '';
+    if (uri.startsWith('file:')) {
+      try {
+        return fileURLToPath(uri);
+      } catch {
+        return uri;
+      }
+    }
+    return uri;
+  }).filter(Boolean).slice(0, 100);
 }
 
 function splitLines(value) {

@@ -7,12 +7,17 @@ export type GitRunResult = {
   output_text: string;
   diagnostic_text: string;
   timed_out: boolean;
+  cancelled: boolean;
   output_truncated: boolean;
   diagnostic_truncated: boolean;
 };
 
-export function runGit(cwd: string, args: string[], policy: GitMcpPolicy): Promise<GitRunResult> {
+export function runGit(cwd: string, args: string[], policy: GitMcpPolicy, options: { abortSignal?: AbortSignal } = {}): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
+    if (options.abortSignal?.aborted) {
+      resolvePromise({ exit_code: null, output_text: '', diagnostic_text: '', timed_out: false, cancelled: true, output_truncated: false, diagnostic_truncated: false });
+      return;
+    }
     const child = spawn('git', args, { cwd, shell: false, windowsHide: true });
     let outputText = '';
     let diagnosticText = '';
@@ -24,8 +29,17 @@ export function runGit(cwd: string, args: string[], policy: GitMcpPolicy): Promi
     const timer = setTimeout(() => {
       child.kill();
       settled = true;
-      resolvePromise({ exit_code: null, output_text: outputText, diagnostic_text: diagnosticText, timed_out: true, output_truncated: outputTruncated, diagnostic_truncated: diagnosticTruncated });
+      options.abortSignal?.removeEventListener('abort', abortHandler);
+      resolvePromise({ exit_code: null, output_text: outputText, diagnostic_text: diagnosticText, timed_out: true, cancelled: false, output_truncated: outputTruncated, diagnostic_truncated: diagnosticTruncated });
     }, policy.maxTimeoutMs);
+    const abortHandler = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      resolvePromise({ exit_code: null, output_text: outputText, diagnostic_text: diagnosticText, timed_out: false, cancelled: true, output_truncated: outputTruncated, diagnostic_truncated: diagnosticTruncated });
+    };
+    options.abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -42,28 +56,31 @@ export function runGit(cwd: string, args: string[], policy: GitMcpPolicy): Promi
     });
     child.on('error', (error) => {
       clearTimeout(timer);
+      options.abortSignal?.removeEventListener('abort', abortHandler);
       if (settled) return;
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      options.abortSignal?.removeEventListener('abort', abortHandler);
       if (settled) return;
-      resolvePromise({ exit_code: code, output_text: outputText, diagnostic_text: diagnosticText, timed_out: false, output_truncated: outputTruncated, diagnostic_truncated: diagnosticTruncated });
+      resolvePromise({ exit_code: code, output_text: outputText, diagnostic_text: diagnosticText, timed_out: false, cancelled: false, output_truncated: outputTruncated, diagnostic_truncated: diagnosticTruncated });
     });
   });
 }
 
-export async function gitText(cwd: string, args: string[], policy: GitMcpPolicy, failureCode: string = 'git_command_failed'): Promise<string> {
-  const result = await runGit(cwd, args, policy);
+export async function gitText(cwd: string, args: string[], policy: GitMcpPolicy, failureCode: string = 'git_command_failed', options: { abortSignal?: AbortSignal } = {}): Promise<string> {
+  const result = await runGit(cwd, args, policy, options);
   ensureGitOk(result, failureCode);
   return result.output_text;
 }
 
 export function ensureGitOk(result: GitRunResult, code: string): void {
-  if (result.exit_code === 0 && !result.timed_out) return;
+  if (result.exit_code === 0 && !result.timed_out && !result.cancelled) return;
   throw diagnosticError(code, code, {
     exit_code: result.exit_code,
     timed_out: result.timed_out,
+    cancelled: result.cancelled,
     diagnostic_text: result.diagnostic_text,
     output_preview: result.output_text.slice(0, 1000),
     output_truncated: result.output_truncated,

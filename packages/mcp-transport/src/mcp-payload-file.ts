@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -290,11 +290,28 @@ export function buildOutputRefToolContent({
     inline_limit: inlineLimit,
     full_output_char_length: stored.full_output_char_length,
   };
-  return { content: [assistantTextContent(fitInlineJson(envelope, inlineLimit))], ...(isError ? { isError: true } : {}) };
+  return {
+    content: [
+      assistantTextContent(fitInlineJson(envelope, inlineLimit)),
+      outputResourceLink(stored),
+    ],
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
-function assistantTextContent(text: string) {
+function assistantTextContent(text: string): any {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
+}
+
+function outputResourceLink(record): any {
+  return {
+    type: 'resource_link',
+    uri: outputResourceUri(record.ref),
+    name: record.ref,
+    description: `Materialized MCP output for ${record.tool_name ?? 'tool result'}.`,
+    mimeType: 'application/json',
+    annotations: { audience: ['assistant'], priority: 0.8 },
+  };
 }
 
 export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
@@ -306,9 +323,53 @@ export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES
   });
 }
 
+export function listOutputResources({ siteRoot, outputDir = DEFAULT_OUTPUT_DIR }: any = {}) {
+  const root = typeof siteRoot === 'string' ? siteRoot : process.cwd();
+  const dir = resolve(root, outputDir, DEFAULT_WORKSPACE_DIR);
+  if (!existsSync(dir)) return { resources: [] };
+  const resources = readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+    .map((name) => {
+      const outputId = name.replace(/\.json$/, '');
+      const ref = buildOutputRef(outputId);
+      return {
+        uri: outputResourceUri(ref),
+        name: ref,
+        title: ref,
+        description: 'Materialized MCP output ref.',
+        mimeType: 'application/json',
+      };
+    });
+  return { resources };
+}
+
+export function readOutputResource({ siteRoot, uri, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }: any = {}) {
+  const ref = outputRefFromResourceUri(String(uri ?? ''));
+  const record = readOutputRecord({ siteRoot, ref, maxBytes, outputDir });
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: 'application/json',
+        text: JSON.stringify(record.full_output, null, 2),
+      },
+    ],
+  };
+}
+
+function outputResourceUri(ref) {
+  return `mcp-output:${encodeURIComponent(ref)}`;
+}
+
+function outputRefFromResourceUri(uri) {
+  if (!uri.startsWith('mcp-output:')) throw new Error(`output_resource_uri_invalid: ${uri}`);
+  return decodeURIComponent(uri.slice('mcp-output:'.length));
+}
+
 export function listOutputTools() {
   return [
-    {
+    toolDefinition({
       name: 'mcp_output_show',
       description: 'Show an MCP output ref inline with bounded pagination.',
       inputSchema: {
@@ -323,7 +384,7 @@ export function listOutputTools() {
           output_limit: { type: 'integer', description: 'Compatibility alias for limit.' },
         },
       },
-    },
+    }),
   ];
 }
 
@@ -522,7 +583,7 @@ function fitInlineJson(value, limit) {
 
 export function listPayloadTools() {
   return [
-    {
+    toolDefinition({
       name: 'mcp_payload_create',
       description: 'Create immutable transient MCP payload revision v1 under .ai/tmp/mcp-payloads/workspace.',
       inputSchema: {
@@ -535,8 +596,8 @@ export function listPayloadTools() {
         },
         required: ['payload'],
       },
-    },
-    {
+    }),
+    toolDefinition({
       name: 'mcp_payload_show',
       description: 'Show an immutable transient MCP payload revision by ref.',
       inputSchema: {
@@ -545,8 +606,8 @@ export function listPayloadTools() {
         properties: { ref: { type: 'string', description: 'Payload ref, e.g. mcp_payload:<id>@v1.' } },
         required: ['ref'],
       },
-    },
-    {
+    }),
+    toolDefinition({
       name: 'mcp_payload_derive',
       description: 'Derive a new immutable payload revision by applying a constrained object overlay.',
       inputSchema: {
@@ -559,8 +620,8 @@ export function listPayloadTools() {
         },
         required: ['source_ref', 'overlay'],
       },
-    },
-    {
+    }),
+    toolDefinition({
       name: 'mcp_payload_validate',
       description: 'Validate that a payload ref exists, is well-formed, and is within size limits.',
       inputSchema: {
@@ -569,8 +630,31 @@ export function listPayloadTools() {
         properties: { ref: { type: 'string', description: 'Payload ref, e.g. mcp_payload:<id>@v1.' } },
         required: ['ref'],
       },
-    },
+    }),
   ];
+}
+
+function toolDefinition(definition) {
+  return {
+    ...definition,
+    annotations: toolAnnotations(definition.name),
+    outputSchema: genericToolOutputSchema(),
+  };
+}
+
+function toolAnnotations(name) {
+  const destructive = /delete|remove|write|replace|move|rename|apply|create|derive|validate/.test(String(name));
+  return {
+    title: String(name),
+    readOnlyHint: !destructive,
+    destructiveHint: /delete|remove|replace|move|rename|apply/.test(String(name)),
+    idempotentHint: /show|inspect|list|read|validate/.test(String(name)),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
 }
 
 function asRecord(value) {

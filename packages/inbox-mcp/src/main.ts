@@ -54,7 +54,9 @@ export async function runStdioServer(options: unknown): Promise<void> {
       requests = lines.filter((line) => line.trim()).map((line) => asRecord(JSON.parse(line)));
     }
     for (const request of requests) {
+      sendProgress(request, 0, 'started', { framed: sawFramedInput });
       const response = handleRequest(request, state);
+      sendProgress(request, 1, 'completed', { framed: sawFramedInput });
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
     }
   }
@@ -84,16 +86,43 @@ function dispatchMethod(method: string, params: InboxRecord, state: InboxServerS
     case 'initialize':
       return {
         protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: state.serverName, version: SERVER_VERSION },
       };
     case 'tools/list':
       return { tools: listTools() };
     case 'tools/call':
       return callTool(params, state);
+    case 'prompts/list':
+      return { prompts: listPrompts() };
+    case 'prompts/get':
+      return promptGet(params);
+    case 'completion/complete':
+      return completeArgument(params);
+    case 'logging/setLevel':
+      return {};
     default:
       throw new Error(`unsupported_mcp_method: ${method}`);
   }
+}
+
+function listPrompts() {
+  return [{ name: 'inbox_triage_workflow', title: 'Inbox Triage Workflow', description: 'Guidance for inbox intake and triage.', arguments: [] }];
+}
+
+function promptGet(params: InboxRecord) {
+  const name = String(params.name ?? '');
+  if (name !== 'inbox_triage_workflow') throw new Error(`unknown_prompt: ${name}`);
+  return {
+    description: 'Guidance for inbox intake and triage.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use inbox_list or inbox_next to inspect actionable envelopes, then use inbox_show before disposition or follow-up workflows.' } }],
+  };
+}
+
+function completeArgument(params: InboxRecord) {
+  const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
+  const values = argumentName === 'name' ? listTools().map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
 }
 
 export function listTools(): unknown[] {
@@ -315,13 +344,30 @@ function tool(name: string, description: string, properties: unknown, required: 
   return {
     name,
     description,
+    annotations: toolAnnotations(name),
     inputSchema: {
       type: 'object',
       properties,
       additionalProperties: false,
       ...(required.length > 0 ? { required } : {}),
     },
+    outputSchema: genericToolOutputSchema(),
   };
+}
+
+function toolAnnotations(name: string) {
+  const writes = /submit|next|capability_next/.test(name);
+  return {
+    title: name,
+    readOnlyHint: !writes,
+    destructiveHint: false,
+    idempotentHint: /doctor|list|show|queue/.test(name),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
 }
 
 function parseArgs(argv: string[]): InboxRecord {
@@ -366,6 +412,16 @@ function writeJsonRpcResponse(payload: unknown, options: unknown = {}): void {
   const text = JSON.stringify(payload);
   if (optionsRecord.framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(text, 'utf8')}\r\n\r\n${text}`);
   else process.stdout.write(`${text}\n`);
+}
+
+function sendProgress(request: InboxRecord, progress: number, message: string, options: unknown): void {
+  const progressToken = asRecord(asRecord(request.params)._meta).progressToken;
+  if (progressToken === undefined) return;
+  writeJsonRpcResponse({
+    jsonrpc: '2.0',
+    method: 'notifications/progress',
+    params: { progressToken, progress, total: 1, message },
+  }, options);
 }
 
 function errorDiagnostic(error: unknown): { schema: string; message: string } {

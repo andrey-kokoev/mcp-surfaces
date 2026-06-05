@@ -17,22 +17,26 @@ import type { GitMcpState } from './state.js';
 
 const PREVIEW_CHAR_LIMIT = 1000;
 
-export async function callGitTool(name: string, args: Record<string, unknown>, state: GitMcpState): Promise<unknown> {
+export type GitRequestContext = {
+  abortSignal?: AbortSignal;
+};
+
+export async function callGitTool(name: string, args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<unknown> {
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
-  if (name === 'git_status') return gitStatus(args, state);
-  if (name === 'git_diff') return gitDiff(args, state);
-  if (name === 'git_add') return gitAdd(args, state);
-  if (name === 'git_commit') return gitCommit(args, state);
-  if (name === 'git_push') return gitPush(args, state);
-  if (name === 'git_log') return gitLog(args, state);
-  if (name === 'git_show') return gitShow(args, state);
+  if (name === 'git_status') return gitStatus(args, state, context);
+  if (name === 'git_diff') return gitDiff(args, state, context);
+  if (name === 'git_add') return gitAdd(args, state, context);
+  if (name === 'git_commit') return gitCommit(args, state, context);
+  if (name === 'git_push') return gitPush(args, state, context);
+  if (name === 'git_log') return gitLog(args, state, context);
+  if (name === 'git_show') return gitShow(args, state, context);
   throw diagnosticError('git_mcp_unknown_tool', `git_mcp_unknown_tool:${name}`, { tool_name: name });
 }
 
-export async function gitStatus(args: Record<string, unknown>, state: GitMcpState): Promise<Record<string, unknown>> {
+export async function gitStatus(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
   const cwd = resolveWorkingDirectory(args, state);
-  const root = await gitText(cwd, ['rev-parse', '--show-toplevel'], state.policy, 'git_status_failed');
-  const status = await gitText(cwd, ['status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'], state.policy, 'git_status_failed');
+  const root = await gitText(cwd, ['rev-parse', '--show-toplevel'], state.policy, 'git_status_failed', context);
+  const status = await gitText(cwd, ['status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'], state.policy, 'git_status_failed', context);
   const parsed = parseStatus(status);
   return {
     schema: 'narada.git.status.v1',
@@ -43,7 +47,7 @@ export async function gitStatus(args: Record<string, unknown>, state: GitMcpStat
   };
 }
 
-export async function gitDiff(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitDiff(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const cwd = resolveWorkingDirectory(args, state);
   const scope = stringEnum(args.scope, ['working', 'staged', 'commit'], 'working');
   const pathspec = optionalPathspec(args.pathspec);
@@ -53,7 +57,7 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState)
       ? ['show', '--format=', '--patch', '--no-ext-diff', requireCommitish(args.commit)]
       : ['diff', '--no-ext-diff'];
   if (pathspec) gitArgs.push('--', pathspec);
-  const result = await runGit(cwd, gitArgs, state.policy);
+  const result = await runGit(cwd, gitArgs, state.policy, context);
   ensureGitOk(result, 'git_diff_failed');
   const diff = result.output_text;
   return {
@@ -71,14 +75,14 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState)
   };
 }
 
-export async function gitAdd(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_add');
   const cwd = resolveWorkingDirectory(args, state);
-  const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy))));
+  const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context))));
   if (paths.length === 0) throw diagnosticError('git_add_requires_paths');
-  const result = await runGit(cwd, ['add', '--', ...paths], state.policy);
+  const result = await runGit(cwd, ['add', '--', ...paths], state.policy, context);
   ensureGitOk(result, 'git_add_failed');
-  const status = await gitStatus({ working_directory: cwd }, state);
+  const status = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.add.v1',
     status: 'ok',
@@ -92,20 +96,20 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState) 
   return payload;
 }
 
-export async function gitCommit(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitCommit(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_commit');
   const cwd = resolveWorkingDirectory(args, state);
   const message = requiredNonEmptyString(args.message, 'git_commit_requires_message');
   const body = optionalNonEmptyString(args.body);
-  const statusBefore = await gitStatus({ working_directory: cwd }, state);
+  const statusBefore = await gitStatus({ working_directory: cwd }, state, context);
   if (!Array.isArray(statusBefore.staged) || statusBefore.staged.length === 0) {
     throw diagnosticError('git_commit_requires_staged_changes');
   }
   const commitArgs = ['commit', '-m', message];
   if (body) commitArgs.push('-m', body);
-  const result = await runGit(cwd, commitArgs, state.policy);
+  const result = await runGit(cwd, commitArgs, state.policy, context);
   ensureGitOk(result, 'git_commit_failed');
-  const commit = (await gitText(cwd, ['rev-parse', 'HEAD'], state.policy, 'git_commit_failed')).trim();
+  const commit = (await gitText(cwd, ['rev-parse', 'HEAD'], state.policy, 'git_commit_failed', context)).trim();
   const committedEntries = Array.isArray(statusBefore.status_entries)
     ? statusBefore.status_entries.filter((entry) => asStatusEntry(entry).staged)
     : [];
@@ -120,13 +124,13 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
     committed_file_count: committedEntries.length,
     summary: firstNonEmptyLine(result.output_text) ?? `created ${commit}`,
     output: combineOutput(result),
-    post_status: await gitStatus({ working_directory: cwd }, state),
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
   };
   audit(state, payload);
   return payload;
 }
 
-export async function gitPush(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitPush(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_push');
   const cwd = resolveWorkingDirectory(args, state);
   const remote = optionalRefName(args.remote, 'remote');
@@ -136,9 +140,9 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState)
     if (!remote || !branch) throw diagnosticError('git_push_remote_and_branch_required_together');
     pushArgs.push(remote, branch);
   }
-  const before = await gitStatus({ working_directory: cwd }, state);
-  const effectiveTarget = await resolvePushTarget(cwd, remote, branch, state.policy);
-  const result = await runGit(cwd, pushArgs, state.policy);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  const effectiveTarget = await resolvePushTarget(cwd, remote, branch, state.policy, context);
+  const result = await runGit(cwd, pushArgs, state.policy, context);
   ensureGitOk(result, 'git_push_failed');
   const payload = {
     schema: 'narada.git.push.v1',
@@ -152,19 +156,19 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState)
     ...(effectiveTarget.reason ? { effective_target_reason: effectiveTarget.reason } : {}),
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state),
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
   };
   audit(state, payload);
   return payload;
 }
 
-export async function gitLog(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitLog(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const cwd = resolveWorkingDirectory(args, state);
   const limit = clampInteger(args.limit, 1, 100, 20);
   const pathspec = optionalPathspec(args.pathspec);
   const gitArgs = ['log', `-${limit}`, '--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s'];
   if (pathspec) gitArgs.push('--', pathspec);
-  const output = await gitText(cwd, gitArgs, state.policy, 'git_log_failed');
+  const output = await gitText(cwd, gitArgs, state.policy, 'git_log_failed', context);
   const commits = output.split(/\r?\n/).filter(Boolean).map((line) => {
     const [hash, shortHash, authorName, authorEmail, authorDate, subject] = line.split('\x1f');
     return { hash, short_hash: shortHash, author_name: authorName, author_email: authorEmail, author_date: authorDate, subject };
@@ -180,16 +184,16 @@ export async function gitLog(args: Record<string, unknown>, state: GitMcpState) 
   };
 }
 
-export async function gitShow(args: Record<string, unknown>, state: GitMcpState) {
+export async function gitShow(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const cwd = resolveWorkingDirectory(args, state);
   const commit = requireCommitish(args.commit);
   const includePatch = args.include_patch !== false;
   const pathspec = optionalPathspec(args.pathspec);
-  const metadata = await gitText(cwd, ['show', '--no-patch', '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b', commit], state.policy, 'git_show_failed');
+  const metadata = await gitText(cwd, ['show', '--no-patch', '--format=%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%b', commit], state.policy, 'git_show_failed', context);
   const [hash, shortHash, authorName, authorEmail, authorDate, subject, ...bodyParts] = metadata.split('\x1f');
   const patchArgs = ['show', '--format=', '--patch', '--no-ext-diff', commit];
   if (pathspec) patchArgs.push('--', pathspec);
-  const patchResult = includePatch ? await runGit(cwd, patchArgs, state.policy) : null;
+  const patchResult = includePatch ? await runGit(cwd, patchArgs, state.policy, context) : null;
   if (patchResult) ensureGitOk(patchResult, 'git_show_failed');
   const patch = patchResult ? patchResult.output_text.trimStart() : '';
   return {
@@ -218,16 +222,16 @@ function resolveWorkingDirectory(args: Record<string, unknown>, state: GitMcpSta
   return resolvePolicyWorkingDirectory(args.working_directory, state.policy);
 }
 
-async function resolvePushTarget(cwd: string, remote: string | null, branch: string | null, policy: GitMcpPolicy) {
+async function resolvePushTarget(cwd: string, remote: string | null, branch: string | null, policy: GitMcpPolicy, context: GitRequestContext = {}) {
   if (remote && branch) return { status: 'resolved', remote, branch, reason: null };
-  const currentBranchResult = await runGit(cwd, ['branch', '--show-current'], policy);
+  const currentBranchResult = await runGit(cwd, ['branch', '--show-current'], policy, context);
   if (currentBranchResult.exit_code !== 0 || currentBranchResult.timed_out) {
     return { status: 'unresolved', remote: null, branch: null, reason: 'current_branch_unavailable' };
   }
   const currentBranch = currentBranchResult.output_text.trim() || null;
   if (!currentBranch) return { status: 'unresolved', remote: null, branch: null, reason: 'detached_head_or_unborn_branch' };
-  const upstreamRemoteResult = await runGit(cwd, ['config', '--get', `branch.${currentBranch}.remote`], policy);
-  const upstreamMergeResult = await runGit(cwd, ['config', '--get', `branch.${currentBranch}.merge`], policy);
+  const upstreamRemoteResult = await runGit(cwd, ['config', '--get', `branch.${currentBranch}.remote`], policy, context);
+  const upstreamMergeResult = await runGit(cwd, ['config', '--get', `branch.${currentBranch}.merge`], policy, context);
   if (upstreamRemoteResult.exit_code !== 0 || upstreamMergeResult.exit_code !== 0) {
     return { status: 'unresolved', remote: null, branch: currentBranch, reason: 'upstream_not_configured' };
   }

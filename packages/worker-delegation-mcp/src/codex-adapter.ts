@@ -1,23 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, readFileSync } from 'node:fs';
+import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
 
-export type ResolvedWorkerConfig = {
-  runtime: 'codex';
-  command: string;
-  argv: string[];
-  cwd: string;
-  sandbox: string;
-  model: string | null;
-  reasoning_effort: string | null;
-  config: Record<string, string | number | boolean>;
-  skip_git_repo_check: boolean;
-  ephemeral: boolean;
-  json_events: boolean;
-  prompt_byte_length: number;
-  max_output_bytes: number;
-  max_run_ms: number;
-  environment_keys: string[];
-};
+export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
 export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[] };

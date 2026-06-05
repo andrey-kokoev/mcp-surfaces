@@ -1,6 +1,6 @@
 import { listOutputTools } from '@narada2/mcp-transport';
 
-export function listTools(mode: string = 'read') {
+export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const readTools = [
     {
       name: 'git_policy_inspect',
@@ -76,9 +76,28 @@ export function listTools(mode: string = 'read') {
   const renderedWriteTools = mode === 'write'
     ? writeTools
     : writeTools.map((tool) => ({ ...tool, description: `${tool.description} Requires git-mcp mode=write.` }));
-  return [...readTools, ...renderedWriteTools];
+  return decorateTools([...readTools, ...renderedWriteTools]);
 }
 
 function objectSchema(properties: Record<string, unknown>, required: string[] = []) {
   return { type: 'object', properties, required, additionalProperties: false };
+}
+
+function decorateTools(tools: Array<Record<string, any>>): Array<Record<string, any>> {
+  return tools.map((tool) => ({ ...tool, annotations: toolAnnotations(String(tool.name)), outputSchema: genericToolOutputSchema() }));
+}
+
+function toolAnnotations(name: string) {
+  const writes = /git_add|git_commit|git_push/.test(name);
+  return {
+    title: name,
+    readOnlyHint: !writes,
+    destructiveHint: false,
+    idempotentHint: /inspect|status|diff|log|show|output_show/.test(name),
+    openWorldHint: false,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
 }

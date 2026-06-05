@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import {
   buildOutputRefToolContent,
   enforceInlinePayloadLimit,
+  listOutputResources,
   listOutputTools,
   outputShow,
   payloadCreate,
   payloadShow,
+  readOutputResource,
 } from '../src/mcp-payload-file.js';
 
 const exactly200 = 'x'.repeat(200);
@@ -63,6 +65,14 @@ try {
   assert.equal(envelope.ref, envelope.output_ref);
   assert.equal(envelope.reader_tool, 'mcp_output_show');
   assert.equal(envelope.inline_limit, 200);
+  assert.equal(longResult.content[1].type, 'resource_link');
+  assert.equal(longResult.content[1].uri, `mcp-output:${encodeURIComponent(envelope.output_ref)}`);
+
+  const resources = listOutputResources({ siteRoot: tempRoot }).resources;
+  assert.equal(resources.length, 1);
+  assert.equal(resources[0].uri, longResult.content[1].uri);
+  const resource = readOutputResource({ siteRoot: tempRoot, uri: resources[0].uri });
+  assert.deepEqual(JSON.parse(resource.contents[0].text), longValue);
 
   const shown = outputShow({ siteRoot: tempRoot, args: { ref: envelope.ref } });
   assert.deepEqual(JSON.parse(shown.output_text), longValue);

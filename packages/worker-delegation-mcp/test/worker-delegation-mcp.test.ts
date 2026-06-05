@@ -27,7 +27,7 @@ process.stdin.on('end', () => {
   process.stdout.write(JSON.stringify({ thread_id: isResume ? 'thread-resumed' : 'thread-created' }) + '\\n');
   fs.writeFileSync(lastMessagePath, JSON.stringify({
     summary: isResume ? 'resumed worker ok' : 'worker ok',
-    deliverables: [{ path: 'result.txt', description: prompt.includes('Task') ? 'saw task' : 'missing task' }],
+    deliverables: [{ path: 'result.txt', description: prompt.includes('Intent') ? 'saw intent' : 'missing intent' }],
     open_questions: [],
     next_actions: ['done']
   }));
@@ -66,7 +66,7 @@ const deniedRuntime = await rpc({
   jsonrpc: '2.0',
   id: 3,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: root, task: 'x', runtime: 'agent-cli' } },
+  params: { name: 'worker_run', arguments: runArgs('x', { runtime: 'agent-cli' }) },
 }, state);
 assert.equal(deniedRuntime.error?.data.schema, 'narada.worker.error.v1');
 assert.equal(deniedRuntime.error?.data.code, 'worker_invalid_runtime');
@@ -75,7 +75,7 @@ const deniedConfig = await rpc({
   jsonrpc: '2.0',
   id: 4,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: root, task: 'x', config: { shell_environment_policy: 'all' } } },
+  params: { name: 'worker_run', arguments: runArgs('x', { config: { shell_environment_policy: 'all' } }) },
 }, state);
 assert.equal(deniedConfig.error?.data.code, 'worker_config_key_not_allowed');
 
@@ -83,7 +83,7 @@ const deniedRawOverrides = await rpc({
   jsonrpc: '2.0',
   id: 41,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: root, task: 'x', config_overrides: ['model=\"x\"'] } },
+  params: { name: 'worker_run', arguments: { ...runArgs('x'), config_overrides: ['model=\"x\"'] } },
 }, state);
 assert.equal(deniedRawOverrides.error?.data.code, 'worker_raw_config_overrides_not_allowed');
 
@@ -98,15 +98,18 @@ const allowedConfigRun = await rpc({
   jsonrpc: '2.0',
   id: 5,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: root, task: 'run with allowed config', model: 'gpt-test', reasoning_effort: 'low', config: { model: 'gpt-test' } } },
+  params: { name: 'worker_run', arguments: runArgs('run with allowed config', { model: 'gpt-test', reasoning_effort: 'low', config: { model: 'gpt-test' } }) },
 }, state);
 assert.equal(allowedConfigRun.result?.structuredContent.status, 'completed');
 assert.equal(allowedConfigRun.result?.structuredContent.worker_session_id, 'thread-created');
 assert.equal(allowedConfigRun.result?.structuredContent.summary, 'worker ok');
 const completedRunDir = allowedConfigRun.result?.structuredContent.run_dir;
-for (const file of ['request.json', 'resolved_worker_config.json', 'worker_prompt.txt', 'worker_invocation.json', 'events.jsonl', 'diagnostic.log', 'last_message.json', 'result.json', 'worker_output.schema.json']) {
+for (const file of ['request.json', 'executor_request.json', 'resolved_worker_config.json', 'worker_prompt.txt', 'worker_invocation.json', 'events.jsonl', 'diagnostic.log', 'last_message.json', 'result.json', 'worker_output.schema.json']) {
   assert.equal(existsSync(join(completedRunDir, file)), true, file);
 }
+const request = JSON.parse(readFileSync(join(completedRunDir, 'request.json'), 'utf8'));
+assert.equal(request.intent.instruction, 'run with allowed config');
+assert.equal(request.constraints.cwd, root);
 const resolvedConfig = JSON.parse(readFileSync(join(completedRunDir, 'resolved_worker_config.json'), 'utf8'));
 assert.equal(resolvedConfig.runtime, 'codex');
 assert.equal(resolvedConfig.command, process.execPath);
@@ -114,6 +117,10 @@ assert.equal(resolvedConfig.config.model, 'gpt-test');
 assert.equal(resolvedConfig.config.model_reasoning_effort, 'low');
 assert.deepEqual(resolvedConfig.environment_keys, ['PATH']);
 assert.equal(JSON.stringify(resolvedConfig).includes('must-not-leak'), false);
+const executorRequest = JSON.parse(readFileSync(join(completedRunDir, 'executor_request.json'), 'utf8'));
+assert.equal(executorRequest.schema, 'narada.worker.executor_request.v1');
+assert.equal(executorRequest.intent.instruction, 'run with allowed config');
+assert.equal(executorRequest.resolved_execution_policy.cwd, root);
 const invocation = JSON.parse(readFileSync(join(completedRunDir, 'worker_invocation.json'), 'utf8'));
 assert.equal(invocation.argv[0], 'exec');
 assert.equal(invocation.argv.includes('--json'), true);
@@ -161,7 +168,7 @@ const spawnFailure = await rpc({
   jsonrpc: '2.0',
   id: 61,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: root, task: 'spawn failure' } },
+  params: { name: 'worker_run', arguments: runArgs('spawn failure') },
 }, spawnFailureState);
 assert.equal(spawnFailure.error?.data.code, 'worker_runtime_failed');
 assert.equal(typeof spawnFailure.error?.data.details.run_dir, 'string');
@@ -186,7 +193,7 @@ const badEvent = await rpc({
   jsonrpc: '2.0',
   id: 62,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { cwd: eventRoot, task: 'bad event' } },
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'bad event' }, constraints: { cwd: eventRoot } } },
 }, badEventState);
 assert.equal(badEvent.error?.data.code, 'worker_runtime_failed');
 assert.match(badEvent.error?.data.details.error, /invalid json event/);
@@ -218,4 +225,11 @@ assert.equal(unknown.error?.data.code, 'worker_unknown_tool');
 
 function hasCode(code: string): (error: unknown) => boolean {
   return (error: any) => error?.codeName === code;
+}
+
+function runArgs(instruction: string, constraints: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    intent: { instruction },
+    constraints: { cwd: root, ...constraints },
+  };
 }

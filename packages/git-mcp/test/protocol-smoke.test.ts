@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'git-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -23,13 +23,31 @@ child.stderr.on('data', (chunk) => {
   stderr += chunk;
 });
 
-child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
-child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'git_policy_inspect', arguments: {} } })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { capabilities: { roots: { listChanged: true } } } })}\n`);
+await waitForLines(() => stdout, 2);
+const initialMessages = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+const rootsRequest = initialMessages.find((message) => message.method === 'roots/list');
+assert.ok(rootsRequest);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: rootsRequest.id, result: { roots: [{ uri: pathToFileURL(root).href, name: 'repo-root' }] } })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { _meta: { progressToken: 'git-progress' }, name: 'git_policy_inspect', arguments: {} } })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'completion/complete', params: { argument: { name: 'working_directory' } } })}\n`);
 child.stdin.end();
 
 const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
 assert.equal(exitCode, 0, stderr);
 
 const responses = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-assert.equal(responses[1].result.structuredContent.mode, 'read');
-assert.match(responses[1].result.content[0].text, /git_policy: ok/);
+assert.equal(responses.some((message) => message.method === 'notifications/progress'), true);
+const policyResponse = responses.find((message) => message.id === 2);
+assert.equal(policyResponse.result.structuredContent.mode, 'read');
+assert.match(policyResponse.result.content[0].text, /git_policy: ok/);
+const completionResponse = responses.find((message) => message.id === 3);
+assert.equal(completionResponse.result.completion.values.includes(root), true);
+
+async function waitForLines(read: () => string, count: number) {
+  const started = Date.now();
+  while (read().trim().split(/\r?\n/).filter(Boolean).length < count) {
+    if (Date.now() - started > 5000) throw new Error(`timed out waiting for ${count} lines`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}

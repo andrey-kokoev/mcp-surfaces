@@ -80,7 +80,22 @@ const TOOLS = [
     drain: { type: 'boolean', description: 'Drain eligible intake when supported.' },
     source_sync: { type: 'boolean', description: 'Request source sync before loop processing.' },
   }),
-];
+].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+
+function toolAnnotations(name: string) {
+  const writes = /run|ack|control_set|autopilot_step/.test(name);
+  return {
+    title: name,
+    readOnlyHint: !writes,
+    destructiveHint: /control_set/.test(name),
+    idempotentHint: /doctor|list|show|status|health|readiness|coherence/.test(name),
+    openWorldHint: true,
+  };
+}
+
+function genericToolOutputSchema() {
+  return { type: 'object', additionalProperties: true };
+}
 
 let inputBuffer = '';
 process.stdin.setEncoding('utf8');
@@ -149,10 +164,11 @@ function readFramedMessage() {
 async function handleMessage(message) {
   const id = message?.id ?? null;
   try {
+    sendProgress(message, 0, 'started');
     if (message.method === 'initialize') {
       respond(id, {
         protocolVersion: message.params?.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       });
       return;
@@ -167,10 +183,47 @@ async function handleMessage(message) {
       respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
       return;
     }
+    if (message.method === 'prompts/list') {
+      respond(id, { prompts: listPrompts() });
+      return;
+    }
+    if (message.method === 'prompts/get') {
+      respond(id, promptGet(message.params ?? {}));
+      return;
+    }
+    if (message.method === 'completion/complete') {
+      respond(id, completeArgument(message.params ?? {}));
+      return;
+    }
+    if (message.method === 'logging/setLevel') {
+      respond(id, {});
+      return;
+    }
     respondError(id, new Error(`unsupported_method: ${message.method}`));
   } catch (error) {
     respondError(id, error);
+  } finally {
+    sendProgress(message, 1, 'completed');
   }
+}
+
+function listPrompts() {
+  return [{ name: 'site_ops_workflow', title: 'Site Ops Workflow', description: 'Guidance for site operations tools.', arguments: [] }];
+}
+
+function promptGet(params) {
+  const name = String(params.name ?? '');
+  if (name !== 'site_ops_workflow') throw new Error(`unknown_prompt: ${name}`);
+  return {
+    description: 'Guidance for site operations tools.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Inspect readiness, health, and coherence before running site operations or changing loop control flags.' } }],
+  };
+}
+
+function completeArgument(params) {
+  const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
+  const values = argumentName === 'name' ? TOOLS.map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
 }
 
 function assistantTextContent(text: string) {
@@ -312,6 +365,16 @@ function respondError(id, error) {
     jsonrpc: '2.0',
     id,
     error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+  });
+}
+
+function sendProgress(message, progress, progressMessage) {
+  const progressToken = message?.params?._meta?.progressToken;
+  if (progressToken === undefined) return;
+  writeMessage({
+    jsonrpc: '2.0',
+    method: 'notifications/progress',
+    params: { progressToken, progress, total: 1, message: progressMessage },
   });
 }
 

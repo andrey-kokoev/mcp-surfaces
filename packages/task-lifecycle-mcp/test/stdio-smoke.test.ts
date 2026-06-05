@@ -3,7 +3,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
 import { runJsonRpcStdioServer } from '../src/kernel/stdio-json-rpc.js';
 
-const stdin = Readable.from(['{"jsonrpc":"2.0","id":1,"method":"ping"}\n']);
+const stdin = Readable.from(['{"jsonrpc":"2.0","id":1,"method":"ping","params":{"_meta":{"progressToken":"task-progress"}}}\n']);
 const stdout = new PassThrough();
 let output = '';
 stdout.setEncoding('utf8');
@@ -19,7 +19,9 @@ stdout.end();
 await once(stdout, 'end');
 
 const lines = output.trim().split(/\r?\n/).filter(Boolean);
-assert.equal(lines.length, 1);
-assert.deepEqual(JSON.parse(lines[0]), { jsonrpc: '2.0', id: 1, result: { status: 'ok' } });
+assert.equal(lines.length, 3);
+assert.deepEqual(JSON.parse(lines[0]), { jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 'task-progress', progress: 0, total: 1, message: 'started' } });
+assert.deepEqual(JSON.parse(lines[1]), { jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 'task-progress', progress: 1, total: 1, message: 'completed' } });
+assert.deepEqual(JSON.parse(lines[2]), { jsonrpc: '2.0', id: 1, result: { status: 'ok' } });
 
 console.log('task-lifecycle-mcp stdio smoke ok');

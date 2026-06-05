@@ -37,6 +37,7 @@ import {
   attachPayloadSource,
   buildOutputRefToolContent,
   enforceInlinePayloadLimit,
+  listOutputResources,
   listOutputTools,
   listPayloadTools,
   outputShow,
@@ -44,6 +45,7 @@ import {
   payloadDerive,
   payloadShow,
   payloadValidate,
+  readOutputResource,
   resolveToolPayloadArgs,
 } from '../mcp-payload-file.js';
 import {
@@ -649,7 +651,11 @@ async function dispatchMethod(method, params) {
       return {
         protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
         capabilities: {
-          tools: {}
+          tools: {},
+          resources: {},
+          prompts: {},
+          completions: {},
+          logging: {},
         },
         serverInfo: {
           name: 'narada-task-lifecycle-mcp',
@@ -662,9 +668,40 @@ async function dispatchMethod(method, params) {
       };
     case 'tools/call':
       return await callTool(params);
+    case 'resources/list':
+      return listOutputResources({ siteRoot });
+    case 'resources/read':
+      return readOutputResource({ siteRoot, uri: params.uri });
+    case 'prompts/list':
+      return { prompts: listPrompts() };
+    case 'prompts/get':
+      return promptGet(params);
+    case 'completion/complete':
+      return completeArgument(params);
+    case 'logging/setLevel':
+      return {};
     default:
       throw new Error(`unsupported_mcp_method: ${method}`);
   }
+}
+
+function listPrompts() {
+  return [{ name: 'task_lifecycle_workflow', title: 'Task Lifecycle Workflow', description: 'Guidance for governed task lifecycle operations.', arguments: [] }];
+}
+
+function promptGet(params) {
+  const name = String(params.name ?? '');
+  if (name !== 'task_lifecycle_workflow') throw new Error(`unknown_prompt: ${name}`);
+  return {
+    description: 'Guidance for governed task lifecycle operations.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Inspect task state before mutation. Admit evidence before finish/close transitions and preserve lifecycle authority details in structuredContent.' } }],
+  };
+}
+
+function completeArgument(params) {
+  const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
+  const values = argumentName === 'name' ? taskLifecycleTools().map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
 }
 
 /**

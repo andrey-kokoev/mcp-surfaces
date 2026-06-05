@@ -7,6 +7,7 @@ export type RunRecordPaths = {
   runId: string;
   runDir: string;
   requestPath: string;
+  executorRequestPath: string;
   resolvedConfigPath: string;
   promptPath: string;
   invocationPath: string;
@@ -28,6 +29,7 @@ export function createRunRecord(policy: WorkerPolicy): RunRecordPaths {
     runId,
     runDir,
     requestPath: join(runDir, 'request.json'),
+    executorRequestPath: join(runDir, 'executor_request.json'),
     resolvedConfigPath: join(runDir, 'resolved_worker_config.json'),
     promptPath: join(runDir, 'worker_prompt.txt'),
     invocationPath: join(runDir, 'worker_invocation.json'),

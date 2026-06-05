@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'worker-delegation-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -23,13 +23,31 @@ child.stderr.on('data', (chunk) => {
   diagnosticText += chunk;
 });
 
-child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { capabilities: { roots: { listChanged: true } } } })}\n`);
+await waitForLines(() => outputText, 2);
+const initialMessages = outputText.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+const rootsRequest = initialMessages.find((message) => message.method === 'roots/list');
+assert.ok(rootsRequest);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: rootsRequest.id, result: { roots: [{ uri: pathToFileURL(root).href, name: 'worker-root' }] } })}\n`);
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'completion/complete', params: { argument: { name: 'cwd' } } })}\n`);
 child.stdin.end();
 
 const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
 assert.equal(exitCode, 0, diagnosticText);
 const responses = outputText.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-assert.equal(responses[0].result.serverInfo.name, 'worker-delegation-mcp');
-assert.equal(responses[1].result.structuredContent.schema, 'narada.worker.policy.v1');
-assert.match(responses[1].result.content[0].text, /worker_policy: ok/);
+const initializeResponse = responses.find((message) => message.id === 1);
+assert.equal(initializeResponse.result.serverInfo.name, 'worker-delegation-mcp');
+const policyResponse = responses.find((message) => message.id === 2);
+assert.equal(policyResponse.result.structuredContent.schema, 'narada.worker.policy.v1');
+assert.match(policyResponse.result.content[0].text, /worker_policy: ok/);
+const completionResponse = responses.find((message) => message.id === 3);
+assert.equal(completionResponse.result.completion.values.includes(root), true);
+
+async function waitForLines(read: () => string, count: number) {
+  const started = Date.now();
+  while (read().trim().split(/\r?\n/).filter(Boolean).length < count) {
+    if (Date.now() - started > 5000) throw new Error(`timed out waiting for ${count} lines`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
