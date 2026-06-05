@@ -62,7 +62,7 @@ export async function runStdioServer(options: Record<string, unknown>) {
 }
 
 export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): WorkerMcpState {
-  return { policy: createWorkerPolicy(options), env, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  return { policy: createWorkerPolicy(options), env, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {

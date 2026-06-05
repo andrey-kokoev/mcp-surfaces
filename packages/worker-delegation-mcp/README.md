@@ -30,15 +30,16 @@ Defaults:
 - runtime: `codex`
 - default profile: `default`
 - allowed runtimes: `codex`
-- allowed profiles: `default`, `delegating-agent-read`, `delegating-agent-write`, `delegating-agent-command`
+- allowed profiles: `default`, `delegating-agent-read`, `delegating-agent-research`, `delegating-agent-write`, `delegating-agent-command`
 - allowed sandboxes: `read-only`, `workspace-write`
 - default sandbox: `read-only`
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
 - edit defaults: `model: "gpt-5.4-mini"`, `reasoning_effort: "low"`
+- profile defaults: `delegating-agent-read`, `delegating-agent-write`, and `delegating-agent-command` use `gpt-5.4-mini` with low reasoning; `delegating-agent-research` uses `gpt-5.4-mini` with medium reasoning
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
-- max parallel runs: `1`
+- max parallel runs: `10`
 - max prompt bytes: `1048576`
 - max output bytes: `2097152`
 - max run time: `1800000` ms
@@ -64,6 +65,10 @@ Common flags:
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable. Omit model overrides unless the runtime account is known to accept the selected model.
 - `--edit-default-reasoning-effort <value>`: default reasoning effort for `worker_edit` when the caller omits one, default `low`.
 - `--edit-default-model <model>`: default model for `worker_edit` when the caller omits one, default `gpt-5.4-mini`.
+- `--profile-read-model <model>` and `--profile-read-reasoning-effort <value>`: defaults for `delegating-agent-read`.
+- `--profile-research-model <model>` and `--profile-research-reasoning-effort <value>`: defaults for `delegating-agent-research`.
+- `--profile-command-model <model>` and `--profile-command-reasoning-effort <value>`: defaults for `delegating-agent-command`.
+- `--max-parallel-runs <count>`: maximum simultaneous worker runs, default `10`; enforced for `worker_run`, `worker_edit`, and `worker_resume`.
 - `--max-run-ms <ms>`, `--max-prompt-bytes <bytes>`, `--max-output-bytes <bytes>`: set limits.
 
 ## Agent Contract
@@ -78,9 +83,10 @@ The worker MCP surface enforces constraints and records the resolved executor re
 Profiles:
 
 - `default`: alias for `delegating-agent-read`.
-- `delegating-agent-read`: inspect within the delegating agent's admitted root envelope; default sandbox `read-only`.
+- `delegating-agent-read`: low-cost inspection within the delegating agent's admitted root envelope; default sandbox `read-only`, default model `gpt-5.4-mini`, default reasoning `low`.
+- `delegating-agent-research`: read-only codebase investigation for vague searches, tracing, and synthesis; default sandbox `read-only`, default model `gpt-5.4-mini`, default reasoning `medium`.
 - `delegating-agent-write`: edit within the delegating agent's admitted root envelope; default sandbox `workspace-write`.
-- `delegating-agent-command`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
+- `delegating-agent-command`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`, default model `gpt-5.4-mini`, default reasoning `low`.
 
 Use `worker_run` for general new work, `worker_edit` for concise edit-capable delegation, and `worker_resume` only when continuing a known `worker_session_id`. `worker_edit` accepts top-level `cwd`, `instruction`, optional `resumable`, and optional `overrides`, then mechanically applies `profile: "delegating-agent-write"`. It defaults to `gpt-5.4-mini` with low reasoning unless the caller or policy overrides it. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
 

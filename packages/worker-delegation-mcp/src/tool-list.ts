@@ -43,7 +43,7 @@ function intentSchema(): Record<string, unknown> {
 function constraintRequestSchema(): Record<string, unknown> {
   return objectSchema({
     cwd: { type: 'string' },
-    profile: { type: 'string', enum: ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command'] },
+    profile: { type: 'string', enum: ['default', 'delegating-agent-read', 'delegating-agent-research', 'delegating-agent-write', 'delegating-agent-command'] },
     resumable: { type: 'boolean' },
     overrides: constraintOverrideSchema(),
   }, ['cwd']);
@@ -103,6 +103,7 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
     max_output_bytes: { type: 'integer' },
     max_run_ms: { type: 'integer' },
     edit_defaults: { type: 'object', additionalProperties: true },
+    profile_defaults: { type: 'object', additionalProperties: true },
     runtimes: { type: 'object', additionalProperties: true },
   }, ['schema', 'status']);
 }

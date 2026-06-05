@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig } from './codex-adapter.js';
-import { defaultSandboxForProfile, environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { defaultConfigForProfile, defaultSandboxForProfile, environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
@@ -22,12 +22,22 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
 }
 
 export async function workerRun(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext = {}, auditTool = resumeSessionId ? 'worker_resume' : 'worker_run'): Promise<Record<string, unknown>> {
+  acquireWorkerRunSlot(state);
+  try {
+    return await workerRunInner(args, state, resumeSessionId, context, auditTool);
+  } finally {
+    releaseWorkerRunSlot(state);
+  }
+}
+
+async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext, auditTool: string): Promise<Record<string, unknown>> {
   const startedAt = new Date();
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
   const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
   const inheritedSession = resumeSessionId ? readWorkerSessionRecord(state.policy, resumeSessionId) : null;
   if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
   const profile = resolveProfile(request.constraints.profile, state.policy);
+  applyProfileDefaults(request, profile, state);
   const overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
@@ -152,6 +162,30 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   if (outcome.status === 'failed') throw diagnosticError('worker_runtime_failed', 'worker_runtime_failed', { error: outcome.error, run_id: runRecord.runId, run_dir: runRecord.runDir });
   if (outcome.status === 'cancelled') throw diagnosticError('worker_runtime_cancelled', 'worker_runtime_cancelled', { run_id: runRecord.runId, run_dir: runRecord.runDir });
   return payload;
+}
+
+function acquireWorkerRunSlot(state: WorkerMcpState): void {
+  if (state.activeRunCount >= state.policy.maxParallelRuns) {
+    throw diagnosticError('worker_parallel_limit_exceeded', 'worker_parallel_limit_exceeded', { active_run_count: state.activeRunCount, max_parallel_runs: state.policy.maxParallelRuns });
+  }
+  state.activeRunCount += 1;
+}
+
+function releaseWorkerRunSlot(state: WorkerMcpState): void {
+  state.activeRunCount = Math.max(0, state.activeRunCount - 1);
+}
+
+function applyProfileDefaults(request: WorkerRunToolInput, profile: ResolvedWorkerConfig['profile'], state: WorkerMcpState): void {
+  const defaults = defaultConfigForProfile(profile, state.policy);
+  if (!defaults.model && !defaults.reasoningEffort) return;
+  const overrides = { ...(request.constraints.overrides ?? {}) };
+  const config = { ...(overrides.config ?? {}) };
+  if (defaults.model && overrides.model === undefined && config.model === undefined) overrides.model = defaults.model;
+  if (defaults.reasoningEffort && overrides.reasoning_effort === undefined && config.model_reasoning_effort === undefined) {
+    overrides.reasoning_effort = defaults.reasoningEffort;
+  }
+  if (Object.keys(config).length > 0) overrides.config = config;
+  if (Object.keys(overrides).length > 0) request.constraints.overrides = overrides;
 }
 
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {

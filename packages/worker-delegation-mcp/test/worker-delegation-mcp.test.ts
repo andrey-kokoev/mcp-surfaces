@@ -62,6 +62,7 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_ins
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_output_show')?.outputSchema?.properties?.schema?.const, 'narada.worker.output_show.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.profile?.enum?.includes('delegating-agent-research'), true);
 
 const initialize = await rpc({ jsonrpc: '2.0', id: 11, method: 'initialize', params: {} }, state);
 assert.deepEqual(Object.keys(initialize.result?.capabilities ?? {}).sort(), ['completions', 'logging', 'prompts', 'resources', 'tools']);
@@ -77,10 +78,14 @@ assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1')
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
 assert.equal(policy.result?.structuredContent.default_profile, 'default');
 assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex']);
-assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command']);
+assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default', 'delegating-agent-read', 'delegating-agent-research', 'delegating-agent-write', 'delegating-agent-command']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
+assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
 assert.deepEqual(policy.result?.structuredContent.edit_defaults, { model: 'gpt-5.4-mini', reasoning_effort: 'low' });
+assert.deepEqual(policy.result?.structuredContent.profile_defaults['delegating-agent-read'], { model: 'gpt-5.4-mini', reasoning_effort: 'low' });
+assert.deepEqual(policy.result?.structuredContent.profile_defaults['delegating-agent-research'], { model: 'gpt-5.4-mini', reasoning_effort: 'medium' });
+assert.deepEqual(policy.result?.structuredContent.profile_defaults['delegating-agent-command'], { model: 'gpt-5.4-mini', reasoning_effort: 'low' });
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
 assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
@@ -130,6 +135,18 @@ assert.throws(() => parseArgs(['--allowed-root']), hasCode('worker_invalid_cli_a
 assert.throws(() => parseArgs(['--codex-command-arg']), hasCode('worker_invalid_cli_args'));
 assert.deepEqual(parseArgs(['--codex-command-arg', 'codex.js', '--codex-command-arg', 'arg2']).codexCommandArgs, ['codex.js', 'arg2']);
 assert.equal(parseArgs(['--edit-default-reasoning-effort', 'minimal']).editDefaultReasoningEffort, 'minimal');
+assert.equal(parseArgs(['--profile-research-reasoning-effort', 'high']).profileResearchReasoningEffort, 'high');
+
+const busyState = createServerState({ allowedRoot: root, runRoot: join(root, 'busy'), codexCommand: process.execPath, maxParallelRuns: 1 });
+busyState.activeRunCount = 1;
+const busyRun = await rpc({
+  jsonrpc: '2.0',
+  id: 42,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('busy worker') },
+}, busyState);
+assert.equal(busyRun.error?.data.code, 'worker_parallel_limit_exceeded');
+assert.equal(busyState.activeRunCount, 1);
 
 const allowedConfigRun = await rpc({
   jsonrpc: '2.0',
@@ -138,6 +155,7 @@ const allowedConfigRun = await rpc({
   params: { name: 'worker_run', arguments: runArgs('run with allowed config', { model: 'gpt-test', reasoning_effort: 'low', config: { model: 'gpt-test' } }) },
 }, state);
 assert.equal(allowedConfigRun.result?.structuredContent.status, 'completed');
+assert.equal(state.activeRunCount, 0);
 assert.equal(allowedConfigRun.result?.structuredContent.worker_session_id, 'thread-created');
 assert.equal(allowedConfigRun.result?.structuredContent.summary, 'worker ok');
 const completedRunDir = allowedConfigRun.result?.structuredContent.run_dir;
@@ -198,6 +216,17 @@ const readProfile = await rpc({
   params: { name: 'worker_run', arguments: runArgs('read profile', {}, 'delegating-agent-read') },
 }, state);
 assert.equal(readProfile.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
+assert.equal(readProfile.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(readProfile.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+const researchProfile = await rpc({
+  jsonrpc: '2.0',
+  id: 541,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('research profile', {}, 'delegating-agent-research') },
+}, state);
+assert.equal(researchProfile.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
+assert.equal(researchProfile.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(researchProfile.result?.structuredContent.resolved_worker_config.reasoning_effort, 'medium');
 const writeProfile = await rpc({
   jsonrpc: '2.0',
   id: 55,
@@ -212,6 +241,8 @@ const commandProfile = await rpc({
   params: { name: 'worker_run', arguments: runArgs('command profile', {}, 'delegating-agent-command') },
 }, state);
 assert.equal(commandProfile.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
+assert.equal(commandProfile.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(commandProfile.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 
 const editRun = await rpc({
   jsonrpc: '2.0',

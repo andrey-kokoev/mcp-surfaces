@@ -4,7 +4,12 @@ import { diagnosticError } from './errors.js';
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type PrimitiveConfigValue = string | number | boolean;
-export type WorkerProfile = 'default' | 'delegating-agent-read' | 'delegating-agent-write' | 'delegating-agent-command';
+export type WorkerProfile = 'default' | 'delegating-agent-read' | 'delegating-agent-research' | 'delegating-agent-write' | 'delegating-agent-command';
+
+export type WorkerProfileDefaults = {
+  model: string | null;
+  reasoningEffort: string | null;
+};
 
 export type WorkerPolicy = {
   defaultRuntime: 'codex';
@@ -27,6 +32,7 @@ export type WorkerPolicy = {
     model: string | null;
     reasoningEffort: string | null;
   };
+  profileDefaults: Record<WorkerProfile, WorkerProfileDefaults>;
   runtimes: {
     codex: {
       command: string;
@@ -43,7 +49,7 @@ const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
 const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY'];
-const WORKER_PROFILES: WorkerProfile[] = ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command'];
+const WORKER_PROFILES: WorkerProfile[] = ['default', 'delegating-agent-read', 'delegating-agent-research', 'delegating-agent-write', 'delegating-agent-command'];
 
 export function createWorkerPolicy(options: Record<string, unknown> = {}): WorkerPolicy {
   const fileConfig = typeof options.config === 'string' && options.config.trim() ? parseConfigFile(options.config) : {};
@@ -52,6 +58,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const roots = asRecord(worker.roots);
   const policy = asRecord(worker.policy);
   const editDefaults = asRecord(worker.edit_defaults);
+  const profiles = asRecord(worker.profiles);
   const runtimes = asRecord(worker.runtimes);
   const codex = asRecord(runtimes.codex);
 
@@ -88,7 +95,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     allowedConfigKeys: stringList(merged.allowedConfigKey ?? merged.allowedConfigKeys ?? policy.allowed_config_keys ?? ['model', 'model_reasoning_effort']),
     allowRawConfigOverrides: booleanValue(merged.allowRawConfigOverrides ?? policy.allow_raw_config_overrides, false),
     allowDangerFullAccess,
-    maxParallelRuns: strictInteger(merged.maxParallelRuns ?? policy.max_parallel_runs, 1, 32, 1, 'max_parallel_runs'),
+    maxParallelRuns: strictInteger(merged.maxParallelRuns ?? policy.max_parallel_runs, 1, 32, 10, 'max_parallel_runs'),
     maxPromptBytes: strictInteger(merged.maxPromptBytes ?? policy.max_prompt_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_PROMPT_BYTES, 'max_prompt_bytes'),
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
@@ -96,6 +103,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
       model: stringOrNull(merged.editDefaultModel ?? editDefaults.model ?? 'gpt-5.4-mini'),
       reasoningEffort: stringOrNull(merged.editDefaultReasoningEffort ?? editDefaults.reasoning_effort ?? 'low'),
     },
+    profileDefaults: profileDefaults(profiles, merged),
     runtimes: {
       codex: {
         command: codexCommand,
@@ -107,6 +115,10 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
       },
     },
   };
+}
+
+export function defaultConfigForProfile(profile: WorkerProfile, policy: WorkerPolicy): WorkerProfileDefaults {
+  return policy.profileDefaults[profile] ?? policy.profileDefaults.default;
 }
 
 export function resolveProfile(value: unknown, policy: WorkerPolicy): WorkerProfile {
@@ -144,6 +156,10 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       model: policy.editDefaults.model,
       reasoning_effort: policy.editDefaults.reasoningEffort,
     },
+    profile_defaults: Object.fromEntries(Object.entries(policy.profileDefaults).map(([profile, defaults]) => [profile, {
+      model: defaults.model,
+      reasoning_effort: defaults.reasoningEffort,
+    }])),
     runtimes: {
       codex: {
         command: policy.runtimes.codex.command,
@@ -284,6 +300,30 @@ function normalizeAllowedRoots(roots: unknown[]): string[] {
 
 function mergeConfig(fileConfig: Record<string, unknown>, options: Record<string, unknown>): Record<string, unknown> {
   return { ...fileConfig, ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'config')) };
+}
+
+function profileDefaults(profiles: Record<string, unknown>, options: Record<string, unknown>): Record<WorkerProfile, WorkerProfileDefaults> {
+  const readDefaults = profileDefault('delegating-agent-read', profiles, options, 'gpt-5.4-mini', 'low');
+  const researchDefaults = profileDefault('delegating-agent-research', profiles, options, 'gpt-5.4-mini', 'medium');
+  const writeDefaults = profileDefault('delegating-agent-write', profiles, options, 'gpt-5.4-mini', 'low');
+  const commandDefaults = profileDefault('delegating-agent-command', profiles, options, 'gpt-5.4-mini', 'low');
+  return {
+    default: readDefaults,
+    'delegating-agent-read': readDefaults,
+    'delegating-agent-research': researchDefaults,
+    'delegating-agent-write': writeDefaults,
+    'delegating-agent-command': commandDefaults,
+  };
+}
+
+function profileDefault(profile: WorkerProfile, profiles: Record<string, unknown>, options: Record<string, unknown>, defaultModel: string | null, defaultReasoningEffort: string | null): WorkerProfileDefaults {
+  const key = profile.replace(/^delegating-agent-/, '').replace(/-/g, '_');
+  const config = asRecord(profiles[key]);
+  const pascal = key.split('_').map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`).join('');
+  return {
+    model: stringOrNull(options[`profile${pascal}Model`] ?? config.model ?? defaultModel),
+    reasoningEffort: stringOrNull(options[`profile${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? defaultReasoningEffort),
+  };
 }
 
 function defaultRunRoot(): string {
