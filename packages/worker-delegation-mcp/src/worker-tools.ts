@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig } from './codex-adapter.js';
-import { environmentForWorker, publicWorkerPolicy, resolveConfig, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, writeJson, writeText, writeWorkerOutputSchema } from './run-record.js';
 import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
 import type { PrimitiveConfigValue } from './policy.js';
-import type { WorkerConstraintRequest, WorkerExecutorRequest, WorkerIntent, WorkerRunToolInput } from './worker-types.js';
+import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerExecutorRequest, WorkerIntent, WorkerRunToolInput } from './worker-types.js';
 
 export type WorkerRequestContext = {
   abortSignal?: AbortSignal;
@@ -24,10 +24,12 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   const startedAt = new Date();
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
   const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
-  const runtime = validateRuntime(request.constraints.runtime, state.policy);
+  const profile = resolveProfile(request.constraints.profile, state.policy);
+  const overrides = request.constraints.overrides ?? {};
+  const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
-  const sandbox = resolveSandbox(request.constraints.sandbox, state.policy);
-  const resolvedConfigInput = resolveConfig(request.constraints, state.policy);
+  const sandbox = resolveSandbox(overrides.sandbox, state.policy);
+  const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
@@ -35,7 +37,7 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   const runRecord = createRunRecord(state.policy);
   writeWorkerOutputSchema(runRecord.schemaPath);
   const codexRuntime = state.policy.runtimes.codex;
-  const skipGitRepoCheck = Boolean(request.constraints.skip_git_repo_check);
+  const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
   const argv = buildCodexArgv({
     cwd,
     sandbox,
@@ -49,6 +51,7 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   const environment = environmentForWorker(state.env);
   const resolvedWorkerConfig: ResolvedWorkerConfig = {
     runtime,
+    profile,
     command: codexRuntime.command,
     argv,
     cwd,
@@ -161,20 +164,26 @@ function normalizeWorkerRunToolInput(args: Record<string, unknown>, isResume: bo
 }
 
 function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constraintsInput: Record<string, unknown>): WorkerConstraintRequest {
+  const overridesInput = asRecord(constraintsInput.overrides);
   const constraints: WorkerConstraintRequest = {
     cwd: requiredNonEmptyString(constraintsInput.cwd ?? args.cwd, 'worker_cwd_required'),
+    profile: String(constraintsInput.profile ?? args.profile ?? 'default').trim() || 'default',
   };
-  copyString(constraints, 'runtime', constraintsInput.runtime ?? args.runtime);
-  copyString(constraints, 'sandbox', constraintsInput.sandbox ?? args.sandbox);
-  copyString(constraints, 'model', constraintsInput.model ?? args.model);
-  copyString(constraints, 'reasoning_effort', constraintsInput.reasoning_effort ?? args.reasoning_effort);
-  const config = primitiveConfigRecord(constraintsInput.config ?? args.config);
-  if (Object.keys(config).length > 0) constraints.config = config;
-  if (constraintsInput.skip_git_repo_check !== undefined || args.skip_git_repo_check !== undefined) constraints.skip_git_repo_check = Boolean(constraintsInput.skip_git_repo_check ?? args.skip_git_repo_check);
+  const overrides: NonNullable<WorkerConstraintRequest['overrides']> = {};
+  copyString(overrides, 'runtime', overridesInput.runtime ?? constraintsInput.runtime ?? args.runtime);
+  copyString(overrides, 'sandbox', overridesInput.sandbox ?? constraintsInput.sandbox ?? args.sandbox);
+  copyString(overrides, 'model', overridesInput.model ?? constraintsInput.model ?? args.model);
+  copyString(overrides, 'reasoning_effort', overridesInput.reasoning_effort ?? constraintsInput.reasoning_effort ?? args.reasoning_effort);
+  const config = primitiveConfigRecord(overridesInput.config ?? constraintsInput.config ?? args.config);
+  if (Object.keys(config).length > 0) overrides.config = config;
+  if (overridesInput.skip_git_repo_check !== undefined || constraintsInput.skip_git_repo_check !== undefined || args.skip_git_repo_check !== undefined) {
+    overrides.skip_git_repo_check = Boolean(overridesInput.skip_git_repo_check ?? constraintsInput.skip_git_repo_check ?? args.skip_git_repo_check);
+  }
+  if (Object.keys(overrides).length > 0) constraints.overrides = overrides;
   return constraints;
 }
 
-function copyString(target: Record<string, unknown>, key: keyof WorkerConstraintRequest, value: unknown): void {
+function copyString(target: Record<string, unknown>, key: keyof WorkerConstraintOverrides, value: unknown): void {
   if (value === undefined || value === null || value === '') return;
   target[key] = String(value).trim();
 }

@@ -4,6 +4,8 @@ export async function runJsonRpcStdioServer({
   handleRequest,
   parseJsonRpcInput,
 }) {
+  const activeRequests = new Map();
+  const pendingRequests = new Set();
   let buffer = '';
   stdin.setEncoding('utf8');
   for await (const chunk of stdin) {
@@ -11,20 +13,40 @@ export async function runJsonRpcStdioServer({
     const drained = drainBufferedRequests(buffer, parseJsonRpcInput);
     buffer = drained.remaining;
     for (const request of drained.requests) {
-      writeProgress(stdout, request, 0, 'started', drained.framed);
-      const response = await handleRequest(request);
-      writeProgress(stdout, request, 1, 'completed', drained.framed);
-      if (response) writeJsonResponse(stdout, response, drained.framed);
+      trackRequest(processRequest({ request, stdout, framed: drained.framed, handleRequest, activeRequests }), pendingRequests);
     }
   }
   const trailing = buffer.trim();
   if (trailing.length > 0) {
     for (const request of parseJsonRpcInput(trailing)) {
-      writeProgress(stdout, request, 0, 'started', false);
-      const response = await handleRequest(request);
-      writeProgress(stdout, request, 1, 'completed', false);
-      if (response) writeJsonResponse(stdout, response, false);
+      trackRequest(processRequest({ request, stdout, framed: false, handleRequest, activeRequests }), pendingRequests);
     }
+  }
+  await Promise.allSettled([...pendingRequests]);
+}
+
+function trackRequest(promise, pendingRequests) {
+  pendingRequests.add(promise);
+  promise.finally(() => pendingRequests.delete(promise)).catch(() => {});
+}
+
+async function processRequest({ request, stdout, framed, handleRequest, activeRequests }) {
+  if (!request?.id && request?.method === 'notifications/cancelled') {
+    const requestId = String(request.params?.requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return;
+  const requestId = String(request.id ?? '');
+  const abortController = new AbortController();
+  activeRequests.set(requestId, abortController);
+  writeProgress(stdout, request, 0, 'started', framed);
+  try {
+    const response = await handleRequest(request, { abortSignal: abortController.signal });
+    writeProgress(stdout, request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', framed);
+    if (response) writeJsonResponse(stdout, response, framed);
+  } finally {
+    activeRequests.delete(requestId);
   }
 }
 

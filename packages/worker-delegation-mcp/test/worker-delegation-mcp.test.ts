@@ -53,7 +53,9 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
 const policy = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, state);
 assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1');
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
+assert.equal(policy.result?.structuredContent.default_profile, 'default');
 assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex']);
+assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
@@ -70,6 +72,14 @@ const deniedRuntime = await rpc({
 }, state);
 assert.equal(deniedRuntime.error?.data.schema, 'narada.worker.error.v1');
 assert.equal(deniedRuntime.error?.data.code, 'worker_invalid_runtime');
+
+const deniedProfile = await rpc({
+  jsonrpc: '2.0',
+  id: 31,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('x', {}, 'workspace-edit') },
+}, state);
+assert.equal(deniedProfile.error?.data.code, 'worker_invalid_profile');
 
 const deniedConfig = await rpc({
   jsonrpc: '2.0',
@@ -116,8 +126,11 @@ for (const file of ['request.json', 'executor_request.json', 'resolved_worker_co
 const request = JSON.parse(readFileSync(join(completedRunDir, 'request.json'), 'utf8'));
 assert.equal(request.intent.instruction, 'run with allowed config');
 assert.equal(request.constraints.cwd, root);
+assert.equal(request.constraints.profile, 'default');
+assert.equal(request.constraints.overrides.model, 'gpt-test');
 const resolvedConfig = JSON.parse(readFileSync(join(completedRunDir, 'resolved_worker_config.json'), 'utf8'));
 assert.equal(resolvedConfig.runtime, 'codex');
+assert.equal(resolvedConfig.profile, 'default');
 assert.equal(resolvedConfig.command, process.execPath);
 assert.equal(resolvedConfig.config.model, 'gpt-test');
 assert.equal(resolvedConfig.config.model_reasoning_effort, 'low');
@@ -127,6 +140,7 @@ const executorRequest = JSON.parse(readFileSync(join(completedRunDir, 'executor_
 assert.equal(executorRequest.schema, 'narada.worker.executor_request.v1');
 assert.equal(executorRequest.intent.instruction, 'run with allowed config');
 assert.equal(executorRequest.resolved_execution_policy.cwd, root);
+assert.equal(executorRequest.resolved_execution_policy.profile, 'default');
 const invocation = JSON.parse(readFileSync(join(completedRunDir, 'worker_invocation.json'), 'utf8'));
 assert.equal(invocation.argv[0], 'exec');
 assert.equal(invocation.argv.includes('--json'), true);
@@ -155,7 +169,7 @@ const resume = await rpc({
   jsonrpc: '2.0',
   id: 6,
   method: 'tools/call',
-  params: { name: 'worker_resume', arguments: { cwd: root, worker_session_id: 'thread-existing' } },
+  params: { name: 'worker_resume', arguments: { worker_session_id: 'thread-existing', constraints: { cwd: root, profile: 'default' } } },
 }, state);
 assert.equal(resume.result?.structuredContent.status, 'completed');
 assert.equal(resume.result?.structuredContent.worker_session_id, 'thread-resumed');
@@ -233,9 +247,9 @@ function hasCode(code: string): (error: unknown) => boolean {
   return (error: any) => error?.codeName === code;
 }
 
-function runArgs(instruction: string, constraints: Record<string, unknown> = {}): Record<string, unknown> {
+function runArgs(instruction: string, constraints: Record<string, unknown> = {}, profile = 'default'): Record<string, unknown> {
   return {
     intent: { instruction },
-    constraints: { cwd: root, ...constraints },
+    constraints: { cwd: root, profile, overrides: constraints },
   };
 }

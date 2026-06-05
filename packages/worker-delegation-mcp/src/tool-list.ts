@@ -37,13 +37,20 @@ function intentSchema(): Record<string, unknown> {
 function constraintRequestSchema(): Record<string, unknown> {
   return objectSchema({
     cwd: { type: 'string' },
+    profile: { type: 'string' },
+    overrides: constraintOverrideSchema(),
+  }, ['cwd']);
+}
+
+function constraintOverrideSchema(): Record<string, unknown> {
+  return objectSchema({
     runtime: { type: 'string' },
     sandbox: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
     model: { type: 'string' },
     reasoning_effort: { type: 'string' },
     config: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } },
     skip_git_repo_check: { type: 'boolean' },
-  }, ['cwd']);
+  });
 }
 
 function decorateTools(tools: WorkerToolDefinition[]): WorkerToolDefinition[] {

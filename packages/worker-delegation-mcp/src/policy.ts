@@ -7,6 +7,8 @@ export type PrimitiveConfigValue = string | number | boolean;
 
 export type WorkerPolicy = {
   defaultRuntime: 'codex';
+  defaultProfile: 'default';
+  allowedProfiles: ['default'];
   runRoot: string;
   auditLogDir: string | null;
   allowedRoots: string[];
@@ -66,6 +68,8 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
 
   return {
     defaultRuntime: 'codex',
+    defaultProfile: 'default',
+    allowedProfiles: ['default'],
     runRoot: resolve(stringValue(merged.runRoot ?? worker.run_root ?? defaultRunRoot())),
     auditLogDir: stringOrNull(merged.auditLogDir ?? worker.audit_log_dir) ? resolve(stringValue(merged.auditLogDir ?? worker.audit_log_dir)) : null,
     allowedRoots,
@@ -91,11 +95,19 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
+export function resolveProfile(value: unknown, policy: WorkerPolicy): 'default' {
+  const profile = stringValue(value ?? policy.defaultProfile);
+  if (profile !== 'default') throw diagnosticError('worker_invalid_profile', 'worker_invalid_profile', { profile, allowed_profiles: policy.allowedProfiles });
+  return 'default';
+}
+
 export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown> {
   return {
     schema: 'narada.worker.policy.v1',
     status: 'ok',
     default_runtime: policy.defaultRuntime,
+    default_profile: policy.defaultProfile,
+    allowed_profiles: policy.allowedProfiles,
     run_root: policy.runRoot,
     audit_log_dir: policy.auditLogDir,
     allowed_roots: policy.allowedRoots,

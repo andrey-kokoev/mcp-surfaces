@@ -1,11 +1,19 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 let siteLoopModulePromise = null;
 type SiteOpsServerArgs = Record<string, unknown>;
 type SiteLoopToolArgs = SiteOpsServerArgs;
 type LoopControlToolArgs = SiteOpsServerArgs;
+type SiteOpsRequestContext = { abortSignal?: AbortSignal };
+type SiteOpsChildResult = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  signal: NodeJS.Signals | null;
+  cancelled: boolean;
+};
 
 const SERVER_NAME = 'narada-sonar-site-ops-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -98,6 +106,7 @@ function genericToolOutputSchema() {
 }
 
 let inputBuffer = '';
+const activeRequests = new Map<string, AbortController>();
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   inputBuffer += chunk;
@@ -162,7 +171,16 @@ function readFramedMessage() {
 }
 
 async function handleMessage(message) {
+  if (!message?.id && message?.method === 'notifications/cancelled') {
+    const requestId = String(message.params?.requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!message?.id && typeof message?.method === 'string' && message.method.startsWith('notifications/')) return;
   const id = message?.id ?? null;
+  const requestId = id == null ? null : String(id);
+  const abortController = requestId == null ? null : new AbortController();
+  if (requestId) activeRequests.set(requestId, abortController);
   try {
     sendProgress(message, 0, 'started');
     if (message.method === 'initialize') {
@@ -173,13 +191,12 @@ async function handleMessage(message) {
       });
       return;
     }
-    if (message.method === 'notifications/initialized') return;
     if (message.method === 'tools/list') {
       respond(id, { tools: TOOLS });
       return;
     }
     if (message.method === 'tools/call') {
-      const result = await callTool(message.params?.name, message.params?.arguments ?? {});
+      const result = await callTool(message.params?.name, message.params?.arguments ?? {}, { abortSignal: abortController?.signal });
       respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
       return;
     }
@@ -203,7 +220,8 @@ async function handleMessage(message) {
   } catch (error) {
     respondError(id, error);
   } finally {
-    sendProgress(message, 1, 'completed');
+    sendProgress(message, 1, abortController?.signal.aborted ? 'cancelled' : 'completed');
+    if (requestId) activeRequests.delete(requestId);
   }
 }
 
@@ -230,7 +248,7 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-async function callTool(name, args) {
+async function callTool(name, args, context: SiteOpsRequestContext = {}) {
   switch (name) {
     case 'site_ops_doctor':
       return {
@@ -255,7 +273,7 @@ async function callTool(name, args) {
         })),
       };
     case 'site_test_run':
-      return runTest(args.selector);
+      return runTest(args.selector, context);
     case 'site_loop_status':
       return (await loadSiteLoopModule()).sonarEmailResidentLoopStatus(siteRoot);
     case 'site_loop_health':
@@ -337,23 +355,74 @@ function showDoc(path) {
   };
 }
 
-function runTest(selector) {
+async function runTest(selector, context: SiteOpsRequestContext = {}) {
   if (!Object.hasOwn(TESTS, selector)) throw new Error(`test_selector_not_approved: ${selector}`);
   const [command, args] = TESTS[selector];
-  const result = spawnSync(command, args, {
+  const result = await runChildProcess(command, args, {
     cwd: siteRoot,
-    encoding: 'utf8',
-    shell: false,
     timeout: 120_000,
     env: { ...process.env },
+    abortSignal: context.abortSignal,
   });
   return {
-    status: result.status === 0 ? 'passed' : 'failed',
+    status: result.cancelled ? 'cancelled' : result.status === 0 ? 'passed' : 'failed',
     selector,
     exit_code: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+function runChildProcess(command, args, options): Promise<SiteOpsChildResult> {
+  return new Promise((resolveResult) => {
+    if (options.abortSignal?.aborted) {
+      resolveResult({ status: null, stdout: '', stderr: '', signal: null, cancelled: true });
+      return;
+    }
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      shell: false,
+      env: options.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let cancelled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      options.abortSignal?.removeEventListener('abort', abortHandler);
+      resolveResult(value);
+    };
+    const abortHandler = () => {
+      cancelled = true;
+      child.kill('SIGTERM');
+      settle({ status: null, stdout, stderr, signal: null, cancelled: true });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, options.timeout);
+    options.abortSignal?.addEventListener('abort', abortHandler, { once: true });
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk;
+    });
+    child.on('error', (error) => {
+      settle({ status: null, stdout, stderr: stderr ? `${stderr}\n${error.message}` : error.message, signal: null, cancelled });
+    });
+    child.on('close', (status, signal) => {
+      settle({ status, stdout, stderr: timedOut ? `${stderr}\ntimed_out`.trim() : stderr, signal, cancelled });
+    });
+  });
 }
 
 function respond(id, result) {

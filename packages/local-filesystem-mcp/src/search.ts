@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
 export const RIPGREP_FIELD_SEPARATOR = '\u001f';
@@ -65,6 +65,89 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
       signal: result.signal ?? null,
       stderr: String(result.stderr ?? ''),
       output_preview: String(result.stdout ?? '').slice(0, 500),
+      parse_error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  assertRipgrepOk(page, { operation, noMatchStatus, diagnosticError });
+  if (page.count_exact) {
+    rememberCompleteSearch(cacheKey, page.matches, { freshness, timeoutMs: effectiveTimeoutMs });
+    const cachedComplete = completeSearchCache.get(cacheKey);
+    if (cachedComplete && cachePolicy !== 'bypass') return pageFromComplete(cachedComplete, { offset, limit, cachePolicy, cacheHit: cachePolicy !== 'refresh' });
+    const pageMatches = page.matches.slice(offset, offset + limit);
+    return {
+      ...page,
+      matches: pageMatches,
+      has_more: offset + pageMatches.length < page.matches.length,
+      snapshot_id: null,
+      snapshot_complete: true,
+      cache_hit: false,
+      cache_policy: cachePolicy,
+      cache_memory_bytes: estimateMatchesBytes(page.matches),
+      timeout_ms: effectiveTimeoutMs,
+    };
+  }
+  page.timeout_ms = effectiveTimeoutMs;
+  page.snapshot_id = null;
+  page.snapshot_complete = false;
+  page.cache_memory_bytes = null;
+  page.cache_policy = cachePolicy;
+  return page;
+}
+
+export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, abortSignal = null }) {
+  const effectiveTimeoutMs = clampTimeout(timeoutMs);
+  const cacheKey = searchCacheKey({ args, freshness });
+  if (snapshotId) {
+    const snapshot = completeSearchCacheBySnapshotId.get(snapshotId);
+    if (!snapshot || snapshot.cacheKey !== cacheKey) {
+      throw diagnosticError(`${operation}_snapshot_not_found`, `${operation}_snapshot_not_found: ${snapshotId}`, {
+        operation,
+        snapshot_id: snapshotId,
+        cache_policy: cachePolicy,
+      });
+    }
+    return pageFromComplete(snapshot, { offset, limit, cachePolicy, requestedSnapshotId: snapshotId });
+  }
+  if (cachePolicy !== 'bypass' && cachePolicy !== 'refresh') {
+    const cached = completeSearchCache.get(cacheKey);
+    if (cached) return pageFromComplete(cached, { offset, limit, cachePolicy });
+  }
+  const complete = offset > 0 || cachePolicy === 'snapshot' || cachePolicy === 'refresh';
+  const runnerPath = fileURLToPath(new URL('./search-runner.js', import.meta.url));
+  const result = await runSearchHelper(process.execPath, [runnerPath], {
+    input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),
+    timeoutMs: effectiveTimeoutMs,
+    abortSignal,
+  });
+  if (result.error) {
+    throw diagnosticError(result.cancelled ? `${operation}_cancelled` : result.timedOut ? `${operation}_timed_out` : `${operation}_failed`, `${result.cancelled ? `${operation}_cancelled` : result.timedOut ? `${operation}_timed_out` : `${operation}_failed`}: ${result.error}`, {
+      operation,
+      status: result.status ?? null,
+      signal: result.signal ?? null,
+      stderr: result.stderr,
+      error: result.error,
+      timeout_ms: effectiveTimeoutMs,
+      cancelled: result.cancelled,
+    });
+  }
+  if (result.status !== 0) {
+    throw diagnosticError(`${operation}_failed`, `${operation}_failed: ${String(result.stderr || '').trim() || `status ${result.status}`}`, {
+      operation,
+      status: result.status ?? null,
+      signal: result.signal ?? null,
+      stderr: result.stderr,
+    });
+  }
+  let page;
+  try {
+    page = JSON.parse(result.stdout);
+  } catch (error) {
+    throw diagnosticError(`${operation}_invalid_helper_output`, `${operation}_invalid_helper_output`, {
+      operation,
+      status: result.status ?? null,
+      signal: result.signal ?? null,
+      stderr: result.stderr,
+      output_preview: result.stdout.slice(0, 500),
       parse_error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -194,6 +277,62 @@ function rememberCompleteSearch(cacheKey, matches, { freshness, timeoutMs }) {
     completeSearchCache.delete(oldestKey);
     if (oldest?.snapshotId) completeSearchCacheBySnapshotId.delete(oldest.snapshotId);
   }
+}
+
+function runSearchHelper(command, args, { input, timeoutMs, abortSignal }): Promise<any> {
+  return new Promise((resolvePromise) => {
+    if (abortSignal?.aborted) {
+      resolvePromise({ status: null, signal: null, stdout: '', stderr: '', error: 'cancelled', timedOut: false, cancelled: true });
+      return;
+    }
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+    let cancelled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSignal?.removeEventListener('abort', abortHandler);
+      resolvePromise(value);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      settle({ status: null, signal: null, stdout, stderr, error: 'ETIMEDOUT', timedOut, cancelled });
+    }, timeoutMs);
+    const abortHandler = () => {
+      cancelled = true;
+      child.kill();
+      settle({ status: null, signal: null, stdout, stderr, error: 'cancelled', timedOut, cancelled });
+    };
+    abortSignal?.addEventListener('abort', abortHandler, { once: true });
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+      if (Buffer.byteLength(stdout, 'utf8') > 1024 * 1024) {
+        child.kill();
+        settle({ status: null, signal: null, stdout: stdout.slice(0, 1024 * 1024), stderr, error: 'maxBuffer exceeded', timedOut, cancelled });
+      }
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk);
+      if (Buffer.byteLength(stderr, 'utf8') > 1024 * 1024) {
+        child.kill();
+        settle({ status: null, signal: null, stdout, stderr: stderr.slice(0, 1024 * 1024), error: 'maxBuffer exceeded', timedOut, cancelled });
+      }
+    });
+    child.on('error', (error) => {
+      settle({ status: null, signal: null, stdout, stderr, error: error.message, timedOut, cancelled });
+    });
+    child.on('close', (code, signal) => {
+      settle({ status: code, signal, stdout, stderr, error: null, timedOut, cancelled });
+    });
+    child.stdin.end(input, 'utf8');
+  });
 }
 
 function searchCacheKey(value) {

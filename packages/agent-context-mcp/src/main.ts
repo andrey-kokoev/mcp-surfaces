@@ -21,6 +21,7 @@ import {
 const SERVER_NAME = 'narada-sonar-agent-context-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
+const activeRequests = new Map();
 
 const args = parseArgs(process.argv.slice(2));
 const siteRoot = resolve(args['site-root'] ?? process.cwd());
@@ -288,7 +289,16 @@ function sendProgress(message, progress, progressMessage) {
 function handleMessage(message) {
   if (!message || typeof message !== 'object') return;
   if (message.error) return;
+  if (!message.id && message.method === 'notifications/cancelled') {
+    const requestId = String(message.params?.requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!message.id && typeof message.method === 'string' && message.method.startsWith('notifications/')) return;
   const id = message.id ?? null;
+  const requestId = id == null ? null : String(id);
+  const abortController = requestId == null ? null : new AbortController();
+  if (requestId) activeRequests.set(requestId, abortController);
   try {
     sendProgress(message, 0, 'started');
     if (message.method === 'initialize') {
@@ -333,7 +343,8 @@ function handleMessage(message) {
   } catch (error) {
     respondError(id, error);
   } finally {
-    sendProgress(message, 1, 'completed');
+    sendProgress(message, 1, abortController?.signal.aborted ? 'cancelled' : 'completed');
+    if (requestId) activeRequests.delete(requestId);
   }
 }
 

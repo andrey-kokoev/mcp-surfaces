@@ -27,7 +27,9 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 Defaults:
 
 - runtime: `codex`
+- default profile: `default`
 - allowed runtimes: `codex`
+- allowed profiles: `default`
 - allowed sandboxes: `read-only`, `workspace-write`
 - default sandbox: `read-only`
 - allowed config keys: `model`, `model_reasoning_effort`
@@ -63,7 +65,7 @@ Common flags:
 Agents should use `worker_policy_inspect` before delegating. A delegation request separates non-mechanically-enforceable intent from mechanically-enforceable constraints:
 
 - `intent.instruction`: what the worker is asked to do and how it should report. This is prompt intent, not enforcement.
-- `constraints`: the executable bounds the server validates or applies, including `cwd`, `runtime`, `sandbox`, model config, and skip-git-repo-check behavior.
+- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `profile` selects the named execution mode, and `overrides` carries explicit low-level execution overrides when policy admits them.
 
 The worker MCP surface enforces constraints and records the resolved executor request. It does not admit worker output as task evidence, close work, or create Narada role authority by itself.
 
@@ -93,9 +95,12 @@ If a response is materialized, call `worker_output_show` with the returned `outp
   },
   "constraints": {
     "cwd": "D:/code/example",
-    "sandbox": "read-only",
-    "model": "gpt-5.5",
-    "reasoning_effort": "medium"
+    "profile": "default",
+    "overrides": {
+      "sandbox": "read-only",
+      "model": "gpt-5.5",
+      "reasoning_effort": "medium"
+    }
   }
 }
 ```

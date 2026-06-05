@@ -6,6 +6,11 @@ export type WorkerIntent = {
 
 export type WorkerConstraintRequest = {
   cwd: string;
+  profile?: string;
+  overrides?: WorkerConstraintOverrides;
+};
+
+export type WorkerConstraintOverrides = {
   runtime?: string;
   sandbox?: string;
   model?: string;
@@ -21,6 +26,7 @@ export type WorkerRunToolInput = {
 
 export type WorkerResolvedExecutionPolicy = {
   runtime: 'codex';
+  profile: string;
   command: string;
   argv: string[];
   cwd: string;

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 import { parsePatch } from '../src/patch-apply.js';
-import { RIPGREP_FIELD_SEPARATOR, grepMatchObject } from '../src/search.js';
+import { RIPGREP_FIELD_SEPARATOR, grepMatchObject, runRipgrepPageAsync } from '../src/search.js';
 
 type DynamicTestValue = string & DynamicTestValue[] & {
   [key: string]: DynamicTestValue;
@@ -95,6 +95,21 @@ trust_level = "untrusted"
   const windowsCountMatch = grepMatchObject(`C:/repo/file.txt${RIPGREP_FIELD_SEPARATOR}12`, 'count_matches');
   assert.equal(windowsCountMatch.path, 'C:/repo/file.txt');
   assert.equal(windowsCountMatch.count, 12);
+  const cancelledSearch = new AbortController();
+  cancelledSearch.abort();
+  await assert.rejects(
+    () => runRipgrepPageAsync(['--files', trusted], {
+      operation: 'fs_glob_search',
+      noMatchStatus: 0,
+      offset: 0,
+      limit: 10,
+      timeoutMs: 60_000,
+      freshness: null,
+      diagnosticError: (_code, message) => new Error(message),
+      abortSignal: cancelledSearch.signal,
+    }),
+    /fs_glob_search_cancelled/
+  );
 
   const readToolNames = listTools('read').map((tool) => tool.name);
   assert.ok(readToolNames.includes('fs_read_file'));

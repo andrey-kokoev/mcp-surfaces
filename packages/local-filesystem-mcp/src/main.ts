@@ -14,7 +14,7 @@ import {
 import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
 import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';
-import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRipgrepPage } from './search.js';
+import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRipgrepPage, runRipgrepPageAsync } from './search.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
@@ -56,6 +56,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
 
 export async function runStdioServer(options: Record<string, unknown>) {
   const state = createServerState(options);
+  const activeRequests = new Map<string, AbortController>();
   const pendingServerRequests = new Map<string, (message: Record<string, unknown>) => void>();
   let nextServerRequestId = 1;
   let buffer = '';
@@ -88,14 +89,18 @@ export async function runStdioServer(options: Record<string, unknown>) {
         requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
         continue;
       }
-      sendProgress(record, 0, 'started', { framed: sawFramedInput });
-      const response = handleRequest(record, state);
-      sendProgress(record, 1, 'completed', { framed: sawFramedInput });
-      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
-      if (record.method === 'initialize' && clientSupportsRoots(asRecord(record.params))) {
-        asRecord(state.clientRoots).supported = true;
-        requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+      if (record.method === 'initialize') {
+        sendProgress(record, 0, 'started', { framed: sawFramedInput });
+        const response = handleRequest(record, state);
+        sendProgress(record, 1, 'completed', { framed: sawFramedInput });
+        if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+        if (clientSupportsRoots(asRecord(record.params))) {
+          asRecord(state.clientRoots).supported = true;
+          requestClientRoots(state, pendingServerRequests, () => `${ROOTS_LIST_REQUEST_PREFIX}${nextServerRequestId++}`, { framed: sawFramedInput });
+        }
+        continue;
       }
+      processStdioRequest(record, state, activeRequests, { framed: sawFramedInput });
     }
   }
 }
@@ -174,6 +179,53 @@ function dispatchMethod(method, params, state) {
       return {};
     default:
       throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method: ${method}`, { method });
+  }
+}
+
+async function dispatchMethodAsync(method, params, state, context) {
+  switch (method) {
+    case 'tools/call':
+      return await callToolAsync(params, state, context);
+    default:
+      return dispatchMethod(method, params, state);
+  }
+}
+
+async function processStdioRequest(request: Record<string, unknown>, state: Record<string, unknown>, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
+  if (!request?.id && request.method === 'notifications/cancelled') {
+    const requestId = String(asRecord(request.params).requestId ?? '');
+    activeRequests.get(requestId)?.abort();
+    return;
+  }
+  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return;
+  const requestId = String(request.id ?? '');
+  const abortController = new AbortController();
+  activeRequests.set(requestId, abortController);
+  sendProgress(request, 0, 'started', options);
+  handleRequestAsync(request, state, { abortSignal: abortController.signal }).then((response) => {
+    sendProgress(request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', options);
+    if (response) writeJsonRpcResponse(response, options);
+  }).finally(() => {
+    activeRequests.delete(requestId);
+  });
+}
+
+async function handleRequestAsync(request: Record<string, unknown>, state: Record<string, unknown>, context: { abortSignal?: AbortSignal } = {}) {
+  if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
+  try {
+    const result = await dispatchMethodAsync(request.method, request.params ?? {}, state, context);
+    return { jsonrpc: '2.0', id: request.id ?? null, result };
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    return {
+      jsonrpc: '2.0',
+      id: request?.id ?? null,
+      error: {
+        code: -32000,
+        message: diagnostic.message,
+        data: diagnostic,
+      },
+    };
   }
 }
 
@@ -464,6 +516,22 @@ function globSearchTool(args, state) {
   return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError }), offset, limit, freshness, cachePolicy });
 }
 
+async function globSearchToolAsync(args, state, context) {
+  const pattern = stringField(args, 'pattern');
+  if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
+  const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
+  const offset = Math.max(0, integerField(args, 'offset') ?? 0);
+  const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 100));
+  const timeoutMs = searchTimeoutMs(args);
+  const cachePolicy = searchCachePolicy(args);
+  const snapshotId = stringField(args, 'snapshot_id');
+  const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  const freshness = searchFreshness(directory);
+  const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal });
+  return cappedSearchResult({ state, kind: 'glob', args, page, offset, limit, freshness, cachePolicy });
+}
+
 function readSummary(value) {
   return {
     path: value.path,
@@ -494,6 +562,23 @@ function grepSearchTool(args, state) {
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
   const freshness = searchFreshness(path);
   return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError }), offset, limit, freshness, cachePolicy });
+}
+
+async function grepSearchToolAsync(args, state, context) {
+  const pattern = stringField(args, 'pattern');
+  if (!pattern) throw diagnosticError('grep_requires_pattern', 'grep_requires_pattern');
+  const { path } = resolveAllowedToolPath(stringField(args, 'path') ?? '.', state.allowedRoots, { operation: 'fs_grep_search' });
+  const mode = stringField(args, 'output_mode') ?? 'files_with_matches';
+  if (!['files_with_matches', 'count_matches', 'content'].includes(mode)) throw diagnosticError('grep_output_mode_unsupported', `grep_output_mode_unsupported: ${mode}`, { output_mode: mode });
+  const offset = Math.max(0, integerField(args, 'offset') ?? 0);
+  const limit = Math.min(500, Math.max(1, integerField(args, 'limit') ?? 80));
+  const timeoutMs = searchTimeoutMs(args);
+  const cachePolicy = searchCachePolicy(args);
+  const snapshotId = stringField(args, 'snapshot_id');
+  const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
+  const freshness = searchFreshness(path);
+  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page, offset, limit, freshness, cachePolicy });
 }
 
 function cappedSearchResult({ state, kind, args, page, offset, limit, freshness, cachePolicy }) {
@@ -857,6 +942,20 @@ function readTextLineWindow({ path, root, offset, limit }) {
     };
   } finally {
     closeSync(fd);
+  }
+}
+
+async function callToolAsync(params, state, context) {
+  const record = asRecord(params);
+  const name = stringField(record, 'name');
+  const args = asRecord(record.arguments);
+  activeToolName = name;
+  if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
+  if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
+  switch (name) {
+    case 'fs_glob_search': return toolResult(await globSearchToolAsync(args, state, context));
+    case 'fs_grep_search': return toolResult(await grepSearchToolAsync(args, state, context), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
+    default: return callTool(params, state);
   }
 }
 

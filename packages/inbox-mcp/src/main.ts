@@ -37,6 +37,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
 
 export async function runStdioServer(options: unknown): Promise<void> {
   const state = createServerState(options);
+  const activeRequests = new Map<string, AbortController>();
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
@@ -54,10 +55,20 @@ export async function runStdioServer(options: unknown): Promise<void> {
       requests = lines.filter((line) => line.trim()).map((line) => asRecord(JSON.parse(line)));
     }
     for (const request of requests) {
+      if (!request.id && request.method === 'notifications/cancelled') {
+        const requestId = String(asRecord(request.params).requestId ?? '');
+        activeRequests.get(requestId)?.abort();
+        continue;
+      }
+      if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) continue;
+      const requestId = String(request.id ?? '');
+      const abortController = new AbortController();
+      activeRequests.set(requestId, abortController);
       sendProgress(request, 0, 'started', { framed: sawFramedInput });
       const response = handleRequest(request, state);
-      sendProgress(request, 1, 'completed', { framed: sawFramedInput });
+      sendProgress(request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', { framed: sawFramedInput });
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+      activeRequests.delete(requestId);
     }
   }
 }
