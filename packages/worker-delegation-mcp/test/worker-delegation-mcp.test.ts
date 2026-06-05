@@ -55,7 +55,7 @@ assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1')
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
 assert.equal(policy.result?.structuredContent.default_profile, 'default');
 assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex']);
-assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default']);
+assert.deepEqual(policy.result?.structuredContent.allowed_profiles, ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
@@ -161,6 +161,28 @@ const prefixedInvocation = JSON.parse(readFileSync(join(prefixedRun.result?.stru
 assert.equal(prefixedInvocation.command, process.execPath);
 assert.equal(prefixedInvocation.argv[0], fakeCodexScript);
 assert.equal(prefixedInvocation.argv[1], 'exec');
+
+const readProfile = await rpc({
+  jsonrpc: '2.0',
+  id: 54,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('read profile', {}, 'delegating-agent-read') },
+}, state);
+assert.equal(readProfile.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
+const writeProfile = await rpc({
+  jsonrpc: '2.0',
+  id: 55,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('write profile', {}, 'delegating-agent-write') },
+}, state);
+assert.equal(writeProfile.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
+const commandProfile = await rpc({
+  jsonrpc: '2.0',
+  id: 56,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: runArgs('command profile', {}, 'delegating-agent-command') },
+}, state);
+assert.equal(commandProfile.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Do not call any worker_\* MCP tools\./);
 assert.match(readFileSync(join(completedRunDir, 'events.jsonl'), 'utf8'), /thread-created/);
 assert.equal(readdirSync(runRoot).some((name) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);

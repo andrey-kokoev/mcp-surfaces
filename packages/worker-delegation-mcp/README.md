@@ -29,7 +29,7 @@ Defaults:
 - runtime: `codex`
 - default profile: `default`
 - allowed runtimes: `codex`
-- allowed profiles: `default`
+- allowed profiles: `default`, `delegating-agent-read`, `delegating-agent-write`, `delegating-agent-command`
 - allowed sandboxes: `read-only`, `workspace-write`
 - default sandbox: `read-only`
 - allowed config keys: `model`, `model_reasoning_effort`
@@ -70,6 +70,13 @@ Agents should use `worker_policy_inspect` before delegating. A delegation reques
 
 The worker MCP surface enforces constraints and records the resolved executor request. It does not admit worker output as task evidence, close work, or create Narada role authority by itself.
 
+Profiles:
+
+- `default`: alias for `delegating-agent-read`.
+- `delegating-agent-read`: inspect within the delegating agent's admitted root envelope; default sandbox `read-only`.
+- `delegating-agent-write`: edit within the delegating agent's admitted root envelope; default sandbox `workspace-write`.
+- `delegating-agent-command`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
+
 Use `worker_run` for new work and `worker_resume` only when continuing a known `worker_session_id`. Do not ask a worker to call `worker_run`, `worker_resume`, or other `worker_*` tools.
 
 Successful worker runs return `schema: "narada.worker.run.v1"` with:
@@ -96,7 +103,7 @@ If a response is materialized, call `worker_output_show` with the returned `outp
   },
   "constraints": {
     "cwd": "D:/code/example",
-    "profile": "default",
+    "profile": "delegating-agent-read",
     "overrides": {
       "sandbox": "read-only",
       "model": "gpt-5.5",

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig } from './codex-adapter.js';
-import { environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { defaultSandboxForProfile, environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, writeJson, writeText, writeWorkerOutputSchema } from './run-record.js';
 import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
@@ -28,7 +28,7 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   const overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
-  const sandbox = resolveSandbox(overrides.sandbox, state.policy);
+  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForProfile(profile), state.policy);
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');

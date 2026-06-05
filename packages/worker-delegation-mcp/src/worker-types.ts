@@ -1,4 +1,4 @@
-import type { PrimitiveConfigValue, SandboxMode } from './policy.js';
+import type { PrimitiveConfigValue, SandboxMode, WorkerProfile } from './policy.js';
 
 export type WorkerIntent = {
   instruction: string;
@@ -26,7 +26,7 @@ export type WorkerRunToolInput = {
 
 export type WorkerResolvedExecutionPolicy = {
   runtime: 'codex';
-  profile: string;
+  profile: WorkerProfile;
   command: string;
   command_args: string[];
   argv: string[];

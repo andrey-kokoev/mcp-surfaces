@@ -4,11 +4,12 @@ import { diagnosticError } from './errors.js';
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type PrimitiveConfigValue = string | number | boolean;
+export type WorkerProfile = 'default' | 'delegating-agent-read' | 'delegating-agent-write' | 'delegating-agent-command';
 
 export type WorkerPolicy = {
   defaultRuntime: 'codex';
   defaultProfile: 'default';
-  allowedProfiles: ['default'];
+  allowedProfiles: WorkerProfile[];
   runRoot: string;
   auditLogDir: string | null;
   allowedRoots: string[];
@@ -38,6 +39,7 @@ const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
 const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY'];
+const WORKER_PROFILES: WorkerProfile[] = ['default', 'delegating-agent-read', 'delegating-agent-write', 'delegating-agent-command'];
 
 export function createWorkerPolicy(options: Record<string, unknown> = {}): WorkerPolicy {
   const fileConfig = typeof options.config === 'string' && options.config.trim() ? parseConfigFile(options.config) : {};
@@ -71,7 +73,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   return {
     defaultRuntime: 'codex',
     defaultProfile: 'default',
-    allowedProfiles: ['default'],
+    allowedProfiles: WORKER_PROFILES,
     runRoot: resolve(stringValue(merged.runRoot ?? worker.run_root ?? defaultRunRoot())),
     auditLogDir: stringOrNull(merged.auditLogDir ?? worker.audit_log_dir) ? resolve(stringValue(merged.auditLogDir ?? worker.audit_log_dir)) : null,
     allowedRoots,
@@ -98,10 +100,15 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
-export function resolveProfile(value: unknown, policy: WorkerPolicy): 'default' {
+export function resolveProfile(value: unknown, policy: WorkerPolicy): WorkerProfile {
   const profile = stringValue(value ?? policy.defaultProfile);
-  if (profile !== 'default') throw diagnosticError('worker_invalid_profile', 'worker_invalid_profile', { profile, allowed_profiles: policy.allowedProfiles });
-  return 'default';
+  if (!isWorkerProfile(profile) || !policy.allowedProfiles.includes(profile)) throw diagnosticError('worker_invalid_profile', 'worker_invalid_profile', { profile, allowed_profiles: policy.allowedProfiles });
+  return profile;
+}
+
+export function defaultSandboxForProfile(profile: WorkerProfile): SandboxMode {
+  if (profile === 'delegating-agent-write' || profile === 'delegating-agent-command') return 'workspace-write';
+  return 'read-only';
 }
 
 export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown> {
@@ -319,6 +326,10 @@ function isPathInside(path: string, root: string): boolean {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function isWorkerProfile(value: string): value is WorkerProfile {
+  return WORKER_PROFILES.includes(value as WorkerProfile);
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
