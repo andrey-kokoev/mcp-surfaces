@@ -183,6 +183,15 @@ trust_level = "untrusted"
   assert.equal(largeRead.result.structuredContent.returned_lines, 1);
   assert.equal(largeRead.result.structuredContent.next_offset, null);
   assert.match(largeRead.result.content[0].text, /result: materialized/);
+  const firstShownLargeRead = call(readState, 124, 'mcp_output_show', { ref: largeRead.result.structuredContent.output_ref, output_limit: 100 });
+  assert.equal(firstShownLargeRead.result.structuredContent.offset, 0);
+  assert.equal(firstShownLargeRead.result.structuredContent.output_limit, 100);
+  assert.equal(firstShownLargeRead.result.structuredContent.next_offset, 100);
+  assert.equal(firstShownLargeRead.result.structuredContent.output_truncated, true);
+  const secondShownLargeRead = call(readState, 126, 'mcp_output_show', { output_ref: largeRead.result.structuredContent.output_ref, offset: 100, output_limit: 10000 });
+  assert.equal(secondShownLargeRead.result.structuredContent.offset, 100);
+  assert.equal(secondShownLargeRead.result.structuredContent.next_offset, null);
+  assert.equal(secondShownLargeRead.result.structuredContent.output_truncated, false);
   const shownLargeRead = call(readState, 122, 'mcp_output_show', { output_ref: largeRead.result.structuredContent.output_ref, limit: 20000 });
   const shownLargeReadPayload = JSON.parse(shownLargeRead.result.content[0].text);
   assert.equal(shownLargeReadPayload.content, `${'x'.repeat(7000)}`);

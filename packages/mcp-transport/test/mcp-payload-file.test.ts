@@ -80,12 +80,39 @@ try {
   const shownByAlias = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref } });
   assert.deepEqual(JSON.parse(shownByAlias.output_text), longValue);
 
-  const paged = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref, offset: 10, limit: 25 } });
-  assert.equal(paged.offset, 10);
-  assert.equal(paged.limit, 25);
-  assert.equal(paged.output_text.length, 25);
-  assert.equal(paged.next_offset, 35);
-  assert.equal(paged.output_truncated, true);
+  const firstPage = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref, output_limit: 100 } });
+  assert.equal(firstPage.offset, 0);
+  assert.equal(firstPage.limit, 100);
+  assert.equal(firstPage.output_limit, 100);
+  assert.equal(firstPage.output_text.length, 100);
+  assert.equal(firstPage.next_offset, 100);
+  assert.equal(firstPage.output_truncated, true);
+
+  const secondPage = outputShow({ siteRoot: tempRoot, args: { ref: envelope.ref, offset: firstPage.next_offset, output_limit: 100 } });
+  assert.equal(secondPage.offset, 100);
+  assert.equal(secondPage.output_text.length, 100);
+  assert.equal(secondPage.next_offset, 200);
+  assert.equal(secondPage.next_offset > firstPage.next_offset, true);
+  assert.equal(secondPage.output_truncated, true);
+
+  const finalPage = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref, offset: secondPage.next_offset, limit: 10000 } });
+  assert.equal(finalPage.output_truncated, false);
+  assert.equal(finalPage.next_offset, null);
+  assert.equal(finalPage.output_text.length > 0, true);
+
+  const wrappedFirstPage = buildOutputRefToolContent({
+    siteRoot: tempRoot,
+    toolName: 'mcp_output_show',
+    value: firstPage,
+  });
+  const wrappedFirstPageStructuredContent = (wrappedFirstPage as { structuredContent: Record<string, unknown> }).structuredContent;
+  assert.equal(wrappedFirstPageStructuredContent.next_offset, 100);
+  assert.equal(wrappedFirstPageStructuredContent.output_truncated, true);
+
+  const emptyPage = outputShow({ siteRoot: tempRoot, args: { output_ref: envelope.output_ref, limit: 0 } });
+  assert.equal(emptyPage.output_text, '');
+  assert.equal(emptyPage.output_truncated, false);
+  assert.equal(emptyPage.next_offset, null);
 
   assert.throws(
     () => payloadShow({ siteRoot: tempRoot, args: { ref: envelope.output_ref } }),

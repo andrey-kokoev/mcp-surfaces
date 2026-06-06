@@ -260,7 +260,7 @@ export function buildOutputRefToolContent({
     return { content: [assistantTextContent(JSON.stringify(value))], ...(isError ? { isError: true } : {}) };
   }
   if (isOutputShowResult(value)) {
-    return { content: [assistantTextContent(JSON.stringify(value, null, 2))], ...(isError ? { isError: true } : {}) };
+    return { content: [assistantTextContent(JSON.stringify(value, null, 2))], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
 
   const fullText = JSON.stringify(value, null, 2);
@@ -455,7 +455,7 @@ function publicOutputRecord(record) {
 function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, offset = 0 } = {}) {
   const outputText = JSON.stringify(record.full_output, null, 2);
   const chunk = outputText.slice(offset, offset + outputLimit);
-  const outputTruncated = offset + chunk.length < outputText.length;
+  const outputTruncated = outputLimit > 0 && offset + chunk.length < outputText.length;
   return {
     schema: 'narada.mcp_output_show.v1',
     status: 'ok',
