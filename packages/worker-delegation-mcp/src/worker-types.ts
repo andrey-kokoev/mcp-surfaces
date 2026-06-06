@@ -1,4 +1,4 @@
-import type { PrimitiveConfigValue, SandboxMode, WorkerProfile } from './policy.js';
+import type { PrimitiveConfigValue, SandboxMode, WorkerAuthority, WorkerCognition } from './policy.js';
 
 export type WorkerIntent = {
   instruction: string;
@@ -6,7 +6,8 @@ export type WorkerIntent = {
 
 export type WorkerConstraintRequest = {
   cwd: string;
-  profile?: string;
+  authority?: string;
+  cognition?: string;
   resumable?: boolean;
   overrides?: WorkerConstraintOverrides;
 };
@@ -34,7 +35,8 @@ export type WorkerEditToolInput = {
 
 export type WorkerResolvedExecutionPolicy = {
   runtime: 'codex';
-  profile: WorkerProfile;
+  authority: WorkerAuthority;
+  cognition: WorkerCognition;
   command: string;
   command_args: string[];
   argv: string[];

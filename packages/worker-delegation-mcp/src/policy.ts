@@ -4,17 +4,20 @@ import { diagnosticError } from './errors.js';
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type PrimitiveConfigValue = string | number | boolean;
-export type WorkerProfile = 'default' | 'delegating-agent-read' | 'delegating-agent-research' | 'delegating-agent-write' | 'delegating-agent-command';
+export type WorkerAuthority = 'read' | 'write' | 'command';
+export type WorkerCognition = 'low' | 'medium' | 'high';
 
-export type WorkerProfileDefaults = {
+export type WorkerCognitionDefaults = {
   model: string | null;
   reasoningEffort: string | null;
 };
 
 export type WorkerPolicy = {
   defaultRuntime: 'codex';
-  defaultProfile: 'default';
-  allowedProfiles: WorkerProfile[];
+  defaultAuthority: WorkerAuthority;
+  defaultCognition: WorkerCognition;
+  allowedAuthorities: WorkerAuthority[];
+  allowedCognition: WorkerCognition[];
   runRoot: string;
   auditLogDir: string | null;
   allowedRoots: string[];
@@ -28,11 +31,7 @@ export type WorkerPolicy = {
   maxPromptBytes: number;
   maxOutputBytes: number;
   maxRunMs: number;
-  editDefaults: {
-    model: string | null;
-    reasoningEffort: string | null;
-  };
-  profileDefaults: Record<WorkerProfile, WorkerProfileDefaults>;
+  cognitionDefaults: Record<WorkerCognition, WorkerCognitionDefaults>;
   runtimes: {
     codex: {
       command: string;
@@ -49,7 +48,8 @@ const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
 const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY'];
-const WORKER_PROFILES: WorkerProfile[] = ['default', 'delegating-agent-read', 'delegating-agent-research', 'delegating-agent-write', 'delegating-agent-command'];
+const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
+const WORKER_COGNITION: WorkerCognition[] = ['low', 'medium', 'high'];
 
 export function createWorkerPolicy(options: Record<string, unknown> = {}): WorkerPolicy {
   const fileConfig = typeof options.config === 'string' && options.config.trim() ? parseConfigFile(options.config) : {};
@@ -57,8 +57,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const worker = asRecord(merged.worker);
   const roots = asRecord(worker.roots);
   const policy = asRecord(worker.policy);
-  const editDefaults = asRecord(worker.edit_defaults);
-  const profiles = asRecord(worker.profiles);
+  const cognition = asRecord(worker.cognition);
   const runtimes = asRecord(worker.runtimes);
   const codex = asRecord(runtimes.codex);
 
@@ -84,8 +83,10 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
 
   return {
     defaultRuntime: 'codex',
-    defaultProfile: 'default',
-    allowedProfiles: WORKER_PROFILES,
+    defaultAuthority: validateAuthority(merged.defaultAuthority ?? worker.default_authority ?? 'read'),
+    defaultCognition: validateCognition(merged.defaultCognition ?? worker.default_cognition ?? 'low'),
+    allowedAuthorities: authorityList(merged.allowedAuthority ?? merged.allowedAuthorities ?? policy.allowed_authorities ?? WORKER_AUTHORITIES),
+    allowedCognition: cognitionList(merged.allowedCognition ?? merged.allowedCognitionLevels ?? policy.allowed_cognition ?? WORKER_COGNITION),
     runRoot: resolve(stringValue(merged.runRoot ?? worker.run_root ?? defaultRunRoot())),
     auditLogDir: stringOrNull(merged.auditLogDir ?? worker.audit_log_dir) ? resolve(stringValue(merged.auditLogDir ?? worker.audit_log_dir)) : null,
     allowedRoots,
@@ -99,11 +100,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     maxPromptBytes: strictInteger(merged.maxPromptBytes ?? policy.max_prompt_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_PROMPT_BYTES, 'max_prompt_bytes'),
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
-    editDefaults: {
-      model: stringOrNull(merged.editDefaultModel ?? editDefaults.model ?? 'gpt-5.4-mini'),
-      reasoningEffort: stringOrNull(merged.editDefaultReasoningEffort ?? editDefaults.reasoning_effort ?? 'low'),
-    },
-    profileDefaults: profileDefaults(profiles, merged),
+    cognitionDefaults: cognitionDefaults(cognition, merged),
     runtimes: {
       codex: {
         command: codexCommand,
@@ -117,18 +114,24 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
-export function defaultConfigForProfile(profile: WorkerProfile, policy: WorkerPolicy): WorkerProfileDefaults {
-  return policy.profileDefaults[profile] ?? policy.profileDefaults.default;
+export function defaultConfigForCognition(cognition: WorkerCognition, policy: WorkerPolicy): WorkerCognitionDefaults {
+  return policy.cognitionDefaults[cognition] ?? policy.cognitionDefaults.low;
 }
 
-export function resolveProfile(value: unknown, policy: WorkerPolicy): WorkerProfile {
-  const profile = stringValue(value ?? policy.defaultProfile);
-  if (!isWorkerProfile(profile) || !policy.allowedProfiles.includes(profile)) throw diagnosticError('worker_invalid_profile', 'worker_invalid_profile', { profile, allowed_profiles: policy.allowedProfiles });
-  return profile;
+export function resolveAuthority(value: unknown, policy: WorkerPolicy): WorkerAuthority {
+  const authority = validateAuthority(value ?? policy.defaultAuthority);
+  if (!policy.allowedAuthorities.includes(authority)) throw diagnosticError('worker_invalid_authority', 'worker_invalid_authority', { authority, allowed_authorities: policy.allowedAuthorities });
+  return authority;
 }
 
-export function defaultSandboxForProfile(profile: WorkerProfile): SandboxMode {
-  if (profile === 'delegating-agent-write' || profile === 'delegating-agent-command') return 'workspace-write';
+export function resolveCognition(value: unknown, policy: WorkerPolicy): WorkerCognition {
+  const cognition = validateCognition(value ?? policy.defaultCognition);
+  if (!policy.allowedCognition.includes(cognition)) throw diagnosticError('worker_invalid_cognition', 'worker_invalid_cognition', { cognition, allowed_cognition: policy.allowedCognition });
+  return cognition;
+}
+
+export function defaultSandboxForAuthority(authority: WorkerAuthority): SandboxMode {
+  if (authority === 'write' || authority === 'command') return 'workspace-write';
   return 'read-only';
 }
 
@@ -137,8 +140,10 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     schema: 'narada.worker.policy.v1',
     status: 'ok',
     default_runtime: policy.defaultRuntime,
-    default_profile: policy.defaultProfile,
-    allowed_profiles: policy.allowedProfiles,
+    default_authority: policy.defaultAuthority,
+    default_cognition: policy.defaultCognition,
+    allowed_authorities: policy.allowedAuthorities,
+    allowed_cognition: policy.allowedCognition,
     run_root: policy.runRoot,
     audit_log_dir: policy.auditLogDir,
     allowed_roots: policy.allowedRoots,
@@ -152,11 +157,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     max_prompt_bytes: policy.maxPromptBytes,
     max_output_bytes: policy.maxOutputBytes,
     max_run_ms: policy.maxRunMs,
-    edit_defaults: {
-      model: policy.editDefaults.model,
-      reasoning_effort: policy.editDefaults.reasoningEffort,
-    },
-    profile_defaults: Object.fromEntries(Object.entries(policy.profileDefaults).map(([profile, defaults]) => [profile, {
+    cognition_defaults: Object.fromEntries(Object.entries(policy.cognitionDefaults).map(([cognition, defaults]) => [cognition, {
       model: defaults.model,
       reasoning_effort: defaults.reasoningEffort,
     }])),
@@ -302,28 +303,31 @@ function mergeConfig(fileConfig: Record<string, unknown>, options: Record<string
   return { ...fileConfig, ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'config')) };
 }
 
-function profileDefaults(profiles: Record<string, unknown>, options: Record<string, unknown>): Record<WorkerProfile, WorkerProfileDefaults> {
-  const readDefaults = profileDefault('delegating-agent-read', profiles, options, 'gpt-5.4-mini', 'low');
-  const researchDefaults = profileDefault('delegating-agent-research', profiles, options, 'gpt-5.4-mini', 'medium');
-  const writeDefaults = profileDefault('delegating-agent-write', profiles, options, 'gpt-5.4-mini', 'low');
-  const commandDefaults = profileDefault('delegating-agent-command', profiles, options, 'gpt-5.4-mini', 'low');
+function cognitionDefaults(cognition: Record<string, unknown>, options: Record<string, unknown>): Record<WorkerCognition, WorkerCognitionDefaults> {
   return {
-    default: readDefaults,
-    'delegating-agent-read': readDefaults,
-    'delegating-agent-research': researchDefaults,
-    'delegating-agent-write': writeDefaults,
-    'delegating-agent-command': commandDefaults,
+    low: cognitionDefault('low', cognition, options, 'gpt-5.4-mini', 'low'),
+    medium: cognitionDefault('medium', cognition, options, 'gpt-5.4-mini', 'medium'),
+    high: cognitionDefault('high', cognition, options, 'gpt-5.4', 'high'),
   };
 }
 
-function profileDefault(profile: WorkerProfile, profiles: Record<string, unknown>, options: Record<string, unknown>, defaultModel: string | null, defaultReasoningEffort: string | null): WorkerProfileDefaults {
-  const key = profile.replace(/^delegating-agent-/, '').replace(/-/g, '_');
-  const config = asRecord(profiles[key]);
-  const pascal = key.split('_').map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`).join('');
+function cognitionDefault(level: WorkerCognition, cognition: Record<string, unknown>, options: Record<string, unknown>, defaultModel: string | null, defaultReasoningEffort: string | null): WorkerCognitionDefaults {
+  const config = asRecord(cognition[level]);
+  const pascal = `${level[0].toUpperCase()}${level.slice(1)}`;
   return {
-    model: stringOrNull(options[`profile${pascal}Model`] ?? config.model ?? defaultModel),
-    reasoningEffort: stringOrNull(options[`profile${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? defaultReasoningEffort),
+    model: stringOrNull(options[`cognition${pascal}Model`] ?? config.model ?? defaultModel),
+    reasoningEffort: stringOrNull(options[`cognition${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? defaultReasoningEffort),
   };
+}
+
+function authorityList(value: unknown): WorkerAuthority[] {
+  const list = stringList(value).map(validateAuthority);
+  return list.length > 0 ? list : [...WORKER_AUTHORITIES];
+}
+
+function cognitionList(value: unknown): WorkerCognition[] {
+  const list = stringList(value).map(validateCognition);
+  return list.length > 0 ? list : [...WORKER_COGNITION];
 }
 
 function defaultRunRoot(): string {
@@ -381,8 +385,16 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function isWorkerProfile(value: string): value is WorkerProfile {
-  return WORKER_PROFILES.includes(value as WorkerProfile);
+function validateAuthority(value: unknown): WorkerAuthority {
+  const authority = stringValue(value);
+  if (authority !== 'read' && authority !== 'write' && authority !== 'command') throw diagnosticError('worker_invalid_authority', 'worker_invalid_authority', { authority });
+  return authority;
+}
+
+function validateCognition(value: unknown): WorkerCognition {
+  const cognition = stringValue(value);
+  if (cognition !== 'low' && cognition !== 'medium' && cognition !== 'high') throw diagnosticError('worker_invalid_cognition', 'worker_invalid_cognition', { cognition });
+  return cognition;
 }
 
 function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig } from './codex-adapter.js';
-import { defaultConfigForProfile, defaultSandboxForProfile, environmentForWorker, publicWorkerPolicy, resolveConfig, resolveProfile, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
@@ -36,12 +36,15 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
   const inheritedSession = resumeSessionId ? readWorkerSessionRecord(state.policy, resumeSessionId) : null;
   if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
-  const profile = resolveProfile(request.constraints.profile, state.policy);
-  applyProfileDefaults(request, profile, state);
+  const authority = resolveAuthority(request.constraints.authority, state.policy);
+  const cognition = resolveCognition(request.constraints.cognition, state.policy);
+  request.constraints.authority = authority;
+  request.constraints.cognition = cognition;
+  applyCognitionDefaults(request, cognition, state);
   const overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
-  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForProfile(profile), state.policy);
+  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy);
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd });
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;
@@ -66,7 +69,8 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const environment = environmentForWorker(state.env);
   const resolvedWorkerConfig: ResolvedWorkerConfig = {
     runtime,
-    profile,
+    authority,
+    cognition,
     command: codexRuntime.command,
     command_args: codexRuntime.commandArgs,
     argv,
@@ -175,8 +179,8 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
   state.activeRunCount = Math.max(0, state.activeRunCount - 1);
 }
 
-function applyProfileDefaults(request: WorkerRunToolInput, profile: ResolvedWorkerConfig['profile'], state: WorkerMcpState): void {
-  const defaults = defaultConfigForProfile(profile, state.policy);
+function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState): void {
+  const defaults = defaultConfigForCognition(cognition, state.policy);
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
@@ -189,7 +193,8 @@ function applyProfileDefaults(request: WorkerRunToolInput, profile: ResolvedWork
 }
 
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {
-  if (request.constraints.profile === undefined || request.constraints.profile === 'default') request.constraints.profile = inherited.profile;
+  if (request.constraints.authority === undefined) request.constraints.authority = inherited.authority;
+  if (request.constraints.cognition === undefined) request.constraints.cognition = inherited.cognition;
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
   if (overrides.runtime === undefined) overrides.runtime = inherited.runtime;
@@ -207,26 +212,16 @@ function inheritSessionConstraints(request: WorkerRunToolInput, inherited: Resol
 
 function workerEditRunArgs(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   const editInput = normalizeWorkerEditToolInput(args);
-  const overrides = applyEditDefaults(editInput.overrides ?? {}, state);
   return {
     intent: { instruction: editInput.instruction },
     constraints: {
       cwd: editInput.cwd,
-      profile: 'delegating-agent-write',
+      authority: 'write',
+      cognition: 'low',
       ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
-      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+      ...(editInput.overrides && Object.keys(editInput.overrides).length > 0 ? { overrides: editInput.overrides } : {}),
     },
   };
-}
-
-function applyEditDefaults(overrides: WorkerConstraintOverrides, state: WorkerMcpState): WorkerConstraintOverrides {
-  const config = { ...(overrides.config ?? {}) };
-  const result: WorkerConstraintOverrides = { ...overrides, ...(Object.keys(config).length > 0 ? { config } : {}) };
-  if (state.policy.editDefaults.model && result.model === undefined && config.model === undefined) result.model = state.policy.editDefaults.model;
-  if (state.policy.editDefaults.reasoningEffort && result.reasoning_effort === undefined && config.model_reasoning_effort === undefined) {
-    result.reasoning_effort = state.policy.editDefaults.reasoningEffort;
-  }
-  return result;
 }
 
 function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEditToolInput {
@@ -280,8 +275,9 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   const overridesInput = asRecord(constraintsInput.overrides);
   const constraints: WorkerConstraintRequest = {
     cwd: requiredNonEmptyString(constraintsInput.cwd ?? args.cwd, 'worker_cwd_required'),
-    profile: String(constraintsInput.profile ?? args.profile ?? 'default').trim() || 'default',
   };
+  copyString(constraints, 'authority', constraintsInput.authority ?? args.authority);
+  copyString(constraints, 'cognition', constraintsInput.cognition ?? args.cognition);
   if (constraintsInput.resumable !== undefined || args.resumable !== undefined) constraints.resumable = Boolean(constraintsInput.resumable ?? args.resumable);
   const overrides: NonNullable<WorkerConstraintRequest['overrides']> = {};
   copyString(overrides, 'runtime', overridesInput.runtime ?? constraintsInput.runtime ?? args.runtime);
@@ -297,7 +293,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   return constraints;
 }
 
-function copyString(target: Record<string, unknown>, key: keyof WorkerConstraintOverrides, value: unknown): void {
+function copyString(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value === undefined || value === null || value === '') return;
   target[key] = String(value).trim();
 }

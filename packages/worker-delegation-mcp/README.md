@@ -10,7 +10,7 @@ The current runtime is Codex only. The worker prompt includes a recursion guard:
 
 - `worker_policy_inspect`: inspect the active delegation policy.
 - `worker_run`: start one new delegated worker run.
-- `worker_edit`: start one new edit-capable worker run using `delegating-agent-write`; this is worker delegation, not a deterministic filesystem write tool.
+- `worker_edit`: start one new edit-capable worker run using write authority and low cognition; this is worker delegation, not a deterministic filesystem write tool.
 - `worker_resume`: continue one existing worker session.
 - `worker_output_show`: read materialized worker output by output ref.
 
@@ -28,16 +28,17 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 Defaults:
 
 - runtime: `codex`
-- default profile: `default`
+- default authority: `read`
+- default cognition: `low`
 - allowed runtimes: `codex`
-- allowed profiles: `default`, `delegating-agent-read`, `delegating-agent-research`, `delegating-agent-write`, `delegating-agent-command`
+- allowed authorities: `read`, `write`, `command`
+- allowed cognition: `low`, `medium`, `high`
 - allowed sandboxes: `read-only`, `workspace-write`
 - default sandbox: `read-only`
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
-- edit defaults: `model: "gpt-5.4-mini"`, `reasoning_effort: "low"`
-- profile defaults: `delegating-agent-read`, `delegating-agent-write`, and `delegating-agent-command` use `gpt-5.4-mini` with low reasoning; `delegating-agent-research` uses `gpt-5.4-mini` with medium reasoning
+- cognition defaults: `low` uses `gpt-5.4-mini` with low reasoning, `medium` uses `gpt-5.4-mini` with medium reasoning, and `high` uses `gpt-5.4` with high reasoning
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
 - max parallel runs: `10`
 - max prompt bytes: `1048576`
@@ -63,11 +64,9 @@ Common flags:
 - `--codex-command-arg <arg>`: prepend a fixed argument to the Codex runtime invocation; repeatable. Useful for `node <codex.js>` on Windows.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable. Omit model overrides unless the runtime account is known to accept the selected model.
-- `--edit-default-reasoning-effort <value>`: default reasoning effort for `worker_edit` when the caller omits one, default `low`.
-- `--edit-default-model <model>`: default model for `worker_edit` when the caller omits one, default `gpt-5.4-mini`.
-- `--profile-read-model <model>` and `--profile-read-reasoning-effort <value>`: defaults for `delegating-agent-read`.
-- `--profile-research-model <model>` and `--profile-research-reasoning-effort <value>`: defaults for `delegating-agent-research`.
-- `--profile-command-model <model>` and `--profile-command-reasoning-effort <value>`: defaults for `delegating-agent-command`.
+- `--cognition-low-model <model>` and `--cognition-low-reasoning-effort <value>`: defaults for low cognition.
+- `--cognition-medium-model <model>` and `--cognition-medium-reasoning-effort <value>`: defaults for medium cognition.
+- `--cognition-high-model <model>` and `--cognition-high-reasoning-effort <value>`: defaults for high cognition.
 - `--max-parallel-runs <count>`: maximum simultaneous worker runs, default `10`; enforced for `worker_run`, `worker_edit`, and `worker_resume`.
 - `--max-run-ms <ms>`, `--max-prompt-bytes <bytes>`, `--max-output-bytes <bytes>`: set limits.
 
@@ -76,21 +75,22 @@ Common flags:
 Agents should use `worker_policy_inspect` before delegating. A delegation request separates non-mechanically-enforceable intent from mechanically-enforceable constraints:
 
 - `intent.instruction`: what the worker is asked to do and how it should report. This is prompt intent, not enforcement.
-- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `profile` selects the named execution mode, `resumable` controls whether the returned session can be continued, and `overrides` carries explicit low-level execution overrides when policy admits them.
+- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `authority` selects read, write, or command capability, `cognition` selects the default model and reasoning tier, `resumable` controls whether the returned session can be continued, and `overrides` carries explicit low-level execution overrides when policy admits them.
 
 The worker MCP surface enforces constraints and records the resolved executor request. It does not admit worker output as task evidence, close work, or create Narada role authority by itself.
 
-Profiles:
+Normalized constraints:
 
-- `default`: alias for `delegating-agent-read`.
-- `delegating-agent-read`: low-cost inspection within the delegating agent's admitted root envelope; default sandbox `read-only`, default model `gpt-5.4-mini`, default reasoning `low`.
-- `delegating-agent-research`: read-only codebase investigation for vague searches, tracing, and synthesis; default sandbox `read-only`, default model `gpt-5.4-mini`, default reasoning `medium`.
-- `delegating-agent-write`: edit within the delegating agent's admitted root envelope; default sandbox `workspace-write`.
-- `delegating-agent-command`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`, default model `gpt-5.4-mini`, default reasoning `low`.
+- `authority: "read"`: inspection within the admitted root envelope; default sandbox `read-only`.
+- `authority: "write"`: edit-capable work within the admitted root envelope; default sandbox `workspace-write`.
+- `authority: "command"`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
+- `cognition: "low"`: default model `gpt-5.4-mini`, default reasoning `low`.
+- `cognition: "medium"`: default model `gpt-5.4-mini`, default reasoning `medium`.
+- `cognition: "high"`: default model `gpt-5.4`, default reasoning `high`.
 
-Use `worker_run` for general new work, `worker_edit` for concise edit-capable delegation, and `worker_resume` only when continuing a known `worker_session_id`. `worker_edit` accepts top-level `cwd`, `instruction`, optional `resumable`, and optional `overrides`, then mechanically applies `profile: "delegating-agent-write"`. It defaults to `gpt-5.4-mini` with low reasoning unless the caller or policy overrides it. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
+There are no internal named execution modes or presets in the worker contract. `worker_run` accepts explicit normalized constraints. `worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, and optional `overrides`, then mechanically compiles to `authority: "write"` and `cognition: "low"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
 
-When a resumable run completes, the server records a session entry under `run_root/sessions`. `worker_resume` uses that entry to inherit the original profile, sandbox, model, reasoning effort, and config unless the caller explicitly overrides them. This keeps resumable `worker_edit` sessions on the same edit defaults across continuations and MCP restarts.
+When a resumable run completes, the server records a session entry under `run_root/sessions`. `worker_resume` uses that entry to inherit the original authority, cognition, sandbox, model, reasoning effort, and config unless the caller explicitly overrides them. This keeps resumable `worker_edit` sessions on write authority and low cognition across continuations and MCP restarts.
 
 Successful worker runs return `schema: "narada.worker.run.v1"` with:
 
@@ -117,7 +117,8 @@ If a response is materialized, call `worker_output_show` with the returned `outp
   },
   "constraints": {
     "cwd": "D:/code/example",
-    "profile": "delegating-agent-read",
+    "authority": "read",
+    "cognition": "medium",
     "resumable": false,
     "overrides": {
       "sandbox": "read-only",
@@ -137,7 +138,7 @@ Edit shortcut:
 }
 ```
 
-Model overrides are intentionally absent from the examples. `worker_edit` uses `gpt-5.4-mini` by default; add `overrides.model` only when the active Codex account and runtime are known to support a different model.
+Model overrides are intentionally absent from the edit shortcut example. `worker_edit` uses the low cognition defaults; add `overrides.model` only when the active Codex account and runtime are known to support a different model.
 
 ## Verification
 

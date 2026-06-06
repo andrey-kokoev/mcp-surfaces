@@ -13,7 +13,7 @@ export function listTools(): WorkerToolDefinition[] {
       intent: intentSchema(),
       constraints: constraintRequestSchema(),
     }, ['intent', 'constraints']) },
-    { name: 'worker_edit', description: 'Start one edit-capable worker run with the delegating-agent-write profile.', inputSchema: objectSchema({
+    { name: 'worker_edit', description: 'Start one edit-capable worker run shortcut using write authority and low cognition.', inputSchema: objectSchema({
       cwd: { type: 'string' },
       instruction: { type: 'string' },
       resumable: { type: 'boolean' },
@@ -43,7 +43,8 @@ function intentSchema(): Record<string, unknown> {
 function constraintRequestSchema(): Record<string, unknown> {
   return objectSchema({
     cwd: { type: 'string' },
-    profile: { type: 'string', enum: ['default', 'delegating-agent-read', 'delegating-agent-research', 'delegating-agent-write', 'delegating-agent-command'] },
+    authority: { type: 'string', enum: ['read', 'write', 'command'] },
+    cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
     resumable: { type: 'boolean' },
     overrides: constraintOverrideSchema(),
   }, ['cwd']);
@@ -87,8 +88,10 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
     schema: { type: 'string', const: 'narada.worker.policy.v1' },
     status: { type: 'string' },
     default_runtime: { type: 'string' },
-    default_profile: { type: 'string' },
-    allowed_profiles: stringArraySchema(),
+    default_authority: { type: 'string' },
+    default_cognition: { type: 'string' },
+    allowed_authorities: stringArraySchema(),
+    allowed_cognition: stringArraySchema(),
     run_root: { type: 'string' },
     audit_log_dir: { type: 'string' },
     allowed_roots: stringArraySchema(),
@@ -102,8 +105,7 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
     max_prompt_bytes: { type: 'integer' },
     max_output_bytes: { type: 'integer' },
     max_run_ms: { type: 'integer' },
-    edit_defaults: { type: 'object', additionalProperties: true },
-    profile_defaults: { type: 'object', additionalProperties: true },
+    cognition_defaults: { type: 'object', additionalProperties: true },
     runtimes: { type: 'object', additionalProperties: true },
   }, ['schema', 'status']);
 }
@@ -148,4 +150,3 @@ function stringArraySchema(): Record<string, unknown> {
 function nullableStringSchema(): Record<string, unknown> {
   return { type: ['string', 'null'] };
 }
-
