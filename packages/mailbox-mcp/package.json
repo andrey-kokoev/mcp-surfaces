@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/mailbox-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Read-only MCP surface for site-local synced mailbox projections.",
+  "bin": {
+    "mailbox-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/mailbox-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

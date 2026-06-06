@@ -1,0 +1,391 @@
+#!/usr/bin/env node
+import { resolve } from 'node:path';
+import { messageMatchesQuery, readMailboxProjection, summarizeMessage } from './mailbox-store.js';
+
+const SERVER_NAME = 'narada-mailbox-mcp';
+const SERVER_VERSION = '0.1.0';
+const PROTOCOL_VERSION = '2024-11-05';
+
+type MailboxRecord = Record<string, unknown>;
+type MailboxServerState = MailboxRecord & { siteRoot: string; serverName: string };
+
+function asRecord(value: unknown): MailboxRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as MailboxRecord : {};
+}
+
+if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
+  runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+}
+
+export async function runStdioServer(options: unknown): Promise<void> {
+  const state = createServerState(options);
+  let buffer = '';
+  let sawFramedInput = false;
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) {
+    buffer += chunk;
+    let requests: MailboxRecord[];
+    if (buffer.includes('Content-Length:')) {
+      sawFramedInput = true;
+      const drained = drainJsonRpcFrames(buffer);
+      buffer = drained.remaining;
+      requests = drained.requests;
+    } else {
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() ?? '';
+      requests = lines.filter((line) => line.trim()).map((line) => asRecord(JSON.parse(line)));
+    }
+    for (const request of requests) {
+      if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) continue;
+      const response = handleRequest(request, state);
+      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+    }
+  }
+}
+
+export function createServerState(options: unknown = {}): MailboxServerState {
+  const optionsRecord = asRecord(options);
+  return {
+    siteRoot: resolve(String(optionsRecord.siteRoot ?? process.cwd())),
+    serverName: String(optionsRecord.serverName ?? SERVER_NAME),
+  };
+}
+
+export function handleRequest(request: MailboxRecord, state: MailboxServerState) {
+  if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
+  try {
+    const result = dispatchMethod(String(request.method), asRecord(request.params), state);
+    return { jsonrpc: '2.0', id: request.id ?? null, result };
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    return { jsonrpc: '2.0', id: request.id ?? null, error: { code: -32000, message: diagnostic.message, data: diagnostic } };
+  }
+}
+
+function dispatchMethod(method: string, params: MailboxRecord, state: MailboxServerState) {
+  switch (method) {
+    case 'initialize':
+      return {
+        protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
+        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
+        serverInfo: { name: state.serverName, version: SERVER_VERSION },
+      };
+    case 'tools/list':
+      return { tools: listTools() };
+    case 'tools/call':
+      return callTool(params, state);
+    case 'prompts/list':
+      return { prompts: listPrompts() };
+    case 'prompts/get':
+      return promptGet(params);
+    case 'completion/complete':
+      return completeArgument(params);
+    case 'logging/setLevel':
+      return {};
+    default:
+      throw new Error(`unsupported_mcp_method: ${method}`);
+  }
+}
+
+function listPrompts() {
+  return [{ name: 'mailbox_read_workflow', title: 'Mailbox Read Workflow', description: 'Guidance for inspecting synced mailbox projections.', arguments: [] }];
+}
+
+function promptGet(params: MailboxRecord) {
+  const name = String(params.name ?? '');
+  if (name !== 'mailbox_read_workflow') throw new Error(`unknown_prompt: ${name}`);
+  return {
+    description: 'Guidance for inspecting synced mailbox projections.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use mailbox_accounts_list to confirm available synced mailboxes, mailbox_messages_list or mailbox_search for bounded discovery, mailbox_message_show before acting on a specific message, and mailbox_thread_show for conversation context.' } }],
+  };
+}
+
+function completeArgument(params: MailboxRecord) {
+  const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
+  const values = argumentName === 'name' ? listTools().map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
+  return { completion: { values, total: values.length, hasMore: false } };
+}
+
+export function listTools(): unknown[] {
+  return [
+    tool('mailbox_doctor', 'Inspect site-local synced mailbox projection readiness.', {}),
+    tool('mailbox_accounts_list', 'List synced mailbox accounts discovered in the local projection.', {}),
+    tool('mailbox_messages_list', 'List synced mailbox messages with bounded filters.', {
+      mailbox_id: { type: 'string', description: 'Optional mailbox/account id filter.' },
+      folder: { type: 'string', description: 'Optional folder filter.' },
+      unread: { type: 'boolean', description: 'Optional unread filter.' },
+      since: { type: 'string', description: 'Optional inclusive received/sent timestamp lower bound.' },
+      before: { type: 'string', description: 'Optional exclusive received/sent timestamp upper bound.' },
+      query: { type: 'string', description: 'Optional case-insensitive subject/body/address/category substring query.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum messages. Defaults to 20.' },
+      include_body: { type: 'boolean', default: false, description: 'Include plain text body in listed messages.' },
+    }),
+    tool('mailbox_message_show', 'Show one synced mailbox message by message_id.', {
+      message_id: { type: 'string', description: 'Message id from mailbox_messages_list or mailbox_search.' },
+      mailbox_id: { type: 'string', description: 'Optional mailbox/account id disambiguator.' },
+      include_html: { type: 'boolean', default: false, description: 'Include HTML body when present.' },
+      include_raw: { type: 'boolean', default: false, description: 'Include raw synced projection record.' },
+    }, ['message_id']),
+    tool('mailbox_search', 'Search synced mailbox messages.', {
+      query: { type: 'string', description: 'Case-insensitive subject/body/address/category substring query.' },
+      mailbox_id: { type: 'string', description: 'Optional mailbox/account id filter.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum messages. Defaults to 20.' },
+      include_body: { type: 'boolean', default: false, description: 'Include plain text body in search results.' },
+    }, ['query']),
+    tool('mailbox_thread_show', 'Show synced messages in one thread/conversation.', {
+      thread_id: { type: 'string', description: 'Thread or conversation id.' },
+      mailbox_id: { type: 'string', description: 'Optional mailbox/account id filter.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 50, description: 'Maximum messages. Defaults to 50.' },
+      include_body: { type: 'boolean', default: true, description: 'Include plain text bodies.' },
+    }, ['thread_id']),
+  ];
+}
+
+function callTool(params: MailboxRecord, state: MailboxServerState) {
+  const name = params.name;
+  const args = asRecord(params.arguments);
+  let result: unknown;
+  switch (name) {
+    case 'mailbox_doctor':
+      result = mailboxDoctor(state);
+      break;
+    case 'mailbox_accounts_list':
+      result = mailboxAccountsList(state);
+      break;
+    case 'mailbox_messages_list':
+      result = mailboxMessagesList(args, state);
+      break;
+    case 'mailbox_message_show':
+      result = mailboxMessageShow(args, state);
+      break;
+    case 'mailbox_search':
+      result = mailboxSearch(args, state);
+      break;
+    case 'mailbox_thread_show':
+      result = mailboxThreadShow(args, state);
+      break;
+    default:
+      throw new Error(`unknown_tool: ${name}`);
+  }
+  return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
+}
+
+function assistantTextContent(text: string) {
+  return { type: 'text', text, annotations: { audience: ['assistant'] } };
+}
+
+function mailboxDoctor(state: MailboxServerState): MailboxRecord {
+  const scan = readMailboxProjection(state.siteRoot);
+  return {
+    schema: 'narada.mailbox_mcp.doctor.v1',
+    status: 'ok',
+    site_root: scan.site_root,
+    roots: scan.roots,
+    scanned_files: scan.scanned_files,
+    message_count: scan.messages.length,
+    invalid_count: scan.invalid_count,
+    invalid_records: scan.invalid_records,
+    server_name: state.serverName,
+  };
+}
+
+function mailboxAccountsList(state: MailboxServerState): MailboxRecord {
+  const scan = readMailboxProjection(state.siteRoot);
+  const accounts = new Map<string, MailboxRecord>();
+  for (const message of scan.messages) {
+    const account = accounts.get(message.mailbox_id) ?? {
+      mailbox_id: message.mailbox_id,
+      message_count: 0,
+      unread_count: 0,
+      folders: [],
+      latest_message_at: null,
+    };
+    account.message_count = Number(account.message_count ?? 0) + 1;
+    if (message.unread === true) account.unread_count = Number(account.unread_count ?? 0) + 1;
+    if (message.folder && !asStringArray(account.folders).includes(message.folder)) account.folders = [...asStringArray(account.folders), message.folder].sort();
+    const timestamp = message.received_at ?? message.sent_at;
+    if (timestamp && (!account.latest_message_at || String(timestamp) > String(account.latest_message_at))) account.latest_message_at = timestamp;
+    accounts.set(message.mailbox_id, account);
+  }
+  return {
+    schema: 'narada.mailbox_mcp.accounts.v1',
+    status: 'ok',
+    site_root: scan.site_root,
+    count: accounts.size,
+    accounts: [...accounts.values()].sort((left, right) => String(left.mailbox_id).localeCompare(String(right.mailbox_id))),
+  };
+}
+
+function mailboxMessagesList(args: MailboxRecord, state: MailboxServerState): MailboxRecord {
+  const scan = readMailboxProjection(state.siteRoot);
+  const rows = filterMessages(scan.messages, args);
+  const limit = boundedLimit(args.limit, 20);
+  const includeBody = args.include_body === true;
+  return {
+    schema: 'narada.mailbox_mcp.messages.v1',
+    status: 'ok',
+    site_root: scan.site_root,
+    filters: {
+      mailbox_id: stringOrNull(args.mailbox_id),
+      folder: stringOrNull(args.folder),
+      unread: typeof args.unread === 'boolean' ? args.unread : null,
+      since: stringOrNull(args.since),
+      before: stringOrNull(args.before),
+      query: stringOrNull(args.query),
+    },
+    count: rows.length,
+    messages: rows.slice(0, limit).map((message) => summarizeMessage(message, { includeBody })),
+  };
+}
+
+function mailboxMessageShow(args: MailboxRecord, state: MailboxServerState): MailboxRecord {
+  const messageId = requiredString(args, 'message_id');
+  const mailboxId = stringOrNull(args.mailbox_id);
+  const scan = readMailboxProjection(state.siteRoot);
+  const message = scan.messages.find((candidate) => candidate.message_id === messageId && (!mailboxId || candidate.mailbox_id === mailboxId));
+  if (!message) return { schema: 'narada.mailbox_mcp.message.v1', status: 'not_found', site_root: scan.site_root, message_id: messageId };
+  return {
+    schema: 'narada.mailbox_mcp.message.v1',
+    status: 'ok',
+    site_root: scan.site_root,
+    message: summarizeMessage(message, { includeBody: true, includeHtml: args.include_html === true, includeRaw: args.include_raw === true }),
+  };
+}
+
+function mailboxSearch(args: MailboxRecord, state: MailboxServerState): MailboxRecord {
+  requiredString(args, 'query');
+  return mailboxMessagesList(args, state);
+}
+
+function mailboxThreadShow(args: MailboxRecord, state: MailboxServerState): MailboxRecord {
+  const threadId = requiredString(args, 'thread_id');
+  const mailboxId = stringOrNull(args.mailbox_id);
+  const includeBody = args.include_body !== false;
+  const limit = boundedLimit(args.limit, 50);
+  const scan = readMailboxProjection(state.siteRoot);
+  const messages = scan.messages
+    .filter((message) => message.thread_id === threadId && (!mailboxId || message.mailbox_id === mailboxId))
+    .sort((left, right) => String(left.received_at ?? left.sent_at ?? '').localeCompare(String(right.received_at ?? right.sent_at ?? '')));
+  return {
+    schema: 'narada.mailbox_mcp.thread.v1',
+    status: messages.length > 0 ? 'ok' : 'not_found',
+    site_root: scan.site_root,
+    thread_id: threadId,
+    count: messages.length,
+    messages: messages.slice(0, limit).map((message) => summarizeMessage(message, { includeBody })),
+  };
+}
+
+function filterMessages(messages: ReturnType<typeof readMailboxProjection>['messages'], args: MailboxRecord) {
+  const mailboxId = stringOrNull(args.mailbox_id);
+  const folder = stringOrNull(args.folder);
+  const since = stringOrNull(args.since);
+  const before = stringOrNull(args.before);
+  return messages.filter((message) => {
+    const timestamp = message.received_at ?? message.sent_at ?? '';
+    if (mailboxId && message.mailbox_id !== mailboxId) return false;
+    if (folder && message.folder !== folder) return false;
+    if (typeof args.unread === 'boolean' && message.unread !== args.unread) return false;
+    if (since && timestamp < since) return false;
+    if (before && timestamp >= before) return false;
+    return messageMatchesQuery(message, args.query);
+  });
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function boundedLimit(value: unknown, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(100, Math.trunc(parsed)));
+}
+
+function requiredString(args: unknown, key: string): string {
+  const value = asRecord(args)[key];
+  if (typeof value !== 'string' || value.trim() === '') throw new Error(`${key}_required`);
+  return value;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {
+  return {
+    name,
+    description,
+    annotations: toolAnnotations(name),
+    inputSchema: {
+      type: 'object',
+      properties,
+      additionalProperties: false,
+      ...(required.length > 0 ? { required } : {}),
+    },
+    outputSchema: { type: 'object', additionalProperties: true },
+  };
+}
+
+function toolAnnotations(name: string) {
+  return {
+    title: name,
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: false,
+  };
+}
+
+function parseArgs(argv: string[]): MailboxRecord {
+  const parsed: MailboxRecord = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith('--')) continue;
+    const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const next = argv[i + 1];
+    if (next && !next.startsWith('--')) {
+      parsed[key] = next;
+      i++;
+    } else {
+      parsed[key] = true;
+    }
+  }
+  return parsed;
+}
+
+function drainJsonRpcFrames(buffer: string): { requests: MailboxRecord[]; remaining: string } {
+  const requests: MailboxRecord[] = [];
+  let rest = buffer;
+  while (true) {
+    const headerEnd = rest.indexOf('\r\n\r\n');
+    const separatorLength = headerEnd >= 0 ? 4 : 2;
+    const lfHeaderEnd = headerEnd >= 0 ? headerEnd : rest.indexOf('\n\n');
+    if (lfHeaderEnd < 0) break;
+    const header = rest.slice(0, lfHeaderEnd);
+    const match = /^Content-Length:\s*(\d+)/im.exec(header);
+    if (!match) break;
+    const length = Number(match[1]);
+    const bodyStart = lfHeaderEnd + separatorLength;
+    if (rest.length < bodyStart + length) break;
+    requests.push(asRecord(JSON.parse(rest.slice(bodyStart, bodyStart + length))));
+    rest = rest.slice(bodyStart + length);
+  }
+  return { requests, remaining: rest };
+}
+
+function writeJsonRpcResponse(payload: unknown, options: unknown = {}): void {
+  const text = JSON.stringify(payload);
+  if (asRecord(options).framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(text, 'utf8')}\r\n\r\n${text}`);
+  else process.stdout.write(`${text}\n`);
+}
+
+function errorDiagnostic(error: unknown): { schema: string; message: string } {
+  return {
+    schema: 'narada.mailbox_mcp.error.v1',
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
