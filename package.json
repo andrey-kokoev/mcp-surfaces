@@ -14,6 +14,8 @@
     "test:git": "pnpm --filter @narada2/git-mcp test",
     "test:worker-delegation": "pnpm --filter @narada2/worker-delegation-mcp test",
     "test:inbox": "pnpm --filter @narada2/inbox-mcp test",
+    "test:mailbox": "pnpm --filter @narada2/mailbox-mcp test",
+    "test:graph-mail": "pnpm --filter @narada2/graph-mail-mcp test",
     "test:task-lifecycle": "pnpm --filter @narada2/task-lifecycle-mcp test",
     "test:sonar-site-ops": "pnpm --filter @narada2/sonar-site-ops-mcp test",
     "test:agent-context": "pnpm --filter @narada2/agent-context-mcp test"

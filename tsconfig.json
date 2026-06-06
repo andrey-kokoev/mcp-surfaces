@@ -7,6 +7,8 @@
     { "path": "./packages/git-mcp" },
     { "path": "./packages/worker-delegation-mcp" },
     { "path": "./packages/inbox-mcp" },
+    { "path": "./packages/mailbox-mcp" },
+    { "path": "./packages/graph-mail-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },
     { "path": "./packages/sonar-site-ops-mcp" },
     { "path": "./packages/agent-context-mcp" }

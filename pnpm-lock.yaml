@@ -35,6 +35,8 @@ importers:
         specifier: workspace:*
         version: link:../mcp-transport
 
+  packages/graph-mail-mcp: {}
+
   packages/inbox-mcp: {}
 
   packages/local-filesystem-mcp:
@@ -42,6 +44,8 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../mcp-transport
+
+  packages/mailbox-mcp: {}
 
   packages/mcp-transport: {}
 
@@ -67,6 +71,8 @@ importers:
       '@narada2/task-governance-core':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core
+
+  packages/worker-delegation-mcp: {}
 
 packages:
 
