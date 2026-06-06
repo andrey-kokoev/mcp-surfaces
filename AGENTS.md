@@ -13,6 +13,8 @@ Current packages:
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
 - `@narada2/inbox-mcp`: governed inbox intake and triage MCP surface.
+- `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
+- `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
 - `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface.
 - `@narada2/agent-context-mcp`: agent context MCP surface.
@@ -39,6 +41,8 @@ pnpm test:structured-command
 pnpm test:git
 pnpm test:worker-delegation
 pnpm test:inbox
+pnpm test:mailbox
+pnpm test:graph-mail
 pnpm test:task-lifecycle
 pnpm test:sonar-site-ops
 pnpm test:agent-context
@@ -58,5 +62,7 @@ Before handing off changes:
 - `structured-command-mcp` owns argv-based command execution policy.
 - `worker-delegation-mcp` owns policy-gated delegation to worker runtimes; it is not a general shell, task lifecycle, or recursive worker-control surface.
 - `mcp-transport` owns reusable payload/output reference mechanics.
+- `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
+- `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.
 - Task lifecycle/domain behavior belongs in dedicated MCP surface packages with explicit shared-domain dependencies.
 

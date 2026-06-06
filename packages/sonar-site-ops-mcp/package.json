@@ -24,5 +24,5 @@
     "@narada2/task-governance-core": "workspace:*",
     "@narada2/task-lifecycle-mcp": "workspace:*"
   },
-  "files": ["dist/"]
+  "files": ["dist/", "README.md"]
 }

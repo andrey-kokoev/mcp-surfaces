@@ -20,6 +20,7 @@
     "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/inbox-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "README.md"
   ]
 }

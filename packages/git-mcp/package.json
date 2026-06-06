@@ -27,6 +27,7 @@
     "@narada2/mcp-transport": "workspace:*"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "README.md"
   ]
 }
