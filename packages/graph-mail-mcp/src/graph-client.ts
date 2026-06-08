@@ -32,7 +32,11 @@ function mailboxPrefix(mailboxId: string): string {
 }
 
 export function graphMailboxPath(mailboxIdInput: unknown, suffix: string, policy: GraphMailPolicy): string {
-  const mailboxId = typeof mailboxIdInput === 'string' && mailboxIdInput.trim() !== '' ? mailboxIdInput : 'me';
+  const mailboxId = typeof mailboxIdInput === 'string' && mailboxIdInput.trim() !== ''
+    ? mailboxIdInput
+    : policy.allowed_mailboxes.length === 1
+      ? policy.allowed_mailboxes[0]
+      : 'me';
   assertMailboxAllowed(policy, mailboxId);
   return `${mailboxPrefix(mailboxId)}/${trimSlashes(suffix)}`;
 }

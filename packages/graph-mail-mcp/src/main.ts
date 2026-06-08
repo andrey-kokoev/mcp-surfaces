@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
 import { decideDraftSend, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
@@ -12,6 +13,12 @@ type GraphMailServerState = GraphMailRecord & {
   siteRoot: string;
   serverName: string;
   accessToken: string | null;
+  authMode: 'access_token' | 'client_credentials' | 'missing';
+  tenantId: string | null;
+  clientId: string | null;
+  clientSecret: string | null;
+  tokenEndpoint: string | null;
+  tokenCache: { accessToken: string; expiresAtMs: number } | null;
   fetchImpl: typeof fetch;
 };
 
@@ -54,10 +61,24 @@ export async function runStdioServer(options: unknown): Promise<void> {
 
 export function createServerState(options: unknown = {}): GraphMailServerState {
   const optionsRecord = asRecord(options);
+  const siteRoot = resolve(String(optionsRecord.siteRoot ?? process.cwd()));
+  const env = loadGraphMailEnvironment(siteRoot);
+  const explicitAccessToken = stringOption(optionsRecord.accessToken) ?? env.GRAPH_ACCESS_TOKEN ?? null;
+  const tenantId = stringOption(optionsRecord.tenantId) ?? env.GRAPH_TENANT_ID ?? null;
+  const clientId = stringOption(optionsRecord.clientId) ?? env.GRAPH_CLIENT_ID ?? null;
+  const clientSecret = stringOption(optionsRecord.clientSecret) ?? env.GRAPH_CLIENT_SECRET ?? null;
+  const hasClientCredentials = !!(tenantId && clientId && clientSecret);
+  const accessToken = explicitAccessToken ?? (hasClientCredentials ? null : env.MS_GRAPH_ACCESS_TOKEN ?? null);
   return {
-    siteRoot: resolve(String(optionsRecord.siteRoot ?? process.cwd())),
+    siteRoot,
     serverName: String(optionsRecord.serverName ?? SERVER_NAME),
-    accessToken: typeof optionsRecord.accessToken === 'string' ? optionsRecord.accessToken : process.env.MS_GRAPH_ACCESS_TOKEN ?? null,
+    accessToken,
+    authMode: accessToken ? 'access_token' : hasClientCredentials ? 'client_credentials' : 'missing',
+    tenantId,
+    clientId,
+    clientSecret,
+    tokenEndpoint: stringOption(optionsRecord.tokenEndpoint) ?? env.GRAPH_TOKEN_ENDPOINT ?? null,
+    tokenCache: null,
     fetchImpl: typeof optionsRecord.fetchImpl === 'function' ? optionsRecord.fetchImpl as typeof fetch : fetch,
   };
 }
@@ -121,7 +142,7 @@ export function listTools(): unknown[] {
   return [
     tool('graph_mail_doctor', 'Inspect Microsoft Graph mail MCP readiness and policy.', {}),
     tool('graph_mail_query', 'Query live Microsoft Graph messages for an allowed mailbox.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       folder_id: { type: 'string', description: 'Optional mail folder id. Defaults to messages across mailbox.' },
       query: { type: 'string', description: 'Optional Graph $search string.' },
       filter: { type: 'string', description: 'Optional Graph $filter expression.' },
@@ -129,7 +150,7 @@ export function listTools(): unknown[] {
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum messages.' },
     }),
     tool('graph_mail_message_show', 'Read one live Microsoft Graph message.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       message_id: { type: 'string', description: 'Graph message id.' },
       select: { type: 'string', description: 'Optional comma-separated Graph $select list.' },
     }, ['message_id']),
@@ -138,16 +159,16 @@ export function listTools(): unknown[] {
     tool('graph_mail_reply_all_draft_create', 'Create a reply-all draft for an existing message.', replyDraftProperties(), ['message_id']),
     tool('graph_mail_forward_draft_create', 'Create a forward draft for an existing message.', forwardDraftProperties(), ['message_id']),
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       draft_id: { type: 'string', description: 'Draft message id.' },
       ...draftMessageProperties(),
     }, ['draft_id']),
     tool('graph_mail_draft_discard', 'Delete an existing draft message.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       draft_id: { type: 'string', description: 'Draft message id.' },
     }, ['draft_id']),
     tool('graph_mail_draft_send', 'Send an existing draft message when explicitly allowed by policy.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       draft_id: { type: 'string', description: 'Draft message id.' },
       confirm_send: { type: 'boolean', default: false, description: 'Must be true for send attempts.' },
       approval_token: { type: 'string', description: 'Optional site-configured approval token.' },
@@ -157,7 +178,7 @@ export function listTools(): unknown[] {
 
 function draftMessageProperties() {
   return {
-    mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+    mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
     subject: { type: 'string', description: 'Draft subject.' },
     body_text: { type: 'string', description: 'Plain text body.' },
     body_html: { type: 'string', description: 'HTML body.' },
@@ -170,7 +191,7 @@ function draftMessageProperties() {
 
 function replyDraftProperties() {
   return {
-    mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to me.' },
+    mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
     message_id: { type: 'string', description: 'Original message id.' },
     comment: { type: 'string', description: 'Optional reply comment.' },
     body_text: { type: 'string', description: 'Optional replacement body text.' },
@@ -191,7 +212,7 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
   let result: unknown;
   switch (name) {
     case 'graph_mail_doctor':
-      result = graphMailDoctor(state);
+      result = await graphMailDoctor(state);
       break;
     case 'graph_mail_query':
       result = await graphMailQuery(args, state);
@@ -230,14 +251,16 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function graphMailDoctor(state: GraphMailServerState): GraphMailRecord {
+async function graphMailDoctor(state: GraphMailServerState): Promise<GraphMailRecord> {
   const policy = loadGraphMailPolicy(state.siteRoot);
+  const auth = await resolveAccessToken(state, { probeOnly: true });
   return {
     schema: 'narada.graph_mail_mcp.doctor.v1',
     status: 'ok',
     site_root: policy.site_root,
     graph_base_url: policy.graph_base_url,
-    has_access_token: !!state.accessToken,
+    has_access_token: auth.available,
+    auth_mode: auth.authMode,
     allowed_mailboxes: policy.allowed_mailboxes,
     allow_send_draft: policy.allow_send_draft,
     send_approval_token_configured: !!policy.send_approval_token,
@@ -246,7 +269,7 @@ function graphMailDoctor(state: GraphMailServerState): GraphMailRecord {
 }
 
 async function graphMailQuery(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const folderId = typeof args.folder_id === 'string' && args.folder_id.trim() !== '' ? args.folder_id : null;
   const suffix = folderId ? `mailFolders/${encodeURIComponent(folderId)}/messages` : 'messages';
   const path = graphMailboxPath(args.mailbox_id, suffix, policy);
@@ -265,7 +288,7 @@ async function graphMailQuery(args: GraphMailRecord, state: GraphMailServerState
 }
 
 async function graphMailMessageShow(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const messageId = requiredString(args, 'message_id');
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}`, policy);
   const query = typeof args.select === 'string' ? { '$select': args.select } : {};
@@ -274,7 +297,7 @@ async function graphMailMessageShow(args: GraphMailRecord, state: GraphMailServe
 }
 
 async function graphMailDraftCreate(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const message = messagePatchFromArgs(args);
   const path = graphMailboxPath(args.mailbox_id, 'messages', policy);
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_create_requested', mailbox_id: args.mailbox_id ?? 'me', subject: message.subject ?? null });
@@ -284,7 +307,7 @@ async function graphMailDraftCreate(args: GraphMailRecord, state: GraphMailServe
 }
 
 async function graphMailDerivedDraftCreate(args: GraphMailRecord, state: GraphMailServerState, action: 'createReply' | 'createReplyAll' | 'createForward'): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const messageId = requiredString(args, 'message_id');
   const body = derivedDraftBody(args, action);
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}/${action}`, policy);
@@ -298,13 +321,16 @@ function derivedDraftBody(args: GraphMailRecord, action: 'createReply' | 'create
   const message = messagePatchFromArgs(args);
   if (action === 'createForward' && Array.isArray(args.to_recipients)) message.toRecipients = recipients(args.to_recipients);
   const body: GraphMailRecord = {};
+  if (typeof args.comment === 'string' && asRecord(message).body) {
+    throw new Error('derived_draft_comment_body_conflict: provide comment or body_text/body_html, not both');
+  }
   if (typeof args.comment === 'string') body.comment = args.comment;
   if (Object.keys(message).length > 0) body.message = message;
   return body;
 }
 
 async function graphMailDraftUpdate(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const draftId = requiredString(args, 'draft_id');
   const patch = messagePatchFromArgs(args);
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(draftId)}`, policy);
@@ -315,7 +341,7 @@ async function graphMailDraftUpdate(args: GraphMailRecord, state: GraphMailServe
 }
 
 async function graphMailDraftDiscard(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
-  const { policy, accessToken, fetchImpl } = clientParts(state);
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
   const draftId = requiredString(args, 'draft_id');
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(draftId)}`, policy);
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_discard_requested', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
@@ -332,7 +358,7 @@ async function graphMailDraftSend(args: GraphMailRecord, state: GraphMailServerS
     recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_send_refused', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId, reason: decision.reason });
     return { schema: 'narada.graph_mail_mcp.draft_send.v1', status: 'refused', reason: decision.reason, draft_id: draftId };
   }
-  const { accessToken, fetchImpl } = clientParts(state, policy);
+  const { accessToken, fetchImpl } = await clientParts(state, policy);
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(draftId)}/send`, policy);
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_send_requested', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'POST', path });
@@ -340,9 +366,73 @@ async function graphMailDraftSend(args: GraphMailRecord, state: GraphMailServerS
   return { schema: 'narada.graph_mail_mcp.draft_send.v1', status: 'sent', result: graph };
 }
 
-function clientParts(state: GraphMailServerState, policy = loadGraphMailPolicy(state.siteRoot)) {
-  if (!state.accessToken) throw new Error('ms_graph_access_token_required');
-  return { policy, accessToken: state.accessToken, fetchImpl: state.fetchImpl as any };
+async function clientParts(state: GraphMailServerState, policy = loadGraphMailPolicy(state.siteRoot)) {
+  const auth = await resolveAccessToken(state);
+  return { policy, accessToken: auth.accessToken, fetchImpl: state.fetchImpl as any };
+}
+
+async function resolveAccessToken(state: GraphMailServerState, options: { probeOnly?: boolean } = {}): Promise<{ available: true; accessToken: string; authMode: string } | { available: false; accessToken: null; authMode: 'missing' }> {
+  if (state.accessToken) return { available: true, accessToken: state.accessToken, authMode: 'access_token' };
+  if (!state.tenantId || !state.clientId || !state.clientSecret) {
+    if (options.probeOnly) return { available: false, accessToken: null, authMode: 'missing' };
+    throw new Error('ms_graph_auth_required: set MS_GRAPH_ACCESS_TOKEN or GRAPH_TENANT_ID/GRAPH_CLIENT_ID/GRAPH_CLIENT_SECRET');
+  }
+  if (state.tokenCache && state.tokenCache.expiresAtMs > Date.now() + 60_000) {
+    return { available: true, accessToken: state.tokenCache.accessToken, authMode: 'client_credentials' };
+  }
+  if (options.probeOnly) return { available: true, accessToken: '<client_credentials_available>', authMode: 'client_credentials' };
+
+  const endpoint = state.tokenEndpoint ?? `https://login.microsoftonline.com/${encodeURIComponent(state.tenantId)}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    client_id: state.clientId,
+    client_secret: state.clientSecret,
+    scope: 'https://graph.microsoft.com/.default',
+    grant_type: 'client_credentials',
+  });
+  const response = await state.fetchImpl(endpoint, { method: 'POST', body } as any);
+  const text = typeof response.text === 'function' ? await response.text() : '';
+  if (!response.ok || response.status < 200 || response.status >= 300) {
+    throw new Error(`ms_graph_token_request_failed:${response.status}:${redactTokenResponse(text || response.statusText || 'unknown_error')}`);
+  }
+  let payload: GraphMailRecord;
+  try {
+    payload = asRecord(JSON.parse(text));
+  } catch {
+    throw new Error('ms_graph_token_response_invalid_json');
+  }
+  const accessToken = stringOption(payload.access_token);
+  if (!accessToken) throw new Error('ms_graph_token_response_missing_access_token');
+  const expiresInSeconds = Number(payload.expires_in ?? 3599);
+  const expiresAtMs = Date.now() + Math.max(60, Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3599) * 1000;
+  state.tokenCache = { accessToken, expiresAtMs };
+  return { available: true, accessToken, authMode: 'client_credentials' };
+}
+
+function loadGraphMailEnvironment(siteRoot: string): Record<string, string> {
+  return {
+    ...readEnvFile(resolve(siteRoot, '..', '.env')),
+    ...readEnvFile(resolve(siteRoot, '.env')),
+    ...process.env,
+  };
+}
+
+function readEnvFile(path: string): Record<string, string> {
+  if (!existsSync(path)) return {};
+  const env: Record<string, string> = {};
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const match = /^\s*([^#=\s]+)\s*=\s*(.*)\s*$/.exec(line);
+    if (!match) continue;
+    env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
+  }
+  return env;
+}
+
+function stringOption(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function redactTokenResponse(text: string): string {
+  return text.replace(/("(?:access_token|client_secret|refresh_token)"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3');
 }
 
 function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {

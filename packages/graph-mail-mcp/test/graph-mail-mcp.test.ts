@@ -32,6 +32,18 @@ function mockFetch(calls: CapturedRequest[], responses: unknown[] = []) {
   };
 }
 
+function mockTextFetch(calls: CapturedRequest[], responses: Array<{ status?: number; ok?: boolean; text?: string }> = []) {
+  return async (url: string, init: DynamicTestValue = {}) => {
+    calls.push({ url, init });
+    const response = responses.shift() ?? { text: '{}' };
+    return {
+      status: response.status ?? 200,
+      ok: response.ok ?? true,
+      text: async () => response.text ?? '{}',
+    };
+  };
+}
+
 const root = mkdtempSync(join(tmpdir(), 'graph-mail-mcp-'));
 
 try {
@@ -52,7 +64,44 @@ try {
   }, state);
   assert.equal(doctor.error, undefined);
   assert.equal(doctor.result.structuredContent.has_access_token, true);
+  assert.equal(doctor.result.structuredContent.auth_mode, 'access_token');
   assert.equal(doctor.result.structuredContent.allow_send_draft, false);
+
+  const clientCredentialCalls: CapturedRequest[] = [];
+  const clientCredentialState = createServerState({
+    siteRoot: root,
+    tenantId: 'tenant-1',
+    clientId: 'client-1',
+    clientSecret: 'secret-1',
+    tokenEndpoint: 'https://login.example.test/token',
+    fetchImpl: mockTextFetch(clientCredentialCalls, [
+      { text: JSON.stringify({ access_token: 'app-token', expires_in: 3600 }) },
+      { text: JSON.stringify({ value: [{ id: 'msg-app-1' }] }) },
+    ]),
+  });
+
+  const clientCredentialDoctor = await rpc({
+    jsonrpc: '2.0',
+    id: 11,
+    method: 'tools/call',
+    params: { name: 'graph_mail_doctor', arguments: {} },
+  }, clientCredentialState);
+  assert.equal(clientCredentialDoctor.error, undefined);
+  assert.equal(clientCredentialDoctor.result.structuredContent.has_access_token, true);
+  assert.equal(clientCredentialDoctor.result.structuredContent.auth_mode, 'client_credentials');
+  assert.equal(clientCredentialCalls.length, 0);
+
+  const clientCredentialQuery = await rpc({
+    jsonrpc: '2.0',
+    id: 12,
+    method: 'tools/call',
+    params: { name: 'graph_mail_query', arguments: { mailbox_id: 'support@example.test', limit: 1 } },
+  }, clientCredentialState);
+  assert.equal(clientCredentialQuery.error, undefined);
+  assert.equal(clientCredentialCalls[0].url, 'https://login.example.test/token');
+  assert.equal(clientCredentialCalls[0].init.method, 'POST');
+  assert.match(clientCredentialCalls[1].url, /^https:\/\/graph\.example\.test\/v1\.0\/users\/support%40example\.test\/messages\?/);
+  assert.equal(clientCredentialCalls[1].init.headers.Authorization, 'Bearer app-token');
 
   const query = await rpc({
     jsonrpc: '2.0',

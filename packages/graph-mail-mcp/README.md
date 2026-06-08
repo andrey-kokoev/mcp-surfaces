@@ -17,13 +17,23 @@ Use this package when an agent needs live Microsoft Graph state or needs to crea
 
 ## Runtime Contract
 
-The server needs a Microsoft Graph access token. Provide it with:
+The server needs Microsoft Graph authorization. Prefer non-interactive application credentials, matching the mailbox sync path:
+
+```text
+GRAPH_TENANT_ID
+GRAPH_CLIENT_ID
+GRAPH_CLIENT_SECRET
+```
+
+The server reads these from process environment or from `.env` at the workspace root beside the site `.narada` directory. It mints and caches short-lived client-credentials tokens as needed.
+
+For diagnostics or explicit override, callers may still provide a ready access token with:
 
 ```text
 MS_GRAPH_ACCESS_TOKEN
 ```
 
-The token must already have the Graph permissions needed by the site runtime. This MCP package does not perform interactive authentication, token refresh, device login, or secret storage.
+The configured identity must have the Graph permissions needed by the site runtime. This MCP package does not perform interactive authentication, device login, or secret storage.
 
 ## Site Policy
 
@@ -53,7 +63,7 @@ Sending drafts requires explicit opt-in:
 Policy fields:
 
 - `graph_base_url`: optional Graph API base URL. Defaults to `https://graph.microsoft.com/v1.0`.
-- `allowed_mailboxes`: optional mailbox allowlist. When present, `me` must also be listed explicitly if agents may use `/me`.
+- `allowed_mailboxes`: optional mailbox allowlist. When exactly one mailbox is allowed, omitted `mailbox_id` arguments resolve to that mailbox. Otherwise omitted `mailbox_id` resolves to `me`, which must be listed explicitly if an allowlist is configured.
 - `allow_send_draft`: defaults to `false`.
 - `send_approval_token`: optional token required by `graph_mail_draft_send`.
 
@@ -69,7 +79,7 @@ This includes draft create/update/discard requests, draft-send refusals, and dra
 
 ## Tools
 
-- `graph_mail_doctor`: reports token presence and active policy.
+- `graph_mail_doctor`: reports Graph auth availability, auth mode, and active policy.
 - `graph_mail_query`: queries live Graph messages with optional mailbox, folder, search, filter, select, and limit arguments.
 - `graph_mail_message_show`: shows one live Graph message by `message_id`.
 - `graph_mail_draft_create`: creates a new draft message.
