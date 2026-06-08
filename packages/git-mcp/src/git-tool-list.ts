@@ -28,6 +28,32 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       }, ['working_directories']),
     },
     {
+      name: 'git_workflow_record',
+      description: 'Append a durable multi-repository Git workflow ledger record. Requires git-mcp mode=write.',
+      inputSchema: objectSchema({
+        workflow_id: { type: 'string', description: 'Optional caller-supplied stable workflow id.' },
+        scope_label: { type: 'string', description: 'Required caller-supplied workflow label.' },
+        summary: { type: 'string', description: 'Optional concise workflow summary.' },
+        repositories: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              working_directory: { type: 'string' },
+              staged_paths: { type: 'array', items: { type: 'string' } },
+              committed_sha: { type: 'string' },
+              pushed: { type: 'boolean' },
+              push_status: { type: 'string', enum: ['pushed', 'not_attempted', 'failed', 'not_pushable'] },
+              push_reason: { type: 'string' },
+              unrelated_dirty_paths_left: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['working_directory'],
+            additionalProperties: false,
+          },
+        },
+      }, ['scope_label', 'repositories']),
+    },
+    {
       name: 'git_diff',
       description: 'Show a bounded Git diff for working tree, staged changes, or one commit.',
       inputSchema: objectSchema({
@@ -104,7 +130,7 @@ function decorateTools(tools: Array<Record<string, any>>): Array<Record<string, 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /git_add|git_commit|git_push/.test(name);
+  const writes = /git_add|git_commit|git_push|git_workflow_record/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,

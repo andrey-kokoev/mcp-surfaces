@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,6 +13,7 @@ import {
   gitRepositoriesSummary,
   gitShow,
   gitStatus,
+  gitWorkflowRecord,
   handleRequest,
 } from '../src/main.js';
 import { runGit } from '../src/git-runner.js';
@@ -62,6 +63,7 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_repositories_summary',
   'git_show',
   'git_status',
+  'git_workflow_record',
 ]);
 
 const readTools = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/list', params: {} }, readState);
@@ -215,6 +217,35 @@ assert.equal(repositoriesSummary.scope_label, 'test-summary');
 assert.equal(repositoriesSummary.repository_count, 2);
 assert.equal((repositoriesSummary.repositories as any[])[0].remotes[0].name, 'origin');
 assert.equal((repositoriesSummary.repositories as any[])[1].push_target.reason, 'upstream_not_configured');
+
+const workflowRecord = await gitWorkflowRecord({
+  workflow_id: 'wf-test',
+  scope_label: 'test-summary',
+  summary: 'test workflow record',
+  repositories: [
+    {
+      working_directory: repo,
+      staged_paths: ['README.md'],
+      committed_sha: String(pushResult.pre_status ? '' : ''),
+      pushed: true,
+      push_status: 'pushed',
+      unrelated_dirty_paths_left: [],
+    },
+    {
+      working_directory: noRemoteRepo,
+      staged_paths: ['README.md'],
+      pushed: false,
+      push_status: 'not_pushable',
+      push_reason: 'no remote configured',
+      unrelated_dirty_paths_left: [],
+    },
+  ],
+}, state);
+assert.equal(workflowRecord.workflow_id, 'wf-test');
+assert.equal(workflowRecord.scope_label, 'test-summary');
+assert.equal(existsSync(workflowRecord.ledger_path), true);
+const workflowLedgerLines = readFileSync(workflowRecord.ledger_path, 'utf8').trim().split(/\r?\n/);
+assert.equal(JSON.parse(workflowLedgerLines.at(-1) ?? '{}').workflow_id, 'wf-test');
 
 const statusCall = await rpc({
   jsonrpc: '2.0',

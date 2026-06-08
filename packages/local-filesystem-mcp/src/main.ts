@@ -640,7 +640,7 @@ function writeFileTool(args, state) {
   assertExpectedSha256(args, before, { operation: 'fs_write_file', path, root });
   const parent = dirname(path);
   if (!existsSync(parent) && !createParentDirectories) throw diagnosticError('write_file_parent_not_found', `write_file_parent_not_found: ${parent}`, { requested_path: path, parent: pathMetadata(parent, root) });
-  mkdirSync(parent, { recursive: createParentDirectories });
+  if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
   writeFileSync(path, content, 'utf8');
   appendAudit(state, 'fs_write_file', path, root, { size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) });
   return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) };

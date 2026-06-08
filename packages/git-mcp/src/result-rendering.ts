@@ -19,6 +19,7 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.git.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.git.status.v1') return renderStatus(record);
   if (record.schema === 'narada.git.repositories_summary.v1') return renderRepositoriesSummary(record);
+  if (record.schema === 'narada.git.workflow_record.v1') return renderWorkflowRecord(record);
   if (record.schema === 'narada.git.diff.v1') return renderPatchResult('git_diff', record, 'diff');
   if (record.schema === 'narada.git.add.v1') return renderMutation('git_add', record);
   if (record.schema === 'narada.git.commit.v1') return renderMutation('git_commit', record);
@@ -101,6 +102,25 @@ function renderRepositoriesSummary(record: Record<string, unknown>): string {
     );
   }
   return compactLines(lines);
+}
+
+function renderWorkflowRecord(record: Record<string, unknown>): string {
+  const repositories = Array.isArray(record.repositories) ? record.repositories.map(asRecord) : [];
+  return compactLines([
+    `git_workflow_record: ${record.status ?? 'recorded'}`,
+    `workflow_id: ${record.workflow_id ?? ''}`,
+    `scope_label: ${record.scope_label ?? ''}`,
+    record.summary !== undefined ? `summary: ${record.summary ?? ''}` : null,
+    `repositories: ${repositories.length}`,
+    ...repositories.flatMap((repository) => [
+      `- ${repository.repository_root ?? repository.working_directory ?? ''}`,
+      `  committed_sha: ${repository.committed_sha ?? 'null'}`,
+      `  pushed: ${repository.pushed ?? false}`,
+      `  push_status: ${repository.push_status ?? 'not_attempted'}`,
+      `  unrelated_dirty_paths_left: ${arrayCount(repository.unrelated_dirty_paths_left)}`,
+    ]),
+    record.ledger_path !== undefined ? `ledger_path: ${record.ledger_path}` : null,
+  ]);
 }
 
 function renderPushTarget(value: unknown): string | null {

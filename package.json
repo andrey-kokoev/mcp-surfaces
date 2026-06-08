@@ -12,6 +12,7 @@
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
     "test:git": "pnpm --filter @narada2/git-mcp test",
+    "test:completion-audit": "pnpm --filter @narada2/completion-audit-mcp test",
     "test:worker-delegation": "pnpm --filter @narada2/worker-delegation-mcp test",
     "test:inbox": "pnpm --filter @narada2/inbox-mcp test",
     "test:mailbox": "pnpm --filter @narada2/mailbox-mcp test",

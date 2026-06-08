@@ -12,6 +12,7 @@ Current packages:
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
+- `@narada2/completion-audit-mcp`: requirement/evidence/verdict completion audit MCP surface.
 - `@narada2/inbox-mcp`: governed inbox intake and triage MCP surface.
 - `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
@@ -39,6 +40,7 @@ pnpm test:mcp-transport
 pnpm test:local-filesystem
 pnpm test:structured-command
 pnpm test:git
+pnpm test:completion-audit
 pnpm test:worker-delegation
 pnpm test:inbox
 pnpm test:mailbox
@@ -60,6 +62,7 @@ Before handing off changes:
 
 - `local-filesystem-mcp` owns governed file inspection and mutation tools.
 - `structured-command-mcp` owns argv-based command execution policy.
+- `completion-audit-mcp` owns durable requirement/evidence/verdict completion audit records; it must not inspect repositories, execute commands, or infer whether a requirement is true.
 - `worker-delegation-mcp` owns policy-gated delegation to worker runtimes; it is not a general shell, task lifecycle, or recursive worker-control surface.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.

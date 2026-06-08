@@ -17,6 +17,7 @@ export {
   gitRepositoriesSummary,
   gitShow,
   gitStatus,
+  gitWorkflowRecord,
 } from './git-tools.js';
 export {
   listTools,

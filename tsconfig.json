@@ -5,6 +5,7 @@
     { "path": "./packages/local-filesystem-mcp" },
     { "path": "./packages/structured-command-mcp" },
     { "path": "./packages/git-mcp" },
+    { "path": "./packages/completion-audit-mcp" },
     { "path": "./packages/worker-delegation-mcp" },
     { "path": "./packages/inbox-mcp" },
     { "path": "./packages/mailbox-mcp" },

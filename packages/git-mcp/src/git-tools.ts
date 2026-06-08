@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -25,6 +26,7 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, context);
   if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, context);
+  if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, context);
   if (name === 'git_diff') return gitDiff(args, state, context);
   if (name === 'git_add') return gitAdd(args, state, context);
   if (name === 'git_commit') return gitCommit(args, state, context);
@@ -102,6 +104,42 @@ export async function gitRepositoriesSummary(args: Record<string, unknown>, stat
     repository_count: repositories.length,
     repositories,
   };
+}
+
+export async function gitWorkflowRecord(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_workflow_record');
+  const scopeLabel = requiredNonEmptyString(args.scope_label, 'git_workflow_record_requires_scope_label');
+  const repositoriesInput = arrayOfRecords(args.repositories);
+  if (repositoriesInput.length === 0) throw diagnosticError('git_workflow_record_requires_repositories');
+  const repositories = [];
+  for (const input of repositoriesInput) {
+    const cwd = resolveWorkingDirectory({ working_directory: input.working_directory }, state);
+    const status = await gitStatus({ working_directory: cwd }, state, context);
+    repositories.push({
+      working_directory: cwd,
+      repository_root: status.repository_root,
+      branch: status.branch,
+      upstream: status.upstream,
+      staged_paths: stringArray(input.staged_paths),
+      committed_sha: optionalNonEmptyString(input.committed_sha),
+      pushed: input.pushed === true,
+      push_status: optionalNonEmptyString(input.push_status) ?? 'not_attempted',
+      push_reason: optionalNonEmptyString(input.push_reason),
+      unrelated_dirty_paths_left: stringArray(input.unrelated_dirty_paths_left),
+      post_status: status,
+    });
+  }
+  const record = {
+    schema: 'narada.git.workflow_record.v1',
+    status: 'recorded',
+    workflow_id: optionalNonEmptyString(args.workflow_id) ?? `gitwf_${new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15)}_${randomUUID().slice(0, 8)}`,
+    scope_label: scopeLabel,
+    recorded_at: new Date().toISOString(),
+    summary: optionalNonEmptyString(args.summary),
+    repositories,
+  };
+  const ledgerPath = appendWorkflowLedger(state, record);
+  return { ...record, ledger_path: ledgerPath };
 }
 
 export async function gitDiff(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
@@ -385,6 +423,14 @@ function audit(state: GitMcpState, payload: unknown): void {
   appendFileSync(resolve(state.auditLogDir, 'git-mcp.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
+function appendWorkflowLedger(state: GitMcpState, payload: unknown): string {
+  const directory = state.auditLogDir ?? resolve(state.outputRoot, 'git-mcp-audit');
+  mkdirSync(directory, { recursive: true });
+  const path = resolve(directory, 'git-workflows.jsonl');
+  appendFileSync(path, `${JSON.stringify(payload)}\n`, 'utf8');
+  return path;
+}
+
 function optionalPathspec(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
   return validateGitPathspec(value);
@@ -403,6 +449,10 @@ function optionalNonEmptyString(value: unknown): string | null {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function arrayOfRecords(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.map(asRecord).filter((record) => Object.keys(record).length > 0) : [];
 }
 
 function stringEnum(value: unknown, allowed: string[], defaultValue: string): string {

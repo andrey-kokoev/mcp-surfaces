@@ -341,6 +341,9 @@ trust_level = "untrusted"
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
   const missingParentWrite = call(writeState, 304, 'fs_write_file', { path: join(trusted, 'missing-write-parent', 'file.txt'), content: 'blocked', create_parent_directories: false });
   assert.equal(missingParentWrite.error.data.code, 'write_file_parent_not_found');
+  const existingParentWrite = call(writeState, 306, 'fs_write_file', { path: join(trusted, 'existing-parent-create-disabled.txt'), content: 'ok', create_parent_directories: false });
+  assert.equal(existingParentWrite.result.structuredContent.status, 'written');
+  assert.equal(readFileSync(join(trusted, 'existing-parent-create-disabled.txt'), 'utf8'), 'ok');
   const parentWrite = call(writeState, 305, 'fs_write_file', { path: join(trusted, 'implicit-write-parent', 'file.txt'), content: 'ok', create_parent_directories: true });
   assert.equal(parentWrite.result.structuredContent.create_parent_directories, true);
   assert.equal(readFileSync(join(trusted, 'implicit-write-parent', 'file.txt'), 'utf8'), 'ok');

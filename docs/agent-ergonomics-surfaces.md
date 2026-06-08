@@ -11,6 +11,7 @@ This repository keeps mechanical MCP guarantees separate from agent intent.
 - latest commit per repository
 - caller-supplied `scope_label` on Git mutations
 - `git_repositories_summary` for multi-repository handoff
+- `git_workflow_record` for durable multi-repository commit/push ledger entries
 
 It does not infer which dirty files belong to the current agent. Callers must pass
 the intended scope explicitly, either through mutation `scope_label` values or
@@ -26,8 +27,9 @@ shape:
 - `verdict`: `proved`, `contradicted`, `incomplete`, or `missing`
 - `residual_risk`: remaining uncertainty, if any
 
-That artifact can be produced by an agent, a future goal-audit surface, or a site
-task lifecycle surface. It should not be hidden in `git_status` or `git_push`.
+That artifact is owned here by `@narada2/completion-audit-mcp` and its
+`completion_audit_record` tool. It should not be hidden in `git_status` or
+`git_push`.
 
 ## Local Search Accounting
 
