@@ -250,6 +250,7 @@ for (const file of ['request.json', 'executor_request.json', 'resolved_worker_co
   assert.equal(existsSync(join(completedRunDir, file)), true, file);
 }
 const workerOutputSchema = JSON.parse(readFileSync(join(completedRunDir, 'worker_output.schema.json'), 'utf8'));
+assertStrictStructuredOutputSchema(workerOutputSchema, 'worker_output_schema');
 assert.equal(workerOutputSchema.required.includes('exit_interview'), true);
 assert.deepEqual(workerOutputSchema.properties.verification.items.required, ['tool', 'command', 'status', 'summary']);
 assert.deepEqual(workerOutputSchema.properties.verification.items.properties.tool.type, ['string', 'null']);
@@ -765,4 +766,16 @@ function runArgs(instruction: string, constraints: Record<string, unknown> = {},
     intent: { instruction },
     constraints: { cwd: root, authority, cognition, wait_for_completion: true, overrides: constraints },
   };
+}
+
+function assertStrictStructuredOutputSchema(schema: any, path: string): void {
+  if (!schema || typeof schema !== 'object') return;
+  if (schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)) {
+    const propertyNames = Object.keys(schema.properties);
+    assert.deepEqual([...schema.required].sort(), [...propertyNames].sort(), `${path}.required must include every property for Codex structured output`);
+    for (const propertyName of propertyNames) {
+      assertStrictStructuredOutputSchema(schema.properties[propertyName], `${path}.properties.${propertyName}`);
+    }
+  }
+  if (schema.items) assertStrictStructuredOutputSchema(schema.items, `${path}.items`);
 }
