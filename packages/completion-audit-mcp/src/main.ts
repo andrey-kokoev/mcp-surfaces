@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SERVER_NAME = 'completion-audit-mcp';
@@ -13,11 +13,19 @@ type JsonRecord = Record<string, unknown>;
 
 export type CompletionAuditState = {
   auditRoot: string;
+  allowedRoots: string[];
 };
 
 export function createServerState(options: JsonRecord = {}): CompletionAuditState {
+  const auditRoot = resolve(String(options.auditRoot ?? options.outputRoot ?? process.cwd()));
+  const allowedRoots = normalizeAllowedRoots([...optionList(options.allowedRoot), ...optionList(options.allowedRoots)]);
+  const effectiveAllowedRoots = allowedRoots.length > 0 ? allowedRoots : [auditRoot];
+  if (!effectiveAllowedRoots.some((root) => auditRoot === root || isPathInside(auditRoot, root))) {
+    throw diagnosticError('completion_audit_root_outside_allowed_roots', 'completion_audit_root_outside_allowed_roots', { audit_root: auditRoot, allowed_roots: effectiveAllowedRoots });
+  }
   return {
-    auditRoot: resolve(String(options.auditRoot ?? options.outputRoot ?? process.cwd())),
+    auditRoot,
+    allowedRoots: effectiveAllowedRoots,
   };
 }
 
@@ -175,12 +183,15 @@ function renderResult(record: JsonRecord): string {
 
 function parseArgs(argv: string[]) {
   const options: JsonRecord = {};
+  const allowedRoots: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--audit-root') options.auditRoot = argv[++index];
     else if (arg === '--output-root') options.outputRoot = argv[++index];
+    else if (arg === '--allowed-root') allowedRoots.push(argv[++index]);
     else throw new Error(`unknown_argument:${arg}`);
   }
+  if (allowedRoots.length > 0) options.allowedRoots = allowedRoots;
   return options;
 }
 
@@ -235,6 +246,29 @@ function optionalString(value: unknown): string | null {
 
 function arrayOfRecords(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.map(asRecord).filter((record) => Object.keys(record).length > 0) : [];
+}
+
+function optionList(value: unknown): string[] {
+  if (value === undefined || value === null || value === true) return [];
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [String(value)].filter(Boolean);
+}
+
+function normalizeAllowedRoots(roots: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const root of roots) {
+    const resolved = resolve(root);
+    const key = resolved.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(resolved);
+  }
+  return normalized;
+}
+
+function isPathInside(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
 function asRecord(value: unknown): JsonRecord {

@@ -246,6 +246,15 @@ assert.equal(workflowRecord.scope_label, 'test-summary');
 assert.equal(existsSync(workflowRecord.ledger_path), true);
 const workflowLedgerLines = readFileSync(workflowRecord.ledger_path, 'utf8').trim().split(/\r?\n/);
 assert.equal(JSON.parse(workflowLedgerLines.at(-1) ?? '{}').workflow_id, 'wf-test');
+await assert.rejects(
+  () => gitWorkflowRecord({
+    scope_label: 'bad-status',
+    repositories: [
+      { working_directory: repo, push_status: 'maybe' },
+    ],
+  }, state),
+  /git_invalid_enum/,
+);
 
 const statusCall = await rpc({
   jsonrpc: '2.0',

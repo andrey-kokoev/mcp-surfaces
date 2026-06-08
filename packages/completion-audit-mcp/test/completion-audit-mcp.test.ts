@@ -6,6 +6,8 @@ import { completionAuditRecord, createServerState, handleRequest, listTools } fr
 
 const root = mkdtempSync(join(tmpdir(), 'completion-audit-mcp-'));
 const state = createServerState({ auditRoot: root });
+assert.deepEqual(state.allowedRoots, [root]);
+assert.throws(() => createServerState({ auditRoot: join(root, 'audit'), allowedRoot: join(root, 'other') }), /completion_audit_root_outside_allowed_roots/);
 
 const tools = listTools();
 assert.deepEqual(tools.map((tool) => tool.name), ['completion_audit_record']);

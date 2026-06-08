@@ -17,6 +17,7 @@ import { parseStatus } from './status-parser.js';
 import type { GitMcpState } from './state.js';
 
 const PREVIEW_CHAR_LIMIT = 1000;
+const WORKFLOW_PUSH_STATUSES = ['pushed', 'not_attempted', 'failed', 'not_pushable'];
 
 export type GitRequestContext = {
   abortSignal?: AbortSignal;
@@ -123,7 +124,7 @@ export async function gitWorkflowRecord(args: Record<string, unknown>, state: Gi
       staged_paths: stringArray(input.staged_paths),
       committed_sha: optionalNonEmptyString(input.committed_sha),
       pushed: input.pushed === true,
-      push_status: optionalNonEmptyString(input.push_status) ?? 'not_attempted',
+      push_status: stringEnum(input.push_status, WORKFLOW_PUSH_STATUSES, 'not_attempted'),
       push_reason: optionalNonEmptyString(input.push_reason),
       unrelated_dirty_paths_left: stringArray(input.unrelated_dirty_paths_left),
       post_status: status,
