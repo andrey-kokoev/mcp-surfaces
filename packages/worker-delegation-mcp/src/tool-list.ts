@@ -17,6 +17,8 @@ export function listTools(): WorkerToolDefinition[] {
       cwd: { type: 'string' },
       instruction: { type: 'string' },
       resumable: { type: 'boolean' },
+      wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
+      exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
       overrides: constraintOverrideSchema(),
     }, ['cwd', 'instruction']) },
     { name: 'worker_resume', description: 'Continue one existing worker session.', inputSchema: objectSchema({
@@ -24,12 +26,72 @@ export function listTools(): WorkerToolDefinition[] {
       intent: intentSchema(),
       constraints: constraintRequestSchema(),
     }, ['worker_session_id', 'constraints']) },
-    { name: 'worker_output_show', description: 'Read materialized worker output by output reference.', inputSchema: objectSchema({
+    { name: 'worker_run_status', description: 'Inspect a worker run by run id without waiting for completion.', inputSchema: objectSchema({
+      run_id: { type: 'string' },
+    }, ['run_id']) },
+    { name: 'worker_runs_list', description: 'List recent worker runs so callers can rediscover outstanding run ids.', inputSchema: objectSchema({
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+      include_running: { type: 'boolean' },
+      include_completed: { type: 'boolean' },
+      include_summary: { type: 'boolean', description: 'Include full summaries in each compact list item.' },
+      verbose: { type: 'boolean', description: 'Include full run path, timing object, session id, and full error fields.' },
+    }) },
+    { name: 'worker_run_wait', description: 'Wait briefly for one worker run to finish, returning the latest run status on timeout.', inputSchema: objectSchema({
+      run_id: { type: 'string' },
+      timeout_ms: { type: 'integer', minimum: 0, maximum: 300000 },
+      poll_ms: { type: 'integer', minimum: 25, maximum: 10000 },
+      summary_only: { type: 'boolean', description: 'Return only run id, status, summary, and error preview.' },
+      verbose: { type: 'boolean', description: 'Include the full worker run payload as full_run.' },
+    }, ['run_id']) },
+    { name: 'worker_output_show', description: 'Read materialized worker output by output ref, or read a run artifact path inside the worker run root.', inputSchema: objectSchema({
       output_ref: { type: 'string' },
+      path: { type: 'string', description: 'Artifact path from a worker run result. Must be inside the worker run root.' },
       offset: { type: 'integer' },
       limit: { type: 'integer' },
-    }, ['output_ref']) },
+    }) },
   ]);
+}
+
+function workerRunsListOutputSchema(): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: 'narada.worker.runs_list.v1' },
+    status: { type: 'string', const: 'ok' },
+    count: { type: 'integer' },
+    limit: { type: 'integer' },
+    verbose: { type: 'boolean' },
+    include_summary: { type: 'boolean' },
+    runs: { type: 'array', items: objectSchema({
+      run_id: { type: 'string' },
+      status: { type: 'string' },
+      requested_mode: nullableStringSchema(),
+      requested_mode_inferred: { type: 'boolean' },
+      authority: nullableStringSchema(),
+      started_at: nullableStringSchema(),
+      finished_at: nullableStringSchema(),
+      duration_ms: { type: ['integer', 'null'] },
+      worker_session_id: nullableStringSchema(),
+      summary_preview: nullableStringSchema(),
+      error_preview: nullableStringSchema(),
+      warning_count: { type: 'integer' },
+      progress_preview: nullableStringSchema(),
+      latest_event_type: nullableStringSchema(),
+      progress: progressPreviewSchema(),
+      summary: { type: 'string' },
+      run_dir: { type: 'string' },
+      timing: { type: 'object', additionalProperties: true },
+      error: nullableStringSchema(),
+    }, ['run_id', 'status']) },
+  }, ['schema', 'status', 'runs']);
+}
+
+function workerRunWaitOutputSchema(): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: 'narada.worker.run_wait.v1' },
+    status: { type: 'string', const: 'ok' },
+    wait: { type: 'object', additionalProperties: true },
+    run: { type: 'object', additionalProperties: true },
+    full_run: { type: 'object', additionalProperties: true },
+  }, ['schema', 'status', 'wait', 'run']);
 }
 
 function objectSchema(properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {
@@ -37,7 +99,10 @@ function objectSchema(properties: Record<string, unknown>, required: string[] = 
 }
 
 function intentSchema(): Record<string, unknown> {
-  return objectSchema({ instruction: { type: 'string' } }, ['instruction']);
+  return objectSchema({
+    instruction: { type: 'string' },
+    mode: { type: 'string', enum: ['audit_only', 'plan_only', 'implement', 'implement_and_verify'], description: 'Non-mechanical task mode. Defaults to audit_only for read authority and implement for write/command authority.' },
+  }, ['instruction']);
 }
 
 function constraintRequestSchema(): Record<string, unknown> {
@@ -46,6 +111,14 @@ function constraintRequestSchema(): Record<string, unknown> {
     authority: { type: 'string', enum: ['read', 'write', 'command'] },
     cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
     resumable: { type: 'boolean' },
+    wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
+    exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
+    preflight_paths: { type: 'array', items: objectSchema({
+      path: { type: 'string' },
+      access: { type: 'string', enum: ['read', 'write', 'create'] },
+      label: { type: 'string' },
+    }, ['path', 'access']), description: 'Optional path capability checks recorded before the worker starts.' },
+    required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the worker must verify before work. Recorded as advisory preflight because worker-delegation cannot inspect the worker runtime tool inventory.' },
     overrides: constraintOverrideSchema(),
   }, ['cwd']);
 }
@@ -71,14 +144,16 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !startsWorker,
     destructiveHint: false,
-    idempotentHint: /inspect|output_show/.test(name),
+    idempotentHint: /inspect|output_show|run_status|runs_list|run_wait/.test(name),
     openWorldHint: true,
   };
 }
 
 function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_policy_inspect') return workerPolicyOutputSchema();
-  if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume') return workerRunOutputSchema();
+  if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();
+  if (name === 'worker_run_wait') return workerRunWaitOutputSchema();
+  if (name === 'worker_runs_list') return workerRunsListOutputSchema();
   if (name === 'worker_output_show') return workerOutputShowSchema();
   return { type: 'object', additionalProperties: true };
 }
@@ -113,17 +188,37 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
 function workerRunOutputSchema(): Record<string, unknown> {
   return objectSchema({
     schema: { type: 'string', const: 'narada.worker.run.v1' },
-    status: { type: 'string', enum: ['completed', 'failed', 'cancelled'] },
+    status: { type: 'string', enum: ['running', 'completed', 'completed_with_errors', 'failed', 'cancelled'] },
     run_id: { type: 'string' },
     run_dir: { type: 'string' },
     runtime: { type: 'string' },
     worker_session_id: nullableStringSchema(),
     resolved_worker_config: { type: 'object', additionalProperties: true },
     executor_request: { type: 'object', additionalProperties: true },
+    requested_mode: { type: 'string', enum: ['audit_only', 'plan_only', 'implement', 'implement_and_verify'] },
+    edits_performed: { type: ['boolean', 'null'] },
+    target_state_changed: { type: ['boolean', 'null'] },
+    confidence: { type: 'string', enum: ['complete', 'partial'] },
+    blocked_paths: stringArraySchema(),
+    verification: stringArraySchema(),
+    runtime_warnings: stringArraySchema(),
+    warning_count: { type: 'integer' },
+    preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
+    final_checklist: stringArraySchema(),
     summary: { type: 'string' },
     deliverables: { type: 'array', items: objectSchema({ path: { type: 'string' }, description: { type: 'string' } }, ['path', 'description']) },
     open_questions: stringArraySchema(),
     next_actions: stringArraySchema(),
+    changes: { type: 'array', items: objectSchema({ path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['path', 'status', 'summary']) },
+    verification_results: { type: 'array', items: objectSchema({ tool: { type: 'string' }, command: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['status', 'summary']) },
+    exit_interview: { type: ['object', 'null'], properties: {
+      ergonomics_feedback: { type: 'string' },
+      friction_points: stringArraySchema(),
+      missing_affordances: stringArraySchema(),
+      observed_incoherencies: stringArraySchema(),
+      suggested_improvements: stringArraySchema(),
+    }, additionalProperties: false },
+    progress: progressPreviewSchema(),
     artifacts: { type: 'array', items: objectSchema({ name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']) },
     timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
@@ -140,7 +235,9 @@ function workerOutputShowSchema(): Record<string, unknown> {
     next_offset: { type: ['integer', 'null'] },
     output_text: { type: 'string' },
     output_truncated: { type: 'boolean' },
-  }, ['schema', 'status', 'ref', 'output_text']);
+    path: { type: 'string' },
+    output_ref: { type: ['string', 'null'] },
+  }, ['schema', 'status', 'output_text']);
 }
 
 function stringArraySchema(): Record<string, unknown> {
@@ -149,4 +246,15 @@ function stringArraySchema(): Record<string, unknown> {
 
 function nullableStringSchema(): Record<string, unknown> {
   return { type: ['string', 'null'] };
+}
+
+function progressPreviewSchema(): Record<string, unknown> {
+  return objectSchema({
+    event_count: { type: 'integer' },
+    latest_event_type: nullableStringSchema(),
+    latest_event_preview: nullableStringSchema(),
+    readable: { type: 'boolean' },
+    tail_truncated: { type: 'boolean' },
+    error_preview: { type: 'string' },
+  }, ['event_count', 'latest_event_type', 'latest_event_preview', 'readable', 'tail_truncated']);
 }

@@ -13,6 +13,8 @@ export function renderToolResultText(value: unknown): string {
   ]);
   if (record.schema === 'narada.worker.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.worker.run.v1') return renderRun(record);
+  if (record.schema === 'narada.worker.runs_list.v1') return renderRunsList(record);
+  if (record.schema === 'narada.worker.run_wait.v1') return renderRunWait(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
 }
 
@@ -33,13 +35,21 @@ function renderPolicy(record: Record<string, unknown>): string {
 
 function renderRun(record: Record<string, unknown>): string {
   const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
+  const progress = asRecord(record.progress);
+  const exitInterview = asRecord(record.exit_interview);
   return compactLines([
     `worker_run: ${record.status ?? ''}`,
     `run_id: ${record.run_id ?? ''}`,
     `run_dir: ${record.run_dir ?? ''}`,
     `runtime: ${record.runtime ?? ''}`,
+    `requested_mode: ${record.requested_mode ?? ''}`,
+    `confidence: ${record.confidence ?? ''}`,
+    `edits_performed: ${record.edits_performed ?? 'null'}`,
+    `warning_count: ${record.warning_count ?? 0}`,
     `worker_session_id: ${record.worker_session_id ?? 'null'}`,
     `summary: ${record.summary ?? ''}`,
+    progress.latest_event_preview ? `progress: ${progress.latest_event_preview}` : null,
+    exitInterview.ergonomics_feedback ? `ergonomics: ${exitInterview.ergonomics_feedback}` : null,
     `deliverables: ${arrayCount(record.deliverables)}`,
     `open_questions: ${arrayCount(record.open_questions)}`,
     `next_actions: ${arrayCount(record.next_actions)}`,
@@ -49,6 +59,32 @@ function renderRun(record: Record<string, unknown>): string {
       return `- ${item.name ?? ''}: ${item.path ?? ''}`;
     }),
     record.error ? `error: ${record.error}` : null,
+  ]);
+}
+
+function renderRunsList(record: Record<string, unknown>): string {
+  const runs = Array.isArray(record.runs) ? record.runs : [];
+  return compactLines([
+    'worker_runs_list: ok',
+    `count: ${record.count ?? runs.length}`,
+    `limit: ${record.limit ?? ''}`,
+    ...runs.map((run) => {
+      const item = asRecord(run);
+      return `- ${item.status ?? ''} ${item.requested_mode ?? ''} ${item.authority ?? ''} ${item.run_id ?? ''} ${item.finished_at ?? item.started_at ?? ''} ${item.progress_preview ?? item.summary_preview ?? ''}`.trim();
+    }),
+  ]);
+}
+
+function renderRunWait(record: Record<string, unknown>): string {
+  const wait = asRecord(record.wait);
+  const run = asRecord(record.run);
+  return compactLines([
+    `worker_run_wait: ${wait.status ?? ''}`,
+    `run_id: ${run.run_id ?? ''}`,
+    `status: ${run.status ?? ''}`,
+    `summary: ${run.summary ?? run.summary_preview ?? ''}`,
+    run.progress_preview ? `progress: ${run.progress_preview}` : null,
+    run.error_preview ? `error: ${run.error_preview}` : null,
   ]);
 }
 

@@ -64,12 +64,28 @@ export function writeWorkerOutputSchema(path: string): void {
   writeJson(path, {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
       open_questions: { type: 'array', items: { type: 'string' } },
       next_actions: { type: 'array', items: { type: 'string' } },
+      edits_performed: { type: 'boolean' },
+      target_state_changed: { type: 'boolean' },
+      changes: { type: 'array', items: { type: 'object', required: ['path', 'status', 'summary'], properties: { path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
+      verification: { type: 'array', items: { type: 'object', required: ['status', 'summary'], properties: { tool: { type: 'string' }, command: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
+      exit_interview: {
+        type: 'object',
+        required: ['ergonomics_feedback', 'friction_points', 'missing_affordances', 'observed_incoherencies', 'suggested_improvements'],
+        properties: {
+          ergonomics_feedback: { type: 'string' },
+          friction_points: { type: 'array', items: { type: 'string' } },
+          missing_affordances: { type: 'array', items: { type: 'string' } },
+          observed_incoherencies: { type: 'array', items: { type: 'string' } },
+          suggested_improvements: { type: 'array', items: { type: 'string' } },
+        },
+        additionalProperties: false,
+      },
     },
   });
 }

@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { diagnosticError } from './errors.js';
 import type { WorkerPolicy } from './policy.js';
@@ -21,18 +21,44 @@ export function materializeOutput(policy: WorkerPolicy, toolName: string, text: 
   };
 }
 
+function resolveOutputRefPath(policy: WorkerPolicy, outputRef: string): string {
+  if (!outputRef.startsWith('worker_output:')) throw diagnosticError('worker_output_materialization_failed', 'worker_output_ref_invalid', { output_ref: outputRef });
+  return resolve(policy.runRoot, 'outputs', `${outputRef.replace(':', '_')}.txt`);
+}
+
+function resolveArtifactPath(policy: WorkerPolicy, inputPath: string): string {
+  const path = resolve(inputPath);
+  const runRoot = resolve(policy.runRoot);
+  if (path !== runRoot && !isPathInside(path, runRoot)) throw diagnosticError('worker_output_materialization_failed', 'worker_artifact_path_outside_run_root', { path, run_root: runRoot });
+  return path;
+}
+
+function isPathInside(path: string, root: string): boolean {
+  const rel = relative(root, path);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
 export function showOutput(policy: WorkerPolicy, args: Record<string, unknown>): Record<string, unknown> {
   const outputRef = String(args.output_ref ?? '').trim();
-  if (!outputRef.startsWith('worker_output:')) throw diagnosticError('worker_output_materialization_failed', 'worker_output_materialization_failed', { output_ref: outputRef });
-  const path = resolve(policy.runRoot, 'outputs', `${outputRef.replace(':', '_')}.txt`);
-  const text = readFileSync(path, 'utf8');
+  const artifactPath = String(args.path ?? '').trim();
+  if (!outputRef && !artifactPath) throw diagnosticError('worker_output_materialization_failed', 'worker_output_show_requires_output_ref_or_path');
+  if (outputRef && artifactPath) throw diagnosticError('worker_output_materialization_failed', 'worker_output_show_accepts_one_source');
+  const path = artifactPath ? resolveArtifactPath(policy, artifactPath) : resolveOutputRefPath(policy, outputRef);
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError('worker_output_materialization_failed', 'worker_output_read_failed', { output_ref: outputRef || null, path, error: message });
+  }
   const offset = strictInteger(args.offset, 0, text.length, 0, 'offset');
   const limit = strictInteger(args.limit, 1, 50 * 1024 * 1024, 10000, 'limit');
   const outputText = text.slice(offset, offset + limit);
   return {
     schema: 'narada.worker.output_show.v1',
     status: 'ok',
-    output_ref: outputRef,
+    output_ref: outputRef || null,
+    path,
     offset,
     limit,
     output_text: outputText,

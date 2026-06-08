@@ -176,7 +176,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
 
 export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): string {
   const cwd = resolve(requiredString(input, 'worker_cwd_required'));
-  if (!policy.allowedRoots.some((root) => cwd === root || isPathInside(cwd, root))) {
+  if (!policy.allowedRoots.some((root) => areSamePath(cwd, root) || isPathInside(cwd, root))) {
     throw diagnosticError('worker_cwd_outside_allowed_roots', 'worker_cwd_outside_allowed_roots', { cwd, allowed_roots: policy.allowedRoots });
   }
   return cwd;
@@ -291,7 +291,7 @@ function normalizeAllowedRoots(roots: unknown[]): string[] {
     const text = String(item ?? '').trim();
     if (!text) continue;
     const resolved = resolve(text);
-    const key = resolved.toLowerCase();
+    const key = normalizePathComparisonKey(resolved);
     if (seen.has(key)) continue;
     seen.add(key);
     normalized.push(resolved);
@@ -377,8 +377,17 @@ function isPrimitiveConfigValue(value: unknown): value is PrimitiveConfigValue {
 }
 
 function isPathInside(path: string, root: string): boolean {
-  const rel = relative(root, path);
+  const rel = relative(normalizePathComparisonKey(root), normalizePathComparisonKey(path));
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function areSamePath(left: string, right: string): boolean {
+  return normalizePathComparisonKey(left) === normalizePathComparisonKey(right);
+}
+
+function normalizePathComparisonKey(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

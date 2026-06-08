@@ -2,6 +2,41 @@ import type { PrimitiveConfigValue, SandboxMode, WorkerAuthority, WorkerCognitio
 
 export type WorkerIntent = {
   instruction: string;
+  mode?: WorkerDelegationMode;
+};
+
+export type WorkerDelegationMode = 'audit_only' | 'plan_only' | 'implement' | 'implement_and_verify';
+
+export type WorkerPreflightCheck = {
+  name: string;
+  status: 'ok' | 'warning' | 'blocked';
+  message: string;
+};
+
+export type WorkerPreflightPath = {
+  path: string;
+  access: 'read' | 'write' | 'create';
+  label?: string;
+};
+
+export type WorkerRunMetadata = {
+  requested_mode: WorkerDelegationMode;
+  edits_performed: boolean | null;
+  target_state_changed: boolean | null;
+  confidence: 'complete' | 'partial';
+  blocked_paths: string[];
+  verification: string[];
+  preflight: WorkerPreflightCheck[];
+  final_checklist: string[];
+};
+
+export type WorkerProgressPreview = {
+  event_count: number;
+  latest_event_type: string | null;
+  latest_event_preview: string | null;
+  readable: boolean;
+  tail_truncated: boolean;
+  error_preview?: string;
 };
 
 export type WorkerConstraintRequest = {
@@ -9,6 +44,10 @@ export type WorkerConstraintRequest = {
   authority?: string;
   cognition?: string;
   resumable?: boolean;
+  wait_for_completion?: boolean;
+  exit_interview?: boolean;
+  preflight_paths?: WorkerPreflightPath[];
+  required_mcp_tools?: string[];
   overrides?: WorkerConstraintOverrides;
 };
 
@@ -30,6 +69,8 @@ export type WorkerEditToolInput = {
   cwd: string;
   instruction: string;
   resumable?: boolean;
+  wait_for_completion?: boolean;
+  exit_interview?: boolean;
   overrides?: WorkerConstraintOverrides;
 };
 
@@ -60,5 +101,7 @@ export type WorkerExecutorRequest = {
   run_id: string;
   resume_worker_session_id: string | null;
   intent: WorkerIntent;
+  requested_mode: WorkerDelegationMode;
+  preflight: WorkerPreflightCheck[];
   resolved_execution_policy: WorkerResolvedExecutionPolicy;
 };

@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
 
 export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[] };
+export type WorkerChange = { path: string; status: string; summary: string };
+export type WorkerVerification = { tool?: string; command?: string; status: string; summary: string };
+export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
+export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; exit_interview?: WorkerExitInterview };
 export type WorkerOutputParseResult =
   | { ok: true; data: WorkerOutput }
   | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
@@ -47,6 +51,12 @@ export function buildInvocation(resolvedWorkerConfig: ResolvedWorkerConfig, envi
   };
 }
 
+export function commandRequiresWindowsShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform !== 'win32') return false;
+  const extension = extname(command).toLowerCase();
+  return extension === '.cmd' || extension === '.bat';
+}
+
 export async function runCodexInvocation(options: {
   invocation: Invocation;
   prompt: string;
@@ -64,7 +74,7 @@ export async function runCodexInvocation(options: {
     const child = spawn(options.invocation.command, options.invocation.argv, {
       cwd: options.invocation.cwd,
       env: options.invocation.environment,
-      shell: false,
+      shell: commandRequiresWindowsShell(options.invocation.command),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -148,6 +158,10 @@ export function parseLastMessage(path: string): WorkerOutputParseResult {
   if (!Array.isArray(record.deliverables)) return { ok: false, reason: 'invalid_shape', message: 'deliverables must be an array' };
   if (!Array.isArray(record.open_questions)) return { ok: false, reason: 'invalid_shape', message: 'open_questions must be an array' };
   if (!Array.isArray(record.next_actions)) return { ok: false, reason: 'invalid_shape', message: 'next_actions must be an array' };
+  if (typeof record.edits_performed !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'edits_performed must be a boolean' };
+  if (typeof record.target_state_changed !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'target_state_changed must be a boolean' };
+  if (!Array.isArray(record.changes)) return { ok: false, reason: 'invalid_shape', message: 'changes must be an array' };
+  if (!Array.isArray(record.verification)) return { ok: false, reason: 'invalid_shape', message: 'verification must be an array' };
   const deliverables: { path: string; description: string }[] = [];
   for (let i = 0; i < record.deliverables.length; i += 1) {
     const deliverable = asDeliverable(record.deliverables[i]);
@@ -156,21 +170,39 @@ export function parseLastMessage(path: string): WorkerOutputParseResult {
   }
   if (!record.open_questions.every((item) => typeof item === 'string')) return { ok: false, reason: 'invalid_shape', message: 'open_questions entries must be strings' };
   if (!record.next_actions.every((item) => typeof item === 'string')) return { ok: false, reason: 'invalid_shape', message: 'next_actions entries must be strings' };
-  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions } };
+  const changes: WorkerChange[] = [];
+  for (let i = 0; i < record.changes.length; i += 1) {
+    const change = asChange(record.changes[i]);
+    if (!change) return { ok: false, reason: 'invalid_shape', message: `changes[${i}] must have string path, status, and summary` };
+    changes.push(change);
+  }
+  const verification: WorkerVerification[] = [];
+  for (let i = 0; i < record.verification.length; i += 1) {
+    const item = asVerification(record.verification[i]);
+    if (!item) return { ok: false, reason: 'invalid_shape', message: `verification[${i}] must have string status and summary, with optional string tool or command` };
+    verification.push(item);
+  }
+  const exitInterview = record.exit_interview === undefined ? undefined : asExitInterview(record.exit_interview);
+  if (record.exit_interview !== undefined && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
+  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, ...(exitInterview ? { exit_interview: exitInterview } : {}) } };
 }
 
 export function parseResult(runRecord: { lastMessagePath: string }): WorkerOutputParseResult {
   return parseLastMessage(runRecord.lastMessagePath);
 }
 
-export function resultStatus(codexResult: { exit_code: number | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null }, parsed: WorkerOutputParseResult): { status: 'completed' | 'failed' | 'cancelled'; error: string | null } {
-  if (codexResult.cancelled) return { status: 'cancelled', error: 'cancelled' };
-  if (codexResult.error) return { status: 'failed', error: codexResult.error };
-  if (codexResult.event_error) return { status: 'failed', error: codexResult.event_error };
-  if (codexResult.runtime_error) return { status: 'failed', error: codexResult.runtime_error };
-  if (codexResult.exit_code !== 0) return { status: 'failed', error: `worker runtime exited with code ${codexResult.exit_code}` };
-  if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}` };
-  return { status: 'completed', error: null };
+export type WorkerRunTerminalStatus = 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
+
+export function resultStatus(codexResult: { exit_code: number | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null }, parsed: WorkerOutputParseResult): { status: WorkerRunTerminalStatus; error: string | null; warnings: string[] } {
+  if (codexResult.cancelled) return { status: 'cancelled', error: 'cancelled', warnings: [] };
+  const warnings = [codexResult.runtime_error].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  const runtimeError = codexResult.error
+    ?? codexResult.event_error
+    ?? (codexResult.exit_code !== 0 ? codexResult.runtime_error ?? `worker runtime exited with code ${codexResult.exit_code}` : null);
+  if (runtimeError && parsed.ok) return { status: 'completed_with_errors', error: runtimeError, warnings };
+  if (runtimeError) return { status: 'failed', error: runtimeError, warnings };
+  if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}`, warnings };
+  return { status: 'completed', error: null, warnings };
 }
 
 function findRuntimeError(value: unknown): string | null {
@@ -222,4 +254,45 @@ function asDeliverable(value: unknown): { path: string; description: string } | 
   const record = value as Record<string, unknown>;
   if (typeof record.path !== 'string' || typeof record.description !== 'string') return null;
   return { path: record.path, description: record.description };
+}
+
+function asChange(value: unknown): WorkerChange | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.path !== 'string' || typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
+  return { path: record.path, status: record.status, summary: record.summary };
+}
+
+function asVerification(value: unknown): WorkerVerification | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
+  const item: WorkerVerification = { status: record.status, summary: record.summary };
+  if (record.tool !== undefined) {
+    if (typeof record.tool !== 'string') return null;
+    item.tool = record.tool;
+  }
+  if (record.command !== undefined) {
+    if (typeof record.command !== 'string') return null;
+    item.command = record.command;
+  }
+  return item;
+}
+
+function asExitInterview(value: unknown): WorkerExitInterview | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.ergonomics_feedback !== 'string') return null;
+  if (!stringArray(record.friction_points) || !stringArray(record.missing_affordances) || !stringArray(record.observed_incoherencies) || !stringArray(record.suggested_improvements)) return null;
+  return {
+    ergonomics_feedback: record.ergonomics_feedback,
+    friction_points: record.friction_points,
+    missing_affordances: record.missing_affordances,
+    observed_incoherencies: record.observed_incoherencies,
+    suggested_improvements: record.suggested_improvements,
+  };
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }

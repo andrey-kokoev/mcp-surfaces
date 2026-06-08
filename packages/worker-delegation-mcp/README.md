@@ -12,6 +12,9 @@ The current runtime is Codex only. The worker prompt includes a recursion guard:
 - `worker_run`: start one new delegated worker run.
 - `worker_edit`: start one new edit-capable worker run using write authority and low cognition; this is worker delegation, not a deterministic filesystem write tool.
 - `worker_resume`: continue one existing worker session.
+- `worker_run_status`: inspect a worker run by `run_id` without waiting.
+- `worker_runs_list`: list recent runs so a caller can rediscover running or completed work without remembering the run id.
+- `worker_run_wait`: wait briefly for one run to finish, returning the latest run payload if the wait times out.
 - `worker_output_show`: read materialized worker output by output ref.
 
 Additional MCP surfaces:
@@ -40,6 +43,7 @@ Defaults:
 - `danger-full-access`: disabled unless explicitly admitted
 - cognition defaults: `low` uses `gpt-5.4-mini` with low reasoning, `medium` uses `gpt-5.4-mini` with medium reasoning, and `high` uses `gpt-5.4` with high reasoning
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
+- worker runs are asynchronous by default; set `constraints.wait_for_completion: true` or `wait_for_completion: true` on `worker_edit` when the caller intentionally wants to block for completion
 - max parallel runs: `10`
 - max prompt bytes: `1048576`
 - max output bytes: `2097152`
@@ -75,7 +79,7 @@ Common flags:
 Agents should use `worker_policy_inspect` before delegating. A delegation request separates non-mechanically-enforceable intent from mechanically-enforceable constraints:
 
 - `intent.instruction`: what the worker is asked to do and how it should report. This is prompt intent, not enforcement.
-- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `authority` selects read, write, or command capability, `cognition` selects the default model and reasoning tier, `resumable` controls whether the returned session can be continued, and `overrides` carries explicit low-level execution overrides when policy admits them.
+- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `authority` selects read, write, or command capability, `cognition` selects the default model and reasoning tier, `resumable` controls whether the returned session can be continued, `wait_for_completion` controls whether the MCP call blocks, and `overrides` carries explicit low-level execution overrides when policy admits them.
 
 The worker MCP surface enforces constraints and records the resolved executor request. It does not admit worker output as task evidence, close work, or create Narada role authority by itself.
 
@@ -88,42 +92,83 @@ Normalized constraints:
 - `cognition: "medium"`: default model `gpt-5.4-mini`, default reasoning `medium`.
 - `cognition: "high"`: default model `gpt-5.4`, default reasoning `high`.
 
-There are no internal named execution modes or presets in the worker contract. `worker_run` accepts explicit normalized constraints. `worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, and optional `overrides`, then mechanically compiles to `authority: "write"` and `cognition: "low"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
+Delegation mode is explicit intent, not mechanical authority. `intent.mode` may be `audit_only`, `plan_only`, `implement`, or `implement_and_verify`. Read authority defaults to `audit_only`; write and command authority default to `implement`. The mode is recorded as `requested_mode`, included in the worker prompt, and summarized in run/list output so an audit cannot be mistaken for a migration or implementation. Mechanical enforcement still comes from `constraints.authority`, sandbox, allowed roots, and policy.
+
+`constraints.preflight_paths` can declare path capability checks before the worker starts. Each entry has `path`, `access` (`read`, `write`, or `create`), and optional `label`. This is useful for migration work: declare the old authority path as readable and the proposed new repo path as creatable. `constraints.required_mcp_tools` can declare tool names the worker must verify before work; worker-delegation records this as advisory preflight because it cannot inspect the worker runtime's future MCP inventory. Preflight results are recorded in `executor_request.preflight`, `preflight`, and `blocked_paths`; they are also placed in the worker prompt as evidence. For `implement` and `implement_and_verify`, any blocked preflight check fails before worker dispatch with `worker_preflight_blocked`. Use `plan_only` for a dry implementation plan under read authority.
+
+`worker_run` accepts explicit normalized constraints. `worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, optional `wait_for_completion`, and optional `overrides`, then mechanically compiles to `authority: "write"`, `cognition: "low"`, and `mode: "implement"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
 
 When a resumable run completes, the server records a session entry under `run_root/sessions`. `worker_resume` uses that entry to inherit the original authority, cognition, sandbox, model, reasoning effort, and config unless the caller explicitly overrides them. This keeps resumable `worker_edit` sessions on write authority and low cognition across continuations and MCP restarts.
 
-Successful worker runs return `schema: "narada.worker.run.v1"` with:
+Worker-starting tools return `schema: "narada.worker.run.v1"` with:
 
-- `status`: `completed`, `failed`, or `cancelled`
+- `status`: `running`, `completed`, `completed_with_errors`, `failed`, or `cancelled`
 - `run_id` and `run_dir`
 - `worker_session_id`
 - `executor_request`
 - `resolved_worker_config`
-- `summary`, `deliverables`, `open_questions`, and `next_actions`
+- `requested_mode`, `edits_performed`, `target_state_changed`, `confidence`, `blocked_paths`, `verification`, `preflight`, and `final_checklist`
+- `summary`, `deliverables`, `open_questions`, `next_actions`, `changes`, and `verification_results`
 - `artifacts` pointing at request, prompt, invocation, event, diagnostic, last-message, result, and schema files
 - resumable sessions additionally write `run_root/sessions/<worker_session_id>.json` with the latest inherited execution policy
 - `timing`
 
+By default, `worker_run`, `worker_edit`, and `worker_resume` return after launch with `status: "running"`. Use `worker_run_status` with the returned `run_id` to inspect completion and read the final full payload. Use `worker_runs_list` to rediscover recent or still-running work after the main agent has stopped or lost the run id. It is compact by default: each item includes run id, status, requested mode, whether requested mode was inferred for an old run, authority, started/finished timing, a short summary preview, and an error preview. Set `include_summary: true` for full summaries and `verbose: true` for full list item metadata. Use `worker_run_wait` for a bounded wait, for example `timeout_ms: 10000`, when a run is likely near completion. It returns a compact run status by default; set `summary_only: true` for the smallest useful response or `verbose: true` to include the full run payload as `full_run`. Set `wait_for_completion: true` only for intentionally short calls where blocking the main agent is acceptable.
+
+Worker output must explicitly include `edits_performed`, `target_state_changed`, `changes`, and `verification`. The server does not infer implementation state from deliverables. `changes` is for files or target artifacts changed; `verification` is structured check evidence with `status`, `summary`, and optional `tool` or `command`.
+
+Runs that produce a valid `last_message.json` but also encounter runtime or tool errors finish as `completed_with_errors`. The error remains on the payload, but the summary and deliverables are preserved as usable worker output.
+
+Worker prompts include MCP-first tool guidance: use available filesystem, git, and structured-command MCP tools for inspection and verification, and avoid direct shell commands for file discovery or file reads when narrower MCP tools can do the work.
+
 A failed runtime call raises `worker_runtime_failed` or `worker_runtime_timed_out` and includes `run_id` and `run_dir` in error details when available. Inspect the run directory for diagnostics.
 
-If a response is materialized, call `worker_output_show` with the returned `output_ref`. `worker_output_show` returns exact stored output text and supports `offset` and `limit`.
+If a response is materialized, call `worker_output_show` with the returned `output_ref`. `worker_output_show` also accepts a `path` copied from a run artifact entry when that path is inside the worker run root, so callers can read `executor_request.json`, `worker_prompt.txt`, `last_message.json`, or diagnostics without switching tools. It returns exact stored output text and supports `offset` and `limit`.
 
 ## Example Tool Arguments
 
 ```json
 {
   "intent": {
-    "instruction": "Inspect the failing test and propose the smallest safe fix. Do not edit files."
+    "instruction": "Inspect the failing test and propose the smallest safe fix. Do not edit files.",
+    "mode": "audit_only"
   },
   "constraints": {
     "cwd": "D:/code/example",
     "authority": "read",
     "cognition": "medium",
     "resumable": false,
+    "wait_for_completion": false,
     "overrides": {
       "sandbox": "read-only",
       "reasoning_effort": "medium"
     }
+  }
+}
+```
+
+Migration audit with explicit preflight:
+
+```json
+{
+  "intent": {
+    "instruction": "Audit the proposed authority migration. Do not edit files. Report old-path dependencies, target repo readiness, risks, and verification steps.",
+    "mode": "audit_only"
+  },
+  "constraints": {
+    "cwd": "D:/code/mcp-surfaces",
+    "authority": "read",
+    "cognition": "medium",
+    "wait_for_completion": false,
+    "preflight_paths": [
+      { "label": "old authority", "path": "D:/code/narada.revolution", "access": "read" },
+      { "label": "new repo", "path": "D:/code/narada.revolution", "access": "create" }
+    ],
+    "required_mcp_tools": [
+      "local-filesystem-read.fs_glob_search",
+      "local-filesystem-read.fs_read_file",
+      "structured-command.structured_command_execute"
+    ]
   }
 }
 ```
