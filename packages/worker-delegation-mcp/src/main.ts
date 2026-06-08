@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs, runStdioServer } from './mcp-server.js';
 
 export { createServerState, handleRequest, parseArgs, runStdioServer } from './mcp-server.js';
+export { callWorkerTool } from './worker-tools.js';
 export { buildCodexArgv } from './codex-adapter.js';
 export { createWorkerPolicy, publicWorkerPolicy } from './policy.js';
 export type { WorkerMcpState } from './state.js';
