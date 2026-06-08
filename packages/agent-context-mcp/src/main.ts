@@ -465,7 +465,7 @@ function doctor() {
 
 function startSession(toolArgs) {
   const identity = requiredString(toolArgs, 'identity');
-  assertSonarIdentity(identity);
+  assertAgentContextIdentity(identity);
   return materializeAgentSessionStart({
     siteRoot,
     identity,
@@ -479,9 +479,7 @@ function startSession(toolArgs) {
 function checkpoint(toolArgs) {
   const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
   if (!agentId) throw new Error('agent_id_required');
-  assertSonarIdentity(agentId);
-  const rosterCheck = validateIdentityAgainstRoster(siteRoot, agentId);
-  if (!rosterCheck.valid) throw new Error(rosterCheck.error);
+  assertAgentContextIdentity(agentId);
 
   return withDb((db) => {
     const now = new Date().toISOString();
@@ -547,7 +545,7 @@ function checkpoint(toolArgs) {
 
 function rehydrate(toolArgs) {
   const agentId = requiredString(toolArgs, 'agent_id');
-  assertSonarIdentity(agentId);
+  assertAgentContextIdentity(agentId);
   const limit = Math.min(Math.max(Number(toolArgs.limit ?? 1), 1), 50);
 
   return withDb((db) => {
@@ -578,9 +576,7 @@ function whoami(toolArgs = {}) {
   return withDb((db) => {
     const envAgent = process.env.NARADA_AGENT_ID;
     if (envAgent) {
-      assertSonarIdentity(envAgent);
-      const roster = validateIdentityAgainstRoster(siteRoot, envAgent);
-      if (!roster.valid) throw new Error(roster.error);
+      const roster = assertAgentContextIdentity(envAgent);
       return {
         status: 'ok',
         identity: envAgent,
@@ -593,8 +589,7 @@ function whoami(toolArgs = {}) {
 
     const checkpointRow = db.prepare('SELECT agent_id, checkpoint_at FROM agent_checkpoints ORDER BY checkpoint_at DESC LIMIT 1').get();
     if (checkpointRow?.agent_id) {
-      assertSonarIdentity(checkpointRow.agent_id);
-      const roster = validateIdentityAgainstRoster(siteRoot, checkpointRow.agent_id);
+      const roster = assertAgentContextIdentity(checkpointRow.agent_id);
       return {
         status: 'ok',
         identity: checkpointRow.agent_id,
@@ -608,8 +603,7 @@ function whoami(toolArgs = {}) {
 
     const eventRow = db.prepare('SELECT identity_id, created_at FROM agent_start_events ORDER BY created_at DESC LIMIT 1').get();
     if (eventRow?.identity_id) {
-      assertSonarIdentity(eventRow.identity_id);
-      const roster = validateIdentityAgainstRoster(siteRoot, eventRow.identity_id);
+      const roster = assertAgentContextIdentity(eventRow.identity_id);
       return {
         status: 'ok',
         identity: eventRow.identity_id,
@@ -709,10 +703,13 @@ function rowToCheckpoint(row) {
   };
 }
 
-function assertSonarIdentity(agentId) {
-  if (typeof agentId !== 'string' || !agentId.startsWith('sonar.')) {
-    throw new Error(`sonar_agent_context_identity_not_sonar_local: ${agentId}`);
+function assertAgentContextIdentity(agentId) {
+  if (typeof agentId !== 'string' || agentId.trim() === '') {
+    throw new Error(`agent_context_identity_invalid: ${agentId}`);
   }
+  const roster = validateIdentityAgainstRoster(siteRoot, agentId);
+  if (!roster.valid) throw new Error(roster.error);
+  return roster;
 }
 
 function requiredString(value, key) {

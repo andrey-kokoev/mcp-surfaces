@@ -5,22 +5,49 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'agent-context-mcp-'));
 writeFileSync(join(siteRoot, 'AGENTS.md'), '# Fixture Site\n', 'utf8');
 mkdirSync(join(siteRoot, '.ai', 'agents'), { recursive: true });
 writeFileSync(join(siteRoot, '.ai', 'agents', 'roster.json'), JSON.stringify({
-  agents: [{ agent_id: 'sonar.architect', role: 'architect', capabilities: [] }],
+  agents: [
+    { agent_id: 'sonar.architect', role: 'architect', capabilities: [] },
+    { agent_id: 'narada-revolution.resident', role: 'resident', capabilities: [] },
+  ],
 }, null, 2), 'utf8');
+
+const dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite');
+mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
+const db = new DatabaseSync(dbPath);
+db.exec(`
+  CREATE TABLE agent_start_events (
+    event_id TEXT PRIMARY KEY,
+    identity_id TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    resume_command TEXT,
+    bootstrap_artifact_uri TEXT
+  );
+  CREATE TABLE agent_events (
+    event_id TEXT PRIMARY KEY,
+    identity_id TEXT NOT NULL,
+    event_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+  );
+`);
+db.close();
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
   env: {
     ...process.env,
-    NARADA_AGENT_ID: 'sonar.architect',
+    NARADA_AGENT_ID: 'narada-revolution.resident',
     NARADA_SITE_ROOT: siteRoot,
-    NARADA_AGENT_CONTEXT_DB: join(siteRoot, '.ai', 'state', 'agent-context.sqlite'),
+    NARADA_AGENT_CONTEXT_DB: dbPath,
   },
   stdio: ['pipe', 'pipe', 'pipe'],
 });
@@ -90,6 +117,12 @@ try {
   writeJsonLine({ jsonrpc: '2.0', id: 4, method: 'tools/list', params: {} });
   const jsonLineTools = await waitFor(4);
   assert.equal(jsonLineTools.error, undefined);
+  writeMessage({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'agent_context_whoami', arguments: {} } });
+  const whoami = await waitFor(5);
+  assert.equal(whoami.error, undefined);
+  const identity = JSON.parse(whoami.result.content[0].text);
+  assert.equal(identity.identity, 'narada-revolution.resident');
+  assert.equal(identity.role, 'resident');
   console.log('agent context MCP tests passed');
 } finally {
   proc.stdin?.destroy();
