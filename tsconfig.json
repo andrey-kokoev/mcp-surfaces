@@ -7,6 +7,7 @@
     { "path": "./packages/git-mcp" },
     { "path": "./packages/completion-audit-mcp" },
     { "path": "./packages/worker-delegation-mcp" },
+    { "path": "./packages/delegated-task-mcp" },
     { "path": "./packages/inbox-mcp" },
     { "path": "./packages/mailbox-mcp" },
     { "path": "./packages/graph-mail-mcp" },

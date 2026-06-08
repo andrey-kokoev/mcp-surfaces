@@ -20,6 +20,7 @@ Current packages:
 - `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface.
 - `@narada2/agent-context-mcp`: agent context MCP surface.
 - `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface.
+- `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface.
 
 ## Development Rules
 
@@ -48,6 +49,7 @@ pnpm test:graph-mail
 pnpm test:task-lifecycle
 pnpm test:sonar-site-ops
 pnpm test:agent-context
+pnpm test:delegated-task
 ```
 
 ## Verification Expectations
@@ -64,6 +66,7 @@ Before handing off changes:
 - `structured-command-mcp` owns argv-based command execution policy.
 - `completion-audit-mcp` owns durable requirement/evidence/verdict completion audit records; it must not inspect repositories, execute commands, or infer whether a requirement is true.
 - `worker-delegation-mcp` owns policy-gated delegation to worker runtimes; it is not a general shell, task lifecycle, or recursive worker-control surface.
+- `delegated-task-mcp` owns durable delegated task records, workflow plans, acceptance contracts, events, and handoff packets; it must not become a shell, git, filesystem mutation, worker runtime, or Narada workboard surface.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.

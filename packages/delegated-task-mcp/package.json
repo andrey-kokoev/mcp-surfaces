@@ -1,0 +1,32 @@
+{
+  "name": "@narada2/delegated-task-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Delegated task orchestration MCP surface.",
+  "bin": {
+    "delegated-task-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/delegated-task-mcp.test.js && node dist/test/protocol-smoke.test.js",
+    "test:live": "pnpm build && node dist/test/live-worker-integration.test.js"
+  },
+  "dependencies": {
+    "@narada2/worker-delegation-mcp": "workspace:*"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "target.md",
+    "task-graph.md"
+  ]
+}

@@ -29,6 +29,14 @@ importers:
 
   packages/agent-context-mcp: {}
 
+  packages/completion-audit-mcp: {}
+
+  packages/delegated-task-mcp:
+    dependencies:
+      '@narada2/worker-delegation-mcp':
+        specifier: workspace:*
+        version: link:../worker-delegation-mcp
+
   packages/git-mcp:
     dependencies:
       '@narada2/mcp-transport':
