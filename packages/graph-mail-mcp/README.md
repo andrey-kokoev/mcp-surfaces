@@ -11,6 +11,7 @@ Use this package when an agent needs live Microsoft Graph state or needs to crea
 - Allowed: create new drafts.
 - Allowed: create reply, reply-all, and forward drafts.
 - Allowed: update or discard drafts.
+- Allowed: inspect, add, upload, and delete message attachments through Graph mail tools.
 - Send from draft: disallowed by default.
 - Not exposed: one-shot direct send operations such as Graph `sendMail`, direct reply send, direct reply-all send, or direct forward send.
 - Not allowed: PowerShell or arbitrary command execution.
@@ -64,6 +65,7 @@ Policy fields:
 
 - `graph_base_url`: optional Graph API base URL. Defaults to `https://graph.microsoft.com/v1.0`.
 - `allowed_mailboxes`: optional mailbox allowlist. When exactly one mailbox is allowed, omitted `mailbox_id` arguments resolve to that mailbox. Otherwise omitted `mailbox_id` resolves to `me`, which must be listed explicitly if an allowlist is configured.
+- `allowed_attachment_roots`: optional local filesystem roots for `graph_mail_attachment_upload_file`. Relative paths resolve under the site root. Defaults to the site root when omitted.
 - `allow_send_draft`: defaults to `false`.
 - `send_approval_token`: optional token required by `graph_mail_draft_send`.
 
@@ -77,11 +79,20 @@ Draft mutations and send refusals/completions are written to:
 
 This includes draft create/update/discard requests, draft-send refusals, and draft-send completions.
 
+Attachment uploads are not sent through `graph_request`; upload tools validate the opaque `uploadUrl`, require `https`, and only allow the exact Graph-owned hosts `outlook.office.com`, `outlook.office365.com`, and `graph.microsoft.com`.
+
 ## Tools
 
 - `graph_mail_doctor`: reports Graph auth availability, auth mode, and active policy.
 - `graph_mail_query`: queries live Graph messages with optional mailbox, folder, search, filter, select, and limit arguments.
 - `graph_mail_message_show`: shows one live Graph message by `message_id`.
+- `graph_mail_attachment_list`: lists attachments for a message or draft.
+- `graph_mail_attachment_get`: shows one attachment and can strip `contentBytes`/`content` when `include_content` is `false`.
+- `graph_mail_attachment_add`: adds a small file attachment with `name`, `content_type`, and `content_base64` using `@odata.type` `#microsoft.graph.fileAttachment`.
+- `graph_mail_attachment_upload_session_create`: creates an upload session for a large file attachment with `name`, positive `size`, and optional content metadata.
+- `graph_mail_attachment_upload_chunk`: uploads one chunk to a guarded upload URL with `upload_url`, `content_base64`, `range_start`, `range_end`, and `total_size`, using binary body bytes and explicit `Content-Length` / `Content-Range` headers.
+- `graph_mail_attachment_upload_file`: preferred path for local files. Reads a file under an allowed attachment root, creates an upload session, uploads bounded binary chunks internally, and returns compact metadata without exposing base64 content or upload URLs.
+- `graph_mail_attachment_delete`: deletes one attachment from a message or draft.
 - `graph_mail_draft_create`: creates a new draft message.
 - `graph_mail_reply_draft_create`: creates a reply draft from an existing message.
 - `graph_mail_reply_all_draft_create`: creates a reply-all draft from an existing message.
@@ -109,6 +120,8 @@ Agents should:
 
 - Prefer `mailbox-mcp` for routine reads from synced local projections.
 - Use `graph_mail_query` or `graph_mail_message_show` only when live Graph state is needed.
+- Use the attachment tools only for live Graph attachment state, and prefer `mailbox-mcp` for routine reads first.
+- Use `graph_mail_attachment_upload_file` for local files instead of base64-printing file content through command output.
 - Use draft tools for outbound customer-facing work.
 - Never send unless an operator has intentionally enabled sending and provided the required confirmation/approval inputs.
 

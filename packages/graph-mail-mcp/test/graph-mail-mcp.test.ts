@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,35 +12,26 @@ type DynamicTestValue = any & {
 
 type JsonRpcTestResponse = {
   error: DynamicTestValue;
-  result: {
-    structuredContent: DynamicTestValue;
-  };
+  result: DynamicTestValue;
 };
 
 type CapturedRequest = { url: string; init: DynamicTestValue };
+type MockResponse = { body?: unknown; ok?: boolean; status?: number; statusText?: string; text?: string };
 
 const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => Promise<JsonRpcTestResponse>;
 
-function mockFetch(calls: CapturedRequest[], responses: unknown[] = []) {
+function mockFetch(calls: CapturedRequest[], responses: MockResponse[] = []) {
   return async (url: string, init: DynamicTestValue = {}) => {
     calls.push({ url, init });
-    const body = responses.shift() ?? { id: 'draft-1', subject: 'Created draft' };
+    const response = responses.shift() ?? {};
+    const status = response.status ?? 200;
+    const ok = response.ok ?? (status >= 200 && status < 300);
+    const text = response.text ?? JSON.stringify(response.body ?? {});
     return {
-      status: init.method === 'DELETE' || String(url).endsWith('/send') ? 202 : 200,
-      ok: true,
-      text: async () => init.method === 'DELETE' || String(url).endsWith('/send') ? '' : JSON.stringify(body),
-    };
-  };
-}
-
-function mockTextFetch(calls: CapturedRequest[], responses: Array<{ status?: number; ok?: boolean; text?: string }> = []) {
-  return async (url: string, init: DynamicTestValue = {}) => {
-    calls.push({ url, init });
-    const response = responses.shift() ?? { text: '{}' };
-    return {
-      status: response.status ?? 200,
-      ok: response.ok ?? true,
-      text: async () => response.text ?? '{}',
+      status,
+      ok,
+      statusText: response.statusText ?? 'OK',
+      text: async () => text,
     };
   };
 }
@@ -53,19 +45,334 @@ try {
     allowed_mailboxes: ['support@example.test'],
   }));
 
-  const calls: CapturedRequest[] = [];
-  const state = createServerState({ siteRoot: root, accessToken: 'test-token', fetchImpl: mockFetch(calls, [{ value: [{ id: 'msg-1' }] }]) });
+  const attachmentCalls: CapturedRequest[] = [];
+  const attachmentState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(attachmentCalls, [
+      { body: { value: [{ id: 'att-list-1' }] } },
+      { body: { id: 'att-get-1', name: 'report.pdf', contentBytes: 'YWJj', content: 'legacy-content' } },
+      { body: { id: 'att-added-1', name: 'report.pdf' } },
+      { body: { id: 'upload-session-1', uploadUrl: 'https://outlook.office.com/upload/abc', expirationDateTime: '2026-06-08T20:00:00Z' } },
+      { body: { id: 'upload-session-2', uploadUrl: 'https://outlook.office365.com/upload/file-abc', expirationDateTime: '2026-06-08T20:00:00Z' } },
+      { status: 202, text: '' },
+      { status: 201, body: { id: 'att-uploaded-1', name: 'local.bin' } },
+      { status: 204, text: '' },
+    ]),
+  });
 
   const doctor = await rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
     params: { name: 'graph_mail_doctor', arguments: {} },
-  }, state);
+  }, attachmentState);
   assert.equal(doctor.error, undefined);
   assert.equal(doctor.result.structuredContent.has_access_token, true);
   assert.equal(doctor.result.structuredContent.auth_mode, 'access_token');
   assert.equal(doctor.result.structuredContent.allow_send_draft, false);
+  assert.deepEqual(doctor.result.structuredContent.allowed_attachment_roots, [root]);
+
+  const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, attachmentState);
+  assert.equal(tools.error, undefined);
+  const toolRows = tools.result.tools;
+  assert.deepEqual(toolRows.map((tool: DynamicTestValue) => tool.name), [
+    'graph_mail_doctor',
+    'graph_mail_query',
+    'graph_mail_message_show',
+    'graph_mail_attachment_list',
+    'graph_mail_attachment_get',
+    'graph_mail_attachment_add',
+    'graph_mail_attachment_upload_session_create',
+    'graph_mail_attachment_upload_chunk',
+    'graph_mail_attachment_upload_file',
+    'graph_mail_attachment_delete',
+    'graph_mail_draft_create',
+    'graph_mail_reply_draft_create',
+    'graph_mail_reply_all_draft_create',
+    'graph_mail_forward_draft_create',
+    'graph_mail_draft_update',
+    'graph_mail_draft_discard',
+    'graph_mail_draft_send',
+  ]);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.inputSchema.required.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_file')?.inputSchema.required.join(','), 'file_path');
+
+  const attachmentList = await rpc({
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_list',
+      arguments: {
+        message_id: 'message-1',
+        limit: 3,
+      },
+    },
+  }, attachmentState);
+  assert.equal(attachmentList.error, undefined);
+  assert.equal(attachmentCalls[0].init.method, 'GET');
+  assert.equal(attachmentCalls[0].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(attachmentCalls[0].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/attachments?%24top=3');
+  assert.equal(attachmentList.result.structuredContent.attachments.value[0].id, 'att-list-1');
+
+  const attachmentGet = await rpc({
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_get',
+      arguments: {
+        message_id: 'message-1',
+        attachment_id: 'att-get-1',
+        include_content: false,
+      },
+    },
+  }, attachmentState);
+  assert.equal(attachmentGet.error, undefined);
+  assert.equal(attachmentCalls[1].init.method, 'GET');
+  assert.equal(attachmentCalls[1].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(attachmentCalls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/attachments/att-get-1');
+  assert.equal(attachmentGet.result.structuredContent.attachment.id, 'att-get-1');
+  assert.equal(attachmentGet.result.structuredContent.attachment.contentBytes, undefined);
+  assert.equal(attachmentGet.result.structuredContent.attachment.content, undefined);
+
+  const attachmentAdd = await rpc({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_add',
+      arguments: {
+        message_id: 'message-1',
+        name: 'report.pdf',
+        content_type: 'application/pdf',
+        content_base64: Buffer.from('attachment-body').toString('base64'),
+        is_inline: true,
+        content_id: 'cid-123',
+      },
+    },
+  }, attachmentState);
+  assert.equal(attachmentAdd.error, undefined);
+  assert.equal(attachmentCalls[2].init.method, 'POST');
+  assert.equal(attachmentCalls[2].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(attachmentCalls[2].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/attachments');
+  const attachmentAddBody = JSON.parse(attachmentCalls[2].init.body);
+  assert.equal(attachmentAddBody['@odata.type'], '#microsoft.graph.fileAttachment');
+  assert.equal(attachmentAddBody.name, 'report.pdf');
+  assert.equal(attachmentAddBody.contentType, 'application/pdf');
+  assert.equal(attachmentAddBody.contentBytes, Buffer.from('attachment-body').toString('base64'));
+  assert.equal(attachmentAddBody.isInline, true);
+  assert.equal(attachmentAddBody.contentId, 'cid-123');
+
+  const oversizedSmallAttachment = await rpc({
+    jsonrpc: '2.0',
+    id: 21,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_add',
+      arguments: {
+        message_id: 'message-1',
+        name: 'too-large.bin',
+        content_type: 'application/octet-stream',
+        content_base64: Buffer.alloc(3 * 1024 * 1024 + 1).toString('base64'),
+      },
+    },
+  }, attachmentState);
+  assert.match(oversizedSmallAttachment.error.message, /attachment_small_file_too_large/);
+
+  const uploadSessionCreate = await rpc({
+    jsonrpc: '2.0',
+    id: 6,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_session_create',
+      arguments: {
+        draft_id: 'draft-1',
+        name: 'video.mp4',
+        size: 42,
+        content_type: 'video/mp4',
+        is_inline: false,
+        content_id: 'cid-video',
+      },
+    },
+  }, attachmentState);
+  assert.equal(uploadSessionCreate.error, undefined);
+  assert.equal(attachmentCalls[3].init.method, 'POST');
+  assert.equal(attachmentCalls[3].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(attachmentCalls[3].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/attachments/createUploadSession');
+  const uploadSessionBody = JSON.parse(attachmentCalls[3].init.body);
+  assert.equal(uploadSessionBody.AttachmentItem.attachmentType, 'file');
+  assert.equal(uploadSessionBody.AttachmentItem.name, 'video.mp4');
+  assert.equal(uploadSessionBody.AttachmentItem.size, 42);
+  assert.equal(uploadSessionBody.AttachmentItem.contentType, 'video/mp4');
+  assert.equal(uploadSessionBody.AttachmentItem.isInline, false);
+  assert.equal(uploadSessionBody.AttachmentItem.contentId, 'cid-video');
+
+  const localAttachmentBytes = Buffer.concat([Buffer.alloc(327680, 1), Buffer.from('tail')]);
+  writeFileSync(join(root, 'local.bin'), localAttachmentBytes);
+  const uploadFile = await rpc({
+    jsonrpc: '2.0',
+    id: 22,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_file',
+      arguments: {
+        draft_id: 'draft-1',
+        file_path: 'local.bin',
+        chunk_size: 327680,
+      },
+    },
+  }, attachmentState);
+  assert.equal(uploadFile.error, undefined);
+  assert.equal(attachmentCalls[4].init.method, 'POST');
+  assert.equal(attachmentCalls[4].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/attachments/createUploadSession');
+  const uploadFileSessionBody = JSON.parse(attachmentCalls[4].init.body);
+  assert.equal(uploadFileSessionBody.AttachmentItem.name, 'local.bin');
+  assert.equal(uploadFileSessionBody.AttachmentItem.size, localAttachmentBytes.byteLength);
+  assert.equal(uploadFileSessionBody.AttachmentItem.contentType, 'application/octet-stream');
+  assert.equal(attachmentCalls[5].init.method, 'PUT');
+  assert.equal(attachmentCalls[5].url, 'https://outlook.office365.com/upload/file-abc');
+  assert.equal(attachmentCalls[5].init.headers['Content-Range'], `bytes 0-327679/${localAttachmentBytes.byteLength}`);
+  assert.equal(Buffer.from(attachmentCalls[5].init.body).byteLength, 327680);
+  assert.equal(attachmentCalls[6].init.headers['Content-Range'], `bytes 327680-${localAttachmentBytes.byteLength - 1}/${localAttachmentBytes.byteLength}`);
+  assert.equal(Buffer.from(attachmentCalls[6].init.body).toString('utf8'), 'tail');
+  assert.equal(uploadFile.result.structuredContent.status, 'uploaded');
+  assert.equal(uploadFile.result.structuredContent.name, 'local.bin');
+  assert.equal(uploadFile.result.structuredContent.size, localAttachmentBytes.byteLength);
+  assert.equal(uploadFile.result.structuredContent.chunk_count, 2);
+  assert.equal(uploadFile.result.structuredContent.sha256, createHash('sha256').update(localAttachmentBytes).digest('hex'));
+  assert.equal(uploadFile.result.structuredContent.attachment.id, 'att-uploaded-1');
+
+  const attachmentDelete = await rpc({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_delete',
+      arguments: {
+        draft_id: 'draft-1',
+        attachment_id: 'att-delete-1',
+      },
+    },
+  }, attachmentState);
+  assert.equal(attachmentDelete.error, undefined);
+  assert.equal(attachmentCalls[7].init.method, 'DELETE');
+  assert.equal(attachmentCalls[7].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(attachmentCalls[7].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/attachments/att-delete-1');
+
+  const uploadCalls: CapturedRequest[] = [];
+  const uploadState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(uploadCalls, [{ status: 202, text: '' }]),
+  });
+
+  const uploadChunk = await rpc({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'https://outlook.office.com/upload/abc',
+        content_base64: Buffer.from('chunk-bytes').toString('base64'),
+        range_start: 0,
+        range_end: 10,
+        total_size: 11,
+      },
+    },
+  }, uploadState);
+  assert.equal(uploadChunk.error, undefined);
+  assert.equal(uploadCalls[0].init.method, 'PUT');
+  assert.equal(uploadCalls[0].init.headers.Authorization, undefined);
+  assert.equal(uploadCalls[0].init.headers['Content-Length'], '11');
+  assert.equal(uploadCalls[0].init.headers['Content-Range'], 'bytes 0-10/11');
+  assert.equal(uploadCalls[0].init.headers['Content-Type'], 'application/octet-stream');
+  assert.equal(Buffer.from(uploadCalls[0].init.body).toString('utf8'), 'chunk-bytes');
+
+  const forbiddenHttpUpload = await rpc({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'http://outlook.office.com/upload/abc',
+        content_base64: Buffer.from('x').toString('base64'),
+        range_start: 0,
+        range_end: 0,
+        total_size: 1,
+      },
+    },
+  }, uploadState);
+  assert.match(forbiddenHttpUpload.error.message, /attachment_upload_url_must_be_https/);
+
+  const forbiddenHostUpload = await rpc({
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'https://evil.example/upload/abc',
+        content_base64: Buffer.from('x').toString('base64'),
+        range_start: 0,
+        range_end: 0,
+        total_size: 1,
+      },
+    },
+  }, uploadState);
+  assert.match(forbiddenHostUpload.error.message, /attachment_upload_url_host_not_allowed/);
+  assert.equal(uploadCalls.length, 1);
+
+  const invalidUploadUrl = await rpc({
+    jsonrpc: '2.0',
+    id: 19,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'not a url',
+        content_base64: Buffer.from('x').toString('base64'),
+        range_start: 0,
+        range_end: 0,
+        total_size: 1,
+      },
+    },
+  }, uploadState);
+  assert.match(invalidUploadUrl.error.message, /attachment_upload_url_invalid/);
+  assert.doesNotMatch(invalidUploadUrl.error.message, /not a url/);
+
+  const failedUploadCalls: CapturedRequest[] = [];
+  const failedUploadState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(failedUploadCalls, [{ status: 400, text: 'failed https://outlook.office.com/upload/secret-token' }]),
+  });
+  const failedUpload = await rpc({
+    jsonrpc: '2.0',
+    id: 20,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'https://outlook.office.com/upload/secret-token',
+        content_base64: Buffer.from('x').toString('base64'),
+        range_start: 0,
+        range_end: 0,
+        total_size: 1,
+      },
+    },
+  }, failedUploadState);
+  assert.match(failedUpload.error.message, /attachment_upload_failed:400:failed \[redacted-upload-url\]/);
+  assert.doesNotMatch(failedUpload.error.message, /secret-token/);
 
   const clientCredentialCalls: CapturedRequest[] = [];
   const clientCredentialState = createServerState({
@@ -74,9 +381,9 @@ try {
     clientId: 'client-1',
     clientSecret: 'secret-1',
     tokenEndpoint: 'https://login.example.test/token',
-    fetchImpl: mockTextFetch(clientCredentialCalls, [
+    fetchImpl: mockFetch(clientCredentialCalls, [
       { text: JSON.stringify({ access_token: 'app-token', expires_in: 3600 }) },
-      { text: JSON.stringify({ value: [{ id: 'msg-app-1' }] }) },
+      { body: { value: [{ id: 'msg-app-1' }] } },
     ]),
   });
 
@@ -103,9 +410,19 @@ try {
   assert.match(clientCredentialCalls[1].url, /^https:\/\/graph\.example\.test\/v1\.0\/users\/support%40example\.test\/messages\?/);
   assert.equal(clientCredentialCalls[1].init.headers.Authorization, 'Bearer app-token');
 
+  const draftCalls: CapturedRequest[] = [];
+  const draftState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(draftCalls, [
+      { body: { value: [{ id: 'msg-1' }] } },
+      { body: { id: 'draft-1', subject: 'Customer follow-up' } },
+    ]),
+  });
+
   const query = await rpc({
     jsonrpc: '2.0',
-    id: 2,
+    id: 13,
     method: 'tools/call',
     params: {
       name: 'graph_mail_query',
@@ -115,16 +432,16 @@ try {
         limit: 5,
       },
     },
-  }, state);
+  }, draftState);
   assert.equal(query.error, undefined);
-  assert.match(calls[0].url, /^https:\/\/graph\.example\.test\/v1\.0\/users\/support%40example\.test\/messages\?/);
-  assert.match(calls[0].url, /%24top=5/);
-  assert.match(calls[0].url, /%24search=%22follow\+up%22/);
-  assert.equal(calls[0].init.headers.Authorization, 'Bearer test-token');
+  assert.match(draftCalls[0].url, /^https:\/\/graph\.example\.test\/v1\.0\/users\/support%40example\.test\/messages\?/);
+  assert.match(draftCalls[0].url, /%24top=5/);
+  assert.match(draftCalls[0].url, /%24search=%22follow\+up%22/);
+  assert.equal(draftCalls[0].init.headers.Authorization, 'Bearer test-token');
 
   const create = await rpc({
     jsonrpc: '2.0',
-    id: 3,
+    id: 14,
     method: 'tools/call',
     params: {
       name: 'graph_mail_draft_create',
@@ -135,18 +452,29 @@ try {
         to_recipients: ['customer@example.test'],
       },
     },
-  }, state);
+  }, draftState);
   assert.equal(create.error, undefined);
-  assert.equal(calls[1].init.method, 'POST');
-  assert.equal(calls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages');
-  const createBody = JSON.parse(calls[1].init.body);
+  assert.equal(draftCalls[1].init.method, 'POST');
+  assert.equal(draftCalls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages');
+  const createBody = JSON.parse(draftCalls[1].init.body);
   assert.equal(createBody.subject, 'Customer follow-up');
   assert.equal(createBody.body.contentType, 'Text');
   assert.equal(createBody.toRecipients[0].emailAddress.address, 'customer@example.test');
 
+  const blockedMailbox = await rpc({
+    jsonrpc: '2.0',
+    id: 15,
+    method: 'tools/call',
+    params: { name: 'graph_mail_query', arguments: { mailbox_id: 'blocked@example.test' } },
+  }, draftState);
+  assert.match(blockedMailbox.error.message, /mailbox_not_allowed/);
+
+  const policyCalls: CapturedRequest[] = [];
+  const policyState = createServerState({ siteRoot: root, accessToken: 'test-token', fetchImpl: mockFetch(policyCalls, [{ status: 204, text: '' }]) });
+
   const refused = await rpc({
     jsonrpc: '2.0',
-    id: 4,
+    id: 16,
     method: 'tools/call',
     params: {
       name: 'graph_mail_draft_send',
@@ -156,22 +484,14 @@ try {
         confirm_send: true,
       },
     },
-  }, state);
+  }, policyState);
   assert.equal(refused.error, undefined);
   assert.equal(refused.result.structuredContent.status, 'refused');
   assert.equal(refused.result.structuredContent.reason, 'send_draft_disallowed_by_policy');
-  assert.equal(calls.length, 2);
+  assert.equal(policyCalls.length, 0);
   const auditPath = join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl');
   assert.equal(existsSync(auditPath), true);
   assert.match(readFileSync(auditPath, 'utf8'), /draft_send_refused/);
-
-  const blockedMailbox = await rpc({
-    jsonrpc: '2.0',
-    id: 5,
-    method: 'tools/call',
-    params: { name: 'graph_mail_query', arguments: { mailbox_id: 'blocked@example.test' } },
-  }, state);
-  assert.match(blockedMailbox.error.message, /mailbox_not_allowed/);
 
   writeFileSync(join(root, '.ai', 'graph-mail-mcp.json'), JSON.stringify({
     graph_base_url: 'https://graph.example.test/v1.0',
@@ -182,7 +502,7 @@ try {
 
   const deniedNoToken = await rpc({
     jsonrpc: '2.0',
-    id: 6,
+    id: 17,
     method: 'tools/call',
     params: {
       name: 'graph_mail_draft_send',
@@ -192,13 +512,13 @@ try {
         confirm_send: true,
       },
     },
-  }, state);
+  }, policyState);
   assert.equal(deniedNoToken.result.structuredContent.status, 'refused');
   assert.equal(deniedNoToken.result.structuredContent.reason, 'send_approval_token_required');
 
   const sent = await rpc({
     jsonrpc: '2.0',
-    id: 7,
+    id: 18,
     method: 'tools/call',
     params: {
       name: 'graph_mail_draft_send',
@@ -209,11 +529,11 @@ try {
         approval_token: 'approve-123',
       },
     },
-  }, state);
+  }, policyState);
   assert.equal(sent.error, undefined);
   assert.equal(sent.result.structuredContent.status, 'sent');
-  assert.equal(calls[2].init.method, 'POST');
-  assert.equal(calls[2].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/send');
+  assert.equal(policyCalls[0].init.method, 'POST');
+  assert.equal(policyCalls[0].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/send');
 
   console.log('graph-mail-mcp behavior ok');
 } finally {

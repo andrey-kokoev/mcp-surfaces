@@ -11,6 +11,7 @@ export type GraphMailPolicy = {
   site_root: string;
   graph_base_url: string;
   allowed_mailboxes: string[];
+  allowed_attachment_roots: string[];
   allow_send_draft: boolean;
   send_approval_token: string | null;
 };
@@ -33,6 +34,7 @@ export function loadGraphMailPolicy(siteRootInput: string): GraphMailPolicy {
       ? config.graph_base_url.replace(/\/+$/, '')
       : DEFAULT_GRAPH_BASE_URL,
     allowed_mailboxes: asStringArray(config.allowed_mailboxes ?? config.allowedMailboxes),
+    allowed_attachment_roots: asStringArray(config.allowed_attachment_roots ?? config.allowedAttachmentRoots).map((root) => resolve(siteRoot, root)),
     allow_send_draft: config.allow_send_draft === true || config.allowSendDraft === true,
     send_approval_token: typeof config.send_approval_token === 'string'
       ? config.send_approval_token

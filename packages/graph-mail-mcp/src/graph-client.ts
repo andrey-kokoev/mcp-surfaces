@@ -109,3 +109,21 @@ export function messagePatchFromArgs(args: GraphMailRecord): GraphMailRecord {
   if (typeof args.importance === 'string') patch.importance = args.importance;
   return patch;
 }
+
+const ATTACHMENT_UPLOAD_HOST_ALLOWLIST = new Set(['outlook.office.com', 'outlook.office365.com', 'graph.microsoft.com']);
+
+export function assertAttachmentUploadUrlAllowed(uploadUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(uploadUrl);
+  } catch {
+    throw new Error('attachment_upload_url_invalid');
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error('attachment_upload_url_must_be_https');
+  }
+  if (!ATTACHMENT_UPLOAD_HOST_ALLOWLIST.has(url.hostname.toLowerCase())) {
+    throw new Error(`attachment_upload_url_host_not_allowed: ${url.hostname}`);
+  }
+  return url;
+}
