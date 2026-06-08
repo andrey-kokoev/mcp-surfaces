@@ -75,6 +75,7 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
         count: countExact ? seen : null,
         count_exact: countExact,
         scanned: seen,
+        scanned_unit: 'matched_entries',
         has_more: hasMore,
         matches: outputMatches,
       });

@@ -241,7 +241,8 @@ trust_level = "untrusted"
   assert.equal(pagedGlob.result.structuredContent.matches_format, 'path');
   assert.equal(pagedGlob.result.structuredContent.next_offset, 5);
   assert.ok(Number(pagedGlob.result.structuredContent.scanned) < 20);
-  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nscanned: \d+\nreturned: 5\norder: ripgrep_traversal\ncache_hit: false\ncache_policy: auto\nsnapshot_id: null\nrequested_snapshot_id: null\nsnapshot_complete: false\ncache_memory_bytes: null\ntimeout_ms: 60000\nfreshness: type=directory tree_sha256=[0-9a-f]{64} tree_entry_count=120 tree_truncated=false\nmatches_format: path\nhas_more: true/);
+  assert.equal(pagedGlob.result.structuredContent.scanned_unit, 'matched_entries');
+  assert.match(pagedGlob.result.content[0].text, /fs_glob_search: ok\ncount: unknown\ncount_exact: false\nmatched_entries_scanned: \d+\nscanned_unit: matched_entries\nreturned: 5\norder: ripgrep_traversal\ncache_hit: false\ncache_policy: auto\nsnapshot_id: null\nrequested_snapshot_id: null\nsnapshot_complete: false\ncache_memory_bytes: null\ntimeout_ms: 60000\nfreshness: type=directory tree_sha256=[0-9a-f]{64} tree_entry_count=120 tree_truncated=false\nmatches_format: path\nhas_more: true/);
   assert.equal(pagedGlob.result.structuredContent.matches.length, 5);
   const snapshotGlob = call(readState, 161, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 5, cache_policy: 'snapshot' });
   assert.equal(snapshotGlob.result.structuredContent.snapshot_complete, true);

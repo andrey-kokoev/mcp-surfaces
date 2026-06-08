@@ -24,6 +24,7 @@ export type GitRequestContext = {
 export async function callGitTool(name: string, args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<unknown> {
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, context);
+  if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, context);
   if (name === 'git_diff') return gitDiff(args, state, context);
   if (name === 'git_add') return gitAdd(args, state, context);
   if (name === 'git_commit') return gitCommit(args, state, context);
@@ -38,12 +39,68 @@ export async function gitStatus(args: Record<string, unknown>, state: GitMcpStat
   const root = await gitText(cwd, ['rev-parse', '--show-toplevel'], state.policy, 'git_status_failed', context);
   const status = await gitText(cwd, ['status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'], state.policy, 'git_status_failed', context);
   const parsed = parseStatus(status);
+  const branch = typeof parsed.branch === 'string' ? parsed.branch : null;
+  const remotes = await listRemotes(cwd, state.policy, context);
+  const configuredPushTarget = await resolvePushTarget(cwd, null, null, state.policy, context, remotes);
   return {
     schema: 'narada.git.status.v1',
     status: 'ok',
     working_directory: cwd,
     repository_root: root.trim(),
     ...parsed,
+    remotes,
+    remote_names: remotes.map((remote) => remote.name),
+    push_target: configuredPushTarget,
+    push_remediation: pushRemediation(configuredPushTarget, branch, remotes),
+  };
+}
+
+export async function gitRepositoriesSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  const workingDirectories = stringArray(args.working_directories);
+  if (workingDirectories.length === 0) throw diagnosticError('git_repositories_summary_requires_working_directories');
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const expectedPathsByRepository = asRecord(args.expected_paths_by_repository);
+  const repositories = [];
+  for (const workingDirectory of workingDirectories) {
+    const status = await gitStatus({ working_directory: workingDirectory }, state, context);
+    const repositoryRoot = String(status.repository_root ?? workingDirectory);
+    const expectedPaths = stringArray(expectedPathsByRepository[repositoryRoot] ?? expectedPathsByRepository[workingDirectory]);
+    const statusEntries = Array.isArray(status.status_entries) ? status.status_entries.map(asStatusEntry) : [];
+    const dirtyPaths = statusEntries.map((entry) => String(entry.display_path ?? entry.path ?? '')).filter(Boolean);
+    const expectedSet = new Set(expectedPaths);
+    const unexpectedDirtyPaths = expectedPaths.length > 0
+      ? dirtyPaths.filter((path) => !expectedSet.has(path))
+      : [];
+    const latestCommitResult = await runGit(String(status.working_directory), ['log', '-1', '--pretty=format:%H%x1f%h%x1f%s'], state.policy, context);
+    const [hash = null, shortHash = null, subject = null] = latestCommitResult.exit_code === 0
+      ? latestCommitResult.output_text.split('\x1f')
+      : [];
+    repositories.push({
+      working_directory: status.working_directory,
+      repository_root: status.repository_root,
+      branch: status.branch,
+      upstream: status.upstream,
+      ahead: status.ahead,
+      behind: status.behind,
+      clean: status.clean,
+      staged: status.staged,
+      unstaged: status.unstaged,
+      untracked: status.untracked,
+      conflicts: status.conflicts,
+      remotes: status.remotes,
+      push_target: status.push_target,
+      push_remediation: status.push_remediation,
+      expected_paths: expectedPaths,
+      unexpected_dirty_paths: unexpectedDirtyPaths,
+      latest_commit: hash ? { hash, short_hash: shortHash, subject } : null,
+    });
+  }
+  return {
+    schema: 'narada.git.repositories_summary.v1',
+    status: 'ok',
+    scope_label: scopeLabel,
+    repository_count: repositories.length,
+    repositories,
   };
 }
 
@@ -78,6 +135,7 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
 export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_add');
   const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
   const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context))));
   if (paths.length === 0) throw diagnosticError('git_add_requires_paths');
   const result = await runGit(cwd, ['add', '--', ...paths], state.policy, context);
@@ -87,6 +145,7 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, 
     schema: 'narada.git.add.v1',
     status: 'ok',
     working_directory: cwd,
+    scope_label: scopeLabel,
     paths,
     staged_count: paths.length,
     summary: `staged ${paths.length} path${paths.length === 1 ? '' : 's'}`,
@@ -99,6 +158,7 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, 
 export async function gitCommit(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_commit');
   const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
   const message = requiredNonEmptyString(args.message, 'git_commit_requires_message');
   const body = optionalNonEmptyString(args.body);
   const statusBefore = await gitStatus({ working_directory: cwd }, state, context);
@@ -118,6 +178,7 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
     schema: 'narada.git.commit.v1',
     status: 'ok',
     working_directory: cwd,
+    scope_label: scopeLabel,
     commit,
     committed_entries: committedEntries,
     committed_files: committedFiles,
@@ -133,6 +194,7 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
 export async function gitPush(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   requireWriteMode(state.policy, 'git_push');
   const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
   const remote = optionalRefName(args.remote, 'remote');
   const branch = optionalRefName(args.branch, 'branch');
   const pushArgs = ['push'];
@@ -141,13 +203,25 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState,
     pushArgs.push(remote, branch);
   }
   const before = await gitStatus({ working_directory: cwd }, state, context);
-  const effectiveTarget = await resolvePushTarget(cwd, remote, branch, state.policy, context);
+  const remotes = Array.isArray(before.remotes) ? before.remotes.map(asRemote) : [];
+  const effectiveTarget = await resolvePushTarget(cwd, remote, branch, state.policy, context, remotes);
+  if (effectiveTarget.status !== 'resolved') {
+    throw diagnosticError('git_push_target_unresolved', `git_push_target_unresolved:${effectiveTarget.reason ?? 'unknown'}`, {
+      working_directory: cwd,
+      remote: remote ?? null,
+      branch: branch ?? null,
+      effective_target: effectiveTarget,
+      remotes,
+      remediation: pushRemediation(effectiveTarget, typeof before.branch === 'string' ? before.branch : null, remotes),
+    });
+  }
   const result = await runGit(cwd, pushArgs, state.policy, context);
   ensureGitOk(result, 'git_push_failed');
   const payload = {
     schema: 'narada.git.push.v1',
     status: 'ok',
     working_directory: cwd,
+    scope_label: scopeLabel,
     remote: remote ?? null,
     branch: branch ?? null,
     effective_remote: effectiveTarget.remote,
@@ -222,8 +296,14 @@ function resolveWorkingDirectory(args: Record<string, unknown>, state: GitMcpSta
   return resolvePolicyWorkingDirectory(args.working_directory, state.policy);
 }
 
-async function resolvePushTarget(cwd: string, remote: string | null, branch: string | null, policy: GitMcpPolicy, context: GitRequestContext = {}) {
-  if (remote && branch) return { status: 'resolved', remote, branch, reason: null };
+async function resolvePushTarget(cwd: string, remote: string | null, branch: string | null, policy: GitMcpPolicy, context: GitRequestContext = {}, remotes: Array<Record<string, unknown>> | null = null) {
+  const knownRemotes = remotes ?? await listRemotes(cwd, policy, context);
+  if (remote && branch) {
+    const exists = knownRemotes.some((candidate) => candidate.name === remote);
+    return exists
+      ? { status: 'resolved', remote, branch, reason: null }
+      : { status: 'unresolved', remote, branch, reason: 'remote_not_configured' };
+  }
   const currentBranchResult = await runGit(cwd, ['branch', '--show-current'], policy, context);
   if (currentBranchResult.exit_code !== 0 || currentBranchResult.timed_out) {
     return { status: 'unresolved', remote: null, branch: null, reason: 'current_branch_unavailable' };
@@ -237,11 +317,65 @@ async function resolvePushTarget(cwd: string, remote: string | null, branch: str
   }
   const upstreamRemote = upstreamRemoteResult.output_text.trim() || null;
   const upstreamMerge = upstreamMergeResult.output_text.trim() || null;
+  const upstreamRemoteExists = upstreamRemote ? knownRemotes.some((candidate) => candidate.name === upstreamRemote) : false;
+  if (upstreamRemote && !upstreamRemoteExists) {
+    return { status: 'unresolved', remote: upstreamRemote, branch: upstreamMerge?.replace(/^refs\/heads\//, '') ?? currentBranch, reason: 'upstream_remote_not_configured' };
+  }
   return {
     status: upstreamRemote && upstreamMerge ? 'resolved' : 'unresolved',
     remote: upstreamRemote,
     branch: upstreamMerge?.replace(/^refs\/heads\//, '') ?? currentBranch,
     reason: upstreamRemote && upstreamMerge ? null : 'upstream_not_configured',
+  };
+}
+
+async function listRemotes(cwd: string, policy: GitMcpPolicy, context: GitRequestContext = {}) {
+  const result = await runGit(cwd, ['remote', '-v'], policy, context);
+  ensureGitOk(result, 'git_status_failed');
+  const byKey = new Map<string, { name: string; fetch_url: string | null; push_url: string | null }>();
+  for (const line of result.output_text.split(/\r?\n/).filter(Boolean)) {
+    const match = line.match(/^(\S+)\s+(.+)\s+\((fetch|push)\)$/);
+    if (!match) continue;
+    const [, name, url, kind] = match;
+    const existing = byKey.get(name) ?? { name, fetch_url: null, push_url: null };
+    if (kind === 'fetch') existing.fetch_url = url;
+    if (kind === 'push') existing.push_url = url;
+    byKey.set(name, existing);
+  }
+  return [...byKey.values()];
+}
+
+function pushRemediation(target: Record<string, unknown>, branch: string | null, remotes: Array<Record<string, unknown>>) {
+  const reason = String(target.reason ?? '');
+  if (target.status === 'resolved') return null;
+  if (reason === 'remote_not_configured') {
+    return {
+      kind: 'configure_remote_or_choose_existing_remote',
+      message: `No remote named ${target.remote ?? ''} is configured.`,
+      configured_remotes: remotes.map((remote) => remote.name),
+      suggested_next_step: 'Add the intended remote, or pass one of the configured remote names.',
+    };
+  }
+  if (reason === 'upstream_not_configured') {
+    return {
+      kind: 'set_upstream_or_push_explicit_target',
+      message: 'Current branch has no upstream configured.',
+      configured_remotes: remotes.map((remote) => remote.name),
+      suggested_push_shape: branch && remotes.length > 0 ? `git_push(remote=${remotes[0].name}, branch=${branch})` : null,
+    };
+  }
+  if (reason === 'upstream_remote_not_configured') {
+    return {
+      kind: 'repair_upstream_remote',
+      message: `Configured upstream remote ${target.remote ?? ''} is missing from git remote list.`,
+      configured_remotes: remotes.map((remote) => remote.name),
+      suggested_next_step: 'Add the missing remote or update the branch upstream.',
+    };
+  }
+  return {
+    kind: 'inspect_repository_push_target',
+    message: `Push target is unresolved: ${reason || 'unknown'}.`,
+    configured_remotes: remotes.map((remote) => remote.name),
   };
 }
 
@@ -288,5 +422,13 @@ function firstNonEmptyLine(value: string): string | null {
 }
 
 function asStatusEntry(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asRemote(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }

@@ -242,6 +242,7 @@ function pageFromComplete(matches, { offset, limit, cachePolicy = 'auto', reques
     count: record.matches.length,
     count_exact: true,
     scanned: record.matches.length,
+    scanned_unit: 'matched_entries',
     has_more: offset + pageMatches.length < record.matches.length,
     cache_hit: cacheHit,
     cache_policy: cachePolicy,

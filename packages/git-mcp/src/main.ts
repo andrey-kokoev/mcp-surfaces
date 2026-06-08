@@ -14,6 +14,7 @@ export {
   gitDiff,
   gitLog,
   gitPush,
+  gitRepositoriesSummary,
   gitShow,
   gitStatus,
 } from './git-tools.js';

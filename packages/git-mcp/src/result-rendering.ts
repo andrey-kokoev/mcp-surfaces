@@ -18,6 +18,7 @@ export function renderToolResultText(value: unknown): string {
   }
   if (record.schema === 'narada.git.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.git.status.v1') return renderStatus(record);
+  if (record.schema === 'narada.git.repositories_summary.v1') return renderRepositoriesSummary(record);
   if (record.schema === 'narada.git.diff.v1') return renderPatchResult('git_diff', record, 'diff');
   if (record.schema === 'narada.git.add.v1') return renderMutation('git_add', record);
   if (record.schema === 'narada.git.commit.v1') return renderMutation('git_commit', record);
@@ -34,6 +35,10 @@ function renderStatus(record: Record<string, unknown>): string {
     `repository_root: ${record.repository_root ?? ''}`,
     `branch: ${record.branch ?? ''}`,
     record.upstream !== undefined ? `upstream: ${record.upstream ?? 'null'}` : null,
+    record.remote_names !== undefined ? `remotes: ${arrayCount(record.remote_names)}` : null,
+    ...arrayLines(record.remote_names),
+    renderPushTarget(record.push_target),
+    renderPushRemediation(record.push_remediation),
     `clean: ${record.clean ?? false}`,
     `ahead: ${record.ahead ?? 0}`,
     `behind: ${record.behind ?? 0}`,
@@ -54,16 +59,75 @@ function renderMutation(label: string, record: Record<string, unknown>): string 
     `${label}: ${record.status ?? 'ok'}`,
     `working_directory: ${record.working_directory ?? ''}`,
     record.commit !== undefined ? `commit: ${record.commit}` : null,
+    record.scope_label !== undefined ? `scope_label: ${record.scope_label ?? 'null'}` : null,
     record.committed_file_count !== undefined ? `committed_files: ${record.committed_file_count}` : null,
     ...committedFiles.map((file) => `- ${String(file)}`),
     record.remote !== undefined ? `remote: ${record.remote ?? 'null'}` : null,
     record.branch !== undefined ? `branch: ${record.branch ?? 'null'}` : null,
     record.effective_remote !== undefined ? `effective_remote: ${record.effective_remote ?? 'null'}` : null,
     record.effective_branch !== undefined ? `effective_branch: ${record.effective_branch ?? 'null'}` : null,
+    record.effective_target_status !== undefined ? `effective_target_status: ${record.effective_target_status}` : null,
+    record.effective_target_reason !== undefined ? `effective_target_reason: ${record.effective_target_reason}` : null,
     record.summary !== undefined ? `summary: ${record.summary}` : null,
     record.output ? 'output:' : null,
     record.output ? String(record.output).trimEnd() : null,
   ]);
+}
+
+function renderRepositoriesSummary(record: Record<string, unknown>): string {
+  const repositories = Array.isArray(record.repositories) ? record.repositories.map(asRecord) : [];
+  const lines = [
+    `git_repositories_summary: ${record.status ?? 'ok'}`,
+    record.scope_label !== undefined ? `scope_label: ${record.scope_label ?? 'null'}` : null,
+    `repositories: ${record.repository_count ?? repositories.length}`,
+  ];
+  for (const repository of repositories) {
+    const latestCommit = asRecord(repository.latest_commit);
+    lines.push(
+      `- ${repository.repository_root ?? repository.working_directory ?? ''}`,
+      `  branch: ${repository.branch ?? 'null'}`,
+      `  upstream: ${repository.upstream ?? 'null'}`,
+      `  ahead: ${repository.ahead ?? 0}`,
+      `  behind: ${repository.behind ?? 0}`,
+      `  clean: ${repository.clean ?? false}`,
+      `  staged: ${arrayCount(repository.staged)}`,
+      `  unstaged: ${arrayCount(repository.unstaged)}`,
+      `  untracked: ${arrayCount(repository.untracked)}`,
+      `  conflicts: ${arrayCount(repository.conflicts)}`,
+      `  unexpected_dirty_paths: ${arrayCount(repository.unexpected_dirty_paths)}`,
+      latestCommit.hash ? `  latest_commit: ${latestCommit.short_hash ?? latestCommit.hash} ${latestCommit.subject ?? ''}`.trimEnd() : null,
+      `  push_target: ${pushTargetSummary(repository.push_target)}`,
+      `  push_remediation: ${pushRemediationSummary(repository.push_remediation)}`,
+    );
+  }
+  return compactLines(lines);
+}
+
+function renderPushTarget(value: unknown): string | null {
+  const target = asRecord(value);
+  if (!target.status) return null;
+  return `push_target: ${pushTargetSummary(target)}`;
+}
+
+function renderPushRemediation(value: unknown): string | null {
+  const remediation = asRecord(value);
+  if (!remediation.kind) return null;
+  return `push_remediation: ${pushRemediationSummary(remediation)}`;
+}
+
+function pushTargetSummary(value: unknown): string {
+  const target = asRecord(value);
+  if (!target.status) return 'unknown';
+  const remote = target.remote ?? 'null';
+  const branch = target.branch ?? 'null';
+  const reason = target.reason ? ` reason=${target.reason}` : '';
+  return `${target.status} remote=${remote} branch=${branch}${reason}`;
+}
+
+function pushRemediationSummary(value: unknown): string {
+  const remediation = asRecord(value);
+  if (!remediation.kind) return 'none';
+  return `${remediation.kind}: ${remediation.message ?? ''}`.trimEnd();
 }
 
 function renderPolicy(record: Record<string, unknown>): string {

@@ -9,10 +9,23 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_status',
-      description: 'Return Git branch, upstream, ahead/behind, and working tree status.',
+      description: 'Return Git branch, upstream, remotes, push target diagnostics, and working tree status.',
       inputSchema: objectSchema({
         working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
       }),
+    },
+    {
+      name: 'git_repositories_summary',
+      description: 'Summarize multiple repositories for multi-repo commit/push handoff, including dirty paths, latest commit, remotes, and push readiness.',
+      inputSchema: objectSchema({
+        working_directories: { type: 'array', items: { type: 'string' }, description: 'Repository directories under allowed roots.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied label for the workflow being summarized.' },
+        expected_paths_by_repository: {
+          type: 'object',
+          additionalProperties: { type: 'array', items: { type: 'string' } },
+          description: 'Optional map from working directory or repository root to paths expected to be dirty for this workflow.',
+        },
+      }, ['working_directories']),
     },
     {
       name: 'git_diff',
@@ -52,6 +65,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to stage.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['paths']),
     },
     {
@@ -61,6 +75,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
         working_directory: { type: 'string' },
         message: { type: 'string' },
         body: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['message']),
     },
     {
@@ -70,6 +85,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
         working_directory: { type: 'string' },
         remote: { type: 'string' },
         branch: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
   ];
@@ -93,7 +109,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: false,
-    idempotentHint: /inspect|status|diff|log|show|output_show/.test(name),
+    idempotentHint: /inspect|status|summary|diff|log|show|output_show/.test(name),
     openWorldHint: false,
   };
 }

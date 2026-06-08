@@ -594,6 +594,7 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     count: page.count,
     count_exact: page.count_exact,
     scanned: page.scanned,
+    scanned_unit: 'matched_entries',
     returned: matches.length,
     order: 'ripgrep_traversal',
     cache_hit: page.cache_hit === true,
@@ -610,7 +611,7 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     matches: kind === 'grep' ? matches.map((match) => renderGrepMatch(match, grepMode)) : matches,
     ...(kind === 'grep' ? { match_objects_authoritative: true, match_objects: matches.map((match) => buildGrepMatchObject(match, grepMode)) } : {}),
   };
-  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });
+  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, scanned_unit: value.scanned_unit, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
 function cappedToolValue({ state, value, summary = {} }) {

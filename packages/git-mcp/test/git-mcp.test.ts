@@ -10,6 +10,7 @@ import {
   gitDiff,
   gitLog,
   gitPush,
+  gitRepositoriesSummary,
   gitShow,
   gitStatus,
   handleRequest,
@@ -58,6 +59,7 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_log',
   'git_policy_inspect',
   'git_push',
+  'git_repositories_summary',
   'git_show',
   'git_status',
 ]);
@@ -83,6 +85,33 @@ assert.match(policy.result?.content[0].text, /mode: write/);
 let status = await gitStatus({ working_directory: repo }, state);
 assert.equal(status.clean, true);
 assert.equal(String(status.repository_root).replaceAll('\\', '/').endsWith('/repo'), true);
+assert.deepEqual(status.remote_names, ['origin']);
+assert.deepEqual((status.remotes as any[]).map((candidate) => ({ name: candidate.name, fetch_url: candidate.fetch_url, push_url: candidate.push_url })), [
+  { name: 'origin', fetch_url: remote, push_url: remote },
+]);
+assert.equal((status.push_target as any).status, 'unresolved');
+assert.equal((status.push_target as any).reason, 'upstream_not_configured');
+assert.equal((status.push_remediation as any).kind, 'set_upstream_or_push_explicit_target');
+
+const noRemoteRepo = join(root, 'no-remote');
+git(root, ['init', '--initial-branch=main', noRemoteRepo]);
+git(noRemoteRepo, ['config', 'user.email', 'agent@example.test']);
+git(noRemoteRepo, ['config', 'user.name', 'Agent Test']);
+writeFileSync(join(noRemoteRepo, 'README.md'), 'local only\n', 'utf8');
+git(noRemoteRepo, ['add', 'README.md']);
+git(noRemoteRepo, ['commit', '-m', 'Initial local commit']);
+const noRemoteStatus = await gitStatus({ working_directory: noRemoteRepo }, state);
+assert.deepEqual(noRemoteStatus.remote_names, []);
+assert.equal((noRemoteStatus.push_target as any).reason, 'upstream_not_configured');
+const missingRemotePush = await rpc({
+  jsonrpc: '2.0',
+  id: 25,
+  method: 'tools/call',
+  params: { name: 'git_push', arguments: { working_directory: noRemoteRepo, remote: 'origin', branch: 'main' } },
+}, state);
+assert.equal(missingRemotePush.error?.data.code, 'git_push_target_unresolved');
+assert.equal(missingRemotePush.error?.data.details.effective_target.reason, 'remote_not_configured');
+assert.match(missingRemotePush.error?.data.details.remediation.message, /No remote named origin/);
 
 writeFileSync(join(repo, 'README.md'), 'hello\n', 'utf8');
 status = await gitStatus({ working_directory: repo }, state);
@@ -176,6 +205,16 @@ git(repo, ['restore', '--', 'big.txt']);
 
 const pushResult = await gitPush({ working_directory: repo, remote: 'origin', branch: currentBranch(repo) }, state);
 assert.match(pushResult.output, /(new branch|main -> main|master -> master)/);
+
+const repositoriesSummary = await gitRepositoriesSummary({
+  working_directories: [repo, noRemoteRepo],
+  scope_label: 'test-summary',
+  expected_paths_by_repository: { [repo]: [] },
+}, state);
+assert.equal(repositoriesSummary.scope_label, 'test-summary');
+assert.equal(repositoriesSummary.repository_count, 2);
+assert.equal((repositoriesSummary.repositories as any[])[0].remotes[0].name, 'origin');
+assert.equal((repositoriesSummary.repositories as any[])[1].push_target.reason, 'upstream_not_configured');
 
 const statusCall = await rpc({
   jsonrpc: '2.0',

@@ -22,3 +22,8 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 pnpm install
 pnpm test
 ```
+
+## Surface Ergonomics
+
+See `docs/agent-ergonomics-surfaces.md` for the boundary between mechanical MCP
+evidence, multi-repository Git summaries, and agent completion audits.
