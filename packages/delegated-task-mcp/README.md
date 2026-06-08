@@ -36,7 +36,11 @@ Workflow state is durable in the task result. Steps move through `pending`, `run
 
 Large sections are compacted by default and materialized as task-local output references under the configured task root. Default results include counts, truncation flags, and output ref metadata so callers can page into full `worker_refs`, verification, changed files, residual risks, or incoherencies when needed.
 
-Acceptance checks are evidence checks. `delegated-task-mcp` does not run tests or tools directly; worker outputs must provide verification evidence for required tests/tools. Required files are checked read-only under the constrained cwd.
+Conditions are parsed as a small expression language, not arbitrary code: `always`, `on_success`, `on_failure`, `review_failed`, `acceptance:<verdict>`, `step:<step_id>:<status>`, `kind:<kind>:<status>`, `result_has:<text>`, `no_residual_risks`, and nested `all(...)`, `any(...)`, `not(...)`. Malformed calls are rejected by `delegated_task_validate` before workers launch.
+
+Acceptance checks are evidence checks. `delegated-task-mcp` does not run tests or tools directly; worker outputs must provide verification evidence for required tests/tools. Required files are checked read-only under the constrained cwd. Required file checks pass when the file exists and any requested `contains` text is present; required test/tool checks pass only when worker evidence reports the requested command/tool with `passed` status; missing evidence is pending; explicit failed evidence fails. `residual_risk_policy: none_allowed` fails acceptance when residual risks remain.
+
+Cancellation marks the delegated task cancelled and annotates running child worker refs with a cancellation request. It does not yet terminate the underlying worker process; low-level worker cancellation remains a separate worker-delegation capability when supported.
 
 The live worker integration test is separate from deterministic tests. It skips with a diagnostic when the local Codex runtime is unavailable, and passes when a real worker can be launched through `worker-delegation-mcp`.
 

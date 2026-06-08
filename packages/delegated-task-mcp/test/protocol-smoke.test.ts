@@ -66,10 +66,19 @@ try {
   assert.ok(runTool.inputSchema.properties.result_policy);
   assert.ok(runTool.inputSchema.properties.execution);
   assert.ok(runTool.inputSchema.properties.idempotency_key);
+  const constraints = runTool.inputSchema.properties.constraints as Record<string, any>;
+  assert.equal(constraints.additionalProperties, false);
+  assert.ok(constraints.properties.required_mcp_tools);
+  assert.ok(constraints.properties.preflight_paths);
+  assert.equal(constraints.properties.overrides.additionalProperties, false);
+  assert.ok(constraints.properties.overrides.properties.skip_git_repo_check);
+  const acceptance = runTool.inputSchema.properties.acceptance as Record<string, any>;
+  assert.equal(acceptance.additionalProperties, false);
   const resultPolicy = (runTool.inputSchema.properties.result_policy as Record<string, any>).properties;
   assert.ok(resultPolicy.max_worker_refs);
   assert.ok(resultPolicy.max_result_items);
   assert.ok(resultPolicy.compact_completed_worker_refs);
+  assert.equal((runTool.inputSchema.properties.result_policy as Record<string, any>).additionalProperties, false);
 
   const waitTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'delegated_task_wait');
   assert.ok(waitTool.inputSchema.properties.task_id);

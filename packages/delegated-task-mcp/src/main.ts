@@ -167,9 +167,14 @@ export function delegatedTaskValidate(args: JsonRecord, state: State): JsonRecor
 
 export async function delegatedTaskWait(args: JsonRecord, state: State): Promise<JsonRecord> {
   const started = Date.now();
-  const task = await advanceTask(readTask(state, taskId(args)), state, { waitUntilTerminal: true, timeoutMs: integer(args.timeout_ms, 30000, 0, 600000), pollMs: integer(args.poll_ms, 500, 50, 30000) });
+  const timeoutMs = integer(args.timeout_ms, 30000, 0, 600000);
+  const pollMs = integer(args.poll_ms, 500, 50, 30000);
+  const task = await advanceTask(readTask(state, taskId(args)), state, { waitUntilTerminal: true, timeoutMs, pollMs });
   const result = delegatedTaskResultView(task, state, args.include_diagnostics === true);
-  return { schema: 'narada.delegated_task.wait.v1', status: TERMINAL.has(task.status) ? 'finished' : 'timeout', elapsed_ms: Date.now() - started, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, result };
+  const waitStatus = TERMINAL.has(task.status) ? 'finished' : 'timeout';
+  const response: JsonRecord = { schema: 'narada.delegated_task.wait.v1', status: waitStatus, elapsed_ms: Date.now() - started, timeout_ms: timeoutMs, poll_ms: pollMs, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, result };
+  if (waitStatus === 'timeout') response.timeout_diagnostics = { active_steps: activeStepIds(task), message: 'delegated_task_wait timed out before task reached a terminal status' };
+  return response;
 }
 
 export function delegatedTasksList(args: JsonRecord, state: State): JsonRecord {
@@ -245,7 +250,7 @@ export function delegatedTaskEvents(args: JsonRecord, state: State): JsonRecord 
   const offset = integer(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const policyLimit = integer(task.result_policy.max_events, 100, 1, 1000);
   const limit = Math.min(integer(args.limit, Math.min(50, policyLimit), 1, 100), policyLimit);
-  return { schema: 'narada.delegated_task.events.v1', status: 'ok', task_id: id, offset, limit, count: events.length, event_counts_by_kind: eventCountsByKind(events), events: events.slice(offset, offset + limit), has_more: offset + limit < events.length, compacted: events.length > limit };
+  return { schema: 'narada.delegated_task.events.v1', status: 'ok', task_id: id, offset, limit, count: events.length, event_counts_by_kind: eventCountsByKind(events), event_summary_by_step: eventSummaryByStep(events), last_meaningful_event_by_active_step: lastMeaningfulEventByActiveStep(task, events), events: events.slice(offset, offset + limit), has_more: offset + limit < events.length, compacted: events.length > limit };
 }
 
 export function delegatedTaskCancel(args: JsonRecord, state: State): JsonRecord {
@@ -509,11 +514,12 @@ function tool(name: string, description: string, properties: JsonRecord, require
   return { name, description, inputSchema: { type: 'object', properties, required: requiredFields, additionalProperties: false }, annotations: { title: name, readOnlyHint, destructiveHint, idempotentHint, openWorldHint: false }, outputSchema: { type: 'object', additionalProperties: true } };
 }
 function intentSchema(): JsonRecord { return { type: 'object', properties: { objective: { type: 'string' }, instructions: { type: 'string' }, behavior: { type: 'string' }, mode: { type: 'string' } }, additionalProperties: false }; }
-function constraintsSchema(): JsonRecord { return { type: 'object', properties: { authority: { type: 'string' }, cwd: { type: 'string' }, profile: { type: 'string' }, model: { type: 'string' }, max_concurrency: { type: 'integer', minimum: 1 }, max_retries: { type: 'integer', minimum: 0 }, repair_policy: repairPolicySchema() }, additionalProperties: true }; }
+function constraintsSchema(): JsonRecord { return { type: 'object', properties: { authority: { type: 'string', enum: ['read', 'write', 'command'] }, cwd: { type: 'string' }, profile: { type: 'string' }, cognition: { type: 'string', enum: ['low', 'medium', 'high'] }, model: { type: 'string' }, sandbox: { type: 'string' }, runtime: { type: 'string' }, skip_git_repo_check: { type: 'boolean' }, resumable: { type: 'boolean' }, wait_for_completion: { type: 'boolean' }, exit_interview: { type: 'boolean' }, max_concurrency: { type: 'integer', minimum: 1 }, max_retries: { type: 'integer', minimum: 0 }, repair_policy: repairPolicySchema(), required_mcp_tools: { type: 'array', items: { type: 'string' } }, preflight_paths: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, access: { type: 'string', enum: ['read', 'write', 'create'] }, label: { type: 'string' } }, required: ['path', 'access'], additionalProperties: false } }, overrides: constraintOverridesSchema() }, additionalProperties: false }; }
+function constraintOverridesSchema(): JsonRecord { return { type: 'object', properties: { runtime: { type: 'string' }, sandbox: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] }, model: { type: 'string' }, reasoning_effort: { type: 'string' }, config: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } }, skip_git_repo_check: { type: 'boolean' } }, additionalProperties: false }; }
 function workflowSchema(): JsonRecord { return { type: 'object', properties: { strategy: { type: 'string', enum: ['implement', 'implement_review', 'research_synthesize', 'implement_review_repair_verify'] }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, profile: { type: 'string' }, instruction: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, if: { type: 'string' }, acceptance_scope: { type: 'array', items: { type: 'string' } }, constraints: constraintsSchema() }, required: ['id', 'kind'], additionalProperties: false } } }, additionalProperties: false }; }
 function repairPolicySchema(): JsonRecord { return { type: 'object', properties: { strategy: { type: 'string', enum: ['retry_same_step', 'named_repair_step'] }, repair_step_id: { type: 'string' }, require_review_after_repair: { type: 'boolean' } }, additionalProperties: false }; }
-function acceptanceSchema(): JsonRecord { return { type: 'object', properties: { required_files: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] } }, required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] } }, required_tools: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] } }, forbidden_patterns: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] } }, review_questions: { type: 'array', items: { type: 'string' } }, review_quorum: { type: 'object', properties: { min_passed: { type: 'integer', minimum: 0 }, max_failed: { type: 'integer', minimum: 0 } }, additionalProperties: false }, residual_risk_policy: { type: 'string', enum: ['allow', 'none_allowed'] } }, additionalProperties: true }; }
-function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: true }; }
+function acceptanceSchema(): JsonRecord { return { type: 'object', properties: { required_files: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, contains: { type: 'string' } }, required: ['path'], additionalProperties: false }] } }, required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, required_tools: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, required: ['name'], additionalProperties: false }] } }, forbidden_patterns: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { pattern: { type: 'string' }, scope: { type: 'string' } }, required: ['pattern'], additionalProperties: false }] } }, review_questions: { type: 'array', items: { type: 'string' } }, review_quorum: { type: 'object', properties: { min_passed: { type: 'integer', minimum: 0 }, max_failed: { type: 'integer', minimum: 0 } }, additionalProperties: false }, residual_risk_policy: { type: 'string', enum: ['allow', 'none_allowed'] } }, additionalProperties: false }; }
+function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
 function executionSchema(): JsonRecord { return { type: 'object', properties: { start: { type: 'boolean', default: true }, wait_for_completion: { type: 'boolean', default: false }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 0 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, resumable: { type: 'boolean', default: true }, exit_interview: { type: 'boolean', default: false }, max_concurrency: { type: 'integer', minimum: 1, maximum: 32, default: 10 }, max_retries: { type: 'integer', minimum: 0, maximum: 10, default: 0 } }, additionalProperties: false }; }
 
 function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { return { schema: 'narada.delegated_task.run.v1', status: created ? 'accepted_for_execution' : 'existing', task_id: task.task_id, task_status: task.status, created, task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, worker_refs: rec(task.result).worker_refs ?? [] }; }
@@ -538,6 +544,9 @@ function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): Jso
   }
   const cycles = detectCycles(steps);
   for (const cycle of cycles) diagnostics.push({ severity: 'error', code: 'workflow_cycle', cycle });
+  diagnostics.push(...unknownKeyDiagnostics(rec(args.constraints), ['authority', 'cwd', 'profile', 'cognition', 'model', 'sandbox', 'runtime', 'skip_git_repo_check', 'resumable', 'wait_for_completion', 'exit_interview', 'max_concurrency', 'max_retries', 'repair_policy', 'required_mcp_tools', 'preflight_paths', 'overrides'], 'constraints'));
+  diagnostics.push(...unknownKeyDiagnostics(rec(rec(args.constraints).overrides), ['runtime', 'sandbox', 'model', 'reasoning_effort', 'config', 'skip_git_repo_check'], 'constraint_overrides'));
+  diagnostics.push(...unknownKeyDiagnostics(rec(args.result_policy), ['include_diagnostics_by_default', 'expose_worker_refs', 'compact_completed_worker_refs', 'max_events', 'max_worker_refs', 'max_result_items'], 'result_policy'));
   const acceptanceDiagnostics = validateAcceptanceContract(rec(args.acceptance));
   diagnostics.push(...acceptanceDiagnostics);
   const repairPolicy = rec(rec(args.constraints).repair_policy ?? rec(args.execution).repair_policy);
@@ -706,6 +715,7 @@ function detectCycles(steps: WorkflowStep[]): string[][] {
 }
 function validateAcceptanceContract(acceptance: JsonRecord): JsonRecord[] {
   const diagnostics: JsonRecord[] = [];
+  diagnostics.push(...unknownKeyDiagnostics(acceptance, ['required_files', 'required_tests', 'required_tools', 'forbidden_patterns', 'review_questions', 'review_quorum', 'residual_risk_policy'], 'acceptance'));
   for (const item of acceptanceItems(acceptance.required_files)) {
     if (!String(item.path ?? item.target ?? item.value ?? '').trim()) diagnostics.push({ severity: 'error', code: 'acceptance_required_file_missing_path', item });
   }
@@ -724,6 +734,11 @@ function validateAcceptanceContract(acceptance: JsonRecord): JsonRecord[] {
   }
   return diagnostics;
 }
+function unknownKeyDiagnostics(value: JsonRecord, allowed: string[], scope: string): JsonRecord[] {
+  if (Object.keys(value).length === 0) return [];
+  const allowedSet = new Set(allowed);
+  return Object.keys(value).filter((key) => !allowedSet.has(key)).map((key) => ({ severity: 'error', code: `${scope}_unknown_key`, scope, key, allowed }));
+}
 function runningCount(states: Record<string, StepState>): number { return Object.values(states).filter((state) => state.status === 'running').length; }
 function workerRefs(task: Task): JsonRecord[] { return records(rec(task.result).worker_refs); }
 function upsertWorkerRef(task: Task, workerRef: JsonRecord, output: JsonRecord): void {
@@ -734,7 +749,7 @@ function upsertWorkerRef(task: Task, workerRef: JsonRecord, output: JsonRecord):
   task.result = { ...rec(task.result), worker_refs: refs, worker_ref_count: refs.length };
 }
 function summarizeWorkerRef(step: WorkflowStep, result: JsonRecord): JsonRecord { return { step_id: step.id, step_kind: step.kind, run_id: result.run_id, worker_session_id: result.worker_session_id ?? null, status: String(result.status ?? 'unknown'), confidence: result.confidence ?? null, summary: result.summary ?? '', run_dir: result.run_dir, result_ref: result.result_ref ?? null }; }
-function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], error: output.error ?? null }; }
+function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null }; }
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const constraints = { ...task.constraints, ...step.constraints };
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
@@ -742,6 +757,7 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
 }
 function workerInstruction(task: Task, step: WorkflowStep): string { return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, `Step kind: ${step.kind}`, `Acceptance: ${JSON.stringify(task.acceptance)}`, 'Return a concise result with changes, verification, residual risks, and observed incoherencies.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord { return { total: Object.keys(states).length, ...stepStatusCounts(task, states), running_run_ids: Object.values(states).filter((step) => step.status === 'running').map((step) => step.current_run_id).filter(Boolean) }; }
+function activeStepIds(task: Task): string[] { return Object.entries(stepStateMap(task)).filter(([, step]) => step.status === 'running').map(([stepId]) => stepId); }
 function stepStatusCounts(task: Task, states?: Record<string, StepState>): JsonRecord { const counts: Record<string, number> = {}; for (const step of Object.values(states ?? stepStateMap(task))) counts[step.status] = (counts[step.status] ?? 0) + 1; return counts; }
 function summaryForTask(task: Task, states: Record<string, StepState>, acceptance: { verdict: string }): string { const progress = progressSummary(task, states); return `delegated task ${task.status}; steps=${progress.total}; acceptance=${acceptance.verdict}`; }
 function stepCounts(workflow: JsonRecord): JsonRecord { const by_kind: Record<string, number> = {}; const steps = workflowSteps(workflow); for (const step of steps) by_kind[step.kind] = (by_kind[step.kind] ?? 0) + 1; return { total: steps.length, by_kind }; }
@@ -761,12 +777,23 @@ function reviewSignalsFromResult(result: JsonRecord): { passed: number; failed: 
   let failed = 0;
   let running = 0;
   for (const ref of refs) {
-    const text = JSON.stringify(ref);
     if (ref.status === 'running') running += 1;
-    else if (ref.status === 'completed' && !text.includes('"status":"failed"') && !text.includes('"status":"contradicted"')) passed += 1;
+    else if (ref.status === 'completed' && !reviewRefHasExplicitFailure(ref)) passed += 1;
     else failed += 1;
   }
   return { passed, failed, running };
+}
+function reviewRefHasExplicitFailure(ref: JsonRecord): boolean {
+  const output = rec(ref.output);
+  const verdicts = [
+    ref.review_verdict,
+    ref.acceptance_verdict,
+    ref.verdict,
+    output.review_verdict,
+    output.acceptance_verdict,
+    output.verdict,
+  ].map((value) => String(value ?? '').toLowerCase());
+  return verdicts.some((value) => value === 'failed' || value === 'contradicted' || value === 'rejected');
 }
 function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDiagnostics: boolean, state: State): JsonRecord {
   const maxWorkerRefs = integer(resultPolicy.max_worker_refs, state.resultCompaction.maxWorkerRefs, 1, 1000);
@@ -823,6 +850,34 @@ function writeTask(state: State, task: Task): void { const paths = taskPaths(sta
 function appendEvent(state: State, id: string, event_kind: string, details: JsonRecord): JsonRecord { const paths = taskPaths(state, id); mkdirSync(dirname(paths.eventsPath), { recursive: true }); const event = { schema: 'narada.delegated_task.event.v1', event_id: `evt_${stamp()}_${randomUUID().slice(0, 8)}`, task_id: id, event_kind, recorded_at: now(), details }; appendFileSync(paths.eventsPath, `${JSON.stringify(event)}\n`, 'utf8'); return event; }
 function readEvents(state: State, id: string): JsonRecord[] { const path = taskPaths(state, id).eventsPath; return existsSync(path) ? readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as JsonRecord) : []; }
 function eventCountsByKind(events: JsonRecord[]): Record<string, number> { const counts: Record<string, number> = {}; for (const event of events) { const kind = String(event.event_kind ?? 'unknown'); counts[kind] = (counts[kind] ?? 0) + 1; } return counts; }
+function eventSummaryByStep(events: JsonRecord[]): Record<string, JsonRecord> {
+  const summary: Record<string, JsonRecord> = {};
+  for (const event of events) {
+    const details = rec(event.details);
+    const stepId = opt(details.step_id);
+    if (!stepId) continue;
+    const current = rec(summary[stepId]);
+    const eventKind = String(event.event_kind ?? 'unknown');
+    const counts = rec(current.event_counts_by_kind);
+    counts[eventKind] = Number(counts[eventKind] ?? 0) + 1;
+    summary[stepId] = { step_id: stepId, event_count: Number(current.event_count ?? 0) + 1, event_counts_by_kind: counts, last_event: compactEvent(event) };
+  }
+  return summary;
+}
+function lastMeaningfulEventByActiveStep(task: Task, events: JsonRecord[]): Record<string, JsonRecord> {
+  const latestByStep: Record<string, JsonRecord> = {};
+  for (const event of events) {
+    const details = rec(event.details);
+    const stepId = opt(details.step_id);
+    if (stepId) latestByStep[stepId] = compactEvent(event);
+  }
+  const active: Record<string, JsonRecord> = {};
+  for (const [stepId, state] of Object.entries(rec(task.result.step_states))) {
+    if (rec(state).status === 'running' && latestByStep[stepId]) active[stepId] = latestByStep[stepId];
+  }
+  return active;
+}
+function compactEvent(event: JsonRecord): JsonRecord { return { event_id: event.event_id, event_kind: event.event_kind, recorded_at: event.recorded_at, details: event.details }; }
 function taskId(args: JsonRecord): string { return required(args.task_id, 'delegated_task_requires_task_id'); }
 function required(value: unknown, code: string): string { const text = String(value ?? '').trim(); if (!text) throw diag(code); return text; }
 function opt(value: unknown): string | null { const text = String(value ?? '').trim(); return text || null; }

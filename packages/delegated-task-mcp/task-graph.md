@@ -66,6 +66,7 @@ Acceptance:
 Expose the tool set:
 
 - `delegated_task_run`
+- `delegated_task_policy_inspect`
 - `delegated_task_validate`
 - `delegated_task_status`
 - `delegated_task_wait`
@@ -83,6 +84,7 @@ Acceptance:
 - Workflow execution supports durable step states, dependency resolution, fan-out, join/gate/note steps, simple conditions, retries, worker status refresh, and result consolidation.
 - Validation rejects invalid workflow graphs, unsupported conditions, policy violations, and malformed acceptance contracts before execution.
 - Summary and compact result views preserve review ergonomics while exposing output refs for large evidence sections.
+- Events expose counts by kind, summaries by step, and last meaningful events for active steps.
 
 ### F. add behavior tests
 
@@ -96,8 +98,8 @@ Acceptance:
 - Wait returns task-level completion state without requiring callers to poll worker runs.
 - List rediscovers active and terminal delegated tasks.
 - Acceptance evaluation covers required files, required tests/tools from evidence, and forbidden patterns.
-- Events support limit/offset.
-- Cancel changes status and appends event.
+- Events support limit/offset and step-level summaries.
+- Cancel changes status, appends an event, and annotates running child worker refs with cancellation requests.
 - Unknown/missing task failures are diagnostic.
 
 ### G. add protocol smoke tests
@@ -109,6 +111,7 @@ Acceptance:
 - Server name is `delegated-task-mcp`.
 - Tools are ordered and named as target.
 - Required schema fields are asserted.
+- Strict schema boundaries for constraints, acceptance, and result policy are asserted.
 
 ### H. run package tests
 

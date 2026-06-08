@@ -40,6 +40,7 @@ try {
         worker_session_id: null,
         confidence: 'complete',
         summary: instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
+        acceptance_verdict: instruction.includes('explicit review failure') ? 'failed' : undefined,
         changed_files: ['src/main.ts'],
         verification_results: [{ tool: 'structured-command', command: 'pnpm test:delegated-task', status: 'passed' }],
         residual_risks: status === 'running' ? ['worker still running'] : [],
@@ -71,6 +72,18 @@ try {
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'unknown_dependency'), true);
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'invalid_condition'), true);
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'acceptance_residual_risk_policy_invalid'), true);
+
+  const unknownShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Unknown keys',
+    constraints: { authority: 'read', cwd: root, surprise: true },
+    acceptance: { required_files: ['src/main.ts'], surprise: true },
+    result_policy: { max_worker_refs: 2, surprise: true },
+  });
+  const unknownShapeView = unknownShape.result.structuredContent as Record<string, any>;
+  assert.equal(unknownShapeView.status, 'rejected');
+  assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'constraints_unknown_key'), true);
+  assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'acceptance_unknown_key'), true);
+  assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'result_policy_unknown_key'), true);
 
   const preset = await callTool(state, 'delegated_task_validate', {
     objective: 'Preset graph',
@@ -150,12 +163,23 @@ try {
   assert.equal(summaryView.child_evidence.length, 3);
   assert.deepEqual(summaryView.changed_files, ['src/main.ts']);
 
+  const failedReviewRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise explicit review failure',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'review', kind: 'review', instruction: 'explicit review failure' }] },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 } },
+    execution: { wait_for_completion: true },
+  });
+  const failedReviewView = failedReviewRun.result.structuredContent as Record<string, any>;
+  assert.equal(failedReviewView.task_status, 'failed');
+
   const cappedEvents = await callTool(state, 'delegated_task_events', { task_id: runResult.task_id, limit: 10, offset: 0 });
   const cappedEventsView = cappedEvents.result.structuredContent as Record<string, any>;
   assert.equal(cappedEventsView.limit, 4);
   assert.equal(cappedEventsView.events.length, 4);
   assert.equal(cappedEventsView.compacted, true);
   assert.equal(cappedEventsView.event_counts_by_kind.task_created, 1);
+  assert.equal(Object.values(cappedEventsView.event_summary_by_step).some((step: any) => step.event_counts_by_kind.step_completed === 1), true);
 
   const conditionalRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise rich conditions',
@@ -193,6 +217,16 @@ try {
   const limitedView = limitedRun.result.structuredContent as Record<string, any>;
   assert.equal(limitedView.task_status, 'running');
   assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - beforeConcurrencyCalls, 2);
+  const limitedEvents = await callTool(state, 'delegated_task_events', { task_id: limitedView.task_id, limit: 10 });
+  const limitedEventsView = limitedEvents.result.structuredContent as Record<string, any>;
+  assert.ok(limitedEventsView.last_meaningful_event_by_active_step.a);
+  assert.ok(limitedEventsView.last_meaningful_event_by_active_step.b);
+  const cancelled = await callTool(state, 'delegated_task_cancel', { task_id: limitedView.task_id, reason: 'caller stopped concurrency test' });
+  assert.equal((cancelled.result.structuredContent as Record<string, any>).task_status, 'cancelled');
+  const cancelledResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, include_diagnostics: true });
+  const cancelledResultView = cancelledResult.result.structuredContent as Record<string, any>;
+  assert.equal(cancelledResultView.result.acceptance_verdict, 'cancelled');
+  assert.equal(cancelledResultView.result.worker_refs.every((ref: Record<string, any>) => ref.cancellation.requested === true), true);
 
   const asyncRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise async wait',
