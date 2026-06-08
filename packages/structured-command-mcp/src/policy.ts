@@ -18,17 +18,24 @@ const DEFAULT_ALLOWED_COMMANDS = new Set([
   'wrangler',
 ]);
 
+const DEFAULT_ALLOWED_PREFIXES = [
+  ['pwsh', '-file'],
+  ['pwsh', '-noprofile', '-file'],
+  ['pwsh', '-noprofile', '-executionpolicy', 'bypass', '-file'],
+];
+
 export function createExecutionPolicy(options: unknown = {}) {
   const optionsRecord = asRecord(options);
   const allowedRoots = normalizeAllowedRoots(optionsRecord.allowedRoots);
   const allowedCommands = new Set([...DEFAULT_ALLOWED_COMMANDS, ...normalizeList(optionsRecord.allowedCommands).map((item) => item.toLowerCase())]);
-  const allowedPrefixes = normalizeList(optionsRecord.allowedPrefixes).map((prefix) => normalizePrefix(prefix));
+  const allowedPrefixes = [...DEFAULT_ALLOWED_PREFIXES, ...normalizeList(optionsRecord.allowedPrefixes).map((prefix) => normalizePrefix(prefix))];
   const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(optionsRecord.blockedCommands).map((item) => item.toLowerCase())]);
   return {
     allowedRoots,
     allowedCommands,
     defaultAllowedCommands: DEFAULT_ALLOWED_COMMANDS,
     allowedPrefixes,
+    defaultAllowedPrefixes: DEFAULT_ALLOWED_PREFIXES,
     blockedCommands,
     maxTimeoutMs: clampInteger(optionsRecord.maxTimeoutMs, 1, DEFAULT_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
     maxOutputBytes: clampInteger(optionsRecord.maxOutputBytes, 1, 20 * 1024 * 1024, 1024 * 1024),
@@ -114,6 +121,7 @@ export function publicExecutionPolicy(policy) {
     allowed_commands: [...policy.allowedCommands].sort(),
     default_allowed_commands: [...(policy.defaultAllowedCommands ?? [])].sort(),
     allowed_prefixes: policy.allowedPrefixes.map((prefix) => prefix.join(' ')),
+    default_allowed_prefixes: (policy.defaultAllowedPrefixes ?? []).map((prefix) => prefix.join(' ')),
     blocked_commands: [...policy.blockedCommands].sort(),
     max_timeout_ms: policy.maxTimeoutMs,
     max_output_bytes: policy.maxOutputBytes,

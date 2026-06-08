@@ -50,7 +50,7 @@ Policy is configured at server launch. Common flags include:
 - `--audit-log-dir <path>`: append execution audit records.
 - timeout/output limit flags, depending on server launch wiring.
 
-By default, selected deployment tools such as `railway` and `wrangler` may be admitted by policy. They are still executed as argv arrays under the same root, timeout, and output controls.
+By default, selected deployment tools such as `railway` and `wrangler` may be admitted by policy. PowerShell Core script execution is admitted as `pwsh -File ...`, `pwsh -NoProfile -File ...`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File ...`; `pwsh -Command` and Windows PowerShell remain disallowed unless site policy changes. All commands are still executed as argv arrays under the same root, timeout, and output controls.
 
 ## Output Refs
 

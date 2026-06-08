@@ -68,6 +68,37 @@ for (const command of ['railway', 'wrangler']) {
   assert.deepEqual(decision.reasons, []);
 }
 
+const defaultPwshFile = decideStructuredCommandExecution({
+  command: 'pwsh.exe',
+  args: ['-File', join(root, 'tool.ps1')],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(defaultPwshFile.status, 'allowed');
+assert.deepEqual(defaultPwshFile.reasons, []);
+
+const defaultPwshNoProfileFile = decideStructuredCommandExecution({
+  command: 'pwsh',
+  args: ['-NoProfile', '-File', join(root, 'tool.ps1')],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(defaultPwshNoProfileFile.status, 'allowed');
+assert.deepEqual(defaultPwshNoProfileFile.reasons, []);
+
+const defaultPwshExecutionPolicyFile = decideStructuredCommandExecution({
+  command: 'pwsh.exe',
+  args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'tool.ps1')],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(defaultPwshExecutionPolicyFile.status, 'allowed');
+assert.deepEqual(defaultPwshExecutionPolicyFile.reasons, []);
+const defaultPwshCommand = decideStructuredCommandExecution({
+  command: 'pwsh',
+  args: ['-Command', 'Write-Output nope'],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(defaultPwshCommand.status, 'refused');
+assert.ok(defaultPwshCommand.reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
+
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 
@@ -152,7 +183,7 @@ const refusedCall = await rpc({
   method: 'tools/call',
   params: {
     name: 'structured_command_execute',
-    arguments: { command: 'pwsh.exe', args: ['-File', join(root, 'tool.ps1')], working_directory: root },
+    arguments: { command: 'pwsh.exe', args: ['-Command', 'Write-Output nope'], working_directory: root },
   },
 }, state);
 assert.match(refusedCall.result.content[0].text, /structured_command_execute: refused/);
@@ -196,6 +227,11 @@ assert.equal(policy.result.structuredContent.output_ref, undefined);
 assert.equal(policy.result.structuredContent.allowed_commands.includes('railway'), true);
 assert.equal(policy.result.structuredContent.allowed_commands.includes('wrangler'), true);
 assert.deepEqual(policy.result.structuredContent.default_allowed_commands, ['railway', 'wrangler']);
+assert.deepEqual(policy.result.structuredContent.default_allowed_prefixes, [
+  'pwsh -file',
+  'pwsh -noprofile -file',
+  'pwsh -noprofile -executionpolicy bypass -file',
+]);
 assert.equal(policy.result.structuredContent.shell_interpolation, false);
 assert.deepEqual(policy.result.structuredContent.allowed_roots, [root]);
 
