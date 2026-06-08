@@ -210,7 +210,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     open_questions: stringArraySchema(),
     next_actions: stringArraySchema(),
     changes: { type: 'array', items: objectSchema({ path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['path', 'status', 'summary']) },
-    verification_results: { type: 'array', items: objectSchema({ tool: { type: 'string' }, command: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['status', 'summary']) },
+    verification_results: { type: 'array', items: objectSchema({ tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, ['tool', 'command', 'status', 'summary']) },
     exit_interview: { type: ['object', 'null'], properties: {
       ergonomics_feedback: { type: 'string' },
       friction_points: stringArraySchema(),

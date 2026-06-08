@@ -7,9 +7,9 @@ export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
 export type WorkerChange = { path: string; status: string; summary: string };
-export type WorkerVerification = { tool?: string; command?: string; status: string; summary: string };
+export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string };
 export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; exit_interview?: WorkerExitInterview };
+export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; exit_interview: WorkerExitInterview | null };
 export type WorkerOutputParseResult =
   | { ok: true; data: WorkerOutput }
   | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
@@ -179,12 +179,12 @@ export function parseLastMessage(path: string): WorkerOutputParseResult {
   const verification: WorkerVerification[] = [];
   for (let i = 0; i < record.verification.length; i += 1) {
     const item = asVerification(record.verification[i]);
-    if (!item) return { ok: false, reason: 'invalid_shape', message: `verification[${i}] must have string status and summary, with optional string tool or command` };
+    if (!item) return { ok: false, reason: 'invalid_shape', message: `verification[${i}] must have nullable string tool and command, plus string status and summary` };
     verification.push(item);
   }
-  const exitInterview = record.exit_interview === undefined ? undefined : asExitInterview(record.exit_interview);
-  if (record.exit_interview !== undefined && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
-  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, ...(exitInterview ? { exit_interview: exitInterview } : {}) } };
+  const exitInterview = record.exit_interview === undefined || record.exit_interview === null ? null : asExitInterview(record.exit_interview);
+  if (record.exit_interview !== undefined && record.exit_interview !== null && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must be null or include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
+  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, exit_interview: exitInterview } };
 }
 
 export function parseResult(runRecord: { lastMessagePath: string }): WorkerOutputParseResult {
@@ -266,17 +266,14 @@ function asChange(value: unknown): WorkerChange | null {
 function asVerification(value: unknown): WorkerVerification | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  if (!Object.hasOwn(record, 'tool') || !Object.hasOwn(record, 'command')) return null;
+  if (!nullableString(record.tool) || !nullableString(record.command)) return null;
   if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
-  const item: WorkerVerification = { status: record.status, summary: record.summary };
-  if (record.tool !== undefined) {
-    if (typeof record.tool !== 'string') return null;
-    item.tool = record.tool;
-  }
-  if (record.command !== undefined) {
-    if (typeof record.command !== 'string') return null;
-    item.command = record.command;
-  }
-  return item;
+  return { tool: record.tool, command: record.command, status: record.status, summary: record.summary };
+}
+
+function nullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
 }
 
 function asExitInterview(value: unknown): WorkerExitInterview | null {

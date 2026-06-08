@@ -64,7 +64,7 @@ export function writeWorkerOutputSchema(path: string): void {
   writeJson(path, {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'exit_interview'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -73,9 +73,9 @@ export function writeWorkerOutputSchema(path: string): void {
       edits_performed: { type: 'boolean' },
       target_state_changed: { type: 'boolean' },
       changes: { type: 'array', items: { type: 'object', required: ['path', 'status', 'summary'], properties: { path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
-      verification: { type: 'array', items: { type: 'object', required: ['status', 'summary'], properties: { tool: { type: 'string' }, command: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
+      verification: { type: 'array', items: { type: 'object', required: ['tool', 'command', 'status', 'summary'], properties: { tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
       exit_interview: {
-        type: 'object',
+        type: ['object', 'null'],
         required: ['ergonomics_feedback', 'friction_points', 'missing_affordances', 'observed_incoherencies', 'suggested_improvements'],
         properties: {
           ergonomics_feedback: { type: 'string' },

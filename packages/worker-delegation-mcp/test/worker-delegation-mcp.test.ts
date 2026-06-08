@@ -36,7 +36,8 @@ process.stdin.on('end', () => {
     edits_performed: prompt.includes('Implement:'),
     target_state_changed: prompt.includes('Implement:'),
     changes: prompt.includes('Implement:') ? [{ path: 'result.txt', status: 'modified', summary: 'fake edit result' }] : [],
-    verification: [{ tool: 'fake-codex', status: 'passed', summary: 'fake worker completed' }]
+    verification: [{ tool: 'fake-codex', command: null, status: 'passed', summary: 'fake worker completed' }],
+    exit_interview: null
   };
   if (prompt.includes('Exit interview')) output.exit_interview = {
     ergonomics_feedback: 'fake worker found the exit interview easy to answer',
@@ -64,7 +65,8 @@ process.stdin.on('end', () => {
     edits_performed: false,
     target_state_changed: false,
     changes: [],
-    verification: [{ tool: 'fake-codex', status: 'failed', summary: 'simulated tool error' }]
+    verification: [{ tool: 'fake-codex', command: null, status: 'failed', summary: 'simulated tool error' }],
+    exit_interview: null
   }));
 });
 `, 'utf8');
@@ -247,6 +249,12 @@ assert.match(promptResource.result?.contents[0].text, /Do not call any worker_\*
 for (const file of ['request.json', 'executor_request.json', 'resolved_worker_config.json', 'worker_prompt.txt', 'worker_invocation.json', 'events.jsonl', 'diagnostic.log', 'last_message.json', 'result.json', 'worker_output.schema.json']) {
   assert.equal(existsSync(join(completedRunDir, file)), true, file);
 }
+const workerOutputSchema = JSON.parse(readFileSync(join(completedRunDir, 'worker_output.schema.json'), 'utf8'));
+assert.equal(workerOutputSchema.required.includes('exit_interview'), true);
+assert.deepEqual(workerOutputSchema.properties.verification.items.required, ['tool', 'command', 'status', 'summary']);
+assert.deepEqual(workerOutputSchema.properties.verification.items.properties.tool.type, ['string', 'null']);
+assert.deepEqual(workerOutputSchema.properties.verification.items.properties.command.type, ['string', 'null']);
+assert.deepEqual(workerOutputSchema.properties.exit_interview.type, ['object', 'null']);
 const request = JSON.parse(readFileSync(join(completedRunDir, 'request.json'), 'utf8'));
 assert.equal(request.intent.instruction, 'run with allowed config');
 assert.equal(request.constraints.cwd, root);
@@ -351,7 +359,7 @@ writeFileSync(join(orphanedRunDir, 'last_message.json'), JSON.stringify({
   edits_performed: true,
   target_state_changed: true,
   changes: [{ path: 'artifact.txt', status: 'modified', summary: 'recovered change' }],
-  verification: [{ tool: 'manual', status: 'passed', summary: 'output parsed' }],
+  verification: [{ tool: 'manual', command: null, status: 'passed', summary: 'output parsed' }],
 }), 'utf8');
 writeFileSync(join(orphanedRunDir, 'result.json'), JSON.stringify({
   schema: 'narada.worker.run.v1',
@@ -592,6 +600,17 @@ writeFileSync(invalidMessagePath, JSON.stringify({ summary: 'bad', deliverables:
 const invalidMessage = parseLastMessage(invalidMessagePath);
 assert.equal(invalidMessage.ok, false);
 assert.equal(invalidMessage.ok ? '' : invalidMessage.reason, 'invalid_shape');
+const nullableVerificationMessagePath = join(root, 'nullable-verification-last-message.json');
+writeFileSync(nullableVerificationMessagePath, JSON.stringify({ summary: 'ok', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: null, command: null, status: 'passed', summary: 'nullable accepted' }] }), 'utf8');
+const nullableVerificationMessage = parseLastMessage(nullableVerificationMessagePath);
+assert.equal(nullableVerificationMessage.ok, true);
+if (nullableVerificationMessage.ok) assert.deepEqual(nullableVerificationMessage.data.verification[0], { tool: null, command: null, status: 'passed', summary: 'nullable accepted' });
+if (nullableVerificationMessage.ok) assert.equal(nullableVerificationMessage.data.exit_interview, null);
+const missingVerificationCommandPath = join(root, 'missing-verification-command-last-message.json');
+writeFileSync(missingVerificationCommandPath, JSON.stringify({ summary: 'bad', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: 'test', status: 'passed', summary: 'missing command rejected' }] }), 'utf8');
+const missingVerificationCommand = parseLastMessage(missingVerificationCommandPath);
+assert.equal(missingVerificationCommand.ok, false);
+assert.match(missingVerificationCommand.ok ? '' : missingVerificationCommand.message, /nullable string tool and command/);
 
 const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), codexCommand: join(root, 'missing-codex.exe') });
 const spawnFailure = await rpc({
