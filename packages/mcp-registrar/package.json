@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/mcp-registrar",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers (opencode, Kimi, Codex).",
+  "bin": {
+    "mcp-registrar": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

@@ -68,6 +68,8 @@ try {
   const advanceTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'sop_run_advance');
   assert.ok(advanceTool.inputSchema.properties.run_id);
   assert.ok(advanceTool.inputSchema.properties.step_id);
+  assert.ok(advanceTool.inputSchema.properties.result);
+  assert.ok(advanceTool.inputSchema.properties.principal);
 
   const eventsTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'sop_run_events');
   assert.ok(eventsTool.inputSchema.properties.limit);

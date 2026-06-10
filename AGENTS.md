@@ -22,6 +22,8 @@ Current packages:
 - `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface.
 - `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface.
 - `@narada2/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution.
+- `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.
+- `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
 
 ## Development Rules
 
@@ -52,6 +54,8 @@ pnpm test:sonar-site-ops
 pnpm test:agent-context
 pnpm test:delegated-task
 pnpm test:sop
+pnpm test:scheduler
+pnpm test:registrar
 ```
 
 ## Verification Expectations
@@ -70,6 +74,8 @@ Before handing off changes:
 - `worker-delegation-mcp` owns policy-gated delegation to worker runtimes; it is not a general shell, task lifecycle, or recursive worker-control surface.
 - `delegated-task-mcp` owns durable delegated task records, workflow plans, acceptance contracts, events, and handoff packets; it must not become a shell, git, filesystem mutation, worker runtime, or Narada workboard surface.
 - `sop-mcp` owns versioned SOP templates and durable run execution; it orchestrates procedural steps but does not own tasks, workers, filesystem access, or shell execution directly — it delegates those to their respective MCP surfaces.
+- `scheduler-mcp` owns Windows Task Scheduler registration, inspection, and execution; it must not become a general shell or process orchestration surface — scheduling policy is defined at the caller level.
+- `mcp-registrar` owns the surface-to-site-to-carrier weave; it edits config files (JSON/TOML) but does not start or stop servers or mutate the surfaces themselves.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.

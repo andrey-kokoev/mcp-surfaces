@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/scheduler-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.",
+  "bin": {
+    "scheduler-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/scheduler-mcp.test.js && node dist/test/protocol-smoke.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}
