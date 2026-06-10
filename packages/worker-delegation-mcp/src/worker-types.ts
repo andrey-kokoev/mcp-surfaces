@@ -74,8 +74,10 @@ export type WorkerEditToolInput = {
   overrides?: WorkerConstraintOverrides;
 };
 
+export type SupportedRuntime = 'codex' | 'deepseek-api';
+
 export type WorkerResolvedExecutionPolicy = {
-  runtime: 'codex';
+  runtime: SupportedRuntime;
   authority: WorkerAuthority;
   cognition: WorkerCognition;
   command: string;

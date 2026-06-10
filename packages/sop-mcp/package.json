@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/sop-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Standard operating procedure MCP surface for versioned runbook templates and durable run execution.",
+  "bin": {
+    "sop-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/sop-mcp.test.js && node dist/test/protocol-smoke.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

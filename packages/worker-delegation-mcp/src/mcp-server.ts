@@ -280,7 +280,7 @@ function workerOutputRefFromUri(uri: string) {
 }
 
 export function parseArgs(argv: string[]): Record<string, unknown> {
-  const parsed: Record<string, unknown> & { allowedRoots?: string[]; allowedSandboxes?: string[]; allowedConfigKeys?: string[]; codexCommandArgs?: string[] } = {};
+  const parsed: Record<string, unknown> & { allowedRoots?: string[]; allowedSandboxes?: string[]; allowedConfigKeys?: string[]; codexCommandArgs?: string[]; deepseekCommandArgs?: string[] } = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -304,6 +304,11 @@ export function parseArgs(argv: string[]): Record<string, unknown> {
     if (key === 'codexCommandArg' || key === 'codexCommandArgs') {
       if (!next || next.startsWith('--')) throw diagnosticError('worker_invalid_cli_args', 'missing value for --codex-command-arg');
       parsed.codexCommandArgs = [...(parsed.codexCommandArgs ?? []), next]; i += 1;
+      continue;
+    }
+    if (key === 'deepseekCommandArg' || key === 'deepseekCommandArgs') {
+      if (!next || next.startsWith('--')) throw diagnosticError('worker_invalid_cli_args', 'missing value for --deepseek-command-arg');
+      parsed.deepseekCommandArgs = [...(parsed.deepseekCommandArgs ?? []), next]; i += 1;
       continue;
     }
     if (next && !next.startsWith('--')) { parsed[key] = next; i += 1; } else { parsed[key] = true; }

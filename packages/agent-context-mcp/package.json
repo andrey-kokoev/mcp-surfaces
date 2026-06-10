@@ -12,6 +12,11 @@
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
+    },
+    "./package.json": "./package.json",
+    "./session-start": {
+      "types": "./dist/src/session-start.d.ts",
+      "default": "./dist/src/session-start.js"
     }
   },
   "scripts": {

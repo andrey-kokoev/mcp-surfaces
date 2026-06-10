@@ -1,7 +1,8 @@
 import { constants, accessSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
-import { buildCodexArgv, buildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
+import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
+import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
 import { defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { showOutput } from './output-ref.js';
@@ -131,7 +132,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
-  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy);
+  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
@@ -145,40 +146,83 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 
   const runRecord = createRunRecord(state.policy);
   writeWorkerOutputSchema(runRecord.schemaPath);
-  const codexRuntime = state.policy.runtimes.codex;
   const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
-  const argv = buildCodexArgv({
-    cwd,
-    sandbox,
-    schemaPath: runRecord.schemaPath,
-    lastMessagePath: runRecord.lastMessagePath,
-    workerSessionId: resumeSessionId ?? undefined,
-    ephemeral,
-    skipGitRepoCheck,
-    config: resolvedConfigInput.config,
-  });
+
   const environment = environmentForWorker(state.env);
-  const resolvedWorkerConfig: ResolvedWorkerConfig = {
-    runtime,
-    authority,
-    cognition,
-    command: codexRuntime.command,
-    command_args: codexRuntime.commandArgs,
-    argv,
-    cwd,
-    sandbox,
-    model: resolvedConfigInput.model,
-    reasoning_effort: resolvedConfigInput.reasoning_effort,
-    config: resolvedConfigInput.config,
-    skip_git_repo_check: skipGitRepoCheck,
-    resumable,
-    ephemeral,
-    json_events: codexRuntime.jsonEvents,
-    prompt_byte_length: promptBytes,
-    max_output_bytes: state.policy.maxOutputBytes,
-    max_run_ms: state.policy.maxRunMs,
-    environment_keys: Object.keys(environment).sort(),
-  };
+
+  let resolvedWorkerConfig: ResolvedWorkerConfig;
+  let invocation: Invocation;
+
+  if (runtime === 'deepseek-api') {
+    const deepseekRuntime = state.policy.runtimes.deepseek;
+    const mcpConfigPath = environment.NARADA_WORKER_MCP_CONFIG || null;
+    const argv = buildDeepseekArgv({
+      schemaPath: runRecord.schemaPath,
+      lastMessagePath: runRecord.lastMessagePath,
+      model: resolvedConfigInput.model,
+      reasoningEffort: resolvedConfigInput.reasoning_effort,
+      mcpConfigPath,
+      workerSessionId: resumeSessionId ?? undefined,
+    });
+    const baseConfig: ResolvedWorkerConfig = {
+      runtime: 'deepseek-api',
+      authority,
+      cognition,
+      command: deepseekRuntime.command,
+      command_args: deepseekRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: deepseekRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    resolvedWorkerConfig = baseConfig;
+    invocation = deepseekBuildInvocation(baseConfig, environment);
+  } else {
+    const codexRuntime = state.policy.runtimes.codex;
+    const argv = buildCodexArgv({
+      cwd,
+      sandbox,
+      schemaPath: runRecord.schemaPath,
+      lastMessagePath: runRecord.lastMessagePath,
+      workerSessionId: resumeSessionId ?? undefined,
+      ephemeral,
+      skipGitRepoCheck,
+      config: resolvedConfigInput.config,
+    });
+    const baseConfig: ResolvedWorkerConfig = {
+      runtime: 'codex',
+      authority,
+      cognition,
+      command: codexRuntime.command,
+      command_args: codexRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: codexRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    resolvedWorkerConfig = baseConfig;
+    invocation = codexBuildInvocation(baseConfig, environment);
+  }
   const executorRequest: WorkerExecutorRequest = {
     schema: 'narada.worker.executor_request.v1',
     run_id: runRecord.runId,
@@ -188,7 +232,6 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     preflight,
     resolved_execution_policy: resolvedWorkerConfig,
   };
-  const invocation = buildInvocation(resolvedWorkerConfig, environment);
 
   mkdirSync(runRecord.runDir, { recursive: true });
   writeJson(runRecord.requestPath, request);
@@ -200,22 +243,22 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   writeText(runRecord.diagnosticPath, '');
 
   const waitForCompletion = request.constraints.wait_for_completion === true;
+  const launchedAt = new Date();
+  const runningPayload = buildWorkerRunPayload({
+    status: 'running',
+    runRecord,
+    runtime,
+    workerSessionId: resumeSessionId,
+    resolvedWorkerConfig,
+    executorRequest,
+    startedAt,
+    finishedAt: null,
+    error: null,
+    metadata: buildRunMetadata({ requestedMode, preflight, status: 'running', output: null, error: null }),
+  });
+  writeJson(runRecord.resultPath, runningPayload);
   if (!waitForCompletion) {
-    const launchedAt = new Date();
-    const payload = buildWorkerRunPayload({
-      status: 'running',
-      runRecord,
-      runtime,
-      workerSessionId: resumeSessionId,
-      resolvedWorkerConfig,
-      executorRequest,
-      startedAt,
-      finishedAt: null,
-      error: null,
-      metadata: buildRunMetadata({ requestedMode, preflight, status: 'running', output: null, error: null }),
-    });
-    writeJson(runRecord.resultPath, payload);
-    audit(state.policy, { tool: auditTool, payload: { ...payload, event: 'worker_run_started', launched_at: launchedAt.toISOString() } });
+    audit(state.policy, { tool: auditTool, payload: { ...runningPayload, event: 'worker_run_started', launched_at: launchedAt.toISOString() } });
     slot.deferRelease();
     void completeWorkerRun({
       state,
@@ -234,7 +277,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     }).catch(() => {
       // The failure payload has already been written by completeWorkerRun.
     }).finally(slot.releaseSlot);
-    return payload;
+    return runningPayload;
   }
 
   return await completeWorkerRun({
@@ -258,7 +301,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 async function completeWorkerRun(options: {
   state: WorkerMcpState;
   runRecord: RunRecordPaths;
-  invocation: ReturnType<typeof buildInvocation>;
+  invocation: Invocation;
   prompt: string;
   resolvedWorkerConfig: ResolvedWorkerConfig;
   runtime: string;
@@ -273,7 +316,8 @@ async function completeWorkerRun(options: {
 }): Promise<Record<string, unknown>> {
   const { state, runRecord, invocation, prompt, resolvedWorkerConfig, runtime, resumeSessionId, resumable, startedAt, executorRequest, auditTool } = options;
   try {
-  const codexResult = await runCodexInvocation({
+  const runner = runtime === 'deepseek-api' ? runDeepseekInvocation : runCodexInvocation;
+  const codexResult = await runner({
     invocation,
     prompt,
     eventsPath: runRecord.eventsPath,

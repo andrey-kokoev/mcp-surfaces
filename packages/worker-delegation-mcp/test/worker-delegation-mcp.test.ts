@@ -131,15 +131,17 @@ assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1')
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
 assert.equal(policy.result?.structuredContent.default_authority, 'read');
 assert.equal(policy.result?.structuredContent.default_cognition, 'low');
-assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex']);
+assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex', 'deepseek-api']);
 assert.deepEqual(policy.result?.structuredContent.allowed_authorities, ['read', 'write', 'command']);
 assert.deepEqual(policy.result?.structuredContent.allowed_cognition, ['low', 'medium', 'high']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
+assert.equal(policy.result?.structuredContent.runtimes.deepseek.ephemeral, true);
+assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: 'gpt-5.4-mini', reasoning_effort: 'low' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: 'gpt-5.4-mini', reasoning_effort: 'medium' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: 'gpt-5.4', reasoning_effort: 'high' });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
 assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
@@ -432,8 +434,8 @@ const readAuthority = await rpc({
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 const mediumCognition = await rpc({
   jsonrpc: '2.0',
   id: 541,
@@ -443,8 +445,8 @@ const mediumCognition = await rpc({
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.cognition, 'medium');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, 'medium');
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 const writeAuthority = await rpc({
   jsonrpc: '2.0',
   id: 55,
@@ -461,8 +463,8 @@ const commandAuthority = await rpc({
 }, state);
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.authority, 'command');
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 
 const editRun = await rpc({
   jsonrpc: '2.0',
@@ -475,7 +477,7 @@ assert.equal(editRun.result?.structuredContent.resolved_worker_config.authority,
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-test');
-assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 assert.equal(editRun.result?.structuredContent.requested_mode, 'implement');
 assert.equal(editRun.result?.structuredContent.edits_performed, true);
 assert.equal(editRun.result?.structuredContent.target_state_changed, true);
@@ -489,7 +491,7 @@ assert.equal(editRequest.constraints.authority, 'write');
 assert.equal(editRequest.constraints.cognition, 'low');
 assert.equal(editRequest.constraints.resumable, undefined);
 assert.equal(editRequest.constraints.overrides.model, 'gpt-edit-test');
-assert.equal(editRequest.constraints.overrides.reasoning_effort, 'low');
+assert.equal(editRequest.constraints.overrides.reasoning_effort, 'high');
 
 const defaultEditRun = await rpc({
   jsonrpc: '2.0',
@@ -497,8 +499,8 @@ const defaultEditRun = await rpc({
   method: 'tools/call',
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'default edit shortcut', wait_for_completion: true } },
 }, state);
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 
 const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), codexCommand: process.execPath, cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
 const customLowCognition = await rpc({
@@ -526,14 +528,14 @@ const resumableEdit = await rpc({
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'resumable edit inheritance', resumable: true, wait_for_completion: true } },
 }, state);
 assert.equal(resumableEdit.result?.structuredContent.worker_session_id, 'thread-created');
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.ephemeral, false);
 const editSessionRecord = JSON.parse(readFileSync(join(runRoot, 'sessions', `${encodeURIComponent('thread-created')}.json`), 'utf8'));
 assert.equal(editSessionRecord.origin_tool, 'worker_edit');
 assert.equal(editSessionRecord.resolved_worker_config.authority, 'write');
 assert.equal(editSessionRecord.resolved_worker_config.cognition, 'low');
-assert.equal(editSessionRecord.resolved_worker_config.model, 'gpt-5.4-mini');
+assert.equal(editSessionRecord.resolved_worker_config.model, 'deepseek-v4-flash');
 const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath }, { PATH: process.env.PATH });
 const resumedEdit = await rpc({
   jsonrpc: '2.0',
@@ -544,8 +546,8 @@ const resumedEdit = await rpc({
 assert.equal(resumedEdit.result?.structuredContent.status, 'completed');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.authority, 'write');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.cognition, 'low');
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, 'gpt-5.4-mini');
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.argv.includes('--ephemeral'), false);
 
 const resumableRun = await rpc({

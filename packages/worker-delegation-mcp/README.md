@@ -4,12 +4,32 @@ Policy-gated MCP surface for delegating bounded work to a worker runtime.
 
 The surface starts or resumes one worker run at a time, records the worker request and artifacts under a run directory, and returns deterministic text plus authoritative `structuredContent`. Large results are materialized as `worker_output:*` refs and can be read with `worker_output_show`.
 
-The current runtime is Codex only. The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
+Supported runtimes: `codex` (Codex CLI) and `deepseek-api` (self-contained agent loop using DeepSeek `/chat/completions`). The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
+
+## Quick Start
+
+Start a read-only audit worker with `worker_run`:
+
+```json
+{
+  "intent": {
+    "instruction": "List all TypeScript files under src/ and report their sizes.",
+    "mode": "audit_only"
+  },
+  "constraints": {
+    "cwd": "D:/code/mcp-surfaces",
+    "authority": "read",
+    "cognition": "low"
+  }
+}
+```
+
+The call returns immediately with `run_id` and `status: "running"`. Poll `worker_run_status` with the returned `run_id` to collect the result, or use `worker_run_wait` for a bounded wait.
 
 ## Tools
 
 - `worker_policy_inspect`: inspect the active delegation policy.
-- `worker_run`: start one new delegated worker run.
+- `worker_run`: start one new delegated worker run with explicit constraints (cwd, authority, cognition, mode).
 - `worker_edit`: start one new edit-capable worker run using write authority and low cognition; this is worker delegation, not a deterministic filesystem write tool.
 - `worker_resume`: continue one existing worker session.
 - `worker_run_status`: inspect a worker run by `run_id` without waiting.
@@ -30,18 +50,18 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 
 Defaults:
 
-- runtime: `codex`
+- runtime: `codex` (default), `deepseek-api` available
 - default authority: `read`
 - default cognition: `low`
-- allowed runtimes: `codex`
+- allowed runtimes: `codex`, `deepseek-api`
 - allowed authorities: `read`, `write`, `command`
 - allowed cognition: `low`, `medium`, `high`
 - allowed sandboxes: `read-only`, `workspace-write`
-- default sandbox: `read-only`
+- default sandbox: `read-only` (codex), `read-only` (deepseek)
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
-- cognition defaults: `low` uses `gpt-5.4-mini` with low reasoning, `medium` uses `gpt-5.4-mini` with medium reasoning, and `high` uses `gpt-5.4` with high reasoning
+- cognition defaults: all levels use `deepseek-v4-flash` with high reasoning effort (DeepSeek maps low/medium to high)
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
 - worker runs are asynchronous by default; set `constraints.wait_for_completion: true` or `wait_for_completion: true` on `worker_edit` when the caller intentionally wants to block for completion
 - max parallel runs: `10`
@@ -55,7 +75,7 @@ Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, 
 
 ```powershell
 pnpm --filter @narada2/worker-delegation-mcp build
-node D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js --allowed-root D:/code/example --run-root D:/tmp/worker-runs
+node D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js --allowed-root D:/code/mcp-surfaces --run-root D:/tmp/worker-runs
 ```
 
 Common flags:
@@ -65,7 +85,10 @@ Common flags:
 - `--run-root <path>`: directory for run records and output refs.
 - `--audit-log-dir <path>`: append worker delegation audit events.
 - `--codex-command <command>`: Codex executable, default `codex`.
-- `--codex-command-arg <arg>`: prepend a fixed argument to the Codex runtime invocation; repeatable. Useful for `node <codex.js>` on Windows.
+- `--codex-command-arg <arg>`: prepend a fixed argument to the Codex runtime invocation; repeatable.
+- `--deepseek-command <command>`: Node.js executable for the DeepSeek worker, default `node`.
+- `--deepseek-command-arg <arg>`: prepend a fixed argument to the DeepSeek worker invocation; repeatable.
+- `--deepseek-model <model>`: override default model for DeepSeek runtime.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable. Omit model overrides unless the runtime account is known to accept the selected model.
 - `--cognition-low-model <model>` and `--cognition-low-reasoning-effort <value>`: defaults for low cognition.
@@ -88,15 +111,31 @@ Normalized constraints:
 - `authority: "read"`: inspection within the admitted root envelope; default sandbox `read-only`.
 - `authority: "write"`: edit-capable work within the admitted root envelope; default sandbox `workspace-write`.
 - `authority: "command"`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
-- `cognition: "low"`: default model `gpt-5.4-mini`, default reasoning `low`.
-- `cognition: "medium"`: default model `gpt-5.4-mini`, default reasoning `medium`.
-- `cognition: "high"`: default model `gpt-5.4`, default reasoning `high`.
+- `cognition: "low"`: default model `deepseek-v4-flash`, default reasoning `high`.
+- `cognition: "medium"`: default model `deepseek-v4-flash`, default reasoning `high`.
+- `cognition: "high"`: default model `deepseek-v4-flash`, default reasoning `high`.
 
 Delegation mode is explicit intent, not mechanical authority. `intent.mode` may be `audit_only`, `plan_only`, `implement`, or `implement_and_verify`. Read authority defaults to `audit_only`; write and command authority default to `implement`. The mode is recorded as `requested_mode`, included in the worker prompt, and summarized in run/list output so an audit cannot be mistaken for a migration or implementation. Mechanical enforcement still comes from `constraints.authority`, sandbox, allowed roots, and policy.
 
 `constraints.preflight_paths` can declare path capability checks before the worker starts. Each entry has `path`, `access` (`read`, `write`, or `create`), and optional `label`. This is useful for migration work: declare the old authority path as readable and the proposed new repo path as creatable. `constraints.required_mcp_tools` can declare tool names the worker must verify before work; worker-delegation records this as advisory preflight because it cannot inspect the worker runtime's future MCP inventory. Preflight results are recorded in `executor_request.preflight`, `preflight`, and `blocked_paths`; they are also placed in the worker prompt as evidence. For `implement` and `implement_and_verify`, any blocked preflight check fails before worker dispatch with `worker_preflight_blocked`. Use `plan_only` for a dry implementation plan under read authority.
 
-`worker_run` accepts explicit normalized constraints. `worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, optional `wait_for_completion`, and optional `overrides`, then mechanically compiles to `authority: "write"`, `cognition: "low"`, and `mode: "implement"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
+`worker_run` accepts explicit normalized constraints:
+
+- `intent.instruction` (string, required): natural-language task description.
+- `intent.mode` (string, default `"implement"`): `"audit_only"`, `"plan_only"`, `"implement"`, or `"implement_and_verify"`.
+- `intent.step_id` (string, optional): caller-chosen step identifier.
+- `intent.step_kind` (string, optional): `"worker"` for delegated work.
+- `intent.acceptance` (object, optional): acceptance criteria such as `required_files`.
+- `constraints.cwd` (string, required): working directory inside an allowed root.
+- `constraints.authority` (string, default `"read"`): `"read"`, `"write"`, or `"command"`.
+- `constraints.cognition` (string, default `"low"`): `"low"`, `"medium"`, or `"high"`.
+- `constraints.resumable` (boolean, default `false`): enable continuation via `worker_resume`.
+- `constraints.wait_for_completion` (boolean, default `false`): block until worker finishes.
+- `constraints.overrides` (object, optional): set `runtime` (`"codex"` or `"deepseek-api"`), `sandbox`, `model`, or `reasoning_effort`.
+- `constraints.preflight_paths` (array, optional): path existence/access checks before delegation.
+- `constraints.required_mcp_tools` (array, optional): MCP tool names the worker must have.
+
+`worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, optional `wait_for_completion`, and optional `overrides`, then mechanically compiles to `authority: "write"`, `cognition: "low"`, and `mode: "implement"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
 
 When a resumable run completes, the server records a session entry under `run_root/sessions`. `worker_resume` uses that entry to inherit the original authority, cognition, sandbox, model, reasoning effort, and config unless the caller explicitly overrides them. This keeps resumable `worker_edit` sessions on write authority and low cognition across continuations and MCP restarts.
 
@@ -125,6 +164,25 @@ A failed runtime call raises `worker_runtime_failed` or `worker_runtime_timed_ou
 
 If a response is materialized, call `worker_output_show` with the returned `output_ref`. `worker_output_show` also accepts a `path` copied from a run artifact entry when that path is inside the worker run root, so callers can read `executor_request.json`, `worker_prompt.txt`, `last_message.json`, or diagnostics without switching tools. It returns exact stored output text and supports `offset` and `limit`.
 
+## DeepSeek Runtime
+
+Override the runtime with `overrides.runtime: 'deepseek-api'` on `worker_run` or `worker_edit`. The deepseek worker implements its own agent loop using `node:https` (no external dependencies). It connects to MCP servers via the config file at `NARADA_WORKER_MCP_CONFIG` environment variable.
+
+Key differences from Codex runtime:
+
+- The deepseek worker spawns as a subprocess, reads the prompt from stdin, and runs the agent loop autonomously.
+- Thinking mode is always enabled (`thinking: { type: "enabled" }`) with `reasoning_effort: "high"`.
+- When tools are used, `reasoning_content` is preserved across turns (required by DeepSeek API).
+- The worker writes debug artifacts: `api_requests.jsonl`, `api_responses.jsonl`, `mcp_tools.json`, `conversation.json`.
+- Session resume is supported: use `worker_resume` with the returned `worker_session_id`.
+- If no MCP config is available, the worker runs without tools (degraded single-shot mode).
+
+Environment variables:
+
+- `DEEPSEEK_API_KEY`: required; used for `Authorization: Bearer` header.
+- `DEEPSEEK_API_BASE_URL`: optional; defaults to `https://api.deepseek.com`.
+- `NARADA_WORKER_MCP_CONFIG`: path to MCP server config JSON (shape: `{ mcpServers: { name: { command, args, env } } }`).
+
 ## Example Tool Arguments
 
 ```json
@@ -134,7 +192,7 @@ If a response is materialized, call `worker_output_show` with the returned `outp
     "mode": "audit_only"
   },
   "constraints": {
-    "cwd": "D:/code/example",
+    "cwd": "D:/code/mcp-surfaces",
     "authority": "read",
     "cognition": "medium",
     "resumable": false,
@@ -177,7 +235,7 @@ Edit shortcut:
 
 ```json
 {
-  "cwd": "D:/code/example",
+  "cwd": "D:/code/mcp-surfaces",
   "instruction": "Fix the narrow test failure, keep the change scoped, and report what changed.",
   "resumable": false
 }

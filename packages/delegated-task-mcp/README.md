@@ -26,6 +26,32 @@ Use this package when a caller wants to delegate a task outcome rather than manu
 - `delegated_task_events`: list durable task lifecycle events.
 - `delegated_task_cancel`: mark a nonterminal delegated task cancelled.
 
+## Quick Example
+
+Minimal `delegated_task_run` payload with a single worker step:
+
+```json
+{
+  "objective": "Fix typo in README",
+  "constraints": {
+    "cwd": "/home/user/project",
+    "allowed_roots": ["/home/user/project"]
+  },
+  "workflow": [
+    {
+      "id": "fix-typo",
+      "kind": "worker",
+      "intent": "Fix the typo in README.md"
+    }
+  ],
+  "execution": {
+    "wait_for_completion": true
+  }
+}
+```
+
+Invoke via `delegated_task_run` with the payload above to create and execute a single-step delegated task. Set `wait_for_completion` to `true` to block until the task reaches a terminal state.
+
 ## Runtime Contract
 
 The MCP writes JSON task records under its configured task root. By default, the task root is the current working directory. Production site registration should pass a site-local runtime directory such as `.ai/runtime/delegated-task-mcp` and constrain it with allowed roots.
@@ -43,6 +69,38 @@ Acceptance checks are evidence checks. `delegated-task-mcp` does not run tests o
 Cancellation marks the delegated task cancelled and annotates running child worker refs with a cancellation request. It does not yet terminate the underlying worker process; low-level worker cancellation remains a separate worker-delegation capability when supported.
 
 The live worker integration test is separate from deterministic tests. It skips with a diagnostic when the local Codex runtime is unavailable, and passes when a real worker can be launched through `worker-delegation-mcp`.
+
+## Condition Language
+
+Step transitions and gate conditions use a small expression language (not arbitrary code). Malformed expressions are rejected by `delegated_task_validate` before workers launch.
+
+| Condition | Description |
+|---|---|
+| `always` | Always true; unconditional transition. |
+| `on_success` | True when the referenced step completed successfully. |
+| `on_failure` | True when the referenced step failed. |
+| `review_failed` | True when a review step returned a failing verdict. |
+| `acceptance:<verdict>` | True when the acceptance check produced the given verdict (e.g. `passed`, `failed`, `pending`). |
+| `step:<id>:<status>` | True when step `<id>` has status `<status>` (e.g. `step:fix-typo:completed`). |
+| `kind:<kind>:<status>` | True when all steps of kind `<kind>` have status `<status>` (e.g. `kind:worker:completed`). |
+| `result_has:<text>` | True when the referenced step result contains `<text>`. |
+| `no_residual_risks` | True when no residual risks remain in the task evidence. |
+| `all(...)` | True when all nested conditions are true. |
+| `any(...)` | True when at least one nested condition is true. |
+| `not(...)` | True when the nested condition is false. |
+
+## Workflow Steps
+
+| Kind | Description |
+|---|---|
+| `worker` | Execute an implementation step via a child worker run. |
+| `review` | Review outputs of preceding steps via a child worker run. |
+| `repair` | Repair or fix issues found by review via a child worker run. |
+| `verify` | Verify outputs or repairs via a child worker run. |
+| `research` | Research or investigate via a child worker run. |
+| `gate` | Orchestration-only conditional: evaluate conditions and branch locally. |
+| `join` | Orchestration-only merge: wait for multiple preceding steps to converge locally. |
+| `note` | Orchestration-only annotation: record a note in the task event log locally. |
 
 ## Verification
 

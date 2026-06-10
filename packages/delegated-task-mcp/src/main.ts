@@ -313,17 +313,11 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
   await refreshRunningSteps(task, state, stepStates);
   let progressMade = false;
   const workflow = workflowSteps(task.workflow);
+  const readyWorkerSteps: Array<{ step: WorkflowStep; stepState: StepState }> = [];
   for (const step of workflow) {
     const stepState = stepStates[step.id] ?? initialStepState(step);
     stepStates[step.id] = stepState;
     if (stepState.status !== 'pending') continue;
-    const condition = evaluateCondition(step.if, task, stepStates);
-    if (!condition.pass) {
-      markStep(stepState, 'skipped', condition.reason);
-      appendEvent(state, task.task_id, 'step_skipped', { step_id: step.id, reason: condition.reason });
-      progressMade = true;
-      continue;
-    }
     const dependency = dependencyStatus(step, stepStates);
     if (dependency.blocked.length > 0) {
       markStep(stepState, 'blocked', `blocked_by:${dependency.blocked.join(',')}`);
@@ -333,16 +327,36 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
       continue;
     }
     if (!dependency.ready) continue;
+    const condition = evaluateCondition(step.if, task, stepStates);
+    if (!condition.pass) {
+      markStep(stepState, 'skipped', condition.reason);
+      appendEvent(state, task.task_id, 'step_skipped', { step_id: step.id, reason: condition.reason });
+      progressMade = true;
+      continue;
+    }
     if (LOCAL_KINDS.has(step.kind)) {
       completeLocalStep(task, state, step, stepState, stepStates);
       progressMade = true;
       continue;
     }
     if (WORKER_KINDS.has(step.kind)) {
-      await launchWorkerStep(task, state, step, stepState);
-      progressMade = true;
-      if (runningCount(stepStates) >= executionPolicy(task).max_concurrency) break;
+      readyWorkerSteps.push({ step, stepState });
+      const concurrencyLimit = executionPolicy(task).max_concurrency;
+      if (readyWorkerSteps.length >= concurrencyLimit) break;
     }
+  }
+  if (readyWorkerSteps.length > 0) {
+    await Promise.allSettled(readyWorkerSteps.map(async ({ step, stepState }) => {
+      try {
+        await launchWorkerStep(task, state, step, stepState);
+      } catch (error) {
+        if (stepState.status === 'pending') {
+          markStep(stepState, 'failed', error instanceof Error ? error.message : String(error));
+          appendEvent(state, task.task_id, 'step_failed', { step_id: stepState.step_id, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
+    }));
+    progressMade = true;
   }
   if (progressMade) appendEvent(state, task.task_id, 'task_progress_advanced', { progress: progressSummary(task, stepStates) });
   finalizeTask(task, state, stepStates);
@@ -351,6 +365,7 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
 }
 
 async function refreshRunningSteps(task: Task, state: State, stepStates: Record<string, StepState>): Promise<void> {
+  let dataChanged = false;
   for (const stepState of Object.values(stepStates)) {
     if (stepState.status !== 'running' || !stepState.current_run_id) continue;
     let statusResult: JsonRecord;
@@ -358,6 +373,7 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
       statusResult = await state.workerTool('worker_run_status', { run_id: stepState.current_run_id }, state.workerState);
     } catch (error) {
       stepState.error = error instanceof Error ? error.message : String(error);
+      dataChanged = true;
       continue;
     }
     const workerRef = summarizeWorkerRef({ id: stepState.step_id, kind: stepState.kind, profile: null, instruction: null, depends_on: [], if: null, acceptance_scope: [], constraints: {} }, statusResult);
@@ -367,6 +383,7 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
       markStep(stepState, 'completed', opt(statusResult.summary));
       stepState.worker_session_id = opt(statusResult.worker_session_id);
       appendEvent(state, task.task_id, 'step_completed', { step_id: stepState.step_id, run_id: stepState.current_run_id });
+      dataChanged = true;
     } else if (FAILED_WORKER_STATUSES.has(refreshedStatus)) {
       const maxRetries = executionPolicy(task).max_retries;
       if (stepState.attempts <= maxRetries) {
@@ -377,7 +394,12 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
         markStep(stepState, 'failed', opt(statusResult.error) ?? `worker_status:${refreshedStatus}`);
         appendEvent(state, task.task_id, 'step_failed', { step_id: stepState.step_id, run_id: stepState.current_run_id, status: refreshedStatus });
       }
+      dataChanged = true;
     }
+  }
+  if (dataChanged) {
+    finalizeTask(task, state, stepStates);
+    writeTask(state, task);
   }
 }
 
@@ -490,7 +512,8 @@ function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { ver
     const signals = reviewSignalsFromResult(result);
     const minPassed = integer(quorum.min_passed, 1, 0, 1000);
     const maxFailed = integer(quorum.max_failed, 0, 0, 1000);
-    checks.push({ kind: 'review_quorum', min_passed: minPassed, max_failed: maxFailed, passed: signals.passed, failed: signals.failed, status: signals.passed >= minPassed && signals.failed <= maxFailed ? 'passed' : signals.running > 0 ? 'pending' : 'failed' });
+    const noSignalsYet = signals.passed === 0 && signals.failed === 0 && signals.running === 0;
+    checks.push({ kind: 'review_quorum', min_passed: minPassed, max_failed: maxFailed, passed: signals.passed, failed: signals.failed, status: noSignalsYet ? 'pending' : signals.passed >= minPassed && signals.failed <= maxFailed ? 'passed' : signals.running > 0 ? 'pending' : 'failed' });
   }
   if (task.acceptance.residual_risk_policy === 'none_allowed') {
     const risks = stringList(result.residual_risks);
@@ -753,7 +776,7 @@ function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summar
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const constraints = { ...task.constraints, ...step.constraints };
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
-  return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' ? 'audit_only' : undefined }, constraints: { ...constraints, cwd, resumable: task.execution.resumable !== false, wait_for_completion: task.execution.wait_for_completion === true, exit_interview: task.execution.exit_interview === true } };
+  return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' ? 'audit_only' : undefined }, constraints: { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true } };
 }
 function workerInstruction(task: Task, step: WorkflowStep): string { return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, `Step kind: ${step.kind}`, `Acceptance: ${JSON.stringify(task.acceptance)}`, 'Return a concise result with changes, verification, residual risks, and observed incoherencies.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord { return { total: Object.keys(states).length, ...stepStatusCounts(task, states), running_run_ids: Object.values(states).filter((step) => step.status === 'running').map((step) => step.current_run_id).filter(Boolean) }; }

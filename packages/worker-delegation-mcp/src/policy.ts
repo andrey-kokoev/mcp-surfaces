@@ -22,7 +22,7 @@ export type WorkerPolicy = {
   auditLogDir: string | null;
   allowedRoots: string[];
   rootsFromTrustConfig: string | null;
-  allowedRuntimes: ['codex'];
+  allowedRuntimes: ['codex', 'deepseek-api'];
   allowedSandboxes: SandboxMode[];
   allowedConfigKeys: string[];
   allowRawConfigOverrides: boolean;
@@ -33,21 +33,33 @@ export type WorkerPolicy = {
   maxRunMs: number;
   cognitionDefaults: Record<WorkerCognition, WorkerCognitionDefaults>;
   runtimes: {
-    codex: {
-      command: string;
-      commandArgs: string[];
-      defaultSandbox: SandboxMode;
-      defaultReasoningEffort: string;
-      ephemeral: boolean;
-      jsonEvents: boolean;
-    };
+    codex: WorkerRuntimeConfig;
+    deepseek: WorkerDeepseekRuntimeConfig;
   };
+};
+
+type WorkerRuntimeConfig = {
+  command: string;
+  commandArgs: string[];
+  defaultSandbox: SandboxMode;
+  defaultReasoningEffort: string;
+  ephemeral: boolean;
+  jsonEvents: boolean;
+};
+
+type WorkerDeepseekRuntimeConfig = {
+  command: string;
+  commandArgs: string[];
+  defaultSandbox: SandboxMode;
+  defaultReasoningEffort: string;
+  ephemeral: boolean;
+  jsonEvents: boolean;
 };
 
 const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
-const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY'];
+const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'];
 const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
 const WORKER_COGNITION: WorkerCognition[] = ['low', 'medium', 'high'];
 
@@ -60,12 +72,13 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const cognition = asRecord(worker.cognition);
   const runtimes = asRecord(worker.runtimes);
   const codex = asRecord(runtimes.codex);
+  const deepseekCfg = asRecord(runtimes.deepseek);
 
   const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? 'codex');
-  if (defaultRuntime !== 'codex') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
+  if (defaultRuntime !== 'codex' && defaultRuntime !== 'deepseek-api') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
 
-  const allowedRuntimes = stringList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex']);
-  if (allowedRuntimes.length !== 1 || allowedRuntimes[0] !== 'codex') throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { allowed_runtimes: allowedRuntimes });
+  const allowedRuntimes = stringList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'deepseek-api']) as ('codex' | 'deepseek-api')[];
+  if (!allowedRuntimes.every((r) => r === 'codex' || r === 'deepseek-api')) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { allowed_runtimes: allowedRuntimes });
 
   const allowedSandboxes = stringList(merged.allowedSandbox ?? merged.allowedSandboxes ?? policy.allowed_sandboxes ?? ['read-only', 'workspace-write']).map(validateSandbox);
   const allowDangerFullAccess = booleanValue(merged.allowDangerFullAccess ?? policy.allow_danger_full_access, false);
@@ -81,6 +94,19 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const codexDefaultSandbox = validateSandbox(merged.defaultSandbox ?? codex.default_sandbox ?? 'read-only');
   if (!allowedSandboxes.includes(codexDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: codexDefaultSandbox });
 
+  const deepseekCommand = stringValue(merged.deepseekCommand ?? deepseekCfg.command ?? 'node');
+  const deepseekCommandArgs = stringList(merged.deepseekCommandArg ?? merged.deepseekCommandArgs ?? deepseekCfg.command_args);
+  const deepseekDefaultSandbox = validateSandbox(merged.deepseekDefaultSandbox ?? deepseekCfg.default_sandbox ?? 'read-only');
+  if (!allowedSandboxes.includes(deepseekDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: deepseekDefaultSandbox });
+
+  const deepseekModelOverride = stringOrNull(merged.deepseekModel);
+  const finalCognitionDefaults = cognitionDefaults(cognition, merged);
+  if (deepseekModelOverride) {
+    for (const level of ['low', 'medium', 'high'] as WorkerCognition[]) {
+      finalCognitionDefaults[level] = { ...finalCognitionDefaults[level], model: deepseekModelOverride };
+    }
+  }
+
   return {
     defaultRuntime: 'codex',
     defaultAuthority: validateAuthority(merged.defaultAuthority ?? worker.default_authority ?? 'read'),
@@ -91,7 +117,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     auditLogDir: stringOrNull(merged.auditLogDir ?? worker.audit_log_dir) ? resolve(stringValue(merged.auditLogDir ?? worker.audit_log_dir)) : null,
     allowedRoots,
     rootsFromTrustConfig,
-    allowedRuntimes: ['codex'],
+    allowedRuntimes: ['codex', 'deepseek-api'],
     allowedSandboxes,
     allowedConfigKeys: stringList(merged.allowedConfigKey ?? merged.allowedConfigKeys ?? policy.allowed_config_keys ?? ['model', 'model_reasoning_effort']),
     allowRawConfigOverrides: booleanValue(merged.allowRawConfigOverrides ?? policy.allow_raw_config_overrides, false),
@@ -100,7 +126,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     maxPromptBytes: strictInteger(merged.maxPromptBytes ?? policy.max_prompt_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_PROMPT_BYTES, 'max_prompt_bytes'),
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
-    cognitionDefaults: cognitionDefaults(cognition, merged),
+    cognitionDefaults: finalCognitionDefaults,
     runtimes: {
       codex: {
         command: codexCommand,
@@ -109,6 +135,14 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
         defaultReasoningEffort: stringValue(merged.defaultReasoningEffort ?? codex.default_reasoning_effort ?? 'medium'),
         ephemeral: booleanValue(merged.ephemeral ?? codex.ephemeral, true),
         jsonEvents: booleanValue(merged.jsonEvents ?? codex.json_events, true),
+      },
+      deepseek: {
+        command: deepseekCommand,
+        commandArgs: deepseekCommandArgs,
+        defaultSandbox: deepseekDefaultSandbox,
+        defaultReasoningEffort: stringValue(merged.deepseekDefaultReasoningEffort ?? deepseekCfg.default_reasoning_effort ?? 'high'),
+        ephemeral: booleanValue(merged.deepseekEphemeral ?? deepseekCfg.ephemeral, true),
+        jsonEvents: booleanValue(merged.deepseekJsonEvents ?? deepseekCfg.json_events, false),
       },
     },
   };
@@ -170,6 +204,14 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         ephemeral: policy.runtimes.codex.ephemeral,
         json_events: policy.runtimes.codex.jsonEvents,
       },
+      deepseek: {
+        command: policy.runtimes.deepseek.command,
+        command_args: policy.runtimes.deepseek.commandArgs,
+        default_sandbox: policy.runtimes.deepseek.defaultSandbox,
+        default_reasoning_effort: policy.runtimes.deepseek.defaultReasoningEffort,
+        ephemeral: policy.runtimes.deepseek.ephemeral,
+        json_events: policy.runtimes.deepseek.jsonEvents,
+      },
     },
   };
 }
@@ -182,11 +224,11 @@ export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): s
   return cwd;
 }
 
-export function validateRuntime(value: unknown, policy: WorkerPolicy): 'codex' {
+export function validateRuntime(value: unknown, policy: WorkerPolicy): 'codex' | 'deepseek-api' {
   const runtime = stringValue(value ?? policy.defaultRuntime);
-  if (runtime !== 'codex') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime });
-  if (!policy.allowedRuntimes.includes(runtime)) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
-  return 'codex';
+  if (runtime !== 'codex' && runtime !== 'deepseek-api') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime });
+  if (!policy.allowedRuntimes.includes(runtime as 'codex' | 'deepseek-api')) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
+  return runtime;
 }
 
 export function validateSandbox(value: unknown): SandboxMode {
@@ -197,8 +239,9 @@ export function validateSandbox(value: unknown): SandboxMode {
   return sandbox;
 }
 
-export function resolveSandbox(value: unknown, policy: WorkerPolicy): SandboxMode {
-  const sandbox = validateSandbox(value ?? policy.runtimes.codex.defaultSandbox);
+export function resolveSandbox(value: unknown, policy: WorkerPolicy, runtime?: 'codex' | 'deepseek-api'): SandboxMode {
+  const defaultSandbox = runtime === 'deepseek-api' ? policy.runtimes.deepseek.defaultSandbox : policy.runtimes.codex.defaultSandbox;
+  const sandbox = validateSandbox(value ?? defaultSandbox);
   if (sandbox === 'danger-full-access' && (!policy.allowDangerFullAccess || !policy.allowedSandboxes.includes('danger-full-access'))) throw diagnosticError('worker_danger_full_access_not_allowed');
   if (!policy.allowedSandboxes.includes(sandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox, allowed_sandboxes: policy.allowedSandboxes });
   return sandbox;
@@ -305,9 +348,9 @@ function mergeConfig(fileConfig: Record<string, unknown>, options: Record<string
 
 function cognitionDefaults(cognition: Record<string, unknown>, options: Record<string, unknown>): Record<WorkerCognition, WorkerCognitionDefaults> {
   return {
-    low: cognitionDefault('low', cognition, options, 'gpt-5.4-mini', 'low'),
-    medium: cognitionDefault('medium', cognition, options, 'gpt-5.4-mini', 'medium'),
-    high: cognitionDefault('high', cognition, options, 'gpt-5.4', 'high'),
+    low: cognitionDefault('low', cognition, options, 'deepseek-v4-flash', 'high'),
+    medium: cognitionDefault('medium', cognition, options, 'deepseek-v4-flash', 'high'),
+    high: cognitionDefault('high', cognition, options, 'deepseek-v4-flash', 'high'),
   };
 }
 

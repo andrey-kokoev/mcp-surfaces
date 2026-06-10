@@ -285,6 +285,7 @@ export function buildOutputRefToolContent({
     ref: stored.ref,
     output_ref: stored.ref,
     reader_tool: 'mcp_output_show',
+    site_root: outputSiteRoot,
     read_command: `mcp_output_show({"output_ref":"${stored.ref}","limit":10000})`,
     remediation: `Call mcp_output_show with output_ref="${stored.ref}" to read the full result. ref and output_limit are accepted as compatibility aliases.`,
     inline_limit: inlineLimit,
@@ -316,7 +317,10 @@ function outputResourceLink(record): any {
 
 export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
   const input = asRecord(args);
-  const record = readOutputRecord({ siteRoot, ref: requireOutputRef(input, 'output_show_requires_ref'), maxBytes, outputDir });
+  const effectiveSiteRoot = typeof input.target_site_root === 'string' && input.target_site_root.trim().length > 0
+    ? resolve(input.target_site_root.trim())
+    : siteRoot;
+  const record = readOutputRecord({ siteRoot: effectiveSiteRoot, ref: requireOutputRef(input, 'output_show_requires_ref'), maxBytes, outputDir });
   return publicOutputShowRecord(record, {
     outputLimit: normalizeOutputShowLimit(input.limit ?? input.output_limit),
     offset: normalizeOutputShowOffset(input.offset),
@@ -382,6 +386,7 @@ export function listOutputTools() {
           offset: { type: 'integer', description: 'Character offset, default 0.' },
           limit: { type: 'integer', description: 'Maximum characters to inline. Defaults to 10000.' },
           output_limit: { type: 'integer', description: 'Compatibility alias for limit.' },
+          target_site_root: { type: 'string', description: 'Optional explicit target Site root where the output was written. Defaults to this MCP server site root.' },
         },
       },
     }),
