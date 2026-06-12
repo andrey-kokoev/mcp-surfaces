@@ -8,7 +8,7 @@
     { "path": "./packages/completion-audit-mcp" },
     { "path": "./packages/worker-delegation-mcp" },
     { "path": "./packages/delegated-task-mcp" },
-    { "path": "./packages/inbox-mcp" },
+    { "path": "./packages/site-inbox-mcp" },
     { "path": "./packages/mailbox-mcp" },
     { "path": "./packages/graph-mail-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },

@@ -1,4 +1,4 @@
-# @narada2/inbox-mcp
+# @narada2/site-inbox-mcp
 
 Governed inbox intake and triage MCP surface.
 
@@ -61,5 +61,5 @@ Agents should use `inbox_list` or `inbox_next`, then `inbox_show` before acting 
 ## Verification
 
 ```powershell
-pnpm --filter @narada2/inbox-mcp test
+pnpm --filter @narada2/site-inbox-mcp test
 ```

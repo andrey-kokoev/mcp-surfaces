@@ -139,3 +139,33 @@ export function getLatestEventsByEnvelope(siteRoot: string): Map<string, InboxRe
   }
   return map;
 }
+
+export function emitEnvelopeAcknowledged(siteRoot: string, envelopeId: string, principal: string, reason?: string): InboxRecord {
+  return appendAdmissionEvent(siteRoot, {
+    envelope_id: envelopeId,
+    event_kind: 'envelope_acknowledged',
+    principal,
+    authority_level: 'agent_reported',
+    event_payload: { reason: reason ?? null },
+  });
+}
+
+export function emitEnvelopeDismissed(siteRoot: string, envelopeId: string, principal: string, reason: string): InboxRecord {
+  return appendAdmissionEvent(siteRoot, {
+    envelope_id: envelopeId,
+    event_kind: 'envelope_dismissed',
+    principal,
+    authority_level: 'agent_reported',
+    event_payload: { reason },
+  });
+}
+
+export function emitEnvelopePromoted(siteRoot: string, envelopeId: string, principal: string, reason?: string): InboxRecord {
+  return appendAdmissionEvent(siteRoot, {
+    envelope_id: envelopeId,
+    event_kind: 'envelope_promoted',
+    principal,
+    authority_level: 'agent_reported',
+    event_payload: { reason: reason ?? null },
+  });
+}

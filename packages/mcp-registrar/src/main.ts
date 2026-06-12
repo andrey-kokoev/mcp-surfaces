@@ -16,6 +16,7 @@ type SurfaceDef = {
   kind: string;
   args: string[];
   tools: string[];
+  env_vars?: string[];
 };
 
 type SiteDef = {
@@ -63,7 +64,7 @@ const SURFACES: SurfaceDef[] = [
     tools: ['completion_audit_record'],
   },
   {
-    id: 'inbox', package: 'inbox-mcp',
+    id: 'inbox', package: 'site-inbox-mcp',
     entrypoint: '{site_root}/tools/inbox/inbox-mcp-server.mjs',
     kind: 'site_tool',
     args: ['--site-root', '{site_root}'],
@@ -131,6 +132,35 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: [],
     tools: ['registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync'],
+  },
+  {
+    id: 'surface-feedback', package: 'surface-feedback-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: ['--feedback-root', '{site_root}'],
+    tools: ['surface_feedback_submit', 'surface_feedback_list', 'surface_feedback_show'],
+  },
+  {
+    id: 'speech', package: 'speech-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: [],
+    tools: ['speech_speak', 'speech_voices'],
+    env_vars: ['OPENAI_API_KEY'],
+  },
+  {
+    id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: ['--repo-root', 'D:/code/narada', '--session-file', 'D:/code/narada/.narada/auth/cloudflare-operator-session.json'],
+    tools: ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+  },
+  {
+    id: 'site-coherence', package: 'site-coherence-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: ['--repo-root', 'D:/code/narada'],
+    tools: ['site_coherence_check', 'site_coherence_doctor'],
   },
 ];
 
@@ -393,7 +423,7 @@ function registrarSiteBind(args: JsonRecord): JsonRecord {
         command: 'node',
         args: [surface.entrypoint, ...resolvedArgs],
         tools: surface.tools,
-        env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'],
+        env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT', ...(surface.env_vars ?? [])],
         surface_id: `${surfaceId}-mcp.${siteId}`,
         authority_posture: 'site_local_mcp_surface',
       },

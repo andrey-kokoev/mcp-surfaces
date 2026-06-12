@@ -13,7 +13,7 @@ Current packages:
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
 - `@narada2/completion-audit-mcp`: requirement/evidence/verdict completion audit MCP surface.
-- `@narada2/inbox-mcp`: governed inbox intake and triage MCP surface.
+- `@narada2/site-inbox-mcp`: governed inbox intake and triage MCP surface.
 - `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
@@ -24,6 +24,10 @@ Current packages:
 - `@narada2/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution.
 - `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
+- `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
+- `@narada2/speech-mcp`: Windows SAPI text-to-speech MCP surface.
+- `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
+- `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
 
 ## Development Rules
 
@@ -56,6 +60,8 @@ pnpm test:delegated-task
 pnpm test:sop
 pnpm test:scheduler
 pnpm test:registrar
+pnpm test:cloudflare-carrier
+pnpm test:site-coherence
 ```
 
 ## Verification Expectations

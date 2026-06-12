@@ -105,6 +105,37 @@ try {
   const queuePayload = queue.result.structuredContent;
   assert.equal(queuePayload.count, 1);
 
+  const audit = rpc({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: { name: 'inbox_audit', arguments: { limit: 10 } },
+  }, state);
+  assert.equal(audit.error, undefined);
+  const auditPayload = audit.result.structuredContent;
+  assert.ok(auditPayload.total_entries);
+  assert.ok(auditPayload.entries.length);
+  assert.ok(auditPayload.entries[0].event_kind);
+
+  const ack = rpc({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: { name: 'inbox_acknowledge', arguments: { envelope_id: submitted.envelope_id, principal: 'test-architect', reason: 'Not actionable.' } },
+  }, state);
+  assert.equal(ack.error, undefined);
+  const ackPayload = ack.result.structuredContent;
+  assert.equal(ackPayload.status, 'acknowledged');
+  assert.equal(ackPayload.envelope_id, submitted.envelope_id);
+
+  const afterAck = rpc({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'tools/call',
+    params: { name: 'inbox_show', arguments: { envelope_id: submitted.envelope_id } },
+  }, state);
+  assert.equal(afterAck.result.structuredContent.envelope.status, 'acknowledged');
+
   console.log('inbox-mcp behavior ok');
 } finally {
   rmSync(root, { recursive: true, force: true });

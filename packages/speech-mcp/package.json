@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/speech-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Text-to-speech MCP surface with SAPI provider and provider abstraction for future OpenAI TTS expansion.",
+  "bin": {
+    "speech-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/speech-mcp.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { admitEnvelope } from './admission-log.js';
+import { resolve } from 'node:path';
+import { admitEnvelope, emitEnvelopeAcknowledged, emitEnvelopeDismissed, emitEnvelopePromoted, readAdmissionLog } from './admission-log.js';
 import { INBOX_ENVELOPE_KINDS, assertKnownInboxEnvelopeKind } from './envelope-kinds.js';
 import { readInboxEnvelopeById, readIndexedInboxBacklog, readIndexedInboxRows, readInboxIndexCounts, refreshInboxIndex } from './inbox-index.js';
 import { evaluateEnvelopeSeverity } from './inbox-policy.js';
 
-const SERVER_NAME = 'narada-inbox-mcp';
+const SERVER_NAME = 'narada-site-inbox-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const INBOX_STATUSES = Object.freeze(['received', 'acknowledged', 'dismissed', 'promoted']);
@@ -156,15 +155,34 @@ export function listTools(): unknown[] {
       principal: { type: 'string', description: 'Submitting principal.' },
       target_role: { type: 'string', enum: TARGET_ROLES, description: 'Optional target role.' },
       severity: { type: 'integer', minimum: 0, maximum: 100, description: 'Optional explicit severity.' },
+      authority_level: { type: 'string', enum: ['agent_reported', 'operator_confirmed', 'operator_directed'], default: 'agent_reported', description: 'Authority level for this submission.' },
       payload: { type: 'object', default: {}, description: 'Optional payload object.' },
     }, ['kind', 'title', 'principal']),
+    tool('inbox_acknowledge', 'Acknowledge an envelope — mark it as reviewed with no further action needed.', {
+      envelope_id: { type: 'string', description: 'Envelope id such as env_...' },
+      principal: { type: 'string', description: 'Principal performing the acknowledgment.' },
+      reason: { type: 'string', description: 'Optional reason for acknowledgment.' },
+    }, ['envelope_id', 'principal']),
+    tool('inbox_dismiss', 'Dismiss an envelope — mark it as rejected or superseded.', {
+      envelope_id: { type: 'string', description: 'Envelope id such as env_...' },
+      principal: { type: 'string', description: 'Principal performing the dismissal.' },
+      reason: { type: 'string', description: 'Required reason for dismissal.' },
+    }, ['envelope_id', 'principal', 'reason']),
+    tool('inbox_promote_capa', 'Promote an envelope to CAPA review status.', {
+      envelope_id: { type: 'string', description: 'Envelope id such as env_...' },
+      principal: { type: 'string', description: 'Principal performing the promotion.' },
+      reason: { type: 'string', description: 'Optional promotion rationale.' },
+    }, ['envelope_id', 'principal']),
+    tool('inbox_audit', 'Read recent admission log entries.', {
+      limit: { type: 'integer', minimum: 1, maximum: 200, default: 50, description: 'Maximum entries. Defaults to 50.' },
+      envelope_id: { type: 'string', description: 'Optional envelope id filter.' },
+    }),
     tool('inbox_next', 'Return the next site-local inbox envelope for triage.', {
       target_role: { type: 'string', enum: TARGET_ROLES, description: 'Optional target role filter.' },
     }),
     tool('capa_queue', 'List inbox envelopes classified as CAPA review candidates.', {
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum envelopes. Defaults to 20.' },
     }),
-    tool('capability_next', 'Return pending local capability-review items when the capability surface exists.', {}),
   ];
 }
 
@@ -185,14 +203,23 @@ function callTool(params: InboxRecord, state: InboxServerState) {
     case 'inbox_submit':
       result = inboxSubmit(args, state);
       break;
+    case 'inbox_acknowledge':
+      result = inboxAcknowledge(args, state);
+      break;
+    case 'inbox_dismiss':
+      result = inboxDismiss(args, state);
+      break;
+    case 'inbox_promote_capa':
+      result = inboxPromoteCapa(args, state);
+      break;
+    case 'inbox_audit':
+      result = inboxAudit(args, state);
+      break;
     case 'inbox_next':
       result = inboxNext(args, state);
       break;
     case 'capa_queue':
       result = capaQueue(args, state);
-      break;
-    case 'capability_next':
-      result = capabilityNext(state);
       break;
     default:
       throw new Error(`unknown_tool: ${name}`);
@@ -215,7 +242,7 @@ function inboxSubmit(args: InboxRecord, state: InboxServerState): InboxRecord {
     status: 'received',
     target_role: args.target_role ?? null,
     severity: Number.isFinite(args.severity) ? Number(args.severity) : undefined,
-    authority: { level: 'agent_reported', principal },
+    authority: { level: args.authority_level ?? 'agent_reported', principal },
     source: { kind: 'inbox_mcp_submit', principal },
     payload: {
       ...asRecord(args.payload),
@@ -303,15 +330,58 @@ function capaQueue(args: InboxRecord, state: InboxServerState): InboxRecord {
   return { status: 'ok', site_root: state.siteRoot, count: rows.length, envelopes: rows.slice(0, limit).map(summarizeRow) };
 }
 
-function capabilityNext(state: InboxServerState): InboxRecord {
-  const path = join(state.siteRoot, 'operator-surfaces', 'capability-announcements.json');
-  if (!existsSync(path)) {
-    return { status: 'not_configured', site_root: state.siteRoot, message: 'No local capability announcements file exists.' };
-  }
-  const doc = asRecord(JSON.parse(readFileSync(path, 'utf8')));
-  const capabilities = Array.isArray(doc.capabilities) ? doc.capabilities : [];
-  const next = capabilities.map(asRecord).find((item) => item.review_status !== 'completed') ?? null;
-  return { status: next ? 'ok' : 'empty', site_root: state.siteRoot, capability: next };
+function inboxAcknowledge(args: InboxRecord, state: InboxServerState): InboxRecord {
+  const envelopeId = requiredString(args, 'envelope_id');
+  const principal = requiredString(args, 'principal');
+  const row = readInboxEnvelopeById(state.siteRoot, envelopeId, { evaluateEnvelopeSeverity });
+  if (!row) return { status: 'not_found', envelope_id: envelopeId };
+  const event = emitEnvelopeAcknowledged(state.siteRoot, envelopeId, principal, typeof args.reason === 'string' ? args.reason : undefined);
+  refreshInboxIndex(state.siteRoot, { evaluateEnvelopeSeverity }).db?.close();
+  return { status: 'acknowledged', envelope_id: envelopeId, event_id: event.event_id, event_sequence: event.event_sequence };
+}
+
+function inboxDismiss(args: InboxRecord, state: InboxServerState): InboxRecord {
+  const envelopeId = requiredString(args, 'envelope_id');
+  const principal = requiredString(args, 'principal');
+  const reason = requiredString(args, 'reason');
+  const row = readInboxEnvelopeById(state.siteRoot, envelopeId, { evaluateEnvelopeSeverity });
+  if (!row) return { status: 'not_found', envelope_id: envelopeId };
+  const event = emitEnvelopeDismissed(state.siteRoot, envelopeId, principal, reason);
+  refreshInboxIndex(state.siteRoot, { evaluateEnvelopeSeverity }).db?.close();
+  return { status: 'dismissed', envelope_id: envelopeId, reason, event_id: event.event_id, event_sequence: event.event_sequence };
+}
+
+function inboxPromoteCapa(args: InboxRecord, state: InboxServerState): InboxRecord {
+  const envelopeId = requiredString(args, 'envelope_id');
+  const principal = requiredString(args, 'principal');
+  const row = readInboxEnvelopeById(state.siteRoot, envelopeId, { evaluateEnvelopeSeverity });
+  if (!row) return { status: 'not_found', envelope_id: envelopeId };
+  const event = emitEnvelopePromoted(state.siteRoot, envelopeId, principal, typeof args.reason === 'string' ? args.reason : undefined);
+  refreshInboxIndex(state.siteRoot, { evaluateEnvelopeSeverity }).db?.close();
+  return { status: 'promoted', envelope_id: envelopeId, event_id: event.event_id, event_sequence: event.event_sequence };
+}
+
+function inboxAudit(args: InboxRecord, state: InboxServerState): InboxRecord {
+  const limit = boundedLimit(args.limit, 50);
+  const envelopeId = typeof args.envelope_id === 'string' ? args.envelope_id : null;
+  let entries = readAdmissionLog(state.siteRoot);
+  if (envelopeId) entries = entries.filter((e) => String(e.envelope_id) === envelopeId);
+  const recent = entries.slice(-limit).reverse();
+  return {
+    status: 'ok',
+    site_root: state.siteRoot,
+    total_entries: entries.length,
+    count: recent.length,
+    entries: recent.map((e) => ({
+      event_id: e.event_id,
+      event_sequence: e.event_sequence,
+      event_kind: e.event_kind,
+      envelope_id: e.envelope_id,
+      principal: e.principal,
+      timestamp: e.timestamp,
+      payload: e.event_payload,
+    })),
+  };
 }
 
 function summarizeRow(row: unknown): InboxRecord {
@@ -367,12 +437,12 @@ function tool(name: string, description: string, properties: unknown, required: 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /submit|next|capability_next/.test(name);
+  const writes = /submit|acknowledge|dismiss|promote/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,
-    destructiveHint: false,
-    idempotentHint: /doctor|list|show|queue/.test(name),
+    destructiveHint: name === 'inbox_dismiss',
+    idempotentHint: /doctor|list|show|queue|audit/.test(name),
     openWorldHint: false,
   };
 }

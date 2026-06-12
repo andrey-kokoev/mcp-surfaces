@@ -16,7 +16,7 @@
     "test:delegated-task": "pnpm --filter @narada2/delegated-task-mcp test",
     "test:delegated-task:live": "pnpm --filter @narada2/delegated-task-mcp test:live",
     "test:worker-delegation": "pnpm --filter @narada2/worker-delegation-mcp test",
-    "test:inbox": "pnpm --filter @narada2/inbox-mcp test",
+    "test:inbox": "pnpm --filter @narada2/site-inbox-mcp test",
     "test:mailbox": "pnpm --filter @narada2/mailbox-mcp test",
     "test:graph-mail": "pnpm --filter @narada2/graph-mail-mcp test",
     "test:task-lifecycle": "pnpm --filter @narada2/task-lifecycle-mcp test",
@@ -24,7 +24,11 @@
     "test:agent-context": "pnpm --filter @narada2/agent-context-mcp test",
     "test:sop": "pnpm --filter @narada2/sop-mcp test",
     "test:scheduler": "pnpm --filter @narada2/scheduler-mcp test",
-    "test:registrar": "pnpm --filter @narada2/mcp-registrar test"
+    "test:registrar": "pnpm --filter @narada2/mcp-registrar test",
+    "test:surface-feedback": "pnpm --filter @narada2/surface-feedback-mcp test",
+    "test:speech": "pnpm --filter @narada2/speech-mcp test",
+    "test:cloudflare-carrier": "pnpm --filter @narada2/cloudflare-carrier-mcp test",
+    "test:site-coherence": "pnpm --filter @narada2/site-coherence-mcp test"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

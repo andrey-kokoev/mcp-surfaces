@@ -311,6 +311,7 @@ export function listTools() {
             },
           },
           trigger_kind: { type: 'string', enum: ['manual', 'inbox_event', 'schedule'] },
+          status: { type: 'string', enum: ['draft', 'active', 'deprecated'], description: 'Template status. Defaults to draft.' },
           acceptance_criteria: { type: 'array', items: { type: 'string' } },
           evidence_requirements: { type: 'array', items: { type: 'string' } },
         },
@@ -531,7 +532,7 @@ function sopTemplateUpdate(args: JsonRecord, state: SopState) {
   const evidenceReq = args.evidence_requirements !== undefined ? stringList(args.evidence_requirements) : JSON.parse(String(current.evidence_requirements_json));
   state.db.prepare(
     'INSERT INTO sop_templates (sop_id, version, title, status, description, steps_json, trigger_kind, acceptance_criteria_json, evidence_requirements_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(sopId, nextVersion, title, 'draft', description, JSON.stringify(steps), triggerKind, JSON.stringify(criteria), JSON.stringify(evidenceReq), now, now);
+  ).run(sopId, nextVersion, title, optionalString(args.status) ?? 'draft', description, JSON.stringify(steps), triggerKind, JSON.stringify(criteria), JSON.stringify(evidenceReq), now, now);
   appendSopEvent(state, 'template_updated', { sop_id: sopId, version: nextVersion, previous_version: current.version });
   return { status: 'updated', sop_id: sopId, version: nextVersion, previous_version: current.version, title, step_count: steps.length };
 }

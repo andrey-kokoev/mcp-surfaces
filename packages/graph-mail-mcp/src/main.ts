@@ -410,8 +410,11 @@ async function uploadAttachmentBytes(uploadUrl: string, bytes: Buffer, rangeStar
     const diagnostic = redactUploadUrlText(text || response.statusText || 'unknown_error', uploadUrl);
     throw new Error(`attachment_upload_failed:${response.status}:${diagnostic}`);
   }
-  if (response.status === 202 || response.status === 204 || text.trim() === '') {
+  if (response.status === 202 || response.status === 204) {
     return { schema: 'narada.graph_mail_mcp.attachment_upload_chunk.v1', status: 'accepted', http_status: response.status };
+  }
+  if (text.trim() === '') {
+    return { schema: 'narada.graph_mail_mcp.attachment_upload_chunk.v1', status: 'ok', http_status: response.status, result: {} };
   }
   try {
     return { schema: 'narada.graph_mail_mcp.attachment_upload_chunk.v1', status: 'ok', http_status: response.status, result: JSON.parse(text) };
@@ -513,7 +516,7 @@ async function graphMailQuery(args: GraphMailRecord, state: GraphMailServerState
   if (typeof args.select === 'string') query['$select'] = args.select;
   if (typeof args.filter === 'string') query['$filter'] = args.filter;
   if (typeof args.query === 'string') query['$search'] = `"${args.query.replace(/"/g, '\\"')}"`;
-  if (!query['$search'] && !query['$filter']) query['$orderby'] = 'receivedDateTime desc';
+  if (!query['$search']) query['$orderby'] = 'receivedDateTime desc';
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { path, query });
   return {
     schema: 'narada.graph_mail_mcp.query.v1',
@@ -625,7 +628,7 @@ async function graphMailAttachmentUploadFile(args: GraphMailRecord, state: Graph
     chunk_size: chunkSize,
     chunk_count: chunkCount,
     sha256,
-    attachment: Object.keys(finalResult ?? {}).length > 0 ? finalResult : null,
+    attachment: finalResult ?? null,
   };
 }
 

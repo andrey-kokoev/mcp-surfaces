@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/cloudflare-carrier-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Cloudflare-carrier live operations MCP surface wrapping product-read, session capture, and continuity sync.",
+  "bin": {
+    "cloudflare-carrier-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/cloudflare-carrier-mcp.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

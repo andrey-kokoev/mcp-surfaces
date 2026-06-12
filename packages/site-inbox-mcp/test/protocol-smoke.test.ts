@@ -25,7 +25,7 @@ try {
     params: { protocolVersion: '2024-11-05' },
   }, state);
   assert.equal(init.error, undefined);
-  assert.equal(init.result.serverInfo.name, 'narada-inbox-mcp');
+  assert.equal(init.result.serverInfo.name, 'narada-site-inbox-mcp');
 
   const tools = rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
   assert.equal(tools.error, undefined);
@@ -36,9 +36,12 @@ try {
     'inbox_list',
     'inbox_show',
     'inbox_submit',
+    'inbox_acknowledge',
+    'inbox_dismiss',
+    'inbox_promote_capa',
+    'inbox_audit',
     'inbox_next',
     'capa_queue',
-    'capability_next',
   ]);
   const inboxList = toolRows.find((tool) => tool.name === 'inbox_list');
   assert.ok(inboxList);
