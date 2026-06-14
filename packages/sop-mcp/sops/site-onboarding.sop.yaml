@@ -1,0 +1,104 @@
+sop_id: site-onboarding
+title: Site Onboarding SOP
+description: |
+  Procedure for onboarding a new Site into the Narada weave.
+  Covers identity verification, root probing, trust-pin creation,
+  connectivity planning, registrar surface binding, and lift-catalog
+  adoption readiness.
+status: active
+trigger_kind: manual
+steps:
+  - id: verify_identity
+    executor: operator
+    blocking: true
+    title: Verify site identity
+    depends_on: []
+    instructions: |
+      Confirm the target site root exists and is reachable.
+      Verify site_id matches known sites registry.
+      Check that .narada/ site identity material is present.
+
+  - id: probe_root
+    executor: engine
+    blocking: false
+    title: Probe site root
+    depends_on: [verify_identity]
+    instructions: Execute read-only site probe to collect governance metadata.
+    command: node
+    args:
+      - -e
+      - process.stdout.write(JSON.stringify({root:"ok",governance:"found"}))
+
+  - id: create_trust_pin
+    executor: operator
+    blocking: true
+    title: Create trust pin
+    depends_on: [probe_root]
+    instructions: |
+      Review site identity document and decide trust posture.
+      If trusted, record the trust-pin in local identity_trust registry.
+      If untrusted, record as quarantined with evidence.
+
+  - id: plan_connectivity
+    executor: agent
+    blocking: true
+    title: Plan two-way connectivity
+    depends_on: [create_trust_pin]
+    instructions: |
+      Run site_connectivity_plan for the target site.
+      Return the connectivity plan including inbox proposal payload.
+      Do not submit the proposal — operator must review first.
+
+  - id: review_connectivity
+    executor: operator
+    blocking: true
+    title: Review and approve connectivity plan
+    depends_on: [plan_connectivity]
+    instructions: |
+      Review the connectivity plan from the previous step.
+      If acceptable, submit the reciprocal inbox proposal.
+      Record the connectivity decision.
+
+  - id: bind_surfaces
+    executor: agent
+    blocking: true
+    title: Bind MCP surfaces via registrar
+    depends_on: [review_connectivity]
+    instructions: |
+      Use mcp_registrar to bind required surfaces for the new site.
+      Verify carrier config files are updated correctly.
+      Report binding summary.
+
+  - id: adoption_readiness
+    executor: agent
+    blocking: true
+    title: Check lift catalog adoption readiness
+    depends_on: [bind_surfaces]
+    instructions: |
+      Query site_lift_catalog_list for adoptable artifacts.
+      For each relevant artifact, retrieve the adoption plan.
+      Produce an adoption readiness report.
+
+  - id: final_signoff
+    executor: operator
+    blocking: true
+    title: Final sign-off
+    depends_on: [adoption_readiness]
+    instructions: |
+      Review the full onboarding evidence.
+      Sign off if all gates are satisfied.
+      Record completion with site-onboarding-complete event.
+
+acceptance_criteria:
+  - Site root is reachable and identity is verified
+  - Trust pin is recorded
+  - Two-way connectivity is planned and approved
+  - MCP surfaces are bound via registrar
+  - Adoption readiness report is produced
+
+evidence_requirements:
+  - Site probe output
+  - Signed trust-pin record
+  - Connectivity plan
+  - Registrar binding summary
+  - Adoption readiness report

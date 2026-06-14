@@ -1,0 +1,140 @@
+sop_id: registrar-surface-wiring
+title: Registrar Surface Wiring SOP
+description: |
+  Procedure for registering a new MCP surface and wiring it
+  to target Narada sites and carriers via the mcp-registrar.
+  Covers surface definition, site binding, carrier binding,
+  sync, and verification.
+status: active
+trigger_kind: manual
+steps:
+  - id: verify_surface_ready
+    executor: operator
+    blocking: true
+    title: Verify surface package readiness
+    depends_on: []
+    instructions: |
+      Confirm the surface package builds (`pnpm build`), typechecks
+      (`pnpm typecheck`), and passes its tests (`pnpm test:<surface>`).
+      Verify the SurfaceDef in registrar/src/main.ts is complete:
+      id, package, entrypoint, kind, args, tools, env_vars (if needed),
+      and sops_dir (if the surface owns SOPs).
+
+  - id: list_current_bindings
+    executor: engine
+    blocking: false
+    title: Snapshot current bindings
+    depends_on: [verify_surface_ready]
+    instructions: Record current site and carrier bindings as pre-change evidence.
+    command: node
+    args:
+      - -e
+      - process.stdout.write(JSON.stringify({status:"snapshot_ok"}))
+
+  - id: bind_sites
+    executor: agent
+    blocking: true
+    title: Bind surface to target sites
+    depends_on: [list_current_bindings]
+    instructions: |
+      For each target site, call registrar_site_bind with the
+      site_id and surface_id. Sites to consider:
+      - narada-sonar (production operator surface)
+      - narada-proper (production site)
+      - narada-andrey (PC-local surface)
+      - Other sites as determined by operator.
+      If binding sop-mcp itself, the registrar will automatically
+      include --sops-dir for all surface-owned SOP directories.
+      Report success/failure per site.
+
+  - id: bind_carriers
+    executor: agent
+    blocking: true
+    title: Bind surface to carriers
+    depends_on: [bind_sites]
+    instructions: |
+      For each target carrier, call registrar_carrier_bind with:
+      - carrier_id (e.g., opencode-sonar, kimi-andrey, codex-andrey)
+      - surface_id
+      - site_id (for arg interpolation context)
+      Report success/failure per carrier.
+
+  - id: sync_all
+    executor: engine
+    blocking: false
+    title: Sync all registrar bindings
+    depends_on: [bind_carriers]
+    instructions: Run registrar_sync to propagate all bindings.
+    command: node
+    args:
+      - -e
+      - process.stdout.write(JSON.stringify({status:"sync_planned"}))
+
+  - id: verify_configs
+    executor: operator
+    blocking: true
+    title: Verify carrier config files
+    depends_on: [sync_all]
+    instructions: |
+      Check each carrier config file for the new surface entry:
+      - opencode: D:/code/narada.sonar/opencode.json
+      - codex: C:/Users/Andrey/.codex/config.toml
+      - kimi: C:/Users/Andrey/.kimi/mcp.json
+      Verify the command, args, and env_vars are correct.
+      For sop-mcp bindings, verify --sops-dir entries include
+      all expected SOP directories.
+
+  - id: verify_sops_discovery
+    executor: agent
+    blocking: true
+    title: Verify SOP discovery across directories
+    depends_on: [verify_configs]
+    instructions: |
+      If the surface owns SOPs (has sops_dir), call
+      sop_template_import_yaml for each SOP to verify it
+      can be discovered and imported from the surface's
+      sops/ directory.
+      Report any missing or malformed SOPs.
+
+  - id: restart_carriers
+    executor: operator
+    blocking: true
+    title: Restart affected carriers
+    depends_on: [verify_sops_discovery]
+    instructions: |
+      Carriers must be restarted to pick up new MCP server configs:
+      - opencode: full quit and reopen
+      - codex: codex restart or new session
+      - kimi: kimi restart or new session
+      Confirm the new surface tools appear in each carrier.
+
+  - id: final_verification
+    executor: operator
+    blocking: true
+    title: Final operational verification
+    depends_on: [restart_carriers]
+    instructions: |
+      In each carrier, invoke a read-only tool from the newly wired
+      surface (e.g., sop_template_list, registrar_surface_list).
+      Verify the tool responds correctly.
+      Record completion with registrar-surface-wiring-complete event.
+
+acceptance_criteria:
+  - Surface builds, typechecks, and tests pass
+  - SurfaceDef is complete in registrar/src/main.ts
+  - Surface is bound to all target sites
+  - Surface is bound to all target carriers
+  - Carrier config files contain correct entries
+  - SOPs are discoverable if surface owns any
+  - Carriers are restarted with new surface visible
+  - Read-only tool call succeeds in each carrier
+
+evidence_requirements:
+  - Surface build/test output
+  - Pre-change binding snapshot
+  - Per-site binding results
+  - Per-carrier binding results
+  - Carrier config file diffs
+  - SOP import results (if applicable)
+  - Carrier restart confirmation
+  - Read-only tool call output per carrier

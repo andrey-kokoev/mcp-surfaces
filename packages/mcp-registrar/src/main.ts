@@ -17,6 +17,7 @@ type SurfaceDef = {
   args: string[];
   tools: string[];
   env_vars?: string[];
+  sops_dir?: string;
 };
 
 type SiteDef = {
@@ -117,7 +118,8 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'],
-    tools: ['sop_template_create', 'sop_template_show', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_run_start', 'sop_run_status', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events'],
+    tools: ['sop_template_create', 'sop_template_show', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_run_start', 'sop_run_status', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events'],
+    sops_dir: `${MCP_SURFACES_ROOT}/sop-mcp/sops`,
   },
   {
     id: 'scheduler', package: 'scheduler-mcp',
@@ -132,6 +134,7 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: [],
     tools: ['registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync'],
+    sops_dir: `${MCP_SURFACES_ROOT}/mcp-registrar/sops`,
   },
   {
     id: 'surface-feedback', package: 'surface-feedback-mcp',
@@ -177,7 +180,7 @@ const KNOWN_SITES: SiteDef[] = [
 
 const CARRIERS: CarrierDef[] = [
   { carrier_id: 'opencode-sonar', kind: 'opencode', config_path: 'D:/code/narada.sonar/opencode.json', surfaces: [] },
-  { carrier_id: 'kimi-andrey', kind: 'kimi', config_path: 'C:/Users/Andrey/.kimi/mcp.json', surfaces: [] },
+  { carrier_id: 'kimi-andrey', kind: 'kimi', config_path: 'C:/Users/Andrey/.kimi-code/mcp.json', surfaces: [] },
   { carrier_id: 'codex-andrey', kind: 'codex', config_path: 'C:/Users/Andrey/.codex/config.toml', surfaces: [] },
 ];
 
@@ -315,15 +318,16 @@ export function listTools() {
     },
     {
       name: 'registrar_sync',
-      description: 'Bind a surface to all sites that match a filter, or to all carriers.',
+      description: 'Bind a surface to all sites/carriers, or bind all surfaces to carriers.',
       inputSchema: {
         type: 'object',
         properties: {
-          surface_id: { type: 'string' },
-          target: { type: 'string', enum: ['all_sites', 'all_carriers', 'all'], description: 'Target scope: all_sites, all_carriers, or all.' },
+          surface_id: { type: 'string', description: 'Surface identifier. Required unless target is all_surfaces_to_carriers or all_surfaces_to_all_carriers.' },
+          target: { type: 'string', enum: ['all_sites', 'all_carriers', 'all', 'all_surfaces_to_carriers', 'all_surfaces_to_all_carriers'], description: 'all_sites/all_carriers/all: bind one surface. all_surfaces_to_carriers: bind all surfaces to a specific carrier. all_surfaces_to_all_carriers: bind all surfaces to all carriers.' },
+          carrier_id: { type: 'string', description: 'Required when target is all_surfaces_to_carriers.' },
           site_filter: { type: 'string', description: 'Optional prefix filter for site IDs, e.g. narada-.' },
         },
-        required: ['surface_id', 'target'],
+        required: ['target'],
         additionalProperties: false,
       },
       annotations: { title: 'registrar_sync', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -370,7 +374,20 @@ function lookupCarrier(carrierId: string): CarrierDef {
 }
 
 function interpolateArgs(args: string[], siteId: string, siteRoot: string): string[] {
-  return args.map((a) => a.replace(/\{site_root\}/g, siteRoot).replace(/\{site_id\}/g, siteId));
+  return args.map((a) => interpolateArg(a, siteId, siteRoot));
+}
+
+function interpolateArg(value: string, siteId: string, siteRoot: string): string {
+  return value.replace(/\{site_root\}/g, siteRoot).replace(/\{site_id\}/g, siteId);
+}
+
+function appendSopsDirs(args: string[]): string[] {
+  for (const def of SURFACES) {
+    if (def.sops_dir) {
+      args.push('--sops-dir', def.sops_dir);
+    }
+  }
+  return args;
 }
 
 function registrarSurfaceList(_args: JsonRecord): JsonRecord {
@@ -413,6 +430,8 @@ function registrarSiteBind(args: JsonRecord): JsonRecord {
   const fileName = `${siteId}-${surfaceId}-mcp.json`;
   const filePath = join(configDir, fileName);
   const resolvedArgs = interpolateArgs(surface.args, siteId, site.root);
+  if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
+
   const config = {
     schema: 'narada.mcp.client_config.v0',
     site_id: siteId,
@@ -470,13 +489,17 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
   const site = KNOWN_SITES.find((s) => s.site_id === defaultSiteId);
   const siteRoot = site ? site.root : defaultSiteId;
 
+  const resolvedArgs = interpolateArgs(surface.args, defaultSiteId, siteRoot);
+  const resolvedEntrypoint = interpolateArg(surface.entrypoint, defaultSiteId, siteRoot);
+  if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
+
   switch (carrier.kind) {
     case 'opencode':
-      return opencodeBind(carrier.config_path, surfaceId, surface, siteRoot);
+      return opencodeBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
     case 'kimi':
-      return kimiBind(carrier.config_path, surfaceId, surface, siteRoot);
+      return kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
     case 'codex':
-      return codexBind(carrier.config_path, surfaceId, surface);
+      return codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
     default:
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
@@ -498,17 +521,16 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   }
 }
 
-function opencodeBind(configPath: string, surfaceId: string, surface: SurfaceDef, siteRoot: string): JsonRecord {
+function opencodeBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
   const mcp = asRecord(cfg.mcp);
   const serverKey = `narada-sonar-${surfaceId}`;
   if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
-  const resolvedArgs = interpolateArgs(surface.args, 'narada-sonar', siteRoot);
   mcp[serverKey] = {
     type: 'local',
-    command: ['node', surface.entrypoint, ...resolvedArgs],
+    command: ['node', entrypoint, ...resolvedArgs],
     enabled: true,
   };
   writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
@@ -527,7 +549,7 @@ function opencodeUnbind(configPath: string, surfaceId: string): JsonRecord {
   return { status: 'unbound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
 }
 
-function kimiBind(configPath: string, surfaceId: string, surface: SurfaceDef, _siteRoot: string): JsonRecord {
+function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
@@ -537,7 +559,7 @@ function kimiBind(configPath: string, surfaceId: string, surface: SurfaceDef, _s
   mcp[serverKey] = {
     transport: 'stdio',
     command: 'node',
-    args: [surface.entrypoint],
+    args: [entrypoint, ...resolvedArgs],
   };
   writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
   return { status: 'bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
@@ -555,12 +577,12 @@ function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
   return { status: 'unbound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
 }
 
-function codexBind(configPath: string, surfaceId: string, surface: SurfaceDef): JsonRecord {
+function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   let content = readFileSync(configPath, 'utf8');
   const sectionKey = `[mcp_servers.${surfaceId}]`;
   if (content.includes(sectionKey)) return { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
-  content += `\n${sectionKey}\ncommand = "node"\nargs = ${JSON.stringify([surface.entrypoint])}\n`;
+  content += `\n${sectionKey}\ncommand = "node"\nargs = ${JSON.stringify([entrypoint, ...resolvedArgs])}\n`;
   writeFileSync(configPath, content, 'utf8');
   return { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
 }
@@ -582,10 +604,31 @@ function codexUnbind(configPath: string, surfaceId: string): JsonRecord {
 }
 
 function registrarSync(args: JsonRecord): JsonRecord {
-  const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const target = requiredString(args.target, 'registrar_requires_target');
-  lookupSurface(surfaceId);
   const results: JsonRecord[] = [];
+
+  if (target === 'all_surfaces_to_carriers') {
+    const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id_for_target');
+    lookupCarrier(carrierId);
+    for (const surface of SURFACES) {
+      try { results.push(registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id })); }
+      catch (e) { results.push({ carrier_id: carrierId, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
+    }
+    return { target, carrier_id: carrierId, results, count: results.length };
+  }
+
+  if (target === 'all_surfaces_to_all_carriers') {
+    for (const carrier of CARRIERS) {
+      for (const surface of SURFACES) {
+        try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id })); }
+        catch (e) { results.push({ carrier_id: carrier.carrier_id, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
+      }
+    }
+    return { target, results, count: results.length };
+  }
+
+  const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
+  lookupSurface(surfaceId);
   if (target === 'all_sites' || target === 'all') {
     for (const site of KNOWN_SITES) {
       try { results.push(registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId })); }

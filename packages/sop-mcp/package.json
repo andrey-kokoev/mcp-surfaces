@@ -19,8 +19,15 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/sop-mcp.test.js && node dist/test/protocol-smoke.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "js-yaml": "^4.2.0"
+  },
   "files": [
-    "dist/"
-  ]
+    "dist/",
+    "sops/"
+  ],
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9"
+  }
 }

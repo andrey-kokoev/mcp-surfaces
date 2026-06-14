@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "narada:sop-template.v1.schema.json",
+  "title": "SOP Template",
+  "description": "Schema for SOP template YAML files consumed by sop_template_import_yaml.",
+  "type": "object",
+  "properties": {
+    "sop_id": {
+      "type": "string",
+      "description": "Stable SOP identifier, e.g. site-onboarding."
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable title."
+    },
+    "description": {
+      "type": "string",
+      "description": "Purpose and scope of this SOP."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "active", "deprecated"],
+      "default": "draft",
+      "description": "Template status. Defaults to draft."
+    },
+    "trigger_kind": {
+      "type": "string",
+      "enum": ["manual", "inbox_event", "schedule"],
+      "default": "manual",
+      "description": "What triggers a run of this SOP."
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Step identifier, e.g. verify_identity."
+          },
+          "executor": {
+            "type": "string",
+            "enum": ["engine", "agent", "operator"],
+            "description": "Who performs: engine (auto), agent (programmatic), operator (human)."
+          },
+          "blocking": {
+            "type": "boolean",
+            "description": "If true, the run pauses and waits for sop_run_advance to complete this step."
+          },
+          "title": {
+            "type": "string",
+            "description": "Step title."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Step IDs this step depends on."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "What the executor must do."
+          },
+          "command": {
+            "type": "string",
+            "description": "For engine steps: the executable."
+          },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For engine steps: argv."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "For engine steps: timeout in milliseconds."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "For command steps: working directory."
+          }
+        },
+        "required": ["id", "executor", "title", "instructions"],
+        "additionalProperties": false
+      },
+      "description": "Ordered SOP steps."
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Acceptance criteria for validating SOP completion."
+    },
+    "evidence_requirements": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Evidence expected from each run."
+    }
+  },
+  "required": ["sop_id", "title", "steps"],
+  "additionalProperties": false
+}

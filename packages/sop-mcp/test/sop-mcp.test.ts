@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'sop-mcp-behavior-'));
+const sopsDir = join(root, 'test-sops');
+mkdirSync(sopsDir, { recursive: true });
 let state: any;
 
 try {
-  state = createServerState({ sopRoot: root });
+  state = createServerState({ sopRoot: root, sopsDirs: [sopsDir] });
 
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -74,6 +76,110 @@ try {
 
   const searchMiss = await call('sop_template_search', { query: 'zzznonexistent' });
   assert.equal((view(searchMiss).items as Array<unknown>).length, 0);
+
+  // --- YAML import tests ---
+
+  writeFileSync(join(sopsDir, 'import-test.sop.yaml'), `
+sop_id: import-test
+title: Imported SOP
+description: Created from YAML.
+steps:
+  - id: step1
+    executor: engine
+    blocking: false
+    title: Step One
+    instructions: Do step one.
+    depends_on: []
+acceptance_criteria:
+  - Import succeeds
+evidence_requirements:
+  - YAML file
+`.trim() + '\n', 'utf8');
+
+  const imported = await call('sop_template_import_yaml', { sop_id: 'import-test' });
+  assert.equal(view(imported).status, 'created');
+  assert.equal(view(imported).sop_id, 'import-test');
+  assert.equal(view(imported).version, 1);
+  assert.equal(view(imported).title, 'Imported SOP');
+  assert.equal(view(imported).step_count, 1);
+
+  const showImported = await call('sop_template_show', { sop_id: 'import-test' });
+  assert.equal(view(showImported).title, 'Imported SOP');
+  assert.equal(view(showImported).description, 'Created from YAML.');
+  assert.equal(view(showImported).status, 'draft');
+  assert.equal(view(showImported).trigger_kind, 'manual');
+  const importedSteps = view(showImported).steps as Array<Record<string, any>>;
+  assert.equal(importedSteps.length, 1);
+  assert.equal(importedSteps[0].id, 'step1');
+  assert.equal(importedSteps[0].executor, 'engine');
+
+  const reimport = await call('sop_template_import_yaml', { sop_id: 'import-test' });
+  assert.equal(view(reimport).status, 'unchanged');
+  assert.equal(view(reimport).version, 1);
+
+  writeFileSync(join(sopsDir, 'import-test.sop.yaml'), `
+sop_id: import-test
+title: Imported SOP v2
+description: Updated from YAML.
+steps:
+  - id: step1
+    executor: engine
+    blocking: false
+    title: Step One
+    instructions: Do step one.
+    depends_on: []
+  - id: step2
+    executor: operator
+    blocking: true
+    title: Step Two
+    instructions: Do step two.
+    depends_on: [step1]
+acceptance_criteria:
+  - Updated import succeeds
+evidence_requirements:
+  - Updated YAML file
+`.trim() + '\n', 'utf8');
+
+  const reimportChanged = await call('sop_template_import_yaml', { sop_id: 'import-test' });
+  assert.equal(view(reimportChanged).status, 'updated');
+  assert.equal(view(reimportChanged).version, 2);
+  assert.equal(view(reimportChanged).title, 'Imported SOP v2');
+  assert.equal(view(reimportChanged).step_count, 2);
+
+  const showV2 = await call('sop_template_show', { sop_id: 'import-test' });
+  assert.equal(view(showV2).version, 2);
+
+  // --- YAML error cases ---
+
+  assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'nonexistent' })), 'sop_yaml_not_found');
+
+  writeFileSync(join(sopsDir, 'bad-syntax.sop.yaml'), 'sop_id: bad-syntax\n  steps:\n', 'utf8');
+
+  assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'bad-syntax' })), 'sop_yaml_parse_error');
+
+  writeFileSync(join(sopsDir, 'id-mismatch.sop.yaml'), 'sop_id: wrong-id\ntitle: Test\nsteps:\n  - id: s1\n    executor: engine\n    title: S1\n    instructions: Do.\n', 'utf8');
+
+  assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'id-mismatch' })), 'sop_yaml_id_mismatch');
+
+  writeFileSync(join(sopsDir, 'bad-schema.sop.yaml'), 'sop_id: bad-schema\ntitle: Bad Schema\nsteps: []\n', 'utf8');
+
+  assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'bad-schema' })), 'sop_yaml_schema_error');
+
+  writeFileSync(join(sopsDir, 'bad-dep.sop.yaml'), `
+sop_id: bad-dep
+title: Bad Dep
+steps:
+  - id: s1
+    executor: engine
+    blocking: false
+    title: S1
+    instructions: Do.
+    depends_on: [nonexistent]
+`.trim() + '\n', 'utf8');
+
+  assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'bad-dep' })), 'sop_unknown_dependency');
+
+  // --- End YAML import tests ---
 
   const deprecate = await call('sop_template_deprecate', { sop_id: 'site-onboarding', reason: 'Replaced.' });
   assert.equal(view(deprecate).status, 'deprecated');

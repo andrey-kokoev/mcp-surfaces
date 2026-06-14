@@ -21,6 +21,7 @@
   },
   "dependencies": {},
   "files": [
-    "dist/"
+    "dist/",
+    "sops/"
   ]
 }
