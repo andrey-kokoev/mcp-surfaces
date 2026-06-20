@@ -47,7 +47,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'structured-command', package: 'structured-command-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/structured-command-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--allowed-root', '{site_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm', '--allow-command', 'git'],
+    args: ['--allowed-root', '{site_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'],
     tools: ['structured_command_execution_policy_inspect', 'structured_command_output_show', 'structured_command_execute', 'structured_command_input_create'],
   },
   {
