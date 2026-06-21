@@ -83,7 +83,7 @@ export function createServerState(options: JsonRecord = {}): State {
     throw diag('delegated_task_root_outside_allowed_roots', 'delegated_task_root_outside_allowed_roots', { task_root: taskRoot, allowed_roots: allowedRoots });
   }
   const workerState: WorkerMcpState = {
-    policy: createWorkerPolicy({ ...rec(options.workerPolicy), allowedRoots, runRoot: resolve(taskRoot, 'worker-runs') }),
+    policy: createWorkerPolicy({ ...rec(options.workerPolicy), allowedRoots }),
     env: process.env,
     activeRunCount: 0,
   };

@@ -57,6 +57,10 @@ try {
   assert.equal(policyView.allowed_workflow_kinds.includes('review'), true);
   assert.equal(policyView.condition_language.includes('all(<expr>,<expr>)'), true);
   assert.equal(policyView.policy_schema, 'narada.delegated_task.policy.v1');
+  assert.notEqual(state.workerState.policy.runRoot, join(root, 'worker-runs'));
+  const explicitWorkerRunRoot = join(root, 'explicit-worker-runs');
+  const explicitWorkerRootState = createServerState({ taskRoot: root, allowedRoots: [root], workerPolicy: { runRoot: explicitWorkerRunRoot } });
+  assert.equal(explicitWorkerRootState.workerState.policy.runRoot, explicitWorkerRunRoot);
 
   const invalid = await callTool(state, 'delegated_task_validate', {
     objective: 'Invalid graph',
