@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/mcp-loader-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Policy-gated runtime MCP surface loader and proxy.",
+  "bin": {
+    "mcp-loader-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}
