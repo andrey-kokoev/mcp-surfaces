@@ -8,7 +8,7 @@ This package executes commands as argv arrays, not shell strings. It is intended
 
 - Allowed: execute admitted commands with explicit argv arrays.
 - Allowed: inspect execution policy.
-- Allowed: read materialized command output refs.
+- Allowed: page command stdout/stderr by re-calling the producing execution tool with its `execution_ref`.
 - Not allowed: shell strings, shell interpolation, pipes, redirection, command separators, or wildcard expansion by this surface.
 - Not allowed: working directories outside admitted roots.
 - Not allowed: broad mutation authority; command admission must be explicit and narrow.
@@ -37,7 +37,6 @@ The server validates:
 
 - `structured_command_execute`: execute one admitted command.
 - `structured_command_execution_policy_inspect`: inspect roots, command admission, blocked commands, limits, and default allowed commands.
-- `structured_command_output_show`: read materialized command output by output ref.
 
 ## Policy
 
@@ -54,7 +53,7 @@ By default, selected deployment tools such as `railway` and `wrangler` may be ad
 
 ## Output Refs
 
-Large stdout/stderr payloads can be materialized and returned as refs. Use `structured_command_output_show` with `offset` and `limit` to read them.
+Large stdout/stderr payloads are paged by `structured_command_execute`. Re-call `structured_command_execute` with the returned `execution_ref` plus `stdout_offset`/`stdout_limit` or `stderr_offset`/`stderr_limit` to read later pages.
 
 ## Audit
 

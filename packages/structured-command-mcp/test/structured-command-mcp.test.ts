@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createServerState,
+  buildElevatedWindowBrokerCommand,
   executeStructuredCommand,
   handleRequest,
 } from '../src/main.js';
@@ -53,10 +54,31 @@ const stateWithDefaultCommands = createServerState({
   allowedRoot: root,
   auditLogDir: join(root, 'audit-default-commands'),
 });
+const siteRoot = join(root, 'site-root');
+const outsideRoot = join(root, 'extra-root');
+mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+writeFileSync(join(siteRoot, '.narada', 'allowed-roots.json'), JSON.stringify({ extra_allowed_roots: [outsideRoot] }), 'utf8');
+writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { STRUCTURED_COMMAND_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+const originalStructuredCommandSecret = process.env.STRUCTURED_COMMAND_TEST_SECRET;
+delete process.env.STRUCTURED_COMMAND_TEST_SECRET;
+const stateFromSiteRoot = createServerState({
+  siteRoot,
+  allowedRoot: root,
+  allowCommand: ['node'],
+  auditLogDir: join(root, 'audit-site-root'),
+});
+if (originalStructuredCommandSecret === undefined) delete process.env.STRUCTURED_COMMAND_TEST_SECRET;
+else process.env.STRUCTURED_COMMAND_TEST_SECRET = originalStructuredCommandSecret;
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: typeof state) => Promise<JsonRpcTestResponse>;
 const exec = executeStructuredCommand as unknown as (args: Record<string, unknown>, requestState: typeof state) => Promise<ExecutionResult>;
 
 assert.equal(state.policy.maxTimeoutMs, 300_000);
+assert.equal(stateFromSiteRoot.policy.allowedRoots.some((allowedRoot) => allowedRoot === outsideRoot), true);
+assert.equal(stateFromSiteRoot.env.STRUCTURED_COMMAND_TEST_SECRET, 'from-site-secret');
+assert.equal(originalStructuredCommandSecret === undefined ? process.env.STRUCTURED_COMMAND_TEST_SECRET === undefined : process.env.STRUCTURED_COMMAND_TEST_SECRET === originalStructuredCommandSecret, true);
+
+const stateEnvExecution = await exec({ command: 'node', args: ['-e', 'process.stdout.write(process.env.STRUCTURED_COMMAND_TEST_SECRET || "")'], working_directory: root }, stateFromSiteRoot);
+assert.equal(stateEnvExecution.stdout, 'from-site-secret');
 
 for (const command of ['railway', 'wrangler']) {
   const decision = decideStructuredCommandExecution({
@@ -105,13 +127,61 @@ assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
 const toolNames = tools.result.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames, [
+  'structured_command_elevated_window_execute',
   'structured_command_execute',
   'structured_command_execution_policy_inspect',
   'structured_command_input_create',
-  'structured_command_output_show',
 ]);
-const outputShowTool = tools.result.tools.find((tool) => tool.name === 'structured_command_output_show');
-assert.ok(outputShowTool.inputSchema.properties.limit);
+const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
+assert.ok(executeTool.inputSchema.properties.execution_ref);
+assert.ok(executeTool.inputSchema.properties.stdout_offset);
+assert.ok(executeTool.inputSchema.properties.stdout_limit);
+
+const broker = buildElevatedWindowBrokerCommand({
+  command: 'pwsh.exe',
+  args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'admin-tool.ps1'), "O'Hare"],
+  workingDirectory: root,
+  wait: false,
+});
+assert.equal(broker.command, 'powershell.exe');
+assert.ok(broker.args.includes('-Command'));
+assert.match(broker.script, /-Verb RunAs/);
+assert.match(broker.script, /O''Hare/);
+
+const elevatedDryRun = await rpc({
+  jsonrpc: '2.0',
+  id: 51,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_elevated_window_execute',
+    arguments: {
+      command: 'pwsh.exe',
+      args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'admin-tool.ps1')],
+      working_directory: root,
+      dry_run: true,
+    },
+  },
+}, stateWithDefaultCommands);
+assert.equal(elevatedDryRun.result.structuredContent.status, 'planned');
+assert.equal(elevatedDryRun.result.structuredContent.executed, false);
+assert.equal(elevatedDryRun.result.structuredContent.broker.command, 'powershell.exe');
+assert.match(elevatedDryRun.result.structuredContent.broker.script, /Start-Process/);
+
+const elevatedBlocked = await rpc({
+  jsonrpc: '2.0',
+  id: 52,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_elevated_window_execute',
+    arguments: {
+      command: 'node',
+      args: ['--version'],
+      working_directory: root,
+    },
+  },
+}, state);
+assert.equal(elevatedBlocked.result.structuredContent.status, 'refused');
+assert.ok(elevatedBlocked.result.structuredContent.refusal_reasons.includes('confirm_elevation_required'));
 
 const ok = await exec({
   command: 'node',
@@ -129,6 +199,19 @@ const okWithLongerTimeout = await exec({
 }, state);
 assert.equal(okWithLongerTimeout.status, 'ok');
 assert.equal(okWithLongerTimeout.timeout_ms, 120_000);
+
+const timedOut = await exec({
+  command: 'node',
+  args: ['-e', 'setTimeout(() => {}, 10000)'],
+  working_directory: root,
+  timeout_ms: 50,
+}, state);
+assert.equal(timedOut.status, 'timed_out');
+assert.equal(timedOut.executed, true);
+assert.equal(timedOut.timed_out, true);
+assert.equal(timedOut.cancelled, false);
+assert.match(String(timedOut.execution_ref), /^structured_command_execution:/);
+
 const okFromTrustConfig = await exec({
   command: 'node',
   args: ['--version'],
@@ -294,8 +377,8 @@ assert.equal(smallCall.result.structuredContent.schema, 'narada.structured_comma
 assert.equal(smallCall.result.structuredContent.status, 'ok');
 assert.equal(smallCall.result.structuredContent.exit_code, 0);
 assert.match(smallCall.result.structuredContent.stdout, /^v\d+/);
-assert.equal(smallCall.result.structuredContent.stdout_ref, undefined);
-assert.equal(smallCall.result.structuredContent.output_ref, undefined);
+assert.match(smallCall.result.structuredContent.execution_ref, /^structured_command_execution:/);
+assert.equal(smallCall.result.structuredContent.stdout_next_offset, null);
 
 const largeCall = await rpc({
   jsonrpc: '2.0',
@@ -317,56 +400,55 @@ assert.equal(largeCall.result.structuredContent.schema, 'narada.structured_comma
 assert.equal(largeCall.result.structuredContent.status, 'ok');
 assert.equal(largeCall.result.structuredContent.stdout_char_length, 6500);
 assert.equal(largeCall.result.structuredContent.stdout, 'x'.repeat(1000));
-assert.match(largeCall.result.structuredContent.stdout_ref, /^structured_command_output:/);
+assert.match(largeCall.result.structuredContent.execution_ref, /^structured_command_execution:/);
 assert.equal(largeCall.result.structuredContent.stdout_next_offset, 1000);
-assert.equal(largeCall.result.structuredContent.output_ref, undefined);
+assert.equal(largeCall.result.structuredContent.stdout_output_truncated, true);
 
 const stdoutPage1 = await rpc({
   jsonrpc: '2.0',
   id: 7,
   method: 'tools/call',
   params: {
-    name: 'structured_command_output_show',
-    arguments: { output_ref: largeCall.result.structuredContent.stdout_ref },
+    name: 'structured_command_execute',
+    arguments: { execution_ref: largeCall.result.structuredContent.execution_ref, stdout_limit: 4000 },
   },
 }, state);
-assert.equal(stdoutPage1.result.content[0].text, 'x'.repeat(4000));
-assert.equal(stdoutPage1.result.structuredContent.kind, 'stdout');
-assert.equal(stdoutPage1.result.structuredContent.output_ref, largeCall.result.structuredContent.stdout_ref);
-assert.equal(stdoutPage1.result.structuredContent.offset, 0);
-assert.equal(stdoutPage1.result.structuredContent.limit, 4000);
-assert.equal(stdoutPage1.result.structuredContent.next_offset, 4000);
-assert.equal(stdoutPage1.result.structuredContent.text_char_length, 4000);
-assert.equal(stdoutPage1.result.structuredContent.full_output_char_length, 6500);
+assert.equal(stdoutPage1.result.structuredContent.stdout, 'x'.repeat(4000));
+assert.equal(stdoutPage1.result.structuredContent.stdout_offset, 0);
+assert.equal(stdoutPage1.result.structuredContent.stdout_limit, 4000);
+assert.equal(stdoutPage1.result.structuredContent.stdout_next_offset, 4000);
+assert.equal(stdoutPage1.result.structuredContent.stdout_output_truncated, true);
+assert.equal(stdoutPage1.result.structuredContent.stdout_char_length, 6500);
 
 const stdoutCustomPage = await rpc({
   jsonrpc: '2.0',
   id: 8,
   method: 'tools/call',
   params: {
-    name: 'structured_command_output_show',
-    arguments: { output_ref: largeCall.result.structuredContent.stdout_ref, offset: 1000, limit: 1200 },
+    name: 'structured_command_execute',
+    arguments: { execution_ref: largeCall.result.structuredContent.execution_ref, stdout_offset: 1000, stdout_limit: 1200 },
   },
 }, state);
-assert.equal(stdoutCustomPage.result.content[0].text, 'x'.repeat(1200));
-assert.equal(stdoutCustomPage.result.structuredContent.offset, 1000);
-assert.equal(stdoutCustomPage.result.structuredContent.limit, 1200);
-assert.equal(stdoutCustomPage.result.structuredContent.next_offset, 2200);
+assert.equal(stdoutCustomPage.result.structuredContent.stdout, 'x'.repeat(1200));
+assert.equal(stdoutCustomPage.result.structuredContent.stdout_offset, 1000);
+assert.equal(stdoutCustomPage.result.structuredContent.stdout_limit, 1200);
+assert.equal(stdoutCustomPage.result.structuredContent.stdout_next_offset, 2200);
 
 const stdoutFinalPage = await rpc({
   jsonrpc: '2.0',
   id: 9,
   method: 'tools/call',
   params: {
-    name: 'structured_command_output_show',
-    arguments: { output_ref: largeCall.result.structuredContent.stdout_ref, offset: 6000 },
+    name: 'structured_command_execute',
+    arguments: { execution_ref: largeCall.result.structuredContent.execution_ref, stdout_offset: 6000, stdout_limit: 4000 },
   },
 }, state);
-assert.equal(stdoutFinalPage.result.content[0].text, 'x'.repeat(500));
-assert.equal(stdoutFinalPage.result.structuredContent.offset, 6000);
-assert.equal(stdoutFinalPage.result.structuredContent.limit, 4000);
-assert.equal(stdoutFinalPage.result.structuredContent.next_offset, null);
-assert.equal(stdoutFinalPage.result.structuredContent.full_output_char_length, 6500);
+assert.equal(stdoutFinalPage.result.structuredContent.stdout, 'x'.repeat(500));
+assert.equal(stdoutFinalPage.result.structuredContent.stdout_offset, 6000);
+assert.equal(stdoutFinalPage.result.structuredContent.stdout_limit, 4000);
+assert.equal(stdoutFinalPage.result.structuredContent.stdout_next_offset, null);
+assert.equal(stdoutFinalPage.result.structuredContent.stdout_output_truncated, false);
+assert.equal(stdoutFinalPage.result.structuredContent.stdout_char_length, 6500);
 
 const audit = readFileSync(join(auditLogDir, 'structured-command.jsonl'), 'utf8');
 assert.match(audit, /structured_command\.execution_result/);

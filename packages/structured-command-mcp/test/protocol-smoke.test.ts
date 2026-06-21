@@ -41,8 +41,9 @@ try {
   assert.equal(tools.error, undefined);
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('structured_command_execute'), true);
+  assert.equal(names.includes('structured_command_elevated_window_execute'), true);
   assert.equal(names.includes('structured_command_input_create'), true);
-  assert.equal(names.includes('structured_command_output_show'), true);
+  assert.equal(names.includes('structured_command_output_show'), false);
   const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
   assert.equal(executeTool.annotations.readOnlyHint, false);
   assert.equal(executeTool.outputSchema.type, 'object');

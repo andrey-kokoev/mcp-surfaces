@@ -14,16 +14,16 @@ import {
 const PROTOCOL_VERSION = '2024-11-05';
 const TOOL_RESULT_CHAR_LIMIT = 4000;
 const STREAM_PREVIEW_CHAR_LIMIT = 1000;
-const TOOL_OUTPUT_SHOW_DEFAULT_LIMIT = 4000;
 const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 8192;
-const REF_PATTERN = /^structured_command_(input|output):([A-Za-z0-9_-]{8,80})$/;
+const REF_PATTERN = /^structured_command_(input|execution):([A-Za-z0-9_-]{8,80})$/;
 const ROOTS_LIST_REQUEST_PREFIX = 'structured_command_roots_';
 
 type StructuredCommandState = Record<string, unknown> & {
   policy: ReturnType<typeof createExecutionPolicy>;
   auditLogDir: string | null;
   storageRoot: string;
+  env: NodeJS.ProcessEnv;
   clientRoots: {
     supported: boolean;
     roots: Array<{ uri: string; name?: string }>;
@@ -35,6 +35,7 @@ type SpawnStructuredOptions = {
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  env?: NodeJS.ProcessEnv;
   abortSignal?: AbortSignal;
 };
 
@@ -121,10 +122,14 @@ export async function runStdioServer(options: Record<string, unknown>) {
   }
 }
 
-export function createServerState(options: Record<string, unknown> = {}): StructuredCommandState {
+export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): StructuredCommandState {
+  const siteRoot = resolve(String(options.siteRoot ?? options.storageRoot ?? firstOption(options.allowedRoot) ?? firstOption(options.allowedRoots) ?? process.cwd()));
+  const stateEnv = { ...env };
+  loadSiteSecrets(siteRoot, stateEnv);
+  const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const allowedRoots = buildAllowedRoots({
     trustConfigPaths: optionList(options.rootsFromTrustConfig),
-    explicitRoots: [...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
+    explicitRoots: [...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
   });
   if (allowedRoots.length === 0) throw new Error('structured_command_requires_allowed_root');
   return {
@@ -138,6 +143,7 @@ export function createServerState(options: Record<string, unknown> = {}): Struct
     }),
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
     storageRoot: resolve(String(options.storageRoot ?? allowedRoots[0])),
+    env: stateEnv,
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
 }
@@ -241,10 +247,15 @@ export function listTools() {
       description: 'Execute a structured argv command under allowed-root and command policy.',
       inputSchema: objectSchema({
         input_ref: { type: 'string', description: 'Structured command input ref from structured_command_input_create.' },
+        execution_ref: { type: 'string', description: 'Prior execution ref returned by structured_command_execute; use to read later stdout/stderr pages without re-running.' },
         command: { type: 'string', description: 'Executable name or absolute executable path admitted by policy.' },
         args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
         working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
         timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
+        stdout_offset: { type: 'integer', description: 'Character offset for stdout page. Defaults 0.' },
+        stderr_offset: { type: 'integer', description: 'Character offset for stderr page. Defaults 0.' },
+        stdout_limit: { type: 'integer', description: `Stdout page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
+        stderr_limit: { type: 'integer', description: `Stderr page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
       }),
     },
     {
@@ -259,13 +270,16 @@ export function listTools() {
       }, ['command']),
     },
     {
-      name: 'structured_command_output_show',
-      description: 'Read a scoped structured command output ref with bounded pagination.',
+      name: 'structured_command_elevated_window_execute',
+      description: 'On Windows, launch a policy-approved command in a visible elevated UAC window. Output is not captured from the elevated process.',
       inputSchema: objectSchema({
-        output_ref: { type: 'string' },
-        offset: { type: 'integer' },
-        limit: { type: 'integer', description: `Characters to read, default ${TOOL_OUTPUT_SHOW_DEFAULT_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
-      }, ['output_ref']),
+        command: { type: 'string', description: 'Executable name or absolute executable path admitted by policy.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Argument vector for the elevated process.' },
+        working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
+        confirm_elevation: { type: 'boolean', description: 'Must be true to show a UAC/elevated execution prompt.' },
+        wait: { type: 'boolean', description: 'When true, the broker waits for the elevated process to exit. Defaults false.' },
+        dry_run: { type: 'boolean', description: 'When true, return the planned broker command without invoking UAC.' },
+      }, ['command', 'working_directory']),
     },
   ]);
 }
@@ -277,13 +291,17 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
   if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
   if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state, context), state);
   if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
-  if (name === 'structured_command_output_show') return toolResult(showStructuredCommandOutput(args, state), state);
+  if (name === 'structured_command_elevated_window_execute') return toolResult(await executeStructuredCommandElevatedWindow(args, state), state);
   throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
 }
 
 export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {
   const argsRecord = asRecord(args);
   enforceInputCharLimit(argsRecord);
+  if (argsRecord.execution_ref) {
+    const execution = readStructuredCommandExecution(String(argsRecord.execution_ref), state);
+    return buildPagedExecutionResult(execution.result, argsRecord, String(argsRecord.execution_ref));
+  }
   const effectiveArgs = argsRecord.input_ref ? asRecord(readStructuredCommandInput(String(argsRecord.input_ref), state).input) : argsRecord;
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
   const workingDirectory = effectiveArgs.working_directory ? resolve(String(effectiveArgs.working_directory)) : state.policy.allowedRoots[0];
@@ -311,6 +329,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     cwd: decision.working_directory,
     timeoutMs,
     maxOutputBytes: state.policy.maxOutputBytes,
+    env: state.env,
     abortSignal: context.abortSignal,
   });
   const finishedAt = new Date().toISOString();
@@ -334,7 +353,8 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     input_ref: argsRecord.input_ref ?? null,
   };
   audit(state, payload);
-  return payload;
+  const executionRef = createStructuredCommandExecution(payload, state);
+  return buildPagedExecutionResult(payload, argsRecord, executionRef);
 }
 
 export function createStructuredCommandInput(args, state) {
@@ -361,27 +381,7 @@ export function createStructuredCommandInput(args, state) {
   };
 }
 
-export function showStructuredCommandOutput(args, state) {
-  const { id } = parseRef(args.output_ref, 'output');
-  const record = readJsonRecord(outputPath(state, id));
-  const offset = Math.max(0, Number(args.offset ?? 0));
-  const limit = clampInteger(args.limit, 1, TOOL_OUTPUT_SHOW_MAX_LIMIT, TOOL_OUTPUT_SHOW_DEFAULT_LIMIT);
-  const text = String(record.text ?? '');
-  const chunk = text.slice(offset, offset + limit);
-  return {
-    schema: 'narada.structured_command.output_show_result.v0',
-    status: 'ok',
-    kind: record.kind ?? 'output',
-    output_ref: record.ref,
-    offset,
-    limit,
-    next_offset: offset + chunk.length < text.length ? offset + chunk.length : null,
-    text: chunk,
-    full_output_char_length: text.length,
-  };
-}
-
-function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
+function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, env, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
   return new Promise((resolvePromise) => {
     if (abortSignal?.aborted) {
       resolvePromise({
@@ -400,6 +400,7 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
       shell: false,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env,
     });
     let stdout = '';
     let stderr = '';
@@ -460,16 +461,151 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
   });
 }
 
+export async function executeStructuredCommandElevatedWindow(args, state) {
+  if (process.platform !== 'win32') {
+    return {
+      schema: 'narada.structured_command.elevated_window_result.v0',
+      status: 'refused',
+      executed: false,
+      refusal_reasons: ['windows_only'],
+    };
+  }
+  const argsRecord = asRecord(args);
+  enforceInputCharLimit(argsRecord);
+  const workingDirectory = resolve(String(argsRecord.working_directory ?? state.policy.allowedRoots[0]));
+  const commandArgs = Array.isArray(argsRecord.args) ? argsRecord.args.map(String) : [];
+  const decision = decideStructuredCommandExecution({
+    command: argsRecord.command,
+    args: commandArgs,
+    workingDirectory,
+  }, state.policy);
+  if (decision.status !== 'allowed') {
+    return {
+      schema: 'narada.structured_command.elevated_window_result.v0',
+      status: 'refused',
+      executed: false,
+      decision,
+      refusal_reasons: decision.reasons,
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+    };
+  }
+  const dryRun = argsRecord.dry_run === true;
+  if (!dryRun && argsRecord.confirm_elevation !== true) {
+    return {
+      schema: 'narada.structured_command.elevated_window_result.v0',
+      status: 'refused',
+      executed: false,
+      decision,
+      refusal_reasons: ['confirm_elevation_required'],
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+    };
+  }
+  const wait = argsRecord.wait === true;
+  const broker = buildElevatedWindowBrokerCommand({ command: decision.command, args: decision.args, workingDirectory: decision.working_directory, wait });
+  if (dryRun) {
+    return {
+      schema: 'narada.structured_command.elevated_window_result.v0',
+      status: 'planned',
+      executed: false,
+      decision,
+      broker,
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+      wait,
+    };
+  }
+  const startedAt = new Date().toISOString();
+  const result = await spawnStructured(broker.command, broker.args, {
+    cwd: decision.working_directory,
+    timeoutMs: 60_000,
+    maxOutputBytes: state.policy.maxOutputBytes,
+    env: state.env,
+  });
+  const payload = {
+    schema: 'narada.structured_command.elevated_window_result.v0',
+    status: result.exit_code === 0 ? 'uac_prompt_completed' : 'broker_failed',
+    executed: result.exit_code === 0,
+    decision,
+    broker_exit_code: result.exit_code,
+    broker_stdout: result.stdout,
+    broker_stderr: result.stderr,
+    command: decision.command,
+    args: decision.args,
+    working_directory: decision.working_directory,
+    wait,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    note: 'The elevated process runs in a separate Windows UAC context; its stdout/stderr are not captured by this MCP call.',
+  };
+  audit(state, payload);
+  const executionRef = createStructuredCommandExecution(payload, state);
+  return buildPagedExecutionResult(payload, argsRecord, executionRef);
+}
+
+function buildPagedExecutionResult(payload, args, executionRef) {
+  if (payload.executed === false) return { ...payload, execution_ref: executionRef ?? null };
+  const stdoutPage = pageText(String(payload.stdout ?? ''), args.stdout_offset, args.stdout_limit, STREAM_PREVIEW_CHAR_LIMIT);
+  const stderrPage = pageText(String(payload.stderr ?? ''), args.stderr_offset, args.stderr_limit, STREAM_PREVIEW_CHAR_LIMIT);
+  return {
+    ...payload,
+    execution_ref: executionRef,
+    stdout: stdoutPage.text,
+    stderr: stderrPage.text,
+    stdout_offset: stdoutPage.offset,
+    stderr_offset: stderrPage.offset,
+    stdout_limit: stdoutPage.limit,
+    stderr_limit: stderrPage.limit,
+    stdout_next_offset: stdoutPage.next_offset,
+    stderr_next_offset: stderrPage.next_offset,
+    stdout_output_truncated: stdoutPage.output_truncated,
+    stderr_output_truncated: stderrPage.output_truncated,
+    stdout_char_length: stdoutPage.full_output_char_length,
+    stderr_char_length: stderrPage.full_output_char_length,
+    page_source: args.execution_ref ? 'persisted_execution' : 'new_execution',
+  };
+}
+
+function pageText(text, offsetValue, limitValue, defaultLimit) {
+  const offset = Math.max(0, Number(offsetValue ?? 0));
+  const limit = clampInteger(limitValue, 1, TOOL_OUTPUT_SHOW_MAX_LIMIT, defaultLimit);
+  const chunk = text.slice(offset, offset + limit);
+  const nextOffset = offset + chunk.length < text.length ? offset + chunk.length : null;
+  return {
+    text: chunk,
+    offset,
+    limit,
+    next_offset: nextOffset,
+    output_truncated: nextOffset !== null,
+    full_output_char_length: text.length,
+  };
+}
+
+export function buildElevatedWindowBrokerCommand({ command, args, workingDirectory, wait }) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$p = Start-Process -FilePath ${psSingleQuote(command)} -ArgumentList ${psArrayLiteral(args)} -WorkingDirectory ${psSingleQuote(workingDirectory)} -Verb RunAs -WindowStyle Normal -PassThru`,
+    wait ? 'if ($p) { $p.WaitForExit(); exit $p.ExitCode }' : 'if ($p) { Write-Output ("started_pid=" + $p.Id) }',
+  ].join('; ');
+  return {
+    command: 'powershell.exe',
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    script,
+  };
+}
+
 function toolResult(payload, state) {
   const text = renderToolResultText(payload);
   const truncated = text.length > TOOL_RESULT_CHAR_LIMIT;
-  const outputRef = truncated ? createStructuredCommandOutput(text, state, 'rendered') : null;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {
-    content: outputRef ? [assistantTextContent(rendered), structuredCommandOutputResourceLink(outputRef)] : [assistantTextContent(rendered)],
+    content: [assistantTextContent(rendered)],
     structuredContent: buildStructuredContent(payload, {
       truncated,
-      outputRef,
       renderedTextLength: rendered.length,
       fullTextLength: text.length,
       state,
@@ -481,40 +617,14 @@ function assistantTextContent(text) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function structuredCommandOutputResourceLink(ref) {
-  return {
-    type: 'resource_link',
-    uri: structuredCommandOutputUri(ref),
-    name: ref,
-    description: 'Structured command materialized output.',
-    mimeType: 'text/plain',
-    annotations: { audience: ['assistant'], priority: 0.8 },
-  };
-}
-
-function buildStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
+function buildStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state }) {
   if (payload?.schema === 'narada.structured_command.execution_result.v0') {
-    return buildExecutionStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state });
-  }
-  if (payload?.schema === 'narada.structured_command.output_show_result.v0') {
-    return {
-      schema: payload.schema,
-      status: payload.status,
-      kind: payload.kind,
-      output_ref: payload.output_ref,
-      offset: payload.offset,
-      limit: payload.limit,
-      next_offset: payload.next_offset,
-      text_char_length: String(payload.text ?? '').length,
-      full_output_char_length: payload.full_output_char_length,
-      truncated,
-    };
+    return buildExecutionStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state });
   }
   if (payload?.schema === 'narada.structured_command.execution_policy.v0') {
     return {
       ...payload,
       truncated,
-      ...(outputRef ? { output_ref: outputRef } : {}),
       rendered_text_char_length: renderedTextLength,
       full_output_char_length: fullTextLength,
     };
@@ -523,7 +633,14 @@ function buildStructuredContent(payload, { truncated, outputRef, renderedTextLen
     return {
       ...payload,
       truncated,
-      ...(outputRef ? { output_ref: outputRef } : {}),
+      rendered_text_char_length: renderedTextLength,
+      full_output_char_length: fullTextLength,
+    };
+  }
+  if (payload?.schema === 'narada.structured_command.elevated_window_result.v0') {
+    return {
+      ...payload,
+      truncated,
       rendered_text_char_length: renderedTextLength,
       full_output_char_length: fullTextLength,
     };
@@ -532,7 +649,6 @@ function buildStructuredContent(payload, { truncated, outputRef, renderedTextLen
     schema: payload?.schema,
     status: payload?.status,
     truncated,
-    ...(outputRef ? { output_ref: outputRef } : {}),
     ...(payload?.input_ref ? { input_ref: payload.input_ref } : {}),
     ...(payload?.sha256 ? { sha256: payload.sha256 } : {}),
     rendered_text_char_length: renderedTextLength,
@@ -540,7 +656,7 @@ function buildStructuredContent(payload, { truncated, outputRef, renderedTextLen
   };
 }
 
-function buildExecutionStructuredContent(payload, { truncated, outputRef, renderedTextLength, fullTextLength, state }) {
+function buildExecutionStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state: _state }) {
   if (payload.executed === false) {
     return {
       schema: payload.schema,
@@ -551,18 +667,14 @@ function buildExecutionStructuredContent(payload, { truncated, outputRef, render
       working_directory: payload.working_directory,
       refusal_reasons: payload.refusal_reasons ?? payload.decision?.reasons ?? [],
       decision: payload.decision ?? null,
+      execution_ref: payload.execution_ref ?? null,
       truncated,
-      ...(outputRef ? { output_ref: outputRef } : {}),
       rendered_text_char_length: renderedTextLength,
       full_output_char_length: fullTextLength,
     };
   }
   const stdout = String(payload.stdout ?? '');
   const stderr = String(payload.stderr ?? '');
-  const stdoutNeedsRef = stdout.length > STREAM_PREVIEW_CHAR_LIMIT || payload.stdout_truncated;
-  const stderrNeedsRef = stderr.length > STREAM_PREVIEW_CHAR_LIMIT || payload.stderr_truncated;
-  const stdoutRef = stdoutNeedsRef ? createStructuredCommandOutput(stdout, state, 'stdout') : null;
-  const stderrRef = stderrNeedsRef ? createStructuredCommandOutput(stderr, state, 'stderr') : null;
   return {
     schema: payload.schema,
     status: payload.status,
@@ -574,17 +686,24 @@ function buildExecutionStructuredContent(payload, { truncated, outputRef, render
     exit_code: payload.exit_code,
     timed_out: payload.timed_out,
     cancelled: payload.cancelled,
-    stdout: stdoutNeedsRef ? stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stdout,
-    stderr: stderrNeedsRef ? stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT) : stderr,
+    execution_ref: payload.execution_ref,
+    page_source: payload.page_source,
+    stdout,
+    stderr,
     stdout_truncated: payload.stdout_truncated,
     stderr_truncated: payload.stderr_truncated,
-    stdout_char_length: stdout.length,
-    stderr_char_length: stderr.length,
-    ...(stdoutRef ? { stdout_ref: stdoutRef, stdout_next_offset: STREAM_PREVIEW_CHAR_LIMIT } : {}),
-    ...(stderrRef ? { stderr_ref: stderrRef, stderr_next_offset: STREAM_PREVIEW_CHAR_LIMIT } : {}),
+    stdout_char_length: payload.stdout_char_length ?? stdout.length,
+    stderr_char_length: payload.stderr_char_length ?? stderr.length,
+    stdout_offset: payload.stdout_offset ?? 0,
+    stderr_offset: payload.stderr_offset ?? 0,
+    stdout_limit: payload.stdout_limit ?? STREAM_PREVIEW_CHAR_LIMIT,
+    stderr_limit: payload.stderr_limit ?? STREAM_PREVIEW_CHAR_LIMIT,
+    stdout_next_offset: payload.stdout_next_offset ?? null,
+    stderr_next_offset: payload.stderr_next_offset ?? null,
+    stdout_output_truncated: payload.stdout_output_truncated ?? false,
+    stderr_output_truncated: payload.stderr_output_truncated ?? false,
     ...(payload.input_ref ? { input_ref: payload.input_ref } : {}),
     truncated,
-    ...(outputRef ? { output_ref: outputRef } : {}),
     rendered_text_char_length: renderedTextLength,
     full_output_char_length: fullTextLength,
   };
@@ -609,22 +728,38 @@ function renderToolResultText(payload) {
       const stdout = String(payload.stdout ?? '');
       const stdoutPreview = stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
       lines.push('stdout:', stdoutPreview);
-      if (stdout.length > stdoutPreview.length) lines.push('[stdout preview truncated]');
+      if (stdout.length > stdoutPreview.length || payload.stdout_output_truncated) lines.push('[stdout preview truncated]');
       if (payload.stdout_truncated) lines.push('[stdout truncated]');
     }
     if (payload.stderr || payload.stderr_truncated) {
       const stderr = String(payload.stderr ?? '');
       const stderrPreview = stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
       lines.push('stderr:', stderrPreview);
-      if (stderr.length > stderrPreview.length) lines.push('[stderr preview truncated]');
+      if (stderr.length > stderrPreview.length || payload.stderr_output_truncated) lines.push('[stderr preview truncated]');
       if (payload.stderr_truncated) lines.push('[stderr truncated]');
     }
     return lines.join('\n');
   }
-  if (payload?.schema === 'narada.structured_command.output_show_result.v0') {
-    return String(payload.text ?? '');
+  if (payload?.schema === 'narada.structured_command.elevated_window_result.v0') {
+    const reasons = payload.refusal_reasons ?? [];
+    return [
+      `structured_command_elevated_window_execute: ${payload.status}`,
+      `executed: ${payload.executed === true}`,
+      `command: ${payload.command ?? ''}`,
+      `working_directory: ${payload.working_directory ?? ''}`,
+      Array.isArray(reasons) && reasons.length ? `refusal_reasons: ${reasons.join('; ')}` : null,
+      payload.note ? `note: ${payload.note}` : null,
+    ].filter(Boolean).join('\n');
   }
   return JSON.stringify(payload, null, 2);
+}
+
+function psSingleQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function psArrayLiteral(values) {
+  return `@(${values.map((value) => psSingleQuote(value)).join(', ')})`;
 }
 
 function enforceInputCharLimit(value, path = 'arguments') {
@@ -652,19 +787,23 @@ function audit(state, payload) {
   appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
-function createStructuredCommandOutput(text, state, kind = 'output') {
+function createStructuredCommandExecution(result, state) {
   if (!state) return null;
-  const outputId = `o_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  const executionId = `e_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const record = {
-    schema: 'narada.structured_command.output.v0',
-    kind,
-    ref: `structured_command_output:${outputId}`,
+    schema: 'narada.structured_command.execution.v0',
+    ref: `structured_command_execution:${executionId}`,
     created_at: new Date().toISOString(),
-    sha256: sha256Text(text),
-    text,
+    sha256: sha256Json(result),
+    result,
   };
-  writeJsonRecord(outputPath(state, outputId), record);
+  writeJsonRecord(executionPath(state, executionId), record);
   return record.ref;
+}
+
+function readStructuredCommandExecution(ref, state) {
+  const { id } = parseRef(ref, 'execution');
+  return readJsonRecord(executionPath(state, id));
 }
 
 function readStructuredCommandInput(ref, state) {
@@ -682,36 +821,36 @@ function inputPath(state, id) {
   return join(state.storageRoot, 'inputs', `${id}.json`);
 }
 
-function outputPath(state, id) {
-  return join(state.storageRoot, 'outputs', `${id}.json`);
+function executionPath(state, id) {
+  return join(state.storageRoot, 'executions', `${id}.json`);
 }
 
 function listStructuredCommandResources(state) {
-  const dir = join(state.storageRoot, 'outputs');
+  const dir = join(state.storageRoot, 'executions');
   if (!existsSync(dir)) return { resources: [] };
   return {
     resources: readdirSync(dir).filter((name) => name.endsWith('.json')).sort().map((name) => {
       const id = name.replace(/\.json$/, '');
-      const ref = `structured_command_output:${id}`;
-      return { uri: structuredCommandOutputUri(ref), name: ref, title: ref, description: 'Structured command output artifact.', mimeType: 'text/plain' };
+      const ref = `structured_command_execution:${id}`;
+      return { uri: structuredCommandExecutionUri(ref), name: ref, title: ref, description: 'Structured command execution artifact.', mimeType: 'application/json' };
     }),
   };
 }
 
 function readStructuredCommandResource(params, state) {
-  const ref = structuredCommandOutputRefFromUri(String(params.uri ?? ''));
-  const { id } = parseRef(ref, 'output');
-  const record = readJsonRecord(outputPath(state, id));
-  return { contents: [{ uri: params.uri, mimeType: 'text/plain', text: String(record.text ?? '') }] };
+  const ref = structuredCommandExecutionRefFromUri(String(params.uri ?? ''));
+  const { id } = parseRef(ref, 'execution');
+  const record = readJsonRecord(executionPath(state, id));
+  return { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify(record, null, 2) }] };
 }
 
-function structuredCommandOutputUri(ref) {
-  return `structured-command-output:${encodeURIComponent(ref)}`;
+function structuredCommandExecutionUri(ref) {
+  return `structured-command-execution:${encodeURIComponent(ref)}`;
 }
 
-function structuredCommandOutputRefFromUri(uri) {
-  if (!uri.startsWith('structured-command-output:')) throw diagnosticError('structured_command_resource_uri_invalid', 'structured_command_resource_uri_invalid', { uri });
-  return decodeURIComponent(uri.slice('structured-command-output:'.length));
+function structuredCommandExecutionRefFromUri(uri) {
+  if (!uri.startsWith('structured-command-execution:')) throw diagnosticError('structured_command_resource_uri_invalid', 'structured_command_resource_uri_invalid', { uri });
+  return decodeURIComponent(uri.slice('structured-command-execution:'.length));
 }
 
 function writeJsonRecord(path, record) {
@@ -884,4 +1023,39 @@ function clientRootCompletionValues(state: StructuredCommandState): string[] {
 
 function isMainModule() {
   return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+function firstOption(value: unknown): string | null {
+  const values = optionList(value);
+  return values.length > 0 ? values[0] : null;
+}
+
+function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
+  try {
+    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    if (!existsSync(configPath)) return [];
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0);
+  } catch {
+    // Best-effort.
+  }
+  return [];
+}
+
+function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void {
+  try {
+    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    if (!existsSync(configPath)) return;
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    const secretEnv = data.env;
+    if (secretEnv && typeof secretEnv === 'object' && !Array.isArray(secretEnv)) {
+      for (const [key, value] of Object.entries(secretEnv)) {
+        if (typeof value === 'string' && value.trim() && !targetEnv[key]) {
+          targetEnv[key] = value;
+        }
+      }
+    }
+  } catch {
+    // Best-effort.
+  }
 }
