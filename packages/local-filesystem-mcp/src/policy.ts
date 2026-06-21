@@ -19,40 +19,62 @@ export function parseTrustedProjectRootsFromTrustConfig(configPath) {
     }
     if (!currentProject) continue;
     const trust = line.match(/^trust_level\s*=\s*"([^"]+)"$/i);
-    if (trust && trust[1].toLowerCase() === 'trusted') roots.push(currentProject);
+    if (trust && trust[1].toLowerCase() === 'trusted') {
+      roots.push({ root: currentProject, provenance: { source: 'codex_trust_config', config_path: configPath, project: currentProject } });
+    }
   }
-  return normalizeAllowedRoots(roots);
+  return normalizeAllowedRoots(roots, 'codex_trust_config');
 }
 
-export function normalizeAllowedRoots(roots) {
+export function normalizeAllowedRoots(roots, source = 'unspecified') {
   const seen = new Set();
   const normalized = [];
-  for (const root of roots) {
-    if (typeof root !== 'string' || root.trim().length === 0) continue;
-    const resolved = resolve(root.trim());
+  for (const entry of roots) {
+    const isEntryObject = entry && typeof entry === 'object';
+    const raw = typeof entry === 'string' ? entry : isEntryObject ? entry.root : undefined;
+    const provenance = isEntryObject && entry.provenance ? entry.provenance : { source };
+    if (typeof raw !== 'string' || raw.trim().length === 0) continue;
+    const resolved = resolve(raw.trim());
     const key = resolved.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    normalized.push(resolved);
+    normalized.push({ root: resolved, provenance });
   }
   return normalized;
 }
 
 export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], rootsConfigPath = null } = {}) {
-  let roots = [];
-  if (codexConfigPath) roots.push(...parseTrustedProjectRootsFromTrustConfig(codexConfigPath));
+  const entries = [];
+  if (codexConfigPath) {
+    for (const entry of parseTrustedProjectRootsFromTrustConfig(codexConfigPath)) {
+      entries.push(entry);
+    }
+  }
   if (rootsConfigPath) {
     const parsed = JSON.parse(readFileSync(rootsConfigPath, 'utf8'));
     if (!Array.isArray(parsed.allowed_roots)) throw new Error('roots_config_requires_allowed_roots_array');
-    roots.push(...parsed.allowed_roots);
+    for (const root of parsed.allowed_roots) {
+      entries.push({ root, provenance: { source: 'roots_config', config_path: rootsConfigPath } });
+    }
   }
-  roots.push(...explicitRoots);
-  roots = normalizeAllowedRoots(roots);
-  if (roots.length === 0) throw new Error('filesystem_mcp_requires_at_least_one_allowed_root');
-  return roots;
+  for (const root of explicitRoots) {
+    entries.push({ root, provenance: { source: 'explicit_flag', flag: '--allowed-root' } });
+  }
+  const normalized = normalizeAllowedRoots(entries);
+  if (normalized.length === 0) throw new Error('filesystem_mcp_requires_at_least_one_allowed_root');
+  return normalized;
 }
 
-export function resolveAllowedPath(inputPath, allowedRoots, { defaultRoot = null, requireExistingParent = false } = {}) {
+export function rootEntriesToRoots(rootEntries) {
+  if (!Array.isArray(rootEntries)) return [];
+  return rootEntries.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    return entry?.root;
+  }).filter((root): root is string => typeof root === 'string');
+}
+
+export function resolveAllowedPath(inputPath, allowedRootEntries, { defaultRoot = null, requireExistingParent = false } = {}) {
+  const allowedRoots = rootEntriesToRoots(allowedRootEntries);
   if (typeof inputPath !== 'string' || inputPath.trim().length === 0) throw new Error('path_required');
   const base = defaultRoot ?? allowedRoots[0];
   const candidate = isAbsolute(inputPath) ? resolve(inputPath) : resolve(base, inputPath);

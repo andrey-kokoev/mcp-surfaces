@@ -2,7 +2,7 @@
 
 Canonical local filesystem MCP server.
 
-Tool results use `structuredContent` as the authoritative machine payload. The text content is a deterministic, compact rendering for agent transcripts. Large read and search results are materialized as `mcp_output:*` refs; in that case `structuredContent` is the authoritative locator payload and `mcp_output_show` returns the full stored domain payload.
+Tool results use `structuredContent` as the authoritative machine payload. The text content is a deterministic, compact rendering for agent transcripts. Large read and search results are bounded by the producing tool's own offset/limit or snapshot paging arguments.
 
 Read mode tools:
 
@@ -11,7 +11,7 @@ Read mode tools:
 - `fs_stat`
 - `fs_glob_search`
 - `fs_grep_search`
-- `mcp_output_show`
+- `fs_doctor`
 
 Write mode tools are exposed only when launched with `--mode write`.
 
@@ -26,7 +26,7 @@ Write mode tools are exposed only when launched with `--mode write`.
 
 Behavior notes:
 
-- `fs_read_file` and `fs_read_file_range` return line-window metadata, `content_sha256`, and explicit line-completeness fields without reading the whole file just to satisfy small windows. `total_lines_status: "unknown_after_window"` means the tool stopped after the requested window plus lookahead. Large windows are returned through `mcp_output_show`.
+- `fs_read_file` and `fs_read_file_range` return line-window metadata, `content_sha256`, and explicit line-completeness fields without reading the whole file just to satisfy small windows. `total_lines_status: "unknown_after_window"` means the tool stopped after the requested window plus lookahead. Request later windows by re-calling the same read tool with adjusted line offsets/ranges.
 - `fs_stat` returns `sha256` for files and `entry_count`, `tree_entry_count`, `tree_truncated`, and `tree_sha256` for directories so callers can build stale-state guards without hashing locally.
 - `fs_glob_search` and `fs_grep_search` return newline-separated matches in text and bounded match arrays in `structuredContent`. Search paging uses `has_more` and `next_offset`; `count_exact: false` means ripgrep was stopped after the requested page plus lookahead. `cache_policy` accepts `auto`, `snapshot`, `refresh`, and `bypass`; complete snapshot responses include a reusable `snapshot_id`, and callers can pass `snapshot_id` for consistent continuation. Directory freshness includes a bounded tree fingerprint. `order: "ripgrep_traversal"` means page order follows ripgrep emission order, not sorted path order.
 - `fs_grep_search` includes `output_mode`, humanized `matches`, and parsed `match_objects` in `structuredContent`; `match_objects_authoritative: true` indicates the parsed objects are the stable machine payload.

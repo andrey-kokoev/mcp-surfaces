@@ -9,7 +9,7 @@ const SEARCH_CACHE_MAX_MATCH_BYTES = 2 * 1024 * 1024;
 const completeSearchCache = new Map();
 const completeSearchCacheBySnapshotId = new Map();
 
-export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError }) {
+export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, env = undefined }) {
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
   const cacheKey = searchCacheKey({ args, freshness });
   if (snapshotId) {
@@ -35,6 +35,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 1024 * 1024,
     timeout: effectiveTimeoutMs,
+    env,
   });
   if (result.error) {
     const timedOut = result.error.name === 'Error' && result.error.message.includes('ETIMEDOUT');
@@ -94,7 +95,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
   return page;
 }
 
-export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, abortSignal = null }) {
+export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, abortSignal = null, env = undefined }) {
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
   const cacheKey = searchCacheKey({ args, freshness });
   if (snapshotId) {
@@ -118,6 +119,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
     input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),
     timeoutMs: effectiveTimeoutMs,
     abortSignal,
+    env,
   });
   if (result.error) {
     throw diagnosticError(result.cancelled ? `${operation}_cancelled` : result.timedOut ? `${operation}_timed_out` : `${operation}_failed`, `${result.cancelled ? `${operation}_cancelled` : result.timedOut ? `${operation}_timed_out` : `${operation}_failed`}: ${result.error}`, {
@@ -280,13 +282,13 @@ function rememberCompleteSearch(cacheKey, matches, { freshness, timeoutMs }) {
   }
 }
 
-function runSearchHelper(command, args, { input, timeoutMs, abortSignal }): Promise<any> {
+function runSearchHelper(command, args, { input, timeoutMs, abortSignal, env }): Promise<any> {
   return new Promise((resolvePromise) => {
     if (abortSignal?.aborted) {
       resolvePromise({ status: null, signal: null, stdout: '', stderr: '', error: 'cancelled', timedOut: false, cancelled: true });
       return;
     }
-    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env });
     let stdout = '';
     let stderr = '';
     let settled = false;

@@ -1,12 +1,12 @@
 export function renderToolResultText(value, renderContext: Record<string, unknown> = {}) {
   const record = asRecord(value);
-  if (record.schema === 'narada.mcp_output_show.v1') return String(record.output_text ?? '');
+  if (record.schema === 'narada.mcp_output_page.v1') return String(record.output_text ?? '');
   if (record.schema === 'narada.mcp_output_locator.v1' || typeof record.output_ref === 'string') {
     return compactLines([
       `status: ${record.status ?? 'ok'}`,
       'result: materialized',
       `output_ref: ${record.output_ref ?? record.ref ?? ''}`,
-      `reader_tool: ${record.reader_tool ?? 'mcp_output_show'}`,
+      `reader_tool: ${record.reader_tool ?? 'none'}`,
       `render_truncated: ${record.render_truncated ?? record.original_truncated ?? true}`,
       record.count !== undefined ? `count: ${record.count ?? 'unknown'}` : null,
       record.count_exact !== undefined ? `count_exact: ${record.count_exact}` : null,

@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import {
-  buildOutputRefToolContent,
   listOutputResources,
-  listOutputTools,
-  outputShow,
   readOutputResource,
 } from '@narada2/mcp-transport';
-import { buildAllowedRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
+import { buildAllowedRoots, rootEntriesToRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
 import { renderToolResultText as renderFilesystemToolResultText } from './result-rendering.js';
 import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRipgrepPage, runRipgrepPageAsync } from './search.js';
@@ -108,11 +105,16 @@ export async function runStdioServer(options: Record<string, unknown>) {
 export function createServerState(options: Record<string, unknown>): Record<string, unknown> {
   const mode = typeof options.mode === 'string' ? options.mode : null;
   if (!['read', 'write'].includes(mode ?? '')) throw diagnosticError('mode_must_be_read_or_write', 'mode_must_be_read_or_write', { mode });
-  let allowedRoots;
+  const siteRoot = resolve(String(options.siteRoot ?? options.outputRoot ?? process.cwd()));
+  const stateEnv = { ...process.env };
+  loadSiteSecrets(siteRoot, stateEnv);
+  const explicitRoots = stringList(options.allowedRoots);
+  const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
+  let allowedRootEntries;
   try {
-    allowedRoots = buildAllowedRoots({
+    allowedRootEntries = buildAllowedRoots({
       codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
-      explicitRoots: stringList(options.allowedRoots),
+      explicitRoots: [...siteExtraRoots, ...explicitRoots],
       rootsConfigPath: stringOrNull(options.rootsConfig),
     });
   } catch (error) {
@@ -121,14 +123,16 @@ export function createServerState(options: Record<string, unknown>): Record<stri
     throw diagnosticError(codeName, message, {
       roots_from_codex_config: stringOrNull(options.rootsFromCodexConfig),
       roots_config: stringOrNull(options.rootsConfig),
-      allowed_roots: stringList(options.allowedRoots),
+      allowed_roots: [...siteExtraRoots, ...explicitRoots],
     });
   }
   const outputRoot = resolve(stringOrNull(options.outputRoot) ?? process.cwd());
   return {
     mode,
-    allowedRoots,
+    allowedRoots: rootEntriesToRoots(allowedRootEntries),
+    allowedRootEntries,
     outputRoot,
+    env: stateEnv,
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
@@ -311,7 +315,11 @@ export function listTools(mode) {
         snapshot_id: { type: 'string', description: 'Optional snapshot_id from a previous complete search response to page consistently.' },
       }, ['pattern']),
     },
-    ...listOutputTools(),
+    {
+      name: 'fs_doctor',
+      description: 'Inspect local-filesystem MCP policy posture: mode, allowed roots with provenance, output root, audit log dir, client roots, and effective permissions.',
+      inputSchema: objectSchema({}),
+    },
   ];
   const writeTools = [
     {
@@ -432,7 +440,7 @@ function callTool(params, state) {
     case 'fs_stat': return toolResult(statTool(args, state));
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
     case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
-    case 'mcp_output_show': return toolResult(outputShow({ siteRoot: state.outputRoot, args: normalizeOutputShowArgs(args) }));
+    case 'fs_doctor': return toolResult(doctorTool(state));
     case 'fs_write_file': return toolResult(writeFileTool(args, state));
     case 'fs_str_replace_file': return toolResult(strReplaceTool(args, state));
     case 'fs_replace_range': return toolResult(replaceRangeTool(args, state));
@@ -467,6 +475,7 @@ function readFileRange({ path, root, offset, limit }) {
   const window = readTextLineWindow({ path, root, offset, limit });
   const content = window.selected.join('\n');
   return {
+    schema: 'local.filesystem.read.v1',
     path,
     root,
     relative_path: relative(root, path).replace(/\\/g, '/'),
@@ -501,6 +510,35 @@ function statTool(args, state) {
   };
 }
 
+function doctorTool(state) {
+  const writeTools = listTools('write').map((tool) => tool.name);
+  const readTools = listTools('read').map((tool) => tool.name);
+  const effectiveTools = state.mode === 'write' ? [...readTools, ...writeTools] : readTools;
+  return {
+    schema: 'local.filesystem.doctor.v1',
+    status: 'ok',
+    mode: state.mode,
+    allowed_roots: state.allowedRoots,
+    allowed_root_entries: (state.allowedRootEntries ?? []).map((entry) => ({
+      root: entry.root,
+      provenance: entry.provenance,
+    })),
+    output_root: state.outputRoot,
+    audit_log_dir: state.auditLogDir,
+    client_roots: state.clientRoots,
+    effective_permissions: {
+      can_read: true,
+      can_write: state.mode === 'write',
+      can_mutate_paths: state.mode === 'write',
+      can_delete_directories: state.mode === 'write',
+    },
+    available_tools: effectiveTools,
+    read_tools: readTools,
+    write_tools: writeTools,
+    default_glob_ignore_patterns: DEFAULT_GLOB_IGNORE_PATTERNS,
+  };
+}
+
 function globSearchTool(args, state) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
@@ -513,7 +551,7 @@ function globSearchTool(args, state) {
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
-  return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError }), offset, limit, freshness, cachePolicy });
+  return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
 async function globSearchToolAsync(args, state, context) {
@@ -528,7 +566,7 @@ async function globSearchToolAsync(args, state, context) {
   const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
-  const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 0, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal });
+  const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'glob', args, page, offset, limit, freshness, cachePolicy });
 }
 
@@ -561,7 +599,7 @@ function grepSearchTool(args, state) {
   const snapshotId = stringField(args, 'snapshot_id');
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
   const freshness = searchFreshness(path);
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError }), offset, limit, freshness, cachePolicy });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
 async function grepSearchToolAsync(args, state, context) {
@@ -577,7 +615,7 @@ async function grepSearchToolAsync(args, state, context) {
   const snapshotId = stringField(args, 'snapshot_id');
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
   const freshness = searchFreshness(path);
-  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal });
+  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page, offset, limit, freshness, cachePolicy });
 }
 
@@ -615,17 +653,9 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
 }
 
 function cappedToolValue({ state, value, summary = {} }) {
-  if (JSON.stringify(value).length <= INLINE_RESULT_CHAR_LIMIT) return value;
-  const result = buildOutputRefToolContent({ siteRoot: state.outputRoot, toolName: activeToolName, value, isError: false });
-  const envelope = parseToolResultStructuredContent(result);
-  if (!envelope) return result;
-  const { truncated, ...locator } = envelope;
-  const structuredContent = { ...locator, render_truncated: truncated, ...summary };
-  return {
-    ...result,
-    structuredContent,
-    content: [assistantTextContent(JSON.stringify(structuredContent, null, 2))],
-  };
+  void state;
+  void summary;
+  return value;
 }
 
 function writeFileTool(args, state) {
@@ -1010,7 +1040,12 @@ function directoryTreeFingerprint(path, root, { maxEntries = 5000 } = {}) {
         return;
       }
       const childPath = resolve(currentPath, child.name);
-      const stat = statSync(childPath);
+      let stat;
+      try {
+        stat = statSync(childPath);
+      } catch {
+        continue;
+      }
       const relativePath = relative(root, childPath).replace(/\\/g, '/');
       const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other';
       entries.push(`${relativePath}\t${type}\t${stat.size}\t${Math.trunc(stat.mtimeMs)}`);
@@ -1034,13 +1069,6 @@ function renderGrepMatch(match, mode) {
   return String(parsed.path ?? match);
 }
 
-function normalizeOutputShowArgs(args) {
-  const record = { ...asRecord(args) };
-  if (record.output_ref && !record.ref) record.ref = record.output_ref;
-  if (record.limit !== undefined && record.output_limit === undefined) record.output_limit = record.limit;
-  return record;
-}
-
 function resolvePatchSource(filePatch, state) {
   const patchPath = stripPatchPrefix(filePatch.oldPath === '/dev/null' ? filePatch.newPath : filePatch.oldPath);
   return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_source_path' });
@@ -1061,10 +1089,42 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
       throw diagnosticError(codeName, message, {
         ...context,
         requested_path: inputPath ?? null,
-        allowed_roots: allowedRoots,
+        allowed_roots: Array.isArray(allowedRoots) && allowedRoots.length > 0 && typeof allowedRoots[0] === 'object'
+          ? allowedRoots.map((entry) => entry.root)
+          : allowedRoots,
       });
     }
     throw error;
+  }
+}
+
+function loadSiteExtraAllowedRoots(siteRoot) {
+  try {
+    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    if (!existsSync(configPath)) return [];
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r) => typeof r === 'string' && r.trim());
+  } catch {
+    // Best-effort.
+  }
+  return [];
+}
+
+function loadSiteSecrets(siteRoot, targetEnv) {
+  try {
+    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    if (!existsSync(configPath)) return;
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    const secretEnv = data.env;
+    if (secretEnv && typeof secretEnv === 'object' && !Array.isArray(secretEnv)) {
+      for (const [key, value] of Object.entries(secretEnv)) {
+        if (typeof value === 'string' && value.trim() && !targetEnv[key]) {
+          targetEnv[key] = value;
+        }
+      }
+    }
+  } catch {
+    // Best-effort.
   }
 }
 
@@ -1181,7 +1241,7 @@ function toolAnnotations(name) {
     title: String(name),
     readOnlyHint: !write,
     destructiveHint: /^fs_(str_replace|replace|apply|move|rename|delete)/.test(String(name)),
-    idempotentHint: /^fs_(read|stat|glob|grep)|mcp_output_show/.test(String(name)),
+    idempotentHint: /^fs_(read|stat|glob|grep)/.test(String(name)),
     openWorldHint: false,
   };
 }

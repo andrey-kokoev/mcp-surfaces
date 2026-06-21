@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath } from '../src/policy.js';
+import { buildAllowedRoots, normalizeAllowedRoots, parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath, rootEntriesToRoots } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 import { parsePatch } from '../src/patch-apply.js';
 import { RIPGREP_FIELD_SEPARATOR, grepMatchObject, runRipgrepPageAsync } from '../src/search.js';
@@ -55,6 +55,15 @@ try {
   writeFileSync(join(trusted, 'large-read.txt'), `${'x'.repeat(7000)}\n`, 'utf8');
   writeFileSync(join(trusted, 'grep-one.txt'), 'alpha\nneedle one\n', 'utf8');
   writeFileSync(join(trusted, 'grep-two.txt'), 'needle two\nplain\n', 'utf8');
+  const danglingRoot = join(tempRoot, 'dangling-root');
+  mkdirSync(danglingRoot, { recursive: true });
+  let danglingSymlinkCreated = false;
+  try {
+    symlinkSync(join(danglingRoot, 'missing-target'), join(danglingRoot, 'dangling-link'));
+    danglingSymlinkCreated = true;
+  } catch {
+    danglingSymlinkCreated = false;
+  }
 
   const revolutionRoot = join(trusted, 'OneDrive - Global Maxima LLC', '!Business', '!Clients', '!Revolution', '.narada');
   mkdirSync(join(revolutionRoot, 'config'), { recursive: true });
@@ -86,10 +95,11 @@ trust_level = "trusted"
 trust_level = "untrusted"
 `, 'utf8');
 
-  const roots = parseTrustedProjectRootsFromTrustConfig(configPath);
+  const rootEntries = parseTrustedProjectRootsFromTrustConfig(configPath);
+  const roots = rootEntries.map((entry) => entry.root);
   assert.deepEqual(roots, [resolve(trusted)]);
-  assert.equal(resolveAllowedPath(join(trusted, 'a.txt'), roots).path, resolve(join(trusted, 'a.txt')));
-  assert.throws(() => resolveAllowedPath(join(other, 'x.txt'), roots), /path_outside_allowed_roots/);
+  assert.equal(resolveAllowedPath(join(trusted, 'a.txt'), rootEntries).path, resolve(join(trusted, 'a.txt')));
+  assert.throws(() => resolveAllowedPath(join(other, 'x.txt'), rootEntries), /path_outside_allowed_roots/);
   assert.throws(() => parsePatch(`*** Begin Patch\n*** Move to: missing-update.txt\n*** End Patch\n`), /patch_move_without_update_file/);
   assert.equal(parsePatch(`\n\n*** Begin Patch\n*** Add File: blank-leading.txt\n+ok\n*** End Patch\n`).length, 1);
   const windowsCountMatch = grepMatchObject(`C:/repo/file.txt${RIPGREP_FIELD_SEPARATOR}12`, 'count_matches');
@@ -115,12 +125,12 @@ trust_level = "untrusted"
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
-  assert.ok(readToolNames.includes('mcp_output_show'));
+  assert.equal(readToolNames.includes('mcp_output_show'), false);
   assert.equal(readToolNames.includes('fs_write_file'), false);
 
   const writeToolNames = listTools('write').map((tool) => tool.name);
   assert.ok(writeToolNames.includes('fs_read_file'));
-  assert.ok(writeToolNames.includes('mcp_output_show'));
+  assert.equal(writeToolNames.includes('mcp_output_show'), false);
   assert.ok(writeToolNames.includes('fs_write_file'));
   assert.ok(writeToolNames.includes('fs_str_replace_file'));
   assert.ok(writeToolNames.includes('fs_replace_range'));
@@ -132,7 +142,17 @@ trust_level = "untrusted"
   const applyPatchToolDescription = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.description;
   assert.match(String(applyPatchToolDescription), /unified diff or Codex-style apply_patch/);
 
-  const readState = createServerState({ mode: 'read', rootsFromCodexConfig: configPath, outputRoot: tempRoot });
+  const readState = createServerState({ mode: 'read', allowedRoots: [trusted], outputRoot: tempRoot });
+  const siteRoot = join(tempRoot, 'site-root');
+  mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+  writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { LOCAL_FILESYSTEM_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+  const originalFilesystemSecret = process.env.LOCAL_FILESYSTEM_TEST_SECRET;
+  delete process.env.LOCAL_FILESYSTEM_TEST_SECRET;
+  const secretState = createServerState({ mode: 'read', siteRoot, allowedRoots: [trusted], outputRoot: tempRoot });
+  assert.equal((secretState.env as NodeJS.ProcessEnv).LOCAL_FILESYSTEM_TEST_SECRET, 'from-site-secret');
+  assert.equal(process.env.LOCAL_FILESYSTEM_TEST_SECRET, undefined);
+  if (originalFilesystemSecret === undefined) delete process.env.LOCAL_FILESYSTEM_TEST_SECRET;
+  else process.env.LOCAL_FILESYSTEM_TEST_SECRET = originalFilesystemSecret;
   const initResponse = handleRequest({
     jsonrpc: '2.0',
     id: 1000,
@@ -177,24 +197,11 @@ trust_level = "untrusted"
   assert.equal(revolutionReadResponse.result.structuredContent.relative_path.endsWith('!Revolution/.narada/config/config.json'), true);
 
   const largeRead = call(readState, 121, 'fs_read_file', { path: join(trusted, 'large-read.txt') });
-  assert.match(largeRead.result.structuredContent.output_ref, /^mcp_output:/);
-  assert.equal(largeRead.result.structuredContent.reader_tool, 'mcp_output_show');
-  assert.equal(largeRead.result.structuredContent.relative_path, 'large-read.txt');
+  assert.equal(largeRead.result.structuredContent.schema, 'local.filesystem.read.v1');
   assert.equal(largeRead.result.structuredContent.returned_lines, 1);
+  assert.equal(largeRead.result.structuredContent.line_window_complete, true);
   assert.equal(largeRead.result.structuredContent.next_offset, null);
-  assert.match(largeRead.result.content[0].text, /result: materialized/);
-  const firstShownLargeRead = call(readState, 124, 'mcp_output_show', { ref: largeRead.result.structuredContent.output_ref, output_limit: 100 });
-  assert.equal(firstShownLargeRead.result.structuredContent.offset, 0);
-  assert.equal(firstShownLargeRead.result.structuredContent.output_limit, 100);
-  assert.equal(firstShownLargeRead.result.structuredContent.next_offset, 100);
-  assert.equal(firstShownLargeRead.result.structuredContent.output_truncated, true);
-  const secondShownLargeRead = call(readState, 126, 'mcp_output_show', { output_ref: largeRead.result.structuredContent.output_ref, offset: 100, output_limit: 10000 });
-  assert.equal(secondShownLargeRead.result.structuredContent.offset, 100);
-  assert.equal(secondShownLargeRead.result.structuredContent.next_offset, null);
-  assert.equal(secondShownLargeRead.result.structuredContent.output_truncated, false);
-  const shownLargeRead = call(readState, 122, 'mcp_output_show', { output_ref: largeRead.result.structuredContent.output_ref, limit: 20000 });
-  const shownLargeReadPayload = JSON.parse(shownLargeRead.result.content[0].text);
-  assert.equal(shownLargeReadPayload.content, `${'x'.repeat(7000)}`);
+  assert.equal(typeof largeRead.result.structuredContent.content, 'string');
 
   const statResponse = call(readState, 123, 'fs_stat', { path: join(trusted, 'a.txt') });
   assert.equal(statResponse.result.structuredContent.schema, 'local.filesystem.stat.v1');
@@ -269,25 +276,20 @@ trust_level = "untrusted"
   assert.equal(pagedGlobThird.result.structuredContent.returned, 5);
 
   const largeGlob = call(readState, 18, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 120 });
-  assert.equal(largeGlob.result.structuredContent.has_more, false);
-  assert.equal(largeGlob.result.structuredContent.render_truncated, true);
-  assert.equal(largeGlob.result.structuredContent.truncated, undefined);
-  assert.match(largeGlob.result.structuredContent.output_ref, /^mcp_output:/);
-  assert.equal(largeGlob.result.structuredContent.reader_tool, 'mcp_output_show');
-  assert.equal(largeGlob.result.structuredContent.count, 120);
-  assert.equal(largeGlob.result.structuredContent.count_exact, true);
+  assert.equal(largeGlob.result.structuredContent.schema, 'local.filesystem.glob.v1');
   assert.equal(largeGlob.result.structuredContent.returned, 120);
+  assert.equal(largeGlob.result.structuredContent.has_more, false);
   assert.equal(largeGlob.result.structuredContent.next_offset, null);
-  assert.equal(largeGlob.result.content[0].text.includes('content'), false);
-  assert.match(largeGlob.result.content[0].text, /result: materialized/);
-  assert.match(largeGlob.result.content[0].text, /count: 120/);
-  assert.match(largeGlob.result.content[0].text, /render_truncated: true/);
-  assert.match(largeGlob.result.content[0].text, /reader_tool: mcp_output_show/);
-  const shownLargeGlob = call(readState, 19, 'mcp_output_show', { output_ref: largeGlob.result.structuredContent.output_ref, limit: 50000 });
-  assert.equal(shownLargeGlob.result.content[0].text, shownLargeGlob.result.structuredContent.output_text);
-  const shownGlobPayload = JSON.parse(shownLargeGlob.result.structuredContent.output_text);
-  assert.equal(shownGlobPayload.schema, 'local.filesystem.glob.v1');
-  assert.equal(shownGlobPayload.matches.length, 120);
+  assert.equal(largeGlob.result.structuredContent.matches.length, 120);
+  const emptyGlob = call(readState, 180, 'fs_glob_search', { directory: trusted, pattern: '**/*.does-not-exist', limit: 5 });
+  assert.equal(emptyGlob.result.structuredContent.schema, 'local.filesystem.glob.v1');
+  assert.equal(emptyGlob.result.structuredContent.returned, 0);
+  if (danglingSymlinkCreated) {
+    const danglingState = createServerState({ mode: 'read', allowedRoots: [danglingRoot], outputRoot: tempRoot });
+    const danglingGlob = call(danglingState, 181, 'fs_glob_search', { directory: danglingRoot, pattern: '**/*.does-not-exist', limit: 5 });
+    assert.equal(danglingGlob.result.structuredContent.schema, 'local.filesystem.glob.v1');
+    assert.equal(danglingGlob.result.structuredContent.returned, 0);
+  }
 
   const grepFiles = call(readState, 20, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'files_with_matches', limit: 10 });
   assert.equal(grepFiles.result.structuredContent.schema, 'local.filesystem.grep.v1');

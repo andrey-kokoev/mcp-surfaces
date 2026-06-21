@@ -38,7 +38,7 @@ try {
   assert.equal(names.includes('fs_create_directory'), true);
   assert.equal(names.includes('fs_rename_directory'), true);
   assert.equal(names.includes('fs_delete_directory'), true);
-  assert.equal(names.includes('mcp_output_show'), true);
+  assert.equal(names.includes('mcp_output_show'), false);
   const readFileTool = tools.result.tools.find((tool) => tool.name === 'fs_read_file');
   assert.equal(readFileTool.annotations.readOnlyHint, true);
   assert.equal(readFileTool.outputSchema.type, 'object');
