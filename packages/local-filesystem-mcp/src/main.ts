@@ -289,7 +289,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_glob_search',
-      description: 'List files under an allowed root using ripgrep file globbing.',
+      description: 'List files under an allowed root using ripgrep file globbing. Empty matches return ok with count 0.',
       inputSchema: objectSchema({
         pattern: { type: 'string' },
         directory: { type: 'string', default: '.' },
@@ -303,7 +303,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_grep_search',
-      description: 'Search file contents under an allowed root using ripgrep. Defaults to files_with_matches.',
+      description: 'Search file contents under an allowed root using ripgrep. Use output_mode content for line-numbered matches; empty matches return ok with count 0.',
       inputSchema: objectSchema({
         pattern: { type: 'string' },
         path: { type: 'string', default: '.' },

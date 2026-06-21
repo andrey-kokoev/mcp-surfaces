@@ -125,6 +125,11 @@ trust_level = "untrusted"
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
+  const globToolDescription = listTools('read').find((tool) => tool.name === 'fs_glob_search')?.description;
+  assert.match(String(globToolDescription), /Empty matches return ok with count 0/);
+  const grepToolDescription = listTools('read').find((tool) => tool.name === 'fs_grep_search')?.description;
+  assert.match(String(grepToolDescription), /line-numbered matches/);
+  assert.match(String(grepToolDescription), /empty matches return ok with count 0/);
   assert.equal(readToolNames.includes('mcp_output_show'), false);
   assert.equal(readToolNames.includes('fs_write_file'), false);
 
@@ -283,7 +288,10 @@ trust_level = "untrusted"
   assert.equal(largeGlob.result.structuredContent.matches.length, 120);
   const emptyGlob = call(readState, 180, 'fs_glob_search', { directory: trusted, pattern: '**/*.does-not-exist', limit: 5 });
   assert.equal(emptyGlob.result.structuredContent.schema, 'local.filesystem.glob.v1');
+  assert.equal(emptyGlob.result.structuredContent.status, 'ok');
+  assert.equal(emptyGlob.result.structuredContent.count, 0);
   assert.equal(emptyGlob.result.structuredContent.returned, 0);
+  assert.deepEqual(emptyGlob.result.structuredContent.matches, []);
   if (danglingSymlinkCreated) {
     const danglingState = createServerState({ mode: 'read', allowedRoots: [danglingRoot], outputRoot: tempRoot });
     const danglingGlob = call(danglingState, 181, 'fs_glob_search', { directory: danglingRoot, pattern: '**/*.does-not-exist', limit: 5 });
@@ -310,6 +318,13 @@ trust_level = "untrusted"
   assert.equal(grepCounts.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt') && Number(match.count) === 1), true);
   assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt: 1/.test(match.replace(/\\/g, '/'))), true);
   assert.equal(grepCounts.result.structuredContent.matches.some((match) => match.includes('\u001f')), false);
+  const emptyGrep = call(readState, 221, 'fs_grep_search', { path: trusted, pattern: 'does-not-exist', output_mode: 'content', limit: 5 });
+  assert.equal(emptyGrep.result.structuredContent.schema, 'local.filesystem.grep.v1');
+  assert.equal(emptyGrep.result.structuredContent.status, 'ok');
+  assert.equal(emptyGrep.result.structuredContent.count, 0);
+  assert.equal(emptyGrep.result.structuredContent.returned, 0);
+  assert.deepEqual(emptyGrep.result.structuredContent.matches, []);
+  assert.deepEqual(emptyGrep.result.structuredContent.match_objects, []);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
