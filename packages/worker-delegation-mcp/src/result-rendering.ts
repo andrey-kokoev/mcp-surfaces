@@ -2,13 +2,11 @@ import { diagnosticError } from './errors.js';
 
 export function renderToolResultText(value: unknown): string {
   const record = asRecord(value);
-  if (record.schema === 'narada.worker.output_show.v1') return String(record.output_text ?? '');
-  if (record.schema === 'narada.worker.output_ref.v1' || record.result_materialized === true) return compactLines([
+  if (record.result_materialized === true) return compactLines([
     `${record.tool_name ?? 'worker_result'}: materialized`,
     `status: ${record.status ?? 'ok'}`,
     'result: materialized',
-    `output_ref: ${record.output_ref ?? ''}`,
-    `reader_tool: ${record.reader_tool ?? 'worker_output_show'}`,
+    `reader_tool: ${record.reader_tool ?? 'none'}`,
     `full_output_byte_length: ${record.full_output_byte_length ?? ''}`,
   ]);
   if (record.schema === 'narada.worker.policy.v1') return renderPolicy(record);

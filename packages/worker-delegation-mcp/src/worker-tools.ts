@@ -1,13 +1,13 @@
 import { constants, accessSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
+import { spawn } from 'node:child_process';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
 import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
 import { defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
-import { showOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
-import type { PrimitiveConfigValue } from './policy.js';
+import type { WorkerPolicy, PrimitiveConfigValue } from './policy.js';
 import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerEditToolInput, WorkerExecutorRequest, WorkerIntent, WorkerPreflightCheck, WorkerPreflightPath, WorkerProgressPreview, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
 import type { RunRecordPaths } from './run-record.js';
 
@@ -23,7 +23,6 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_run_status') return workerRunStatus(args, state);
   if (name === 'worker_runs_list') return workerRunsList(args, state);
   if (name === 'worker_run_wait') return workerRunWait(args, state);
-  if (name === 'worker_output_show') return showOutput(state.policy, args);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
 }
 
@@ -112,6 +111,153 @@ function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMc
   };
 }
 
+function recoverCompletedRunFromEvents(run: Record<string, unknown>, resultPath: string): Record<string, unknown> {
+  if (run.status !== 'running') return run;
+  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
+  if (!runDir) return run;
+  const lastMessagePath = resolve(runDir, 'last_message.json');
+  if (existsSync(lastMessagePath)) return run;
+  const recovered = recoverWorkerOutputFromEvents(resolve(runDir, 'events.jsonl'));
+  if (!recovered) return run;
+
+  writeJson(lastMessagePath, recovered.output);
+  const timing = asRecord(run.timing);
+  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
+  const finishedAtMs = recovered.finishedAt.getTime();
+  const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
+  const warning = 'worker_run_recovered_from_events: turn.completed observed with final agent_message, but last_message.json was missing';
+  const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
+  const output = recovered.output;
+  const recoveredRun = {
+    ...run,
+    status: 'completed_with_errors',
+    edits_performed: output.edits_performed,
+    target_state_changed: output.target_state_changed,
+    confidence: 'partial',
+    runtime_warnings: runtimeWarnings,
+    warning_count: runtimeWarnings.length,
+    summary: output.summary,
+    deliverables: output.deliverables,
+    open_questions: output.open_questions,
+    next_actions: output.next_actions,
+    changes: output.changes,
+    verification_results: output.verification,
+    exit_interview: output.exit_interview ?? null,
+    artifacts: Array.isArray(run.artifacts) ? run.artifacts : runArtifacts({
+      runId: String(run.run_id ?? ''),
+      runDir,
+      requestPath: resolve(runDir, 'request.json'),
+      executorRequestPath: resolve(runDir, 'executor_request.json'),
+      resolvedConfigPath: resolve(runDir, 'resolved_worker_config.json'),
+      promptPath: resolve(runDir, 'worker_prompt.txt'),
+      invocationPath: resolve(runDir, 'worker_invocation.json'),
+      eventsPath: resolve(runDir, 'events.jsonl'),
+      diagnosticPath: resolve(runDir, 'diagnostic.log'),
+      lastMessagePath,
+      resultPath,
+      schemaPath: resolve(runDir, 'worker_output.schema.json'),
+    }),
+    timing: {
+      ...timing,
+      finished_at: recovered.finishedAt.toISOString(),
+      duration_ms: Number.isFinite(startedAtMs) ? Math.max(0, finishedAtMs - startedAtMs) : null,
+    },
+    error: warning,
+  };
+  writeJson(resultPath, recoveredRun);
+  return recoveredRun;
+}
+
+function recoverWorkerOutputFromEvents(eventsPath: string): { output: WorkerOutput; finishedAt: Date } | null {
+  if (!existsSync(eventsPath)) return null;
+  let terminalSeen = false;
+  let finalAgentMessage: string | null = null;
+  let finishedAt: Date | null = null;
+  try {
+    const lines = readFileSync(eventsPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    for (const line of lines) {
+      let event: unknown;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const type = eventType(event);
+      if (type === 'agent_message') {
+        finalAgentMessage = eventText(event) ?? finalAgentMessage;
+      }
+      if (type === 'turn.completed') {
+        terminalSeen = true;
+        finishedAt = eventTimestamp(event) ?? finishedAt;
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (!terminalSeen || !finalAgentMessage) return null;
+  return { output: workerOutputFromAgentMessage(finalAgentMessage), finishedAt: finishedAt ?? new Date() };
+}
+
+function workerOutputFromAgentMessage(message: string): WorkerOutput {
+  const parsed = parseWorkerOutputJson(message);
+  if (parsed) return parsed;
+  return {
+    summary: message,
+    deliverables: [],
+    open_questions: [],
+    next_actions: [],
+    edits_performed: false,
+    target_state_changed: false,
+    changes: [],
+    verification: [{ tool: 'codex-events', command: null, status: 'passed', summary: 'Recovered final agent_message after turn.completed' }],
+    exit_interview: null,
+  };
+}
+
+function parseWorkerOutputJson(message: string): WorkerOutput | null {
+  try {
+    const parsed = JSON.parse(message) as Record<string, unknown>;
+    if (typeof parsed.summary !== 'string') return null;
+    if (!Array.isArray(parsed.deliverables) || !Array.isArray(parsed.open_questions) || !Array.isArray(parsed.next_actions) || !Array.isArray(parsed.changes) || !Array.isArray(parsed.verification)) return null;
+    if (typeof parsed.edits_performed !== 'boolean' || typeof parsed.target_state_changed !== 'boolean') return null;
+    return parsed as WorkerOutput;
+  } catch {
+    return null;
+  }
+}
+
+function eventText(value: unknown): string | null {
+  const record = asRecord(value);
+  for (const key of ['message', 'text', 'summary']) {
+    const item = record[key];
+    if (typeof item === 'string' && item.trim()) return item.trim();
+  }
+  const content = record.content;
+  if (typeof content === 'string' && content.trim()) return content.trim();
+  if (Array.isArray(content)) {
+    const parts = content.map((item) => eventText(item)).filter((item): item is string => Boolean(item));
+    if (parts.length > 0) return parts.join('\n').trim();
+  }
+  const nested = asRecord(record.message);
+  for (const key of ['content', 'text']) {
+    const item = nested[key];
+    if (typeof item === 'string' && item.trim()) return item.trim();
+  }
+  return null;
+}
+
+function eventTimestamp(value: unknown): Date | null {
+  const record = asRecord(value);
+  for (const key of ['timestamp', 'created_at', 'time']) {
+    const item = record[key];
+    if (typeof item === 'string') {
+      const ms = Date.parse(item);
+      if (Number.isFinite(ms)) return new Date(ms);
+    }
+  }
+  return null;
+}
+
 function withFreshProgress(run: Record<string, unknown>): Record<string, unknown> {
   const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
   if (!runDir) return run;
@@ -128,16 +274,29 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const cognition = resolveCognition(request.constraints.cognition, state.policy);
   request.constraints.authority = authority;
   request.constraints.cognition = cognition;
-  applyCognitionDefaults(request, cognition, state);
-  const overrides = request.constraints.overrides ?? {};
+  let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
+  applyCognitionDefaults(request, cognition, state, runtime);
+  overrides = request.constraints.overrides ?? {};
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
   enforcePreflightForMode(requestedMode, preflight);
+
+  // Runtime availability preflight: fail fast with a clear remediation if the selected runtime is not runnable.
+  const environment = environmentForWorker(state.env);
+  const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
+  if (!runtimeAvailability.available) {
+    throw diagnosticError('worker_runtime_unavailable', `worker_runtime_unavailable:${runtime}`, {
+      runtime,
+      reason: runtimeAvailability.reason,
+      remediation: runtimeAvailability.remediation,
+    });
+  }
+
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, exitInterview: request.constraints.exit_interview === true });
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;
   const ephemeral = !resumable;
@@ -147,8 +306,6 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const runRecord = createRunRecord(state.policy);
   writeWorkerOutputSchema(runRecord.schemaPath);
   const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
-
-  const environment = environmentForWorker(state.env);
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
@@ -168,7 +325,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       runtime: 'deepseek-api',
       authority,
       cognition,
-      command: deepseekRuntime.command,
+      command: runtimeAvailability.command ?? deepseekRuntime.command,
       command_args: deepseekRuntime.commandArgs,
       argv,
       cwd,
@@ -203,7 +360,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       runtime: 'codex',
       authority,
       cognition,
-      command: codexRuntime.command,
+      command: runtimeAvailability.command ?? codexRuntime.command,
       command_args: codexRuntime.commandArgs,
       argv,
       cwd,
@@ -508,7 +665,7 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
   }
   try {
     const run = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
-    return withFreshProgress(recoverOrphanedRunningRun(run, state));
+    return withFreshProgress(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state));
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
@@ -670,7 +827,7 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
   state.activeRunCount = Math.max(0, state.activeRunCount - 1);
 }
 
-function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState): void {
+function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: 'codex' | 'deepseek-api' = 'deepseek-api'): void {
   const defaults = defaultConfigForCognition(cognition, state.policy);
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
@@ -800,6 +957,39 @@ function isPathInside(path: string, root: string): boolean {
 
 function areSamePath(left: string, right: string): boolean {
   return normalizePathComparisonKey(left) === normalizePathComparisonKey(right);
+}
+
+function checkRuntimeAvailability(runtime: 'codex' | 'deepseek-api', policy: WorkerPolicy, env: Record<string, string>): { available: boolean; reason?: string; remediation?: string; command?: string } {
+  if (runtime === 'deepseek-api') {
+    const key = policy.runtimes.deepseek.command === 'node' ? 'DEEPSEEK_API_KEY' : null;
+    if (key && !env[key]) {
+      return { available: false, reason: `${key} not set`, remediation: `set ${key} in the environment or choose a different runtime` };
+    }
+    if (policy.runtimes.deepseek.command === 'node') {
+      return { available: true, command: policy.runtimes.deepseek.command };
+    }
+    return commandAvailable(policy.runtimes.deepseek.command, env);
+  }
+  return commandAvailable(policy.runtimes.codex.command, env);
+}
+
+function commandAvailable(command: string, env: Record<string, string>): { available: boolean; reason?: string; remediation?: string; command?: string } {
+  if (isAbsolute(command)) {
+    if (!existsSync(command)) {
+      return { available: false, reason: `command not found: ${command}`, remediation: 'install the runtime or configure an explicit command path that exists' };
+    }
+    return { available: true, command };
+  }
+  const pathEnv = env.PATH || '';
+  const extensions = process.platform === 'win32' ? [...new Set([...(env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';'), '.PS1'])] : [''];
+  for (const dir of pathEnv.split(process.platform === 'win32' ? ';' : ':')) {
+    const candidateNames = process.platform === 'win32' && extname(command) ? [command] : extensions.map((ext) => command + ext);
+    for (const name of candidateNames) {
+      const candidate = resolve(dir, name);
+      if (existsSync(candidate)) return { available: true, command: candidate };
+    }
+  }
+  return { available: false, reason: `command not found on PATH: ${command}`, remediation: 'install the runtime, add it to PATH, or configure an absolute command path' };
 }
 
 function normalizePathComparisonKey(path: string): string {

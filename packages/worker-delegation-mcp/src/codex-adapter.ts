@@ -54,7 +54,7 @@ export function buildInvocation(resolvedWorkerConfig: ResolvedWorkerConfig, envi
 export function commandRequiresWindowsShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
   if (platform !== 'win32') return false;
   const extension = extname(command).toLowerCase();
-  return extension === '.cmd' || extension === '.bat';
+  return extension === '.cmd' || extension === '.bat' || extension === '.ps1';
 }
 
 export async function runCodexInvocation(options: {
@@ -198,7 +198,7 @@ export function resultStatus(codexResult: { exit_code: number | null; cancelled:
   const warnings = [codexResult.runtime_error].filter((value): value is string => typeof value === 'string' && value.length > 0);
   const runtimeError = codexResult.error
     ?? codexResult.event_error
-    ?? (codexResult.exit_code !== 0 ? codexResult.runtime_error ?? `worker runtime exited with code ${codexResult.exit_code}` : null);
+    ?? (codexResult.exit_code !== 0 && codexResult.exit_code !== null ? codexResult.runtime_error ?? `worker runtime exited with code ${codexResult.exit_code}` : null);
   if (runtimeError && parsed.ok) return { status: 'completed_with_errors', error: runtimeError, warnings };
   if (runtimeError) return { status: 'failed', error: runtimeError, warnings };
   if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}`, warnings };

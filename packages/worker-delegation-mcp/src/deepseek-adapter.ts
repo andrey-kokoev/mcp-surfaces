@@ -84,6 +84,7 @@ export async function runDeepseekInvocation(options: {
     let workerSessionId: string | null = null;
     let settled = false;
     let cancelled = false;
+    let runtimeError: string | null = null;
 
     const timer = setTimeout(() => {
       cancelled = true;
@@ -97,7 +98,11 @@ export async function runDeepseekInvocation(options: {
     if (options.abortSignal) options.abortSignal.addEventListener('abort', abortHandler, { once: true });
 
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => diagnostics.write(String(chunk)));
+    child.stderr.on('data', (chunk: string) => {
+      const text = String(chunk);
+      diagnostics.write(text);
+      if (!runtimeError) runtimeError = text.trim();
+    });
 
     child.on('error', (error) => {
       if (settled) return;
@@ -124,7 +129,8 @@ export async function runDeepseekInvocation(options: {
           }
         }
       }
-      resolvePromise({ exit_code: code, signal: signal, cancelled, worker_session_id: workerSessionId, error: null, event_error: null, runtime_error: null });
+      const runtimeErrorOut = code !== 0 && !cancelled ? (runtimeError || `deepseek worker exited with code ${code}`) : null;
+      resolvePromise({ exit_code: code, signal: signal, cancelled, worker_session_id: workerSessionId, error: null, event_error: null, runtime_error: runtimeErrorOut });
     });
 
     if (child.stdin) child.stdin.end(options.prompt, 'utf8');

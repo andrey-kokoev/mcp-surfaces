@@ -3,10 +3,9 @@ import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
 import { renderToolResultText } from './result-rendering.js';
-import { materializeOutput } from './output-ref.js';
 import type { WorkerMcpState } from './state.js';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -62,7 +61,14 @@ export async function runStdioServer(options: Record<string, unknown>) {
 }
 
 export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): WorkerMcpState {
-  return { policy: createWorkerPolicy(options), env, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  const siteRoot = resolve(String(options.siteRoot ?? firstRoot(options.allowedRoot) ?? firstRoot(options.allowedRoots) ?? process.cwd()));
+  const stateEnv = { ...env };
+  loadSiteSecrets(siteRoot, stateEnv);
+  const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
+  const mergedOptions = siteExtraRoots.length > 0
+    ? { ...options, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
+    : options;
+  return { policy: createWorkerPolicy(mergedOptions), env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -147,20 +153,17 @@ async function callTool(params: Record<string, unknown>, state: WorkerMcpState, 
 
 function toolResult(value: unknown, state: WorkerMcpState, toolName: string) {
   const text = renderToolResultText(value);
-  if (asRecord(value).schema === 'narada.worker.output_show.v1') return { content: [assistantTextContent(text)], structuredContent: value };
   const structuredText = JSON.stringify(value, null, 2);
-  const artifactLinks = workerArtifactResourceLinks(value, state);
   if (Buffer.byteLength(text, 'utf8') <= state.policy.maxOutputBytes && Buffer.byteLength(structuredText, 'utf8') <= state.policy.maxOutputBytes) {
-    return { content: [assistantTextContent(text), ...artifactLinks], structuredContent: value };
+    return { content: [assistantTextContent(text)], structuredContent: value };
   }
-  const locator = materializeOutput(state.policy, toolName, structuredText);
   return {
-    content: [assistantTextContent(renderToolResultText(locator)), workerOutputResourceLink(String(locator.output_ref ?? '')), ...artifactLinks],
+    content: [assistantTextContent(`${toolName}: output exceeds compact text limit; full result is in structuredContent`)],
     structuredContent: {
+      ...asRecord(value),
       result_materialized: true,
-      output_ref: locator.output_ref,
-      reader_tool: 'worker_output_show',
-      full_output_byte_length: locator.full_output_byte_length,
+      reader_tool: null,
+      full_output_byte_length: Buffer.byteLength(structuredText, 'utf8'),
     },
   };
 }
@@ -169,43 +172,8 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function workerOutputResourceLink(outputRef: string) {
-  return {
-    type: 'resource_link',
-    uri: workerOutputResourceUri(outputRef),
-    name: outputRef,
-    description: 'Materialized worker output.',
-    mimeType: 'text/plain',
-    annotations: { audience: ['assistant'], priority: 0.8 },
-  };
-}
-
-function workerArtifactResourceLinks(value: unknown, state: WorkerMcpState) {
-  const record = asRecord(value);
-  const runId = String(record.run_id ?? '');
-  const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
-  if (record.schema !== 'narada.worker.run.v1' || !runId) return [];
-  return artifacts.map((artifact) => asRecord(artifact)).filter((artifact) => typeof artifact.name === 'string' && typeof artifact.path === 'string').map((artifact) => {
-    const name = String(artifact.name);
-    return {
-      type: 'resource_link',
-      uri: workerArtifactResourceUri(runId, name),
-      name: `${runId}/${name}`,
-      description: 'Worker run artifact.',
-      mimeType: workerArtifactMimeType(name),
-      annotations: { audience: ['assistant'], priority: 0.7 },
-    };
-  });
-}
-
 function listWorkerResources(state: WorkerMcpState) {
-  const dir = resolve(state.policy.runRoot, 'outputs');
-  const outputResources = !existsSync(dir) ? [] : readdirSync(dir).filter((name) => name.endsWith('.txt')).sort().map((name) => {
-    const outputRef = name.replace(/^worker_output_/, 'worker_output:').replace(/\.txt$/, '');
-    return { uri: workerOutputResourceUri(outputRef), name: outputRef, title: outputRef, description: 'Materialized worker output.', mimeType: 'text/plain' };
-  });
-  const artifactResources = listWorkerArtifactResources(state);
-  return { resources: [...outputResources, ...artifactResources] };
+  return { resources: listWorkerArtifactResources(state) };
 }
 
 function listWorkerArtifactResources(state: WorkerMcpState) {
@@ -229,9 +197,7 @@ function listWorkerArtifactResources(state: WorkerMcpState) {
 function readWorkerResource(params: Record<string, unknown>, state: WorkerMcpState) {
   const uri = String(params.uri ?? '');
   if (uri.startsWith('worker-artifact:')) return readWorkerArtifactResource(uri, state);
-  const outputRef = workerOutputRefFromUri(uri);
-  const path = resolve(state.policy.runRoot, 'outputs', `${outputRef.replace(':', '_')}.txt`);
-  return { contents: [{ uri: params.uri, mimeType: 'text/plain', text: readFileSync(path, 'utf8') }] };
+  throw diagnosticError('worker_output_materialization_failed', 'worker_resource_uri_invalid', { uri });
 }
 
 function readWorkerArtifactResource(uri: string, state: WorkerMcpState) {
@@ -268,15 +234,6 @@ function workerArtifactMimeType(name: string) {
 function isPathInside(candidate: string, root: string): boolean {
   const relativePath = relative(resolve(root), resolve(candidate));
   return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
-}
-
-function workerOutputResourceUri(outputRef: string) {
-  return `worker-output:${encodeURIComponent(outputRef)}`;
-}
-
-function workerOutputRefFromUri(uri: string) {
-  if (!uri.startsWith('worker-output:')) throw diagnosticError('worker_output_materialization_failed', 'worker_resource_uri_invalid', { uri });
-  return decodeURIComponent(uri.slice('worker-output:'.length));
 }
 
 export function parseArgs(argv: string[]): Record<string, unknown> {
@@ -383,6 +340,41 @@ function clientRootCompletionValues(state: WorkerMcpState): string[] {
   }).filter(Boolean).slice(0, 100);
 }
 
+function firstRoot(value: unknown): string | null {
+  if (Array.isArray(value)) return typeof value[0] === 'string' && value[0].trim() ? value[0] : null;
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
+  try {
+    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    if (!existsSync(configPath)) return [];
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0);
+  } catch {
+    // Best-effort.
+  }
+  return [];
+}
+
+function loadSiteSecrets(siteRoot: string, env: NodeJS.ProcessEnv): void {
+  try {
+    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    if (!existsSync(configPath)) return;
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    const secretEnv = data.env;
+    if (secretEnv && typeof secretEnv === 'object' && !Array.isArray(secretEnv)) {
+      for (const [key, value] of Object.entries(secretEnv)) {
+        if (typeof value === 'string' && value.trim() && !env[key]) {
+          env[key] = value;
+        }
+      }
+    }
+  } catch {
+    // Best-effort.
+  }
 }

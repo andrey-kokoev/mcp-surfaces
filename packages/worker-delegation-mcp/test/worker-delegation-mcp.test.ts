@@ -89,7 +89,6 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_run_status',
   'worker_runs_list',
   'worker_run_wait',
-  'worker_output_show',
 ]);
 for (const tool of tools.result?.tools ?? []) {
   assert.equal(tool.outputSchema?.type, 'object', tool.name);
@@ -104,7 +103,7 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.ou
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_output_show')?.outputSchema?.properties?.schema?.const, 'narada.worker.output_show.v1');
+assert.equal(tools.result?.tools.some((tool) => tool.name === 'worker_output_show'), false);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.authority?.enum, ['read', 'write', 'command']);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.wait_for_completion?.type, 'boolean');
@@ -114,6 +113,7 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inp
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.required_mcp_tools?.type, 'array');
 assert.equal(commandRequiresWindowsShell('codex.cmd', 'win32'), true);
 assert.equal(commandRequiresWindowsShell('codex.bat', 'win32'), true);
+assert.equal(commandRequiresWindowsShell('codex.ps1', 'win32'), true);
 assert.equal(commandRequiresWindowsShell(process.execPath, 'win32'), false);
 assert.equal(commandRequiresWindowsShell('codex.cmd', 'linux'), false);
 
@@ -139,15 +139,27 @@ assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.ephemeral, true);
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 
 assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
 assert.throws(() => createServerState({ allowedRoot: root, allowedSandbox: 'invalid' }), /worker_invalid_sandbox/);
 assert.throws(() => createServerState({ allowedRoot: root, allowedSandbox: 'danger-full-access' }), /worker_danger_full_access_not_allowed/);
 createServerState({ allowedRoot: root, allowedSandboxes: ['read-only', 'workspace-write'] });
+
+const secretProcessValue = process.env.WORKER_DELEGATION_TEST_SECRET;
+delete process.env.WORKER_DELEGATION_TEST_SECRET;
+const secretSiteRoot = join(root, 'secret-site');
+const secretRunRoot = join(root, 'secret-runs');
+mkdirSync(join(secretSiteRoot, '.narada'), { recursive: true });
+writeFileSync(join(secretSiteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { WORKER_DELEGATION_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+const secretState = createServerState({ siteRoot: secretSiteRoot, allowedRoot: secretSiteRoot, runRoot: secretRunRoot, codexCommand: process.execPath }, { PATH: process.env.PATH });
+assert.equal(secretState.env.WORKER_DELEGATION_TEST_SECRET, 'from-site-secret');
+assert.equal(process.env.WORKER_DELEGATION_TEST_SECRET, undefined);
+if (secretProcessValue === undefined) delete process.env.WORKER_DELEGATION_TEST_SECRET;
+else process.env.WORKER_DELEGATION_TEST_SECRET = secretProcessValue;
 
 if (process.platform === 'win32') {
   const mixedCaseState = createServerState({ allowedRoot: root.toLowerCase(), runRoot, codexCommand: process.execPath });
@@ -158,6 +170,21 @@ if (process.platform === 'win32') {
   const mixedCaseChild = join(platformRootCase, 'Child');
   mkdirSync(mixedCaseChild, { recursive: true });
   assert.equal(resolveWorkingDirectory(mixedCaseChild, mixedCaseState.policy).toLowerCase(), mixedCaseChild.toLowerCase());
+
+  const ps1Bin = join(root, 'ps1-bin');
+  mkdirSync(ps1Bin, { recursive: true });
+  const codexPs1 = join(ps1Bin, 'codex.ps1');
+  writeFileSync(codexPs1, `
+$out = $args[$args.IndexOf('-o') + 1]
+Set-Content -LiteralPath $out -Encoding UTF8 -Value '{"summary":"ps1 worker ok","deliverables":[],"open_questions":[],"next_actions":[],"edits_performed":false,"target_state_changed":false,"changes":[],"verification":[],"exit_interview":null}'
+Write-Output '{"thread_id":"ps1-thread"}'
+`, 'utf8');
+  const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), codexCommand: 'codex.ps1' }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
+  const ps1Run = await rpc({ jsonrpc: '2.0', id: 158, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('ps1 command lookup') } }, ps1State);
+  const ps1RunDir = ps1Run.result?.structuredContent.run_dir ?? ps1Run.error?.data.details.run_dir;
+  assert.equal(typeof ps1RunDir, 'string');
+  const ps1Invocation = JSON.parse(readFileSync(join(ps1RunDir, 'worker_invocation.json'), 'utf8'));
+  assert.equal(ps1Invocation.command.toLowerCase(), codexPs1.toLowerCase());
 }
 
 const deniedRuntime = await rpc({
@@ -242,11 +269,11 @@ if (process.platform === 'win32') {
 }
 assert.deepEqual(allowedConfigRun.result?.structuredContent.final_checklist, ['state whether files were edited', 'list evidence inspected', 'list blocked or unreadable paths', 'separate recommendations from completed work']);
 const completedRunDir = allowedConfigRun.result?.structuredContent.run_dir;
-const promptArtifactLink = allowedConfigRun.result?.content.find((item) => item.type === 'resource_link' && String(item.uri).startsWith('worker-artifact:') && item.name.endsWith('/worker_prompt.txt'));
-assert.ok(promptArtifactLink);
+assert.deepEqual(allowedConfigRun.result?.content.map((item) => item.type), ['text']);
 const listedResources = await rpc({ jsonrpc: '2.0', id: 51, method: 'resources/list', params: {} }, state);
-assert.equal(listedResources.result?.resources.some((resource) => resource.uri === promptArtifactLink.uri), true);
-const promptResource = await rpc({ jsonrpc: '2.0', id: 52, method: 'resources/read', params: { uri: promptArtifactLink.uri } }, state);
+const promptArtifact = listedResources.result?.resources.find((resource) => String(resource.uri).startsWith('worker-artifact:') && resource.name.endsWith('/worker_prompt.txt'));
+assert.ok(promptArtifact);
+const promptResource = await rpc({ jsonrpc: '2.0', id: 52, method: 'resources/read', params: { uri: promptArtifact.uri } }, state);
 assert.match(promptResource.result?.contents[0].text, /Do not call any worker_\* MCP tools\./);
 for (const file of ['request.json', 'executor_request.json', 'resolved_worker_config.json', 'worker_prompt.txt', 'worker_invocation.json', 'events.jsonl', 'diagnostic.log', 'last_message.json', 'result.json', 'worker_output.schema.json']) {
   assert.equal(existsSync(join(completedRunDir, file)), true, file);
@@ -323,6 +350,7 @@ const asyncRun = await rpc({
   params: { name: 'worker_run', arguments: { intent: { instruction: 'default async run' }, constraints: { cwd: root, authority: 'read', cognition: 'low' } } },
 }, state);
 assert.equal(asyncRun.result?.structuredContent.status, 'running');
+assert.deepEqual(asyncRun.result?.content.map((item) => item.type), ['text']);
 assert.equal(asyncRun.result?.structuredContent.timing.finished_at, null);
 assert.deepEqual(asyncRun.result?.structuredContent.progress, { event_count: 0, latest_event_type: null, latest_event_preview: null, readable: true, tail_truncated: false });
 assert.equal(state.activeRunCount, 1);
@@ -398,6 +426,54 @@ assert.equal(orphanedStatus.result?.structuredContent.status, 'completed_with_er
 assert.equal(orphanedStatus.result?.structuredContent.summary, 'orphaned worker output');
 assert.equal(orphanedStatus.result?.structuredContent.warning_count, 1);
 assert.match(orphanedStatus.result?.structuredContent.error, /worker_run_orphaned_final_output/);
+const eventRecoveredRunId = 'run-20000101T000003Z-events1';
+const eventRecoveredRunDir = join(runRoot, eventRecoveredRunId);
+mkdirSync(eventRecoveredRunDir, { recursive: true });
+writeFileSync(join(eventRecoveredRunDir, 'events.jsonl'), [
+  JSON.stringify({ type: 'thread.started', thread_id: 'thread-events-recovered' }),
+  JSON.stringify({ type: 'agent_message', message: 'Recovered recommendation from events.', timestamp: '2000-01-01T00:00:04.000Z' }),
+  JSON.stringify({ type: 'turn.completed', timestamp: '2000-01-01T00:00:05.000Z' }),
+].join('\n') + '\n', 'utf8');
+writeFileSync(join(eventRecoveredRunDir, 'result.json'), JSON.stringify({
+  schema: 'narada.worker.run.v1',
+  status: 'running',
+  run_id: eventRecoveredRunId,
+  run_dir: eventRecoveredRunDir,
+  runtime: 'codex',
+  worker_session_id: null,
+  resolved_worker_config: { authority: 'read', max_run_ms: 60_000 },
+  executor_request: { requested_mode: 'audit_only', preflight: [] },
+  requested_mode: 'audit_only',
+  edits_performed: null,
+  target_state_changed: null,
+  confidence: 'complete',
+  blocked_paths: [],
+  verification: [],
+  runtime_warnings: [],
+  warning_count: 0,
+  preflight: [],
+  final_checklist: [],
+  summary: '',
+  deliverables: [],
+  open_questions: [],
+  next_actions: [],
+  changes: [],
+  verification_results: [],
+  artifacts: [],
+  timing: { started_at: '2000-01-01T00:00:03.000Z', finished_at: null, duration_ms: null },
+  error: null,
+}), 'utf8');
+const eventRecoveredStatus = await rpc({ jsonrpc: '2.0', id: 52321, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: eventRecoveredRunId } } }, state);
+assert.equal(eventRecoveredStatus.result?.structuredContent.status, 'completed_with_errors');
+assert.equal(eventRecoveredStatus.result?.structuredContent.summary, 'Recovered recommendation from events.');
+assert.match(eventRecoveredStatus.result?.structuredContent.error, /worker_run_recovered_from_events/);
+assert.equal(eventRecoveredStatus.result?.structuredContent.timing.finished_at, '2000-01-01T00:00:05.000Z');
+assert.equal(JSON.parse(readFileSync(join(eventRecoveredRunDir, 'result.json'), 'utf8')).status, 'completed_with_errors');
+const recoveredResources = await rpc({ jsonrpc: '2.0', id: 52322, method: 'resources/list', params: {} }, state);
+const recoveredLastMessageResource = recoveredResources.result?.resources.find((resource) => resource.name === `${eventRecoveredRunId}/last_message.json`);
+assert.ok(recoveredLastMessageResource);
+const recoveredLastMessage = await rpc({ jsonrpc: '2.0', id: 52323, method: 'resources/read', params: { uri: recoveredLastMessageResource.uri } }, state);
+assert.match(recoveredLastMessage.result?.contents[0].text, /Recovered recommendation from events/);
 const recentRuns = await rpc({ jsonrpc: '2.0', id: 524, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 10 } } }, state);
 const recentAsyncRun = recentRuns.result?.structuredContent.runs.find((run) => run.run_id === asyncRun.result?.structuredContent.run_id);
 assert.ok(recentAsyncRun);
@@ -434,8 +510,8 @@ const readAuthority = await rpc({
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 const mediumCognition = await rpc({
   jsonrpc: '2.0',
   id: 541,
@@ -445,8 +521,8 @@ const mediumCognition = await rpc({
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.cognition, 'medium');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 const writeAuthority = await rpc({
   jsonrpc: '2.0',
   id: 55,
@@ -463,8 +539,8 @@ const commandAuthority = await rpc({
 }, state);
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.authority, 'command');
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 
 const editRun = await rpc({
   jsonrpc: '2.0',
@@ -477,7 +553,7 @@ assert.equal(editRun.result?.structuredContent.resolved_worker_config.authority,
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-test');
-assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 assert.equal(editRun.result?.structuredContent.requested_mode, 'implement');
 assert.equal(editRun.result?.structuredContent.edits_performed, true);
 assert.equal(editRun.result?.structuredContent.target_state_changed, true);
@@ -491,7 +567,7 @@ assert.equal(editRequest.constraints.authority, 'write');
 assert.equal(editRequest.constraints.cognition, 'low');
 assert.equal(editRequest.constraints.resumable, undefined);
 assert.equal(editRequest.constraints.overrides.model, 'gpt-edit-test');
-assert.equal(editRequest.constraints.overrides.reasoning_effort, 'high');
+assert.equal(editRequest.constraints.overrides.reasoning_effort, undefined);
 
 const defaultEditRun = await rpc({
   jsonrpc: '2.0',
@@ -499,8 +575,8 @@ const defaultEditRun = await rpc({
   method: 'tools/call',
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'default edit shortcut', wait_for_completion: true } },
 }, state);
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 
 const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), codexCommand: process.execPath, cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
 const customLowCognition = await rpc({
@@ -528,14 +604,14 @@ const resumableEdit = await rpc({
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'resumable edit inheritance', resumable: true, wait_for_completion: true } },
 }, state);
 assert.equal(resumableEdit.result?.structuredContent.worker_session_id, 'thread-created');
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.ephemeral, false);
 const editSessionRecord = JSON.parse(readFileSync(join(runRoot, 'sessions', `${encodeURIComponent('thread-created')}.json`), 'utf8'));
 assert.equal(editSessionRecord.origin_tool, 'worker_edit');
 assert.equal(editSessionRecord.resolved_worker_config.authority, 'write');
 assert.equal(editSessionRecord.resolved_worker_config.cognition, 'low');
-assert.equal(editSessionRecord.resolved_worker_config.model, 'deepseek-v4-flash');
+assert.equal(editSessionRecord.resolved_worker_config.model, null);
 const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath }, { PATH: process.env.PATH });
 const resumedEdit = await rpc({
   jsonrpc: '2.0',
@@ -546,8 +622,8 @@ const resumedEdit = await rpc({
 assert.equal(resumedEdit.result?.structuredContent.status, 'completed');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.authority, 'write');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.cognition, 'low');
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.argv.includes('--ephemeral'), false);
 
 const resumableRun = await rpc({
@@ -622,12 +698,30 @@ const spawnFailure = await rpc({
   method: 'tools/call',
   params: { name: 'worker_run', arguments: runArgs('spawn failure') },
 }, spawnFailureState);
-assert.equal(spawnFailure.error?.data.code, 'worker_runtime_failed');
-assert.equal(typeof spawnFailure.error?.data.details.run_dir, 'string');
-const failureResult = JSON.parse(readFileSync(join(spawnFailure.error?.data.details.run_dir, 'result.json'), 'utf8'));
-assert.equal(failureResult.summary, '');
-assert.deepEqual(failureResult.next_actions, []);
-assert.equal(failureResult.worker_output_error.reason, 'invalid_shape');
+assert.equal(spawnFailure.error?.data.code, 'worker_runtime_unavailable');
+assert.match(spawnFailure.error?.data.details.reason, /command not found/);
+assert.equal(typeof spawnFailure.error?.data.details.remediation, 'string');
+
+const unavailableRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-unavailable-'));
+const unavailableState = createServerState({ allowedRoot: unavailableRoot, runRoot: join(unavailableRoot, 'runs'), codexCommand: 'definitely-not-a-real-codex-binary' });
+const unavailableRun = await rpc({
+  jsonrpc: '2.0',
+  id: 611,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'unavailable runtime' }, constraints: { cwd: unavailableRoot, wait_for_completion: true } } },
+}, unavailableState);
+assert.equal(unavailableRun.error?.data.code, 'worker_runtime_unavailable');
+
+const deepseekRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-deepseek-spawn-'));
+const deepseekState = createServerState({ allowedRoot: deepseekRoot, runRoot: join(deepseekRoot, 'runs'), defaultRuntime: 'deepseek-api' });
+const deepseekUnavailable = await rpc({
+  jsonrpc: '2.0',
+  id: 612,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'deepseek unavailable' }, constraints: { cwd: deepseekRoot, wait_for_completion: true, overrides: { runtime: 'deepseek-api' } } } },
+}, deepseekState);
+assert.equal(deepseekUnavailable.error?.data.code, 'worker_runtime_unavailable');
+assert.match(String(deepseekUnavailable.error?.data.details.reason), /DEEPSEEK_API_KEY/);
 
 const eventRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-bad-event-'));
 writeFileSync(join(eventRoot, 'exec'), `
@@ -712,39 +806,16 @@ assert.equal(runtimeError.error?.data.details.error, 'model not available for ac
 const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 120 });
 const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
 assert.equal(materialized.result?.structuredContent.result_materialized, true);
-assert.equal(materialized.result?.structuredContent.reader_tool, 'worker_output_show');
-assert.match(materialized.result?.content[0].text, /worker_policy_inspect: materialized/);
-const materializedResourceLink = materialized.result?.content.find((item) => item.type === 'resource_link' && String(item.uri).startsWith('worker-output:'));
-assert.ok(materializedResourceLink);
+assert.equal(materialized.result?.structuredContent.reader_tool, null);
+assert.equal(materialized.result?.structuredContent.schema, 'narada.worker.policy.v1');
+assert.match(materialized.result?.content[0].text, /worker_policy_inspect: output exceeds compact text limit/);
+assert.deepEqual(materialized.result?.content.map((item) => item.type), ['text']);
 const materializedResources = await rpc({ jsonrpc: '2.0', id: 71, method: 'resources/list', params: {} }, materializedState);
-assert.equal(materializedResources.result?.resources.some((resource) => resource.uri === materializedResourceLink.uri), true);
-const materializedResource = await rpc({ jsonrpc: '2.0', id: 72, method: 'resources/read', params: { uri: materializedResourceLink.uri } }, materializedState);
-assert.match(materializedResource.result?.contents[0].text, /narada.worker.policy.v1/);
-const shown = await rpc({
-  jsonrpc: '2.0',
-  id: 8,
-  method: 'tools/call',
-  params: { name: 'worker_output_show', arguments: { output_ref: materialized.result?.structuredContent.output_ref, offset: 0, limit: 20 } },
-}, materializedState);
-assert.equal(shown.result?.structuredContent.schema, 'narada.worker.output_show.v1');
-assert.equal(shown.result?.content[0].text, shown.result?.structuredContent.output_text);
-assert.equal(shown.result?.content[0].text.length <= 20, true);
-const shownArtifact = await rpc({
-  jsonrpc: '2.0',
-  id: 801,
-  method: 'tools/call',
-  params: { name: 'worker_output_show', arguments: { path: join(completedRunDir, 'executor_request.json'), offset: 0, limit: 80 } },
-}, state);
-assert.equal(shownArtifact.result?.structuredContent.schema, 'narada.worker.output_show.v1');
-assert.equal(shownArtifact.result?.structuredContent.output_ref, null);
-assert.match(shownArtifact.result?.structuredContent.output_text, /narada.worker.executor_request.v1/);
-const badSlice = await rpc({
-  jsonrpc: '2.0',
-  id: 81,
-  method: 'tools/call',
-  params: { name: 'worker_output_show', arguments: { output_ref: materialized.result?.structuredContent.output_ref, offset: 'nope', limit: 20 } },
-}, materializedState);
-assert.equal(badSlice.error?.data.code, 'worker_invalid_config_value');
+assert.equal(materializedResources.result?.resources.some((resource) => String(resource.uri).startsWith('worker-output:')), false);
+const executorRequestResource = (await rpc({ jsonrpc: '2.0', id: 72, method: 'resources/list', params: {} }, state)).result?.resources.find((resource) => resource.name === `${allowedConfigRun.result?.structuredContent.run_id}/executor_request.json`);
+assert.ok(executorRequestResource);
+const shownArtifact = await rpc({ jsonrpc: '2.0', id: 801, method: 'resources/read', params: { uri: executorRequestResource.uri } }, state);
+assert.match(shownArtifact.result?.contents[0].text, /narada.worker.executor_request.v1/);
 
 const cancelled = new AbortController();
 cancelled.abort();

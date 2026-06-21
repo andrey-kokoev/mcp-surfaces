@@ -13,7 +13,7 @@ export type WorkerCognitionDefaults = {
 };
 
 export type WorkerPolicy = {
-  defaultRuntime: 'codex';
+  defaultRuntime: 'codex' | 'deepseek-api';
   defaultAuthority: WorkerAuthority;
   defaultCognition: WorkerCognition;
   allowedAuthorities: WorkerAuthority[];
@@ -108,7 +108,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   }
 
   return {
-    defaultRuntime: 'codex',
+    defaultRuntime,
     defaultAuthority: validateAuthority(merged.defaultAuthority ?? worker.default_authority ?? 'read'),
     defaultCognition: validateCognition(merged.defaultCognition ?? worker.default_cognition ?? 'low'),
     allowedAuthorities: authorityList(merged.allowedAuthority ?? merged.allowedAuthorities ?? policy.allowed_authorities ?? WORKER_AUTHORITIES),
@@ -262,7 +262,13 @@ export function resolveConfig(input: Record<string, unknown>, policy: WorkerPoli
 
 export function environmentForWorker(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const key of ENV_KEYS) if (typeof env[key] === 'string') result[key] = env[key]!;
+  const envByLowerKey = process.platform === 'win32'
+    ? new Map(Object.entries(env).map(([key, value]) => [key.toLowerCase(), value]))
+    : null;
+  for (const key of ENV_KEYS) {
+    const value = typeof env[key] === 'string' ? env[key] : envByLowerKey?.get(key.toLowerCase());
+    if (typeof value === 'string') result[key] = value;
+  }
   return result;
 }
 
@@ -348,9 +354,9 @@ function mergeConfig(fileConfig: Record<string, unknown>, options: Record<string
 
 function cognitionDefaults(cognition: Record<string, unknown>, options: Record<string, unknown>): Record<WorkerCognition, WorkerCognitionDefaults> {
   return {
-    low: cognitionDefault('low', cognition, options, 'deepseek-v4-flash', 'high'),
-    medium: cognitionDefault('medium', cognition, options, 'deepseek-v4-flash', 'high'),
-    high: cognitionDefault('high', cognition, options, 'deepseek-v4-flash', 'high'),
+    low: cognitionDefault('low', cognition, options, null, null),
+    medium: cognitionDefault('medium', cognition, options, null, null),
+    high: cognitionDefault('high', cognition, options, null, null),
   };
 }
 

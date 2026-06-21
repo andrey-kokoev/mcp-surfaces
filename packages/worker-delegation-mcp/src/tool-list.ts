@@ -43,12 +43,6 @@ export function listTools(): WorkerToolDefinition[] {
       summary_only: { type: 'boolean', description: 'Return only run id, status, summary, and error preview.' },
       verbose: { type: 'boolean', description: 'Include the full worker run payload as full_run.' },
     }, ['run_id']) },
-    { name: 'worker_output_show', description: 'Read materialized worker output by output ref, or read a run artifact path inside the worker run root.', inputSchema: objectSchema({
-      output_ref: { type: 'string' },
-      path: { type: 'string', description: 'Artifact path from a worker run result. Must be inside the worker run root.' },
-      offset: { type: 'integer' },
-      limit: { type: 'integer' },
-    }) },
   ]);
 }
 
@@ -144,7 +138,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !startsWorker,
     destructiveHint: false,
-    idempotentHint: /inspect|output_show|run_status|runs_list|run_wait/.test(name),
+    idempotentHint: /inspect|run_status|runs_list|run_wait/.test(name),
     openWorldHint: true,
   };
 }
@@ -154,7 +148,6 @@ function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();
   if (name === 'worker_run_wait') return workerRunWaitOutputSchema();
   if (name === 'worker_runs_list') return workerRunsListOutputSchema();
-  if (name === 'worker_output_show') return workerOutputShowSchema();
   return { type: 'object', additionalProperties: true };
 }
 
@@ -223,21 +216,6 @@ function workerRunOutputSchema(): Record<string, unknown> {
     timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
   }, ['schema', 'status', 'run_id', 'run_dir', 'resolved_worker_config', 'summary', 'deliverables', 'open_questions', 'next_actions']);
-}
-
-function workerOutputShowSchema(): Record<string, unknown> {
-  return objectSchema({
-    schema: { type: 'string', const: 'narada.worker.output_show.v1' },
-    status: { type: 'string' },
-    ref: { type: 'string' },
-    offset: { type: 'integer' },
-    limit: { type: 'integer' },
-    next_offset: { type: ['integer', 'null'] },
-    output_text: { type: 'string' },
-    output_truncated: { type: 'boolean' },
-    path: { type: 'string' },
-    output_ref: { type: ['string', 'null'] },
-  }, ['schema', 'status', 'output_text']);
 }
 
 function stringArraySchema(): Record<string, unknown> {

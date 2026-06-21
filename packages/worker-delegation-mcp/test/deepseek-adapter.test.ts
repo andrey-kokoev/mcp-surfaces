@@ -69,9 +69,9 @@ const policy = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: 
 assert.equal(policy.result?.structuredContent.allowed_runtimes.includes('deepseek-api'), true);
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.command, 'node');
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
-assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: 'deepseek-v4-flash', reasoning_effort: 'high' });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
+assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
 
 // --- Constructor validation ---
 
@@ -145,6 +145,9 @@ const env = environmentForWorker({
 assert.equal(env.DEEPSEEK_API_KEY, 'sk-test');
 assert.equal(env.DEEPSEEK_API_BASE_URL, 'https://custom.api.com');
 assert.equal(env.NARADA_WORKER_MCP_CONFIG, '/custom/mcp.json');
+if (process.platform === 'win32') {
+  assert.equal(environmentForWorker({ Path: 'C:/tools' } as Record<string, string>).PATH, 'C:/tools');
+}
 
 // --- Deepseek CLI args via parseArgs ---
 
