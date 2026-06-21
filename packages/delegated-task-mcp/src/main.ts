@@ -456,10 +456,12 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
   const allDone = statuses.length > 0 && statuses.every((status) => COMPLETE_STEP_STATES.has(status));
   task.status = hasFailed || hasBlocked || acceptance.verdict === 'failed' ? 'failed' : hasRunning || hasPending ? 'running' : allDone ? 'completed' : 'accepted_for_execution';
   const verdict = task.status === 'completed' && acceptance.verdict === 'passed' ? 'passed' : task.status === 'failed' ? 'failed' : 'pending';
-  task.summary = summaryForTask(task, stepStates, acceptance);
+  task.summary = summaryForTask(task, stepStates, { verdict });
   task.result = {
     ...consolidated,
+    acceptance_status: verdict === 'pending' && acceptance.verdict === 'passed' ? 'pending_terminal_completion' : verdict,
     acceptance_verdict: verdict,
+    acceptance_precheck_verdict: acceptance.verdict,
     acceptance_evidence: acceptance.checks,
     step_states: stepStates,
     progress: progressSummary(task, stepStates),

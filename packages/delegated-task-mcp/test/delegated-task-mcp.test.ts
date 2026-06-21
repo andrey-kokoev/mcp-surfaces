@@ -206,6 +206,7 @@ try {
   const limitedRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise max concurrency',
     constraints: { authority: 'read', cwd: root, max_concurrency: 2 },
+    acceptance: { forbidden_patterns: ['definitely-not-present-in-results'] },
     workflow: {
       steps: [
         { id: 'a', kind: 'worker', instruction: 'async worker a' },
@@ -216,6 +217,16 @@ try {
   });
   const limitedView = limitedRun.result.structuredContent as Record<string, any>;
   assert.equal(limitedView.task_status, 'running');
+  const limitedStatus = await callTool(state, 'delegated_task_status', { task_id: limitedView.task_id, refresh: false });
+  const limitedStatusView = limitedStatus.result.structuredContent as Record<string, any>;
+  assert.equal(limitedStatusView.acceptance_verdict, 'pending');
+  const limitedResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, refresh: false, include_diagnostics: true });
+  const limitedResultView = limitedResult.result.structuredContent as Record<string, any>;
+  assert.equal(limitedResultView.result.acceptance_verdict, 'pending');
+  assert.equal(limitedResultView.result.acceptance_precheck_verdict, 'passed');
+  assert.equal(limitedResultView.result.acceptance_status, 'pending_terminal_completion');
+  assert.match(limitedResultView.result.summary, /acceptance=pending/);
+  assert.doesNotMatch(limitedResultView.result.summary, /acceptance=passed/);
   assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - beforeConcurrencyCalls, 2);
   const limitedEvents = await callTool(state, 'delegated_task_events', { task_id: limitedView.task_id, limit: 10 });
   const limitedEventsView = limitedEvents.result.structuredContent as Record<string, any>;
