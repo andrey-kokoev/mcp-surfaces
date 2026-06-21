@@ -4,6 +4,7 @@ import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
 import { renderToolResultText } from './result-rendering.js';
 import type { WorkerMcpState } from './state.js';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +65,7 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   const siteRoot = resolve(String(options.siteRoot ?? firstRoot(options.allowedRoot) ?? firstRoot(options.allowedRoots) ?? process.cwd()));
   const stateEnv = { ...env };
   loadSiteSecrets(siteRoot, stateEnv);
+  loadProviderCredentialSecrets(siteRoot, stateEnv, options);
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...options, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
@@ -378,3 +380,76 @@ function loadSiteSecrets(siteRoot: string, env: NodeJS.ProcessEnv): void {
     // Best-effort.
   }
 }
+
+function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): void {
+  const registryPath = providerRegistryPath(siteRoot, env, options);
+  if (!registryPath || !existsSync(registryPath)) return;
+  let registry: Record<string, unknown>;
+  try {
+    registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const providers = asRecord(registry.providers);
+  for (const metadata of Object.values(providers).map(asRecord)) {
+    const requirement = asRecord(metadata.credential_requirement);
+    if (requirement.kind !== 'api_key_secret') continue;
+    const envNames = Array.isArray(requirement.env_names) ? requirement.env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+    const primaryEnv = envNames[0];
+    const secretRef = typeof requirement.secret_ref === 'string' && requirement.secret_ref.trim() ? requirement.secret_ref.trim() : null;
+    if (!primaryEnv || !secretRef || envNames.some((name) => typeof env[name] === 'string' && String(env[name]).trim())) continue;
+    const value = lookupPowerShellSecret(secretRef, env, options);
+    if (value) env[primaryEnv] = value;
+    const baseUrlEnvNames = Array.isArray(metadata.base_url_env_names) ? metadata.base_url_env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+    const primaryBaseUrlEnv = baseUrlEnvNames[0];
+    const baseUrl = typeof metadata.base_url === 'string' && metadata.base_url.trim() ? metadata.base_url.trim() : null;
+    if (value && primaryBaseUrlEnv && baseUrl && !env[primaryBaseUrlEnv]) env[primaryBaseUrlEnv] = baseUrl;
+  }
+}
+
+function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {
+  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);
+  if (explicit) return resolve(explicit);
+  const candidates = [
+    join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
+    join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
+    'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
+  ];
+  return candidates.map((candidate) => resolve(candidate)).find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function lookupPowerShellSecret(secretRef: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {
+  const mode = String(env.NARADA_PROVIDER_SECRET_STORE ?? options.providerSecretStore ?? '').trim().toLowerCase();
+  if (['0', 'false', 'off', 'disabled', 'none'].includes(mode)) return null;
+  const command = firstString(options.secretLookupCommand, env.NARADA_SECRET_LOOKUP_COMMAND) ?? 'pwsh';
+  const args = Array.isArray(options.secretLookupCommandArgs)
+    ? options.secretLookupCommandArgs.map(String)
+    : ['-NoProfile', '-NonInteractive', '-Command', SECRET_MANAGEMENT_LOOKUP_SCRIPT];
+  const result = spawnSync(command, args, {
+    env: { ...env, NARADA_SECRET_LOOKUP_NAME: secretRef },
+    encoding: 'utf8',
+    timeout: 5000,
+    windowsHide: true,
+  });
+  if (result.status !== 0) return null;
+  const value = String(result.stdout ?? '').trim();
+  return value || null;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+const SECRET_MANAGEMENT_LOOKUP_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+$name = [Environment]::GetEnvironmentVariable('NARADA_SECRET_LOOKUP_NAME', 'Process')
+if ([string]::IsNullOrWhiteSpace($name)) { exit 3 }
+if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) { exit 10 }
+Import-Module Microsoft.PowerShell.SecretManagement -ErrorAction Stop
+$secret = Get-Secret -Name $name -AsPlainText -ErrorAction SilentlyContinue
+if ($null -eq $secret -or [string]::IsNullOrWhiteSpace([string]$secret)) { exit 2 }
+[Console]::Out.Write([string]$secret)
+`;

@@ -198,6 +198,49 @@ assert.equal(process.env.WORKER_DELEGATION_TEST_SECRET, undefined);
 if (secretProcessValue === undefined) delete process.env.WORKER_DELEGATION_TEST_SECRET;
 else process.env.WORKER_DELEGATION_TEST_SECRET = secretProcessValue;
 
+const providerRoot = join(root, 'provider-secret-site');
+const providerRunRoot = join(root, 'provider-secret-runs');
+const providerRegistryPath = join(providerRoot, 'provider-registry.json');
+const providerSecretLookupScript = join(providerRoot, 'secret-lookup.js');
+mkdirSync(providerRoot, { recursive: true });
+writeFileSync(providerRegistryPath, JSON.stringify({
+  schema: 'narada.carrier.provider_registry.v1',
+  providers: {
+    'deepseek-api': {
+      base_url: 'https://api.deepseek.com',
+      base_url_env_names: ['DEEPSEEK_API_BASE_URL'],
+      credential_requirement: {
+        kind: 'api_key_secret',
+        secret_ref: 'narada/provider/deepseek-api/api-key',
+        env_names: ['DEEPSEEK_API_KEY'],
+      },
+    },
+  },
+}), 'utf8');
+writeFileSync(providerSecretLookupScript, `
+if (process.env.NARADA_SECRET_LOOKUP_NAME === 'narada/provider/deepseek-api/api-key') {
+  process.stdout.write('deepseek-from-secret-store');
+  process.exit(0);
+}
+process.exit(2);
+`, 'utf8');
+const providerState = createServerState({
+  siteRoot: providerRoot,
+  allowedRoot: providerRoot,
+  runRoot: providerRunRoot,
+  codexCommand: process.execPath,
+  providerRegistryPath,
+  secretLookupCommand: process.execPath,
+  secretLookupCommandArgs: [providerSecretLookupScript],
+}, { PATH: process.env.PATH });
+assert.equal(providerState.env.DEEPSEEK_API_KEY, 'deepseek-from-secret-store');
+assert.equal(providerState.env.DEEPSEEK_API_BASE_URL, 'https://api.deepseek.com');
+const providerPolicy = await rpc({ jsonrpc: '2.0', id: 197, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, providerState);
+assert.equal(JSON.stringify(providerPolicy.result?.structuredContent).includes('deepseek-from-secret-store'), false);
+const deepseekResolve = await rpc({ jsonrpc: '2.0', id: 198, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek secret check' }, constraints: { cwd: providerRoot, overrides: { runtime: 'deepseek-api' } } } } }, providerState);
+assert.equal(deepseekResolve.result?.structuredContent.runtime_availability.available, true);
+assert.equal(JSON.stringify(deepseekResolve.result?.structuredContent).includes('deepseek-from-secret-store'), false);
+
 if (process.platform === 'win32') {
   const mixedCaseState = createServerState({ allowedRoot: root.toLowerCase(), runRoot, codexCommand: process.execPath });
   assert.equal(mixedCaseState.policy.allowedRoots.length, 1);
@@ -339,8 +382,9 @@ assert.equal(resolvedConfig.resumable, false);
 assert.equal(resolvedConfig.ephemeral, true);
 assert.equal(resolvedConfig.config.model, 'gpt-test');
 assert.equal(resolvedConfig.config.model_reasoning_effort, 'low');
-assert.deepEqual(resolvedConfig.environment_keys, ['PATH']);
+assert.equal(resolvedConfig.environment_keys.includes('PATH'), true);
 assert.equal(JSON.stringify(resolvedConfig).includes('must-not-leak'), false);
+assert.equal(JSON.stringify(resolvedConfig).includes('deepseek-from-secret-store'), false);
 const executorRequest = JSON.parse(readFileSync(join(completedRunDir, 'executor_request.json'), 'utf8'));
 assert.equal(executorRequest.schema, 'narada.worker.executor_request.v1');
 assert.equal(executorRequest.intent.instruction, 'run with allowed config');
@@ -750,7 +794,7 @@ const unavailableRun = await rpc({
 assert.equal(unavailableRun.error?.data.code, 'worker_runtime_unavailable');
 
 const deepseekRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-deepseek-spawn-'));
-const deepseekState = createServerState({ allowedRoot: deepseekRoot, runRoot: join(deepseekRoot, 'runs'), defaultRuntime: 'deepseek-api' });
+const deepseekState = createServerState({ allowedRoot: deepseekRoot, runRoot: join(deepseekRoot, 'runs'), defaultRuntime: 'deepseek-api' }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
 const deepseekUnavailable = await rpc({
   jsonrpc: '2.0',
   id: 612,
