@@ -473,11 +473,15 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
 function consolidateResult(task: Task, _state: State, stepStates: Record<string, StepState>): JsonRecord {
   const refs = workerRefs(task);
   const outputs = refs.map((ref) => rec(ref.output));
-  const changedFiles = uniqueStrings([...stringList(rec(task.result).changed_files), ...outputs.flatMap((output) => stringList(output.changed_files)), ...outputs.flatMap((output) => records(output.changes).map((change) => String(change.path ?? '')).filter(Boolean)), ...outputs.flatMap((output) => records(output.deliverables).map((item) => String(item.path ?? '')).filter(Boolean))]);
+  const parentChangedFiles = uniqueStrings(stringList(rec(task.result).parent_changed_files));
+  const workerReportedChangedFiles = uniqueStrings([...outputs.flatMap((output) => stringList(output.changed_files)), ...outputs.flatMap((output) => records(output.changes).map((change) => String(change.path ?? '')).filter(Boolean))]);
+  const observedFiles = uniqueStrings(outputs.flatMap((output) => records(output.deliverables).map((item) => String(item.path ?? '')).filter(Boolean)));
+  const nestedWorkflowChangedFiles = uniqueStrings(outputs.flatMap((output) => records(output.nested_workflows).flatMap((workflow) => stringList(workflow.changed_files))));
+  const changedFiles = uniqueStrings([...parentChangedFiles, ...workerReportedChangedFiles, ...observedFiles, ...nestedWorkflowChangedFiles]);
   const verification = uniqueRecords([...records(rec(task.result).verification), ...outputs.flatMap((output) => records(output.verification_results)), ...outputs.flatMap((output) => records(output.verification))]);
   const residualRisks = uniqueStrings([...stringList(rec(task.result).residual_risks), ...outputs.flatMap((output) => stringList(output.residual_risks)), ...(Object.values(stepStates).some((step) => step.status === 'running') ? ['worker_runs_still_in_progress'] : [])]);
   const observedIncoherencies = uniqueStrings([...stringList(rec(task.result).observed_incoherencies), ...outputs.flatMap((output) => stringList(output.observed_incoherencies))]);
-  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, verification, residual_risks: residualRisks, observed_incoherencies: observedIncoherencies, worker_refs: refs, worker_ref_count: refs.length };
+  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflow_changed_files: nestedWorkflowChangedFiles, verification, residual_risks: residualRisks, observed_incoherencies: observedIncoherencies, worker_refs: refs, worker_ref_count: refs.length };
 }
 
 function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { verdict: 'passed' | 'pending' | 'failed'; checks: JsonRecord[] } {
@@ -827,6 +831,10 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
   const fullSections = {
     worker_refs: refs,
     changed_files: stringList(result.changed_files),
+    parent_changed_files: stringList(result.parent_changed_files),
+    worker_reported_changed_files: stringList(result.worker_reported_changed_files),
+    observed_files: stringList(result.observed_files),
+    nested_workflow_changed_files: stringList(result.nested_workflow_changed_files),
     verification: records(result.verification),
     residual_risks: stringList(result.residual_risks),
     observed_incoherencies: stringList(result.observed_incoherencies),
@@ -838,6 +846,14 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
     worker_refs_truncated: refs.length > maxWorkerRefs,
     changed_files: fullSections.changed_files.slice(0, maxItems),
     changed_files_count: fullSections.changed_files.length,
+    parent_changed_files: fullSections.parent_changed_files.slice(0, maxItems),
+    parent_changed_files_count: fullSections.parent_changed_files.length,
+    worker_reported_changed_files: fullSections.worker_reported_changed_files.slice(0, maxItems),
+    worker_reported_changed_files_count: fullSections.worker_reported_changed_files.length,
+    observed_files: fullSections.observed_files.slice(0, maxItems),
+    observed_files_count: fullSections.observed_files.length,
+    nested_workflow_changed_files: fullSections.nested_workflow_changed_files.slice(0, maxItems),
+    nested_workflow_changed_files_count: fullSections.nested_workflow_changed_files.length,
     verification: fullSections.verification.slice(0, maxItems),
     verification_count: fullSections.verification.length,
     residual_risks: fullSections.residual_risks.slice(0, maxItems),
@@ -845,7 +861,7 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
     observed_incoherencies: fullSections.observed_incoherencies.slice(0, maxItems),
     observed_incoherency_count: fullSections.observed_incoherencies.length,
   };
-  const truncated = refs.length > maxWorkerRefs || fullSections.changed_files.length > maxItems || fullSections.verification.length > maxItems || fullSections.residual_risks.length > maxItems || fullSections.observed_incoherencies.length > maxItems;
+  const truncated = refs.length > maxWorkerRefs || fullSections.changed_files.length > maxItems || fullSections.parent_changed_files.length > maxItems || fullSections.worker_reported_changed_files.length > maxItems || fullSections.observed_files.length > maxItems || fullSections.nested_workflow_changed_files.length > maxItems || fullSections.verification.length > maxItems || fullSections.residual_risks.length > maxItems || fullSections.observed_incoherencies.length > maxItems;
   if (truncated) compacted.output_refs = materializeOutputSections(state, fullSections);
   if (resultPolicy.compact_completed_worker_refs === true && !includeDiagnostics) {
     compacted.worker_refs = records(compacted.worker_refs).map((ref) => ({ step_id: ref.step_id, step_kind: ref.step_kind, run_id: ref.run_id, status: ref.status, summary: ref.summary }));

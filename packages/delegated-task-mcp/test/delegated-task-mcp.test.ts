@@ -147,6 +147,12 @@ try {
   assert.equal(resultView.result.output_refs.some((ref: Record<string, unknown>) => ref.name === 'worker_refs'), true);
   assert.deepEqual(resultView.result.changed_files, ['src/main.ts']);
   assert.equal(resultView.result.changed_files_count, 1);
+  assert.deepEqual(resultView.result.parent_changed_files, []);
+  assert.equal(resultView.result.parent_changed_files_count, 0);
+  assert.deepEqual(resultView.result.worker_reported_changed_files, ['src/main.ts']);
+  assert.equal(resultView.result.worker_reported_changed_files_count, 1);
+  assert.deepEqual(resultView.result.observed_files, []);
+  assert.deepEqual(resultView.result.nested_workflow_changed_files, []);
   assert.equal(resultView.result.verification.length, 1);
   assert.equal(resultView.result.verification_count, 1);
   assert.equal(resultView.diagnostics.task_id, runResult.task_id);
