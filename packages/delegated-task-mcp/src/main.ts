@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { callWorkerTool, createWorkerPolicy, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
 
@@ -77,14 +77,18 @@ type AdvanceOptions = { waitUntilTerminal?: boolean; timeoutMs?: number; pollMs?
 
 export function createServerState(options: JsonRecord = {}): State {
   const taskRoot = resolve(String(options.taskRoot ?? options.outputRoot ?? process.cwd()));
-  const roots = normalizeRoots([...optionList(options.allowedRoot), ...optionList(options.allowedRoots)]);
+  const siteRoot = resolve(String(options.siteRoot ?? taskRoot));
+  const stateEnv = { ...process.env };
+  loadSiteSecrets(siteRoot, stateEnv);
+  const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
+  const roots = normalizeRoots([...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)]);
   const allowedRoots = roots.length ? roots : [taskRoot];
   if (!allowedRoots.some((root) => taskRoot === root || inside(taskRoot, root))) {
     throw diag('delegated_task_root_outside_allowed_roots', 'delegated_task_root_outside_allowed_roots', { task_root: taskRoot, allowed_roots: allowedRoots });
   }
   const workerState: WorkerMcpState = {
     policy: createWorkerPolicy({ ...rec(options.workerPolicy), allowedRoots }),
-    env: process.env,
+    env: stateEnv,
     activeRunCount: 0,
   };
   const policy = rec(options.policy);
@@ -235,11 +239,14 @@ export async function delegatedTaskSummary(args: JsonRecord, state: State): Prom
     summary: task.summary,
     acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending',
     changed_files: stringList(rec(task.result).changed_files),
+    real_changed_files: stringList(rec(task.result).real_changed_files),
+    affected_refs: stringList(rec(task.result).affected_refs),
     verification_count: count(rec(task.result).verification),
     residual_risks: stringList(rec(task.result).residual_risks),
     observed_incoherencies: stringList(rec(task.result).observed_incoherencies),
     child_evidence: workerRefs(task).map((ref) => ({ step_id: ref.step_id, step_kind: ref.step_kind, run_id: ref.run_id, status: ref.status, summary: ref.summary })),
     progress: rec(task.result).progress,
+    terminal_summary: terminalSummary(task.result),
   };
 }
 
@@ -454,7 +461,7 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
   const hasBlocked = statuses.includes('blocked');
   const hasFailed = statuses.includes('failed');
   const allDone = statuses.length > 0 && statuses.every((status) => COMPLETE_STEP_STATES.has(status));
-  task.status = hasFailed || hasBlocked || acceptance.verdict === 'failed' ? 'failed' : hasRunning || hasPending ? 'running' : allDone ? 'completed' : 'accepted_for_execution';
+  task.status = hasFailed || hasBlocked ? 'failed' : hasRunning || hasPending ? 'running' : acceptance.verdict === 'failed' ? 'failed' : allDone ? 'completed' : 'accepted_for_execution';
   const verdict = task.status === 'completed' && acceptance.verdict === 'passed' ? 'passed' : task.status === 'failed' ? 'failed' : 'pending';
   task.summary = summaryForTask(task, stepStates, { verdict });
   task.result = {
@@ -476,12 +483,17 @@ function consolidateResult(task: Task, _state: State, stepStates: Record<string,
   const parentChangedFiles = uniqueStrings(stringList(rec(task.result).parent_changed_files));
   const workerReportedChangedFiles = uniqueStrings([...outputs.flatMap((output) => stringList(output.changed_files)), ...outputs.flatMap((output) => records(output.changes).map((change) => String(change.path ?? '')).filter(Boolean))]);
   const observedFiles = uniqueStrings(outputs.flatMap((output) => records(output.deliverables).map((item) => String(item.path ?? '')).filter(Boolean)));
-  const nestedWorkflowChangedFiles = uniqueStrings(outputs.flatMap((output) => records(output.nested_workflows).flatMap((workflow) => stringList(workflow.changed_files))));
+  const nestedWorkflows = uniqueRecords(outputs.flatMap(nestedWorkflowRecords));
+  const nestedWorkflowChangedFiles = uniqueStrings(nestedWorkflows.flatMap((workflow) => stringList(workflow.changed_files)));
   const changedFiles = uniqueStrings([...parentChangedFiles, ...workerReportedChangedFiles, ...observedFiles, ...nestedWorkflowChangedFiles]);
-  const verification = uniqueRecords([...records(rec(task.result).verification), ...outputs.flatMap((output) => records(output.verification_results)), ...outputs.flatMap((output) => records(output.verification))]);
+  const changedFileRefs = classifyChangedFileRefs(task, changedFiles);
+  const realChangedFiles = changedFileRefs.filter((ref) => ref.kind === 'real_file').map((ref) => String(ref.path));
+  const affectedRefs = changedFileRefs.filter((ref) => ref.kind !== 'real_file').map((ref) => String(ref.path));
+  const nestedWorkflowVerification = uniqueRecords(nestedWorkflows.flatMap((workflow) => records(workflow.verification_results).length ? records(workflow.verification_results) : records(workflow.verification)));
+  const verification = uniqueRecords([...records(rec(task.result).verification), ...outputs.flatMap((output) => records(output.verification_results)), ...outputs.flatMap((output) => records(output.verification)), ...nestedWorkflowVerification]);
   const residualRisks = uniqueStrings([...stringList(rec(task.result).residual_risks), ...outputs.flatMap((output) => stringList(output.residual_risks)), ...(Object.values(stepStates).some((step) => step.status === 'running') ? ['worker_runs_still_in_progress'] : [])]);
   const observedIncoherencies = uniqueStrings([...stringList(rec(task.result).observed_incoherencies), ...outputs.flatMap((output) => stringList(output.observed_incoherencies))]);
-  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflow_changed_files: nestedWorkflowChangedFiles, verification, residual_risks: residualRisks, observed_incoherencies: observedIncoherencies, worker_refs: refs, worker_ref_count: refs.length };
+  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, changed_file_refs: changedFileRefs, real_changed_files: realChangedFiles, affected_refs: affectedRefs, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflows: nestedWorkflows, nested_workflow_changed_files: nestedWorkflowChangedFiles, nested_workflow_verification: nestedWorkflowVerification, verification, residual_risks: residualRisks, observed_incoherencies: observedIncoherencies, worker_refs: refs, worker_ref_count: refs.length };
 }
 
 function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { verdict: 'passed' | 'pending' | 'failed'; checks: JsonRecord[] } {
@@ -515,7 +527,7 @@ function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { ver
   }
   const quorum = rec(task.acceptance.review_quorum);
   if (Object.keys(quorum).length > 0) {
-    const signals = reviewSignalsFromResult(result);
+    const signals = reviewSignalsFromResult(result, { resolveAfterRepair: true });
     const minPassed = integer(quorum.min_passed, 1, 0, 1000);
     const maxFailed = integer(quorum.max_failed, 0, 0, 1000);
     const noSignalsYet = signals.passed === 0 && signals.failed === 0 && signals.running === 0;
@@ -778,7 +790,8 @@ function upsertWorkerRef(task: Task, workerRef: JsonRecord, output: JsonRecord):
   task.result = { ...rec(task.result), worker_refs: refs, worker_ref_count: refs.length };
 }
 function summarizeWorkerRef(step: WorkflowStep, result: JsonRecord): JsonRecord { return { step_id: step.id, step_kind: step.kind, run_id: result.run_id, worker_session_id: result.worker_session_id ?? null, status: String(result.status ?? 'unknown'), confidence: result.confidence ?? null, summary: result.summary ?? '', run_dir: result.run_dir, result_ref: result.result_ref ?? null }; }
-function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null }; }
+function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], nested_workflows: nestedWorkflowRecords(output), verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null }; }
+function nestedWorkflowRecords(output: JsonRecord): JsonRecord[] { return uniqueRecords([...recordList(output.nested_workflows), ...recordList(output.nested_workflow), ...recordList(output.nested_tasks), ...recordList(output.nested_task_results)]); }
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const constraints = { ...task.constraints, ...step.constraints };
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
@@ -800,17 +813,42 @@ function acceptanceItems(value: unknown): JsonRecord[] {
 function reviewSignals(task: Task): { passed: number; failed: number; running: number } {
   return reviewSignalsFromResult(task.result);
 }
-function reviewSignalsFromResult(result: JsonRecord): { passed: number; failed: number; running: number } {
-  const refs = records(result.worker_refs).filter((ref) => ref.step_kind === 'review' || ref.step_kind === 'verify');
+function reviewSignalsFromResult(result: JsonRecord, options: { resolveAfterRepair?: boolean } = {}): { passed: number; failed: number; running: number } {
+  const allRefs = records(result.worker_refs);
+  let latestCompletedRepair = -1;
+  if (options.resolveAfterRepair) {
+    for (let index = allRefs.length - 1; index >= 0; index -= 1) {
+      const ref = allRefs[index];
+      if (ref.step_kind === 'repair' && ref.status === 'completed') {
+        latestCompletedRepair = index;
+        break;
+      }
+    }
+  }
+  const refs = allRefs.slice(latestCompletedRepair + 1).filter((ref) => ref.step_kind === 'review');
   let passed = 0;
   let failed = 0;
   let running = 0;
   for (const ref of refs) {
     if (ref.status === 'running') running += 1;
-    else if (ref.status === 'completed' && !reviewRefHasExplicitFailure(ref)) passed += 1;
+    else if (ref.status === 'completed' && reviewRefHasExplicitPass(ref)) passed += 1;
+    else if (ref.status === 'completed' && reviewRefHasExplicitFailure(ref)) failed += 1;
+    else if (ref.status === 'completed') running += 1;
     else failed += 1;
   }
   return { passed, failed, running };
+}
+function reviewRefHasExplicitPass(ref: JsonRecord): boolean {
+  const output = rec(ref.output);
+  const verdicts = [
+    ref.review_verdict,
+    ref.acceptance_verdict,
+    ref.verdict,
+    output.review_verdict,
+    output.acceptance_verdict,
+    output.verdict,
+  ].map((value) => String(value ?? '').toLowerCase());
+  return verdicts.some((value) => value === 'passed' || value === 'accepted' || value === 'accept_with_notes' || value === 'accepted_with_notes');
 }
 function reviewRefHasExplicitFailure(ref: JsonRecord): boolean {
   const output = rec(ref.output);
@@ -822,7 +860,43 @@ function reviewRefHasExplicitFailure(ref: JsonRecord): boolean {
     output.acceptance_verdict,
     output.verdict,
   ].map((value) => String(value ?? '').toLowerCase());
-  return verdicts.some((value) => value === 'failed' || value === 'contradicted' || value === 'rejected');
+  if (verdicts.some((value) => value === 'failed' || value === 'contradicted' || value === 'rejected')) return true;
+  const summary = String(ref.summary ?? output.summary ?? '').toLowerCase();
+  if (/\b(verdict\s*:\s*)?(rejected|failed)\b/.test(summary)) return true;
+  return records(output.changes).some((change) => /^(failed_review|rejected|failed)$/.test(String(change.status ?? '').toLowerCase()));
+}
+function classifyChangedFileRefs(task: Task, paths: string[]): JsonRecord[] {
+  const cwd = opt(task.constraints.cwd) ?? process.cwd();
+  return paths.map((path) => {
+    const kind = isRealFileRef(cwd, path) ? 'real_file' : 'affected_ref';
+    return { path, kind };
+  });
+}
+function isRealFileRef(cwd: string, path: string): boolean {
+  const target = isAbsolute(path) ? resolve(path) : resolve(cwd, path);
+  return (target === cwd || inside(target, cwd)) && existsSync(target) && statSync(target).isFile();
+}
+function terminalSummary(result: JsonRecord): JsonRecord {
+  const review = reviewSignalsFromResult(result, { resolveAfterRepair: true });
+  const reviewQuorum = records(result.acceptance_evidence).find((check) => check.kind === 'review_quorum');
+  const nextAction = review.failed > 0 ? 'repair_failed_review'
+    : review.running > 0 || reviewQuorum?.status === 'pending' ? 'await_review_resolution'
+      : result.acceptance_verdict === 'passed' ? 'ready_for_closeout'
+        : result.acceptance_verdict === 'failed' ? 'repair_or_replan'
+          : 'continue_or_verify';
+  return {
+    acceptance_verdict: result.acceptance_verdict ?? 'pending',
+    task_summary: result.summary ?? '',
+    review_passed_count: review.passed,
+    review_failed_count: review.failed,
+    review_pending_count: review.running,
+    next_action: nextAction,
+    real_changed_files_count: stringList(result.real_changed_files).length,
+    affected_refs_count: stringList(result.affected_refs).length,
+    verification_count: records(result.verification).length,
+    residual_risk_count: stringList(result.residual_risks).length,
+    observed_incoherency_count: stringList(result.observed_incoherencies).length,
+  };
 }
 function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDiagnostics: boolean, state: State): JsonRecord {
   const maxWorkerRefs = integer(resultPolicy.max_worker_refs, state.resultCompaction.maxWorkerRefs, 1, 1000);
@@ -831,29 +905,45 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
   const fullSections = {
     worker_refs: refs,
     changed_files: stringList(result.changed_files),
+    changed_file_refs: records(result.changed_file_refs),
+    real_changed_files: stringList(result.real_changed_files),
+    affected_refs: stringList(result.affected_refs),
     parent_changed_files: stringList(result.parent_changed_files),
     worker_reported_changed_files: stringList(result.worker_reported_changed_files),
     observed_files: stringList(result.observed_files),
+    nested_workflows: records(result.nested_workflows),
     nested_workflow_changed_files: stringList(result.nested_workflow_changed_files),
+    nested_workflow_verification: records(result.nested_workflow_verification),
     verification: records(result.verification),
     residual_risks: stringList(result.residual_risks),
     observed_incoherencies: stringList(result.observed_incoherencies),
   };
   const compacted: JsonRecord = {
     ...result,
+    terminal_summary: terminalSummary(result),
     worker_refs: fullSections.worker_refs.slice(0, maxWorkerRefs),
     worker_ref_count: refs.length,
     worker_refs_truncated: refs.length > maxWorkerRefs,
     changed_files: fullSections.changed_files.slice(0, maxItems),
     changed_files_count: fullSections.changed_files.length,
+    changed_file_refs: fullSections.changed_file_refs.slice(0, maxItems),
+    changed_file_refs_count: fullSections.changed_file_refs.length,
+    real_changed_files: fullSections.real_changed_files.slice(0, maxItems),
+    real_changed_files_count: fullSections.real_changed_files.length,
+    affected_refs: fullSections.affected_refs.slice(0, maxItems),
+    affected_refs_count: fullSections.affected_refs.length,
     parent_changed_files: fullSections.parent_changed_files.slice(0, maxItems),
     parent_changed_files_count: fullSections.parent_changed_files.length,
     worker_reported_changed_files: fullSections.worker_reported_changed_files.slice(0, maxItems),
     worker_reported_changed_files_count: fullSections.worker_reported_changed_files.length,
     observed_files: fullSections.observed_files.slice(0, maxItems),
     observed_files_count: fullSections.observed_files.length,
+    nested_workflows: fullSections.nested_workflows.slice(0, maxItems),
+    nested_workflow_count: fullSections.nested_workflows.length,
     nested_workflow_changed_files: fullSections.nested_workflow_changed_files.slice(0, maxItems),
     nested_workflow_changed_files_count: fullSections.nested_workflow_changed_files.length,
+    nested_workflow_verification: fullSections.nested_workflow_verification.slice(0, maxItems),
+    nested_workflow_verification_count: fullSections.nested_workflow_verification.length,
     verification: fullSections.verification.slice(0, maxItems),
     verification_count: fullSections.verification.length,
     residual_risks: fullSections.residual_risks.slice(0, maxItems),
@@ -861,7 +951,7 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
     observed_incoherencies: fullSections.observed_incoherencies.slice(0, maxItems),
     observed_incoherency_count: fullSections.observed_incoherencies.length,
   };
-  const truncated = refs.length > maxWorkerRefs || fullSections.changed_files.length > maxItems || fullSections.parent_changed_files.length > maxItems || fullSections.worker_reported_changed_files.length > maxItems || fullSections.observed_files.length > maxItems || fullSections.nested_workflow_changed_files.length > maxItems || fullSections.verification.length > maxItems || fullSections.residual_risks.length > maxItems || fullSections.observed_incoherencies.length > maxItems;
+  const truncated = refs.length > maxWorkerRefs || fullSections.changed_files.length > maxItems || fullSections.changed_file_refs.length > maxItems || fullSections.real_changed_files.length > maxItems || fullSections.affected_refs.length > maxItems || fullSections.parent_changed_files.length > maxItems || fullSections.worker_reported_changed_files.length > maxItems || fullSections.observed_files.length > maxItems || fullSections.nested_workflows.length > maxItems || fullSections.nested_workflow_changed_files.length > maxItems || fullSections.nested_workflow_verification.length > maxItems || fullSections.verification.length > maxItems || fullSections.residual_risks.length > maxItems || fullSections.observed_incoherencies.length > maxItems;
   if (truncated) compacted.output_refs = materializeOutputSections(state, fullSections);
   if (resultPolicy.compact_completed_worker_refs === true && !includeDiagnostics) {
     compacted.worker_refs = records(compacted.worker_refs).map((ref) => ({ step_id: ref.step_id, step_kind: ref.step_kind, run_id: ref.run_id, status: ref.status, summary: ref.summary }));
@@ -931,9 +1021,12 @@ function normalizeRoots(roots: string[]): string[] { const seen = new Set<string
 function optionList(value: unknown): string[] { if (value === undefined || value === null || value === true) return []; return Array.isArray(value) ? value.map(String).filter(Boolean) : [String(value)].filter(Boolean); }
 function stringList(value: unknown, fallback: string[] = []): string[] { if (value === undefined || value === null) return fallback; return Array.isArray(value) ? value.map(String).filter(Boolean) : [String(value)].filter(Boolean); }
 function records(value: unknown): JsonRecord[] { return Array.isArray(value) ? value.map(rec).filter((record) => Object.keys(record).length > 0) : []; }
+function recordList(value: unknown): JsonRecord[] { return Array.isArray(value) ? records(value) : Object.keys(rec(value)).length > 0 ? [rec(value)] : []; }
 function uniqueStrings(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 function uniqueRecords(values: JsonRecord[]): JsonRecord[] { const seen = new Set<string>(); const out: JsonRecord[] = []; for (const value of values) { const key = JSON.stringify(value); if (!seen.has(key)) { seen.add(key); out.push(value); } } return out; }
 function inside(path: string, root: string): boolean { const rel = relative(root, path); return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel); }
+function loadSiteExtraAllowedRoots(siteRoot: string): string[] { try { const configPath = join(siteRoot, '.narada', 'allowed-roots.json'); if (!existsSync(configPath)) return []; const data = JSON.parse(readFileSync(configPath, 'utf8')); if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0); } catch { } return []; }
+function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void { try { const configPath = join(siteRoot, '.narada', 'secrets.json'); if (!existsSync(configPath)) return; const data = JSON.parse(readFileSync(configPath, 'utf8')); const env = data.env; if (env && typeof env === 'object' && !Array.isArray(env)) { for (const [key, value] of Object.entries(env)) { if (typeof value === 'string' && value.trim() && !targetEnv[key]) { targetEnv[key] = value; } } } } catch { } }
 function rec(value: unknown): JsonRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 function diag(code: string, message = code, details: JsonRecord = {}) { const error = new Error(message); Object.assign(error, { codeName: code, details }); return error; }
 function errorData(error: unknown): JsonRecord { const record = rec(error); return { schema: 'narada.delegated_task.error.v1', code: String(record.codeName ?? 'delegated_task_error'), message: error instanceof Error ? error.message : String(error), details: rec(record.details) }; }

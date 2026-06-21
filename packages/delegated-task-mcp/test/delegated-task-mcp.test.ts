@@ -12,8 +12,16 @@ try {
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'main.ts'), 'export const ok = true;\n', 'utf8');
   writeFileSync(join(root, 'src', 'policy.ts'), 'export const policy = "review";\n', 'utf8');
+  const originalDelegatedTaskSecret = process.env.DELEGATED_TASK_TEST_SECRET;
+  delete process.env.DELEGATED_TASK_TEST_SECRET;
+  const siteRoot = join(root, 'site-root');
+  const extraRoot = join(root, 'extra-root');
+  mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+  writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { DELEGATED_TASK_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+  writeFileSync(join(siteRoot, '.narada', 'allowed-roots.json'), JSON.stringify({ extra_allowed_roots: [extraRoot] }), 'utf8');
 
   const state = createServerState({
+    siteRoot,
     taskRoot: root,
     allowedRoots: [root],
     policy: { allowed_workflow_kinds: ['worker', 'review', 'repair', 'verify', 'research', 'gate', 'join', 'note'] },
@@ -40,8 +48,11 @@ try {
         worker_session_id: null,
         confidence: 'complete',
         summary: instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
-        acceptance_verdict: instruction.includes('explicit review failure') ? 'failed' : undefined,
-        changed_files: ['src/main.ts'],
+        acceptance_verdict: instruction.includes('Step kind: review')
+          ? instruction.includes('Step instruction: inconclusive review') ? undefined : instruction.includes('Step instruction: explicit review failure') || instruction.includes('Step instruction: rejected review') ? 'failed' : 'accepted'
+          : undefined,
+        changed_files: instruction.includes('nested probe') ? [] : ['src/main.ts'],
+        nested_workflows: instruction.includes('nested probe') ? [{ task_id: 'task_nested_probe', task_status: 'failed', acceptance_verdict: 'passed', changed_files: ['nested/output.txt'], verification: [{ tool: 'delegated-task', command: 'nested probe', status: 'failed' }] }] : [],
         verification_results: [{ tool: 'structured-command', command: 'pnpm test:delegated-task', status: 'passed' }],
         residual_risks: status === 'running' ? ['worker still running'] : [],
         observed_incoherencies: [],
@@ -50,6 +61,15 @@ try {
       return result;
     },
   });
+  assert.equal(state.workerState.env.DELEGATED_TASK_TEST_SECRET, 'from-site-secret');
+  assert.equal(process.env.DELEGATED_TASK_TEST_SECRET, undefined);
+  assert.equal(state.allowedRoots.some((allowedRoot) => allowedRoot === extraRoot), true);
+  assert.notEqual(state.workerState.policy.runRoot, join(root, 'worker-runs'));
+  const explicitWorkerRunRoot = join(root, 'explicit-worker-runs');
+  const explicitWorkerRootState = createServerState({ taskRoot: root, allowedRoots: [root], workerPolicy: { runRoot: explicitWorkerRunRoot } });
+  assert.equal(explicitWorkerRootState.workerState.policy.runRoot, explicitWorkerRunRoot);
+  if (originalDelegatedTaskSecret === undefined) delete process.env.DELEGATED_TASK_TEST_SECRET;
+  else process.env.DELEGATED_TASK_TEST_SECRET = originalDelegatedTaskSecret;
 
   const policy = await callTool(state, 'delegated_task_policy_inspect', {});
   const policyView = policy.result.structuredContent as Record<string, any>;
@@ -57,10 +77,6 @@ try {
   assert.equal(policyView.allowed_workflow_kinds.includes('review'), true);
   assert.equal(policyView.condition_language.includes('all(<expr>,<expr>)'), true);
   assert.equal(policyView.policy_schema, 'narada.delegated_task.policy.v1');
-  assert.notEqual(state.workerState.policy.runRoot, join(root, 'worker-runs'));
-  const explicitWorkerRunRoot = join(root, 'explicit-worker-runs');
-  const explicitWorkerRootState = createServerState({ taskRoot: root, allowedRoots: [root], workerPolicy: { runRoot: explicitWorkerRunRoot } });
-  assert.equal(explicitWorkerRootState.workerState.policy.runRoot, explicitWorkerRunRoot);
 
   const invalid = await callTool(state, 'delegated_task_validate', {
     objective: 'Invalid graph',
@@ -151,6 +167,11 @@ try {
   assert.equal(resultView.result.output_refs.some((ref: Record<string, unknown>) => ref.name === 'worker_refs'), true);
   assert.deepEqual(resultView.result.changed_files, ['src/main.ts']);
   assert.equal(resultView.result.changed_files_count, 1);
+  assert.deepEqual(resultView.result.real_changed_files, ['src/main.ts']);
+  assert.equal(resultView.result.real_changed_files_count, 1);
+  assert.deepEqual(resultView.result.affected_refs, []);
+  assert.equal(resultView.result.affected_refs_count, 0);
+  assert.deepEqual(resultView.result.changed_file_refs, [{ path: 'src/main.ts', kind: 'real_file' }]);
   assert.deepEqual(resultView.result.parent_changed_files, []);
   assert.equal(resultView.result.parent_changed_files_count, 0);
   assert.deepEqual(resultView.result.worker_reported_changed_files, ['src/main.ts']);
@@ -159,6 +180,8 @@ try {
   assert.deepEqual(resultView.result.nested_workflow_changed_files, []);
   assert.equal(resultView.result.verification.length, 1);
   assert.equal(resultView.result.verification_count, 1);
+  assert.equal(resultView.result.terminal_summary.acceptance_verdict, 'passed');
+  assert.equal(resultView.result.terminal_summary.real_changed_files_count, 1);
   assert.equal(resultView.diagnostics.task_id, runResult.task_id);
 
   const compactResult = await callTool(state, 'delegated_task_result', { task_id: runResult.task_id });
@@ -172,6 +195,29 @@ try {
   assert.equal(summaryView.status, 'ok');
   assert.equal(summaryView.child_evidence.length, 3);
   assert.deepEqual(summaryView.changed_files, ['src/main.ts']);
+  assert.deepEqual(summaryView.real_changed_files, ['src/main.ts']);
+  assert.deepEqual(summaryView.affected_refs, []);
+  assert.equal(summaryView.terminal_summary.acceptance_verdict, 'passed');
+
+  const nestedRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise nested probe separation',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'probe', kind: 'research', instruction: 'nested probe' }] },
+    execution: { wait_for_completion: true },
+  });
+  const nestedView = nestedRun.result.structuredContent as Record<string, any>;
+  assert.equal(nestedView.task_status, 'completed');
+  const nestedResult = await callTool(state, 'delegated_task_result', { task_id: nestedView.task_id, include_diagnostics: true });
+  const nestedResultView = nestedResult.result.structuredContent as Record<string, any>;
+  assert.deepEqual(nestedResultView.result.worker_reported_changed_files, []);
+  assert.deepEqual(nestedResultView.result.nested_workflow_changed_files, ['nested/output.txt']);
+  assert.equal(nestedResultView.result.nested_workflow_count, 1);
+  assert.equal(nestedResultView.result.nested_workflow_verification_count, 1);
+  assert.deepEqual(nestedResultView.result.changed_files, ['nested/output.txt']);
+  assert.deepEqual(nestedResultView.result.real_changed_files, []);
+  assert.deepEqual(nestedResultView.result.affected_refs, ['nested/output.txt']);
+  assert.deepEqual(nestedResultView.result.changed_file_refs, [{ path: 'nested/output.txt', kind: 'affected_ref' }]);
+  assert.equal(nestedResultView.result.terminal_summary.affected_refs_count, 1);
 
   const failedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise explicit review failure',
@@ -182,6 +228,76 @@ try {
   });
   const failedReviewView = failedReviewRun.result.structuredContent as Record<string, any>;
   assert.equal(failedReviewView.task_status, 'failed');
+
+  const repairedReviewRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise rejected review repair routing',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'implement', kind: 'worker', instruction: 'Implement rejected review case' },
+        { id: 'review', kind: 'review', depends_on: ['implement'], instruction: 'rejected review' },
+        { id: 'repair', kind: 'repair', depends_on: ['review'], if: 'review_failed', instruction: 'Repair rejected review' },
+        { id: 'rereview', kind: 'review', depends_on: ['repair'], instruction: 'Accepted repaired review' },
+        { id: 'verify', kind: 'verify', depends_on: ['rereview'], instruction: 'Verify repaired review' },
+      ],
+    },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 } },
+    execution: { wait_for_completion: true },
+  });
+  const repairedReviewView = repairedReviewRun.result.structuredContent as Record<string, any>;
+  assert.equal(repairedReviewView.task_status, 'completed');
+  const repairedReviewResult = await callTool(state, 'delegated_task_result', { task_id: repairedReviewView.task_id, include_diagnostics: true });
+  const repairedReviewResultView = repairedReviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(repairedReviewResultView.result.step_states.repair.status, 'completed');
+  assert.equal(repairedReviewResultView.result.acceptance_verdict, 'passed');
+  assert.deepEqual(repairedReviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 1, failed: 0, status: 'passed' });
+  assert.equal(repairedReviewResultView.result.terminal_summary.review_passed_count, 1);
+  assert.equal(repairedReviewResultView.result.terminal_summary.next_action, 'ready_for_closeout');
+
+  const repairWithoutRereviewRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise repair without re-review',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'implement', kind: 'worker', instruction: 'Implement repair without rereview' },
+        { id: 'review', kind: 'review', depends_on: ['implement'], instruction: 'rejected review' },
+        { id: 'repair', kind: 'repair', depends_on: ['review'], if: 'review_failed', instruction: 'Repair rejected review' },
+        { id: 'verify', kind: 'verify', depends_on: ['repair'], instruction: 'Verify without re-review' },
+      ],
+    },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 } },
+    execution: { wait_for_completion: true },
+  });
+  const repairWithoutRereviewView = repairWithoutRereviewRun.result.structuredContent as Record<string, any>;
+  assert.equal(repairWithoutRereviewView.task_status, 'completed');
+  const repairWithoutRereviewResult = await callTool(state, 'delegated_task_result', { task_id: repairWithoutRereviewView.task_id, include_diagnostics: true });
+  const repairWithoutRereviewResultView = repairWithoutRereviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(repairWithoutRereviewResultView.result.acceptance_verdict, 'pending');
+  assert.deepEqual(repairWithoutRereviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 0, failed: 0, status: 'pending' });
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.next_action, 'await_review_resolution');
+
+  const skippedRepairRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise rejected review with skipped repair',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'implement', kind: 'worker', instruction: 'Implement skipped repair case' },
+        { id: 'review', kind: 'review', depends_on: ['implement'], instruction: 'rejected review' },
+        { id: 'repair', kind: 'repair', depends_on: ['review'], if: 'not(review_failed)', instruction: 'Skipped repair' },
+        { id: 'verify', kind: 'verify', depends_on: ['repair'], instruction: 'Verify skipped repair' },
+      ],
+    },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 } },
+    execution: { wait_for_completion: true },
+  });
+  const skippedRepairView = skippedRepairRun.result.structuredContent as Record<string, any>;
+  assert.equal(skippedRepairView.task_status, 'failed');
+  const skippedRepairResult = await callTool(state, 'delegated_task_result', { task_id: skippedRepairView.task_id, include_diagnostics: true });
+  const skippedRepairResultView = skippedRepairResult.result.structuredContent as Record<string, any>;
+  assert.equal(skippedRepairResultView.result.step_states.repair.status, 'skipped');
+  assert.equal(skippedRepairResultView.result.acceptance_verdict, 'failed');
+  assert.deepEqual(skippedRepairResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 0, failed: 1, status: 'failed' });
+  assert.equal(skippedRepairResultView.result.terminal_summary.next_action, 'repair_failed_review');
 
   const cappedEvents = await callTool(state, 'delegated_task_events', { task_id: runResult.task_id, limit: 10, offset: 0 });
   const cappedEventsView = cappedEvents.result.structuredContent as Record<string, any>;
@@ -208,7 +324,7 @@ try {
   const conditionalResultView = conditionalResult.result.structuredContent as Record<string, any>;
   assert.equal(conditionalResultView.result.step_states.conditional.status, 'noted');
 
-  const listed = await callTool(state, 'delegated_tasks_list', { limit: 5 });
+  const listed = await callTool(state, 'delegated_tasks_list', { limit: 20 });
   const listedView = listed.result.structuredContent as Record<string, any>;
   assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === runResult.task_id), true);
 
