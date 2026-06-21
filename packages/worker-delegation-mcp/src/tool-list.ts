@@ -239,6 +239,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     artifacts: { type: 'array', items: objectSchema({ name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']) },
     timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
+    worker_output_error: { type: 'object', additionalProperties: true },
     diagnostic_tail: nullableStringSchema(),
     error_classification: nullableStringSchema(),
   }, ['schema', 'status', 'run_id', 'run_dir', 'resolved_worker_config', 'summary', 'deliverables', 'open_questions', 'next_actions']);
