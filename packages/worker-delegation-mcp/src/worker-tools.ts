@@ -797,7 +797,7 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
   }
   try {
     const run = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
-    return withFreshProgress(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state));
+    return enrichFailedRunDiagnostics(withFreshProgress(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state)));
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
@@ -835,7 +835,8 @@ function runListItem(run: Record<string, unknown>, options: { verbose: boolean; 
     finished_at: timing.finished_at ?? null,
     duration_ms: timing.duration_ms ?? null,
     summary_preview: previewString(run.summary, 180),
-    error_preview: previewString(run.error, 180),
+    error_preview: previewString(compactRunError(run), 180),
+    error_classification: run.error_classification ?? null,
     warning_count: run.warning_count ?? 0,
     progress_preview: progress.latest_event_preview ?? null,
     latest_event_type: progress.latest_event_type ?? null,
@@ -847,8 +848,52 @@ function runListItem(run: Record<string, unknown>, options: { verbose: boolean; 
     item.worker_session_id = run.worker_session_id;
     item.timing = run.timing;
     item.error = run.error;
+    item.diagnostic_tail = run.diagnostic_tail ?? null;
+    item.error_classification = run.error_classification ?? null;
   }
   return item;
+}
+
+function compactRunError(run: Record<string, unknown>): string | null {
+  const error = previewString(run.error, 120);
+  const diagnosticTail = previewString(run.diagnostic_tail, 220);
+  if (error && diagnosticTail) return `${error}: ${diagnosticTail}`;
+  return error ?? diagnosticTail;
+}
+
+function enrichFailedRunDiagnostics(run: Record<string, unknown>): Record<string, unknown> {
+  if (run.status !== 'failed') return run;
+  const progress = asRecord(run.progress);
+  if (progress.event_count !== 0 || run.worker_session_id) return run;
+  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
+  if (!runDir) return run;
+  const diagnosticTail = readDiagnosticTail(resolve(runDir, 'diagnostic.log'));
+  if (!diagnosticTail) return run;
+  return {
+    ...run,
+    diagnostic_tail: diagnosticTail,
+    error_classification: classifyDiagnosticTail(diagnosticTail),
+  };
+}
+
+function readDiagnosticTail(path: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    const text = readFileSync(path, 'utf8').trim();
+    if (!text) return null;
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    return normalized.length <= 800 ? normalized : normalized.slice(-800);
+  } catch {
+    return null;
+  }
+}
+
+function classifyDiagnosticTail(text: string): string {
+  const lower = text.toLowerCase();
+  if (lower.includes('not inside a trusted directory') || lower.includes('--skip-git-repo-check')) return 'codex_untrusted_directory';
+  if (lower.includes('permission denied') || lower.includes('access is denied')) return 'permission_denied';
+  if (lower.includes('command not found') || lower.includes('not recognized as')) return 'runtime_command_unavailable';
+  return 'runtime_prestart_diagnostic';
 }
 
 function runWaitPayload(run: Record<string, unknown>, options: { status: 'finished' | 'timed_out'; timeoutMs: number; elapsedMs: number; verbose: boolean; summaryOnly: boolean }): Record<string, unknown> {

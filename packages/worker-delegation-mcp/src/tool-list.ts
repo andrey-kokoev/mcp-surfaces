@@ -71,6 +71,7 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
       worker_session_id: nullableStringSchema(),
       summary_preview: nullableStringSchema(),
       error_preview: nullableStringSchema(),
+      error_classification: nullableStringSchema(),
       warning_count: { type: 'integer' },
       progress_preview: nullableStringSchema(),
       latest_event_type: nullableStringSchema(),
@@ -79,6 +80,7 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
       run_dir: { type: 'string' },
       timing: { type: 'object', additionalProperties: true },
       error: nullableStringSchema(),
+      diagnostic_tail: nullableStringSchema(),
     }, ['run_id', 'status']) },
   }, ['schema', 'status', 'runs']);
 }
@@ -237,6 +239,8 @@ function workerRunOutputSchema(): Record<string, unknown> {
     artifacts: { type: 'array', items: objectSchema({ name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']) },
     timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
+    diagnostic_tail: nullableStringSchema(),
+    error_classification: nullableStringSchema(),
   }, ['schema', 'status', 'run_id', 'run_dir', 'resolved_worker_config', 'summary', 'deliverables', 'open_questions', 'next_actions']);
 }
 

@@ -17,6 +17,7 @@ const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec');
 const fakeCodexErrorScript = join(root, 'exec-error-with-output');
+const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure');
 const platformRootCase = process.platform === 'win32' ? root.toUpperCase() : root;
 writeFileSync(fakeCodexScript, `
 const fs = require('fs');
@@ -68,6 +69,13 @@ process.stdin.on('end', () => {
     verification: [{ tool: 'fake-codex', command: null, status: 'failed', summary: 'simulated tool error' }],
     exit_interview: null
   }));
+});
+`, 'utf8');
+writeFileSync(fakeCodexPrestartFailureScript, `
+process.stdin.resume();
+process.stdin.on('end', () => {
+  process.stderr.write('Not inside a trusted directory and --skip-git-repo-check was not specified.\n');
+  process.exit(1);
 });
 `, 'utf8');
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
@@ -831,6 +839,23 @@ const runtimeError = await rpc({
 }, runtimeErrorState);
 assert.equal(runtimeError.error?.data.code, 'worker_runtime_failed');
 assert.equal(runtimeError.error?.data.details.error, 'model not available for account');
+
+const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript] });
+const prestartFailure = await rpc({
+  jsonrpc: '2.0',
+  id: 631,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'prestart failure' }, constraints: { cwd: root, wait_for_completion: true } } },
+}, prestartFailureState);
+assert.equal(prestartFailure.error?.data.code, 'worker_runtime_failed');
+const prestartRunId = readdirSync(join(root, 'prestart-failure')).find((entry) => entry.startsWith('run-'));
+assert.ok(prestartRunId);
+const prestartStatus = await rpc({ jsonrpc: '2.0', id: 632, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: prestartRunId } } }, prestartFailureState);
+assert.equal(prestartStatus.result?.structuredContent.error_classification, 'codex_untrusted_directory');
+assert.match(prestartStatus.result?.structuredContent.diagnostic_tail, /Not inside a trusted directory/);
+const prestartList = await rpc({ jsonrpc: '2.0', id: 633, method: 'tools/call', params: { name: 'worker_runs_list', arguments: {} } }, prestartFailureState);
+assert.match(prestartList.result?.structuredContent.runs[0].error_preview, /Not inside a trusted directory/);
+assert.equal(prestartList.result?.structuredContent.runs[0].error_classification, 'codex_untrusted_directory');
 
 const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 120 });
 const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
