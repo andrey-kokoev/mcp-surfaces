@@ -129,6 +129,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     cognitionDefaults: finalCognitionDefaults,
     runtimes: {
       codex: {
+        id: 'codex',
         command: codexCommand,
         commandArgs: codexCommandArgs,
         defaultSandbox: codexDefaultSandbox,
@@ -137,6 +138,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
         jsonEvents: booleanValue(merged.jsonEvents ?? codex.json_events, true),
       },
       deepseek: {
+        id: 'deepseek-api',
         command: deepseekCommand,
         commandArgs: deepseekCommandArgs,
         defaultSandbox: deepseekDefaultSandbox,

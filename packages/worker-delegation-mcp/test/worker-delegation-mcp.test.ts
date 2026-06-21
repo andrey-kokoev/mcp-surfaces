@@ -147,8 +147,12 @@ assert.deepEqual(policy.result?.structuredContent.allowed_authorities, ['read', 
 assert.deepEqual(policy.result?.structuredContent.allowed_cognition, ['low', 'medium', 'high']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
+assert.equal(policy.result?.structuredContent.runtimes.codex.id, 'codex');
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.ephemeral, true);
+assert.equal(policy.result?.structuredContent.runtimes.deepseek.id, 'deepseek-api');
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
+assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].id, 'deepseek-api');
+assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].default_sandbox, 'read-only');
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });

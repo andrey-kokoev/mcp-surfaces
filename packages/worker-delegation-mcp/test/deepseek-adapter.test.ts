@@ -69,6 +69,9 @@ const policy = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: 
 assert.equal(policy.result?.structuredContent.allowed_runtimes.includes('deepseek-api'), true);
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.command, 'node');
 assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
+assert.equal(policy.result?.structuredContent.runtimes.deepseek.id, 'deepseek-api');
+assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].command, 'node');
+assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].id, 'deepseek-api');
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
