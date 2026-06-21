@@ -1137,7 +1137,7 @@ function buildPreflight(options: { cwd: string; authority: string; mode: WorkerD
   if (options.isResume) checks.push({ name: 'resume', status: 'ok', message: 'continuing an existing worker session' });
   for (const item of options.preflightPaths) checks.push(preflightPathCheck(item, options.allowedRoots));
   if (options.requiredMcpTools.length > 0) {
-    checks.push({ name: 'required_mcp_tools', status: 'warning', message: `worker must verify required MCP tools before work: ${options.requiredMcpTools.join(', ')}` });
+    checks.push({ name: 'required_mcp_tools', status: 'warning', message: `not_verified_by_delegation; worker must verify requested MCP tools before work: ${options.requiredMcpTools.join(', ')}` });
   }
   return checks;
 }

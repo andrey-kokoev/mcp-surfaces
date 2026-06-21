@@ -854,7 +854,7 @@ assert.equal(preflightRun.result?.structuredContent.requested_mode, 'plan_only')
 assert.equal(preflightRun.result?.structuredContent.edits_performed, false);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('old authority') && check.status === 'ok'), true);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('new repo') && check.status === 'ok'), true);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('structured-command.structured_command_execute')), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('not_verified_by_delegation') && check.message.includes('structured-command.structured_command_execute')), true);
 
 const blockedPreflight = await rpc({
   jsonrpc: '2.0',
