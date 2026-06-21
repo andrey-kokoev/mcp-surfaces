@@ -66,6 +66,7 @@ function renderRun(record: Record<string, unknown>): string {
     `run_dir: ${record.run_dir ?? ''}`,
     `runtime: ${record.runtime ?? ''}`,
     `requested_mode: ${record.requested_mode ?? ''}`,
+    `completion_state: ${record.completion_state ?? record.confidence ?? ''}`,
     `confidence: ${record.confidence ?? ''}`,
     `edits_performed: ${record.edits_performed ?? 'null'}`,
     `warning_count: ${record.warning_count ?? 0}`,

@@ -62,6 +62,7 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
     runs: { type: 'array', items: objectSchema({
       run_id: { type: 'string' },
       status: { type: 'string' },
+      completion_state: { type: ['string', 'null'], enum: ['complete', 'partial', null] },
       requested_mode: nullableStringSchema(),
       requested_mode_inferred: { type: 'boolean' },
       authority: nullableStringSchema(),
@@ -216,6 +217,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     edits_performed: { type: ['boolean', 'null'] },
     target_state_changed: { type: ['boolean', 'null'] },
     confidence: { type: 'string', enum: ['complete', 'partial'] },
+    completion_state: { type: 'string', enum: ['complete', 'partial'] },
     blocked_paths: stringArraySchema(),
     verification: stringArraySchema(),
     runtime_warnings: stringArraySchema(),

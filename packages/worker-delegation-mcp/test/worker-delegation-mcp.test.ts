@@ -336,6 +336,7 @@ assert.equal(allowedConfigRun.result?.structuredContent.requested_mode, 'audit_o
 assert.equal(allowedConfigRun.result?.structuredContent.edits_performed, false);
 assert.equal(allowedConfigRun.result?.structuredContent.target_state_changed, false);
 assert.equal(allowedConfigRun.result?.structuredContent.confidence, 'complete');
+assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 if (process.platform === 'win32') {
   const caseInsensitiveRun = await rpc({
@@ -440,6 +441,7 @@ assert.ok(listedRuns.result, JSON.stringify(listedRuns.error));
 assert.equal(listedRuns.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), true);
 assert.equal(listedRuns.result?.structuredContent.runs[0].summary, undefined);
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].summary_preview === 'string' || listedRuns.result?.structuredContent.runs[0].summary_preview === null, true);
+assert.equal(['complete', 'partial', null].includes(listedRuns.result?.structuredContent.runs[0].completion_state), true);
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].requested_mode, 'string');
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].authority, 'string');
 const asyncStatus = await rpc({ jsonrpc: '2.0', id: 523, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: asyncRun.result?.structuredContent.run_id, timeout_ms: 5000, poll_ms: 25 } } }, state);

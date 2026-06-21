@@ -703,6 +703,7 @@ function buildWorkerRunPayload(options: {
     edits_performed: options.metadata.edits_performed,
     target_state_changed: options.metadata.target_state_changed,
     confidence: options.metadata.confidence,
+    completion_state: options.metadata.confidence,
     blocked_paths: options.metadata.blocked_paths,
     verification: options.metadata.verification,
     runtime_warnings: options.runtimeWarnings ?? [],
@@ -828,6 +829,7 @@ function runListItem(run: Record<string, unknown>, options: { verbose: boolean; 
   const item: Record<string, unknown> = {
     run_id: run.run_id,
     status: run.status,
+    completion_state: run.completion_state ?? run.confidence ?? null,
     requested_mode: mode.requestedMode,
     requested_mode_inferred: mode.inferred,
     authority: asRecord(run.resolved_worker_config).authority ?? null,
