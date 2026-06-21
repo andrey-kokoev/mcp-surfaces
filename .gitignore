@@ -4,3 +4,6 @@ node_modules/
 *.log
 .ai/
 packages/*/dist/
+.feedback/
+.tmp/
+packages/*/sessions/
