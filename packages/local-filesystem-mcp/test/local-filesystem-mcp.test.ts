@@ -356,6 +356,16 @@ trust_level = "untrusted"
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
+  const payloadDir = join(tempRoot, '.ai', 'tmp', 'mcp-payloads', 'workspace');
+  mkdirSync(payloadDir, { recursive: true });
+  const payloadPath = join(payloadDir, 'large-write.json');
+  const payloadContent = `${'payload-line\n'.repeat(1000)}`;
+  writeFileSync(payloadPath, JSON.stringify({ path: join(trusted, 'payload-write.txt'), content: payloadContent, overwrite: true }), 'utf8');
+  const payloadWrite = call(writeState, 307, 'fs_write_file', { payload_path: '.ai/tmp/mcp-payloads/workspace/large-write.json' });
+  assert.equal(payloadWrite.result.structuredContent.status, 'written');
+  assert.equal(payloadWrite.result.structuredContent.payload_source.kind, 'file');
+  assert.equal(payloadWrite.result.structuredContent.payload_source.transient_not_authority, true);
+  assert.equal(readFileSync(join(trusted, 'payload-write.txt'), 'utf8'), payloadContent);
   const missingParentWrite = call(writeState, 304, 'fs_write_file', { path: join(trusted, 'missing-write-parent', 'file.txt'), content: 'blocked', create_parent_directories: false });
   assert.equal(missingParentWrite.error.data.code, 'write_file_parent_not_found');
   const existingParentWrite = call(writeState, 306, 'fs_write_file', { path: join(trusted, 'existing-parent-create-disabled.txt'), content: 'ok', create_parent_directories: false });

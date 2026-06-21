@@ -5,8 +5,10 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import {
+  attachPayloadSource,
   listOutputResources,
   readOutputResource,
+  resolveToolPayloadArgs,
 } from '@narada2/mcp-transport';
 import { buildAllowedRoots, rootEntriesToRoots, resolveAllowedPath as resolvePolicyAllowedPath } from './policy.js';
 import { applyDeletePatch as applyParsedDeletePatch, applyFilePatch as applyParsedFilePatch, parsePatch as parseToolPatch } from './patch-apply.js';
@@ -132,6 +134,7 @@ export function createServerState(options: Record<string, unknown>): Record<stri
     allowedRoots: rootEntriesToRoots(allowedRootEntries),
     allowedRootEntries,
     outputRoot,
+    payloadMaxBytes: Number(options.payloadMaxBytes ?? 5 * 1024 * 1024),
     env: stateEnv,
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
@@ -326,13 +329,15 @@ export function listTools(mode) {
       name: 'fs_write_file',
       description: 'Write a text file under an allowed root and append an audit record.',
       inputSchema: objectSchema({
+        payload_ref: { type: 'string', description: 'Optional MCP payload ref carrying the complete fs_write_file argument object, including large content.' },
+        payload_path: { type: 'string', description: 'Optional JSON payload path under the site MCP payload staging directory.' },
         path: { type: 'string' },
         content: { type: 'string' },
         overwrite: { type: 'boolean', default: true },
         create_only: { type: 'boolean', default: false },
         create_parent_directories: { type: 'boolean', default: true, description: 'Create missing parent directories before writing.' },
         expected_sha256: { type: 'string', description: 'Optional expected current file sha256 before overwriting.' },
-      }, ['path', 'content']),
+      }),
     },
     {
       name: 'fs_str_replace_file',
@@ -430,7 +435,7 @@ export function listTools(mode) {
 function callTool(params, state) {
   const record = asRecord(params);
   const name = stringField(record, 'name');
-  const args = asRecord(record.arguments);
+  let args = asRecord(record.arguments);
   activeToolName = name;
   if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
   if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
@@ -441,7 +446,10 @@ function callTool(params, state) {
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
     case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_doctor': return toolResult(doctorTool(state));
-    case 'fs_write_file': return toolResult(writeFileTool(args, state));
+    case 'fs_write_file': {
+      const payload = resolveFilesystemPayloadArgs(name, args, state);
+      return toolResult(attachPayloadSource(writeFileTool(payload.args, state), payload.payloadSource));
+    }
     case 'fs_str_replace_file': return toolResult(strReplaceTool(args, state));
     case 'fs_replace_range': return toolResult(replaceRangeTool(args, state));
     case 'fs_apply_patch': return toolResult(applyPatchTool(args, state));
@@ -1557,6 +1565,21 @@ function errorDiagnostic(error) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function resolveFilesystemPayloadArgs(toolName, args, state) {
+  try {
+    return resolveToolPayloadArgs({
+      siteRoot: state.outputRoot,
+      toolName,
+      args,
+      allowedTools: ['fs_write_file'],
+      maxBytes: Number(state.payloadMaxBytes ?? 5 * 1024 * 1024),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError(message.split(/[:\s]/)[0] || 'payload_resolution_failed', message, { tool_name: toolName });
+  }
 }
 
 function stringOrNull(value: unknown): string | null {
