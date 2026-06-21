@@ -17,6 +17,7 @@ export type WorkerRequestContext = {
 
 export async function callWorkerTool(name: string, args: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext = {}): Promise<unknown> {
   if (name === 'worker_policy_inspect') return publicWorkerPolicy(state.policy);
+  if (name === 'worker_config_resolve') return workerConfigResolve(args, state);
   if (name === 'worker_run') return workerRun(args, state, null, context, 'worker_run');
   if (name === 'worker_edit') return workerRun(workerEditRunArgs(args, state), state, null, context, 'worker_edit');
   if (name === 'worker_resume') return workerRun(args, state, requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported'), context, 'worker_resume');
@@ -24,6 +25,137 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_runs_list') return workerRunsList(args, state);
   if (name === 'worker_run_wait') return workerRunWait(args, state);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
+}
+
+function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
+  const resumeSessionId = args.worker_session_id === undefined || args.worker_session_id === null || args.worker_session_id === ''
+    ? null
+    : requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported');
+  const request = normalizeWorkerRunToolInput(args, resumeSessionId !== null);
+  const inheritedSession = resumeSessionId ? readWorkerSessionRecord(state.policy, resumeSessionId) : null;
+  if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
+  const requestedOverrides = request.constraints.overrides ? { ...request.constraints.overrides, config: { ...(request.constraints.overrides.config ?? {}) } } : {};
+  const authority = resolveAuthority(request.constraints.authority, state.policy);
+  const cognition = resolveCognition(request.constraints.cognition, state.policy);
+  request.constraints.authority = authority;
+  request.constraints.cognition = cognition;
+  let overrides = request.constraints.overrides ?? {};
+  const runtime = validateRuntime(overrides.runtime, state.policy);
+  const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
+  const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
+  applyCognitionDefaults(request, cognition, state, runtime);
+  overrides = request.constraints.overrides ?? {};
+  const resolvedConfigInput = resolveConfig(overrides, state.policy);
+  const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
+  request.intent.mode = requestedMode;
+  const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
+  const environment = environmentForWorker(state.env);
+  const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
+  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, exitInterview: request.constraints.exit_interview === true });
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+  if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
+  const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
+  const resumable = resumeSessionId !== null || request.constraints.resumable === true;
+  const ephemeral = !resumable;
+  const dryRunPaths = {
+    schemaPath: '<dry-run>/worker_output.schema.json',
+    lastMessagePath: '<dry-run>/last_message.json',
+  };
+
+  let resolvedWorkerConfig: ResolvedWorkerConfig;
+  let invocation: Invocation;
+  if (runtime === 'deepseek-api') {
+    const deepseekRuntime = state.policy.runtimes.deepseek;
+    const mcpConfigPath = environment.NARADA_WORKER_MCP_CONFIG || null;
+    const argv = buildDeepseekArgv({
+      schemaPath: dryRunPaths.schemaPath,
+      lastMessagePath: dryRunPaths.lastMessagePath,
+      model: resolvedConfigInput.model,
+      reasoningEffort: resolvedConfigInput.reasoning_effort,
+      mcpConfigPath,
+      workerSessionId: resumeSessionId ?? undefined,
+    });
+    resolvedWorkerConfig = {
+      runtime: 'deepseek-api',
+      authority,
+      cognition,
+      command: runtimeAvailability.command ?? deepseekRuntime.command,
+      command_args: deepseekRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: deepseekRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    invocation = deepseekBuildInvocation(resolvedWorkerConfig, environment);
+  } else {
+    const codexRuntime = state.policy.runtimes.codex;
+    const argv = buildCodexArgv({
+      cwd,
+      sandbox,
+      schemaPath: dryRunPaths.schemaPath,
+      lastMessagePath: dryRunPaths.lastMessagePath,
+      workerSessionId: resumeSessionId ?? undefined,
+      ephemeral,
+      skipGitRepoCheck,
+      config: resolvedConfigInput.config,
+    });
+    resolvedWorkerConfig = {
+      runtime: 'codex',
+      authority,
+      cognition,
+      command: runtimeAvailability.command ?? codexRuntime.command,
+      command_args: codexRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: codexRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    invocation = codexBuildInvocation(resolvedWorkerConfig, environment);
+  }
+
+  const configResolution = configResolutionMetadata({ requestedOverrides, resolvedConfigInput, runtime, cognition, policy: state.policy });
+  const warnings = [
+    'dry_run_paths_are_placeholders: invocation argv uses <dry-run> paths and does not create run artifacts',
+    ...(configResolution.model_source === 'runtime_default_opaque' ? ['model_delegated_to_runtime_default: concrete model is not knowable before launching this runtime'] : []),
+    ...(configResolution.reasoning_effort_source === 'runtime_default_opaque' ? ['reasoning_effort_delegated_to_runtime_default: concrete reasoning effort is not knowable before launching this runtime'] : []),
+    ...preflight.filter((check) => check.status === 'blocked').map((check) => `blocked_preflight: ${check.message}`),
+  ];
+  return {
+    schema: 'narada.worker.config_resolve.v1',
+    status: 'ok',
+    dry_run: true,
+    requested_mode: requestedMode,
+    resume_worker_session_id: resumeSessionId,
+    resolved_worker_config: resolvedWorkerConfig,
+    invocation: { command: invocation.command, argv: invocation.argv, cwd: invocation.cwd, environment_keys: resolvedWorkerConfig.environment_keys },
+    preflight,
+    runtime_availability: runtimeAvailability.available
+      ? { available: true, command: runtimeAvailability.command ?? resolvedWorkerConfig.command }
+      : { available: false, reason: runtimeAvailability.reason ?? null, remediation: runtimeAvailability.remediation ?? null, command: runtimeAvailability.command ?? null },
+    config_resolution: configResolution,
+    warnings,
+  };
 }
 
 function modeWithInference(run: Record<string, unknown>): { requestedMode: WorkerDelegationMode | null; inferred: boolean } {
@@ -838,6 +970,43 @@ function applyCognitionDefaults(request: WorkerRunToolInput, cognition: Resolved
   }
   if (Object.keys(config).length > 0) overrides.config = config;
   if (Object.keys(overrides).length > 0) request.constraints.overrides = overrides;
+}
+
+function configResolutionMetadata(options: {
+  requestedOverrides: WorkerConstraintOverrides;
+  resolvedConfigInput: { config: Record<string, PrimitiveConfigValue>; model: string | null; reasoning_effort: string | null };
+  runtime: 'codex' | 'deepseek-api';
+  cognition: ResolvedWorkerConfig['cognition'];
+  policy: WorkerPolicy;
+}): Record<string, unknown> {
+  const config = options.requestedOverrides.config ?? {};
+  const cognitionDefaults = defaultConfigForCognition(options.cognition, options.policy);
+  return {
+    model_source: configValueSource({
+      explicit: options.requestedOverrides.model !== undefined || config.model !== undefined,
+      hasResolvedValue: options.resolvedConfigInput.model !== null,
+      cognitionDefault: cognitionDefaults.model,
+      runtime: options.runtime,
+      deepseekAdapterDefault: 'deepseek-v4-flash',
+    }),
+    reasoning_effort_source: configValueSource({
+      explicit: options.requestedOverrides.reasoning_effort !== undefined || config.model_reasoning_effort !== undefined,
+      hasResolvedValue: options.resolvedConfigInput.reasoning_effort !== null,
+      cognitionDefault: cognitionDefaults.reasoningEffort,
+      runtime: options.runtime,
+      deepseekAdapterDefault: 'high',
+    }),
+    allowed_config_keys: options.policy.allowedConfigKeys,
+    explicit_config_keys: Object.keys(options.resolvedConfigInput.config).sort(),
+  };
+}
+
+function configValueSource(options: { explicit: boolean; hasResolvedValue: boolean; cognitionDefault: string | null; runtime: 'codex' | 'deepseek-api'; deepseekAdapterDefault: string }): string {
+  if (options.explicit) return 'request_override';
+  if (options.hasResolvedValue && options.cognitionDefault) return 'cognition_default';
+  if (options.hasResolvedValue) return 'resolved_config';
+  if (options.runtime === 'deepseek-api') return `adapter_default:${options.deepseekAdapterDefault}`;
+  return 'runtime_default_opaque';
 }
 
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {

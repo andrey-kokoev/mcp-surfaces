@@ -9,6 +9,11 @@ type WorkerToolDefinition = {
 export function listTools(): WorkerToolDefinition[] {
   return decorateTools([
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy.', inputSchema: objectSchema({}) },
+    { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker.', inputSchema: objectSchema({
+      worker_session_id: { type: 'string', description: 'Optional existing worker session whose constraints should be inherited like worker_resume.' },
+      intent: intentSchema(),
+      constraints: constraintRequestSchema(),
+    }, ['intent', 'constraints']) },
     { name: 'worker_run', description: 'Start one new worker run for one delegated instruction.', inputSchema: objectSchema({
       intent: intentSchema(),
       constraints: constraintRequestSchema(),
@@ -138,17 +143,33 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !startsWorker,
     destructiveHint: false,
-    idempotentHint: /inspect|run_status|runs_list|run_wait/.test(name),
+    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait/.test(name),
     openWorldHint: true,
   };
 }
 
 function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_policy_inspect') return workerPolicyOutputSchema();
+  if (name === 'worker_config_resolve') return workerConfigResolveOutputSchema();
   if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();
   if (name === 'worker_run_wait') return workerRunWaitOutputSchema();
   if (name === 'worker_runs_list') return workerRunsListOutputSchema();
   return { type: 'object', additionalProperties: true };
+}
+
+function workerConfigResolveOutputSchema(): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: 'narada.worker.config_resolve.v1' },
+    status: { type: 'string', const: 'ok' },
+    dry_run: { type: 'boolean', const: true },
+    requested_mode: { type: 'string', enum: ['audit_only', 'plan_only', 'implement', 'implement_and_verify'] },
+    resolved_worker_config: { type: 'object', additionalProperties: true },
+    invocation: { type: 'object', additionalProperties: true },
+    preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
+    runtime_availability: { type: 'object', additionalProperties: true },
+    config_resolution: { type: 'object', additionalProperties: true },
+    warnings: stringArraySchema(),
+  }, ['schema', 'status', 'dry_run', 'requested_mode', 'resolved_worker_config', 'invocation', 'preflight', 'runtime_availability', 'config_resolution', 'warnings']);
 }
 
 function workerPolicyOutputSchema(): Record<string, unknown> {

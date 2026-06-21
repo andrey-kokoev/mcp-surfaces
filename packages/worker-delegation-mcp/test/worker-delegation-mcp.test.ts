@@ -83,6 +83,7 @@ const state = createServerState({
 const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state);
 assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_policy_inspect',
+  'worker_config_resolve',
   'worker_run',
   'worker_edit',
   'worker_resume',
@@ -98,7 +99,9 @@ for (const tool of tools.result?.tools ?? []) {
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.outputSchema?.properties?.schema?.const, 'narada.worker.config_resolve.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
@@ -143,6 +146,32 @@ assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { mode
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
+
+const configPreview = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
+  intent: { instruction: 'inspect repository shape' },
+  constraints: { cwd: root, authority: 'read', cognition: 'high', required_mcp_tools: ['mcp__narada_andrey_local_filesystem'] },
+} } }, state);
+assert.equal(configPreview.result?.structuredContent.schema, 'narada.worker.config_resolve.v1');
+assert.equal(configPreview.result?.structuredContent.dry_run, true);
+assert.equal(configPreview.result?.structuredContent.requested_mode, 'audit_only');
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.runtime, 'codex');
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(configPreview.result?.structuredContent.config_resolution.model_source, 'runtime_default_opaque');
+assert.equal(configPreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'runtime_default_opaque');
+assert.equal(configPreview.result?.structuredContent.runtime_availability.available, true);
+assert.match(configPreview.result?.structuredContent.invocation.argv.join(' '), /<dry-run>\/worker_output\.schema\.json/);
+assert.match(configPreview.result?.structuredContent.warnings.join('\n'), /model_delegated_to_runtime_default/);
+assert.match(configPreview.result?.content[0].text, /worker_config_resolve: ok/);
+
+const explicitConfig = await rpc({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
+  intent: { instruction: 'inspect repository shape', mode: 'plan_only' },
+  constraints: { cwd: root, authority: 'read', overrides: { model: 'gpt-test', reasoning_effort: 'low' } },
+} } }, state);
+assert.equal(explicitConfig.result?.structuredContent.resolved_worker_config.model, 'gpt-test');
+assert.equal(explicitConfig.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(explicitConfig.result?.structuredContent.config_resolution.model_source, 'request_override');
+assert.equal(explicitConfig.result?.structuredContent.config_resolution.reasoning_effort_source, 'request_override');
+assert.doesNotMatch(explicitConfig.result?.structuredContent.warnings.join('\n'), /runtime_default/);
 
 assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
 assert.throws(() => createServerState({ allowedRoot: root, allowedSandbox: 'invalid' }), /worker_invalid_sandbox/);

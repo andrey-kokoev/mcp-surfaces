@@ -10,10 +10,35 @@ export function renderToolResultText(value: unknown): string {
     `full_output_byte_length: ${record.full_output_byte_length ?? ''}`,
   ]);
   if (record.schema === 'narada.worker.policy.v1') return renderPolicy(record);
+  if (record.schema === 'narada.worker.config_resolve.v1') return renderConfigResolve(record);
   if (record.schema === 'narada.worker.run.v1') return renderRun(record);
   if (record.schema === 'narada.worker.runs_list.v1') return renderRunsList(record);
   if (record.schema === 'narada.worker.run_wait.v1') return renderRunWait(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderConfigResolve(record: Record<string, unknown>): string {
+  const resolved = asRecord(record.resolved_worker_config);
+  const invocation = asRecord(record.invocation);
+  const runtimeAvailability = asRecord(record.runtime_availability);
+  const configResolution = asRecord(record.config_resolution);
+  return compactLines([
+    'worker_config_resolve: ok',
+    `runtime: ${resolved.runtime ?? ''}`,
+    `cwd: ${resolved.cwd ?? ''}`,
+    `sandbox: ${resolved.sandbox ?? ''}`,
+    `requested_mode: ${record.requested_mode ?? ''}`,
+    `model: ${resolved.model ?? 'null'}`,
+    `model_source: ${configResolution.model_source ?? ''}`,
+    `reasoning_effort: ${resolved.reasoning_effort ?? 'null'}`,
+    `reasoning_effort_source: ${configResolution.reasoning_effort_source ?? ''}`,
+    `runtime_available: ${runtimeAvailability.available ?? false}`,
+    runtimeAvailability.reason ? `runtime_reason: ${runtimeAvailability.reason}` : null,
+    `command: ${invocation.command ?? ''}`,
+    `argv: ${arrayCount(invocation.argv)}`,
+    `preflight: ${arrayCount(record.preflight)}`,
+    `warnings: ${arrayCount(record.warnings)}`,
+  ]);
 }
 
 function renderPolicy(record: Record<string, unknown>): string {
