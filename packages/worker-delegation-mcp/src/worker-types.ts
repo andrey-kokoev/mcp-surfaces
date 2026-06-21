@@ -34,6 +34,7 @@ export type WorkerProgressPreview = {
   event_count: number;
   latest_event_type: string | null;
   latest_event_preview: string | null;
+  latest_event_at?: string | null;
   readable: boolean;
   tail_truncated: boolean;
   error_preview?: string;

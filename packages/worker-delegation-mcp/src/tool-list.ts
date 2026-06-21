@@ -82,6 +82,7 @@ function workerRunsListOutputSchema(): Record<string, unknown> {
       timing: { type: 'object', additionalProperties: true },
       error: nullableStringSchema(),
       diagnostic_tail: nullableStringSchema(),
+      status_liveness: { type: 'object', additionalProperties: true },
     }, ['run_id', 'status']) },
   }, ['schema', 'status', 'runs']);
 }
@@ -244,6 +245,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     worker_output_error: { type: 'object', additionalProperties: true },
     diagnostic_tail: nullableStringSchema(),
     error_classification: nullableStringSchema(),
+    status_liveness: { type: 'object', additionalProperties: true },
   }, ['schema', 'status', 'run_id', 'run_dir', 'resolved_worker_config', 'summary', 'deliverables', 'open_questions', 'next_actions']);
 }
 
@@ -260,6 +262,7 @@ function progressPreviewSchema(): Record<string, unknown> {
     event_count: { type: 'integer' },
     latest_event_type: nullableStringSchema(),
     latest_event_preview: nullableStringSchema(),
+    latest_event_at: nullableStringSchema(),
     readable: { type: 'boolean' },
     tail_truncated: { type: 'boolean' },
     error_preview: { type: 'string' },

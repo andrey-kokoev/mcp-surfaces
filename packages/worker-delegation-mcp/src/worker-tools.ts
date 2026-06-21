@@ -11,6 +11,8 @@ import type { WorkerPolicy, PrimitiveConfigValue } from './policy.js';
 import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerEditToolInput, WorkerExecutorRequest, WorkerIntent, WorkerPreflightCheck, WorkerPreflightPath, WorkerProgressPreview, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
 import type { RunRecordPaths } from './run-record.js';
 
+const RUN_STATUS_GRACE_MS = 60_000;
+
 export type WorkerRequestContext = {
   abortSignal?: AbortSignal;
 };
@@ -211,7 +213,7 @@ function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMc
   if (!Number.isFinite(startedAtMs)) return run;
   const resolvedConfig = asRecord(run.resolved_worker_config);
   const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
-  if (Date.now() - startedAtMs <= maxRunMsValue + 60_000) return run;
+  if (Date.now() - startedAtMs <= maxRunMsValue + RUN_STATUS_GRACE_MS) return run;
   const parsed = parseLastMessage(resolve(runDir, 'last_message.json'));
   if (!parsed.ok) return run;
   const output = parsed.data;
@@ -240,6 +242,41 @@ function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMc
       duration_ms: maxRunMsValue,
     },
     error: warning,
+  };
+}
+
+function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  if (run.status !== 'running') return run;
+  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
+  if (!runDir) return run;
+  const timing = asRecord(run.timing);
+  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
+  if (!Number.isFinite(startedAtMs)) return run;
+  const resolvedConfig = asRecord(run.resolved_worker_config);
+  const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
+  const expiredAtMs = startedAtMs + maxRunMsValue + RUN_STATUS_GRACE_MS;
+  if (Date.now() <= expiredAtMs) return run;
+  const parsed = parseLastMessage(resolve(runDir, 'last_message.json'));
+  if (parsed.ok) return run;
+  const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
+  const warning = 'worker_run_expired_without_terminal_output: run stayed running past max_run_ms plus grace without a usable last_message.json';
+  const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
+  const diagnosticTail = readDiagnosticTail(resolve(runDir, 'diagnostic.log'));
+  return {
+    ...run,
+    status: 'failed',
+    confidence: 'partial',
+    completion_state: 'partial',
+    runtime_warnings: runtimeWarnings,
+    warning_count: runtimeWarnings.length,
+    timing: {
+      ...timing,
+      finished_at: new Date(expiredAtMs).toISOString(),
+      duration_ms: maxRunMsValue + RUN_STATUS_GRACE_MS,
+    },
+    error: warning,
+    error_classification: 'worker_run_expired_without_terminal_output',
+    ...(diagnosticTail ? { diagnostic_tail: diagnosticTail } : {}),
   };
 }
 
@@ -394,6 +431,38 @@ function withFreshProgress(run: Record<string, unknown>): Record<string, unknown
   const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
   if (!runDir) return run;
   return { ...run, progress: readRunProgress(resolve(runDir, 'events.jsonl')) };
+}
+
+function withRunningLiveness(run: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  if (run.status !== 'running') return run;
+  const timing = asRecord(run.timing);
+  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
+  if (!Number.isFinite(startedAtMs)) return run;
+  const progress = asRecord(run.progress);
+  const latestEventAtMs = Date.parse(String(progress.latest_event_at ?? ''));
+  const lastActivityMs = Number.isFinite(latestEventAtMs) ? latestEventAtMs : startedAtMs;
+  const resolvedConfig = asRecord(run.resolved_worker_config);
+  const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
+  const staleAfterMs = Math.min(300_000, Math.max(60_000, Math.trunc(maxRunMsValue / 10)));
+  const now = Date.now();
+  const staleForMs = Math.max(0, now - lastActivityMs - staleAfterMs);
+  const elapsedMs = Math.max(0, now - startedAtMs);
+  const livenessState = staleForMs > 0 ? 'stale' : 'active';
+  return {
+    ...run,
+    completion_state: livenessState === 'stale' ? 'partial' : run.completion_state,
+    status_liveness: {
+      state: livenessState,
+      process_liveness: 'unknown',
+      started_at: new Date(startedAtMs).toISOString(),
+      last_event_at: Number.isFinite(latestEventAtMs) ? new Date(latestEventAtMs).toISOString() : null,
+      last_activity_at: new Date(lastActivityMs).toISOString(),
+      stale_after_ms: staleAfterMs,
+      stale_for_ms: staleForMs,
+      elapsed_ms: elapsedMs,
+      max_run_ms: maxRunMsValue,
+    },
+  };
 }
 
 async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext, auditTool: string, slot: { releaseSlot: () => void; deferRelease: () => void }): Promise<Record<string, unknown>> {
@@ -798,7 +867,7 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
   }
   try {
     const run = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
-    return enrichFailedRunDiagnostics(withFreshProgress(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state)));
+    return enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state), state)), state));
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
@@ -844,6 +913,7 @@ function runListItem(run: Record<string, unknown>, options: { verbose: boolean; 
     latest_event_type: progress.latest_event_type ?? null,
     progress: run.progress ?? null,
   };
+  if (run.status_liveness !== undefined) item.status_liveness = run.status_liveness;
   if (options.includeSummary) item.summary = String(run.summary ?? '');
   if (options.verbose) {
     item.run_dir = run.run_dir;
@@ -921,7 +991,7 @@ function summaryOnlyRun(run: Record<string, unknown>): Record<string, unknown> {
 }
 
 function readRunProgress(eventsPath: string): WorkerProgressPreview {
-  const empty: WorkerProgressPreview = { event_count: 0, latest_event_type: null, latest_event_preview: null, readable: true, tail_truncated: false };
+  const empty: WorkerProgressPreview = { event_count: 0, latest_event_type: null, latest_event_preview: null, latest_event_at: null, readable: true, tail_truncated: false };
   if (!existsSync(eventsPath)) return empty;
   try {
     const stat = statSync(eventsPath);
@@ -955,6 +1025,7 @@ function readRunProgress(eventsPath: string): WorkerProgressPreview {
       event_count: eventCount,
       latest_event_type: eventType(latest),
       latest_event_preview: previewString(latestEventText(latest), 240),
+      latest_event_at: eventTimestamp(latest)?.toISOString() ?? (eventCount > 0 ? stat.mtime.toISOString() : null),
       readable: parseError === null,
       tail_truncated: start > 0,
       ...(parseError ? { error_preview: previewString(parseError, 180) ?? undefined } : {}),

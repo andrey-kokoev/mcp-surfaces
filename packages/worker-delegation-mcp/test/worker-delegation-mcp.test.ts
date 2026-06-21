@@ -438,7 +438,7 @@ const asyncRun = await rpc({
 assert.equal(asyncRun.result?.structuredContent.status, 'running');
 assert.deepEqual(asyncRun.result?.content.map((item) => item.type), ['text']);
 assert.equal(asyncRun.result?.structuredContent.timing.finished_at, null);
-assert.deepEqual(asyncRun.result?.structuredContent.progress, { event_count: 0, latest_event_type: null, latest_event_preview: null, readable: true, tail_truncated: false });
+assert.deepEqual(asyncRun.result?.structuredContent.progress, { event_count: 0, latest_event_type: null, latest_event_preview: null, latest_event_at: null, readable: true, tail_truncated: false });
 assert.equal(state.activeRunCount, 1);
 const listedRuns = await rpc({ jsonrpc: '2.0', id: 522, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 20 } } }, state);
 assert.ok(listedRuns.result, JSON.stringify(listedRuns.error));
@@ -513,6 +513,89 @@ assert.equal(orphanedStatus.result?.structuredContent.status, 'completed_with_er
 assert.equal(orphanedStatus.result?.structuredContent.summary, 'orphaned worker output');
 assert.equal(orphanedStatus.result?.structuredContent.warning_count, 1);
 assert.match(orphanedStatus.result?.structuredContent.error, /worker_run_orphaned_final_output/);
+const expiredRunId = 'run-20000101T000002Z-expire1';
+const expiredRunDir = join(runRoot, expiredRunId);
+mkdirSync(expiredRunDir, { recursive: true });
+writeFileSync(join(expiredRunDir, 'events.jsonl'), JSON.stringify({ type: 'item.completed', timestamp: '2000-01-01T00:00:02.000Z' }) + '\n', 'utf8');
+writeFileSync(join(expiredRunDir, 'diagnostic.log'), 'runtime process stopped before final message\n', 'utf8');
+writeFileSync(join(expiredRunDir, 'result.json'), JSON.stringify({
+  schema: 'narada.worker.run.v1',
+  status: 'running',
+  run_id: expiredRunId,
+  run_dir: expiredRunDir,
+  runtime: 'codex',
+  worker_session_id: null,
+  resolved_worker_config: { authority: 'read', max_run_ms: 1000 },
+  executor_request: { requested_mode: 'audit_only', preflight: [] },
+  requested_mode: 'audit_only',
+  edits_performed: null,
+  target_state_changed: null,
+  confidence: 'complete',
+  completion_state: 'complete',
+  blocked_paths: [],
+  verification: [],
+  runtime_warnings: [],
+  warning_count: 0,
+  preflight: [],
+  final_checklist: [],
+  summary: '',
+  deliverables: [],
+  open_questions: [],
+  next_actions: [],
+  changes: [],
+  verification_results: [],
+  artifacts: [],
+  timing: { started_at: '2000-01-01T00:00:02.000Z', finished_at: null, duration_ms: null },
+  error: null,
+}), 'utf8');
+const expiredStatus = await rpc({ jsonrpc: '2.0', id: 52320, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: expiredRunId } } }, state);
+assert.equal(expiredStatus.result?.structuredContent.status, 'failed');
+assert.equal(expiredStatus.result?.structuredContent.completion_state, 'partial');
+assert.equal(expiredStatus.result?.structuredContent.error_classification, 'worker_run_expired_without_terminal_output');
+assert.match(expiredStatus.result?.structuredContent.error, /expired_without_terminal_output/);
+assert.equal(expiredStatus.result?.structuredContent.progress.latest_event_type, 'item.completed');
+assert.equal(expiredStatus.result?.structuredContent.progress.latest_event_at, '2000-01-01T00:00:02.000Z');
+const staleRunId = 'run-20990101T000002Z-stale1';
+const staleRunDir = join(runRoot, staleRunId);
+const staleStartedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+mkdirSync(staleRunDir, { recursive: true });
+writeFileSync(join(staleRunDir, 'events.jsonl'), JSON.stringify({ type: 'item.completed', timestamp: staleStartedAt }) + '\n', 'utf8');
+writeFileSync(join(staleRunDir, 'result.json'), JSON.stringify({
+  schema: 'narada.worker.run.v1',
+  status: 'running',
+  run_id: staleRunId,
+  run_dir: staleRunDir,
+  runtime: 'codex',
+  worker_session_id: null,
+  resolved_worker_config: { authority: 'read', max_run_ms: 60 * 60_000 },
+  executor_request: { requested_mode: 'audit_only', preflight: [] },
+  requested_mode: 'audit_only',
+  edits_performed: null,
+  target_state_changed: null,
+  confidence: 'complete',
+  completion_state: 'complete',
+  blocked_paths: [],
+  verification: [],
+  runtime_warnings: [],
+  warning_count: 0,
+  preflight: [],
+  final_checklist: [],
+  summary: '',
+  deliverables: [],
+  open_questions: [],
+  next_actions: [],
+  changes: [],
+  verification_results: [],
+  artifacts: [],
+  timing: { started_at: staleStartedAt, finished_at: null, duration_ms: null },
+  error: null,
+}), 'utf8');
+const staleStatus = await rpc({ jsonrpc: '2.0', id: 52319, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: staleRunId } } }, state);
+assert.equal(staleStatus.result?.structuredContent.status, 'running');
+assert.equal(staleStatus.result?.structuredContent.completion_state, 'partial');
+assert.equal(staleStatus.result?.structuredContent.status_liveness.state, 'stale');
+assert.equal(staleStatus.result?.structuredContent.status_liveness.process_liveness, 'unknown');
+assert.equal(typeof staleStatus.result?.structuredContent.status_liveness.stale_for_ms, 'number');
 const eventRecoveredRunId = 'run-20000101T000003Z-events1';
 const eventRecoveredRunDir = join(runRoot, eventRecoveredRunId);
 mkdirSync(eventRecoveredRunDir, { recursive: true });
