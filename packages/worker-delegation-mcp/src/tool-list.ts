@@ -128,7 +128,7 @@ function constraintRequestSchema(): Record<string, unknown> {
 
 function constraintOverrideSchema(): Record<string, unknown> {
   return objectSchema({
-    runtime: { type: 'string' },
+    runtime: { type: 'string', enum: ['codex', 'deepseek-api', 'narada-agent-runtime-server'] },
     sandbox: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] },
     model: { type: 'string' },
     reasoning_effort: { type: 'string' },
@@ -210,7 +210,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     status: { type: 'string', enum: ['running', 'completed', 'completed_with_errors', 'failed', 'cancelled'] },
     run_id: { type: 'string' },
     run_dir: { type: 'string' },
-    runtime: { type: 'string' },
+    runtime: { type: 'string', enum: ['codex', 'deepseek-api', 'narada-agent-runtime-server'] },
     worker_session_id: nullableStringSchema(),
     resolved_worker_config: { type: 'object', additionalProperties: true },
     executor_request: { type: 'object', additionalProperties: true },

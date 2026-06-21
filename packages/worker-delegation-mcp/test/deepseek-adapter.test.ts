@@ -58,7 +58,7 @@ const state = createServerState({
   allowedRoot: root,
   runRoot,
 });
-assert.deepEqual(state.policy.allowedRuntimes, ['codex', 'deepseek-api']);
+assert.deepEqual(state.policy.allowedRuntimes, ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
 assert.equal(state.policy.runtimes.deepseek.command, 'node');
 assert.equal(state.policy.runtimes.deepseek.defaultSandbox, 'read-only');
 assert.equal(state.policy.runtimes.deepseek.defaultReasoningEffort, 'high');

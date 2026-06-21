@@ -4,10 +4,11 @@ import { spawn } from 'node:child_process';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
 import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
+import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
 import { defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
-import type { WorkerPolicy, PrimitiveConfigValue } from './policy.js';
+import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
 import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerEditToolInput, WorkerExecutorRequest, WorkerIntent, WorkerPreflightCheck, WorkerPreflightPath, WorkerProgressPreview, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
 import type { RunRecordPaths } from './run-record.js';
 
@@ -100,6 +101,33 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       environment_keys: Object.keys(environment).sort(),
     };
     invocation = deepseekBuildInvocation(resolvedWorkerConfig, environment);
+  } else if (runtime === 'narada-agent-runtime-server') {
+    const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
+    environment.NARADA_SITE_ROOT ||= cwd;
+    environment.NARADA_WORKSPACE_ROOT ||= cwd;
+    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
+    resolvedWorkerConfig = {
+      runtime: 'narada-agent-runtime-server',
+      authority,
+      cognition,
+      command: runtimeAvailability.command ?? agentRuntime.command,
+      command_args: agentRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: agentRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    invocation = agentRuntimeServerBuildInvocation(resolvedWorkerConfig, environment);
   } else {
     const codexRuntime = state.policy.runtimes.codex;
     const argv = buildCodexArgv({
@@ -545,6 +573,34 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     };
     resolvedWorkerConfig = baseConfig;
     invocation = deepseekBuildInvocation(baseConfig, environment);
+  } else if (runtime === 'narada-agent-runtime-server') {
+    const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
+    environment.NARADA_SITE_ROOT ||= cwd;
+    environment.NARADA_WORKSPACE_ROOT ||= cwd;
+    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
+    const baseConfig: ResolvedWorkerConfig = {
+      runtime: 'narada-agent-runtime-server',
+      authority,
+      cognition,
+      command: runtimeAvailability.command ?? agentRuntime.command,
+      command_args: agentRuntime.commandArgs,
+      argv,
+      cwd,
+      sandbox,
+      model: resolvedConfigInput.model,
+      reasoning_effort: resolvedConfigInput.reasoning_effort,
+      config: resolvedConfigInput.config,
+      skip_git_repo_check: skipGitRepoCheck,
+      resumable,
+      ephemeral,
+      json_events: agentRuntime.jsonEvents,
+      prompt_byte_length: promptBytes,
+      max_output_bytes: state.policy.maxOutputBytes,
+      max_run_ms: state.policy.maxRunMs,
+      environment_keys: Object.keys(environment).sort(),
+    };
+    resolvedWorkerConfig = baseConfig;
+    invocation = agentRuntimeServerBuildInvocation(baseConfig, environment);
   } else {
     const codexRuntime = state.policy.runtimes.codex;
     const argv = buildCodexArgv({
@@ -674,7 +730,11 @@ async function completeWorkerRun(options: {
 }): Promise<Record<string, unknown>> {
   const { state, runRecord, invocation, prompt, resolvedWorkerConfig, runtime, resumeSessionId, resumable, startedAt, executorRequest, auditTool } = options;
   try {
-  const runner = runtime === 'deepseek-api' ? runDeepseekInvocation : runCodexInvocation;
+  const runner = runtime === 'deepseek-api'
+    ? runDeepseekInvocation
+    : runtime === 'narada-agent-runtime-server'
+      ? runAgentRuntimeServerInvocation
+      : runCodexInvocation;
   const codexResult = await runner({
     invocation,
     prompt,
@@ -1077,7 +1137,7 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
   state.activeRunCount = Math.max(0, state.activeRunCount - 1);
 }
 
-function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: 'codex' | 'deepseek-api' = 'deepseek-api'): void {
+function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: WorkerRuntimeId = 'deepseek-api'): void {
   const defaults = defaultConfigForCognition(cognition, state.policy);
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
@@ -1093,7 +1153,7 @@ function applyCognitionDefaults(request: WorkerRunToolInput, cognition: Resolved
 function configResolutionMetadata(options: {
   requestedOverrides: WorkerConstraintOverrides;
   resolvedConfigInput: { config: Record<string, PrimitiveConfigValue>; model: string | null; reasoning_effort: string | null };
-  runtime: 'codex' | 'deepseek-api';
+  runtime: WorkerRuntimeId;
   cognition: ResolvedWorkerConfig['cognition'];
   policy: WorkerPolicy;
 }): Record<string, unknown> {
@@ -1119,7 +1179,7 @@ function configResolutionMetadata(options: {
   };
 }
 
-function configValueSource(options: { explicit: boolean; hasResolvedValue: boolean; cognitionDefault: string | null; runtime: 'codex' | 'deepseek-api'; deepseekAdapterDefault: string }): string {
+function configValueSource(options: { explicit: boolean; hasResolvedValue: boolean; cognitionDefault: string | null; runtime: WorkerRuntimeId; deepseekAdapterDefault: string }): string {
   if (options.explicit) return 'request_override';
   if (options.hasResolvedValue && options.cognitionDefault) return 'cognition_default';
   if (options.hasResolvedValue) return 'resolved_config';
@@ -1246,7 +1306,7 @@ function areSamePath(left: string, right: string): boolean {
   return normalizePathComparisonKey(left) === normalizePathComparisonKey(right);
 }
 
-function checkRuntimeAvailability(runtime: 'codex' | 'deepseek-api', policy: WorkerPolicy, env: Record<string, string>): { available: boolean; reason?: string; remediation?: string; command?: string } {
+function checkRuntimeAvailability(runtime: WorkerRuntimeId, policy: WorkerPolicy, env: Record<string, string>): { available: boolean; reason?: string; remediation?: string; command?: string } {
   if (runtime === 'deepseek-api') {
     const key = policy.runtimes.deepseek.command === 'node' ? 'DEEPSEEK_API_KEY' : null;
     if (key && !env[key]) {
@@ -1257,6 +1317,7 @@ function checkRuntimeAvailability(runtime: 'codex' | 'deepseek-api', policy: Wor
     }
     return commandAvailable(policy.runtimes.deepseek.command, env);
   }
+  if (runtime === 'narada-agent-runtime-server') return commandAvailable(policy.runtimes.naradaAgentRuntimeServer.command, env);
   return commandAvailable(policy.runtimes.codex.command, env);
 }
 

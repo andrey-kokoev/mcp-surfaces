@@ -239,7 +239,7 @@ function isPathInside(candidate: string, root: string): boolean {
 }
 
 export function parseArgs(argv: string[]): Record<string, unknown> {
-  const parsed: Record<string, unknown> & { allowedRoots?: string[]; allowedSandboxes?: string[]; allowedConfigKeys?: string[]; codexCommandArgs?: string[]; deepseekCommandArgs?: string[] } = {};
+  const parsed: Record<string, unknown> & { allowedRoots?: string[]; allowedSandboxes?: string[]; allowedConfigKeys?: string[]; codexCommandArgs?: string[]; deepseekCommandArgs?: string[]; agentRuntimeServerCommandArgs?: string[] } = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -268,6 +268,11 @@ export function parseArgs(argv: string[]): Record<string, unknown> {
     if (key === 'deepseekCommandArg' || key === 'deepseekCommandArgs') {
       if (!next || next.startsWith('--')) throw diagnosticError('worker_invalid_cli_args', 'missing value for --deepseek-command-arg');
       parsed.deepseekCommandArgs = [...(parsed.deepseekCommandArgs ?? []), next]; i += 1;
+      continue;
+    }
+    if (key === 'agentRuntimeServerCommandArg' || key === 'agentRuntimeServerCommandArgs' || key === 'naradaAgentRuntimeServerCommandArg' || key === 'naradaAgentRuntimeServerCommandArgs') {
+      if (next === undefined) throw diagnosticError('worker_invalid_cli_args', 'missing value for --agent-runtime-server-command-arg');
+      parsed.agentRuntimeServerCommandArgs = [...(parsed.agentRuntimeServerCommandArgs ?? []), next]; i += 1;
       continue;
     }
     if (next && !next.startsWith('--')) { parsed[key] = next; i += 1; } else { parsed[key] = true; }

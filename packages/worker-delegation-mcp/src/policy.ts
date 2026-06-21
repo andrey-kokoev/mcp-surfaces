@@ -13,7 +13,7 @@ export type WorkerCognitionDefaults = {
 };
 
 export type WorkerPolicy = {
-  defaultRuntime: 'codex' | 'deepseek-api';
+  defaultRuntime: WorkerRuntimeId;
   defaultAuthority: WorkerAuthority;
   defaultCognition: WorkerCognition;
   allowedAuthorities: WorkerAuthority[];
@@ -22,7 +22,7 @@ export type WorkerPolicy = {
   auditLogDir: string | null;
   allowedRoots: string[];
   rootsFromTrustConfig: string | null;
-  allowedRuntimes: ['codex', 'deepseek-api'];
+  allowedRuntimes: WorkerRuntimeId[];
   allowedSandboxes: SandboxMode[];
   allowedConfigKeys: string[];
   allowRawConfigOverrides: boolean;
@@ -35,8 +35,11 @@ export type WorkerPolicy = {
   runtimes: {
     codex: WorkerRuntimeConfig;
     deepseek: WorkerDeepseekRuntimeConfig;
+    naradaAgentRuntimeServer: WorkerRuntimeConfig;
   };
 };
+
+export type WorkerRuntimeId = 'codex' | 'deepseek-api' | 'narada-agent-runtime-server';
 
 type WorkerRuntimeConfig = {
   command: string;
@@ -59,7 +62,21 @@ type WorkerDeepseekRuntimeConfig = {
 const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
-const ENV_KEYS = ['PATH', 'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'CODEX_HOME', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'];
+const ENV_KEYS = [
+  'PATH',
+  'USERPROFILE',
+  'HOME',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'CODEX_HOME',
+  'OPENAI_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'DEEPSEEK_API_BASE_URL',
+  'KIMI_API_KEY',
+  'KIMI_CODE_API_KEY',
+  'MOONSHOT_API_KEY',
+  'NARADA_WORKER_MCP_CONFIG',
+];
 const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
 const WORKER_COGNITION: WorkerCognition[] = ['low', 'medium', 'high'];
 
@@ -73,12 +90,12 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const runtimes = asRecord(worker.runtimes);
   const codex = asRecord(runtimes.codex);
   const deepseekCfg = asRecord(runtimes.deepseek);
+  const naradaAgentRuntimeServerCfg = asRecord(runtimes.narada_agent_runtime_server ?? runtimes.naradaAgentRuntimeServer);
 
   const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? 'codex');
-  if (defaultRuntime !== 'codex' && defaultRuntime !== 'deepseek-api') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
+  if (!isWorkerRuntime(defaultRuntime)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
 
-  const allowedRuntimes = stringList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'deepseek-api']) as ('codex' | 'deepseek-api')[];
-  if (!allowedRuntimes.every((r) => r === 'codex' || r === 'deepseek-api')) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { allowed_runtimes: allowedRuntimes });
+  const allowedRuntimes = runtimeList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
 
   const allowedSandboxes = stringList(merged.allowedSandbox ?? merged.allowedSandboxes ?? policy.allowed_sandboxes ?? ['read-only', 'workspace-write']).map(validateSandbox);
   const allowDangerFullAccess = booleanValue(merged.allowDangerFullAccess ?? policy.allow_danger_full_access, false);
@@ -99,6 +116,11 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const deepseekDefaultSandbox = validateSandbox(merged.deepseekDefaultSandbox ?? deepseekCfg.default_sandbox ?? 'read-only');
   if (!allowedSandboxes.includes(deepseekDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: deepseekDefaultSandbox });
 
+  const naradaAgentRuntimeServerCommand = stringValue(merged.naradaAgentRuntimeServerCommand ?? merged.agentRuntimeServerCommand ?? naradaAgentRuntimeServerCfg.command ?? 'agent-runtime-server');
+  const naradaAgentRuntimeServerCommandArgs = stringList(merged.naradaAgentRuntimeServerCommandArg ?? merged.naradaAgentRuntimeServerCommandArgs ?? merged.agentRuntimeServerCommandArg ?? merged.agentRuntimeServerCommandArgs ?? naradaAgentRuntimeServerCfg.command_args);
+  const naradaAgentRuntimeServerDefaultSandbox = validateSandbox(merged.naradaAgentRuntimeServerDefaultSandbox ?? naradaAgentRuntimeServerCfg.default_sandbox ?? 'workspace-write');
+  if (!allowedSandboxes.includes(naradaAgentRuntimeServerDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: naradaAgentRuntimeServerDefaultSandbox });
+
   const deepseekModelOverride = stringOrNull(merged.deepseekModel);
   const finalCognitionDefaults = cognitionDefaults(cognition, merged);
   if (deepseekModelOverride) {
@@ -117,7 +139,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     auditLogDir: stringOrNull(merged.auditLogDir ?? worker.audit_log_dir) ? resolve(stringValue(merged.auditLogDir ?? worker.audit_log_dir)) : null,
     allowedRoots,
     rootsFromTrustConfig,
-    allowedRuntimes: ['codex', 'deepseek-api'],
+    allowedRuntimes,
     allowedSandboxes,
     allowedConfigKeys: stringList(merged.allowedConfigKey ?? merged.allowedConfigKeys ?? policy.allowed_config_keys ?? ['model', 'model_reasoning_effort']),
     allowRawConfigOverrides: booleanValue(merged.allowRawConfigOverrides ?? policy.allow_raw_config_overrides, false),
@@ -129,7 +151,6 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     cognitionDefaults: finalCognitionDefaults,
     runtimes: {
       codex: {
-        id: 'codex',
         command: codexCommand,
         commandArgs: codexCommandArgs,
         defaultSandbox: codexDefaultSandbox,
@@ -138,7 +159,6 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
         jsonEvents: booleanValue(merged.jsonEvents ?? codex.json_events, true),
       },
       deepseek: {
-        id: 'deepseek-api',
         command: deepseekCommand,
         commandArgs: deepseekCommandArgs,
         defaultSandbox: deepseekDefaultSandbox,
@@ -146,8 +166,28 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
         ephemeral: booleanValue(merged.deepseekEphemeral ?? deepseekCfg.ephemeral, true),
         jsonEvents: booleanValue(merged.deepseekJsonEvents ?? deepseekCfg.json_events, false),
       },
+      naradaAgentRuntimeServer: {
+        command: naradaAgentRuntimeServerCommand,
+        commandArgs: naradaAgentRuntimeServerCommandArgs,
+        defaultSandbox: naradaAgentRuntimeServerDefaultSandbox,
+        defaultReasoningEffort: stringValue(merged.naradaAgentRuntimeServerDefaultReasoningEffort ?? naradaAgentRuntimeServerCfg.default_reasoning_effort ?? 'medium'),
+        ephemeral: booleanValue(merged.naradaAgentRuntimeServerEphemeral ?? naradaAgentRuntimeServerCfg.ephemeral, true),
+        jsonEvents: booleanValue(merged.naradaAgentRuntimeServerJsonEvents ?? naradaAgentRuntimeServerCfg.json_events, true),
+      },
     },
   };
+}
+
+function runtimeList(value: unknown): WorkerRuntimeId[] {
+  const list = stringList(value).map((runtime) => {
+    if (!isWorkerRuntime(runtime)) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
+    return runtime;
+  });
+  return list.length > 0 ? [...new Set(list)] : ['codex', 'deepseek-api', 'narada-agent-runtime-server'];
+}
+
+function isWorkerRuntime(value: unknown): value is WorkerRuntimeId {
+  return value === 'codex' || value === 'deepseek-api' || value === 'narada-agent-runtime-server';
 }
 
 export function defaultConfigForCognition(cognition: WorkerCognition, policy: WorkerPolicy): WorkerCognitionDefaults {
@@ -199,6 +239,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     }])),
     runtimes: {
       codex: {
+        id: 'codex',
         command: policy.runtimes.codex.command,
         command_args: policy.runtimes.codex.commandArgs,
         default_sandbox: policy.runtimes.codex.defaultSandbox,
@@ -207,12 +248,33 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         json_events: policy.runtimes.codex.jsonEvents,
       },
       deepseek: {
+        id: 'deepseek-api',
         command: policy.runtimes.deepseek.command,
         command_args: policy.runtimes.deepseek.commandArgs,
         default_sandbox: policy.runtimes.deepseek.defaultSandbox,
         default_reasoning_effort: policy.runtimes.deepseek.defaultReasoningEffort,
         ephemeral: policy.runtimes.deepseek.ephemeral,
         json_events: policy.runtimes.deepseek.jsonEvents,
+      },
+      'deepseek-api': {
+        id: 'deepseek-api',
+        command: policy.runtimes.deepseek.command,
+        command_args: policy.runtimes.deepseek.commandArgs,
+        default_sandbox: policy.runtimes.deepseek.defaultSandbox,
+        default_reasoning_effort: policy.runtimes.deepseek.defaultReasoningEffort,
+        ephemeral: policy.runtimes.deepseek.ephemeral,
+        json_events: policy.runtimes.deepseek.jsonEvents,
+      },
+      'narada-agent-runtime-server': {
+        id: 'narada-agent-runtime-server',
+        command: policy.runtimes.naradaAgentRuntimeServer.command,
+        command_args: policy.runtimes.naradaAgentRuntimeServer.commandArgs,
+        default_sandbox: policy.runtimes.naradaAgentRuntimeServer.defaultSandbox,
+        default_reasoning_effort: policy.runtimes.naradaAgentRuntimeServer.defaultReasoningEffort,
+        ephemeral: policy.runtimes.naradaAgentRuntimeServer.ephemeral,
+        json_events: policy.runtimes.naradaAgentRuntimeServer.jsonEvents,
+        carrier_kind: 'agent-cli',
+        carrier_transport: 'jsonl-stdio',
       },
     },
   };
@@ -226,10 +288,10 @@ export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): s
   return cwd;
 }
 
-export function validateRuntime(value: unknown, policy: WorkerPolicy): 'codex' | 'deepseek-api' {
+export function validateRuntime(value: unknown, policy: WorkerPolicy): WorkerRuntimeId {
   const runtime = stringValue(value ?? policy.defaultRuntime);
-  if (runtime !== 'codex' && runtime !== 'deepseek-api') throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime });
-  if (!policy.allowedRuntimes.includes(runtime as 'codex' | 'deepseek-api')) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
+  if (!isWorkerRuntime(runtime)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime });
+  if (!policy.allowedRuntimes.includes(runtime)) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
   return runtime;
 }
 
@@ -241,8 +303,12 @@ export function validateSandbox(value: unknown): SandboxMode {
   return sandbox;
 }
 
-export function resolveSandbox(value: unknown, policy: WorkerPolicy, runtime?: 'codex' | 'deepseek-api'): SandboxMode {
-  const defaultSandbox = runtime === 'deepseek-api' ? policy.runtimes.deepseek.defaultSandbox : policy.runtimes.codex.defaultSandbox;
+export function resolveSandbox(value: unknown, policy: WorkerPolicy, runtime?: WorkerRuntimeId): SandboxMode {
+  const defaultSandbox = runtime === 'deepseek-api'
+    ? policy.runtimes.deepseek.defaultSandbox
+    : runtime === 'narada-agent-runtime-server'
+      ? policy.runtimes.naradaAgentRuntimeServer.defaultSandbox
+      : policy.runtimes.codex.defaultSandbox;
   const sandbox = validateSandbox(value ?? defaultSandbox);
   if (sandbox === 'danger-full-access' && (!policy.allowDangerFullAccess || !policy.allowedSandboxes.includes('danger-full-access'))) throw diagnosticError('worker_danger_full_access_not_allowed');
   if (!policy.allowedSandboxes.includes(sandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox, allowed_sandboxes: policy.allowedSandboxes });

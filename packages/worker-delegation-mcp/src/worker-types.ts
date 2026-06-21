@@ -75,7 +75,7 @@ export type WorkerEditToolInput = {
   overrides?: WorkerConstraintOverrides;
 };
 
-export type SupportedRuntime = 'codex' | 'deepseek-api';
+export type SupportedRuntime = 'codex' | 'deepseek-api' | 'narada-agent-runtime-server';
 
 export type WorkerResolvedExecutionPolicy = {
   runtime: SupportedRuntime;

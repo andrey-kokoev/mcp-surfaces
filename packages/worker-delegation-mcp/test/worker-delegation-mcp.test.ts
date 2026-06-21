@@ -18,6 +18,7 @@ const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec');
 const fakeCodexErrorScript = join(root, 'exec-error-with-output');
 const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure');
+const fakeAgentRuntimeServerScript = join(root, 'agent-runtime-server');
 const platformRootCase = process.platform === 'win32' ? root.toUpperCase() : root;
 writeFileSync(fakeCodexScript, `
 const fs = require('fs');
@@ -78,6 +79,37 @@ process.stdin.on('end', () => {
   process.exit(1);
 });
 `, 'utf8');
+writeFileSync(fakeAgentRuntimeServerScript, `
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  const lines = buffer.split(/\\r?\\n/);
+  buffer = lines.pop() || '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const frame = JSON.parse(line);
+    if (frame.method === 'conversation.send') {
+      const output = {
+        summary: 'agent runtime worker ok',
+        deliverables: [{ path: 'server-result.txt', description: 'server runtime saw ' + (frame.params.message.includes('Intent') ? 'intent' : 'prompt') }],
+        open_questions: [],
+        next_actions: ['done'],
+        edits_performed: false,
+        target_state_changed: false,
+        changes: [],
+        verification: [{ tool: 'fake-agent-runtime-server', command: null, status: 'passed', summary: 'fake server completed' }],
+        exit_interview: null
+      };
+      process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-worker' }) + '\\n');
+      process.stdout.write(JSON.stringify({ event: 'assistant_message', request_id: frame.id, turn_id: 'turn-worker', content: JSON.stringify(output) }) + '\\n');
+      process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-worker', terminal_state: 'completed' }) + '\\n');
+    }
+    if (frame.method === 'session.close') process.exit(0);
+  }
+});
+`, 'utf8');
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
 const rpcWithContext = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>, context: { abortSignal?: AbortSignal }) => Promise<RpcResponse>;
 const state = createServerState({
@@ -86,7 +118,7 @@ const state = createServerState({
   auditLogDir,
   codexCommand: process.execPath,
   maxOutputBytes: 2 * 1024 * 1024,
-}, { PATH: process.env.PATH, WORKER_SECRET: 'must-not-leak' });
+}, { PATH: process.env.PATH, KIMI_CODE_API_KEY: 'kimi-secret-must-not-leak', WORKER_SECRET: 'must-not-leak' });
 
 const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state);
 assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
@@ -142,7 +174,7 @@ assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1')
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
 assert.equal(policy.result?.structuredContent.default_authority, 'read');
 assert.equal(policy.result?.structuredContent.default_cognition, 'low');
-assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex', 'deepseek-api']);
+assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
 assert.deepEqual(policy.result?.structuredContent.allowed_authorities, ['read', 'write', 'command']);
 assert.deepEqual(policy.result?.structuredContent.allowed_cognition, ['low', 'medium', 'high']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
@@ -171,6 +203,8 @@ assert.equal(configPreview.result?.structuredContent.resolved_worker_config.mode
 assert.equal(configPreview.result?.structuredContent.config_resolution.model_source, 'runtime_default_opaque');
 assert.equal(configPreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'runtime_default_opaque');
 assert.equal(configPreview.result?.structuredContent.runtime_availability.available, true);
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
+assert.equal(JSON.stringify(configPreview.result?.structuredContent).includes('kimi-secret-must-not-leak'), false);
 assert.match(configPreview.result?.structuredContent.invocation.argv.join(' '), /<dry-run>\/worker_output\.schema\.json/);
 assert.match(configPreview.result?.structuredContent.warnings.join('\n'), /model_delegated_to_runtime_default/);
 assert.match(configPreview.result?.content[0].text, /worker_config_resolve: ok/);
@@ -269,6 +303,32 @@ Write-Output '{"thread_id":"ps1-thread"}'
   assert.equal(typeof ps1RunDir, 'string');
   const ps1Invocation = JSON.parse(readFileSync(join(ps1RunDir, 'worker_invocation.json'), 'utf8'));
   assert.equal(ps1Invocation.command.toLowerCase(), codexPs1.toLowerCase());
+
+  const agentRuntimeShimBin = join(root, 'agent-runtime-shim-bin');
+  mkdirSync(agentRuntimeShimBin, { recursive: true });
+  const agentRuntimeCmd = join(agentRuntimeShimBin, 'agent-runtime-server.cmd');
+  writeFileSync(agentRuntimeCmd, `
+@SETLOCAL
+@IF NOT DEFINED NODE_PATH (
+  @SET "NODE_PATH=${root}\\node_modules"
+)
+@IF EXIST "%~dp0\\node.exe" (
+  "%~dp0\\node.exe" "%~dp0\\..\\agent-runtime-server" %*
+) ELSE (
+  node "%~dp0\\..\\agent-runtime-server" %*
+)
+`, 'utf8');
+  const agentRuntimeShimState = createServerState({
+    allowedRoot: root,
+    runRoot: join(root, 'agent-runtime-shim-runs'),
+    agentRuntimeServerCommand: agentRuntimeCmd,
+  }, { PATH: process.env.PATH });
+  const agentRuntimeShimRun = await rpc({ jsonrpc: '2.0', id: 159, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime shim lookup', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeShimState);
+  assert.equal(agentRuntimeShimRun.result?.structuredContent.status, 'completed');
+  const agentRuntimeShimInvocation = JSON.parse(readFileSync(join(agentRuntimeShimRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
+  assert.equal(agentRuntimeShimInvocation.command, process.execPath);
+  assert.equal(agentRuntimeShimInvocation.argv[0], fakeAgentRuntimeServerScript);
+  assert.equal(agentRuntimeShimInvocation.argv[1], '--raw-jsonl');
 }
 
 const deniedRuntime = await rpc({
@@ -312,6 +372,7 @@ assert.throws(() => createServerState({ allowedRoot: root, ephemeral: 'treu' }),
 assert.throws(() => parseArgs(['--allowed-root']), hasCode('worker_invalid_cli_args'));
 assert.throws(() => parseArgs(['--codex-command-arg']), hasCode('worker_invalid_cli_args'));
 assert.deepEqual(parseArgs(['--codex-command-arg', 'codex.js', '--codex-command-arg', 'arg2']).codexCommandArgs, ['codex.js', 'arg2']);
+assert.deepEqual(parseArgs(['--agent-runtime-server-command-arg', 'server.js', '--agent-runtime-server-command-arg', '--raw-jsonl']).agentRuntimeServerCommandArgs, ['server.js', '--raw-jsonl']);
 assert.equal(parseArgs(['--cognition-low-reasoning-effort', 'minimal']).cognitionLowReasoningEffort, 'minimal');
 assert.equal(parseArgs(['--cognition-high-model', 'gpt-test-high']).cognitionHighModel, 'gpt-test-high');
 
@@ -342,6 +403,28 @@ assert.equal(allowedConfigRun.result?.structuredContent.target_state_changed, fa
 assert.equal(allowedConfigRun.result?.structuredContent.confidence, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
+
+const agentRuntimeState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'agent-runtime-runs'),
+  agentRuntimeServerCommand: process.execPath,
+  agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+});
+const agentRuntimeResolve = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: runArgs('server runtime resolve', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
+assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.argv, ['--raw-jsonl']);
+assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
+const agentRuntimeRun = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime worker', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeRun.result?.structuredContent.status, 'completed');
+assert.equal(agentRuntimeRun.result?.structuredContent.runtime, 'narada-agent-runtime-server');
+assert.equal(agentRuntimeRun.result?.structuredContent.worker_session_id, 'carrier-worker-runtime');
+assert.equal(agentRuntimeRun.result?.structuredContent.summary, 'agent runtime worker ok');
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.command, process.execPath);
+assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.command_args, [fakeAgentRuntimeServerScript]);
+assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.argv, ['--raw-jsonl']);
+assert.equal(agentRuntimeRun.result?.structuredContent.verification_results[0].tool, 'fake-agent-runtime-server');
+assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
+
 if (process.platform === 'win32') {
   const caseInsensitiveRun = await rpc({
     jsonrpc: '2.0',

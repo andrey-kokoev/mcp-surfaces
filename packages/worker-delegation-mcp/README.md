@@ -4,7 +4,7 @@ Policy-gated MCP surface for delegating bounded work to a worker runtime.
 
 The surface starts or resumes one worker run at a time, records the worker request and artifacts under a run directory, and returns deterministic text plus authoritative `structuredContent`. Large results are materialized as `worker_output:*` refs and can be read with `worker_output_show`.
 
-Supported runtimes: `codex` (Codex CLI) and `deepseek-api` (self-contained agent loop using DeepSeek `/chat/completions`). The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
+Supported runtimes: `codex` (Codex CLI), `deepseek-api` (self-contained agent loop using DeepSeek `/chat/completions`), and `narada-agent-runtime-server` (Narada Agent Runtime Server over JSONL stdio). The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
 
 ## Quick Start
 
@@ -50,18 +50,18 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 
 Defaults:
 
-- runtime: `codex` (default), `deepseek-api` available
+- runtime: `codex` (default), `deepseek-api` and `narada-agent-runtime-server` available
 - default authority: `read`
 - default cognition: `low`
-- allowed runtimes: `codex`, `deepseek-api`
+- allowed runtimes: `codex`, `deepseek-api`, `narada-agent-runtime-server`
 - allowed authorities: `read`, `write`, `command`
 - allowed cognition: `low`, `medium`, `high`
 - allowed sandboxes: `read-only`, `workspace-write`
-- default sandbox: `read-only` (codex), `read-only` (deepseek)
+- default sandbox: `read-only` (codex), `read-only` (deepseek), `workspace-write` (narada-agent-runtime-server)
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
-- cognition defaults: all levels use `deepseek-v4-flash` with high reasoning effort (DeepSeek maps low/medium to high)
+- cognition defaults: model and reasoning effort are runtime-default opaque unless configured by policy or request overrides
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
 - worker runs are asynchronous by default; set `constraints.wait_for_completion: true` or `wait_for_completion: true` on `worker_edit` when the caller intentionally wants to block for completion
 - max parallel runs: `10`
@@ -69,7 +69,7 @@ Defaults:
 - max output bytes: `2097152`
 - max run time: `1800000` ms
 
-Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, and `OPENAI_API_KEY` when present. Run records store environment key names, not secret values.
+Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_BASE_URL`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY`, and `NARADA_WORKER_MCP_CONFIG` when present. The `narada-agent-runtime-server` adapter also projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from `cwd` when absent. Run records store environment key names, not secret values.
 
 ## Run
 
@@ -89,6 +89,8 @@ Common flags:
 - `--deepseek-command <command>`: Node.js executable for the DeepSeek worker, default `node`.
 - `--deepseek-command-arg <arg>`: prepend a fixed argument to the DeepSeek worker invocation; repeatable.
 - `--deepseek-model <model>`: override default model for DeepSeek runtime.
+- `--agent-runtime-server-command <command>`: Narada Agent Runtime Server executable, default `agent-runtime-server`.
+- `--agent-runtime-server-command-arg <arg>`: prepend a fixed argument to the Agent Runtime Server invocation; repeatable.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable. Omit model overrides unless the runtime account is known to accept the selected model.
 - `--cognition-low-model <model>` and `--cognition-low-reasoning-effort <value>`: defaults for low cognition.
@@ -111,9 +113,9 @@ Normalized constraints:
 - `authority: "read"`: inspection within the admitted root envelope; default sandbox `read-only`.
 - `authority: "write"`: edit-capable work within the admitted root envelope; default sandbox `workspace-write`.
 - `authority: "command"`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
-- `cognition: "low"`: default model `deepseek-v4-flash`, default reasoning `high`.
-- `cognition: "medium"`: default model `deepseek-v4-flash`, default reasoning `high`.
-- `cognition: "high"`: default model `deepseek-v4-flash`, default reasoning `high`.
+- `cognition: "low"`: policy-selected low cognition tier; model and reasoning effort are runtime-default opaque unless configured.
+- `cognition: "medium"`: policy-selected medium cognition tier; model and reasoning effort are runtime-default opaque unless configured.
+- `cognition: "high"`: policy-selected high cognition tier; model and reasoning effort are runtime-default opaque unless configured.
 
 Delegation mode is explicit intent, not mechanical authority. `intent.mode` may be `audit_only`, `plan_only`, `implement`, or `implement_and_verify`. Read authority defaults to `audit_only`; write and command authority default to `implement`. The mode is recorded as `requested_mode`, included in the worker prompt, and summarized in run/list output so an audit cannot be mistaken for a migration or implementation. Mechanical enforcement still comes from `constraints.authority`, sandbox, allowed roots, and policy.
 
@@ -131,7 +133,7 @@ Delegation mode is explicit intent, not mechanical authority. `intent.mode` may 
 - `constraints.cognition` (string, default `"low"`): `"low"`, `"medium"`, or `"high"`.
 - `constraints.resumable` (boolean, default `false`): enable continuation via `worker_resume`.
 - `constraints.wait_for_completion` (boolean, default `false`): block until worker finishes.
-- `constraints.overrides` (object, optional): set `runtime` (`"codex"` or `"deepseek-api"`), `sandbox`, `model`, or `reasoning_effort`.
+- `constraints.overrides` (object, optional): set `runtime` (`"codex"`, `"deepseek-api"`, or `"narada-agent-runtime-server"`), `sandbox`, `model`, or `reasoning_effort`.
 - `constraints.preflight_paths` (array, optional): path existence/access checks before delegation.
 - `constraints.required_mcp_tools` (array, optional): MCP tool names the worker must have.
 
@@ -163,6 +165,12 @@ Worker prompts include MCP-first tool guidance: use available filesystem, git, a
 A failed runtime call raises `worker_runtime_failed` or `worker_runtime_timed_out` and includes `run_id` and `run_dir` in error details when available. Inspect the run directory for diagnostics.
 
 If a response is materialized, call `worker_output_show` with the returned `output_ref`. `worker_output_show` also accepts a `path` copied from a run artifact entry when that path is inside the worker run root, so callers can read `executor_request.json`, `worker_prompt.txt`, `last_message.json`, or diagnostics without switching tools. It returns exact stored output text and supports `offset` and `limit`.
+
+## Narada Agent Runtime Server
+
+Override the runtime with `overrides.runtime: 'narada-agent-runtime-server'` on `worker_run` or `worker_edit`. This starts a Narada Agent Runtime Server in raw JSONL stdio mode, sends one `conversation.send` frame, records the server event stream in `events.jsonl`, and materializes the final `assistant_message` into the normal worker `last_message.json` contract.
+
+This runtime is a carrier-server posture, not a direct model substrate. It projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from the worker `cwd` when those variables are absent, so the child runtime has an explicit Site/workspace anchor. On Windows, npm/pnpm `.cmd` shims are unwrapped to `node <agent-runtime-server entrypoint>` before launch so the JSONL pipe is attached to the real server process; the resolved config records the configured command, while `worker_invocation.json` records the actual spawned command. Use this runtime for delegated work that benefits from Narada carrier semantics, Site MCP fabric, durable session evidence, or later resume/handoff behavior. Keep `codex` or `deepseek-api` for cheap direct one-shot substrate work.
 
 ## DeepSeek Runtime
 
