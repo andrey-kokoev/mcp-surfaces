@@ -108,6 +108,8 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = cwd;
+    environment.NARADA_AGENT_ID ??= 'narada.architect';
+    environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
     const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
     resolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
@@ -600,9 +602,12 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
     const siteRoot = resolvedSiteBinding.siteRoot;
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
+    const workerSessionId = resumeSessionId ?? runRecord.runId;
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = cwd;
-    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? runRecord.runId });
+    environment.NARADA_AGENT_ID ??= 'narada.architect';
+    environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
+    const argv = buildAgentRuntimeServerArgv({ workerSessionId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,

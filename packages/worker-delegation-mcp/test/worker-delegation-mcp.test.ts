@@ -432,6 +432,8 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_confi
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.matched_marker, '.narada/');
 assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.required_markers, ['.narada/', '.ai/mcp/']);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.workspace_root, root);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_SITE_ROOT'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_bound: true/);
@@ -451,6 +453,8 @@ assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_confi
 assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.argv, ['--raw-jsonl', '--session', agentRuntimeRun.result?.structuredContent.run_id]);
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.site_root, root);
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.site_binding.source, 'nearest_parent_marker');
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
 assert.equal(agentRuntimeRun.result?.structuredContent.verification_results[0].tool, 'fake-agent-runtime-server');
 assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
 const nonSiteRoot = join(root, 'not-a-site-outside-site-root');
