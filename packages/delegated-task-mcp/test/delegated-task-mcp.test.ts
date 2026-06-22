@@ -274,8 +274,32 @@ try {
   const legacyWorkOrderView = legacyWorkOrder.result.structuredContent as Record<string, any>;
   assert.equal(legacyWorkOrderView.status, 'ok');
   assert.deepEqual(legacyWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement', 'review']);
+  assert.equal(legacyWorkOrderView.workflow_preview.work_order.source, 'legacy_step_list');
   assert.deepEqual(legacyWorkOrderView.workflow_preview.imports.workflow, ['task_a70abebd40847000', 'task_aedc86df78be77f4']);
   assert.deepEqual(legacyWorkOrderView.workflow_preview.imports.by_step.implement, ['sfb_074b9629-4a8']);
+
+  const additiveWorkOrder = await callTool(state, 'delegated_task_validate', {
+    objective: 'Explicit DAG governed by work order',
+    constraints: { authority: 'read', cwd: root },
+    workflow: {
+      steps: [{ id: 'implement', kind: 'worker', instruction: 'Implement without commit or push' }],
+      work_order: {
+        scope: ['packages/delegated-task-mcp'],
+        budget: { max_verification_attempts: 1, timeout_ms: 600000 },
+        verification: {
+          focused_tests: [{ command: 'pnpm --filter @narada2/delegated-task-mcp test', status: 'passed' }],
+          verification_budget: { max_attempts: 1, max_commands: 1 },
+        },
+        acceptance: { residual_risk_policy: 'allow' },
+      },
+    },
+  });
+  const additiveWorkOrderView = additiveWorkOrder.result.structuredContent as Record<string, any>;
+  assert.equal(additiveWorkOrderView.status, 'ok');
+  assert.equal(additiveWorkOrderView.diagnostics.some((item: Record<string, unknown>) => item.code === 'workflow_steps_and_work_order_conflict'), false);
+  assert.equal(additiveWorkOrderView.workflow_preview.work_order.source, 'governing_contract');
+  assert.deepEqual(additiveWorkOrderView.workflow_preview.work_order.scope, ['packages/delegated-task-mcp']);
+  assert.deepEqual(additiveWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement']);
 
   const publishGate = await callTool(state, 'delegated_task_validate', {
     objective: 'Implement and git push the branch',
@@ -285,6 +309,15 @@ try {
   const publishGateView = publishGate.result.structuredContent as Record<string, any>;
   assert.equal(publishGateView.status, 'rejected');
   assert.equal(publishGateView.diagnostics.some((item: Record<string, unknown>) => item.code === 'git_publish_requires_command_authority'), true);
+
+  const negatedPublishGate = await callTool(state, 'delegated_task_validate', {
+    objective: 'Implement the change. Do not commit or push.',
+    constraints: { authority: 'write', cwd: root },
+    workflow: { steps: [{ id: 'implement', kind: 'worker', instruction: 'No git commit/push; preserve caller publication control.' }] },
+  });
+  const negatedPublishGateView = negatedPublishGate.result.structuredContent as Record<string, any>;
+  assert.equal(negatedPublishGateView.status, 'ok');
+  assert.equal(negatedPublishGateView.diagnostics.some((item: Record<string, unknown>) => String(item.code).startsWith('git_publish_requires_')), false);
 
   const commitReadGate = await callTool(state, 'delegated_task_validate', {
     objective: 'Implement and git commit the changes',
@@ -331,6 +364,8 @@ try {
     acceptance: {
       required_files: ['src/main.ts', { path: 'src/policy.ts', contains: 'review' }],
       required_tests: [{ command: 'pnpm test:delegated-task', status: 'passed' }],
+      focused_tests: [{ command: 'pnpm test:delegated-task', status: 'passed' }],
+      verification_budget: { max_attempts: 10, max_commands: 10 },
       required_tools: [{ name: 'structured-command' }],
       forbidden_patterns: [{ pattern: 'forbidden-never' }],
       review_quorum: { min_passed: 1, max_failed: 0 },
@@ -385,6 +420,8 @@ try {
   assert.deepEqual(resultView.result.nested_workflow_changed_files, []);
   assert.equal(resultView.result.verification.length, 1);
   assert.equal(resultView.result.verification_count, 1);
+  assert.equal(resultView.result.acceptance_evidence.some((check: Record<string, any>) => check.kind === 'focused_test' && check.status === 'passed'), true);
+  assert.equal(resultView.result.acceptance_evidence.some((check: Record<string, any>) => check.kind === 'verification_budget' && check.status === 'passed'), true);
   assert.equal(resultView.result.terminal_summary.acceptance_verdict, 'passed');
   assert.equal(resultView.result.terminal_summary.steps_terminal, true);
   assert.equal(resultView.result.terminal_summary.acceptance_terminal, true);
@@ -679,6 +716,7 @@ try {
   const listed = await callTool(state, 'delegated_tasks_list', { limit: 20 });
   const listedView = listed.result.structuredContent as Record<string, any>;
   assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === runResult.task_id), true);
+  assert.equal(listedView.tasks.every((task: Record<string, any>) => task.operator_posture?.schema === 'narada.delegated_task.operator_posture.v1'), true);
 
   const beforeConcurrencyCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
   const limitedRun = await callTool(state, 'delegated_task_run', {
@@ -725,6 +763,9 @@ try {
   const cancelledResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, include_diagnostics: true });
   const cancelledResultView = cancelledResult.result.structuredContent as Record<string, any>;
   assert.equal(cancelledResultView.result.acceptance_verdict, 'cancelled');
+  assert.deepEqual(cancelledResultView.result.progress.running_run_ids, []);
+  assert.equal(cancelledResultView.result.progress.running, 0);
+  assert.deepEqual(cancelledResultView.result.active_step_posture ?? [], []);
   assert.equal(cancelledResultView.result.worker_refs.every((ref: Record<string, any>) => ref.cancellation.requested === true), true);
 
   const asyncRun = await callTool(state, 'delegated_task_run', {
