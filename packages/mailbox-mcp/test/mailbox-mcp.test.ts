@@ -22,7 +22,9 @@ const root = mkdtempSync(join(tmpdir(), 'mailbox-mcp-'));
 
 try {
   const mailboxDir = join(root, '.ai', 'mailboxes', 'support@example.test');
+  const viewsDir = join(mailboxDir, 'views', 'by-thread', 'thread-1');
   mkdirSync(mailboxDir, { recursive: true });
+  mkdirSync(viewsDir, { recursive: true });
   writeFileSync(join(mailboxDir, 'messages.jsonl'), [
     JSON.stringify({
       id: 'msg-1',
@@ -50,7 +52,29 @@ try {
       isRead: true,
       text: 'We are checking the deployment state.',
     }),
+    JSON.stringify({
+      id: 'msg-2',
+      conversationId: 'thread-1',
+      mailbox_id: 'support@example.test',
+      folder: 'Sent Items',
+      subject: 'Re: Ticket needs follow-up',
+      from: { address: 'support@example.test' },
+      to: [{ address: 'customer@example.test' }],
+      sentDateTime: '2026-06-04T17:00:00.000Z',
+      isRead: true,
+      text: 'We are checking the deployment state.',
+    }),
   ].join('\n'));
+  writeFileSync(join(mailboxDir, 'settings.json'), JSON.stringify({ id: 'mailbox-settings', enabled: true }));
+  writeFileSync(join(viewsDir, 'msg-2.json'), JSON.stringify({
+    id: 'msg-2',
+    conversationId: 'thread-1',
+    mailbox_id: 'support@example.test',
+    folder: 'Sent Items',
+    subject: 'Derived duplicate should not win',
+    sentDateTime: '2026-06-04T17:00:00.000Z',
+    text: 'Derived view body should not win.',
+  }));
   writeFileSync(join(mailboxDir, 'bad.json'), '{not json');
 
   const state = createServerState({ siteRoot: root });
@@ -62,6 +86,7 @@ try {
   }, state);
   assert.equal(doctor.error, undefined);
   assert.equal(doctor.result.structuredContent.message_count, 2);
+  assert.equal(doctor.result.structuredContent.skipped_non_message_records, 1);
   assert.equal(doctor.result.structuredContent.invalid_count, 1);
 
   const accounts = rpc({
@@ -94,6 +119,15 @@ try {
   assert.equal(show.error, undefined);
   assert.equal(show.result.structuredContent.message.body_text, 'Can you send an update on the open ticket?');
   assert.equal(show.result.structuredContent.message.attachments[0].name, 'screenshot.png');
+
+  const showDuplicate = rpc({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: { name: 'mailbox_message_show', arguments: { message_id: 'msg-2' } },
+  }, state);
+  assert.equal(showDuplicate.error, undefined);
+  assert.equal(showDuplicate.result.structuredContent.message.subject, 'Re: Ticket needs follow-up');
 
   const thread = rpc({
     jsonrpc: '2.0',

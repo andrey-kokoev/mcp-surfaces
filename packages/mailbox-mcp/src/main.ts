@@ -185,6 +185,7 @@ function mailboxDoctor(state: MailboxServerState): MailboxRecord {
     site_root: scan.site_root,
     roots: scan.roots,
     scanned_files: scan.scanned_files,
+    skipped_non_message_records: scan.skipped_non_message_records,
     message_count: scan.messages.length,
     invalid_count: scan.invalid_count,
     invalid_records: scan.invalid_records,

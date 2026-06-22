@@ -40,6 +40,7 @@ export type MailboxScan = {
   site_root: string;
   roots: string[];
   scanned_files: number;
+  skipped_non_message_records: number;
   invalid_count: number;
   invalid_records: unknown[];
   messages: MailboxMessage[];
@@ -135,6 +136,52 @@ function mailboxIdFromPath(siteRoot: string, sourcePath: string): string {
   return basename(dirname(sourcePath)) || 'default';
 }
 
+function hasMessageIdentity(raw: MailboxRecord): boolean {
+  return stringValue(raw.message_id, raw.messageId, raw.internetMessageId, raw.internet_message_id, raw.id, raw.entryId) != null;
+}
+
+function hasMailboxMessageShape(record: unknown): boolean {
+  const raw = asRecord(record);
+  if (!hasMessageIdentity(raw)) return false;
+  const body = asRecord(raw.body);
+  return [
+    raw.subject,
+    raw.title,
+    raw.body_text,
+    raw.bodyText,
+    raw.text,
+    raw.body_html,
+    raw.bodyHtml,
+    raw.html,
+    body.content,
+    raw.preview,
+    raw.body_preview,
+    raw.bodyPreview,
+    raw.snippet,
+    raw.from,
+    raw.sender,
+    raw.to,
+    raw.toRecipients,
+    raw.received_at,
+    raw.receivedAt,
+    raw.receivedDateTime,
+    raw.sent_at,
+    raw.sentAt,
+    raw.sentDateTime,
+    raw.conversation_id,
+    raw.conversationId,
+    raw.thread_id,
+    raw.threadId,
+  ].some((value) => value != null);
+}
+
+function sourcePreference(siteRoot: string, sourcePath: string): number {
+  const parts = relative(siteRoot, sourcePath).split(/[\\/]/).map((part) => part.toLowerCase());
+  if (parts.includes('messages')) return 0;
+  if (parts.includes('views')) return 10;
+  return 5;
+}
+
 export function normalizeMailboxMessage(record: unknown, context: { siteRoot: string; sourcePath: string }): MailboxMessage | null {
   const raw = asRecord(record);
   const body = asRecord(raw.body);
@@ -171,28 +218,39 @@ export function normalizeMailboxMessage(record: unknown, context: { siteRoot: st
 export function readMailboxProjection(siteRootInput: string): MailboxScan {
   const siteRoot = resolve(siteRootInput);
   const invalidRecords: unknown[] = [];
+  let skippedNonMessageRecords = 0;
   const roots = configuredRoots(siteRoot).filter((root) => isInsideSite(siteRoot, root));
   const files: string[] = [];
   for (const root of roots) collectFiles(root, files, invalidRecords);
-  const messages: MailboxMessage[] = [];
+  const messagesById = new Map<string, MailboxMessage>();
   for (const filePath of files) {
     try {
       for (const record of recordsFromFile(filePath)) {
+        if (!hasMailboxMessageShape(record)) {
+          skippedNonMessageRecords += 1;
+          continue;
+        }
         const message = normalizeMailboxMessage(record, { siteRoot, sourcePath: filePath });
-        if (message) messages.push(message);
-        else invalidRecords.push({ file_path: filePath, reason: 'missing_message_id' });
+        if (!message) {
+          invalidRecords.push({ file_path: filePath, reason: 'missing_message_id' });
+          continue;
+        }
+        const messageKey = `${message.mailbox_id}\u0000${message.message_id}`;
+        const existing = messagesById.get(messageKey);
+        if (!existing || sourcePreference(siteRoot, filePath) < sourcePreference(siteRoot, existing.source_path)) messagesById.set(messageKey, message);
       }
     } catch (error) {
       invalidRecords.push({ file_path: filePath, reason: error instanceof Error ? error.message : String(error) });
     }
   }
-  messages.sort((left, right) => String(right.received_at ?? right.sent_at ?? '').localeCompare(String(left.received_at ?? left.sent_at ?? '')));
+  const messages = [...messagesById.values()].sort((left, right) => String(right.received_at ?? right.sent_at ?? '').localeCompare(String(left.received_at ?? left.sent_at ?? '')));
   return {
     schema: 'narada.mailbox_projection.v1',
     status: 'ok',
     site_root: siteRoot,
     roots,
     scanned_files: files.length,
+    skipped_non_message_records: skippedNonMessageRecords,
     invalid_count: invalidRecords.length,
     invalid_records: invalidRecords.slice(0, 100),
     messages,
