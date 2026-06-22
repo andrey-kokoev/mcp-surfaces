@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/runtime-introspection-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Narada-owned runtime trace and session composition analysis MCP surface.",
+  "bin": {
+    "runtime-introspection-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/runtime-introspection-mcp.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

@@ -14,6 +14,8 @@
     { "path": "./packages/task-lifecycle-mcp" },
     { "path": "./packages/sonar-site-ops-mcp" },
     { "path": "./packages/agent-context-mcp" },
+    { "path": "./packages/launcher-mcp" },
+    { "path": "./packages/runtime-introspection-mcp" },
     { "path": "./packages/site-lifecycle-mcp" }
   ]
 }

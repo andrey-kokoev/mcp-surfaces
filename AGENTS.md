@@ -26,6 +26,7 @@ Current packages:
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
 - `@narada2/launcher-mcp`: read-only launcher registry, option matrix, plan, and coherence MCP surface.
+- `@narada2/runtime-introspection-mcp`: Narada-owned runtime trace and session composition analysis MCP surface.
 - `@narada2/speech-mcp`: Windows SAPI text-to-speech MCP surface.
 - `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
 - `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
