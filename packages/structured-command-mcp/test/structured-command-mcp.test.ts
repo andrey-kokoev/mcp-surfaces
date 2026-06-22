@@ -404,6 +404,42 @@ assert.match(largeCall.result.structuredContent.execution_ref, /^structured_comm
 assert.equal(largeCall.result.structuredContent.stdout_next_offset, 1000);
 assert.equal(largeCall.result.structuredContent.stdout_output_truncated, true);
 
+const failedLargeStdoutCall = await rpc({
+  jsonrpc: '2.0',
+  id: 61,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: {
+      command: 'node',
+      args: ['-e', "process.stdout.write('x'.repeat(6500)); process.stderr.write('not ok 1 - failure before payload\\n'); process.exit(1);"],
+      working_directory: root,
+    },
+  },
+}, state);
+assert.equal(failedLargeStdoutCall.result.structuredContent.status, 'failed');
+assert.match(failedLargeStdoutCall.result.content[0].text, /structured_command_execute: failed/);
+assert.match(failedLargeStdoutCall.result.content[0].text, /stderr:\nnot ok 1 - failure before payload/);
+assert.ok(failedLargeStdoutCall.result.content[0].text.indexOf('stderr:') < failedLargeStdoutCall.result.content[0].text.indexOf('stdout:'));
+assert.ok(failedLargeStdoutCall.result.content[0].text.length <= 4000);
+assert.equal(failedLargeStdoutCall.result.structuredContent.stdout_char_length, 6500);
+assert.equal(failedLargeStdoutCall.result.structuredContent.stdout, 'x'.repeat(1000));
+assert.equal(failedLargeStdoutCall.result.structuredContent.stderr, 'not ok 1 - failure before payload\n');
+assert.match(failedLargeStdoutCall.result.structuredContent.execution_ref, /^structured_command_execution:/);
+assert.equal(failedLargeStdoutCall.result.structuredContent.stdout_next_offset, 1000);
+
+const failedStdoutPage = await rpc({
+  jsonrpc: '2.0',
+  id: 62,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: { execution_ref: failedLargeStdoutCall.result.structuredContent.execution_ref, stdout_offset: 6000, stdout_limit: 1000 },
+  },
+}, state);
+assert.equal(failedStdoutPage.result.structuredContent.stdout, 'x'.repeat(500));
+assert.equal(failedStdoutPage.result.structuredContent.stdout_next_offset, null);
+
 const stdoutPage1 = await rpc({
   jsonrpc: '2.0',
   id: 7,

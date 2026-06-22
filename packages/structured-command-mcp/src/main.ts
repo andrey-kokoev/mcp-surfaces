@@ -724,20 +724,10 @@ function renderToolResultText(payload) {
       `structured_command_execute: ${payload.status}`,
       `exit_code: ${payload.exit_code}`,
     ];
-    if (payload.stdout || payload.stdout_truncated) {
-      const stdout = String(payload.stdout ?? '');
-      const stdoutPreview = stdout.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
-      lines.push('stdout:', stdoutPreview);
-      if (stdout.length > stdoutPreview.length || payload.stdout_output_truncated) lines.push('[stdout preview truncated]');
-      if (payload.stdout_truncated) lines.push('[stdout truncated]');
-    }
-    if (payload.stderr || payload.stderr_truncated) {
-      const stderr = String(payload.stderr ?? '');
-      const stderrPreview = stderr.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
-      lines.push('stderr:', stderrPreview);
-      if (stderr.length > stderrPreview.length || payload.stderr_output_truncated) lines.push('[stderr preview truncated]');
-      if (payload.stderr_truncated) lines.push('[stderr truncated]');
-    }
+    const stdoutLines = renderStreamPreviewLines('stdout', payload.stdout, payload.stdout_truncated, payload.stdout_output_truncated);
+    const stderrLines = renderStreamPreviewLines('stderr', payload.stderr, payload.stderr_truncated, payload.stderr_output_truncated);
+    if (payload.status === 'ok') lines.push(...stdoutLines, ...stderrLines);
+    else lines.push(...stderrLines, ...stdoutLines);
     return lines.join('\n');
   }
   if (payload?.schema === 'narada.structured_command.elevated_window_result.v0') {
@@ -752,6 +742,16 @@ function renderToolResultText(payload) {
     ].filter(Boolean).join('\n');
   }
   return JSON.stringify(payload, null, 2);
+}
+
+function renderStreamPreviewLines(label, value, streamTruncated, pageTruncated) {
+  if (!value && !streamTruncated) return [];
+  const text = String(value ?? '');
+  const preview = text.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
+  const lines = [`${label}:`, preview];
+  if (text.length > preview.length || pageTruncated) lines.push(`[${label} preview truncated]`);
+  if (streamTruncated) lines.push(`[${label} truncated]`);
+  return lines;
 }
 
 function psSingleQuote(value) {
