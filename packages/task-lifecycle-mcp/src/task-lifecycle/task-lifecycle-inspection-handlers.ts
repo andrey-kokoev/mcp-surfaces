@@ -1,8 +1,10 @@
 import { join } from 'path';
+import { findReviewerCapableAgents } from './operator-identity.js';
 
 export const TASK_LIFECYCLE_INSPECTION_TOOL_NAMES = Object.freeze([
   'task_lifecycle_show',
   'task_lifecycle_inspect',
+  'task_lifecycle_diagnose_task_ref',
   'task_lifecycle_evidence_preflight',
   'task_lifecycle_audit',
   'task_lifecycle_search',
@@ -46,6 +48,7 @@ export function createTaskLifecycleInspectionHandlers({
         reviewed_at: review.reviewed_at,
         single_operator_meta: getSingleOperatorReviewMeta(review),
       }));
+      const eligibleReviewers = lifecycle.status === 'in_review' ? findReviewerCapableAgents(store) : [];
       let body = null;
       try {
         const taskFile = await findTaskFile(siteRoot, String(taskNumber));
@@ -69,6 +72,7 @@ export function createTaskLifecycleInspectionHandlers({
         observations: observations ?? [],
         reviews: reviews ?? [],
         body,
+        eligible_reviewers: eligibleReviewers,
       });
     },
 
@@ -92,6 +96,7 @@ export function createTaskLifecycleInspectionHandlers({
         reviewed_at: review.reviewed_at,
         single_operator_meta: getSingleOperatorReviewMeta(review),
       }));
+      const eligibleReviewers = lifecycle.status === 'in_review' ? findReviewerCapableAgents(store) : [];
       return jsonToolResult({
         status: 'ok',
         task_number: taskNumber,
@@ -121,7 +126,51 @@ export function createTaskLifecycleInspectionHandlers({
         reports: reports || [],
         reviews: reviews || [],
         obligations: obligations.map((obligation) => ({ obligation_id: obligation.obligation_id, kind: obligation.kind, status: obligation.status })),
+        eligible_reviewers: eligibleReviewers,
         schema: 'narada.task.mcp.inspect.v0',
+      });
+    },
+
+    task_lifecycle_diagnose_task_ref: async (args) => {
+      const taskId = stringField(args, 'task_id');
+      const taskNumber = numberField(args, 'task_number');
+      if (!taskId && !taskNumber) throw new Error('task_id_or_task_number_required');
+      const lifecycleById = taskId
+        ? store.db.prepare('SELECT * FROM task_lifecycle WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1').get(taskId)
+        : null;
+      const lifecycleByNumber = taskNumber ? store.getLifecycleByNumber(taskNumber) : null;
+      const effectiveNumber = taskNumber ?? lifecycleById?.task_number;
+      const numberOwner = effectiveNumber ? store.getLifecycleByNumber(effectiveNumber) : null;
+      const taskFile = effectiveNumber ? await findTaskFile(siteRoot, String(effectiveNumber)).catch(() => null) : null;
+      const requestedTaskFileMatches = taskFile && taskId ? taskFile.path.includes(taskId) || readTaskFile(taskFile.path).then((file) => file.taskId === taskId).catch(() => false) : null;
+      const projectionMatchesRequestedTask = typeof requestedTaskFileMatches?.then === 'function' ? await requestedTaskFileMatches : requestedTaskFileMatches;
+      const collision = Boolean(taskId && numberOwner && numberOwner.task_id !== taskId);
+      const missingProjection = Boolean(lifecycleById && effectiveNumber && !taskFile);
+      const state = !lifecycleById && !lifecycleByNumber
+        ? 'not_found'
+        : collision
+        ? 'task_number_collision'
+        : missingProjection
+        ? 'missing_projection'
+        : projectionMatchesRequestedTask === false
+        ? 'projection_mismatch'
+        : 'ok';
+      return jsonToolResult({
+        status: state === 'ok' ? 'ok' : 'attention_needed',
+        schema: 'narada.task.ref_diagnostics.v0',
+        query: { task_id: taskId ?? null, task_number: taskNumber ?? null },
+        state,
+        lifecycle_by_task_id: lifecycleById ?? null,
+        lifecycle_by_task_number: lifecycleByNumber ?? null,
+        number_owner: numberOwner ?? null,
+        projection: taskFile ? { exists: true, path: taskFile.path, matches_requested_task: projectionMatchesRequestedTask } : { exists: false, path: effectiveNumber ? join(siteRoot, '.ai', 'do-not-open', 'tasks', `task-${effectiveNumber}.md`) : null },
+        collision: collision ? {
+          requested_task_id: taskId,
+          requested_task_number: effectiveNumber,
+          number_owner_task_id: numberOwner.task_id,
+          number_owner_status: numberOwner.status,
+        } : null,
+        repair_guidance: buildTaskRefRepairGuidance({ state, taskId, taskNumber: effectiveNumber, lifecycleById, numberOwner }),
       });
     },
 
@@ -196,4 +245,42 @@ export function createTaskLifecycleInspectionHandlers({
       return jsonToolResult(result);
     },
   };
+}
+
+function buildTaskRefRepairGuidance({ state, taskId, taskNumber, lifecycleById, numberOwner }) {
+  if (state === 'task_number_collision') {
+    return {
+      safe_next_tool: 'task_lifecycle_diagnose_task_ref',
+      summary: 'Do not report or close out by task_number; it resolves to a different lifecycle task.',
+      options: [
+        'Retire or mark the upstream directive orphaned in the directive-owning surface using task_id scope.',
+        'If the task_id is legitimate, materialize or repair a lifecycle/projection record before dispatch.',
+      ],
+      evidence: { requested_task_id: taskId, requested_task_number: taskNumber, number_owner_task_id: numberOwner?.task_id },
+    };
+  }
+  if (state === 'missing_projection') {
+    return {
+      safe_next_tool: 'task_lifecycle_evidence_preflight',
+      summary: 'Lifecycle row exists but markdown projection is missing; repair projection before report/closeout.',
+      options: ['Regenerate the task projection from lifecycle/spec data if available.', 'Tombstone or reopen through governed lifecycle tools only when operator authority exists.'],
+      evidence: { requested_task_id: taskId, requested_task_number: taskNumber, lifecycle_status: lifecycleById?.status },
+    };
+  }
+  if (state === 'projection_mismatch') {
+    return {
+      safe_next_tool: 'task_lifecycle_show',
+      summary: 'The projection resolved by task_number does not appear to describe the requested task_id.',
+      options: ['Treat the directive as unsafe to dispatch until directive routing is corrected by task_id.'],
+      evidence: { requested_task_id: taskId, requested_task_number: taskNumber },
+    };
+  }
+  if (state === 'not_found') {
+    return {
+      safe_next_tool: 'task_lifecycle_search',
+      summary: 'No lifecycle row was found for the requested task reference.',
+      options: ['Search by title/source ref before creating a new task.', 'Retire the directive in its owning queue if it references a nonexistent task_id.'],
+    };
+  }
+  return { summary: 'Task reference is coherent enough for normal lifecycle tools.', safe_next_tool: 'task_lifecycle_show' };
 }

@@ -149,10 +149,14 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     openTaskLifecycleStore,
     detectSameOperatorReview,
     detectSelfReview,
+    isReviewerCapable,
+    findReviewerCapableAgents,
     validateTaskFinishRecoveryTruthfulness,
     finishGateExamples,
     buildStateAwareFinishBlockerRemediation,
+    buildTaskFileResolutionFailure,
     detectGitChangedFiles,
+    scopeChangedFiles,
     buildTaskEvidencePreflight,
     buildPostCloseoutContinuation,
     emitCheckpoint,
@@ -255,6 +259,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         finish: booleanField(args, 'finish') === true,
         changedFiles: stringArrayField(args, 'changed_files'),
         noFilesChanged: booleanField(args, 'no_files_changed') === true,
+        includeUnrelatedChangedFiles: booleanField(args, 'include_unrelated_changed_files') === true,
       });
       return jsonToolResult(result, result.status === 'error');
     }
@@ -340,6 +345,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         return jsonToolResult(payload, true);
       }
       const taskFile = await findTaskFile(siteRoot, taskNumber);
+      if (!taskFile && lifecycle) {
+        return jsonToolResult(buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_finish' }), true);
+      }
       if (taskFile) {
         const { body } = await readTaskFile(taskFile.path);
         const selfCertificationValidation = selfCertification
@@ -409,8 +417,11 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         }
       }
       ensureStaticRosterAgentInSql(store, siteRoot, agentId);
-      const autoDetectedChangedFiles = !changedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
-      const finishOptions: TaskLifecyclePayload = { cwd: siteRoot, taskNumber, agent: agentId, summary, verdict, close: true };
+      const includeUnrelatedChangedFiles = booleanField(args, 'include_unrelated_changed_files') === true;
+      const rawAutoDetectedChangedFiles = !changedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
+      const scopedChangedFiles = scopeChangedFiles(siteRoot, rawAutoDetectedChangedFiles, { includeUnrelated: includeUnrelatedChangedFiles });
+      const autoDetectedChangedFiles = scopedChangedFiles.files;
+      const finishOptions: TaskLifecyclePayload = { cwd: siteRoot, taskNumber, agent: agentId, summary, verdict, close: true, store };
       if (reviewer) finishOptions.reviewer = reviewer;
       if (changedFiles) finishOptions.changedFiles = JSON.stringify(changedFiles);
       if (!changedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);
@@ -418,6 +429,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const result = await withAuthoredRosterJsonPreserved(siteRoot, () => finishTaskService(finishOptions));
       const payload = result.result || result;
       const isBlocked = payload.close_action === 'blocked';
+      if (!changedFiles && !noFilesChanged) {
+        payload.changed_files_scoping = scopedChangedFiles;
+      }
       if (isBlocked) {
         payload.close_blocked = true;
         payload.evidence_preflight = await buildTaskEvidencePreflight({ siteRoot, store, taskNumber });
@@ -546,6 +560,20 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (!verdict) throw new Error('verdict_required');
       enforceSessionIdentity(agentId);
       const identityWarning = verifySessionIdentity(agentId);
+
+      if (!isReviewerCapable(store, agentId)) {
+        const eligibleReviewers = findReviewerCapableAgents(store);
+        return jsonToolResult({
+          status: 'error',
+          error: 'review_authority_not_admitted',
+          message: `Agent ${agentId} does not have admitted review authority.`,
+          eligible_reviewers: eligibleReviewers,
+          remediation: eligibleReviewers.length > 0
+            ? `Call task_lifecycle_review with one of the eligible reviewer agent ids: ${eligibleReviewers.map((r) => r.agent_id).join(', ')}.`
+            : 'No reviewer-capable agents are present in the roster. Admit a reviewer identity with task_lifecycle_roster_admit before reviewing.',
+        }, true);
+      }
+
       const selfCertification = objectField(args, 'self_certification');
       if (selfCertification) {
         const validation = validateSelfCertificationPacket({
@@ -573,30 +601,43 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       // Same-operator and self-review detection
       let structuralReviewInfo = null;
       try {
-        const store = openTaskLifecycleStore(siteRoot);
+        const reviewStore = openTaskLifecycleStore(siteRoot);
         try {
-          structuralReviewInfo = detectSameOperatorReview(store, agentId, taskNumber);
+          structuralReviewInfo = detectSameOperatorReview(reviewStore, agentId, taskNumber);
           if (!structuralReviewInfo?.sameOperator) {
-            structuralReviewInfo = detectSelfReview(store, agentId, taskNumber);
+            structuralReviewInfo = detectSelfReview(reviewStore, agentId, taskNumber);
           }
         } finally {
-          store.db.close();
+          reviewStore.db.close();
         }
       } catch {
         // Best-effort
       }
 
-      const isStructuralReview = structuralReviewInfo?.sameOperator || structuralReviewInfo?.selfReview;
-      if (isStructuralReview && !args.single_operator_review) {
+      let isStructuralReview = structuralReviewInfo?.sameOperator || structuralReviewInfo?.selfReview;
+      const autoAcceptSingleOperator = booleanField(args, 'auto_accept_single_operator') === true;
+      const reviewerCapableAgents = findReviewerCapableAgents(store);
+      const isSingletonReviewer = reviewerCapableAgents.length === 1 && reviewerCapableAgents[0].agent_id === agentId;
+      if (autoAcceptSingleOperator && !isStructuralReview && isSingletonReviewer) {
+        isStructuralReview = true;
+        structuralReviewInfo = {
+          selfReview: true,
+          kind: 'singleton_reviewer',
+          reviewerAgent: agentId,
+          warning: `Singleton reviewer detected: only one reviewer-capable agent is available (${agentId}).`,
+        };
+      }
+      if (isStructuralReview && !args.single_operator_review && !autoAcceptSingleOperator) {
         return jsonToolResult({
           status: 'error',
           error: 'single_operator_review_blocked',
           message: structuralReviewInfo.warning,
-          hint: 'Pass single_operator_review: true to allow single-operator review with annotation recorded.',
+          hint: 'Pass single_operator_review: true to allow single-operator review with annotation recorded, or pass auto_accept_single_operator: true to accept automatically.',
         }, true);
       }
 
-      // Prepend annotation when single-operator review is explicitly requested
+      // Prepend annotation when single-operator review is explicitly requested or auto-accepted
+      const effectiveSingleOperatorReview = args.single_operator_review === true || (autoAcceptSingleOperator && isStructuralReview);
       let parsedFindings = null;
       if (findings) {
         try {
@@ -619,7 +660,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           examples: blockingDispositionValidation.examples,
         }, true);
       }
-      if (isStructuralReview && args.single_operator_review) {
+      if (isStructuralReview && effectiveSingleOperatorReview) {
         const annotation = {
           severity: 'note',
           description: `single_operator_review: ${structuralReviewInfo.warning} This review is annotated as single-operator review (kind: ${structuralReviewInfo.kind || 'same_operator'}).`,

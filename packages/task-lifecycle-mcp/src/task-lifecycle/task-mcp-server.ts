@@ -12,7 +12,7 @@ import { buildWorkboard } from './workboard.js';
 import { buildNextWorkContract, buildUnifiedWorkboard, deriveNextRecommendation } from './unified-workboard.js';
 import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
 import { randomUUID } from 'crypto';
-import { relative, resolve, join } from 'path';
+import { relative, resolve, join, sep } from 'path';
 import { pathToFileURL } from 'url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'child_process';
@@ -20,7 +20,7 @@ import { pollInboxBridge, targetInboxEnvelope, readUnprocessedEnvelopes, evaluat
 import { readAdmissionLog, resolveEnvelopeStatus } from '../inbox/admission-log.js';
 import { refreshInboxIndex } from '../inbox/inbox-index.js';
 import { emitCheckpoint } from './emit-checkpoint.js';
-import { detectSameOperatorReview, detectSelfReview, getSingleOperatorReviewMeta } from './operator-identity.js';
+import { detectSameOperatorReview, detectSelfReview, getSingleOperatorReviewMeta, findReviewerCapableAgents, isReviewerCapable } from './operator-identity.js';
 import { findRelatedTasks } from './task-relatedness.js';
 import { validateFollowUpLedger } from './follow-up-ledger-validation.js';
 import { validateRecoveryTruthfulnessBody, validateRecoveryTruthfulnessPacket } from './recovery-truthfulness-guard.js';
@@ -35,12 +35,9 @@ import { runJsonRpcStdioServer } from '../kernel/stdio-json-rpc.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 import {
   attachPayloadSource,
-  buildOutputRefToolContent,
   enforceInlinePayloadLimit,
   listOutputResources,
-  listOutputTools,
   listPayloadTools,
-  outputShow,
   payloadCreate,
   payloadDerive,
   payloadShow,
@@ -99,7 +96,6 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
 // Session identity binding for mechanical identity verification.
 // If NARADA_AGENT_ID is set, mutating operations warn/block on mismatched agent_id params.
 let SESSION_IDENTITY = null;
-let activeOutputToolName = null;
 let taskLifecycleToolCaller = null;
 let taskLifecycleHandlerRegistry = null;
 
@@ -109,7 +105,6 @@ function taskLifecycleTools() {
   return [
     ...taskLifecycleDomainTools(),
     ...listPayloadTools(),
-    ...listOutputTools(),
   ];
 }
 
@@ -755,9 +750,7 @@ function getTaskLifecycleToolCaller() {
       resolveToolPayloadArgs,
       enforceInlinePayloadLimit,
       locusGuardedMutationTools: LOCUS_GUARDED_MUTATION_TOOLS,
-      setActiveOutputToolName: (name) => {
-        activeOutputToolName = name;
-      },
+      setActiveOutputToolName: () => {},
     });
   }
   return taskLifecycleToolCaller;
@@ -878,10 +871,14 @@ function getTaskLifecycleHandlerRegistry() {
           openTaskLifecycleStore,
           detectSameOperatorReview,
           detectSelfReview,
+          findReviewerCapableAgents,
+          isReviewerCapable,
           validateTaskFinishRecoveryTruthfulness,
           finishGateExamples,
           buildStateAwareFinishBlockerRemediation,
+          buildTaskFileResolutionFailure,
           detectGitChangedFiles,
+          scopeChangedFiles,
           buildTaskEvidencePreflight,
           buildPostCloseoutContinuation,
           emitCheckpoint,
@@ -953,7 +950,6 @@ function getTaskLifecycleHandlerRegistry() {
         }),
         mcp_payload_create: (args) => jsonToolResult(payloadCreate({ siteRoot, args })),
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
-        mcp_output_show: (args) => jsonToolResult(outputShow({ siteRoot, args })),
         mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
       },
@@ -1566,7 +1562,6 @@ function legacyTaskLifecycleToolsSnapshot() {
       }, ['payload_ref']),
     },
     ...listPayloadTools(),
-    ...listOutputTools(),
     {
       name: 'task_lifecycle_set_routing',
       description: 'Route an opened task to a target role, preferred agent, and/or relative priority without claiming it as that agent.',
@@ -1943,6 +1938,32 @@ function buildStateAwareFinishBlockerRemediation({ taskNumber, agentId, lifecycl
       remediation: 'Close scope-complete facade/prototype/spike/design-only work with task_lifecycle_close and no_continuation_needed, or add a concrete continuation task before retrying finish.',
     };
   }
+  if (/Latest Evidence Admission result is not eligible for lifecycle close/i.test(blockerText)) {
+    if (currentStatus === 'in_review') {
+      return {
+        next_action: {
+          tool: 'task_lifecycle_review',
+          arguments: {
+            task_number: taskNumber,
+            agent_id: '<eligible_reviewer_agent_id>',
+            verdict: 'accepted',
+          },
+          lifecycle_status: currentStatus,
+        },
+        next_command: `task_lifecycle_show({ "task_number": ${taskNumber} }) to see eligible_reviewers, then task_lifecycle_review({ "task_number": ${taskNumber}, "agent_id": "<eligible_reviewer>", "verdict": "accepted" })`,
+        remediation: 'Task is in_review awaiting review. Use task_lifecycle_show or task_lifecycle_inspect to discover eligible reviewers, then call task_lifecycle_review with an admitted reviewer agent id. Do not call finish/close until review is accepted.',
+      };
+    }
+    return {
+      next_action: {
+        tool: 'task_lifecycle_evidence_preflight',
+        arguments: { task_number: taskNumber },
+        lifecycle_status: currentStatus,
+      },
+      next_command: `task_lifecycle_evidence_preflight({ "task_number": ${taskNumber} })`,
+      remediation: 'Evidence admission is not eligible for close. Inspect preflight blockers and repair evidence before retrying finish/close.',
+    };
+  }
   if (/Latest Evidence Admission result is rejected|evidence repair/i.test(blockerText)) {
     const continueAllowed = currentStatus === 'needs_continuation' || currentStatus === 'in_review';
     return {
@@ -2023,7 +2044,20 @@ function buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, repo
 }
 
 function jsonToolResult(value, isError = false, toolName = null) {
-  return buildOutputRefToolContent({ siteRoot, toolName: toolName ?? activeOutputToolName, value, isError });
+  void toolName;
+  const text = JSON.stringify(value, null, 2);
+  const inlineLimit = 4000;
+  const truncated = text.length > inlineLimit;
+  return {
+    content: [{ type: 'text', text: truncated ? text.slice(0, inlineLimit) : text, annotations: { audience: ['assistant'] } }],
+    structuredContent: {
+      ...(value && typeof value === 'object' && !Array.isArray(value) ? value : { value }),
+      inline_text_truncated: truncated,
+      rendered_text_char_length: Math.min(text.length, inlineLimit),
+      full_output_char_length: text.length,
+    },
+    ...(isError ? { isError: true } : {}),
+  };
 }
 
 function validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId }) {
@@ -2150,10 +2184,52 @@ function stringArrayField(record, key) {
   return strings.length > 0 && strings.length === value.length ? strings : undefined;
 }
 
-function detectGitChangedFiles(cwd) {
+function detectGitChangedFiles(cwd, basePath = cwd) {
   const result = spawnSync('git', ['diff', '--name-only', 'HEAD'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   if (result.status !== 0 || !result.stdout) return [];
-  return result.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  const base = resolve(basePath);
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => resolve(cwd, line))
+    .filter((absolute) => absolute.startsWith(base + sep) || absolute === base)
+    .map((absolute) => relative(base, absolute).replace(/\\/g, '/'));
+}
+
+const SCOPED_CHANGED_FILE_EXCLUDE_PATTERNS = [
+  /^\.ai\/tmp\b/i,
+  /^\.ai\/tmp-/i,
+  /^\.ai\/mcp\/carriers\//i,
+  /^\.ai\/inbox-envelopes\//i,
+  /^vendor\//i,
+  /^node_modules\//i,
+  /^\.git\//i,
+];
+
+const SCOPED_CHANGED_FILE_INCLUDE_PATTERNS = [
+  /^(packages|tools|docs|kb|config|operator-surfaces|templates)\//i,
+  /^AGENTS\.md$/i,
+  /^README\.md$/i,
+  /^\.ai\/do-not-open\/tasks\//i,
+];
+
+const CHANGED_FILES_SUMMARY_LIMIT = 100;
+
+export function scopeChangedFiles(siteRoot, files, { includeUnrelated = false, taskFilePath = null } = {}) {
+  if (includeUnrelated) {
+    return { files, scoped: false, truncated: false };
+  }
+  let scoped = files.filter((file) => !SCOPED_CHANGED_FILE_EXCLUDE_PATTERNS.some((pattern) => pattern.test(file)));
+  if (scoped.length > CHANGED_FILES_SUMMARY_LIMIT) {
+    scoped = scoped.slice(0, CHANGED_FILES_SUMMARY_LIMIT);
+  }
+  return {
+    files: scoped,
+    scoped: true,
+    truncated: scoped.length < files.length,
+    full_count: files.length,
+  };
 }
 
 function numberField(record, key) {
@@ -2182,11 +2258,11 @@ function todayYmd() {
   return `${y}${m}${day}`;
 }
 
-async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, agentId, envelopeId, disposition, summary, dryRun, proveCriteria, finish, changedFiles: finishChangedFiles, noFilesChanged }) {
+async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, agentId, envelopeId, disposition, summary, dryRun, proveCriteria, finish, changedFiles: finishChangedFiles, noFilesChanged, includeUnrelatedChangedFiles = false }) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   const taskFile = await findTaskFile(siteRoot, taskNumber);
-  if (!taskFile) throw new Error(`task_file_not_found: ${taskNumber}`);
+  if (!taskFile) return buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_disposition_closeout' });
   const original = readFileSync(taskFile.path, 'utf8');
   const resolvedEnvelopeId = envelopeId ?? extractEnvelopeId(original);
   const envelope = resolvedEnvelopeId ? readIndexedEnvelope(siteRoot, resolvedEnvelopeId) : null;
@@ -2250,7 +2326,9 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
       if (finishChangedFiles && noFilesChanged) {
         throw new Error('changed_files_conflicts_with_no_files_changed');
       }
-      const autoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
+      const rawAutoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
+      const scopedChangedFiles = scopeChangedFiles(siteRoot, rawAutoDetectedChangedFiles, { includeUnrelated: includeUnrelatedChangedFiles });
+      const autoDetectedChangedFiles = scopedChangedFiles.files;
       const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
       if (proveCriteria) finishOptions.proveCriteria = true;
       if (finishChangedFiles) finishOptions.changedFiles = JSON.stringify(finishChangedFiles);
@@ -2267,6 +2345,9 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
       });
       if (finishResult.close_action !== 'blocked') {
         finishResult.post_closeout_continuation = buildPostCloseoutContinuation({ agentId, result: finishResult });
+      }
+      if (!finishChangedFiles && !noFilesChanged) {
+        finishResult.changed_files_scoping = scopedChangedFiles;
       }
     }
   }
@@ -2303,6 +2384,47 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
       envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
       exclude_unrelated_dirty_files: true,
     },
+  };
+}
+
+function buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface }) {
+  const expectedPath = resolve(siteRoot, '.ai', 'do-not-open', 'tasks', `${lifecycle.task_id}.md`);
+  const spec = store.getTaskSpec(lifecycle.task_id) ?? store.getTaskSpecByNumber?.(taskNumber) ?? null;
+  const assignment = store.getActiveAssignment?.(lifecycle.task_id) ?? null;
+  return {
+    status: 'error',
+    error: 'task_file_resolution_failed',
+    schema: 'narada.task.mcp.task_file_resolution_failed.v1',
+    surface,
+    task_number: taskNumber,
+    task_id: lifecycle.task_id,
+    lifecycle_task_id: lifecycle.task_id,
+    lifecycle_status: lifecycle.status,
+    lifecycle_row_exists: true,
+    task_spec_exists: Boolean(spec),
+    active_assignment_agent_id: assignment?.agent_id ?? null,
+    expected_path: expectedPath,
+    task_file_exists: false,
+    resolution_source: 'sqlite_lifecycle_without_markdown_projection',
+    recommended_next_tool: 'task_lifecycle_show',
+    repair_options: [
+      {
+        tool: 'task_lifecycle_show',
+        reason: 'Inspect the SQLite-backed task state and task_id before choosing a repair path.',
+        arguments: { task_number: taskNumber },
+      },
+      {
+        tool: 'task_lifecycle_record_observation',
+        reason: 'Record evidence without mutating the missing task markdown projection.',
+        arguments: { task_number: taskNumber },
+      },
+      {
+        tool: 'task_lifecycle_reopen',
+        reason: 'Use only if the lifecycle state itself needs a governed transition before regenerating or replacing the task projection.',
+        arguments: { task_number: taskNumber },
+      },
+    ],
+    remediation: 'The task exists in SQLite lifecycle state but its markdown task projection could not be resolved. Do not retry closeout/report blindly. Inspect the task, restore/regenerate the expected markdown projection if needed, or use DB-backed observation/transition tools that do not require the markdown file.',
   };
 }
 
@@ -3018,6 +3140,10 @@ function admitRosterIdentity(args) {
     last_done: null,
     ...(operatorIdentityCol ? { operator_identity: operatorIdentity } : {}),
   };
+  const capabilitiesChanged = existing
+    ? JSON.stringify(existing?.capabilities_json ? JSON.parse(existing.capabilities_json) : []) !== projectedCapabilitiesJson
+    : false;
+  const projectionChanged = !existing || capabilitiesChanged || role !== (existing.role ?? null) || (operatorIdentityCol && operatorIdentity !== (existing.operator_identity ?? null));
   const event = {
     event_id: `roster-${randomUUID()}`,
     event_type: 'admit_agent',
@@ -3028,7 +3154,7 @@ function admitRosterIdentity(args) {
     requested_by: actorAgentId,
     requested_at: now,
     authority_basis_json: JSON.stringify(authorityBasis),
-    admission_status: existing ? 'already_present' : 'admitted',
+    admission_status: existing ? (projectionChanged ? 'updated' : 'already_present') : 'admitted',
     admitted_by: actorAgentId,
     admitted_at: now,
     reason,
@@ -3036,13 +3162,14 @@ function admitRosterIdentity(args) {
       dry_run: dryRun,
       projection_target: 'agent_roster',
       existing_agent_present: Boolean(existing),
+      capabilities_changed: capabilitiesChanged,
     }),
     supersedes_event_id: null,
   };
 
   if (dryRun) {
     return {
-      status: existing ? 'already_present' : 'would_admit',
+      status: existing ? (projectionChanged ? 'would_update' : 'already_present') : 'would_admit',
       schema: 'narada.task.roster_admission.v0',
       dry_run: true,
       event,
@@ -3093,16 +3220,19 @@ function admitRosterIdentity(args) {
   }
 
   return {
-    status: existing ? 'already_present' : 'admitted',
+    status: existing ? (projectionChanged ? 'updated' : 'already_present') : 'admitted',
     schema: 'narada.task.roster_admission.v0',
     dry_run: false,
     event_id: event.event_id,
     agent_id: agentId,
     role,
     capabilities,
+    capabilities_changed: capabilitiesChanged,
     append_only_event_recorded: true,
-    roster_projection_changed: true,
-    projection: existing ? 'agent_roster_existing_row_updated_from_admitted_event' : 'agent_roster_inserted_from_admitted_event',
+    roster_projection_changed: projectionChanged,
+    projection: existing
+      ? (projectionChanged ? 'agent_roster_existing_row_updated_from_admitted_event' : 'agent_roster_existing_row_preserved')
+      : 'agent_roster_inserted_from_admitted_event',
   };
 }
 

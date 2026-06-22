@@ -1,7 +1,6 @@
 export const PAYLOAD_OUTPUT_TOOL_NAMES = Object.freeze([
   'mcp_payload_create',
   'mcp_payload_show',
-  'mcp_output_show',
   'mcp_payload_derive',
   'mcp_payload_validate',
 ]);

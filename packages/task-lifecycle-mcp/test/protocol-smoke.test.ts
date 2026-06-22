@@ -34,6 +34,6 @@ assert.equal(tools.error, undefined);
 const names = tools.result.tools.map((tool) => tool.name);
 assert.equal(names.includes('task_lifecycle_next'), true);
 assert.equal(names.includes('task_lifecycle_doctor'), true);
-assert.equal(names.includes('mcp_output_show'), true);
+assert.equal(names.includes('mcp_output_show'), false);
 
 console.log('task-lifecycle-mcp protocol smoke ok');

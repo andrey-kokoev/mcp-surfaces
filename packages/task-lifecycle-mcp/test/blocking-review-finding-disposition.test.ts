@@ -109,23 +109,11 @@ try {
   };
 
   async function responsePayload(response: any, id: number) {
+    void id;
+    if (response.result.structuredContent) return response.result.structuredContent;
     const initialPayload = JSON.parse(response.result.content[0].text);
     if (!initialPayload.output_ref) return initialPayload;
-    const outputResponse = await handleTaskLifecycleMcpRequest({
-      jsonrpc: '2.0',
-      id,
-      method: 'tools/call',
-      params: {
-        name: 'mcp_output_show',
-        arguments: {
-          ref: initialPayload.output_ref,
-          output_limit: 20000,
-        },
-      },
-    }, runtimeOptions);
-    assert.equal(outputResponse.error, undefined);
-    const outputPayload = JSON.parse(outputResponse.result.content[0].text);
-    return JSON.parse(outputPayload.output_text);
+    throw new Error('unexpected_output_ref_without_structured_content');
   }
 
   const invalidResponse = await handleTaskLifecycleMcpRequest({

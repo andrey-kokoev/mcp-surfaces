@@ -80,7 +80,6 @@ Verification helpers:
 Transport helpers:
 
 - payload tools from `@narada2/mcp-transport`
-- `mcp_output_show`
 
 ## Payload Refs
 

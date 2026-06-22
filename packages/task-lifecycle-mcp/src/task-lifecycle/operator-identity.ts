@@ -142,3 +142,44 @@ export function detectSelfReview(store, reviewerAgent, taskNumber) {
     return { selfReview: false };
   }
 }
+
+function parseCapabilities(capabilitiesJson: unknown): string[] {
+  if (!capabilitiesJson) return [];
+  try {
+    const parsed = JSON.parse(String(capabilitiesJson));
+    return Array.isArray(parsed) ? parsed.filter((c) => typeof c === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function hasReviewCapability(capabilities: string[]): boolean {
+  return capabilities.some((c) => c === 'review' || c === 'task_review' || c === 'architect_as_reviewer');
+}
+
+export function isReviewerCapable(store, agentId) {
+  try {
+    const row = store.db.prepare('SELECT capabilities_json FROM agent_roster WHERE agent_id = ?').get(agentId);
+    return hasReviewCapability(parseCapabilities(row?.capabilities_json));
+  } catch {
+    return false;
+  }
+}
+
+export function findReviewerCapableAgents(store) {
+  try {
+    const rows = store.db.prepare(
+      `SELECT agent_id, role, capabilities_json FROM agent_roster
+       WHERE capabilities_json LIKE '%"review"%'
+          OR capabilities_json LIKE '%"task_review"%'
+          OR capabilities_json LIKE '%"architect_as_reviewer"%'`
+    ).all();
+    return rows.map((row) => ({
+      agent_id: row.agent_id,
+      role: row.role,
+      capabilities: parseCapabilities(row.capabilities_json),
+    }));
+  } catch {
+    return [];
+  }
+}
