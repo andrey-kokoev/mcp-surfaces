@@ -46,6 +46,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
       stderr: String(result.stderr ?? ''),
       error: result.error.message,
       timeout_ms: effectiveTimeoutMs,
+      ...(timedOut ? timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }) : {}),
     });
   }
   if (result.status !== 0) {
@@ -130,6 +131,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
       error: result.error,
       timeout_ms: effectiveTimeoutMs,
       cancelled: result.cancelled,
+      ...(result.timedOut ? timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }) : {}),
     });
   }
   if (result.status !== 0) {
@@ -344,6 +346,40 @@ function searchCacheKey(value) {
 
 function estimateMatchesBytes(matches) {
   return matches.reduce((sum, match) => sum + Buffer.byteLength(String(match), 'utf8'), 0);
+}
+
+function timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }) {
+  return {
+    timeout_kind: 'search_helper_timeout',
+    partial_results_returned: false,
+    continuation_available: false,
+    complete_snapshot_required: complete,
+    requested_offset: offset,
+    requested_limit: limit,
+    requested_cache_policy: cachePolicy,
+    requested_snapshot_id: snapshotId,
+    search_scope: searchScopeFromArgs(operation, args),
+    remediation: [
+      'Narrow the directory/path to a package or subdirectory before broad glob/grep searches.',
+      'Use a more selective pattern and lower limit for the first page.',
+      'Use cache_policy=snapshot or cache_policy=refresh on a scoped search to materialize a reusable complete snapshot, then continue with snapshot_id and offset.',
+      'Use cache_policy=bypass when a stale or expensive complete cache rebuild is not needed.',
+      'Increase timeout_ms only after narrowing scope and pattern.',
+    ],
+  };
+}
+
+function searchScopeFromArgs(operation, args) {
+  if (!Array.isArray(args) || args.length === 0) return null;
+  if (operation === 'fs_glob_search') return args.at(-1) ?? null;
+  if (operation === 'fs_grep_search') {
+    const modeFlags = new Set(['-n', '-c', '-l']);
+    for (let index = args.length - 1; index >= 0; index -= 1) {
+      const value = args[index];
+      if (!modeFlags.has(value)) return value;
+    }
+  }
+  return null;
 }
 
 function clampTimeout(value) {

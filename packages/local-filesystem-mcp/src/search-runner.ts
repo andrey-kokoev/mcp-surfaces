@@ -15,6 +15,8 @@ async function run() {
   const limit = Math.max(1, Number(input.limit ?? 1));
   const complete = input.complete === true;
   const maxMatchBytes = Math.max(1, Number(input.max_match_bytes ?? 2 * 1024 * 1024));
+  const testDelayMs = Math.max(0, Number(process.env.NARADA_LOCAL_FILESYSTEM_SEARCH_RUNNER_DELAY_MS ?? 0));
+  if (testDelayMs > 0) await delay(testDelayMs);
   const result = await collectRipgrepPage(args, { offset, limit, complete, maxMatchBytes });
   process.stdout.write(JSON.stringify(result));
 }
@@ -110,6 +112,10 @@ function readStdin() {
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => resolvePromise(data));
   });
+}
+
+function delay(ms: number) {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 }
 
 function truncate(value: string, maxLength: number) {
