@@ -12,6 +12,7 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.worker.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.worker.config_resolve.v1') return renderConfigResolve(record);
   if (record.schema === 'narada.worker.run.v1') return renderRun(record);
+  if (record.schema === 'narada.worker.run_reap.v1') return renderRunReap(record);
   if (record.schema === 'narada.worker.runs_list.v1') return renderRunsList(record);
   if (record.schema === 'narada.worker.run_wait.v1') return renderRunWait(record);
   if (record.schema === 'narada.worker.run_batch.v1') return renderRunBatch(record);
@@ -19,6 +20,21 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.worker.runs_synthesis.v1') return renderRunsSynthesis(record);
   if (record.schema === 'narada.worker.dashboard.v1') return renderDashboard(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderRunReap(record: Record<string, unknown>): string {
+  const evidence = asRecord(record.evidence);
+  const run = asRecord(record.run);
+  return compactLines([
+    `worker_run_reap: ${record.status ?? ''}`,
+    `run_id: ${record.run_id ?? ''}`,
+    `reaped: ${record.reaped ?? false}`,
+    `run_status: ${run.status ?? ''}`,
+    `stale_confirmed: ${evidence.stale_confirmed ?? false}`,
+    `process_liveness: ${evidence.process_liveness ?? 'unknown'}`,
+    `process_verification: ${evidence.process_verification ?? 'unknown'}`,
+    evidence.reason ? `reason: ${evidence.reason}` : null,
+  ]);
 }
 
 function renderConfigResolve(record: Record<string, unknown>): string {

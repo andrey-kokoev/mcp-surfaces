@@ -25,6 +25,7 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_edit') return workerRun(workerEditRunArgs(args, state), state, null, context, 'worker_edit');
   if (name === 'worker_resume') return workerRun(args, state, requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported'), context, 'worker_resume');
   if (name === 'worker_run_status') return workerRunStatus(args, state);
+  if (name === 'worker_run_reap') return workerRunReap(args, state);
   if (name === 'worker_runs_list') return workerRunsList(args, state);
   if (name === 'worker_run_wait') return workerRunWait(args, state);
   if (name === 'worker_run_batch') return workerRunBatch(args, state, context);
@@ -538,6 +539,20 @@ function withProgressObservability(run: Record<string, unknown>): Record<string,
   return { ...run, progress_state: progressState, budget_status: budgetStatus, recent_activity: recentActivity };
 }
 
+function reapEvidence(run: Record<string, unknown>, reason: string, force: boolean): Record<string, unknown> {
+  const liveness = asRecord(run.status_liveness);
+  return {
+    reason,
+    force,
+    previous_status: run.status ?? null,
+    status_liveness: liveness,
+    process_liveness: liveness.process_liveness ?? 'unknown',
+    process_verification: 'not_available:no_run_pid_recorded',
+    stale_confirmed: liveness.state === 'stale',
+    reaped_at: new Date().toISOString(),
+  };
+}
+
 function workerBudgetStatus(run: Record<string, unknown>): Record<string, unknown> {
   const timing = asRecord(run.timing);
   const liveness = asRecord(run.status_liveness);
@@ -1005,6 +1020,49 @@ function runArtifacts(runRecord: RunRecordPaths) {
 function workerRunStatus(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
   return readRunResult(state, runId);
+}
+
+function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
+  const reason = requiredNonEmptyString(args.reason, 'worker_run_reap_reason_required');
+  const force = Boolean(args.force);
+  const located = locateRunResult(state, runId);
+  if (!located) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
+  const current = readRunResult(state, runId);
+  if (isTerminalRunStatus(String(current.status ?? ''))) {
+    return { schema: 'narada.worker.run_reap.v1', status: 'already_terminal', run_id: runId, reaped: false, evidence: reapEvidence(current, reason, force), run: current };
+  }
+  const liveness = asRecord(current.status_liveness);
+  if (current.status !== 'running') throw diagnosticError('worker_run_reap_not_running', 'worker_run_reap_not_running', { run_id: runId, status: current.status });
+  if (liveness.state !== 'stale' && !force) {
+    throw diagnosticError('worker_run_reap_refused_active_run', 'worker_run_reap_refused_active_run', { run_id: runId, status_liveness: liveness, remediation: 'wait_or_pass_force_true_with_operator_reason' });
+  }
+  const timing = asRecord(current.timing);
+  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
+  const finishedAt = new Date().toISOString();
+  const finishedAtMs = Date.parse(finishedAt);
+  const warning = 'worker_run_reaped_stale_orphan: run record was still running but caller explicitly reaped it as stale/orphaned';
+  const runtimeWarnings = uniqueStrings([...(Array.isArray(current.runtime_warnings) ? current.runtime_warnings.map(String) : []), warning]);
+  const evidence = reapEvidence(current, reason, force);
+  const reapedRun = {
+    ...current,
+    status: 'cancelled',
+    confidence: 'partial',
+    completion_state: 'partial',
+    runtime_warnings: runtimeWarnings,
+    warning_count: runtimeWarnings.length,
+    timing: {
+      ...timing,
+      finished_at: finishedAt,
+      duration_ms: Number.isFinite(startedAtMs) ? Math.max(0, finishedAtMs - startedAtMs) : timing.duration_ms ?? null,
+    },
+    error: warning,
+    error_classification: 'worker_run_reaped_stale_orphan',
+    reaped: evidence,
+  };
+  writeJson(located.resultPath, reapedRun);
+  audit(state.policy, { tool: 'worker_run_reap', run_id: runId, reason, force, evidence, result_path: located.resultPath, at: finishedAt });
+  return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: readRunResult(state, runId) };
 }
 
 function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {

@@ -35,6 +35,11 @@ export function listTools(): WorkerToolDefinition[] {
     { name: 'worker_run_status', description: 'Inspect a worker run by run id without waiting for completion.', inputSchema: objectSchema({
       run_id: { type: 'string' },
     }, ['run_id']) },
+    { name: 'worker_run_reap', description: 'Governed cleanup for a stale running worker record: persist a terminal orphaned/cancelled result with evidence. Does not kill OS processes.', inputSchema: objectSchema({
+      run_id: { type: 'string' },
+      reason: { type: 'string', description: 'Required cleanup rationale.' },
+      force: { type: 'boolean', description: 'Allow reaping a non-stale running run. Defaults false.' },
+    }, ['run_id', 'reason']) },
     { name: 'worker_runs_list', description: 'List recent worker runs so callers can rediscover outstanding run ids.', inputSchema: objectSchema({
       limit: { type: 'integer', minimum: 1, maximum: 200 },
       include_running: { type: 'boolean' },
@@ -200,10 +205,11 @@ function decorateTools(tools: WorkerToolDefinition[]): WorkerToolDefinition[] {
 
 function toolAnnotations(name: string) {
   const startsWorker = name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_batch';
+  const mutatesRunRecord = name === 'worker_run_reap';
   return {
     title: name,
-    readOnlyHint: !startsWorker,
-    destructiveHint: false,
+    readOnlyHint: !startsWorker && !mutatesRunRecord,
+    destructiveHint: mutatesRunRecord,
     idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait|synthesize|dashboard_describe/.test(name),
     openWorldHint: true,
   };
@@ -213,6 +219,7 @@ function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_policy_inspect') return workerPolicyOutputSchema();
   if (name === 'worker_config_resolve') return workerConfigResolveOutputSchema();
   if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();
+  if (name === 'worker_run_reap') return workerRunReapOutputSchema();
   if (name === 'worker_run_wait') return workerRunWaitOutputSchema();
   if (name === 'worker_runs_list') return workerRunsListOutputSchema();
   if (name === 'worker_run_batch') return batchOutputSchema('narada.worker.run_batch.v1');
@@ -220,6 +227,17 @@ function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_runs_synthesize') return batchOutputSchema('narada.worker.runs_synthesis.v1');
   if (name === 'worker_dashboard_describe') return workerDashboardOutputSchema();
   return { type: 'object', additionalProperties: true };
+}
+
+function workerRunReapOutputSchema(): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: 'narada.worker.run_reap.v1' },
+    status: { type: 'string', enum: ['reaped', 'already_terminal'] },
+    run_id: { type: 'string' },
+    reaped: { type: 'boolean' },
+    evidence: { type: 'object', additionalProperties: true },
+    run: { type: 'object', additionalProperties: true },
+  }, ['schema', 'status', 'run_id', 'reaped', 'evidence', 'run']);
 }
 
 function batchOutputSchema(schemaConst: string): Record<string, unknown> {

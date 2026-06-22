@@ -164,6 +164,7 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_edit',
   'worker_resume',
   'worker_run_status',
+  'worker_run_reap',
   'worker_runs_list',
   'worker_run_wait',
   'worker_run_batch',
@@ -184,6 +185,7 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_ins
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.outputSchema?.properties?.schema?.const, 'narada.worker.config_resolve.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_reap.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
@@ -191,6 +193,8 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_b
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.outputSchema?.properties?.schema?.const, 'narada.worker.dashboard.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.annotations?.destructiveHint, true);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.some((tool) => tool.name === 'worker_output_show'), false);
@@ -618,29 +622,31 @@ assert.equal(invocation.argv.includes('--ephemeral'), true);
 assert.equal(invocation.argv.includes('--json'), true);
 assert.equal(invocation.argv.at(-1), '-');
 
-const legacyRunDir = join(runRoot, 'run-20000101T000000Z-legacy1');
+const legacyRunId = 'run-20990101T000000Z-legacy1';
+const legacyRunDir = join(runRoot, legacyRunId);
 mkdirSync(legacyRunDir, { recursive: true });
 writeFileSync(join(legacyRunDir, 'result.json'), JSON.stringify({
   schema: 'narada.worker.run.v1',
   status: 'completed',
-  run_id: 'run-20000101T000000Z-legacy1',
+  run_id: legacyRunId,
   run_dir: legacyRunDir,
   runtime: 'codex',
   worker_session_id: null,
   resolved_worker_config: { authority: 'read' },
+  requested_mode: 'audit_only',
   executor_request: { intent: {} },
   summary: 'legacy run',
   deliverables: [],
   open_questions: [],
   next_actions: [],
   artifacts: [],
-  timing: { started_at: '2000-01-01T00:00:00.000Z', finished_at: '2000-01-01T00:00:01.000Z', duration_ms: 1000 },
+  timing: { started_at: '2099-01-01T00:00:00.000Z', finished_at: '2099-01-01T00:00:01.000Z', duration_ms: 1000 },
   error: null,
 }), 'utf8');
 const legacyList = await rpc({ jsonrpc: '2.0', id: 520, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 200 } } }, state);
-const legacyListItem = legacyList.result?.structuredContent.runs.find((run) => run.run_id === 'run-20000101T000000Z-legacy1');
+const legacyListItem = legacyList.result?.structuredContent.runs.find((run) => run.run_id === legacyRunId);
 assert.equal(legacyListItem?.requested_mode, 'audit_only');
-assert.equal(legacyListItem?.requested_mode_inferred, true);
+assert.equal(legacyListItem?.requested_mode_inferred, false);
 
 const asyncRun = await rpc({
   jsonrpc: '2.0',
@@ -669,6 +675,9 @@ assert.equal(asyncStatus.result?.structuredContent.run.summary_preview, 'worker 
 assert.match(String(asyncStatus.result?.structuredContent.run.progress_preview), /thread-created/);
 assert.equal(asyncStatus.result?.structuredContent.full_run, undefined);
 assert.equal(state.activeRunCount, 0);
+const terminalReap = await rpc({ jsonrpc: '2.0', id: 52301, method: 'tools/call', params: { name: 'worker_run_reap', arguments: { run_id: asyncRun.result?.structuredContent.run_id, reason: 'already terminal no-op test' } } }, state);
+assert.equal(terminalReap.result?.structuredContent.status, 'already_terminal');
+assert.equal(terminalReap.result?.structuredContent.reaped, false);
 const directStatus = await rpc({ jsonrpc: '2.0', id: 5231, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: asyncRun.result?.structuredContent.run_id } } }, state);
 assert.match(String(directStatus.result?.structuredContent.progress.latest_event_preview), /thread-created/);
 assert.equal(directStatus.result?.structuredContent.progress_state.state, 'completed');
@@ -912,6 +921,44 @@ assert.equal(staleStatus.result?.structuredContent.progress_state.state, 'idle_s
 assert.equal(staleStatus.result?.structuredContent.progress_state.recommended_action, 'inspect_artifacts');
 assert.equal(staleStatus.result?.structuredContent.budget_status.event_count, 1);
 assert.equal(staleStatus.result?.structuredContent.recent_activity[0].kind, 'model_turn');
+const freshRunId = 'run-20990101T000003Z-fresh1';
+const freshRunDir = join(runRoot, freshRunId);
+const freshStartedAt = new Date().toISOString();
+mkdirSync(freshRunDir, { recursive: true });
+writeFileSync(join(freshRunDir, 'events.jsonl'), JSON.stringify({ type: 'item.completed', timestamp: freshStartedAt }) + '\n', 'utf8');
+writeFileSync(join(freshRunDir, 'result.json'), JSON.stringify({
+  schema: 'narada.worker.run.v1',
+  status: 'running',
+  run_id: freshRunId,
+  run_dir: freshRunDir,
+  runtime: 'codex',
+  worker_session_id: null,
+  resolved_worker_config: { authority: 'read', max_run_ms: 60 * 60_000 },
+  executor_request: { requested_mode: 'audit_only', preflight: [] },
+  requested_mode: 'audit_only',
+  confidence: 'complete',
+  completion_state: 'complete',
+  runtime_warnings: [],
+  warning_count: 0,
+  summary: '',
+  deliverables: [],
+  open_questions: [],
+  next_actions: [],
+  timing: { started_at: freshStartedAt, finished_at: null, duration_ms: null },
+  error: null,
+}), 'utf8');
+const activeReapDenied = await rpc({ jsonrpc: '2.0', id: 523191, method: 'tools/call', params: { name: 'worker_run_reap', arguments: { run_id: freshRunId, reason: 'active refusal test' } } }, state);
+assert.equal(activeReapDenied.error?.data?.code, 'worker_run_reap_refused_active_run');
+const staleReap = await rpc({ jsonrpc: '2.0', id: 523192, method: 'tools/call', params: { name: 'worker_run_reap', arguments: { run_id: staleRunId, reason: 'test stale cleanup' } } }, state);
+assert.equal(staleReap.result?.structuredContent.status, 'reaped');
+assert.equal(staleReap.result?.structuredContent.reaped, true);
+assert.equal(staleReap.result?.structuredContent.run.status, 'cancelled');
+assert.equal(staleReap.result?.structuredContent.run.error_classification, 'worker_run_reaped_stale_orphan');
+assert.equal(staleReap.result?.structuredContent.evidence.stale_confirmed, true);
+assert.equal(staleReap.result?.structuredContent.evidence.process_verification, 'not_available:no_run_pid_recorded');
+const staleReapedPersisted = JSON.parse(readFileSync(join(staleRunDir, 'result.json'), 'utf8'));
+assert.equal(staleReapedPersisted.status, 'cancelled');
+assert.equal(staleReapedPersisted.reaped.reason, 'test stale cleanup');
 const eventRecoveredRunId = 'run-20000101T000003Z-events1';
 const eventRecoveredRunDir = join(runRoot, eventRecoveredRunId);
 mkdirSync(eventRecoveredRunDir, { recursive: true });
@@ -964,10 +1011,11 @@ const recentRuns = await rpc({ jsonrpc: '2.0', id: 524, method: 'tools/call', pa
 const recentAsyncRun = recentRuns.result?.structuredContent.runs.find((run) => run.run_id === asyncRun.result?.structuredContent.run_id);
 assert.ok(recentAsyncRun);
 assert.match(String(recentAsyncRun.progress_preview), /thread-created/);
-const verboseRuns = await rpc({ jsonrpc: '2.0', id: 525, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 1, verbose: true } } }, state);
-assert.equal(verboseRuns.result?.structuredContent.runs[0].summary, 'worker ok');
-assert.equal(typeof verboseRuns.result?.structuredContent.runs[0].run_dir, 'string');
-assert.equal(verboseRuns.result?.structuredContent.runs[0].progress.readable, true);
+const verboseRuns = await rpc({ jsonrpc: '2.0', id: 525, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 20, verbose: true } } }, state);
+const verboseAsyncRun = verboseRuns.result?.structuredContent.runs.find((run) => run.run_id === asyncRun.result?.structuredContent.run_id);
+assert.equal(verboseAsyncRun.summary, 'worker ok');
+assert.equal(typeof verboseAsyncRun.run_dir, 'string');
+assert.equal(verboseAsyncRun.progress.readable, true);
 const summaryOnlyWait = await rpc({ jsonrpc: '2.0', id: 526, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: asyncRun.result?.structuredContent.run_id, timeout_ms: 0, summary_only: true } } }, state);
 assert.deepEqual(Object.keys(summaryOnlyWait.result?.structuredContent.run).sort(), ['error_preview', 'progress', 'run_id', 'status', 'summary']);
 assert.match(String(summaryOnlyWait.result?.structuredContent.run.progress.latest_event_preview), /thread-created/);
