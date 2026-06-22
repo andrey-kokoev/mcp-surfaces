@@ -6,7 +6,7 @@ This package is not an MCP server. It provides reusable helpers used by MCP surf
 
 ## Boundary
 
-- Allowed: generic payload staging, immutable payload refs, output materialization, compact text rendering, and output-ref readback helpers.
+- Allowed: generic payload staging, immutable payload refs, output materialization, compact text rendering, and output resources.
 - Not allowed: Narada task-domain behavior.
 - Not allowed: package-specific policy decisions.
 - Not allowed: filesystem, Git, command, mailbox, or task lifecycle tool behavior.
@@ -42,7 +42,7 @@ Materialized results are addressed as:
 mcp_output:<id>
 ```
 
-Surfaces can expose `mcp_output_show` using the transport helper’s output tools. `mcp_output_show` supports `offset` and `limit` so large stored outputs can be paged deterministically.
+Separate generic output-reader tools are not exposed. Surfaces that produce large output should provide their own paging arguments on the producing tool, or expose MCP resources when resource readback is explicitly part of that surface.
 
 ## Exports
 
@@ -55,7 +55,7 @@ Primary helper areas:
 - attach payload-source metadata.
 - enforce inline payload limits.
 - write materialized output refs.
-- list/read output-ref tools.
+- list/read output resources.
 - render compact, deterministic MCP text content while preserving `structuredContent` as the authoritative payload.
 
 ## Verification

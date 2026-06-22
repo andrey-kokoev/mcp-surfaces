@@ -154,9 +154,36 @@ export function enforceInlinePayloadLimit({
   visitInlinePayload(input, [], { limit: inlineLimit, exemptFields: exemptFieldSet, objectPayloadFields: objectPayloadFieldSet, violations });
   const first = violations[0];
   if (!first) return;
+  const createArgs = buildPayloadCreateTemplate(violations);
+  const retryArgs = buildPayloadRetryTemplate(currentToolName);
   throw new Error(
-    `inline_payload_too_long: field=${first.field} length=${first.length} threshold=${inlineLimit} remediation=call mcp_payload_create with {"payload":{...}} then call ${currentToolName} with {"payload_ref":"mcp_payload:<id>@v1"}`
+    `inline_payload_too_long: field=${first.field} length=${first.length} threshold=${inlineLimit} remediation=call mcp_payload_create then retry_with_payload_ref mcp_payload_create_args=${JSON.stringify(createArgs)} retry_args=${JSON.stringify(retryArgs)}`
   );
+}
+
+function buildPayloadCreateTemplate(violations) {
+  const payload = {};
+  for (const violation of violations.slice(0, 10)) {
+    assignPath(payload, String(violation.field).split('.'), `<move original ${violation.field} here>`);
+  }
+  return { payload, created_by: '<agent_id_or_principal>' };
+}
+
+function buildPayloadRetryTemplate(toolName) {
+  return { tool: toolName || '<original_tool>', args: { payload_ref: 'mcp_payload:<id>@v1' } };
+}
+
+function assignPath(target, path, value) {
+  let current = target;
+  for (let index = 0; index < path.length; index++) {
+    const key = path[index];
+    if (index === path.length - 1) {
+      current[key] = value;
+      return;
+    }
+    current[key] = isPlainObject(current[key]) ? current[key] : {};
+    current = current[key];
+  }
 }
 
 function visitInlinePayload(value, path, context) {
@@ -268,51 +295,38 @@ export function buildOutputRefToolContent({
     return { content: [assistantTextContent(fullText)], ...(isError ? { isError: true } : {}) };
   }
 
-  const stored = outputCreate({
-    siteRoot: outputSiteRoot,
-    toolName: outputToolName,
-    value,
-    fullText,
-    inlineLimit,
-    createdBy: outputCreatedBy,
-  });
-
   const payloadRef = typeof valueRecord.ref === 'string' && valueRecord.ref.startsWith('mcp_payload:') ? valueRecord.ref : null;
+  const outputText = fullText.slice(0, inlineLimit);
+  const nextOffset = outputText.length < fullText.length ? outputText.length : null;
   const envelope = {
+    schema: 'narada.producer_output_page.v1',
     status: outputStatus(value, isError),
     truncated: true,
     ...(payloadRef ? { payload_ref: payloadRef } : {}),
-    ref: stored.ref,
-    output_ref: stored.ref,
-    reader_tool: 'mcp_output_show',
+    tool_name: outputToolName,
+    offset: 0,
+    limit: inlineLimit,
+    next_offset: nextOffset,
+    output_text: outputText,
+    output_truncated: nextOffset !== null,
+    reader_tool: null,
     site_root: outputSiteRoot,
-    read_command: `mcp_output_show({"output_ref":"${stored.ref}","limit":10000})`,
-    remediation: `Call mcp_output_show with output_ref="${stored.ref}" to read the full result. ref and output_limit are accepted as compatibility aliases.`,
+    read_command: null,
+    remediation: 'Re-call the original producing tool with its own paging arguments; separate mcp_output_show reader tools are not exposed.',
     inline_limit: inlineLimit,
-    full_output_char_length: stored.full_output_char_length,
+    full_output_char_length: fullText.length,
   };
   return {
     content: [
       assistantTextContent(fitInlineJson(envelope, inlineLimit)),
-      outputResourceLink(stored),
     ],
+    structuredContent: envelope,
     ...(isError ? { isError: true } : {}),
   };
 }
 
 function assistantTextContent(text: string): any {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
-}
-
-function outputResourceLink(record): any {
-  return {
-    type: 'resource_link',
-    uri: outputResourceUri(record.ref),
-    name: record.ref,
-    description: `Materialized MCP output for ${record.tool_name ?? 'tool result'}.`,
-    mimeType: 'application/json',
-    annotations: { audience: ['assistant'], priority: 0.8 },
-  };
 }
 
 export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
@@ -372,25 +386,7 @@ function outputRefFromResourceUri(uri) {
 }
 
 export function listOutputTools() {
-  return [
-    toolDefinition({
-      name: 'mcp_output_show',
-      description: 'Show an MCP output ref inline with bounded pagination.',
-      inputSchema: {
-        type: 'object',
-        additionalProperties: false,
-        required: [],
-        properties: {
-          output_ref: { type: 'string', description: 'Output ref, e.g. mcp_output:<id>.' },
-          ref: { type: 'string', description: 'Compatibility alias for output_ref.' },
-          offset: { type: 'integer', description: 'Character offset, default 0.' },
-          limit: { type: 'integer', description: 'Maximum characters to inline. Defaults to 10000.' },
-          output_limit: { type: 'integer', description: 'Compatibility alias for limit.' },
-          target_site_root: { type: 'string', description: 'Optional explicit target Site root where the output was written. Defaults to this MCP server site root.' },
-        },
-      },
-    }),
-  ];
+  return [];
 }
 
 function outputCreate({ siteRoot, toolName, value, fullText, inlineLimit, createdBy, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
@@ -462,7 +458,7 @@ function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR
   const chunk = outputText.slice(offset, offset + outputLimit);
   const outputTruncated = outputLimit > 0 && offset + chunk.length < outputText.length;
   return {
-    schema: 'narada.mcp_output_show.v1',
+    schema: 'narada.mcp_output_page.v1',
     status: 'ok',
     ref: record.ref,
     tool_name: record.tool_name ?? null,
@@ -494,7 +490,7 @@ function isOutputShowResult(value) {
     value
       && typeof value === 'object'
       && !Array.isArray(value)
-      && value.schema === 'narada.mcp_output_show.v1'
+      && value.schema === 'narada.mcp_output_page.v1'
       && typeof value.ref === 'string'
       && typeof value.output_text === 'string'
   );
@@ -557,33 +553,39 @@ function outputStatus(value, isError) {
 function fitInlineJson(value, limit) {
   let text = JSON.stringify(value);
   if (text.length <= limit) return text;
+  if (value.schema === 'narada.producer_output_page.v1') {
+    const minimalPage = {
+      schema: value.schema,
+      status: value.status,
+      truncated: true,
+      tool_name: value.tool_name,
+      offset: value.offset,
+      limit: value.limit,
+      next_offset: value.next_offset,
+      output_truncated: value.output_truncated,
+      output_text: value.output_text,
+      full_output_char_length: value.full_output_char_length,
+      reader_tool: null,
+    };
+    text = JSON.stringify(minimalPage);
+    if (text.length <= limit) return text;
+    return JSON.stringify({ ...minimalPage, output_text: String(value.output_text ?? '').slice(0, Math.max(0, limit - 400)) });
+  }
+  const outputRef = value.output_ref ?? value.ref;
   const payloadRef = value.payload_ref ?? (typeof value.ref === 'string' && value.ref.startsWith('mcp_payload:') ? value.ref : undefined);
   const minimal = {
-    status: value.status,
     truncated: true,
-    payload_ref: payloadRef,
-    payload_path: value.payload_path,
-    ref: value.ref,
-    output_ref: value.output_ref,
+    output_ref: outputRef,
     reader_tool: value.reader_tool,
-    inline_limit: value.inline_limit,
-    full_output_char_length: value.full_output_char_length,
+    site_root: value.site_root,
+    ...(payloadRef ? { payload_ref: payloadRef } : {}),
   };
   text = JSON.stringify(minimal);
   if (text.length <= limit) return text;
-  const fallback = payloadRef
-    ? { status: value.status, truncated: true, payload_ref: payloadRef }
-    : {
-      status: value.status,
-      truncated: true,
-      ref: value.ref ?? value.output_ref,
-      output_ref: value.output_ref,
-      reader_tool: value.reader_tool,
-      inline_limit: value.inline_limit,
-    };
-  text = JSON.stringify(fallback);
-  if (text.length <= limit) return text;
-  return JSON.stringify({ status: value.status, truncated: true });
+  if (payloadRef) {
+    return JSON.stringify({ output_ref: outputRef, payload_ref: payloadRef, truncated: true });
+  }
+  return JSON.stringify({ output_ref: outputRef, site_root: value.site_root, truncated: true });
 }
 
 export function listPayloadTools() {
@@ -742,7 +744,7 @@ function validateRevisionRecord(record, parsed, statSize, maxBytes) {
 function parsePayloadRef(ref) {
   const value = typeof ref === 'string' ? ref.trim() : '';
   if (OUTPUT_REF_PATTERN.test(value)) {
-    throw new Error('wrong_ref_family: got=mcp_output expected=mcp_payload reader_tool=mcp_output_show remediation=use mcp_output_show');
+    throw new Error('wrong_ref_family: got=mcp_output expected=mcp_payload remediation=re-call_original_producing_tool_with_paging_args');
   }
   const match = value.match(REF_PATTERN);
   if (!match) throw new Error(`payload_ref_invalid: ${value}`);
