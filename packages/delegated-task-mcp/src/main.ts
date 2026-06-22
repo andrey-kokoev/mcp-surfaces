@@ -165,8 +165,9 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 }
 
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
-  const task = args.refresh === false ? readTask(state, taskId(args)) : await advanceTask(readTask(state, taskId(args)), state);
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, active_step_posture: activeStepPosture(task), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  const before = readTask(state, taskId(args));
+  const task = args.refresh === false ? before : await advanceTask(before, state);
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export function delegatedTaskValidate(args: JsonRecord, state: State): JsonRecord {
@@ -177,11 +178,12 @@ export async function delegatedTaskWait(args: JsonRecord, state: State): Promise
   const started = Date.now();
   const timeoutMs = integer(args.timeout_ms, 30000, 0, 600000);
   const pollMs = integer(args.poll_ms, 500, 50, 30000);
-  const task = await advanceTask(readTask(state, taskId(args)), state, { waitUntilTerminal: true, timeoutMs, pollMs });
+  const before = readTask(state, taskId(args));
+  const task = await advanceTask(before, state, { waitUntilTerminal: true, timeoutMs, pollMs });
   const result = delegatedTaskResultView(task, state, args.include_diagnostics === true);
   const waitStatus = TERMINAL.has(task.status) ? 'finished' : 'timeout';
-  const response: JsonRecord = { schema: 'narada.delegated_task.wait.v1', status: waitStatus, elapsed_ms: Date.now() - started, timeout_ms: timeoutMs, poll_ms: pollMs, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, active_step_posture: activeStepPosture(task), result };
-  if (waitStatus === 'timeout') response.timeout_diagnostics = { active_steps: activeStepIds(task), active_step_posture: activeStepPosture(task), message: 'delegated_task_wait timed out before task reached a terminal status' };
+  const response: JsonRecord = { schema: 'narada.delegated_task.wait.v1', status: waitStatus, elapsed_ms: Date.now() - started, timeout_ms: timeoutMs, poll_ms: pollMs, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), closeout_synthesis: closeoutSynthesis(task.result), result };
+  if (waitStatus === 'timeout') response.timeout_diagnostics = { active_steps: activeStepIds(task), active_step_posture: activeStepPosture(task), progress_delta: response.progress_delta, next_action: closeoutSynthesis(task.result).next_action, message: 'delegated_task_wait timed out before task reached a terminal status' };
   return response;
 }
 
@@ -194,7 +196,7 @@ export function delegatedTasksList(args: JsonRecord, state: State): JsonRecord {
     try { return readTask(state, entry.name); } catch { return null; }
   }).filter((task): task is Task => task !== null) : [];
   const filtered = tasks.filter((task) => TERMINAL.has(task.status) ? includeTerminal : includeActive).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, limit);
-  return { schema: 'narada.delegated_task.list.v1', status: 'ok', limit, count: filtered.length, tasks: filtered.map((task) => ({ task_id: task.task_id, task_status: task.status, objective: task.objective, updated_at: task.updated_at, progress: rec(task.result).progress, acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending' })) };
+  return { schema: 'narada.delegated_task.list.v1', status: 'ok', limit, count: filtered.length, tasks: filtered.map((task) => ({ task_id: task.task_id, task_status: task.status, objective: task.objective, updated_at: task.updated_at, progress: rec(task.result).progress, acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', next_action: closeoutSynthesis(task.result).next_action })) };
 }
 
 export function delegatedTaskPolicyInspect(state: State): JsonRecord {
@@ -249,6 +251,9 @@ export async function delegatedTaskSummary(args: JsonRecord, state: State): Prom
     residual_risks: stringList(rec(task.result).residual_risks),
     observed_incoherencies: stringList(rec(task.result).observed_incoherencies),
     child_evidence: workerRefs(task).map((ref) => ({ step_id: ref.step_id, step_kind: ref.step_kind, run_id: ref.run_id, status: ref.status, summary: ref.summary })),
+    step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems),
+    review_consensus: reviewConsensus(task.result),
+    closeout_synthesis: closeoutSynthesis(task.result),
     progress: rec(task.result).progress,
     terminal_summary: terminalSummary(task.result),
   };
@@ -579,7 +584,7 @@ function tool(name: string, description: string, properties: JsonRecord, require
 function intentSchema(): JsonRecord { return { type: 'object', properties: { objective: { type: 'string' }, instructions: { type: 'string' }, behavior: { type: 'string' }, mode: { type: 'string' } }, additionalProperties: false }; }
 function constraintsSchema(): JsonRecord { return { type: 'object', properties: { authority: { type: 'string', enum: ['read', 'write', 'command'] }, cwd: { type: 'string' }, site_root: { type: 'string', description: 'Optional Narada Site root forwarded to worker-delegation for site-bound runtimes.' }, profile: { type: 'string' }, cognition: { type: 'string', enum: ['low', 'medium', 'high'] }, model: { type: 'string' }, sandbox: { type: 'string' }, runtime: { type: 'string' }, skip_git_repo_check: { type: 'boolean' }, resumable: { type: 'boolean' }, wait_for_completion: { type: 'boolean' }, exit_interview: { type: 'boolean' }, max_concurrency: { type: 'integer', minimum: 1 }, max_retries: { type: 'integer', minimum: 0 }, repair_policy: repairPolicySchema(), required_mcp_tools: { type: 'array', items: { type: 'string' } }, preflight_paths: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, access: { type: 'string', enum: ['read', 'write', 'create'] }, label: { type: 'string' } }, required: ['path', 'access'], additionalProperties: false } }, overrides: constraintOverridesSchema() }, additionalProperties: false }; }
 function constraintOverridesSchema(): JsonRecord { return { type: 'object', properties: { runtime: { type: 'string' }, sandbox: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] }, model: { type: 'string' }, reasoning_effort: { type: 'string' }, config: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } }, skip_git_repo_check: { type: 'boolean' } }, additionalProperties: false }; }
-function workflowSchema(): JsonRecord { return { type: 'object', properties: { strategy: { type: 'string', enum: ['implement', 'implement_review', 'research_synthesize', 'implement_review_repair_verify'] }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, profile: { type: 'string' }, instruction: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, if: { type: 'string' }, acceptance_scope: { type: 'array', items: { type: 'string' } }, constraints: constraintsSchema() }, required: ['id', 'kind'], additionalProperties: false } } }, additionalProperties: false }; }
+function workflowSchema(): JsonRecord { return { type: 'object', description: 'Workflow DAG: every depends_on value must name an earlier or later step id in this request, and cycles are rejected by delegated_task_validate.', properties: { strategy: { type: 'string', enum: ['implement', 'implement_review', 'research_synthesize', 'implement_review_repair_verify'] }, steps: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, profile: { type: 'string' }, instruction: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, if: { type: 'string' }, acceptance_scope: { type: 'array', items: { type: 'string' } }, constraints: constraintsSchema() }, required: ['id', 'kind'], additionalProperties: false } } }, additionalProperties: false, examples: [{ strategy: 'implement_review_repair_verify' }, { steps: [{ id: 'research-a', kind: 'research' }, { id: 'research-b', kind: 'research' }, { id: 'synthesize', kind: 'worker', depends_on: ['research-a', 'research-b'] }, { id: 'review', kind: 'review', depends_on: ['synthesize'] }] }] }; }
 function repairPolicySchema(): JsonRecord { return { type: 'object', properties: { strategy: { type: 'string', enum: ['retry_same_step', 'named_repair_step'] }, repair_step_id: { type: 'string' }, require_review_after_repair: { type: 'boolean' } }, additionalProperties: false }; }
 function acceptanceSchema(): JsonRecord { return { type: 'object', properties: { required_files: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, contains: { type: 'string' } }, required: ['path'], additionalProperties: false }] } }, required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, required_tools: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, required: ['name'], additionalProperties: false }] } }, forbidden_patterns: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { pattern: { type: 'string' }, scope: { type: 'string' } }, required: ['pattern'], additionalProperties: false }] } }, review_questions: { type: 'array', items: { type: 'string' } }, review_quorum: { type: 'object', properties: { min_passed: { type: 'integer', minimum: 0 }, max_failed: { type: 'integer', minimum: 0 } }, additionalProperties: false }, residual_risk_policy: { type: 'string', enum: ['allow', 'none_allowed'] } }, additionalProperties: false }; }
 function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
@@ -619,7 +624,7 @@ function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): Jso
     if (strategy !== 'retry_same_step' && strategy !== 'named_repair_step') diagnostics.push({ severity: 'error', code: 'repair_policy_strategy_invalid', strategy });
     if (strategy === 'named_repair_step' && !ids.has(String(repairPolicy.repair_step_id ?? ''))) diagnostics.push({ severity: 'error', code: 'repair_policy_repair_step_missing', repair_step_id: repairPolicy.repair_step_id });
   }
-  return { schema: 'narada.delegated_task.validate.v1', status: diagnostics.some((item) => item.severity === 'error') ? 'rejected' : 'ok', dry_run: dryRun, diagnostics, workflow_preview: { step_count: steps.length, steps: steps.map((step) => ({ id: step.id, kind: step.kind, depends_on: step.depends_on, if: step.if })) }, policy: { allowed_workflow_kinds: state.allowedWorkflowKinds, allowed_profiles: state.allowedProfiles, allowed_roots: state.allowedRoots } };
+  return { schema: 'narada.delegated_task.validate.v1', status: diagnostics.some((item) => item.severity === 'error') ? 'rejected' : 'ok', dry_run: dryRun, diagnostics, workflow_preview: { step_count: steps.length, steps: steps.map((step) => ({ id: step.id, kind: step.kind, depends_on: step.depends_on, if: step.if })), shape: workflowShape(steps) }, validation_hints: workflowValidationHints(steps, diagnostics), policy: { allowed_workflow_kinds: state.allowedWorkflowKinds, allowed_profiles: state.allowedProfiles, allowed_roots: state.allowedRoots } };
 }
 function expandWorkflowPreset(workflow: JsonRecord): JsonRecord {
   if (Array.isArray(workflow.steps)) return workflow;
@@ -994,6 +999,40 @@ function terminalSummary(result: JsonRecord): JsonRecord {
     observed_incoherency_count: stringList(result.observed_incoherencies).length,
   };
 }
+function closeoutSynthesis(result: JsonRecord): JsonRecord {
+  const terminal = terminalSummary(result);
+  const acceptanceVerdict = String(terminal.acceptance_verdict ?? 'pending');
+  const blocked = acceptanceVerdict === 'passed' && Number(terminal.review_failed_count ?? 0) === 0 && Number(terminal.residual_risk_count ?? 0) === 0 ? []
+    : [acceptanceVerdict !== 'passed' ? `acceptance:${acceptanceVerdict}` : null, Number(terminal.review_failed_count ?? 0) > 0 ? 'review_failed' : null, Number(terminal.residual_risk_count ?? 0) > 0 ? 'residual_risks_present' : null].filter(Boolean);
+  return { schema: 'narada.delegated_task.closeout_synthesis.v1', acceptance_verdict: acceptanceVerdict, closeout_ready: blocked.length === 0, blocked_by: blocked, next_action: terminal.next_action, condition_language: blocked.length === 0 ? 'acceptance:passed' : blocked.join(',') };
+}
+function reviewConsensus(result: JsonRecord): JsonRecord {
+  const refs = workerRefs({ result } as Task).filter((ref) => ref.step_kind === 'review');
+  const passed = refs.filter(reviewRefHasExplicitPass).map((ref) => String(ref.step_id ?? ref.run_id ?? 'review'));
+  const failed = refs.filter(reviewRefHasExplicitFailure).map((ref) => String(ref.step_id ?? ref.run_id ?? 'review'));
+  const inconclusive = refs.filter((ref) => !passed.includes(String(ref.step_id ?? ref.run_id ?? 'review')) && !failed.includes(String(ref.step_id ?? ref.run_id ?? 'review'))).map((ref) => String(ref.step_id ?? ref.run_id ?? 'review'));
+  const consensus = failed.length > 0 ? 'failed' : passed.length > 0 && inconclusive.length === 0 ? 'passed' : refs.length === 0 ? 'none' : 'mixed_or_inconclusive';
+  return { schema: 'narada.delegated_task.review_consensus.v1', consensus, passed_step_ids: passed, failed_step_ids: failed, inconclusive_step_ids: inconclusive, disagreement: passed.length > 0 && failed.length > 0 };
+}
+function stepFindings(task: Task): JsonRecord[] {
+  const refsByStep = new Map(workerRefs(task).map((ref) => [String(ref.step_id ?? ''), ref]));
+  return Object.values(stepStateMap(task)).map((step) => {
+    const ref = refsByStep.get(step.step_id);
+    const output = rec(ref?.output);
+    return { step_id: step.step_id, step_kind: step.kind, status: step.status, run_id: ref?.run_id ?? step.current_run_id, summary: step.summary ?? ref?.summary ?? '', verification_count: records(output.verification_results).length || records(output.verification).length, change_count: stringList(output.changed_files).length + records(output.changes).length, residual_risk_count: stringList(output.residual_risks).length, observed_incoherency_count: stringList(output.observed_incoherencies).length };
+  });
+}
+function progressDelta(before: Task, after: Task): JsonRecord {
+  const beforeCounts = stepStatusCounts(before);
+  const afterCounts = stepStatusCounts(after);
+  const keys = uniqueStrings([...Object.keys(beforeCounts), ...Object.keys(afterCounts)]);
+  const beforeRunning = stringList(rec(rec(before.result).progress).running_run_ids);
+  const afterRunning = stringList(rec(rec(after.result).progress).running_run_ids);
+  return { from_task_status: before.status, to_task_status: after.status, changed: before.updated_at !== after.updated_at || before.status !== after.status, step_status_delta: Object.fromEntries(keys.map((key) => [key, Number(afterCounts[key] ?? 0) - Number(beforeCounts[key] ?? 0)])), running_run_ids_added: afterRunning.filter((id) => !beforeRunning.includes(id)), running_run_ids_removed: beforeRunning.filter((id) => !afterRunning.includes(id)) };
+}
+function workflowShape(steps: WorkflowStep[]): JsonRecord { return { dag: true, entry_step_ids: steps.filter((step) => step.depends_on.length === 0).map((step) => step.id), terminal_step_ids: steps.filter((step) => !steps.some((candidate) => candidate.depends_on.includes(step.id))).map((step) => step.id), edges: steps.flatMap((step) => step.depends_on.map((dependency) => ({ from: dependency, to: step.id }))) }; }
+function workflowValidationHints(steps: WorkflowStep[], diagnostics: JsonRecord[]): JsonRecord { return { expected_shape: 'directed_acyclic_graph', step_count: steps.length, edge_count: steps.reduce((count, step) => count + step.depends_on.length, 0), entry_step_ids: steps.filter((step) => step.depends_on.length === 0).map((step) => step.id), terminal_step_ids: steps.filter((step) => !steps.some((candidate) => candidate.depends_on.includes(step.id))).map((step) => step.id), cycle_count: diagnostics.filter((item) => item.code === 'workflow_cycle').length, unknown_dependency_count: diagnostics.filter((item) => item.code === 'unknown_dependency').length, examples: workflowSchema().examples };
+}
 function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDiagnostics: boolean, state: State): JsonRecord {
   const maxWorkerRefs = integer(resultPolicy.max_worker_refs, state.resultCompaction.maxWorkerRefs, 1, 1000);
   const maxItems = integer(resultPolicy.max_result_items, state.resultCompaction.maxListItems, 1, 5000);
@@ -1017,6 +1056,8 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
   const compacted: JsonRecord = {
     ...result,
     terminal_summary: terminalSummary(result),
+    closeout_synthesis: closeoutSynthesis(result),
+    review_consensus: reviewConsensus(result),
     worker_refs: fullSections.worker_refs.slice(0, maxWorkerRefs),
     worker_ref_count: refs.length,
     worker_refs_truncated: refs.length > maxWorkerRefs,

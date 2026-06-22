@@ -42,6 +42,7 @@ try {
         const status = runStatuses.get(runId);
         if (!status) throw new Error(`worker_run_not_found: ${runId}`);
         if (status.status === 'recover_with_wait') throw new Error(`worker_run_not_found: ${runId}`);
+        if (status.timeout_forever === true) return status;
         runStatuses.set(runId, { ...status, status: 'completed', summary: `${runId} completed after wait` });
         return runStatuses.get(runId)!;
       }
@@ -57,7 +58,7 @@ try {
       const instruction = JSON.stringify(args);
       const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run').length}`;
       const status = instruction.includes('async missing status worker') ? 'recover_with_wait'
-        : instruction.includes('async worker') ? 'running'
+        : instruction.includes('async worker') || instruction.includes('timeout worker') ? 'running'
         : instruction.includes('fail once') && ![...runStatuses.values()].some((run) => String(run.summary).includes('fail once')) ? 'failed'
           : 'completed';
       const result = {
@@ -74,6 +75,7 @@ try {
         timing: { started_at: new Date().toISOString(), finished_at: status === 'running' ? null : new Date().toISOString(), duration_ms: status === 'running' ? null : 1 },
         confidence: 'complete',
         summary: instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
+        timeout_forever: instruction.includes('timeout worker'),
         acceptance_verdict: instruction.includes('Step kind: review')
           ? instruction.includes('Step instruction: inconclusive review') ? undefined : instruction.includes('Step instruction: explicit review failure') || instruction.includes('Step instruction: rejected review') ? 'failed' : 'accepted'
           : undefined,
@@ -108,6 +110,12 @@ try {
   assert.equal(policyView.condition_language.includes('all(<expr>,<expr>)'), true);
   assert.equal(policyView.policy_schema, 'narada.delegated_task.policy.v1');
 
+  const tools = await handleRequest({ jsonrpc: '2.0', id: 'tools-list', method: 'tools/list', params: {} }, state);
+  const toolsView = tools?.result as Record<string, any>;
+  const runTool = toolsView.tools.find((item: Record<string, any>) => item.name === 'delegated_task_run');
+  assert.equal(Array.isArray(runTool.inputSchema.properties.workflow.examples), true);
+  assert.equal(runTool.inputSchema.properties.workflow.description.includes('Workflow DAG'), true);
+
   const invalid = await callTool(state, 'delegated_task_validate', {
     objective: 'Invalid graph',
     workflow: {
@@ -122,6 +130,8 @@ try {
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'unknown_dependency'), true);
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'invalid_condition'), true);
   assert.equal(invalidView.diagnostics.some((item: Record<string, unknown>) => item.code === 'acceptance_residual_risk_policy_invalid'), true);
+  assert.equal(invalidView.validation_hints.expected_shape, 'directed_acyclic_graph');
+  assert.equal(invalidView.validation_hints.unknown_dependency_count, 1);
 
   const unknownShape = await callTool(state, 'delegated_task_validate', {
     objective: 'Unknown keys',
@@ -168,6 +178,8 @@ try {
   const presetView = preset.result.structuredContent as Record<string, any>;
   assert.equal(presetView.status, 'ok');
   assert.deepEqual(presetView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement', 'review', 'repair', 'verify']);
+  assert.deepEqual(presetView.workflow_preview.shape.entry_step_ids, ['implement']);
+  assert.equal(presetView.workflow_preview.shape.edges.some((edge: Record<string, unknown>) => edge.from === 'implement' && edge.to === 'review'), true);
 
   const run = await callTool(state, 'delegated_task_run', {
     objective: 'Implement complete delegated task orchestration',
@@ -213,6 +225,10 @@ try {
   assert.equal(statusResult.step_status_counts.completed, 5);
   assert.equal(statusResult.step_status_counts.noted, 1);
   assert.equal(statusResult.acceptance_verdict, 'passed');
+  assert.equal(statusResult.progress_delta.changed, false);
+  assert.equal(statusResult.step_findings.some((finding: Record<string, unknown>) => finding.step_id === 'review' && finding.verification_count === 1), true);
+  assert.equal(statusResult.review_consensus.consensus, 'passed');
+  assert.equal(statusResult.closeout_synthesis.next_action, 'ready_for_closeout');
 
   const result = await callTool(state, 'delegated_task_result', { task_id: runResult.task_id, include_diagnostics: true });
   const resultView = result.result.structuredContent as Record<string, any>;
@@ -238,6 +254,9 @@ try {
   assert.equal(resultView.result.verification_count, 1);
   assert.equal(resultView.result.terminal_summary.acceptance_verdict, 'passed');
   assert.equal(resultView.result.terminal_summary.real_changed_files_count, 1);
+  assert.equal(resultView.result.closeout_synthesis.closeout_ready, true);
+  assert.equal(resultView.result.closeout_synthesis.condition_language, 'acceptance:passed');
+  assert.equal(resultView.result.review_consensus.consensus, 'passed');
   assert.equal(resultView.diagnostics.task_id, runResult.task_id);
 
   const compactResult = await callTool(state, 'delegated_task_result', { task_id: runResult.task_id });
@@ -254,6 +273,9 @@ try {
   assert.deepEqual(summaryView.real_changed_files, ['src/main.ts']);
   assert.deepEqual(summaryView.affected_refs, []);
   assert.equal(summaryView.terminal_summary.acceptance_verdict, 'passed');
+  assert.equal(summaryView.step_findings.length, 6);
+  assert.equal(summaryView.review_consensus.consensus, 'passed');
+  assert.equal(summaryView.closeout_synthesis.closeout_ready, true);
 
   const nestedRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise nested probe separation',
@@ -468,6 +490,21 @@ try {
   assert.equal(workerCalls.some((call) => call.name === 'worker_run_status'), true);
   assert.equal(waitedView.status, 'finished');
   assert.equal(waitedView.task_status, 'completed', JSON.stringify(waitedView));
+  assert.equal(waitedView.progress_delta.to_task_status, 'completed');
+
+  const timeoutRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise async wait timeout progress delta',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'timeout', kind: 'worker', instruction: 'timeout worker' }] },
+  });
+  const timeoutTask = timeoutRun.result.structuredContent as Record<string, any>;
+  assert.equal(timeoutTask.task_status, 'running');
+  const timedOut = await callTool(state, 'delegated_task_wait', { task_id: timeoutTask.task_id, timeout_ms: 0, poll_ms: 50 });
+  const timedOutView = timedOut.result.structuredContent as Record<string, any>;
+  assert.equal(timedOutView.status, 'timeout');
+  assert.equal(timedOutView.timeout_diagnostics.progress_delta.to_task_status, 'running');
+  assert.equal(timedOutView.timeout_diagnostics.next_action, 'continue_or_verify');
+  await callTool(state, 'delegated_task_cancel', { task_id: timeoutTask.task_id, reason: 'caller stopped timeout test' });
 
   const retryRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise retry repair',
