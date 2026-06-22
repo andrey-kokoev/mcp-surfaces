@@ -25,9 +25,37 @@ Current packages:
 - `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution.
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
+- `@narada2/launcher-mcp`: read-only launcher registry, option matrix, plan, and coherence MCP surface.
 - `@narada2/speech-mcp`: Windows SAPI text-to-speech MCP surface.
 - `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
 - `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
+- `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
+
+## Surface Feedback
+
+Agents can submit feedback about any MCP surface via `@narada2/surface-feedback-mcp`:
+
+- `surface_feedback_submit` — submit a bug, improvement, gap, or observation about a surface.
+- `surface_feedback_list` — list feedback with visibility scoping.
+- `surface_feedback_show` — show one feedback entry.
+- `surface_feedback_stats` — aggregated counts by surface, kind, and status.
+
+Kinds:
+
+- `bug` — something is broken or fails unexpectedly.
+- `improvement` — an enhancement to existing behavior.
+- `gap` — missing capability that should exist.
+- `observation` — usage note, discoverability finding, or non-urgent concern.
+
+When submitting, include:
+
+- `surface_id` (e.g. `worker-delegation`, `graph-mail`, `mcp-registrar`).
+- `submitter_site_id` (e.g. `narada-andrey`, `narada-sonar`).
+- `submitter_principal` (your agent identity).
+- `kind` and a concise `summary`.
+- `details` with reproduction steps, expected behavior, and impact.
+
+Use this surface for any MCP usage friction, runtime failures, schema issues, or documentation gaps before opening a task or CAPA.
 
 ## Development Rules
 
@@ -60,6 +88,7 @@ pnpm test:delegated-task
 pnpm test:sop
 pnpm test:scheduler
 pnpm test:registrar
+pnpm test:launcher
 pnpm test:cloudflare-carrier
 pnpm test:site-coherence
 ```

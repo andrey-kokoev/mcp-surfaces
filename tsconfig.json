@@ -13,6 +13,7 @@
     { "path": "./packages/graph-mail-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },
     { "path": "./packages/sonar-site-ops-mcp" },
-    { "path": "./packages/agent-context-mcp" }
+    { "path": "./packages/agent-context-mcp" },
+    { "path": "./packages/site-lifecycle-mcp" }
   ]
 }

@@ -47,8 +47,6 @@ importers:
 
   packages/graph-mail-mcp: {}
 
-  packages/inbox-mcp: {}
-
   packages/local-filesystem-mcp:
     dependencies:
       '@narada2/mcp-transport':

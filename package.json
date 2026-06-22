@@ -25,7 +25,9 @@
     "test:sop": "pnpm --filter @narada2/sop-mcp test",
     "test:scheduler": "pnpm --filter @narada2/scheduler-mcp test",
     "test:registrar": "pnpm --filter @narada2/mcp-registrar test",
+    "test:site-lifecycle": "pnpm --filter @narada2/site-lifecycle-mcp test",
     "test:surface-feedback": "pnpm --filter @narada2/surface-feedback-mcp test",
+    "test:launcher": "pnpm --filter @narada2/launcher-mcp test",
     "test:speech": "pnpm --filter @narada2/speech-mcp test",
     "test:cloudflare-carrier": "pnpm --filter @narada2/cloudflare-carrier-mcp test",
     "test:site-coherence": "pnpm --filter @narada2/site-coherence-mcp test"
