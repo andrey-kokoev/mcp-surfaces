@@ -43,12 +43,15 @@ try {
     'delegated_task_validate',
     'delegated_task_run',
     'delegated_task_status',
+    'delegated_task_advance',
     'delegated_task_wait',
     'delegated_tasks_list',
     'delegated_task_result',
     'delegated_task_summary',
     'delegated_task_events',
     'delegated_task_cancel',
+    'delegated_task_acknowledge',
+    'delegated_task_parent_takeover',
   ]);
 
   const policyTool = tools.find((tool: { name: string; annotations: Record<string, unknown> }) => tool.name === 'delegated_task_policy_inspect');

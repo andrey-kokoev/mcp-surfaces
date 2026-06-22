@@ -328,6 +328,9 @@ function workerRunOutputSchema(): Record<string, unknown> {
     diagnostic_tail: nullableStringSchema(),
     error_classification: nullableStringSchema(),
     status_liveness: { type: 'object', additionalProperties: true },
+    progress_state: { type: 'object', additionalProperties: true },
+    budget_status: { type: 'object', additionalProperties: true },
+    recent_activity: { type: 'array', items: { type: 'object', additionalProperties: true } },
   }, ['schema', 'status', 'run_id', 'run_dir', 'resolved_worker_config', 'summary', 'deliverables', 'open_questions', 'next_actions']);
 }
 

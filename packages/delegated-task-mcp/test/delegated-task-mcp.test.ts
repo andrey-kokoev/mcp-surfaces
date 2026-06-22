@@ -75,6 +75,9 @@ try {
         resolved_worker_config: { runtime: 'codex', provider: 'openai', max_run_ms: 600000 },
         progress: { event_count: 2, latest_event_type: 'assistant.delta', latest_event_preview: `${runId} heartbeat`, latest_event_at: new Date().toISOString(), readable: true, tail_truncated: false },
         status_liveness: { state: 'active', process_liveness: 'unknown', started_at: new Date().toISOString(), last_activity_at: new Date().toISOString(), max_run_ms: 600000, stale_for_ms: 0 },
+        progress_state: { state: status === 'running' ? 'thinking' : status, current_action: `${runId} heartbeat`, recommended_action: status === 'running' ? 'wait' : 'inspect_result' },
+        budget_status: { elapsed_ms: 10, max_run_ms: 600000, remaining_ms: 599990, percent_used: 0.000016, stale_for_ms: 0, event_count: 2 },
+        recent_activity: [{ type: 'assistant.delta', kind: 'model_turn', preview: `${runId} heartbeat`, summary: `${runId} heartbeat`, timestamp: new Date().toISOString() }],
         timing: { started_at: new Date().toISOString(), finished_at: status === 'running' ? null : new Date().toISOString(), duration_ms: status === 'running' ? null : 1 },
         confidence: 'complete',
         summary: instruction.includes('accepted findings summary only') ? 'review_verdict=accepted_with_findings; edits_performed=false; reviewed successfully' : instruction.includes('positive summary no explicit verdict') ? 'artifact passed required content, forbidden pattern, privacy posture, core answer, and Slidev structure checks' : instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
@@ -451,6 +454,8 @@ try {
   assert.equal(resultView.result.graph_execution_synthesis.synthesized_verdict, 'accepted');
   assert.equal(resultView.result.graph_execution_synthesis.orchestration_success, true);
   assert.equal(resultView.result.graph_execution_synthesis.step_status.length, 6);
+  assert.equal(resultView.result.graph_execution_synthesis.step_status.find((step: Record<string, any>) => step.step_id === 'implement-a').current_run_id, null);
+  assert.deepEqual(resultView.result.graph_execution_synthesis.step_status.find((step: Record<string, any>) => step.step_id === 'implement-a').run_ids, ['run-test-1']);
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries.length, 3);
   assert.match(resultView.result.graph_execution_synthesis.worker_summaries[0].output_ref, /^output-run-test-/);
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries[0].diagnostic_flags.verification_count, 1);
@@ -559,6 +564,9 @@ try {
   const recoveredResultView = recoveredResult.result.structuredContent as Record<string, any>;
   assert.equal(recoveredResultView.result.steps_terminal, true);
   assert.equal(recoveredResultView.result.residual_risks.includes('worker_runs_still_in_progress'), false);
+  assert.deepEqual(recoveredResultView.result.progress.running_run_ids, []);
+  assert.deepEqual(recoveredResultView.result.progress.historical_run_ids, [recoveredRunId]);
+  assert.equal(recoveredResultView.result.step_states['async-recover'].current_run_id, null);
 
   const implicitPositiveReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise staccato positive review summary without explicit verdict',
@@ -740,10 +748,142 @@ try {
   const conditionalResultView = conditionalResult.result.structuredContent as Record<string, any>;
   assert.equal(conditionalResultView.result.step_states.conditional.status, 'noted');
 
+  const legacyTaskId = 'task_legacy_global_active';
+  mkdirSync(join(root, 'tasks', legacyTaskId), { recursive: true });
+  writeFileSync(join(root, 'tasks', legacyTaskId, 'task.json'), JSON.stringify({
+    schema: 'narada.delegated_task.task.v1',
+    task_id: legacyTaskId,
+    status: 'running',
+    objective: 'Legacy active task without ownership metadata',
+    constraints: {},
+    workflow: { steps: [] },
+    acceptance: {},
+    result_policy: { include_diagnostics_by_default: false, expose_worker_refs: true, compact_completed_worker_refs: false, max_events: 100, max_worker_refs: 50, max_result_items: 200 },
+    execution: { start: true, wait_for_completion: false, timeout_ms: 0, poll_ms: 500, resumable: true, exit_interview: false, max_concurrency: 10, max_retries: 0 },
+    idempotency_key: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    cancelled_at: null,
+    summary: null,
+    result: { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', progress: { running_run_ids: [] } },
+  }, null, 2), 'utf8');
+  const otherSiteTaskId = 'task_other_site_active';
+  mkdirSync(join(root, 'tasks', otherSiteTaskId), { recursive: true });
+  writeFileSync(join(root, 'tasks', otherSiteTaskId, 'task.json'), JSON.stringify({
+    schema: 'narada.delegated_task.task.v1',
+    task_id: otherSiteTaskId,
+    owner_site_id: 'other-site',
+    owner_site_root: join(root, 'other-site'),
+    created_by_site_id: 'other-site',
+    visibility_scope: 'site',
+    task_root_scope: 'shared_physical_store',
+    status: 'running',
+    objective: 'Other site active task',
+    constraints: {},
+    workflow: { steps: [] },
+    acceptance: {},
+    result_policy: { include_diagnostics_by_default: false, expose_worker_refs: true, compact_completed_worker_refs: false, max_events: 100, max_worker_refs: 50, max_result_items: 200 },
+    execution: { start: true, wait_for_completion: false, timeout_ms: 0, poll_ms: 500, resumable: true, exit_interview: false, max_concurrency: 10, max_retries: 0 },
+    idempotency_key: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    cancelled_at: null,
+    summary: null,
+    result: { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', progress: { running_run_ids: [] } },
+  }, null, 2), 'utf8');
+
   const listed = await callTool(state, 'delegated_tasks_list', { limit: 20 });
   const listedView = listed.result.structuredContent as Record<string, any>;
-  assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === runResult.task_id), true);
+  assert.equal(listedView.site_scope, 'current_site');
+  assert.equal(listedView.current_site_id, 'site-root');
+  assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === legacyTaskId), false);
+  assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === otherSiteTaskId), false);
+  assert.equal(listedView.include_terminal, false);
+  assert.equal(listedView.tasks.some((task: Record<string, unknown>) => task.task_id === runResult.task_id), false);
+  assert.equal(listedView.tasks.every((task: Record<string, any>) => task.list_category === 'active_queue'), true);
+  assert.equal(listedView.tasks.every((task: Record<string, any>) => task.owner_site_id === 'site-root'), true);
+  const listedGlobal = await callTool(state, 'delegated_tasks_list', { limit: 50, site_scope: 'all_sites' });
+  const listedGlobalView = listedGlobal.result.structuredContent as Record<string, any>;
+  const globalLegacyRow = listedGlobalView.tasks.find((task: Record<string, unknown>) => task.task_id === legacyTaskId);
+  assert.equal(listedGlobalView.tasks.some((task: Record<string, unknown>) => task.task_id === otherSiteTaskId), true);
+  assert.equal(globalLegacyRow.visibility_scope, 'user_global_legacy');
+  assert.equal(globalLegacyRow.owner_site_id, 'unknown');
+  assert.ok(listedGlobalView.queue_summary.by_owner_site['other-site']);
+  assert.ok(listedGlobalView.queue_summary.by_owner_site.unknown);
+  const listedUserGlobal = await callTool(state, 'delegated_tasks_list', { limit: 50, site_scope: 'user_global' });
+  const listedUserGlobalView = listedUserGlobal.result.structuredContent as Record<string, any>;
+  assert.equal(listedUserGlobalView.tasks.some((task: Record<string, unknown>) => task.task_id === legacyTaskId), true);
+  assert.equal(listedUserGlobalView.tasks.some((task: Record<string, unknown>) => task.task_id === otherSiteTaskId), false);
+  const otherSiteCancelDenied = await callTool(state, 'delegated_task_cancel', { task_id: otherSiteTaskId, reason: 'cross-site denial test' });
+  assert.equal((otherSiteCancelDenied.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
+  const listedHistory = await callTool(state, 'delegated_tasks_list', { limit: 20, include_terminal: true });
+  const listedHistoryView = listedHistory.result.structuredContent as Record<string, any>;
+  const completedHistoryRow = listedHistoryView.tasks.find((task: Record<string, unknown>) => task.task_id === runResult.task_id);
+  assert.ok(completedHistoryRow);
+  assert.equal(completedHistoryRow.list_category, 'terminal_history');
+  assert.equal(completedHistoryRow.operator_posture.active, false);
+  assert.equal(completedHistoryRow.operator_posture.active_execution, false);
+  assert.equal(completedHistoryRow.operator_posture.terminal_posture, 'no_active_execution');
+  assert.equal(completedHistoryRow.operator_posture.operator_category, 'archive_ready_for_acknowledgement');
+  assert.equal(completedHistoryRow.operator_posture.next_action, 'acknowledge_closeout');
   assert.equal(listedView.tasks.every((task: Record<string, any>) => task.operator_posture?.schema === 'narada.delegated_task.operator_posture.v1'), true);
+
+  const scopedCurrentRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise current-site queue ownership',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'owned', kind: 'note', instruction: 'Current site queue row' }] },
+    execution: { start: false },
+  });
+  const scopedCurrentView = scopedCurrentRun.result.structuredContent as Record<string, any>;
+  assert.equal(scopedCurrentView.ownership.owner_site_id, 'site-root');
+  assert.equal(scopedCurrentView.ownership.visibility_scope, 'site');
+  const scopedCurrentTaskPath = join(root, 'tasks', scopedCurrentView.task_id, 'task.json');
+  const scopedCurrentTask = JSON.parse(readFileSync(scopedCurrentTaskPath, 'utf8')) as Record<string, any>;
+  assert.equal(scopedCurrentTask.owner_site_id, 'site-root');
+  assert.equal(scopedCurrentTask.created_by_site_id, 'site-root');
+  const legacyTask = { ...scopedCurrentTask, task_id: 'task_legacyglobal', owner_site_id: undefined, owner_site_root: undefined, created_by_site_id: undefined, visibility_scope: undefined, task_root_scope: undefined, objective: 'Legacy global active queue row', updated_at: new Date().toISOString() };
+  const foreignTask = { ...scopedCurrentTask, task_id: 'task_foreignsite', owner_site_id: 'other-site', owner_site_root: join(root, 'other-site'), created_by_site_id: 'other-site', visibility_scope: 'site', objective: 'Foreign site active queue row', updated_at: new Date().toISOString() };
+  mkdirSync(join(root, 'tasks', legacyTask.task_id), { recursive: true });
+  mkdirSync(join(root, 'tasks', foreignTask.task_id), { recursive: true });
+  writeFileSync(join(root, 'tasks', legacyTask.task_id, 'task.json'), `${JSON.stringify(legacyTask, null, 2)}\n`, 'utf8');
+  writeFileSync(join(root, 'tasks', foreignTask.task_id, 'task.json'), `${JSON.stringify(foreignTask, null, 2)}\n`, 'utf8');
+
+  const currentSiteList = await callTool(state, 'delegated_tasks_list', { limit: 100 });
+  const currentSiteListView = currentSiteList.result.structuredContent as Record<string, any>;
+  assert.equal(currentSiteListView.site_scope, 'current_site');
+  assert.equal(currentSiteListView.tasks.some((task: Record<string, any>) => task.task_id === scopedCurrentView.task_id), true);
+  assert.equal(currentSiteListView.tasks.some((task: Record<string, any>) => task.task_id === 'task_foreignsite'), false);
+  assert.equal(currentSiteListView.tasks.some((task: Record<string, any>) => task.task_id === 'task_legacyglobal'), false);
+  const allSiteList = await callTool(state, 'delegated_tasks_list', { limit: 100, site_scope: 'all_sites' });
+  const allSiteListView = allSiteList.result.structuredContent as Record<string, any>;
+  const legacyRow2 = allSiteListView.tasks.find((task: Record<string, any>) => task.task_id === 'task_legacyglobal');
+  const foreignRow2 = allSiteListView.tasks.find((task: Record<string, any>) => task.task_id === 'task_foreignsite');
+  assert.equal(legacyRow2.owner_site_id, 'unknown');
+  assert.equal(legacyRow2.visibility_scope, 'user_global_legacy');
+  assert.equal(foreignRow2.owner_site_id, 'other-site');
+  const deniedForeignCancel = await callTool(state, 'delegated_task_cancel', { task_id: 'task_foreignsite', reason: 'should require explicit cross-site override' });
+  assert.equal((deniedForeignCancel.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
+  const deniedLegacyCancel = await callTool(state, 'delegated_task_cancel', { task_id: 'task_legacyglobal', reason: 'should require explicit legacy override' });
+  assert.equal((deniedLegacyCancel.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
+  const allowedForeignCancel = await callTool(state, 'delegated_task_cancel', { task_id: 'task_foreignsite', reason: 'explicit cross-site override', expected_owner_site_id: 'other-site', allow_cross_site: true });
+  const allowedForeignCancelView = allowedForeignCancel.result.structuredContent as Record<string, any>;
+  assert.equal(allowedForeignCancelView.task_status, 'cancelled');
+  assert.equal(allowedForeignCancelView.ownership.owner_site_id, 'other-site');
+
+  const foreignAckTask = { ...foreignTask, task_id: 'task_foreignack', status: 'completed', objective: 'Foreign terminal row', updated_at: new Date().toISOString(), result: { ...scopedCurrentTask.result, acceptance_verdict: 'passed' } };
+  const foreignTakeoverTask = { ...foreignTask, task_id: 'task_foreigntakeover', status: 'running', objective: 'Foreign takeover row', updated_at: new Date().toISOString() };
+  mkdirSync(join(root, 'tasks', foreignAckTask.task_id), { recursive: true });
+  mkdirSync(join(root, 'tasks', foreignTakeoverTask.task_id), { recursive: true });
+  writeFileSync(join(root, 'tasks', foreignAckTask.task_id, 'task.json'), `${JSON.stringify(foreignAckTask, null, 2)}\n`, 'utf8');
+  writeFileSync(join(root, 'tasks', foreignTakeoverTask.task_id, 'task.json'), `${JSON.stringify(foreignTakeoverTask, null, 2)}\n`, 'utf8');
+  const deniedForeignAck = await callTool(state, 'delegated_task_acknowledge', { task_id: 'task_foreignack', acknowledged_by: 'test' });
+  assert.equal((deniedForeignAck.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
+  const allowedForeignAck = await callTool(state, 'delegated_task_acknowledge', { task_id: 'task_foreignack', acknowledged_by: 'test', expected_owner_site_id: 'other-site', allow_cross_site: true });
+  assert.equal((allowedForeignAck.result.structuredContent as Record<string, any>).ownership.owner_site_id, 'other-site');
+  const deniedForeignTakeover = await callTool(state, 'delegated_task_parent_takeover', { task_id: 'task_foreigntakeover', reason: 'test takeover' });
+  assert.equal((deniedForeignTakeover.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
+  const allowedForeignTakeover = await callTool(state, 'delegated_task_parent_takeover', { task_id: 'task_foreigntakeover', reason: 'test takeover', expected_owner_site_id: 'other-site', allow_cross_site: true });
+  assert.equal((allowedForeignTakeover.result.structuredContent as Record<string, any>).ownership.owner_site_id, 'other-site');
 
   const beforeConcurrencyCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
   const limitedRun = await callTool(state, 'delegated_task_run', {
@@ -770,6 +910,10 @@ try {
   assert.equal(limitedStatusView.active_step_posture[0].provider, 'openai');
   assert.equal(limitedStatusView.active_step_posture[0].latest_event_kind, 'assistant.delta');
   assert.match(limitedStatusView.active_step_posture[0].latest_event_preview, /heartbeat/);
+  assert.equal(limitedStatusView.active_step_posture[0].worker_progress_state.state, 'thinking');
+  assert.equal(limitedStatusView.active_step_posture[0].recommended_action, 'wait');
+  assert.equal(limitedStatusView.active_step_posture[0].budget_status.event_count, 2);
+  assert.equal(limitedStatusView.active_step_posture[0].recent_activity_preview[0].kind, 'model_turn');
   assert.equal(typeof limitedStatusView.active_step_posture[0].heartbeat_age_ms, 'number');
   assert.equal(limitedStatusView.active_step_posture[0].expected_timeout_ms, 600000);
   assert.match(limitedStatusView.active_step_posture[0].deadline_at, /T/);
@@ -792,8 +936,17 @@ try {
   assert.equal(cancelledResultView.result.acceptance_verdict, 'cancelled');
   assert.deepEqual(cancelledResultView.result.progress.running_run_ids, []);
   assert.equal(cancelledResultView.result.progress.running, 0);
+  assert.equal(cancelledResultView.result.progress.liveness, 'terminal_no_active_execution');
+  assert.deepEqual(cancelledResultView.result.step_states.a.run_ids, [limitedView.progress.running_run_ids[0]]);
+  assert.equal(cancelledResultView.result.step_states.a.current_run_id, null);
   assert.deepEqual(cancelledResultView.result.active_step_posture ?? [], []);
   assert.equal(cancelledResultView.result.worker_refs.every((ref: Record<string, any>) => ref.cancellation.requested === true), true);
+  const cancelledHistory = await callTool(state, 'delegated_tasks_list', { limit: 50, include_terminal: true });
+  const cancelledHistoryView = cancelledHistory.result.structuredContent as Record<string, any>;
+  const cancelledRow = cancelledHistoryView.tasks.find((task: Record<string, unknown>) => task.task_id === limitedView.task_id);
+  assert.equal(cancelledRow.operator_posture.operator_category, 'operator_inbox_cancelled');
+  assert.equal(cancelledRow.operator_posture.next_action, 'acknowledge_cancelled_history');
+  assert.deepEqual(cancelledRow.operator_posture.running_run_ids, []);
 
   const asyncRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise async wait',
@@ -820,7 +973,7 @@ try {
   const timedOutView = timedOut.result.structuredContent as Record<string, any>;
   assert.equal(timedOutView.status, 'timeout');
   assert.equal(timedOutView.timeout_diagnostics.progress_delta.to_task_status, 'running');
-  assert.equal(timedOutView.timeout_diagnostics.next_action, 'continue_or_verify');
+  assert.equal(timedOutView.timeout_diagnostics.next_action, 'wait_or_refresh_running_workers');
   await callTool(state, 'delegated_task_cancel', { task_id: timeoutTask.task_id, reason: 'caller stopped timeout test' });
 
   const readOnlyRefreshRunCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
@@ -846,13 +999,20 @@ try {
   const refreshedStatusView = refreshedStatus.result.structuredContent as Record<string, any>;
   assert.equal(refreshedStatusView.step_status_counts.completed, 1);
   assert.equal(refreshedStatusView.step_status_counts.pending, 1);
+  assert.equal(refreshedStatusView.scheduler_state.state, 'ready_pending_steps');
+  assert.deepEqual(refreshedStatusView.scheduler_state.ready_step_ids, ['second']);
+  assert.equal(refreshedStatusView.operator_posture.next_action, 'advance_ready_steps');
   assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
   const refreshedResult = await callTool(state, 'delegated_task_result', { task_id: readOnlyRefreshTask.task_id, refresh: true, include_diagnostics: true });
   const refreshedResultView = refreshedResult.result.structuredContent as Record<string, any>;
   assert.equal(refreshedResultView.result.step_states.first.status, 'completed');
   assert.equal(refreshedResultView.result.step_states.second.status, 'pending');
   assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
-  await callTool(state, 'delegated_task_cancel', { task_id: readOnlyRefreshTask.task_id, reason: 'caller stopped read-only refresh test' });
+  const advancedReady = await callTool(state, 'delegated_task_advance', { task_id: readOnlyRefreshTask.task_id });
+  const advancedReadyView = advancedReady.result.structuredContent as Record<string, any>;
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 2);
+  assert.equal(advancedReadyView.task_status, 'completed');
+  assert.deepEqual(advancedReadyView.scheduler_state.ready_step_ids, []);
 
   const retryRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise retry repair',

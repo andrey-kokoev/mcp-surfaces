@@ -530,6 +530,76 @@ function withRunningLiveness(run: Record<string, unknown>, state: WorkerMcpState
   };
 }
 
+function withProgressObservability(run: Record<string, unknown>): Record<string, unknown> {
+  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
+  const recentActivity = runDir ? compactEventStream(resolve(runDir, 'events.jsonl'), 8) : [];
+  const budgetStatus = workerBudgetStatus(run);
+  const progressState = workerProgressState(run, recentActivity, budgetStatus);
+  return { ...run, progress_state: progressState, budget_status: budgetStatus, recent_activity: recentActivity };
+}
+
+function workerBudgetStatus(run: Record<string, unknown>): Record<string, unknown> {
+  const timing = asRecord(run.timing);
+  const liveness = asRecord(run.status_liveness);
+  const progress = asRecord(run.progress);
+  const config = asRecord(run.resolved_worker_config);
+  const startedAt = typeof liveness.started_at === 'string' ? liveness.started_at : typeof timing.started_at === 'string' ? timing.started_at : null;
+  const startedAtMs = startedAt ? Date.parse(startedAt) : NaN;
+  const elapsedMs = typeof liveness.elapsed_ms === 'number' ? liveness.elapsed_ms : Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : null;
+  const maxRunMs = typeof liveness.max_run_ms === 'number' ? liveness.max_run_ms : typeof config.max_run_ms === 'number' ? config.max_run_ms : null;
+  const remainingMs = elapsedMs !== null && maxRunMs !== null ? Math.max(0, maxRunMs - elapsedMs) : null;
+  return {
+    started_at: startedAt,
+    elapsed_ms: elapsedMs,
+    max_run_ms: maxRunMs,
+    remaining_ms: remainingMs,
+    percent_used: elapsedMs !== null && maxRunMs ? Math.min(1, elapsedMs / maxRunMs) : null,
+    stale_for_ms: typeof liveness.stale_for_ms === 'number' ? liveness.stale_for_ms : null,
+    event_count: typeof progress.event_count === 'number' ? progress.event_count : 0,
+  };
+}
+
+function workerProgressState(run: Record<string, unknown>, recentActivity: Record<string, unknown>[], budgetStatus: Record<string, unknown>): Record<string, unknown> {
+  const status = String(run.status ?? 'unknown');
+  const liveness = asRecord(run.status_liveness);
+  const progress = asRecord(run.progress);
+  const latest = recentActivity.at(-1) ?? null;
+  const terminal = isTerminalRunStatus(status);
+  const stale = liveness.state === 'stale';
+  const eventCount = typeof progress.event_count === 'number' ? progress.event_count : 0;
+  const state = terminal ? status : stale ? 'idle_stale' : eventCount === 0 ? 'starting' : classifyProgressState(String(progress.latest_event_type ?? ''), String(progress.latest_event_preview ?? ''));
+  return {
+    state,
+    current_action: latest ? latest.summary ?? latest.preview ?? null : progress.latest_event_preview ?? null,
+    current_target: null,
+    current_command: null,
+    since: typeof liveness.last_activity_at === 'string' ? liveness.last_activity_at : typeof progress.latest_event_at === 'string' ? progress.latest_event_at : asRecord(run.timing).started_at ?? null,
+    last_event_at: progress.latest_event_at ?? null,
+    stale_for_ms: typeof liveness.stale_for_ms === 'number' ? liveness.stale_for_ms : null,
+    confidence: eventCount > 0 ? 'observed' : 'unknown',
+    liveness: liveness.state ?? null,
+    recommended_action: recommendedProgressAction(status, liveness, budgetStatus),
+  };
+}
+
+function classifyProgressState(eventTypeValue: string, preview: string): string {
+  const text = `${eventTypeValue} ${preview}`.toLowerCase();
+  if (/command|exec|shell|structured_command/.test(text)) return 'running_command';
+  if (/apply_patch|edit|write|modified|file_change/.test(text)) return 'editing';
+  if (/read|grep|glob|search/.test(text)) return 'reading';
+  if (/tool|call/.test(text)) return 'waiting_tool';
+  if (/result|last_message|final/.test(text)) return 'writing_result';
+  return 'thinking';
+}
+
+function recommendedProgressAction(status: string, liveness: Record<string, unknown>, budgetStatus: Record<string, unknown>): string {
+  if (isTerminalRunStatus(status)) return 'inspect_result';
+  if (liveness.state !== 'stale') return 'wait';
+  const remainingMs = typeof budgetStatus.remaining_ms === 'number' ? budgetStatus.remaining_ms : null;
+  if (remainingMs === 0) return 'recover_or_fail';
+  return 'inspect_artifacts';
+}
+
 async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext, auditTool: string, slot: { releaseSlot: () => void; deferRelease: () => void }): Promise<Record<string, unknown>> {
   const startedAt = new Date();
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
@@ -1167,6 +1237,9 @@ function dashboardRun(run: Record<string, unknown>): Record<string, unknown> {
     },
     events: runDir ? compactEventStream(resolve(runDir, 'events.jsonl'), 8) : [],
     status_liveness: run.status_liveness ?? null,
+    progress_state: run.progress_state ?? null,
+    budget_status: run.budget_status ?? null,
+    recent_activity: Array.isArray(run.recent_activity) ? run.recent_activity : [],
   };
 }
 
@@ -1191,10 +1264,14 @@ function compactEventStream(eventsPath: string, limit: number): Record<string, u
     return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-limit).map((line) => {
       try {
         const parsed = JSON.parse(line) as unknown;
+        const type = eventType(parsed);
+        const preview = previewString(latestEventText(parsed), 180);
         return {
-          type: eventType(parsed),
+          type,
+          kind: normalizeActivityKind(type, preview),
           timestamp: eventTimestamp(parsed)?.toISOString() ?? null,
-          preview: previewString(latestEventText(parsed), 180),
+          preview,
+          summary: preview,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1246,7 +1323,7 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
   }
   try {
     const run = JSON.parse(readFileSync(located.resultPath, 'utf8')) as Record<string, unknown>;
-    return withArtifactReadback(enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state, located.resultPath)), state)), state, located);
+    return withArtifactReadback(enrichFailedRunDiagnostics(withProgressObservability(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state, located.resultPath)), state))), state, located);
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
@@ -1507,6 +1584,16 @@ function latestEventText(value: unknown): string | null {
   if (type) return type;
   if (value === null) return null;
   return JSON.stringify(value);
+}
+
+function normalizeActivityKind(type: string | null, preview: string | null): string {
+  const text = `${type ?? ''} ${preview ?? ''}`.toLowerCase();
+  if (/command|exec|shell|structured_command/.test(text)) return 'command';
+  if (/apply_patch|edit|write|modified|file_change/.test(text)) return 'file_edit';
+  if (/read|grep|glob|search/.test(text)) return 'file_read';
+  if (/tool|call/.test(text)) return 'tool';
+  if (/error|failed/.test(text)) return 'error';
+  return 'model_turn';
 }
 
 function previewString(value: unknown, limit: number): string | null {

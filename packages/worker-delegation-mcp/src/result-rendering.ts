@@ -76,6 +76,8 @@ function renderRun(record: Record<string, unknown>): string {
   const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
   const progress = asRecord(record.progress);
   const liveness = asRecord(record.status_liveness);
+  const progressState = asRecord(record.progress_state);
+  const budgetStatus = asRecord(record.budget_status);
   const exitInterview = asRecord(record.exit_interview);
   return compactLines([
     `worker_run: ${record.status ?? ''}`,
@@ -92,6 +94,8 @@ function renderRun(record: Record<string, unknown>): string {
     `worker_session_id: ${record.worker_session_id ?? 'null'}`,
     `summary: ${record.summary ?? ''}`,
     progress.latest_event_preview ? `progress: ${progress.latest_event_preview}` : null,
+    progressState.state ? `progress_state: ${progressState.state} action=${progressState.current_action ?? ''} recommended=${progressState.recommended_action ?? ''}` : null,
+    budgetStatus.elapsed_ms !== undefined ? `budget: elapsed_ms=${budgetStatus.elapsed_ms ?? 'null'} remaining_ms=${budgetStatus.remaining_ms ?? 'null'} events=${budgetStatus.event_count ?? 0}` : null,
     liveness.state ? `liveness: ${liveness.state} stale_for_ms=${liveness.stale_for_ms ?? 0} process=${liveness.process_liveness ?? 'unknown'}` : null,
     exitInterview.ergonomics_feedback ? `ergonomics: ${exitInterview.ergonomics_feedback}` : null,
     `deliverables: ${arrayCount(record.deliverables)}`,
@@ -115,8 +119,10 @@ function renderRunsList(record: Record<string, unknown>): string {
     ...runs.map((run) => {
       const item = asRecord(run);
       const liveness = asRecord(item.status_liveness);
+      const progressState = asRecord(item.progress_state);
       const livenessText = liveness.state ? `liveness=${liveness.state}` : '';
-      return `- ${item.status ?? ''} ${item.requested_mode ?? ''} ${item.authority ?? ''} ${item.run_id ?? ''} ${item.finished_at ?? item.started_at ?? ''} ${livenessText} ${item.progress_preview ?? item.summary_preview ?? ''}`.trim();
+      const progressStateText = progressState.state ? `progress_state=${progressState.state}` : '';
+      return `- ${item.status ?? ''} ${item.requested_mode ?? ''} ${item.authority ?? ''} ${item.run_id ?? ''} ${item.finished_at ?? item.started_at ?? ''} ${livenessText} ${progressStateText} ${item.progress_preview ?? item.summary_preview ?? ''}`.trim();
     }),
   ]);
 }
