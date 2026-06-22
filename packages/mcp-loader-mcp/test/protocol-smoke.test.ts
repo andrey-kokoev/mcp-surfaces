@@ -38,6 +38,7 @@ try {
   assert.deepEqual(tools.map((t) => t.name), [
     'mcp_loader_policy_inspect',
     'mcp_loader_list_site_surfaces',
+    'mcp_loader_site_fabric_diagnostics',
     'mcp_loader_attach_surface',
     'mcp_loader_list_tools',
     'mcp_loader_tool_discovery_manifest',
@@ -47,6 +48,9 @@ try {
 
   const listTool = tools.find((t) => t.name === 'mcp_loader_list_site_surfaces');
   assert.equal(listTool?.annotations.readOnlyHint, true);
+
+  const diagnosticsTool = tools.find((t) => t.name === 'mcp_loader_site_fabric_diagnostics');
+  assert.equal(diagnosticsTool?.annotations.readOnlyHint, true);
 
   const attachTool = tools.find((t) => t.name === 'mcp_loader_attach_surface');
   assert.equal(attachTool?.annotations.readOnlyHint, false);

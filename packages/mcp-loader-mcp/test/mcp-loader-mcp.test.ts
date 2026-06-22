@@ -7,11 +7,23 @@ import { fileURLToPath } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
+const externalRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-external-'));
+const externalAgentContextEntrypoint = join(externalRoot, 'packages', 'agent-context-tools', 'src', 'agent-context-mcp-server.mjs');
+mkdirSync(dirname(externalAgentContextEntrypoint), { recursive: true });
+writeFileSync(externalAgentContextEntrypoint, 'export {};\n', 'utf8');
 writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
   mcpServers: {
     'test-echo': {
       command: 'node',
       args: ['--version'],
+    },
+    'missing-shared': {
+      command: 'node',
+      args: [join(root, 'missing-server.mjs')],
+    },
+    'agent-context': {
+      command: 'node',
+      args: [externalAgentContextEntrypoint],
     },
   },
 }), 'utf8');
@@ -47,12 +59,22 @@ try {
   const surfaces = listResult?.surfaces as { surface_id: string }[];
   assert.ok(surfaces.some((s) => s.surface_id === 'test-echo'), `expected test-echo in ${JSON.stringify(surfaces)}`);
 
-  const policyResult = await call('tools/call', { name: 'mcp_loader_policy_inspect', arguments: {} }, 4);
+  const diagnosticsResult = await call('tools/call', { name: 'mcp_loader_site_fabric_diagnostics', arguments: { site_root: root } }, 4);
+  assert.equal(diagnosticsResult?.schema, 'narada.mcp_loader.site_fabric_diagnostics.v1');
+  const diagnostics = diagnosticsResult?.diagnostics as { surface_id: string; classification: string; provenance: { tracking_state: string }; durability: { local_repair_durable: string } }[];
+  const missing = diagnostics.find((entry) => entry.surface_id === 'missing-shared');
+  assert.equal(missing?.classification, 'stale_entrypoint');
+  const agentContext = diagnostics.find((entry) => entry.surface_id === 'agent-context');
+  assert.equal(agentContext?.classification, 'external_entrypoint_override');
+  assert.equal(agentContext?.provenance.tracking_state, 'unknown');
+  assert.equal(agentContext?.durability.local_repair_durable, 'unknown');
+
+  const policyResult = await call('tools/call', { name: 'mcp_loader_policy_inspect', arguments: {} }, 5);
   assert.equal(policyResult?.schema, 'narada.mcp_loader.policy.v1');
   const policy = policyResult?.policy as { allowedSiteRoots: string[] };
   assert.ok(policy.allowedSiteRoots.some((p: string) => root.replace(/\\/g, '/').startsWith(p)));
 
-  const badAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'unknown-surface' } }, 5);
+  const badAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'unknown-surface' } }, 6);
   assert.equal(badAttach?.schema, undefined);
 
   console.log('mcp-loader-mcp behavior ok');
@@ -60,4 +82,5 @@ try {
   child.stdin.end();
   await new Promise((resolve) => child.on('close', resolve));
   rmSync(root, { recursive: true, force: true });
+  rmSync(externalRoot, { recursive: true, force: true });
 }

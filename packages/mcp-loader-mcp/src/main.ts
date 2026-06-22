@@ -135,6 +135,9 @@ export function listTools() {
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
       site_root: { type: 'string', description: 'Site root directory.' },
     }, ['site_root']),
+    tool('mcp_loader_site_fabric_diagnostics', 'Inspect site MCP fabric provenance and classify shared-registry drift or intentional entrypoint overrides.', {
+      site_root: { type: 'string', description: 'Site root directory.' },
+    }, ['site_root']),
     tool('mcp_loader_attach_surface', 'Spawn and initialize a stdio MCP surface and return a connection id.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_id: { type: 'string', description: 'Surface identifier from the site fabric or shared surface registry.' },
@@ -166,6 +169,8 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
       return policyInspect(state);
     case 'mcp_loader_list_site_surfaces':
       return listSiteSurfaces(args, state);
+    case 'mcp_loader_site_fabric_diagnostics':
+      return siteFabricDiagnostics(args, state);
     case 'mcp_loader_attach_surface':
       return attachSurface(args, state);
     case 'mcp_loader_list_tools':
@@ -201,6 +206,73 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
     });
   }
   return { schema: 'narada.mcp_loader.site_surfaces.v1', site_root: siteRoot, surfaces };
+}
+
+function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord {
+  const siteRoot = normalizePath(requiredString(args.site_root, 'missing_site_root'));
+  ensureSiteRootAllowed(siteRoot, state.policy);
+  const fabricPath = resolve(siteRoot, '.ai', 'mcp', 'config.json');
+  const fabric = readSiteFabric(siteRoot);
+  const servers = asRecord(fabric.mcpServers);
+  const diagnostics = Object.entries(servers).map(([surfaceId, server]) => {
+    const rec = asRecord(server);
+    const command = String(rec.command ?? '');
+    const rawArgs = stringArray(rec.args) ?? [];
+    const declaredEntrypoint = extractNodeEntrypoint(command, rawArgs);
+    const shared = SHARED_SURFACE_REGISTRY[surfaceId];
+    const expectedEntrypoint = shared ? normalizePath(shared.entrypoint.replace(/{site_root}/g, siteRoot)) : null;
+    const normalizedDeclared = declaredEntrypoint ? normalizePath(declaredEntrypoint.replace(/{site_root}/g, siteRoot)) : null;
+    const entrypointExists = normalizedDeclared ? existsSync(normalizedDeclared) : false;
+    const classification = classifyFabricEntrypoint({
+      siteRoot,
+      declaredEntrypoint: normalizedDeclared,
+      expectedEntrypoint,
+      entrypointExists,
+    });
+    return {
+      surface_id: surfaceId,
+      source: 'site_fabric',
+      config_path: fabricPath,
+      command,
+      args: rawArgs,
+      declared_entrypoint: normalizedDeclared,
+      shared_registry_entrypoint: expectedEntrypoint,
+      entrypoint_exists: entrypointExists,
+      classification: classification.status,
+      durability: {
+        local_repair_durable: 'unknown',
+        reason: 'mcp-loader reads site fabric but does not own the generator or VCS ignore rules for this config.',
+      },
+      provenance: {
+        config_source: 'site_root/.ai/mcp/config.json',
+        shared_registry_source: shared ? '@narada2/mcp-loader-mcp embedded registry' : null,
+        generator: typeof fabric.generated_by === 'string' ? fabric.generated_by : null,
+        generated_at: typeof fabric.generated_at === 'string' ? fabric.generated_at : null,
+        tracking_state: 'unknown',
+        tracking_state_reason: 'VCS tracking and ignore state are outside mcp-loader authority.',
+      },
+      remediation: classification.remediation,
+    };
+  });
+  const sharedFallbacks = Object.entries(SHARED_SURFACE_REGISTRY)
+    .filter(([surfaceId]) => !servers[surfaceId])
+    .map(([surfaceId, shared]) => ({
+      surface_id: surfaceId,
+      source: 'shared_registry_fallback',
+      shared_registry_entrypoint: normalizePath(shared.entrypoint.replace(/{site_root}/g, siteRoot)),
+      classification: 'registry_fallback_available',
+      provenance: {
+        shared_registry_source: '@narada2/mcp-loader-mcp embedded registry',
+      },
+    }));
+  return {
+    schema: 'narada.mcp_loader.site_fabric_diagnostics.v1',
+    site_root: siteRoot,
+    config_path: fabricPath,
+    config_exists: existsSync(fabricPath),
+    diagnostics,
+    shared_registry_fallbacks: sharedFallbacks,
+  };
 }
 
 async function attachSurface(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
@@ -366,6 +438,60 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
     return { entrypoint, resolvedArgs: [...args, ...extraArgs ?? []] };
   }
   throw diagnosticError('surface_not_found', `surface_not_found:${surfaceId}`);
+}
+
+function extractNodeEntrypoint(command: string, args: string[]): string | null {
+  const commandEntrypoint = command.replace(/^node\s+--import\s+tsx\s+/i, '').replace(/^node\s+/i, '').trim();
+  if (commandEntrypoint && commandEntrypoint !== 'node') return commandEntrypoint;
+  return args.find((arg) => /\.m?js$/i.test(arg) || /\.cjs$/i.test(arg)) ?? null;
+}
+
+function classifyFabricEntrypoint({ siteRoot, declaredEntrypoint, expectedEntrypoint, entrypointExists }: {
+  siteRoot: string;
+  declaredEntrypoint: string | null;
+  expectedEntrypoint: string | null;
+  entrypointExists: boolean;
+}): { status: string; remediation: string[] } {
+  if (!declaredEntrypoint) {
+    return {
+      status: 'entrypoint_unresolved',
+      remediation: ['Inspect the site fabric command and args; mcp-loader could not determine the Node entrypoint.'],
+    };
+  }
+  if (!entrypointExists) {
+    return {
+      status: 'stale_entrypoint',
+      remediation: ['Repair or regenerate the site MCP fabric so the declared entrypoint exists before attach.'],
+    };
+  }
+  if (expectedEntrypoint && declaredEntrypoint === expectedEntrypoint) {
+    return {
+      status: 'matches_shared_registry',
+      remediation: [],
+    };
+  }
+  if (isUnderPath(declaredEntrypoint, siteRoot)) {
+    return {
+      status: expectedEntrypoint ? 'site_local_override' : 'site_local_surface',
+      remediation: ['Treat this as site-local authority; compare expected tools before replacing it with the shared registry entrypoint.'],
+    };
+  }
+  if (expectedEntrypoint) {
+    return {
+      status: 'external_entrypoint_override',
+      remediation: ['Classify as intentional override or drift at the fabric generator/registrar layer before local repair. Compare tool counts and authority implications against the shared registry entrypoint.'],
+    };
+  }
+  return {
+    status: 'external_site_declared_surface',
+    remediation: ['Verify the external entrypoint authority and allowed-entrypoint policy before attach.'],
+  };
+}
+
+function isUnderPath(child: string, parent: string): boolean {
+  const normalizedChild = normalizePath(child);
+  const normalizedParent = normalizePath(parent);
+  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}/`);
 }
 
 const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string[] }> = {
@@ -540,7 +666,7 @@ function tool(name: string, description: string, properties: JsonRecord, require
     description,
     annotations: {
       title: name,
-      readOnlyHint: name === 'mcp_loader_policy_inspect' || name === 'mcp_loader_list_site_surfaces' || name === 'mcp_loader_list_tools',
+      readOnlyHint: name === 'mcp_loader_policy_inspect' || name === 'mcp_loader_list_site_surfaces' || name === 'mcp_loader_site_fabric_diagnostics' || name === 'mcp_loader_list_tools',
       destructiveHint: name === 'mcp_loader_detach',
       idempotentHint: false,
       openWorldHint: true,
