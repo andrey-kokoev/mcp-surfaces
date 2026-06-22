@@ -30,14 +30,24 @@ try {
       if (name === 'worker_run_status') {
         const runId = String(args.run_id);
         const status = runStatuses.get(runId);
-        if (!status) throw new Error(`missing run status: ${runId}`);
+        if (!status) throw new Error(`worker_run_not_found: ${runId}`);
+        if (status.status === 'recover_with_wait') throw new Error(`worker_run_not_found: ${runId}`);
         runStatuses.set(runId, { ...status, status: 'completed', summary: `${runId} completed after wait` });
         return runStatuses.get(runId)!;
+      }
+      if (name === 'worker_run_wait') {
+        const runId = String(args.run_id);
+        const status = runStatuses.get(runId);
+        if (!status) throw new Error(`worker_run_not_found: ${runId}`);
+        const recovered = { ...status, status: 'completed', summary: `${runId} recovered by wait` };
+        runStatuses.set(runId, recovered);
+        return recovered;
       }
 
       const instruction = JSON.stringify(args);
       const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run').length}`;
-      const status = instruction.includes('async worker') ? 'running'
+      const status = instruction.includes('async missing status worker') ? 'recover_with_wait'
+        : instruction.includes('async worker') ? 'running'
         : instruction.includes('fail once') && ![...runStatuses.values()].some((run) => String(run.summary).includes('fail once')) ? 'failed'
           : 'completed';
       const result = {
@@ -104,6 +114,14 @@ try {
   assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'constraints_unknown_key'), true);
   assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'acceptance_unknown_key'), true);
   assert.equal(unknownShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'result_policy_unknown_key'), true);
+
+  const siteRootShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Site-bound worker graph',
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot },
+    workflow: { steps: [{ id: 'site-bound', kind: 'research', instruction: 'Inspect site-bound runtime' }] },
+  });
+  const siteRootShapeView = siteRootShape.result.structuredContent as Record<string, any>;
+  assert.equal(siteRootShapeView.status, 'ok');
 
   const preset = await callTool(state, 'delegated_task_validate', {
     objective: 'Preset graph',
@@ -228,6 +246,31 @@ try {
   });
   const failedReviewView = failedReviewRun.result.structuredContent as Record<string, any>;
   assert.equal(failedReviewView.task_status, 'failed');
+
+  const siteRootRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise site_root pass-through',
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot },
+    workflow: { steps: [{ id: 'site-bound', kind: 'research', instruction: 'site_root pass through' }] },
+    execution: { wait_for_completion: true },
+  });
+  const siteRootRunView = siteRootRun.result.structuredContent as Record<string, any>;
+  assert.equal(siteRootRunView.task_status, 'completed');
+  const siteRootWorkerCall = workerCalls.find((call) => call.name === 'worker_run' && JSON.stringify(call.args).includes('site_root pass through'));
+  assert.equal((siteRootWorkerCall?.args.constraints as Record<string, unknown>).site_root, siteRoot);
+
+  const recoveredWaitRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise worker status recovery',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'async-recover', kind: 'research', instruction: 'async missing status worker' }] },
+    execution: { start: true, wait_for_completion: false },
+  });
+  const recoveredWaitRunView = recoveredWaitRun.result.structuredContent as Record<string, any>;
+  assert.equal(recoveredWaitRunView.task_status, 'running');
+  const recoveredRunId = recoveredWaitRunView.progress.running_run_ids[0];
+  const recoveredStatus = await callTool(state, 'delegated_task_status', { task_id: recoveredWaitRunView.task_id, refresh: true });
+  const recoveredStatusView = recoveredStatus.result.structuredContent as Record<string, any>;
+  assert.equal(recoveredStatusView.task_status, 'completed');
+  assert.equal(workerCalls.some((call) => call.name === 'worker_run_wait' && String(call.args.run_id) === recoveredRunId), true);
 
   const repairedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise rejected review repair routing',
