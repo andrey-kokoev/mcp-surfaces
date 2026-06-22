@@ -575,13 +575,26 @@ function consolidateResult(task: Task, _state: State, stepStates: Record<string,
   const hasRunningStep = Object.values(stepStates).some((step) => step.status === 'running');
   const priorResidualRisks = stringList(rec(task.result).residual_risks).filter((risk) => hasRunningStep || risk !== 'worker_runs_still_in_progress');
   const residualRisks = uniqueStrings([...priorResidualRisks, ...outputs.flatMap((output) => stringList(output.residual_risks)), ...(hasRunningStep ? ['worker_runs_still_in_progress'] : [])]);
+  const workerTerminalDiagnostics = workerTerminalDiagnosticRecords(refs);
   const exitInterviews = exitInterviewRecords(refs);
   const exitInterviewFeedback = exitInterviewFeedbackSummary(exitInterviews);
   const observedIncoherencies = uniqueStrings([...stringList(rec(task.result).observed_incoherencies), ...outputs.flatMap((output) => stringList(output.observed_incoherencies)), ...stringList(exitInterviewFeedback.observed_incoherencies)]);
   const workerLaunchFailures = records(rec(task.result).worker_launch_failures);
   const launchFailureIncoherencies = workerLaunchFailures.map((failure) => `worker_launch_failed:${failure.step_id ?? 'unknown'}:${failure.message ?? 'unknown_error'}`);
   const joinSyntheses = records(rec(task.result).join_syntheses);
-  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, changed_file_refs: changedFileRefs, real_changed_files: realChangedFiles, affected_refs: affectedRefs, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflows: nestedWorkflows, nested_workflow_changed_files: nestedWorkflowChangedFiles, nested_workflow_verification: nestedWorkflowVerification, join_syntheses: joinSyntheses, verification, residual_risks: residualRisks, observed_incoherencies: uniqueStrings([...observedIncoherencies, ...launchFailureIncoherencies]), exit_interviews: exitInterviews, exit_interview_count: exitInterviews.length, exit_interview_feedback: exitInterviewFeedback, worker_launch_failures: workerLaunchFailures, worker_refs: refs, worker_ref_count: refs.length };
+  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, changed_file_refs: changedFileRefs, real_changed_files: realChangedFiles, affected_refs: affectedRefs, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflows: nestedWorkflows, nested_workflow_changed_files: nestedWorkflowChangedFiles, nested_workflow_verification: nestedWorkflowVerification, join_syntheses: joinSyntheses, verification, residual_risks: residualRisks, observed_incoherencies: uniqueStrings([...observedIncoherencies, ...launchFailureIncoherencies]), worker_terminal_diagnostics: workerTerminalDiagnostics, worker_terminal_diagnostic_count: workerTerminalDiagnostics.length, exit_interviews: exitInterviews, exit_interview_count: exitInterviews.length, exit_interview_feedback: exitInterviewFeedback, worker_launch_failures: workerLaunchFailures, worker_refs: refs, worker_ref_count: refs.length };
+}
+
+function workerTerminalDiagnosticRecords(refs: JsonRecord[]): JsonRecord[] {
+  return refs.flatMap((ref) => {
+    const output = rec(ref.output);
+    const error = opt(output.error);
+    const errorClassification = opt(output.error_classification);
+    const diagnosticTail = opt(output.diagnostic_tail);
+    const runtimeWarnings = stringList(output.runtime_warnings);
+    if (!error && !errorClassification && !diagnosticTail && runtimeWarnings.length === 0) return [];
+    return [{ step_id: ref.step_id ?? null, step_kind: ref.step_kind ?? null, run_id: ref.run_id ?? null, status: ref.status ?? null, error, error_classification: errorClassification, diagnostic_tail: diagnosticTail, runtime_warnings: runtimeWarnings }];
+  });
 }
 
 function exitInterviewRecords(refs: JsonRecord[]): JsonRecord[] {
@@ -1095,7 +1108,7 @@ function upsertWorkerRef(task: Task, workerRef: JsonRecord, output: JsonRecord):
   task.result = { ...rec(task.result), worker_refs: refs, worker_ref_count: refs.length };
 }
 function summarizeWorkerRef(step: WorkflowStep, result: JsonRecord): JsonRecord { return { step_id: step.id, step_kind: step.kind, run_id: result.run_id, worker_session_id: result.worker_session_id ?? null, status: String(result.status ?? 'unknown'), confidence: result.confidence ?? null, summary: result.summary ?? '', run_dir: result.run_dir, output_ref: result.output_ref ?? null, result_ref: result.result_ref ?? null }; }
-function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], nested_workflows: nestedWorkflowRecords(output), verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], exit_interview: output.exit_interview ?? null, review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null }; }
+function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], nested_workflows: nestedWorkflowRecords(output), verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], exit_interview: output.exit_interview ?? null, review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null, error_classification: output.error_classification ?? null, diagnostic_tail: output.diagnostic_tail ?? null, runtime_warnings: output.runtime_warnings ?? [], completion_state: output.completion_state ?? null }; }
 function nestedWorkflowRecords(output: JsonRecord): JsonRecord[] { return uniqueRecords([...recordList(output.nested_workflows), ...recordList(output.nested_workflow), ...recordList(output.nested_tasks), ...recordList(output.nested_task_results)]); }
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const constraints = { ...task.constraints, ...step.constraints };
@@ -1332,6 +1345,7 @@ function terminalSummary(result: JsonRecord): JsonRecord {
     verification_count: records(result.verification).length,
     residual_risk_count: stringList(result.residual_risks).length,
     observed_incoherency_count: stringList(result.observed_incoherencies).length,
+    worker_terminal_diagnostic_count: integer(result.worker_terminal_diagnostic_count, records(result.worker_terminal_diagnostics).length, 0, 1000000),
     exit_interview_count: integer(result.exit_interview_count, records(result.exit_interviews).length, 0, 1000000),
   };
 }
@@ -1397,6 +1411,7 @@ function graphExecutionSynthesis(task: Task, stepStates: Record<string, StepStat
     run_refs: refs.map((ref) => ({ step_id: ref.step_id, run_id: ref.run_id, output_ref: ref.output_ref ?? null, result_ref: ref.result_ref ?? null, run_dir: ref.run_dir ?? null })),
     worker_summaries: refs.map(compactWorkerRef),
     diagnostics: { failed_steps: failedSteps, pending_steps: pendingSteps, pending_acceptance_items: records(terminal.pending_acceptance_items), pending_review_items: records(terminal.pending_review_items) },
+    worker_terminal_diagnostics: records(result.worker_terminal_diagnostics),
     residual_risks: stringList(result.residual_risks),
     review_consensus: review,
     changed_files_by_source: changedFilesBySource(result),

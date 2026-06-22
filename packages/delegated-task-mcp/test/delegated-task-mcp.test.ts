@@ -88,6 +88,16 @@ try {
         verification_results: [{ tool: 'structured-command', command: 'pnpm test:delegated-task', status: 'passed' }],
         residual_risks: status === 'running' ? ['worker still running'] : [],
         observed_incoherencies: [],
+        ...(instruction.includes('expired terminal worker') ? {
+          status: 'failed',
+          confidence: 'partial',
+          completion_state: 'partial',
+          summary: '',
+          error: 'worker_run_expired_without_terminal_output: run stayed running past max_run_ms plus grace without a usable last_message.json',
+          error_classification: 'worker_run_expired_without_terminal_output',
+          diagnostic_tail: 'runtime process stopped before final message',
+          runtime_warnings: ['worker_run_expired_without_terminal_output: run stayed running past max_run_ms plus grace without a usable last_message.json'],
+        } : {}),
         exit_interview: (args.constraints as Record<string, unknown> | undefined)?.exit_interview === true ? {
           ergonomics_feedback: 'Worker exit interview captured by delegated task.',
           friction_points: ['exit interview propagation required explicit test coverage'],
@@ -611,6 +621,23 @@ try {
   assert.deepEqual(exitInterviewResultView.result.exit_interview_feedback.friction_points, ['exit interview propagation required explicit test coverage']);
   assert.equal(exitInterviewResultView.result.observed_incoherencies.includes('delegated_task_exit_interview_path_was_previously_unprocessed'), true);
   assert.equal(exitInterviewResultView.result.terminal_summary.exit_interview_count, 1);
+
+  const expiredTerminalRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise delegated task expired terminal diagnostics',
+    constraints: { authority: 'read', cwd: root, exit_interview: true },
+    workflow: { steps: [{ id: 'audit', kind: 'research', instruction: 'expired terminal worker' }] },
+    result_policy: { expose_worker_refs: false },
+    execution: { wait_for_completion: true },
+  });
+  const expiredTerminalView = expiredTerminalRun.result.structuredContent as Record<string, any>;
+  assert.equal(expiredTerminalView.task_status, 'failed');
+  const expiredTerminalResult = await callTool(state, 'delegated_task_result', { task_id: expiredTerminalView.task_id, include_diagnostics: true });
+  const expiredTerminalResultView = expiredTerminalResult.result.structuredContent as Record<string, any>;
+  assert.equal(expiredTerminalResultView.result.worker_terminal_diagnostic_count, 1);
+  assert.equal(expiredTerminalResultView.result.worker_terminal_diagnostics[0].error_classification, 'worker_run_expired_without_terminal_output');
+  assert.match(expiredTerminalResultView.result.worker_terminal_diagnostics[0].diagnostic_tail, /runtime process stopped before final message/);
+  assert.equal(expiredTerminalResultView.result.terminal_summary.worker_terminal_diagnostic_count, 1);
+  assert.equal(expiredTerminalResultView.result.graph_execution_synthesis.worker_terminal_diagnostics[0].run_id, expiredTerminalResultView.result.worker_terminal_diagnostics[0].run_id);
 
   const repairedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise rejected review repair routing',

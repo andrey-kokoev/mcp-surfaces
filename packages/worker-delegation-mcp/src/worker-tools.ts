@@ -281,7 +281,7 @@ function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMc
   const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
   const warning = 'worker_run_orphaned_final_output: valid last_message.json exists, but result.json was not finalized before max_run_ms elapsed';
   const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
-  return {
+  const recoveredRun = {
     ...run,
     status: 'completed_with_errors',
     edits_performed: output.edits_performed,
@@ -303,9 +303,10 @@ function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMc
     },
     error: warning,
   };
+  return recoveredRun;
 }
 
-function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcpState, resultPath?: string): Record<string, unknown> {
   if (run.status !== 'running') return run;
   const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
   if (!runDir) return run;
@@ -322,7 +323,7 @@ function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcp
   const warning = 'worker_run_expired_without_terminal_output: run stayed running past max_run_ms plus grace without a usable last_message.json';
   const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
   const diagnosticTail = readDiagnosticTail(resolve(runDir, 'diagnostic.log'));
-  return {
+  const recoveredRun = {
     ...run,
     status: 'failed',
     confidence: 'partial',
@@ -338,6 +339,8 @@ function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcp
     error_classification: 'worker_run_expired_without_terminal_output',
     ...(diagnosticTail ? { diagnostic_tail: diagnosticTail } : {}),
   };
+  if (resultPath) writeJson(resultPath, recoveredRun);
+  return recoveredRun;
 }
 
 function recoverCompletedRunFromEvents(run: Record<string, unknown>, resultPath: string): Record<string, unknown> {
@@ -1243,7 +1246,7 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
   }
   try {
     const run = JSON.parse(readFileSync(located.resultPath, 'utf8')) as Record<string, unknown>;
-    return withArtifactReadback(enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state)), state)), state, located);
+    return withArtifactReadback(enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state, located.resultPath)), state)), state, located);
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
