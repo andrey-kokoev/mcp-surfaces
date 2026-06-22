@@ -64,7 +64,7 @@ export function writeWorkerOutputSchema(path: string): void {
   writeJson(path, {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'exit_interview'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -73,7 +73,9 @@ export function writeWorkerOutputSchema(path: string): void {
       edits_performed: { type: 'boolean' },
       target_state_changed: { type: 'boolean' },
       changes: { type: 'array', items: { type: 'object', required: ['path', 'status', 'summary'], properties: { path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
-      verification: { type: 'array', items: { type: 'object', required: ['tool', 'command', 'status', 'summary'], properties: { tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
+      verification: { type: 'array', items: { type: 'object', required: ['tool', 'command', 'status', 'summary', 'command_classification'], properties: { tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' }, command_classification: { type: 'string', enum: ['focused', 'broad', 'not_applicable'] } }, additionalProperties: false } },
+      verification_budget_respected: { type: ['boolean', 'null'] },
+      broad_unrelated_failures: { type: 'array', items: { type: 'object', required: ['command', 'status', 'summary'], properties: { command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
       exit_interview: {
         type: ['object', 'null'],
         required: ['ergonomics_feedback', 'friction_points', 'missing_affordances', 'observed_incoherencies', 'suggested_improvements'],

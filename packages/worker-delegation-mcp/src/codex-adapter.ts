@@ -7,9 +7,11 @@ export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
 export type WorkerChange = { path: string; status: string; summary: string };
-export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string };
+export type WorkerVerificationCommandClassification = 'focused' | 'broad' | 'not_applicable';
+export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string; command_classification?: WorkerVerificationCommandClassification };
+export type WorkerBroadUnrelatedFailure = { command: string | null; status: string; summary: string };
 export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; exit_interview: WorkerExitInterview | null };
+export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null };
 export type WorkerOutputParseResult =
   | { ok: true; data: WorkerOutput }
   | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
@@ -196,9 +198,23 @@ export function parseLastMessage(path: string): WorkerOutputParseResult {
     if (!item) return { ok: false, reason: 'invalid_shape', message: `verification[${i}] must have nullable string tool and command, plus string status and summary` };
     verification.push(item);
   }
+  const verificationBudgetRespected: boolean | null = record.verification_budget_respected === undefined || record.verification_budget_respected === null
+    ? null
+    : typeof record.verification_budget_respected === 'boolean'
+      ? record.verification_budget_respected
+      : null;
+  if (record.verification_budget_respected !== undefined && record.verification_budget_respected !== null && typeof record.verification_budget_respected !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'verification_budget_respected must be boolean or null' };
+  const broadUnrelatedFailuresRaw = record.broad_unrelated_failures === undefined ? [] : record.broad_unrelated_failures;
+  if (!Array.isArray(broadUnrelatedFailuresRaw)) return { ok: false, reason: 'invalid_shape', message: 'broad_unrelated_failures must be an array' };
+  const broadUnrelatedFailures: WorkerBroadUnrelatedFailure[] = [];
+  for (let i = 0; i < broadUnrelatedFailuresRaw.length; i += 1) {
+    const item = asBroadUnrelatedFailure(broadUnrelatedFailuresRaw[i]);
+    if (!item) return { ok: false, reason: 'invalid_shape', message: `broad_unrelated_failures[${i}] must have nullable string command plus string status and summary` };
+    broadUnrelatedFailures.push(item);
+  }
   const exitInterview = record.exit_interview === undefined || record.exit_interview === null ? null : asExitInterview(record.exit_interview);
   if (record.exit_interview !== undefined && record.exit_interview !== null && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must be null or include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
-  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, exit_interview: exitInterview } };
+  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, verification_budget_respected: verificationBudgetRespected, broad_unrelated_failures: broadUnrelatedFailures, exit_interview: exitInterview } };
 }
 
 export function parseResult(runRecord: { lastMessagePath: string }): WorkerOutputParseResult {
@@ -283,7 +299,21 @@ function asVerification(value: unknown): WorkerVerification | null {
   if (!Object.hasOwn(record, 'tool') || !Object.hasOwn(record, 'command')) return null;
   if (!nullableString(record.tool) || !nullableString(record.command)) return null;
   if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
-  return { tool: record.tool, command: record.command, status: record.status, summary: record.summary };
+  const commandClassification = verificationCommandClassification(record.command_classification);
+  if (record.command_classification !== undefined && commandClassification === null) return null;
+  return { tool: record.tool, command: record.command, status: record.status, summary: record.summary, ...(commandClassification ? { command_classification: commandClassification } : {}) };
+}
+
+function verificationCommandClassification(value: unknown): WorkerVerificationCommandClassification | null {
+  return value === 'focused' || value === 'broad' || value === 'not_applicable' ? value : null;
+}
+
+function asBroadUnrelatedFailure(value: unknown): WorkerBroadUnrelatedFailure | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!nullableString(record.command)) return null;
+  if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
+  return { command: record.command, status: record.status, summary: record.summary };
 }
 
 function nullableString(value: unknown): value is string | null {

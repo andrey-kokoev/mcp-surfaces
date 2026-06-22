@@ -438,7 +438,9 @@ function workerOutputFromAgentMessage(message: string): WorkerOutput {
     edits_performed: false,
     target_state_changed: false,
     changes: [],
-    verification: [{ tool: 'codex-events', command: null, status: 'passed', summary: 'Recovered final agent_message after turn.completed' }],
+    verification: [{ tool: 'codex-events', command: null, status: 'passed', summary: 'Recovered final agent_message after turn.completed', command_classification: 'not_applicable' }],
+    verification_budget_respected: null,
+    broad_unrelated_failures: [],
     exit_interview: null,
   };
 }
@@ -896,6 +898,8 @@ function buildWorkerRunPayload(options: {
     next_actions: options.output?.next_actions ?? [],
     changes: options.output?.changes ?? [],
     verification_results: options.output?.verification ?? [],
+    verification_budget_respected: options.output?.verification_budget_respected ?? null,
+    broad_unrelated_failures: options.output?.broad_unrelated_failures ?? [],
     exit_interview: options.output?.exit_interview ?? null,
     progress: readRunProgress(options.runRecord.eventsPath),
     artifacts: runArtifacts(options.runRecord),
@@ -1799,6 +1803,8 @@ function outputContractForRequest(request: WorkerRunToolInput, mode: WorkerDeleg
     tool_capability_note: authority === 'read' ? 'If a raw MCP surface advertises write-capable roots or mutation tools, treat them as unavailable for this delegation unless the requested authority is escalated by the caller.' : null,
     target_paths: targetPaths,
     forbidden_adjacent_paths: targetPaths.length > 0 ? ['Paths outside target_paths and allowed roots unless explicitly required by the task.'] : [],
+    verification_budget: request.constraints.verification_budget ?? null,
+    test_budget: request.constraints.test_budget ?? null,
   };
 }
 
@@ -1814,6 +1820,14 @@ function outputContractForMode(mode: WorkerDelegationMode): Record<string, unkno
       item_shape: { severity: 'info|low|medium|high|critical', path: 'string|null', recommendation: 'string', confidence_level: 'number 0..1', evidence_refs: 'string[]' },
     } : null,
     shell_fallback_reason: 'When verification or discovery uses shell because an MCP tool was unavailable or insufficient, explain that reason in verification.summary.',
+    verification_command_classification: {
+      required: true,
+      allowed_values: ['focused', 'broad', 'not_applicable'],
+      meaning: 'focused commands directly validate the touched package/task; broad commands scan larger or unrelated surfaces and must be justified.',
+    },
+    verification_budget_respected: { type: ['boolean', 'null'], required: true, meaning: 'true if verification/test budget and stop discipline were respected, false if exceeded, null if no budget was supplied and no verification was run' },
+    broad_unrelated_failures: { type: 'array', required: true, meaning: 'Failures from broad commands that appear unrelated to the delegated target; do not mix them with focused verification failures.' },
+    stop_discipline: 'Run focused checks first. Stop after the requested tests or first blocking focused failure when stop_on_first_failure is true. Do not run broad suites unless requested, needed, or allowed by budget.',
   };
 }
 
@@ -1842,6 +1856,12 @@ function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: W
     'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
     'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
     'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    '',
+    'Verification budget discipline',
+    'Classify every verification command as focused, broad, or not_applicable in verification[].command_classification.',
+    'Focused commands directly validate the requested package or touched files. Broad commands cover unrelated packages, whole-repo suites, or wide scans.',
+    'Respect verification_budget and test_budget from the structured output contract. If stop_on_first_failure is true, stop after the first blocking focused failure.',
+    'Report verification_budget_respected as true, false, or null, and list broad unrelated failures only in broad_unrelated_failures.',
     ...(options.runtime === 'narada-agent-runtime-server' ? [
       '',
       'NARS worker completion guard',
@@ -1862,6 +1882,7 @@ function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: W
     'Return one JSON object matching worker_output.schema.json.',
     'For audit_only or plan_only, explicitly state that edits_performed=false in the summary if no files were changed.',
     'Always include explicit edits_performed, target_state_changed, changes, and verification fields.',
+    'Always include explicit verification_budget_respected and broad_unrelated_failures fields.',
     'For implement or implement_and_verify, list changed files in changes and checks run in verification.',
     ...(options.exitInterview ? [
       '',
@@ -1896,6 +1917,10 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   if (constraintsInput.resumable !== undefined || args.resumable !== undefined) constraints.resumable = Boolean(constraintsInput.resumable ?? args.resumable);
   if (constraintsInput.wait_for_completion !== undefined || args.wait_for_completion !== undefined) constraints.wait_for_completion = Boolean(constraintsInput.wait_for_completion ?? args.wait_for_completion);
   if (constraintsInput.exit_interview !== undefined || args.exit_interview !== undefined) constraints.exit_interview = Boolean(constraintsInput.exit_interview ?? args.exit_interview);
+  const verificationBudget = normalizeBudget(constraintsInput.verification_budget ?? args.verification_budget);
+  if (verificationBudget) constraints.verification_budget = verificationBudget;
+  const testBudget = normalizeBudget(constraintsInput.test_budget ?? args.test_budget);
+  if (testBudget) constraints.test_budget = testBudget;
   const preflightPaths = normalizePreflightPaths(constraintsInput.preflight_paths ?? args.preflight_paths);
   if (preflightPaths.length > 0) constraints.preflight_paths = preflightPaths;
   const requiredMcpTools = normalizeStringList(constraintsInput.required_mcp_tools ?? args.required_mcp_tools, 'worker_invalid_required_mcp_tools');
@@ -1912,6 +1937,24 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   }
   if (Object.keys(overrides).length > 0) constraints.overrides = overrides;
   return constraints;
+}
+
+function normalizeBudget(value: unknown): NonNullable<WorkerConstraintRequest['verification_budget']> | undefined {
+  const input = asRecord(value);
+  const result: NonNullable<WorkerConstraintRequest['verification_budget']> = {};
+  if (input.focus === 'focused' || input.focus === 'broad') result.focus = input.focus;
+  if (input.max_commands !== undefined) result.max_commands = boundedNumber(input.max_commands, 'worker_invalid_verification_budget', 0, 100);
+  if (input.max_minutes !== undefined) result.max_minutes = boundedNumber(input.max_minutes, 'worker_invalid_verification_budget', 0, 24 * 60);
+  if (input.stop_on_first_failure !== undefined) result.stop_on_first_failure = Boolean(input.stop_on_first_failure);
+  if (input.broad_commands_allowed !== undefined) result.broad_commands_allowed = Boolean(input.broad_commands_allowed);
+  copyString(result as Record<string, unknown>, 'notes', input.notes);
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function boundedNumber(value: unknown, code: string, min: number, max: number): number {
+  const number = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(number) || number < min || number > max) throw diagnosticError(code, code, { value, min, max });
+  return number;
 }
 
 function copyString(target: Record<string, unknown>, key: string, value: unknown): void {

@@ -155,6 +155,8 @@ function constraintRequestSchema(): Record<string, unknown> {
     resumable: { type: 'boolean' },
     wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
     exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
+    verification_budget: budgetSchema('Advisory verification budget. Workers classify commands as focused or broad, respect stop discipline, and report budget adherence.'),
+    test_budget: budgetSchema('Advisory test budget. Use for focused package-local checks before broader suites; workers report broad unrelated failures separately.'),
     preflight_paths: { type: 'array', items: objectSchema({
       path: { type: 'string' },
       access: { type: 'string', enum: ['read', 'write', 'create'] },
@@ -163,6 +165,22 @@ function constraintRequestSchema(): Record<string, unknown> {
     required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the worker must verify before work. Recorded as advisory preflight because worker-delegation cannot inspect the worker runtime tool inventory.' },
     overrides: constraintOverrideSchema(),
   }, ['cwd']);
+}
+
+function budgetSchema(description: string): Record<string, unknown> {
+  return {
+    type: 'object',
+    description,
+    properties: {
+      focus: { type: 'string', enum: ['focused', 'broad'], description: 'Default command scope expected for verification.' },
+      max_commands: { type: 'integer', minimum: 0, maximum: 100 },
+      max_minutes: { type: 'number', minimum: 0 },
+      stop_on_first_failure: { type: 'boolean' },
+      broad_commands_allowed: { type: 'boolean' },
+      notes: { type: 'string' },
+    },
+    additionalProperties: false,
+  };
 }
 
 function constraintOverrideSchema(): Record<string, unknown> {
@@ -291,7 +309,9 @@ function workerRunOutputSchema(): Record<string, unknown> {
     open_questions: stringArraySchema(),
     next_actions: stringArraySchema(),
     changes: { type: 'array', items: objectSchema({ path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['path', 'status', 'summary']) },
-    verification_results: { type: 'array', items: objectSchema({ tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, ['tool', 'command', 'status', 'summary']) },
+    verification_results: { type: 'array', items: objectSchema({ tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' }, command_classification: { type: 'string', enum: ['focused', 'broad', 'not_applicable'] } }, ['tool', 'command', 'status', 'summary']) },
+    verification_budget_respected: { type: ['boolean', 'null'] },
+    broad_unrelated_failures: { type: 'array', items: objectSchema({ command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, ['command', 'status', 'summary']) },
     exit_interview: { type: ['object', 'null'], properties: {
       ergonomics_feedback: { type: 'string' },
       friction_points: stringArraySchema(),

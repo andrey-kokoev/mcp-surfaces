@@ -134,6 +134,8 @@ Delegation mode is explicit intent, not mechanical authority. `intent.mode` may 
 - `constraints.cognition` (string, default `"low"`): `"low"`, `"medium"`, or `"high"`.
 - `constraints.resumable` (boolean, default `false`): enable continuation via `worker_resume`.
 - `constraints.wait_for_completion` (boolean, default `false`): block until worker finishes.
+- `constraints.verification_budget` (object, optional): advisory verification discipline, with fields such as `focus` (`"focused"` or `"broad"`), `max_commands`, `max_minutes`, `stop_on_first_failure`, `broad_commands_allowed`, and `notes`.
+- `constraints.test_budget` (object, optional): advisory test discipline using the same shape as `verification_budget`.
 - `constraints.overrides` (object, optional): set `runtime` (`"codex"`, `"deepseek-api"`, or `"narada-agent-runtime-server"`), `sandbox`, `model`, or `reasoning_effort`.
 - `constraints.preflight_paths` (array, optional): path existence/access checks before delegation.
 - `constraints.required_mcp_tools` (array, optional): MCP tool names the worker must have.
@@ -150,14 +152,14 @@ Worker-starting tools return `schema: "narada.worker.run.v1"` with:
 - `executor_request`
 - `resolved_worker_config`
 - `requested_mode`, `edits_performed`, `target_state_changed`, `confidence`, `blocked_paths`, `verification`, `preflight`, and `final_checklist`
-- `summary`, `deliverables`, `open_questions`, `next_actions`, `changes`, and `verification_results`
+- `summary`, `deliverables`, `open_questions`, `next_actions`, `changes`, `verification_results`, `verification_budget_respected`, and `broad_unrelated_failures`
 - `artifacts` pointing at request, prompt, invocation, event, diagnostic, last-message, result, and schema files
 - resumable sessions additionally write `run_root/sessions/<worker_session_id>.json` with the latest inherited execution policy
 - `timing`
 
 By default, `worker_run`, `worker_edit`, and `worker_resume` return after launch with `status: "running"`. Use `worker_run_status` with the returned `run_id` to inspect completion and read the final full payload. Use `worker_runs_list` to rediscover recent or still-running work after the main agent has stopped or lost the run id. It is compact by default: each item includes run id, status, requested mode, whether requested mode was inferred for an old run, authority, started/finished timing, a short summary preview, and an error preview. Set `include_summary: true` for full summaries and `verbose: true` for full list item metadata. Use `worker_run_wait` for a bounded wait, for example `timeout_ms: 10000`, when a run is likely near completion. It returns a compact run status by default; set `summary_only: true` for the smallest useful response or `verbose: true` to include the full run payload as `full_run`. Set `wait_for_completion: true` only for intentionally short calls where blocking the main agent is acceptable.
 
-Worker output must explicitly include `edits_performed`, `target_state_changed`, `changes`, and `verification`. The server does not infer implementation state from deliverables. `changes` is for files or target artifacts changed; `verification` is structured check evidence with `status`, `summary`, and optional `tool` or `command`.
+Worker output must explicitly include `edits_performed`, `target_state_changed`, `changes`, `verification`, `verification_budget_respected`, and `broad_unrelated_failures`. The server does not infer implementation state from deliverables. `changes` is for files or target artifacts changed; `verification` is structured check evidence with `status`, `summary`, optional `tool` or `command`, and `command_classification` (`focused`, `broad`, or `not_applicable`). Broad command failures that appear unrelated to the delegated target should be reported separately in `broad_unrelated_failures`.
 
 Runs that produce a valid `last_message.json` but also encounter runtime or tool errors finish as `completed_with_errors`. The error remains on the payload, but the summary and deliverables are preserved as usable worker output.
 

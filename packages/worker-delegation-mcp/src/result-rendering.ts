@@ -86,6 +86,8 @@ function renderRun(record: Record<string, unknown>): string {
     `completion_state: ${record.completion_state ?? record.confidence ?? ''}`,
     `confidence: ${record.confidence ?? ''}`,
     `edits_performed: ${record.edits_performed ?? 'null'}`,
+    `verification_budget_respected: ${record.verification_budget_respected ?? 'null'}`,
+    `broad_unrelated_failures: ${arrayCount(record.broad_unrelated_failures)}`,
     `warning_count: ${record.warning_count ?? 0}`,
     `worker_session_id: ${record.worker_session_id ?? 'null'}`,
     `summary: ${record.summary ?? ''}`,

@@ -41,7 +41,9 @@ process.stdin.on('end', () => {
     edits_performed: prompt.includes('Implement:'),
     target_state_changed: prompt.includes('Implement:'),
     changes: prompt.includes('Implement:') ? [{ path: 'result.txt', status: 'modified', summary: 'fake edit result' }] : [],
-    verification: [{ tool: 'fake-codex', command: null, status: 'passed', summary: 'fake worker completed' }],
+    verification: [{ tool: 'fake-codex', command: null, status: 'passed', summary: 'fake worker completed', command_classification: 'not_applicable' }],
+    verification_budget_respected: true,
+    broad_unrelated_failures: [],
     exit_interview: null
   };
   if (prompt.includes('Exit interview')) output.exit_interview = {
@@ -70,7 +72,9 @@ process.stdin.on('end', () => {
     edits_performed: false,
     target_state_changed: false,
     changes: [],
-    verification: [{ tool: 'fake-codex', command: null, status: 'failed', summary: 'simulated tool error' }],
+    verification: [{ tool: 'fake-codex', command: null, status: 'failed', summary: 'simulated tool error', command_classification: 'not_applicable' }],
+    verification_budget_respected: true,
+    broad_unrelated_failures: [],
     exit_interview: null
   }));
 });
@@ -105,6 +109,8 @@ process.stdin.on('data', (chunk) => {
           edits_performed: false,
           target_state_changed: false,
           verification: { tool: 'fake-agent-runtime-server', status: 'passed', summary: 'loose verification object accepted' },
+          verification_budget_respected: true,
+          broad_unrelated_failures: [],
           exit_interview: {
             ergonomics_feedback: 'loose output preserved',
             friction_points: ['verification object was not an array'],
@@ -126,7 +132,9 @@ process.stdin.on('data', (chunk) => {
         edits_performed: false,
         target_state_changed: false,
         changes: [],
-        verification: [{ tool: 'fake-agent-runtime-server', command: null, status: 'passed', summary: 'fake server completed' }],
+        verification: [{ tool: 'fake-agent-runtime-server', command: null, status: 'passed', summary: 'fake server completed', command_classification: 'not_applicable' }],
+        verification_budget_respected: true,
+        broad_unrelated_failures: [],
         exit_interview: null
       };
       process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-worker' }) + '\\n');
@@ -190,6 +198,8 @@ assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.wait_for_completion?.type, 'boolean');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.exit_interview?.type, 'boolean');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.verification_budget?.type, 'object');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.test_budget?.type, 'object');
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.intent?.properties?.mode?.enum, ['audit_only', 'plan_only', 'implement', 'implement_and_verify']);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.preflight_paths?.type, 'array');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.required_mcp_tools?.type, 'array');
@@ -241,7 +251,7 @@ assert.match(policy.result?.content[0].text, /nars_site_markers: \.narada\/,.ai\
 
 const configPreview = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'inspect repository shape' },
-  constraints: { cwd: root, authority: 'read', cognition: 'high', required_mcp_tools: ['mcp__narada_andrey_local_filesystem'] },
+  constraints: { cwd: root, authority: 'read', cognition: 'high', required_mcp_tools: ['mcp__narada_andrey_local_filesystem'], verification_budget: { focus: 'focused', max_commands: 1, stop_on_first_failure: true }, test_budget: { focus: 'focused', max_minutes: 2, broad_commands_allowed: false } },
 } } }, state);
 assert.equal(configPreview.result?.structuredContent.schema, 'narada.worker.config_resolve.v1');
 assert.equal(configPreview.result?.structuredContent.dry_run, true);
@@ -255,6 +265,9 @@ assert.deepEqual(configPreview.result?.structuredContent.requested_mcp_tools, ['
 assert.equal(configPreview.result?.structuredContent.mcp_tool_verification.verification_state, 'delegated_to_worker');
 assert.equal(configPreview.result?.structuredContent.output_contract.schema, 'narada.worker.output_contract.v1');
 assert.equal(configPreview.result?.structuredContent.output_contract.findings.required_for_audit_only, true);
+assert.equal(configPreview.result?.structuredContent.output_contract.verification_command_classification.required, true);
+assert.deepEqual(configPreview.result?.structuredContent.output_contract.verification_budget, { focus: 'focused', max_commands: 1, stop_on_first_failure: true });
+assert.deepEqual(configPreview.result?.structuredContent.output_contract.test_budget, { focus: 'focused', max_minutes: 2, broad_commands_allowed: false });
 assert.equal(configPreview.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
 assert.equal(JSON.stringify(configPreview.result?.structuredContent).includes('kimi-secret-must-not-leak'), false);
 assert.match(configPreview.result?.structuredContent.invocation.argv.join(' '), /<dry-run>\/worker_output\.schema\.json/);
@@ -346,7 +359,7 @@ if (process.platform === 'win32') {
   const codexPs1 = join(ps1Bin, 'codex.ps1');
   writeFileSync(codexPs1, `
 $out = $args[$args.IndexOf('-o') + 1]
-Set-Content -LiteralPath $out -Encoding UTF8 -Value '{"summary":"ps1 worker ok","deliverables":[],"open_questions":[],"next_actions":[],"edits_performed":false,"target_state_changed":false,"changes":[],"verification":[],"exit_interview":null}'
+Set-Content -LiteralPath $out -Encoding UTF8 -Value '{"summary":"ps1 worker ok","deliverables":[],"open_questions":[],"next_actions":[],"edits_performed":false,"target_state_changed":false,"changes":[],"verification":[],"verification_budget_respected":null,"broad_unrelated_failures":[],"exit_interview":null}'
 Write-Output '{"thread_id":"ps1-thread"}'
 `, 'utf8');
   const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), codexCommand: 'codex.ps1' }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
@@ -562,9 +575,12 @@ for (const file of ['request.json', 'executor_request.json', 'resolved_worker_co
 const workerOutputSchema = JSON.parse(readFileSync(join(completedRunDir, 'worker_output.schema.json'), 'utf8'));
 assertStrictStructuredOutputSchema(workerOutputSchema, 'worker_output_schema');
 assert.equal(workerOutputSchema.required.includes('exit_interview'), true);
-assert.deepEqual(workerOutputSchema.properties.verification.items.required, ['tool', 'command', 'status', 'summary']);
+assert.equal(workerOutputSchema.required.includes('verification_budget_respected'), true);
+assert.equal(workerOutputSchema.required.includes('broad_unrelated_failures'), true);
+assert.deepEqual(workerOutputSchema.properties.verification.items.required, ['tool', 'command', 'status', 'summary', 'command_classification']);
 assert.deepEqual(workerOutputSchema.properties.verification.items.properties.tool.type, ['string', 'null']);
 assert.deepEqual(workerOutputSchema.properties.verification.items.properties.command.type, ['string', 'null']);
+assert.deepEqual(workerOutputSchema.properties.verification.items.properties.command_classification.enum, ['focused', 'broad', 'not_applicable']);
 assert.deepEqual(workerOutputSchema.properties.exit_interview.type, ['object', 'null']);
 const request = JSON.parse(readFileSync(join(completedRunDir, 'request.json'), 'utf8'));
 assert.equal(request.intent.instruction, 'run with allowed config');

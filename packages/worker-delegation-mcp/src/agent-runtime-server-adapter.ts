@@ -242,7 +242,9 @@ function workerOutputFromAgentMessage(message: string): WorkerOutput {
     edits_performed: false,
     target_state_changed: false,
     changes: [],
-    verification: [{ tool: 'narada-agent-runtime-server', command: null, status: 'passed', summary: 'Recovered final assistant_message after turn_complete' }],
+    verification: [{ tool: 'narada-agent-runtime-server', command: null, status: 'passed', summary: 'Recovered final assistant_message after turn_complete', command_classification: 'not_applicable' }],
+    verification_budget_respected: null,
+    broad_unrelated_failures: [],
     exit_interview: null,
   };
 }
@@ -282,6 +284,8 @@ function normalizeWorkerOutput(value: unknown): WorkerOutput | null {
     target_state_changed: typeof record.target_state_changed === 'boolean' ? record.target_state_changed : false,
     changes: arrayOf(record.changes, asChange),
     verification: normalizeVerification(record.verification),
+    verification_budget_respected: typeof record.verification_budget_respected === 'boolean' ? record.verification_budget_respected : null,
+    broad_unrelated_failures: arrayOf(record.broad_unrelated_failures, asBroadUnrelatedFailure),
     exit_interview: normalizeExitInterview(record.exit_interview),
   };
 }
@@ -328,6 +332,17 @@ function asVerification(value: unknown): WorkerVerification | null {
       : typeof record.message === 'string'
         ? record.message
         : '',
+    command_classification: record.command_classification === 'focused' || record.command_classification === 'broad' || record.command_classification === 'not_applicable' ? record.command_classification : 'not_applicable',
+  };
+}
+
+function asBroadUnrelatedFailure(value: unknown): { command: string | null; status: string; summary: string } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    command: typeof record.command === 'string' ? record.command : null,
+    status: typeof record.status === 'string' ? record.status : 'reported',
+    summary: typeof record.summary === 'string' ? record.summary : '',
   };
 }
 

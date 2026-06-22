@@ -19,6 +19,15 @@ export type WorkerPreflightPath = {
   label?: string;
 };
 
+export type WorkerVerificationBudget = {
+  focus?: 'focused' | 'broad';
+  max_commands?: number;
+  max_minutes?: number;
+  stop_on_first_failure?: boolean;
+  broad_commands_allowed?: boolean;
+  notes?: string;
+};
+
 export type WorkerRunMetadata = {
   requested_mode: WorkerDelegationMode;
   edits_performed: boolean | null;
@@ -48,6 +57,8 @@ export type WorkerConstraintRequest = {
   resumable?: boolean;
   wait_for_completion?: boolean;
   exit_interview?: boolean;
+  verification_budget?: WorkerVerificationBudget;
+  test_budget?: WorkerVerificationBudget;
   preflight_paths?: WorkerPreflightPath[];
   required_mcp_tools?: string[];
   overrides?: WorkerConstraintOverrides;

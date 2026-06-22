@@ -251,7 +251,9 @@ function buildInitialMessages(prompt: string): DeepseekMessage[] {
         '- edits_performed (boolean): whether files were edited',
         '- target_state_changed (boolean): whether target state was modified',
         '- changes (array of {path, status, summary}): detailed list of changes',
-        '- verification (array of {tool, command, status, summary}): verification results',
+        '- verification (array of {tool, command, status, summary, command_classification}): verification results; command_classification is focused, broad, or not_applicable',
+        '- verification_budget_respected (boolean or null): whether verification/test budget and stop discipline were respected',
+        '- broad_unrelated_failures (array of {command, status, summary}): unrelated failures from broad commands only',
         '- exit_interview (object or null): structured feedback',
         '',
         'Return ONLY valid JSON. Do not include markdown fences or explanatory text before or after the JSON.',
@@ -569,7 +571,9 @@ function parseWorkerOutput(content: string): WorkerOutput | null {
         edits_performed: Boolean(parsed.edits_performed),
         target_state_changed: Boolean(parsed.target_state_changed),
         changes: Array.isArray(parsed.changes) ? parsed.changes as Array<{ path: string; status: string; summary: string }> : [],
-        verification: Array.isArray(parsed.verification) ? parsed.verification as Array<{ tool: string | null; command: string | null; status: string; summary: string }> : [],
+        verification: Array.isArray(parsed.verification) ? parsed.verification as Array<{ tool: string | null; command: string | null; status: string; summary: string; command_classification?: 'focused' | 'broad' | 'not_applicable' }> : [],
+        verification_budget_respected: typeof parsed.verification_budget_respected === 'boolean' ? parsed.verification_budget_respected : null,
+        broad_unrelated_failures: Array.isArray(parsed.broad_unrelated_failures) ? parsed.broad_unrelated_failures as Array<{ command: string | null; status: string; summary: string }> : [],
         exit_interview: parsed.exit_interview !== undefined && parsed.exit_interview !== null ? parsed.exit_interview as Record<string, unknown> : null,
       };
     }
@@ -587,7 +591,9 @@ type WorkerOutput = {
   edits_performed: boolean;
   target_state_changed: boolean;
   changes: Array<{ path: string; status: string; summary: string }>;
-  verification: Array<{ tool: string | null; command: string | null; status: string; summary: string }>;
+  verification: Array<{ tool: string | null; command: string | null; status: string; summary: string; command_classification?: 'focused' | 'broad' | 'not_applicable' }>;
+  verification_budget_respected: boolean | null;
+  broad_unrelated_failures: Array<{ command: string | null; status: string; summary: string }>;
   exit_interview: null | Record<string, unknown>;
 };
 
@@ -611,6 +617,8 @@ function buildErrorOutput(summary: string): WorkerOutput {
     target_state_changed: false,
     changes: [],
     verification: [],
+    verification_budget_respected: null,
+    broad_unrelated_failures: [],
     exit_interview: null,
   };
 }
