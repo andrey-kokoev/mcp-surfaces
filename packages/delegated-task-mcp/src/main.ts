@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { callWorkerTool, createWorkerPolicy, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
 
@@ -80,6 +81,7 @@ export function createServerState(options: JsonRecord = {}): State {
   const siteRoot = resolve(String(options.siteRoot ?? taskRoot));
   const stateEnv = { ...process.env };
   loadSiteSecrets(siteRoot, stateEnv);
+  loadProviderCredentialSecrets(siteRoot, stateEnv, options);
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const roots = normalizeRoots([...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)]);
   const allowedRoots = roots.length ? roots : [taskRoot];
@@ -1080,6 +1082,58 @@ function uniqueRecords(values: JsonRecord[]): JsonRecord[] { const seen = new Se
 function inside(path: string, root: string): boolean { const rel = relative(root, path); return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel); }
 function loadSiteExtraAllowedRoots(siteRoot: string): string[] { try { const configPath = join(siteRoot, '.narada', 'allowed-roots.json'); if (!existsSync(configPath)) return []; const data = JSON.parse(readFileSync(configPath, 'utf8')); if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0); } catch { } return []; }
 function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void { try { const configPath = join(siteRoot, '.narada', 'secrets.json'); if (!existsSync(configPath)) return; const data = JSON.parse(readFileSync(configPath, 'utf8')); const env = data.env; if (env && typeof env === 'object' && !Array.isArray(env)) { for (const [key, value] of Object.entries(env)) { if (typeof value === 'string' && value.trim() && !targetEnv[key]) { targetEnv[key] = value; } } } } catch { } }
+function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): void {
+  const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
+  if (!registryPath || !existsSync(registryPath)) return;
+  let registry: JsonRecord;
+  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return; }
+  for (const metadata of Object.values(rec(registry.providers)).map(rec)) {
+    const requirement = rec(metadata.credential_requirement);
+    if (requirement.kind !== 'api_key_secret') continue;
+    const envNames = Array.isArray(requirement.env_names) ? requirement.env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+    const primaryEnv = envNames[0];
+    const secretRef = typeof requirement.secret_ref === 'string' && requirement.secret_ref.trim() ? requirement.secret_ref.trim() : null;
+    if (!primaryEnv || !secretRef || envNames.some((name) => typeof targetEnv[name] === 'string' && String(targetEnv[name]).trim())) continue;
+    const value = lookupPowerShellSecret(secretRef, targetEnv, options);
+    if (!value) continue;
+    targetEnv[primaryEnv] = value;
+    const baseUrlEnvNames = Array.isArray(metadata.base_url_env_names) ? metadata.base_url_env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+    const primaryBaseUrlEnv = baseUrlEnvNames[0];
+    const baseUrl = typeof metadata.base_url === 'string' && metadata.base_url.trim() ? metadata.base_url.trim() : null;
+    if (primaryBaseUrlEnv && baseUrl && !targetEnv[primaryBaseUrlEnv]) targetEnv[primaryBaseUrlEnv] = baseUrl;
+  }
+}
+function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
+  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);
+  if (explicit) return resolve(explicit);
+  const candidates = [
+    join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
+    join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
+    'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
+  ];
+  return candidates.map((candidate) => resolve(candidate)).find((candidate) => existsSync(candidate)) ?? null;
+}
+function lookupPowerShellSecret(secretRef: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
+  const mode = String(env.NARADA_PROVIDER_SECRET_STORE ?? options.providerSecretStore ?? '').trim().toLowerCase();
+  if (['0', 'false', 'off', 'disabled', 'none'].includes(mode)) return null;
+  const command = firstString(options.secretLookupCommand, env.NARADA_SECRET_LOOKUP_COMMAND) ?? 'pwsh';
+  const args = Array.isArray(options.secretLookupCommandArgs) ? options.secretLookupCommandArgs.map(String) : ['-NoProfile', '-NonInteractive', '-Command', SECRET_MANAGEMENT_LOOKUP_SCRIPT];
+  const result = spawnSync(command, args, { env: { ...env, NARADA_SECRET_LOOKUP_NAME: secretRef }, encoding: 'utf8', timeout: 5000, windowsHide: true });
+  if (result.status !== 0) return null;
+  const value = String(result.stdout ?? '').trim();
+  return value || null;
+}
+function firstString(...values: unknown[]): string | null { for (const value of values) { if (typeof value === 'string' && value.trim()) return value.trim(); } return null; }
+const SECRET_MANAGEMENT_LOOKUP_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+$name = [Environment]::GetEnvironmentVariable('NARADA_SECRET_LOOKUP_NAME', 'Process')
+if ([string]::IsNullOrWhiteSpace($name)) { exit 3 }
+if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) { exit 10 }
+Import-Module Microsoft.PowerShell.SecretManagement -ErrorAction Stop
+$secret = Get-Secret -Name $name -AsPlainText -ErrorAction SilentlyContinue
+if ($null -eq $secret -or [string]::IsNullOrWhiteSpace([string]$secret)) { exit 2 }
+[Console]::Out.Write([string]$secret)
+`;
 function rec(value: unknown): JsonRecord { return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {}; }
 function diag(code: string, message = code, details: JsonRecord = {}) { const error = new Error(message); Object.assign(error, { codeName: code, details }); return error; }
 function errorData(error: unknown): JsonRecord { const record = rec(error); return { schema: 'narada.delegated_task.error.v1', code: String(record.codeName ?? 'delegated_task_error'), message: error instanceof Error ? error.message : String(error), details: rec(record.details) }; }

@@ -22,11 +22,18 @@ try {
   mkdirSync(join(siteRoot, '.narada'), { recursive: true });
   writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { DELEGATED_TASK_TEST_SECRET: 'from-site-secret' } }), 'utf8');
   writeFileSync(join(siteRoot, '.narada', 'allowed-roots.json'), JSON.stringify({ extra_allowed_roots: [extraRoot] }), 'utf8');
+  const providerRegistryPath = join(root, 'provider-registry.json');
+  writeFileSync(providerRegistryPath, JSON.stringify({ providers: { test: { credential_requirement: { kind: 'api_key_secret', env_names: ['MOONSHOT_API_KEY'], secret_ref: 'delegated-task-provider-secret' } } } }), 'utf8');
+  const originalMoonshotApiKey = process.env.MOONSHOT_API_KEY;
+  delete process.env.MOONSHOT_API_KEY;
 
   const state = createServerState({
     siteRoot,
     taskRoot: root,
     allowedRoots: [root],
+    providerRegistryPath,
+    secretLookupCommand: process.execPath,
+    secretLookupCommandArgs: ['-e', 'process.stdout.write(process.env.NARADA_SECRET_LOOKUP_NAME === "delegated-task-provider-secret" ? "provider-secret-from-store" : "")'],
     policy: { allowed_workflow_kinds: ['worker', 'review', 'repair', 'verify', 'research', 'gate', 'join', 'note'] },
     workerTool: async (name: string, args: Record<string, unknown>) => {
       workerCalls.push({ name, args });
@@ -75,7 +82,9 @@ try {
     },
   });
   assert.equal(state.workerState.env.DELEGATED_TASK_TEST_SECRET, 'from-site-secret');
+  assert.equal(state.workerState.env.MOONSHOT_API_KEY, 'provider-secret-from-store');
   assert.equal(process.env.DELEGATED_TASK_TEST_SECRET, undefined);
+  assert.equal(process.env.MOONSHOT_API_KEY, undefined);
   assert.equal(state.allowedRoots.some((allowedRoot) => allowedRoot === extraRoot), true);
   assert.notEqual(state.workerState.policy.runRoot, join(root, 'worker-runs'));
   const explicitWorkerRunRoot = join(root, 'explicit-worker-runs');
@@ -83,6 +92,8 @@ try {
   assert.equal(explicitWorkerRootState.workerState.policy.runRoot, explicitWorkerRunRoot);
   if (originalDelegatedTaskSecret === undefined) delete process.env.DELEGATED_TASK_TEST_SECRET;
   else process.env.DELEGATED_TASK_TEST_SECRET = originalDelegatedTaskSecret;
+  if (originalMoonshotApiKey === undefined) delete process.env.MOONSHOT_API_KEY;
+  else process.env.MOONSHOT_API_KEY = originalMoonshotApiKey;
 
   const policy = await callTool(state, 'delegated_task_policy_inspect', {});
   const policyView = policy.result.structuredContent as Record<string, any>;
