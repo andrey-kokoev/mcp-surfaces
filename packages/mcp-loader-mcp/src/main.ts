@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages'));
+const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 
 const SERVER_NAME = 'mcp-loader-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -510,7 +510,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
   'scheduler': { entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`, args: [] },
   'mcp-registrar': { entrypoint: `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`, args: [] },
-  'surface-feedback': { entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`, args: ['--feedback-root', '{site_root}'] },
+  'surface-feedback': { entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`, args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
   'speech': { entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`, args: [] },
   'cloudflare-carrier': { entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-coherence': { entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },

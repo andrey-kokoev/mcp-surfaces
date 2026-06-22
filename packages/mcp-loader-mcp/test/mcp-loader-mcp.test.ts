@@ -29,7 +29,7 @@ writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
 }), 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs')], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';
@@ -42,12 +42,12 @@ function rpc(method: string, params: Record<string, unknown>, id: number) {
   return `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`;
 }
 
-async function call(method: string, params: Record<string, unknown>, id: number): Promise<Record<string, unknown> | undefined> {
+async function call(method: string, params: Record<string, unknown>, id: number): Promise<Record<string, any> | undefined> {
   child.stdin.write(rpc(method, params, id));
   await new Promise((r) => setTimeout(r, 150));
   const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
   const response = lines.map((line) => JSON.parse(line)).find((m) => m.id === id);
-  return response?.result as Record<string, unknown> | undefined;
+  return (response?.result ?? response?.error) as Record<string, any> | undefined;
 }
 
 try {
@@ -76,6 +76,14 @@ try {
 
   const badAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'unknown-surface' } }, 6);
   assert.equal(badAttach?.schema, undefined);
+
+  const feedbackAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'surface-feedback' } }, 7);
+  assert.equal(feedbackAttach?.code, undefined, JSON.stringify(feedbackAttach));
+  assert.equal(feedbackAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  const feedbackArgs = feedbackAttach?.args as string[];
+  assert.equal(feedbackArgs[feedbackArgs.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
+  assert.equal(feedbackArgs.includes(root), false);
+  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: feedbackAttach?.connection_id } }, 8);
 
   console.log('mcp-loader-mcp behavior ok');
 } finally {
