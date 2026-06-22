@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -141,6 +141,22 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'surface_feedback_import',
+      description: 'Import explicit feedback entries from another local surface-feedback store into this store. Intended for repairing split-brain site-local stores.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source_feedback_root: { type: 'string', description: 'Root containing .feedback/surface-feedback.db for the source store.' },
+          source_db_path: { type: 'string', description: 'Direct path to a source surface-feedback.db. Use only when source_feedback_root is unavailable.' },
+          feedback_ids: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Feedback IDs to import from the source store.' },
+        },
+        required: ['feedback_ids'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_import', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'surface_feedback_list',
       description: 'List feedback entries scoped by caller site visibility. When caller_site_id is provided, entries are filtered to: (a) feedback for surfaces in owned_surface_ids, and (b) feedback submitted by the caller site. When absent, returns all feedback.',
       inputSchema: {
@@ -204,6 +220,7 @@ function callTool(params: JsonRecord, state: FeedbackState) {
     case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
     case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;
+    case 'surface_feedback_import': result = feedbackImport(args, state); break;
     case 'surface_feedback_list': result = feedbackList(args, state); break;
     case 'surface_feedback_show': result = feedbackShow(args, state); break;
     case 'surface_feedback_stats': result = feedbackStats(args, state); break;
@@ -262,6 +279,79 @@ function feedbackUpdateStatus(args: JsonRecord, state: FeedbackState): JsonRecor
   return { status: 'updated', feedback: hydrateFeedback(updated) };
 }
 
+function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
+  const sourceDbPath = sourceFeedbackDbPath(args);
+  if (samePath(sourceDbPath, state.dbPath)) {
+    throw diagnosticError('feedback_import_same_store', 'feedback_import_same_store', { source_db_path: sourceDbPath, target_db_path: state.dbPath });
+  }
+  if (!existsSync(sourceDbPath)) {
+    throw diagnosticError('feedback_import_source_missing', `feedback_import_source_missing:${sourceDbPath}`, { source_db_path: sourceDbPath });
+  }
+  const feedbackIds = feedbackIdList(args.feedback_ids);
+  const imported: JsonRecord[] = [];
+  const skipped: JsonRecord[] = [];
+  const missing: string[] = [];
+  const sourceDb = new DatabaseSync(sourceDbPath, { readOnly: true });
+  try {
+    const sourceRows = new Map<string, JsonRecord>();
+    const selectSource = sourceDb.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?');
+    for (const feedbackId of feedbackIds) {
+      const row = selectSource.get(feedbackId) as JsonRecord | undefined;
+      if (row) sourceRows.set(feedbackId, row);
+      else missing.push(feedbackId);
+    }
+    const targetSelect = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?');
+    const insert = state.db.prepare(
+      'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    state.db.exec('BEGIN');
+    try {
+      for (const [feedbackId, row] of sourceRows.entries()) {
+        const existing = targetSelect.get(feedbackId) as JsonRecord | undefined;
+        if (existing) {
+          skipped.push({ feedback_id: feedbackId, reason: 'already_exists' });
+          continue;
+        }
+        insert.run(
+          String(row.feedback_id),
+          String(row.surface_id),
+          String(row.submitter_site_id),
+          String(row.submitter_principal),
+          String(row.kind),
+          String(row.summary),
+          String(row.details ?? ''),
+          String(row.status ?? 'submitted'),
+          optionalString(row.resolution_note),
+          optionalString(row.resolved_by),
+          String(row.created_at),
+          String(row.updated_at)
+        );
+        imported.push(hydrateFeedback(row));
+      }
+      state.db.exec('COMMIT');
+    } catch (error) {
+      state.db.exec('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    sourceDb.close();
+  }
+  return {
+    schema: 'narada.surface_feedback.import.v1',
+    status: missing.length || skipped.length ? 'partial' : 'imported',
+    store: storeIdentity(state),
+    source_db_path: sourceDbPath,
+    target_db_path: state.dbPath,
+    requested_count: feedbackIds.length,
+    imported_count: imported.length,
+    skipped_count: skipped.length,
+    missing_count: missing.length,
+    imported,
+    skipped,
+    missing_feedback_ids: missing,
+  };
+}
+
 function visibilityClause(callerSiteId: string | null, ownedSurfaceIds: string[]): { sql: string; params: string[] } {
   if (!callerSiteId) return { sql: '', params: [] };
   if (ownedSurfaceIds.length > 0) {
@@ -302,7 +392,7 @@ function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
-  return { items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
+  return { store: storeIdentity(state), items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
 }
 
 function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -312,7 +402,7 @@ function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
   const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
   if (!row) throw feedbackNotFound(feedbackId, state);
   if (!isVisible(row, callerSiteId, owned)) throw diagnosticError('feedback_not_visible', `feedback_not_visible:${feedbackId}`);
-  return hydrateFeedback(row);
+  return { ...hydrateFeedback(row), store: storeIdentity(state) };
 }
 
 function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -337,7 +427,7 @@ function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
     byKind[k] = (byKind[k] ?? 0) + 1;
     byStatus[st] = (byStatus[st] ?? 0) + 1;
   }
-  return { by_surface: bySurface, by_kind: byKind, by_status: byStatus, total: rows.length };
+  return { store: storeIdentity(state), by_surface: bySurface, by_kind: byKind, by_status: byStatus, total: rows.length };
 }
 
 function isVisible(row: JsonRecord, callerSiteId: string | null, ownedSurfaceIds: string[]): boolean {
@@ -354,6 +444,33 @@ function feedbackNotFound(feedbackId: string, state: FeedbackState) {
     db_path: state.dbPath,
     store_hint: 'Feedback IDs are local to the configured feedback_root. If this ID was created from another site/session, compare surface_feedback_doctor.db_path for both sessions and migrate/rebind stale site-local feedback roots to the shared feedback root.',
   });
+}
+
+function storeIdentity(state: FeedbackState): JsonRecord {
+  const usesCanonicalStore = samePath(state.feedbackRoot, state.canonicalFeedbackRoot);
+  return {
+    feedback_root: state.feedbackRoot,
+    canonical_feedback_root: state.canonicalFeedbackRoot,
+    uses_canonical_store: usesCanonicalStore,
+    storage_posture: usesCanonicalStore ? 'canonical_feedback_root' : 'noncanonical_feedback_root',
+    db_path: state.dbPath,
+  };
+}
+
+function sourceFeedbackDbPath(args: JsonRecord): string {
+  const sourceRoot = optionalString(args.source_feedback_root);
+  const sourceDbPath = optionalString(args.source_db_path);
+  if (sourceRoot && sourceDbPath) throw diagnosticError('feedback_import_source_ambiguous', 'feedback_import_source_ambiguous');
+  if (sourceRoot) return resolve(sourceRoot, '.feedback', 'surface-feedback.db');
+  if (sourceDbPath) return resolve(sourceDbPath);
+  throw diagnosticError('feedback_import_requires_source', 'feedback_import_requires_source');
+}
+
+function feedbackIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) throw diagnosticError('feedback_import_requires_feedback_ids', 'feedback_import_requires_feedback_ids');
+  const ids = [...new Set(value.map((v) => String(v ?? '').trim()).filter(Boolean))];
+  if (!ids.length) throw diagnosticError('feedback_import_requires_feedback_ids', 'feedback_import_requires_feedback_ids');
+  return ids;
 }
 
 function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {

@@ -13,6 +13,9 @@ try {
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
   }
+  async function callWith(callState: any, name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
+    return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, callState) as Promise<Record<string, any>>;
+  }
   function view(res: Record<string, any>): Record<string, any> {
     return res.result.structuredContent as Record<string, any>;
   }
@@ -91,6 +94,8 @@ try {
   // --- list: no scope (all visible) ---
   const listAll = await call('surface_feedback_list', {});
   assert.equal(view(listAll).count, 4);
+  assert.equal(view(listAll).store.feedback_root, root);
+  assert.equal(view(listAll).store.uses_canonical_store, true);
 
   // --- list: by surface_id ---
   const listSop = await call('surface_feedback_list', { surface_id: 'sop' });
@@ -129,6 +134,7 @@ try {
   assert.equal(view(show).summary, 'Add agent step kind');
   assert.equal(view(show).status, 'closed');
   assert.equal(view(show).details, 'SOP should support agent executor with blocking for agent-performed steps.');
+  assert.equal(view(show).store.db_path, state.dbPath);
 
   // --- show: visible via owned surface ---
   const showSop = await call('surface_feedback_show', {
@@ -150,10 +156,54 @@ try {
   assert.equal(showMissing.error.data.db_path.endsWith('surface-feedback.db'), true);
   assert.match(showMissing.error.data.store_hint, /feedback_root/);
 
+  // --- import: repair explicit feedback IDs from a site-local split-brain store ---
+  const siteLocalRoot = join(root, 'split-brain-site');
+  const siteLocalState = createServerState({ feedbackRoot: siteLocalRoot, canonicalFeedbackRoot: root });
+  try {
+    const siteLocalSubmit = await callWith(siteLocalState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'narada-staccato',
+      submitter_principal: 'staccato.test',
+      kind: 'gap',
+      summary: 'Local feedback is invisible to maintainers',
+      details: 'Submitted through a site-local store before canonical feedback root was configured.',
+    });
+    const localFeedbackId = view(siteLocalSubmit).feedback_id;
+    const missingBeforeImport = await call('surface_feedback_show', { feedback_id: localFeedbackId });
+    assert.equal(errorCode(missingBeforeImport), 'feedback_not_found');
+
+    const importResult = await call('surface_feedback_import', {
+      source_feedback_root: siteLocalRoot,
+      feedback_ids: [localFeedbackId, 'sfb_missing_local'],
+    });
+    const importData = view(importResult);
+    assert.equal(importData.status, 'partial');
+    assert.equal(importData.imported_count, 1);
+    assert.equal(importData.missing_count, 1);
+    assert.equal(importData.imported[0].feedback_id, localFeedbackId);
+    assert.equal(importData.store.feedback_root, root);
+    assert.equal(importData.source_db_path, siteLocalState.dbPath);
+    assert.equal(importData.target_db_path, state.dbPath);
+
+    const importedShow = await call('surface_feedback_show', { feedback_id: localFeedbackId });
+    assert.equal(view(importedShow).summary, 'Local feedback is invisible to maintainers');
+    assert.equal(view(importedShow).store.uses_canonical_store, true);
+
+    const duplicateImport = await call('surface_feedback_import', {
+      source_db_path: siteLocalState.dbPath,
+      feedback_ids: [localFeedbackId],
+    });
+    assert.equal(view(duplicateImport).imported_count, 0);
+    assert.equal(view(duplicateImport).skipped_count, 1);
+    assert.equal(view(duplicateImport).skipped[0].reason, 'already_exists');
+  } finally {
+    siteLocalState.db.close();
+  }
+
   // --- stats: no scope ---
   const statsAll = await call('surface_feedback_stats', {});
   const statsAllData = view(statsAll);
-  assert.equal(statsAllData.total, 4);
+  assert.equal(statsAllData.total, 5);
   assert.ok(statsAllData.by_surface.sop >= 2);
   assert.ok(statsAllData.by_kind.improvement >= 1);
   assert.ok(statsAllData.by_kind.bug >= 1);
