@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 let siteLoopModulePromise = null;
 type SiteOpsServerArgs = Record<string, unknown>;
@@ -47,6 +47,13 @@ const TOOLS = [
     selector: { type: 'string', description: 'Approved selector from site_test_list.' },
   }, ['selector']),
   tool('site_loop_status', 'Show Sonar email resident Site Operating Loop status.', {}),
+  tool('site_loop_unified_status', 'Show unified Sonar site-loop status: scheduled launcher, supervisor PID files, logical loop control, health, and useful-work posture.', {
+    task_name: { type: 'string', description: 'Scheduled task name. Defaults to \\Narada-Sonar-Daemon.' },
+  }),
+  tool('site_loop_recovery_plan', 'Return a safe operator recovery plan for the Sonar site loop without mutating state.', {
+    task_name: { type: 'string', description: 'Scheduled task name. Defaults to \\Narada-Sonar-Daemon.' },
+    include_commands: { type: 'boolean', description: 'Include concrete operator commands. Defaults true.' },
+  }),
   tool('site_loop_health', 'Show Sonar email resident Site Operating Loop health.', {}),
   tool('site_loop_operating_status', 'Show composed operating-layer status for the Sonar email resident loop.', {
     limit: { type: 'number', description: 'Pending/directive row limit.' },
@@ -276,6 +283,10 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       return runTest(args.selector, context);
     case 'site_loop_status':
       return (await loadSiteLoopModule()).sonarEmailResidentLoopStatus(siteRoot);
+    case 'site_loop_unified_status':
+      return unifiedSiteLoopStatus(args);
+    case 'site_loop_recovery_plan':
+      return siteLoopRecoveryPlan(args);
     case 'site_loop_health':
       return (await loadSiteLoopModule()).sonarEmailResidentLoopHealth(siteRoot);
     case 'site_loop_operating_status':
@@ -371,6 +382,178 @@ async function runTest(selector, context: SiteOpsRequestContext = {}) {
     stdout: result.stdout,
     stderr: result.stderr,
   };
+}
+
+async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
+  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? '\\Narada-Sonar-Daemon';
+  const [loopStatus, loopHealth, scheduledTask] = await Promise.all([
+    loadSiteLoopModule().then((module) => module.sonarEmailResidentLoopStatus(siteRoot)).catch((error) => statusError(error)),
+    loadSiteLoopModule().then((module) => module.sonarEmailResidentLoopHealth(siteRoot)).catch((error) => statusError(error)),
+    readScheduledTaskStatus(taskName),
+  ]);
+  const pidFiles = ['daemon.pid', 'recurring-runner.pid', 'site-loop-runner.pid'].map((name) => readPidFileStatus(name));
+  const stalePidFiles = pidFiles.filter((item) => item.exists && item.pid && item.process_alive === false).map((item) => item.name);
+  const livePidFiles = pidFiles.filter((item) => item.exists && item.process_alive === true).map((item) => item.name);
+  const logicalLoopEnabled = loopStatus?.control?.enabled ?? loopStatus?.enabled;
+  const logicalLoopPaused = loopStatus?.control?.paused ?? loopStatus?.paused;
+  const healthStatus = loopHealth?.status ?? loopHealth?.overall_status ?? loopHealth?.health;
+  const blockers = [
+    ...(scheduledTask.status === 'missing' ? ['scheduled_task_missing'] : []),
+    ...(scheduledTask.status === 'error' ? ['scheduled_task_query_failed'] : []),
+    ...(stalePidFiles.length > 0 ? ['stale_pid_files'] : []),
+    ...(logicalLoopEnabled === false ? ['logical_loop_disabled'] : []),
+    ...(logicalLoopPaused === true ? ['logical_loop_paused'] : []),
+    ...(loopStatus?.status === 'error' ? ['loop_status_unavailable'] : []),
+    ...(loopHealth?.status === 'error' ? ['loop_health_unavailable'] : []),
+  ];
+  const posture = blockers.length === 0 && livePidFiles.length > 0 ? 'running' : blockers.length === 0 ? 'ready_but_no_live_pid' : 'attention_needed';
+  return {
+    status: 'ok',
+    site_root: siteRoot,
+    posture,
+    blockers,
+    scheduled_task: scheduledTask,
+    pid_files: pidFiles,
+    logical_loop: {
+      enabled: logicalLoopEnabled,
+      paused: logicalLoopPaused,
+      status: loopStatus?.status,
+    },
+    health: {
+      status: healthStatus,
+      raw_status: loopHealth?.status,
+    },
+    useful_work: summarizeUsefulWork(loopStatus, loopHealth),
+    raw: {
+      loop_status: loopStatus,
+      loop_health: loopHealth,
+    },
+  };
+}
+
+async function siteLoopRecoveryPlan(args: SiteOpsServerArgs = {}) {
+  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? '\\Narada-Sonar-Daemon';
+  const includeCommands = args.include_commands !== false && args.includeCommands !== false;
+  const status = await unifiedSiteLoopStatus({ ...args, task_name: taskName });
+  const steps = [
+    {
+      id: 'inspect_unified_status',
+      reason: 'Capture scheduler, PID, logical loop, and health posture before changing state.',
+      command: `site_loop_unified_status { "task_name": "${taskName}" }`,
+    },
+    {
+      id: 'restart_supervisor',
+      reason: 'Use the site-owned idempotent supervisor start path; it cleans stale PID files before launch.',
+      command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${join(siteRoot, 'scripts', 'supervisor.ps1')}" start`,
+    },
+    {
+      id: 'run_scheduled_task',
+      reason: 'Ask Windows Task Scheduler to invoke the registered daemon task after supervisor scripts are healthy.',
+      command: `schtasks /run /tn "${taskName}"`,
+    },
+    {
+      id: 'verify_recovery',
+      reason: 'Re-read unified status and health; do not infer recovery from process launch alone.',
+      command: `site_loop_unified_status { "task_name": "${taskName}" }`,
+    },
+  ];
+  return {
+    status: 'ok',
+    site_root: siteRoot,
+    read_only: true,
+    mutation_performed: false,
+    task_name: taskName,
+    current_posture: status.posture,
+    current_blockers: status.blockers,
+    recommended_order: includeCommands ? steps : steps.map(({ id, reason }) => ({ id, reason })),
+    guardrails: [
+      'Do not delete or overwrite loop state files manually unless the supervisor script reports stale PID cleanup failure.',
+      'Use elevated PowerShell only for scheduled-task registration or trigger changes, not for ordinary status checks.',
+      'After recovery, verify useful-work posture through site_loop_unified_status and site_loop_health.',
+    ],
+    status_snapshot: status,
+  };
+}
+
+function readPidFileStatus(name: string) {
+  const path = join(siteRoot, 'logs', name);
+  if (!existsSync(path)) return { name, path, exists: false, pid: null, process_alive: null };
+  const raw = readFileSync(path, 'utf8').trim();
+  const pid = Number(raw);
+  return {
+    name,
+    path,
+    exists: true,
+    raw,
+    pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+    process_alive: Number.isInteger(pid) && pid > 0 ? isProcessAlive(pid) : null,
+  };
+}
+
+function isProcessAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readScheduledTaskStatus(taskName: string) {
+  if (process.platform !== 'win32') return { status: 'unsupported_platform', task_name: taskName, platform: process.platform };
+  const result = await runChildProcess('schtasks.exe', ['/query', '/tn', taskName, '/fo', 'LIST', '/v'], {
+    cwd: siteRoot,
+    timeout: 20_000,
+    env: { ...process.env },
+  });
+  if (result.status !== 0) {
+    const text = `${result.stdout}\n${result.stderr}`.trim();
+    return {
+      status: /cannot find|does not exist/i.test(text) ? 'missing' : 'error',
+      task_name: taskName,
+      exit_code: result.status,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    };
+  }
+  const fields = parseListOutput(result.stdout);
+  return {
+    status: 'ok',
+    task_name: taskName,
+    enabled: fields['Scheduled Task State'] ? !/disabled/i.test(fields['Scheduled Task State']) : undefined,
+    task_status: fields.Status,
+    last_run_time: fields['Last Run Time'],
+    last_result: fields['Last Result'],
+    next_run_time: fields['Next Run Time'],
+    task_to_run: fields['Task To Run'],
+    start_in: fields['Start In'],
+    raw: fields,
+  };
+}
+
+function parseListOutput(output: string) {
+  const fields: Record<string, string> = {};
+  for (const line of output.split(/\r?\n/)) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    if (key) fields[key] = value;
+  }
+  return fields;
+}
+
+function summarizeUsefulWork(loopStatus, loopHealth) {
+  return {
+    last_run_id: loopStatus?.last_run_id ?? loopStatus?.lastRunId ?? loopHealth?.last_run_id,
+    last_run_at: loopStatus?.last_run_at ?? loopStatus?.lastRunAt ?? loopHealth?.last_run_at,
+    pending_work: loopStatus?.pending_work ?? loopStatus?.pendingWork ?? loopHealth?.pending_work,
+    attention_open: loopStatus?.attention_open ?? loopStatus?.attentionOpen ?? loopHealth?.attention_open,
+  };
+}
+
+function statusError(error) {
+  return { status: 'error', error: error instanceof Error ? error.message : String(error) };
 }
 
 function runChildProcess(command, args, options): Promise<SiteOpsChildResult> {
