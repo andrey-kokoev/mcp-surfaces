@@ -30,11 +30,12 @@ Launch with write mode only for agents that are allowed to publish repository ch
 Read tools:
 
 - `git_policy_inspect`: inspect active Git MCP policy.
-- `git_status`: branch, upstream, ahead/behind, and working tree status.
-- `git_diff`: bounded working, staged, or commit diff.
+- `git_status`: branch, upstream, remotes, push readiness, and working tree status.
+- `git_diff`: paged working, staged, or commit diff. Pass `offset`, `limit`, and the returned `next_offset` to continue reading. Pass `include_untracked: true` with `scope: "working"` to append bounded untracked-file patches.
 - `git_log`: recent commits, optionally scoped by pathspec.
 - `git_show`: one commit with metadata and optional patch.
-- `mcp_output_show`: read materialized large output.
+- `git_repositories_summary`: multi-repository status and push-readiness summary for handoffs.
+- `git_workflow_record`: durable record for completed multi-repository stage/commit/push workflows.
 
 Write-mode tools:
 
@@ -42,9 +43,9 @@ Write-mode tools:
 - `git_commit`: commit already staged changes.
 - `git_push`: push current branch or explicit remote/branch; force push is not supported.
 
-## Output Refs
+## Large Output
 
-Large results can be materialized through `@narada2/mcp-transport` as `mcp_output:*` refs. Use `mcp_output_show` with `offset` and `limit` to page them.
+Git tools return bounded output directly in their own result payloads. For `git_diff`, use `next_offset` from the result to fetch the next page. Request narrower pathspecs, lower limits, or `include_patch: false` when a result would be too large.
 
 ## Run
 

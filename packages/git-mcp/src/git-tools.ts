@@ -17,23 +17,29 @@ import { parseStatus } from './status-parser.js';
 import type { GitMcpState } from './state.js';
 
 const PREVIEW_CHAR_LIMIT = 1000;
+const DEFAULT_DIFF_LIMIT = 4000;
+const MAX_DIFF_LIMIT = 50_000;
+const UNTRACKED_DIFF_CHAR_LIMIT = 20_000;
+const UNTRACKED_FILE_COUNT_LIMIT = 25;
 const WORKFLOW_PUSH_STATUSES = ['pushed', 'not_attempted', 'failed', 'not_pushable'];
 
 export type GitRequestContext = {
   abortSignal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
 };
 
 export async function callGitTool(name: string, args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<unknown> {
+  const runContext = { ...context, env: state.env };
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
-  if (name === 'git_status') return gitStatus(args, state, context);
-  if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, context);
-  if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, context);
-  if (name === 'git_diff') return gitDiff(args, state, context);
-  if (name === 'git_add') return gitAdd(args, state, context);
-  if (name === 'git_commit') return gitCommit(args, state, context);
-  if (name === 'git_push') return gitPush(args, state, context);
-  if (name === 'git_log') return gitLog(args, state, context);
-  if (name === 'git_show') return gitShow(args, state, context);
+  if (name === 'git_status') return gitStatus(args, state, runContext);
+  if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, runContext);
+  if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, runContext);
+  if (name === 'git_diff') return gitDiff(args, state, runContext);
+  if (name === 'git_add') return gitAdd(args, state, runContext);
+  if (name === 'git_commit') return gitCommit(args, state, runContext);
+  if (name === 'git_push') return gitPush(args, state, runContext);
+  if (name === 'git_log') return gitLog(args, state, runContext);
+  if (name === 'git_show') return gitShow(args, state, runContext);
   throw diagnosticError('git_mcp_unknown_tool', `git_mcp_unknown_tool:${name}`, { tool_name: name });
 }
 
@@ -147,6 +153,10 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
   const cwd = resolveWorkingDirectory(args, state);
   const scope = stringEnum(args.scope, ['working', 'staged', 'commit'], 'working');
   const pathspec = optionalPathspec(args.pathspec);
+  const offset = clampInteger(args.offset, 0, Number.MAX_SAFE_INTEGER, 0);
+  const limit = clampInteger(args.limit ?? args.diff_limit, 1, MAX_DIFF_LIMIT, DEFAULT_DIFF_LIMIT);
+  const includeUntracked = args.include_untracked === true;
+  if (includeUntracked && scope !== 'working') throw diagnosticError('git_diff_include_untracked_requires_working_scope');
   const gitArgs = scope === 'staged'
     ? ['diff', '--cached', '--no-ext-diff']
     : scope === 'commit'
@@ -155,7 +165,10 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
   if (pathspec) gitArgs.push('--', pathspec);
   const result = await runGit(cwd, gitArgs, state.policy, context);
   ensureGitOk(result, 'git_diff_failed');
-  const diff = result.output_text;
+  const untracked = includeUntracked ? await untrackedDiff(cwd, pathspec, state.policy, context) : null;
+  const fullDiff = [result.output_text, untracked?.diff].filter(Boolean).join(result.output_text && untracked?.diff ? '\n' : '');
+  const diff = fullDiff.slice(offset, offset + limit);
+  const nextOffset = offset + diff.length < fullDiff.length ? offset + diff.length : null;
   return {
     schema: 'narada.git.diff.v1',
     status: 'ok',
@@ -163,11 +176,21 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
     scope,
     pathspec,
     ...(scope === 'commit' ? { commit: String(args.commit) } : {}),
+    offset,
+    limit,
+    next_offset: nextOffset,
+    include_untracked: includeUntracked,
+    untracked_diff_included: includeUntracked,
+    ...(untracked ? {
+      untracked_paths: untracked.paths,
+      untracked_paths_omitted: untracked.pathsOmitted,
+      untracked_diff_truncated: untracked.truncated,
+    } : {}),
     diff,
     diff_preview: diff.slice(0, PREVIEW_CHAR_LIMIT),
     diff_omitted: false,
-    diff_truncated: result.output_truncated,
-    diff_char_length: diff.length,
+    diff_truncated: result.output_truncated || nextOffset !== null || (untracked?.truncated ?? false),
+    diff_char_length: fullDiff.length,
   };
 }
 
@@ -382,6 +405,30 @@ async function listRemotes(cwd: string, policy: GitMcpPolicy, context: GitReques
     byKey.set(name, existing);
   }
   return [...byKey.values()];
+}
+
+async function untrackedDiff(cwd: string, pathspec: string | null, policy: GitMcpPolicy, context: GitRequestContext = {}) {
+  const lsArgs = ['ls-files', '--others', '--exclude-standard', '-z'];
+  if (pathspec) lsArgs.push('--', pathspec);
+  const listed = await runGit(cwd, lsArgs, policy, context);
+  ensureGitOk(listed, 'git_diff_failed');
+  const paths = listed.output_text.split('\0').filter(Boolean).slice(0, UNTRACKED_FILE_COUNT_LIMIT);
+  const allPaths = listed.output_text.split('\0').filter(Boolean);
+  let diff = '';
+  let truncated = listed.output_truncated || allPaths.length > paths.length;
+  for (const path of paths) {
+    const result = await runGit(cwd, ['diff', '--no-ext-diff', '--no-index', '--', '/dev/null', path], policy, context);
+    if (![0, 1].includes(result.exit_code ?? -1) || result.timed_out || result.cancelled) ensureGitOk(result, 'git_diff_failed');
+    const next = result.output_text.replaceAll('/dev/null', 'a/dev/null');
+    const remaining = UNTRACKED_DIFF_CHAR_LIMIT - diff.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    diff += next.length <= remaining ? next : next.slice(0, remaining);
+    truncated ||= result.output_truncated || next.length > remaining;
+  }
+  return { diff, paths, pathsOmitted: Math.max(0, allPaths.length - paths.length), truncated };
 }
 
 function pushRemediation(target: Record<string, unknown>, branch: string | null, remotes: Array<Record<string, unknown>>) {

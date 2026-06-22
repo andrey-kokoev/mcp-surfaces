@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 export type GitMcpMode = 'read' | 'write';
 
@@ -30,9 +30,12 @@ const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 export function createGitPolicy(options: Record<string, unknown> = {}): GitMcpPolicy {
   const mode = String(options.mode ?? 'read');
   if (mode !== 'read' && mode !== 'write') throw new GitPolicyError('git_mode_must_be_read_or_write', { mode });
+  const siteRoot = resolve(String(options.siteRoot ?? options.outputRoot ?? firstOption(options.allowedRoot) ?? firstOption(options.allowedRoots) ?? process.cwd()));
+  const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
+  const explicitRoots = [...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)];
   const allowedRoots = buildAllowedRoots({
     codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
-    explicitRoots: [...optionList(options.allowedRoot), ...optionList(options.allowedRoots)],
+    explicitRoots,
     rootsConfigPath: stringOrNull(options.rootsConfig),
   });
   return {
@@ -185,7 +188,24 @@ function optionList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String).filter(Boolean) : [String(value)].filter(Boolean);
 }
 
+function firstOption(value: unknown): string | null {
+  const values = optionList(value);
+  return values.length > 0 ? values[0] : null;
+}
+
 function isPathInside(path: string, root: string): boolean {
   const rel = relative(root, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
+  try {
+    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    if (!existsSync(configPath)) return [];
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0);
+  } catch {
+    // Best-effort.
+  }
+  return [];
 }

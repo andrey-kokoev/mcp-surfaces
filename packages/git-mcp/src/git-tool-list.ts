@@ -1,5 +1,3 @@
-import { listOutputTools } from '@narada2/mcp-transport';
-
 export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const readTools = [
     {
@@ -9,14 +7,14 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_status',
-      description: 'Return Git branch, upstream, remotes, push target diagnostics, and working tree status.',
+      description: 'Inspect branch, upstream, remotes, push readiness, and dirty paths before diffing, staging, committing, or pushing.',
       inputSchema: objectSchema({
         working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
       }),
     },
     {
       name: 'git_repositories_summary',
-      description: 'Summarize multiple repositories for multi-repo commit/push handoff, including dirty paths, latest commit, remotes, and push readiness.',
+      description: 'Summarize multiple repositories for multi-repo handoff and publication checks, including dirty paths, latest commit, remotes, and push readiness.',
       inputSchema: objectSchema({
         working_directories: { type: 'array', items: { type: 'string' }, description: 'Repository directories under allowed roots.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied label for the workflow being summarized.' },
@@ -29,7 +27,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_workflow_record',
-      description: 'Append a durable multi-repository Git workflow ledger record. Requires git-mcp mode=write.',
+      description: 'Record the final status of a multi-repository stage/commit/push workflow for handoff. Requires git-mcp mode=write.',
       inputSchema: objectSchema({
         workflow_id: { type: 'string', description: 'Optional caller-supplied stable workflow id.' },
         scope_label: { type: 'string', description: 'Required caller-supplied workflow label.' },
@@ -55,12 +53,15 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_diff',
-      description: 'Show a bounded Git diff for working tree, staged changes, or one commit.',
+      description: 'Show a paged Git diff for working tree, staged changes, or one commit; optionally include bounded untracked-file patches for working-tree review.',
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         scope: { type: 'string', enum: ['working', 'staged', 'commit'], default: 'working' },
         pathspec: { type: 'string', description: 'Optional Git pathspec.' },
         commit: { type: 'string', description: 'Required when scope is commit.' },
+        offset: { type: 'integer', default: 0, description: 'Character offset into the complete diff. Use next_offset from the prior result to continue.' },
+        limit: { type: 'integer', default: 4000, description: 'Maximum diff characters to return in this page.' },
+        include_untracked: { type: 'boolean', default: false, description: 'When scope=working, append bounded patches for untracked files matched by pathspec.' },
       }),
     },
     {
@@ -82,7 +83,6 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
         include_patch: { type: 'boolean', default: true },
       }, ['commit']),
     },
-    ...listOutputTools(),
   ];
   const writeTools = [
     {

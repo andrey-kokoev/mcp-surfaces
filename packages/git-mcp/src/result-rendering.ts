@@ -4,7 +4,7 @@ const PATCH_PREVIEW_CHAR_LIMIT = 4000;
 
 export function renderToolResultText(value: unknown): string {
   const record = asRecord(value);
-  if (record.schema === 'narada.mcp_output_show.v1') return String(record.output_text ?? '');
+  if (record.schema === 'narada.mcp_output_page.v1') return String(record.output_text ?? '');
   if (record.schema === 'narada.mcp_output_locator.v1' || typeof record.output_ref === 'string' && record.result_materialized === true) {
     const label = typeof record.tool_name === 'string' ? record.tool_name : 'git_result';
     return compactLines([
@@ -12,7 +12,7 @@ export function renderToolResultText(value: unknown): string {
       `status: ${record.status ?? 'ok'}`,
       'result: materialized',
       `output_ref: ${record.output_ref ?? record.ref ?? ''}`,
-      `reader_tool: ${record.reader_tool ?? 'mcp_output_show'}`,
+      `reader_tool: ${record.reader_tool ?? 'none'}`,
       record.full_output_char_length !== undefined ? `full_output_char_length: ${record.full_output_char_length}` : null,
     ]);
   }
@@ -173,6 +173,14 @@ function renderPatchResult(label: string, record: Record<string, unknown>, field
     record.scope !== undefined ? `scope: ${record.scope}` : null,
     record.commit !== undefined ? `commit: ${record.commit}` : null,
     record.pathspec !== undefined ? `pathspec: ${record.pathspec ?? 'null'}` : null,
+    record.offset !== undefined ? `offset: ${record.offset}` : null,
+    record.limit !== undefined ? `limit: ${record.limit}` : null,
+    record.next_offset !== undefined ? `next_offset: ${record.next_offset ?? 'null'}` : null,
+    record.include_untracked !== undefined ? `include_untracked: ${record.include_untracked}` : null,
+    record.untracked_paths !== undefined ? `untracked_paths: ${arrayCount(record.untracked_paths)}` : null,
+    ...arrayLines(record.untracked_paths),
+    record.untracked_paths_omitted !== undefined ? `untracked_paths_omitted: ${record.untracked_paths_omitted}` : null,
+    record.untracked_diff_truncated !== undefined ? `untracked_diff_truncated: ${record.untracked_diff_truncated}` : null,
     `${field}_truncated: ${record[`${field}_truncated`] ?? false}`,
     `${field}:`,
     preview,

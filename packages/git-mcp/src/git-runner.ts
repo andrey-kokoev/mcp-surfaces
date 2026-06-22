@@ -12,13 +12,13 @@ export type GitRunResult = {
   diagnostic_truncated: boolean;
 };
 
-export function runGit(cwd: string, args: string[], policy: GitMcpPolicy, options: { abortSignal?: AbortSignal } = {}): Promise<GitRunResult> {
+export function runGit(cwd: string, args: string[], policy: GitMcpPolicy, options: { abortSignal?: AbortSignal; env?: NodeJS.ProcessEnv } = {}): Promise<GitRunResult> {
   return new Promise((resolvePromise, reject) => {
     if (options.abortSignal?.aborted) {
       resolvePromise({ exit_code: null, output_text: '', diagnostic_text: '', timed_out: false, cancelled: true, output_truncated: false, diagnostic_truncated: false });
       return;
     }
-    const child = spawn('git', args, { cwd, shell: false, windowsHide: true });
+    const child = spawn('git', args, { cwd, shell: false, windowsHide: true, env: options.env });
     let outputText = '';
     let diagnosticText = '';
     let outputBytes = 0;
@@ -69,7 +69,7 @@ export function runGit(cwd: string, args: string[], policy: GitMcpPolicy, option
   });
 }
 
-export async function gitText(cwd: string, args: string[], policy: GitMcpPolicy, failureCode: string = 'git_command_failed', options: { abortSignal?: AbortSignal } = {}): Promise<string> {
+export async function gitText(cwd: string, args: string[], policy: GitMcpPolicy, failureCode: string = 'git_command_failed', options: { abortSignal?: AbortSignal; env?: NodeJS.ProcessEnv } = {}): Promise<string> {
   const result = await runGit(cwd, args, policy, options);
   ensureGitOk(result, failureCode);
   return result.output_text;

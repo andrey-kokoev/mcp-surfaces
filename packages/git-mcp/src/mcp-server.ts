@@ -1,9 +1,9 @@
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
   listOutputResources,
-  outputShow,
   readOutputResource,
 } from '@narada2/mcp-transport';
 import { diagnosticError, GitMcpError } from './git-errors.js';
@@ -15,7 +15,6 @@ import type { GitMcpState } from './state.js';
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_BYTE_LIMIT = 6000;
-const PREVIEW_CHAR_LIMIT = 1000;
 const ROOTS_LIST_REQUEST_PREFIX = 'git_roots_';
 
 export async function runStdioServer(options: Record<string, unknown>) {
@@ -67,12 +66,16 @@ export async function runStdioServer(options: Record<string, unknown>) {
   }
 }
 
-export function createServerState(options: Record<string, unknown> = {}): GitMcpState {
+export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): GitMcpState {
+  const siteRoot = resolve(String(options.siteRoot ?? options.outputRoot ?? firstOption(options.allowedRoot) ?? firstOption(options.allowedRoots) ?? process.cwd()));
+  const stateEnv = { ...env };
+  loadSiteSecrets(siteRoot, stateEnv);
   const policy = createGitPolicy(options);
   return {
     policy,
     outputRoot: resolve(String(options.outputRoot ?? policy.allowedRoots[0])),
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
+    env: stateEnv,
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
 }
@@ -167,47 +170,25 @@ function completeArgument(params: Record<string, unknown>, state: GitMcpState) {
 async function callTool(params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  if (name === 'mcp_output_show') return toolResult(outputShow({ siteRoot: state.outputRoot, args }), state, name);
   const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);
 }
 
 function toolResult(value: unknown, state: GitMcpState, toolName: string) {
   const text = renderToolResultText(value);
-  if (asRecord(value).schema === 'narada.mcp_output_show.v1') {
+  if (asRecord(value).schema === 'narada.mcp_output_page.v1') {
     return { content: [assistantTextContent(text)], structuredContent: value };
   }
   const structuredText = JSON.stringify(value, null, 2);
-  const structuredTextLength = structuredText.length;
   if (utf8ByteLength(text) <= INLINE_RESULT_BYTE_LIMIT && utf8ByteLength(structuredText) <= INLINE_RESULT_BYTE_LIMIT) {
     return { content: [assistantTextContent(text)], structuredContent: value };
   }
-  const refResult = buildOutputRefToolContent({
+  return buildOutputRefToolContent({
     siteRoot: state.outputRoot,
     toolName,
     value,
     limit: INLINE_RESULT_BYTE_LIMIT,
   });
-  const locator = requireOutputLocator(refResult);
-  return {
-    content: [
-      assistantTextContent(renderToolResultText({ ...locator, tool_name: toolName, result_materialized: true })),
-      ...resourceLinksFromToolResult(refResult),
-    ],
-    structuredContent: {
-      ...boundedStructuredContent(value),
-      result_materialized: true,
-      output_ref: locator.output_ref ?? locator.ref,
-      reader_tool: locator.reader_tool ?? 'mcp_output_show',
-      full_output_char_length: locator.full_output_char_length ?? structuredTextLength,
-    },
-  };
-}
-
-function resourceLinksFromToolResult(value: unknown): unknown[] {
-  const contentValue = asRecord(value).content;
-  const content = Array.isArray(contentValue) ? contentValue : [];
-  return content.filter((item) => asRecord(item).type === 'resource_link');
 }
 
 function assistantTextContent(text: string) {
@@ -216,40 +197,6 @@ function assistantTextContent(text: string) {
 
 function utf8ByteLength(value: string): number {
   return Buffer.byteLength(value, 'utf8');
-}
-
-function boundedStructuredContent(value: unknown): Record<string, unknown> {
-  const record = { ...asRecord(value) };
-  for (const field of ['diff', 'patch']) {
-    if (typeof record[field] === 'string') {
-      const text = String(record[field]);
-      record[`${field}_preview`] = text.slice(0, PREVIEW_CHAR_LIMIT);
-      record[`${field}_omitted`] = true;
-      delete record[field];
-    }
-  }
-  return record;
-}
-
-function requireOutputLocator(value: unknown): Record<string, unknown> {
-  const locator = parseToolResultStructuredContent(value);
-  if (typeof (locator.output_ref ?? locator.ref) !== 'string') throw diagnosticError('git_output_ref_materialization_failed');
-  return locator;
-}
-
-function parseToolResultStructuredContent(value: unknown): Record<string, unknown> {
-  const record = asRecord(value);
-  const content = Array.isArray(record.content) ? record.content : [];
-  const text = asRecord(content.find((item) => asRecord(item).type === 'text')).text;
-  if (typeof text !== 'string') throw diagnosticError('git_output_ref_materialization_failed', 'git_output_ref_materialization_failed', { reason: 'missing_text_content' });
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw diagnosticError('git_output_ref_materialization_failed', 'git_output_ref_materialization_failed', {
-      reason: 'invalid_json_text_content',
-      parse_error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 export function parseArgs(argv: string[]): Record<string, unknown> {
@@ -385,4 +332,30 @@ function clientRootCompletionValues(state: GitMcpState): string[] {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function optionList(value: unknown): string[] {
+  if (value === undefined || value === null || value === true) return [];
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [String(value)].filter(Boolean);
+}
+
+function firstOption(value: unknown): string | null {
+  const values = optionList(value);
+  return values.length > 0 ? values[0] : null;
+}
+
+function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void {
+  try {
+    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    if (!existsSync(configPath)) return;
+    const data = JSON.parse(readFileSync(configPath, 'utf8'));
+    const secretEnv = data.env;
+    if (secretEnv && typeof secretEnv === 'object' && !Array.isArray(secretEnv)) {
+      for (const [key, value] of Object.entries(secretEnv)) {
+        if (typeof value === 'string' && value.trim() && !targetEnv[key]) targetEnv[key] = value;
+      }
+    }
+  } catch {
+    // Best-effort.
+  }
 }

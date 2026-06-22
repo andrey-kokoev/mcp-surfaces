@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -33,9 +33,20 @@ git(repo, ['config', 'user.email', 'agent@example.test']);
 git(repo, ['config', 'user.name', 'Agent Test']);
 git(repo, ['config', 'core.autocrlf', 'false']);
 git(repo, ['remote', 'add', 'origin', remote]);
+const siteRoot = join(root, 'site-root');
+mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { GIT_MCP_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+const originalGitSecret = process.env.GIT_MCP_TEST_SECRET;
+delete process.env.GIT_MCP_TEST_SECRET;
 
 const state = createServerState({ allowedRoot: root, outputRoot: root, mode: 'write', maxOutputBytes: 2 * 1024 * 1024 });
 const readState = createServerState({ allowedRoot: root, outputRoot: root, mode: 'read' });
+const secretState = createServerState({ allowedRoot: siteRoot, mode: 'read' });
+assert.equal(secretState.env.GIT_MCP_TEST_SECRET, 'from-site-secret');
+assert.equal(secretState.policy.allowedRoots.includes(siteRoot), true);
+assert.equal(process.env.GIT_MCP_TEST_SECRET, undefined);
+if (originalGitSecret === undefined) delete process.env.GIT_MCP_TEST_SECRET;
+else process.env.GIT_MCP_TEST_SECRET = originalGitSecret;
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
 
 const abortController = new AbortController();
@@ -44,6 +55,9 @@ const cancelledGit = await runGit(repo, ['status'], state.policy, { abortSignal:
 assert.equal(cancelledGit.cancelled, true);
 assert.equal(cancelledGit.timed_out, false);
 assert.equal(cancelledGit.exit_code, null);
+
+const secretGitEnv = await runGit(repo, ['var', 'GIT_AUTHOR_IDENT'], secretState.policy, { env: secretState.env });
+assert.equal(secretGitEnv.exit_code, 0);
 
 const unbornRepo = join(root, 'unborn');
 git(root, ['init', '--initial-branch=main', unbornRepo]);
@@ -118,6 +132,9 @@ assert.match(missingRemotePush.error?.data.details.remediation.message, /No remo
 writeFileSync(join(repo, 'README.md'), 'hello\n', 'utf8');
 status = await gitStatus({ working_directory: repo }, state);
 assert.deepEqual(status.untracked, ['README.md']);
+const untrackedDiff = await gitDiff({ working_directory: repo, scope: 'working', pathspec: 'README.md', include_untracked: true }, state);
+assert.deepEqual(untrackedDiff.untracked_paths, ['README.md']);
+assert.match(untrackedDiff.diff, /\+hello/);
 
 const addResult = await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 assert.deepEqual((addResult.post_status as any).staged, ['README.md']);
@@ -158,6 +175,8 @@ assert.equal(unknownTool.error?.data.code, 'git_mcp_unknown_tool');
 writeFileSync(join(repo, 'README.md'), 'hello\nworld\n', 'utf8');
 const workingDiff = await gitDiff({ working_directory: repo, scope: 'working', pathspec: 'README.md' }, state);
 assert.match(workingDiff.diff, /\+world/);
+assert.equal(workingDiff.offset, 0);
+assert.equal(workingDiff.next_offset, null);
 
 await assert.rejects(
   () => gitAdd({ working_directory: repo, paths: ['.'] }, state),
@@ -326,13 +345,18 @@ const materialized = await rpc({
   method: 'tools/call',
   params: { name: 'git_diff', arguments: { working_directory: repo, scope: 'working', pathspec: 'RENAMED.md' } },
 }, state);
-assert.equal(typeof materialized.result?.structuredContent.output_ref, 'string');
-assert.equal(materialized.result?.structuredContent.diff, undefined);
-assert.match(materialized.result?.structuredContent.diff_preview, /^diff --git/);
-assert.match(materialized.result?.content[0].text, /git_diff: materialized/);
-assert.match(materialized.result?.content[0].text, /reader_tool: mcp_output_show/);
-assert.equal(materialized.result?.content[1].type, 'resource_link');
-assert.equal(materialized.result?.content[1].uri, `mcp-output:${encodeURIComponent(String(materialized.result?.structuredContent.output_ref))}`);
+assert.equal(materialized.result?.structuredContent.schema, 'narada.git.diff.v1');
+assert.equal(materialized.result?.structuredContent.output_ref, undefined);
+assert.match(materialized.result?.structuredContent.diff, /diff --git/);
+assert.equal(materialized.result?.structuredContent.offset, 0);
+assert.equal(materialized.result?.structuredContent.limit, 4000);
+assert.equal(materialized.result?.structuredContent.next_offset, 4000);
+assert.equal(materialized.result?.structuredContent.diff_truncated, true);
+assert.equal(materialized.result?.content.length, 1);
+const diffPage2 = await gitDiff({ working_directory: repo, scope: 'working', pathspec: 'RENAMED.md', offset: materialized.result?.structuredContent.next_offset, limit: 2000 }, state);
+assert.equal(diffPage2.offset, 4000);
+assert.equal(diffPage2.limit, 2000);
+assert.equal(diffPage2.diff.length, 2000);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
