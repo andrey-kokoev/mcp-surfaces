@@ -107,11 +107,50 @@ export function decideStructuredCommandExecution({ command, args = [], workingDi
     schema: 'narada.structured_command.execution_decision.v0',
     status: reasons.length === 0 ? 'allowed' : 'refused',
     reasons,
+    remediation_hints: reasons.length === 0 ? [] : buildRemediationHints(argv, reasons),
     command: normalizedCommand,
     args: argv.slice(1),
     working_directory: cwd,
     shell_interpolation: false,
   };
+}
+
+function buildRemediationHints(argv, reasons) {
+  const command = argv[0]?.toLowerCase();
+  const subcommand = argv[1]?.toLowerCase();
+  const hints = [];
+
+  if (command === 'git') {
+    const toolBySubcommand = {
+      add: 'git_git_add',
+      commit: 'git_git_commit',
+      diff: 'git_git_diff',
+      log: 'git_git_log',
+      push: 'git_git_push',
+      show: 'git_git_show',
+      status: 'git_git_status',
+    };
+    const tool = toolBySubcommand[subcommand] ?? 'git_git_status';
+    hints.push(`Use the governed Git MCP tool ${tool} instead of shelling out to git.`);
+  }
+
+  if (command === 'rg' || command === 'grep' || command === 'findstr') {
+    hints.push('Use local-filesystem fs_grep_search for content search or fs_glob_search for file pattern search.');
+  }
+
+  if (command === 'ls' || command === 'dir' || command === 'find') {
+    hints.push('Use local-filesystem fs_glob_search or fs_read_file for governed filesystem inspection.');
+  }
+
+  if (reasons.some((reason) => String(reason).startsWith('working_directory_outside_allowed_roots:'))) {
+    hints.push('Run from an allowed root or request a policy update through the surface configuration instead of bypassing the root guard.');
+  }
+
+  if (reasons.some((reason) => String(reason).startsWith('blocked_command:'))) {
+    hints.push('Use an explicit argv-based allowed command or a narrower MCP surface; blocked shell interpreters remain disallowed.');
+  }
+
+  return [...new Set(hints)];
 }
 
 export function publicExecutionPolicy(policy) {

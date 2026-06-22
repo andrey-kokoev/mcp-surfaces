@@ -316,6 +316,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
       status: 'refused',
       decision,
       refusal_reasons: decision.reasons,
+      remediation_hints: decision.remediation_hints,
       command: decision.command,
       args: decision.args,
       working_directory: decision.working_directory,
@@ -666,6 +667,7 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
       args: payload.args,
       working_directory: payload.working_directory,
       refusal_reasons: payload.refusal_reasons ?? payload.decision?.reasons ?? [],
+      remediation_hints: payload.remediation_hints ?? payload.decision?.remediation_hints ?? [],
       decision: payload.decision ?? null,
       execution_ref: payload.execution_ref ?? null,
       truncated,
@@ -712,12 +714,14 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
 function renderToolResultText(payload) {
   if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === false) {
     const reasons = payload.refusal_reasons ?? payload.decision?.reasons ?? [];
+    const hints = payload.remediation_hints ?? payload.decision?.remediation_hints ?? [];
     return [
       `structured_command_execute: ${payload.status}`,
       `command: ${payload.command ?? ''}`,
       `working_directory: ${payload.working_directory ?? ''}`,
       `refusal_reasons: ${Array.isArray(reasons) && reasons.length ? reasons.join('; ') : 'none'}`,
-    ].join('\n');
+      Array.isArray(hints) && hints.length ? `remediation_hints: ${hints.join('; ')}` : null,
+    ].filter(Boolean).join('\n');
   }
   if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === true) {
     const lines = [

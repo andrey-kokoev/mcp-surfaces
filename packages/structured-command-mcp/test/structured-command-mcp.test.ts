@@ -275,6 +275,27 @@ assert.equal(refusedCall.result.structuredContent.status, 'refused');
 assert.equal(refusedCall.result.structuredContent.executed, false);
 assert.ok(refusedCall.result.structuredContent.refusal_reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
 
+const refusedGitAdd = await exec({
+  command: 'git',
+  args: ['add', 'README.md'],
+  working_directory: root,
+}, state);
+assert.equal(refusedGitAdd.status, 'refused');
+assert.deepEqual(refusedGitAdd.remediation_hints, ['Use the governed Git MCP tool git_git_add instead of shelling out to git.']);
+
+const refusedSearch = await rpc({
+  jsonrpc: '2.0',
+  id: 33,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: { command: 'rg', args: ['needle'], working_directory: root },
+  },
+}, state);
+assert.equal(refusedSearch.result.structuredContent.status, 'refused');
+assert.deepEqual(refusedSearch.result.structuredContent.remediation_hints, ['Use local-filesystem fs_grep_search for content search or fs_glob_search for file pattern search.']);
+assert.match(refusedSearch.result.content[0].text, /remediation_hints: Use local-filesystem fs_grep_search/);
+
 const longInlineScript = `${' '.repeat(318)}process.stdout.write('long-inline-ok')`;
 const okLongInlineArg = await exec({
   command: 'node',
