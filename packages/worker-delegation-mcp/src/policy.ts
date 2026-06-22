@@ -26,6 +26,7 @@ export type WorkerPolicy = {
   allowedRoots: string[];
   rootsFromTrustConfig: string | null;
   allowedRuntimes: WorkerRuntimeId[];
+  allowedNaradaAgentRuntimeProviders: string[];
   allowedSandboxes: SandboxMode[];
   allowedConfigKeys: string[];
   allowRawConfigOverrides: boolean;
@@ -65,6 +66,9 @@ type WorkerDeepseekRuntimeConfig = {
 const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
+const DEFAULT_WORKER_RUNTIME: WorkerRuntimeId = 'narada-agent-runtime-server';
+const DEFAULT_WORKER_RUNTIME_ENV = 'NARADA_WORKER_DEFAULT_RUNTIME';
+const DEFAULT_NARADA_AGENT_RUNTIME_PROVIDERS = ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription'] as const;
 const ENV_KEYS = [
   'PATH',
   'USERPROFILE',
@@ -95,10 +99,11 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const deepseekCfg = asRecord(runtimes.deepseek);
   const naradaAgentRuntimeServerCfg = asRecord(runtimes.narada_agent_runtime_server ?? runtimes.naradaAgentRuntimeServer);
 
-  const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? 'narada-agent-runtime-server');
+  const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? process.env[DEFAULT_WORKER_RUNTIME_ENV] ?? DEFAULT_WORKER_RUNTIME);
   if (!isWorkerRuntime(defaultRuntime)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
 
   const allowedRuntimes = runtimeList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
+  const allowedNaradaAgentRuntimeProviders = providerList(merged.allowedNaradaAgentRuntimeProvider ?? merged.allowedNaradaAgentRuntimeProviders ?? policy.allowed_narada_agent_runtime_providers ?? DEFAULT_NARADA_AGENT_RUNTIME_PROVIDERS);
 
   const allowedSandboxes = stringList(merged.allowedSandbox ?? merged.allowedSandboxes ?? policy.allowed_sandboxes ?? ['read-only', 'workspace-write']).map(validateSandbox);
   const allowDangerFullAccess = booleanValue(merged.allowDangerFullAccess ?? policy.allow_danger_full_access, false);
@@ -143,6 +148,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     allowedRoots,
     rootsFromTrustConfig,
     allowedRuntimes,
+    allowedNaradaAgentRuntimeProviders,
     allowedSandboxes,
     allowedConfigKeys: stringList(merged.allowedConfigKey ?? merged.allowedConfigKeys ?? policy.allowed_config_keys ?? ['model', 'model_reasoning_effort']),
     allowRawConfigOverrides: booleanValue(merged.allowRawConfigOverrides ?? policy.allow_raw_config_overrides, false),
@@ -203,6 +209,11 @@ function runtimeList(value: unknown): WorkerRuntimeId[] {
   return list.length > 0 ? [...new Set(list)] : ['codex', 'deepseek-api', 'narada-agent-runtime-server'];
 }
 
+function providerList(value: unknown): string[] {
+  const list = stringList(value).map((provider) => provider.trim()).filter(Boolean);
+  return list.length > 0 ? [...new Set(list)] : [...DEFAULT_NARADA_AGENT_RUNTIME_PROVIDERS];
+}
+
 function isWorkerRuntime(value: unknown): value is WorkerRuntimeId {
   return value === 'codex' || value === 'deepseek-api' || value === 'narada-agent-runtime-server';
 }
@@ -242,6 +253,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     allowed_roots: policy.allowedRoots,
     roots_from_trust_config: policy.rootsFromTrustConfig,
     allowed_runtimes: policy.allowedRuntimes,
+    allowed_narada_agent_runtime_providers: policy.allowedNaradaAgentRuntimeProviders,
     allowed_sandboxes: policy.allowedSandboxes,
     allowed_config_keys: policy.allowedConfigKeys,
     allow_raw_config_overrides: policy.allowRawConfigOverrides,
@@ -253,6 +265,8 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
       workspace_root: 'worker cwd inside the resolved Site root',
       environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
+      provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
+      allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
       remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
     },
     max_parallel_runs: policy.maxParallelRuns,
@@ -305,6 +319,8 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
         site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
         site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
+        provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
+        allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
         site_root_required_remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
       },
     },
@@ -365,6 +381,20 @@ export function validateRuntime(value: unknown, policy: WorkerPolicy): WorkerRun
   if (!isWorkerRuntime(runtime)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime });
   if (!policy.allowedRuntimes.includes(runtime)) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
   return runtime;
+}
+
+export function resolveNaradaAgentRuntimeProvider(value: unknown, policy: WorkerPolicy): { provider: string | null; source: string } {
+  const provider = stringOrNull(value);
+  if (!provider) return { provider: null, source: 'runtime_default' };
+  if (!policy.allowedNaradaAgentRuntimeProviders.includes(provider)) {
+    throw diagnosticError('worker_narada_provider_not_allowed', 'worker_narada_provider_not_allowed', { provider, allowed_providers: policy.allowedNaradaAgentRuntimeProviders });
+  }
+  return { provider, source: 'explicit_constraint' };
+}
+
+export function rejectNaradaAgentRuntimeProviderForRuntime(provider: unknown, runtime: WorkerRuntimeId): void {
+  if (provider === undefined || provider === null || String(provider).trim() === '') return;
+  if (runtime !== 'narada-agent-runtime-server') throw diagnosticError('worker_narada_provider_runtime_mismatch', 'worker_narada_provider_runtime_mismatch', { runtime, provider });
 }
 
 export function validateSandbox(value: unknown): SandboxMode {

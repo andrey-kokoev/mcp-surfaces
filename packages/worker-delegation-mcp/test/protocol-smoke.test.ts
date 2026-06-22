@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = mkdtempSync(join(tmpdir(), 'worker-delegation-protocol-'));
+const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const child = spawn(process.execPath, [serverPath, '--allowed-root', root, '--run-root', join(root, 'runs')], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -51,4 +50,10 @@ async function waitForLines(read: () => string, count: number) {
     if (Date.now() - started > 5000) throw new Error(`timed out waiting for ${count} lines`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+function testTempRoot(): string {
+  const root = join(process.cwd(), '.tmp-tests');
+  mkdirSync(root, { recursive: true });
+  return root;
 }

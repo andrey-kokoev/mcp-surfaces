@@ -5,7 +5,7 @@ import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
 import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
 import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
@@ -50,6 +50,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   request.constraints.cognition = cognition;
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
+  rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
   applyCognitionDefaults(request, cognition, state, runtime);
@@ -116,6 +117,8 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     environment.NARADA_WORKSPACE_ROOT = cwd;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
+    const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
+    if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
     const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
     resolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
@@ -131,6 +134,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
       site_binding: siteBinding,
+      provider: providerResolution.provider,
+      provider_source: providerResolution.source,
+      provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -627,6 +633,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   request.constraints.cognition = cognition;
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
+  rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
   applyCognitionDefaults(request, cognition, state, runtime);
@@ -706,6 +713,8 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     environment.NARADA_WORKSPACE_ROOT = cwd;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
+    const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
+    if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
     const argv = buildAgentRuntimeServerArgv({ workerSessionId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
@@ -721,6 +730,9 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
       site_binding: siteBinding,
+      provider: providerResolution.provider,
+      provider_source: providerResolution.source,
+      provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -1735,6 +1747,7 @@ function configValueSource(options: { explicit: boolean; hasResolvedValue: boole
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {
   if (request.constraints.authority === undefined) request.constraints.authority = inherited.authority;
   if (request.constraints.cognition === undefined) request.constraints.cognition = inherited.cognition;
+  if (request.constraints.provider === undefined && inherited.provider) request.constraints.provider = inherited.provider;
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
   if (overrides.runtime === undefined) overrides.runtime = inherited.runtime;
@@ -1757,6 +1770,7 @@ function workerEditRunArgs(args: Record<string, unknown>, state: WorkerMcpState)
     constraints: {
       cwd: editInput.cwd,
       ...(editInput.site_root !== undefined ? { site_root: editInput.site_root } : {}),
+      ...(editInput.provider !== undefined ? { provider: editInput.provider } : {}),
       authority: 'write',
       cognition: 'low',
       ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
@@ -1774,6 +1788,7 @@ function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEdit
     instruction: requiredNonEmptyString(args.instruction, 'worker_prompt_too_large'),
   };
   if (args.site_root !== undefined && args.site_root !== null && String(args.site_root).trim()) editInput.site_root = String(args.site_root).trim();
+  if (args.provider !== undefined && args.provider !== null && String(args.provider).trim()) editInput.provider = String(args.provider).trim();
   if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);
   if (args.wait_for_completion !== undefined) editInput.wait_for_completion = Boolean(args.wait_for_completion);
   if (args.exit_interview !== undefined) editInput.exit_interview = Boolean(args.exit_interview);
@@ -2060,6 +2075,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
     cwd: requiredNonEmptyString(constraintsInput.cwd ?? args.cwd, 'worker_cwd_required'),
   };
   copyString(constraints, 'site_root', constraintsInput.site_root ?? args.site_root);
+  copyString(constraints, 'provider', constraintsInput.provider ?? args.provider);
   copyString(constraints, 'authority', constraintsInput.authority ?? args.authority);
   copyString(constraints, 'cognition', constraintsInput.cognition ?? args.cognition);
   if (constraintsInput.resumable !== undefined || args.resumable !== undefined) constraints.resumable = Boolean(constraintsInput.resumable ?? args.resumable);

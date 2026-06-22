@@ -52,6 +52,7 @@ export type WorkerProgressPreview = {
 export type WorkerConstraintRequest = {
   cwd: string;
   site_root?: string;
+  provider?: string;
   authority?: string;
   cognition?: string;
   resumable?: boolean;
@@ -81,6 +82,7 @@ export type WorkerRunToolInput = {
 export type WorkerEditToolInput = {
   cwd: string;
   site_root?: string;
+  provider?: string;
   instruction: string;
   resumable?: boolean;
   wait_for_completion?: boolean;
@@ -104,6 +106,9 @@ export type WorkerResolvedExecutionPolicy = {
   site_root_source?: 'explicit' | 'nearest_marker';
   site_binding?: Record<string, unknown>;
   workspace_root?: string;
+  provider?: string | null;
+  provider_source?: string;
+  provider_env_key?: string;
   sandbox: SandboxMode;
   model: string | null;
   reasoning_effort: string | null;

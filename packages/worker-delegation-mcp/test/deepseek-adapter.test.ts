@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { buildDeepseekArgv, deepseekRuntimeName, createServerState, handleRequest } from '../src/main.js';
 import { runtimeName, supportsResume } from '../src/deepseek-adapter.js';
 import { parseLastMessage, resultStatus } from '../src/codex-adapter.js';
 
-const root = mkdtempSync(join(tmpdir(), 'deepseek-adapter-'));
+const root = mkdtempSync(join(testTempRoot(), 'deepseek-adapter-'));
 const runRoot = join(root, 'runs');
 
 type RpcResponse = {
@@ -207,3 +206,9 @@ assert.equal(customDeepseekState.policy.cognitionDefaults.low.model, 'deepseek-c
 assert.equal(customDeepseekState.policy.cognitionDefaults.low.reasoningEffort, 'max');
 
 console.log('deepseek-adapter tests passed');
+
+function testTempRoot(): string {
+  const root = join(process.cwd(), '.tmp-tests');
+  mkdirSync(root, { recursive: true });
+  return root;
+}

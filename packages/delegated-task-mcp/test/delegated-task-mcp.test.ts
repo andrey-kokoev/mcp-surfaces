@@ -560,6 +560,13 @@ try {
   });
   const failedReviewView = failedReviewRun.result.structuredContent as Record<string, any>;
   assert.equal(failedReviewView.task_status, 'failed');
+  const failedReviewResult = await callTool(state, 'delegated_task_result', { task_id: failedReviewView.task_id });
+  const failedReviewResultView = failedReviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(failedReviewResultView.retry_replacement.available, true);
+  assert.equal(failedReviewResultView.retry_replacement.mode, 'create_replacement_task');
+  assert.equal(failedReviewResultView.retry_replacement.run_request_template.objective, 'Exercise explicit review failure');
+  assert.equal(failedReviewResultView.retry_replacement.run_request_template.execution.start, false);
+  assert.equal(failedReviewResultView.retry_replacement.mutable_fields.includes('constraints.runtime'), true);
 
   const siteRootRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise site_root pass-through',
@@ -614,6 +621,12 @@ try {
   const writeSetAdvance = await callTool(state, 'delegated_task_advance', { task_id: writeSetRunView.task_id });
   const writeSetAdvanceView = writeSetAdvance.result.structuredContent as Record<string, any>;
   assert.equal(writeSetAdvanceView.scheduler_state.running_step_ids.includes('execute-b'), true);
+  assert.equal(writeSetAdvanceView.result, undefined);
+  assert.equal(writeSetAdvanceView.result_summary.schema, 'narada.delegated_task.result_summary.v1');
+  const writeSetAdvanceDiagnostic = await callTool(state, 'delegated_task_advance', { task_id: writeSetRunView.task_id, include_diagnostics: true });
+  const writeSetAdvanceDiagnosticView = writeSetAdvanceDiagnostic.result.structuredContent as Record<string, any>;
+  assert.equal(writeSetAdvanceDiagnosticView.result.schema, 'narada.delegated_task.result.v1');
+  assert.equal(writeSetAdvanceDiagnosticView.result.diagnostics.task_id, writeSetRunView.task_id);
   const writeSetResult = await callTool(state, 'delegated_task_result', { task_id: writeSetRunView.task_id, include_diagnostics: true });
   const writeSetResultView = writeSetResult.result.structuredContent as Record<string, any>;
   assert.equal(writeSetResultView.result.graph_execution_synthesis.derived_topology.write_set_scheduling, true);
@@ -1083,7 +1096,7 @@ try {
   const beforeMappedWorkerCalls = workerCalls.length;
   const mappedWorkerRun = await callTool(state, 'delegated_task_run', {
     objective: 'Map delegated task worker convenience constraints',
-    constraints: { authority: 'read', cwd: root, site_root: siteRoot, runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot, provider: 'codex-subscription', runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
     workflow: { steps: [{ id: 'mapped-worker', kind: 'research', instruction: 'Inspect mapped worker args' }] },
     execution: { wait_for_completion: true, resumable: false, max_concurrency: 1 },
   });
@@ -1097,6 +1110,7 @@ try {
   assert.equal(mappedConstraints.skip_git_repo_check, undefined);
   assert.equal(mappedConstraints.max_concurrency, undefined);
   assert.equal(mappedConstraints.site_root, siteRoot);
+  assert.equal(mappedConstraints.provider, 'codex-subscription');
   assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
 
   const launchFailureRun = await callTool(state, 'delegated_task_run', {

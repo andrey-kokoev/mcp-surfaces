@@ -78,6 +78,7 @@ try {
   const constraints = runTool.inputSchema.properties.constraints as Record<string, any>;
   assert.equal(constraints.additionalProperties, false);
   assert.ok(constraints.properties.authority_gates);
+  assert.ok(constraints.properties.provider);
   assert.ok(constraints.properties.required_mcp_tools);
   assert.ok(constraints.properties.preflight_paths);
   assert.equal(constraints.properties.overrides.additionalProperties, false);

@@ -21,6 +21,7 @@ export function listTools(): WorkerToolDefinition[] {
     { name: 'worker_edit', description: 'Start one edit-capable worker run shortcut using write authority and low cognition.', inputSchema: objectSchema({
       cwd: { type: 'string' },
       site_root: { type: 'string', description: 'Explicit Narada Site root for narada-agent-runtime-server workers. Defaults to nearest Site marker above cwd.' },
+      provider: { type: 'string', description: 'Explicit NARS intelligence provider projected as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' },
       instruction: { type: 'string' },
       resumable: { type: 'boolean' },
       wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
@@ -155,6 +156,7 @@ function constraintRequestSchema(): Record<string, unknown> {
   return objectSchema({
     cwd: { type: 'string' },
     site_root: { type: 'string', description: 'Explicit Narada Site root for narada-agent-runtime-server workers. Defaults to nearest Site marker above cwd.' },
+    provider: { type: 'string', description: 'Explicit NARS intelligence provider projected as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' },
     authority: { type: 'string', enum: ['read', 'write', 'command'] },
     cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
     resumable: { type: 'boolean' },
