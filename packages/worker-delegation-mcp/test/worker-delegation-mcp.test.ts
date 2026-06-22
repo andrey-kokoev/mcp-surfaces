@@ -591,6 +591,8 @@ assert.equal(state.activeRunCount, 0);
 const directStatus = await rpc({ jsonrpc: '2.0', id: 5231, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: asyncRun.result?.structuredContent.run_id } } }, state);
 assert.match(String(directStatus.result?.structuredContent.progress.latest_event_preview), /thread-created/);
 assert.equal(directStatus.result?.structuredContent.exit_interview, null);
+assert.equal(directStatus.result?.structuredContent.artifact_readback.readable_via_worker_delegation, true);
+assert.equal(directStatus.result?.structuredContent.artifact_readback.local_filesystem_access_required, false);
 const exitInterviewRun = await rpc({ jsonrpc: '2.0', id: 5233, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'ask for ergonomics feedback' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, exit_interview: true } } } }, state);
 assert.equal(exitInterviewRun.result?.structuredContent.status, 'completed');
 assert.equal(exitInterviewRun.result?.structuredContent.exit_interview.ergonomics_feedback, 'fake worker found the exit interview easy to answer');
@@ -645,6 +647,53 @@ assert.equal(orphanedStatus.result?.structuredContent.status, 'completed_with_er
 assert.equal(orphanedStatus.result?.structuredContent.summary, 'orphaned worker output');
 assert.equal(orphanedStatus.result?.structuredContent.warning_count, 1);
 assert.match(orphanedStatus.result?.structuredContent.error, /worker_run_orphaned_final_output/);
+const legacyHomeRunId = 'run-20000101T000002Z-legacyhome';
+const legacyHomeRunDir = join(root, 'worker-delegation', 'runs', legacyHomeRunId);
+mkdirSync(legacyHomeRunDir, { recursive: true });
+writeFileSync(join(legacyHomeRunDir, 'events.jsonl'), JSON.stringify({ type: 'turn.completed', timestamp: '2000-01-01T00:00:03.000Z', text: 'legacy complete' }) + '\n', 'utf8');
+writeFileSync(join(legacyHomeRunDir, 'diagnostic.log'), 'legacy diagnostic detail\n', 'utf8');
+writeFileSync(join(legacyHomeRunDir, 'worker_invocation.json'), JSON.stringify({ command: 'codex', argv: ['exec'], cwd: root }), 'utf8');
+writeFileSync(join(legacyHomeRunDir, 'resolved_worker_config.json'), JSON.stringify({ runtime: 'codex', authority: 'read', secret_like: 'not-secret' }), 'utf8');
+writeFileSync(join(legacyHomeRunDir, 'result.json'), JSON.stringify({
+  schema: 'narada.worker.run.v1',
+  status: 'completed',
+  run_id: legacyHomeRunId,
+  run_dir: legacyHomeRunDir,
+  runtime: 'codex',
+  worker_session_id: 'legacy-session',
+  resolved_worker_config: { authority: 'read', max_run_ms: 1000 },
+  executor_request: { requested_mode: 'audit_only', preflight: [] },
+  requested_mode: 'audit_only',
+  edits_performed: false,
+  target_state_changed: false,
+  confidence: 'complete',
+  completion_state: 'complete',
+  blocked_paths: [],
+  verification: [],
+  runtime_warnings: [],
+  warning_count: 0,
+  preflight: [],
+  final_checklist: [],
+  summary: 'legacy completed worker',
+  deliverables: [],
+  open_questions: [],
+  next_actions: [],
+  changes: [],
+  verification_results: [],
+  artifacts: [],
+  timing: { started_at: '2000-01-01T00:00:02.000Z', finished_at: '2000-01-01T00:00:03.000Z', duration_ms: 1000 },
+  error: null,
+}), 'utf8');
+const originalUserProfile = process.env.USERPROFILE;
+process.env.USERPROFILE = root;
+const legacyHomeStatus = await rpc({ jsonrpc: '2.0', id: 52322, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: legacyHomeRunId } } }, state);
+if (originalUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = originalUserProfile;
+assert.equal(legacyHomeStatus.result?.structuredContent.status, 'completed');
+assert.equal(legacyHomeStatus.result?.structuredContent.summary, 'legacy completed worker');
+assert.equal(legacyHomeStatus.result?.structuredContent.artifact_readback.rediscovered, true);
+assert.equal(legacyHomeStatus.result?.structuredContent.artifact_readback.resources_available, false);
+assert.match(legacyHomeStatus.result?.structuredContent.artifact_readback.diagnostic_tail, /legacy diagnostic detail/);
+assert.match(legacyHomeStatus.result?.structuredContent.artifact_readback.events_tail, /legacy complete/);
 const expiredRunId = 'run-20000101T000002Z-expire1';
 const expiredRunDir = join(runRoot, expiredRunId);
 mkdirSync(expiredRunDir, { recursive: true });

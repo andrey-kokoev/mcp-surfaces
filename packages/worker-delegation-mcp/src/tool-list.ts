@@ -243,6 +243,7 @@ function workerRunOutputSchema(): Record<string, unknown> {
     progress: progressPreviewSchema(),
     artifacts: { type: 'array', items: objectSchema({ name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']) },
     timing: { type: 'object', additionalProperties: true },
+    artifact_readback: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
     worker_output_error: { type: 'object', additionalProperties: true },
     diagnostic_tail: nullableStringSchema(),

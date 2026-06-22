@@ -955,15 +955,14 @@ async function workerRunWait(args: Record<string, unknown>, state: WorkerMcpStat
 
 function readRunResult(state: WorkerMcpState, runId: string, required = true): Record<string, unknown> | null {
   if (!/^run-[A-Za-z0-9TZ-]+$/.test(runId)) throw diagnosticError('worker_run_id_invalid', 'worker_run_id_invalid', { run_id: runId });
-  const runDir = resolve(state.policy.runRoot, runId);
-  const resultPath = resolve(runDir, 'result.json');
-  if (!existsSync(resultPath)) {
+  const located = locateRunResult(state, runId);
+  if (!located) {
     if (!required) return null;
-    throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId });
+    throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
   }
   try {
-    const run = JSON.parse(readFileSync(resultPath, 'utf8')) as Record<string, unknown>;
-    return enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, resultPath), state), state)), state));
+    const run = JSON.parse(readFileSync(located.resultPath, 'utf8')) as Record<string, unknown>;
+    return withArtifactReadback(enrichFailedRunDiagnostics(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state)), state)), state, located);
   } catch (error) {
     if (!required) return null;
     const message = error instanceof Error ? error.message : String(error);
@@ -972,8 +971,51 @@ function readRunResult(state: WorkerMcpState, runId: string, required = true): R
 }
 
 function listRunIds(state: WorkerMcpState): string[] {
-  if (!existsSync(state.policy.runRoot)) return [];
-  return readdirSync(state.policy.runRoot).filter((entry) => entry.startsWith('run-') && statSync(resolve(state.policy.runRoot, entry)).isDirectory());
+  return uniqueStrings(candidateRunRoots(state).flatMap((root) => {
+    if (!existsSync(root)) return [];
+    try {
+      return readdirSync(root).filter((entry) => entry.startsWith('run-') && statSync(resolve(root, entry)).isDirectory());
+    } catch { return []; }
+  }));
+}
+
+function locateRunResult(state: WorkerMcpState, runId: string): { runRoot: string; runDir: string; resultPath: string; primary: boolean } | null {
+  const primaryRoot = resolve(state.policy.runRoot);
+  for (const runRoot of candidateRunRoots(state)) {
+    const runDir = resolve(runRoot, runId);
+    const resultPath = resolve(runDir, 'result.json');
+    if (existsSync(resultPath)) return { runRoot, runDir, resultPath, primary: runRoot === primaryRoot };
+  }
+  return null;
+}
+
+function candidateRunRoots(state: WorkerMcpState): string[] {
+  const roots = [resolve(state.policy.runRoot)];
+  const userHome = process.env.USERPROFILE || process.env.HOME;
+  const codeHome = process.env.CODEX_HOME;
+  if (process.env.NARADA_SITE_ROOT) roots.push(resolve(process.env.NARADA_SITE_ROOT, '.narada', 'runtime', 'worker-delegation'));
+  if (userHome) {
+    roots.push(resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation'));
+    roots.push(resolve(userHome, 'worker-delegation', 'runs'));
+  }
+  if (codeHome) roots.push(resolve(codeHome, 'worker-delegation', 'runs'));
+  return uniqueStrings(roots);
+}
+
+function withArtifactReadback(run: Record<string, unknown>, state: WorkerMcpState, located: { runRoot: string; runDir: string; primary: boolean }): Record<string, unknown> {
+  const artifactReadback = {
+    readable_via_worker_delegation: true,
+    local_filesystem_access_required: false,
+    run_root: located.runRoot,
+    run_root_source: located.primary ? 'policy.runRoot' : 'rediscovered_run_root',
+    rediscovered: !located.primary,
+    resources_available: located.primary,
+    diagnostic_tail: readDiagnosticTail(resolve(located.runDir, 'diagnostic.log')),
+    events_tail: readTextTail(resolve(located.runDir, 'events.jsonl'), 1200),
+    worker_invocation_preview: readJsonPreview(resolve(located.runDir, 'worker_invocation.json')),
+    resolved_worker_config_preview: readJsonPreview(resolve(located.runDir, 'resolved_worker_config.json')),
+  };
+  return { ...run, artifact_readback: artifactReadback };
 }
 
 function includeRunByStatus(status: string, options: { includeCompleted: boolean; includeRunning: boolean }): boolean {
@@ -1045,16 +1087,42 @@ function enrichFailedRunDiagnostics(run: Record<string, unknown>): Record<string
 }
 
 function readDiagnosticTail(path: string): string | null {
+  return readTextTail(path, 800);
+}
+
+function readTextTail(path: string, limit: number): string | null {
   if (!existsSync(path)) return null;
   try {
     const text = readFileSync(path, 'utf8').trim();
     if (!text) return null;
     const normalized = text.replace(/\s+/g, ' ').trim();
-    return normalized.length <= 800 ? normalized : normalized.slice(-800);
+    return normalized.length <= limit ? normalized : normalized.slice(-limit);
   } catch {
     return null;
   }
 }
+
+function readJsonPreview(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+    return redactLargeRecord(parsed, 20);
+  } catch { return null; }
+}
+
+function redactLargeRecord(record: Record<string, unknown>, maxKeys: number): Record<string, unknown> {
+  const entries = Object.entries(record).slice(0, maxKeys).map(([key, value]) => [key, previewJsonValue(value)]);
+  return Object.fromEntries(entries);
+}
+
+function previewJsonValue(value: unknown): unknown {
+  if (typeof value === 'string') return previewString(value, 240) ?? '';
+  if (Array.isArray(value)) return value.slice(0, 20).map(previewJsonValue);
+  if (value && typeof value === 'object') return redactLargeRecord(value as Record<string, unknown>, 20);
+  return value;
+}
+
+function uniqueStrings(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 
 function classifyDiagnosticTail(text: string): string {
   const lower = text.toLowerCase();
