@@ -50,7 +50,7 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 
 Defaults:
 
-- runtime: `codex` (default), `deepseek-api` and `narada-agent-runtime-server` available
+- runtime: `narada-agent-runtime-server` (default), with `codex` and `deepseek-api` available by explicit override
 - default authority: `read`
 - default cognition: `low`
 - allowed runtimes: `codex`, `deepseek-api`, `narada-agent-runtime-server`

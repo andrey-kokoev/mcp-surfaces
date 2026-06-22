@@ -151,6 +151,7 @@ const state = createServerState({
   allowedRoot: root,
   runRoot,
   auditLogDir,
+  defaultRuntime: 'codex',
   codexCommand: process.execPath,
   codexCommandArgs: [fakeCodexScript],
   maxOutputBytes: 2 * 1024 * 1024,
@@ -252,6 +253,7 @@ assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { mod
 assert.match(policy.result?.content[0].text, /worker_policy: ok/);
 assert.match(policy.result?.content[0].text, /nars_site_bound: true/);
 assert.match(policy.result?.content[0].text, /nars_site_markers: \.narada\/,.ai\/mcp\//);
+assert.equal(createServerState({ allowedRoot: root }).policy.defaultRuntime, 'narada-agent-runtime-server');
 
 const configPreview = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'inspect repository shape' },
@@ -299,7 +301,7 @@ const secretSiteRoot = join(root, 'secret-site');
 const secretRunRoot = join(root, 'secret-runs');
 mkdirSync(join(secretSiteRoot, '.narada'), { recursive: true });
 writeFileSync(join(secretSiteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { WORKER_DELEGATION_TEST_SECRET: 'from-site-secret' } }), 'utf8');
-const secretState = createServerState({ siteRoot: secretSiteRoot, allowedRoot: secretSiteRoot, runRoot: secretRunRoot, codexCommand: process.execPath }, { PATH: process.env.PATH });
+const secretState = createServerState({ siteRoot: secretSiteRoot, allowedRoot: secretSiteRoot, runRoot: secretRunRoot, defaultRuntime: 'codex', codexCommand: process.execPath }, { PATH: process.env.PATH });
 assert.equal(secretState.env.WORKER_DELEGATION_TEST_SECRET, 'from-site-secret');
 assert.equal(process.env.WORKER_DELEGATION_TEST_SECRET, undefined);
 if (secretProcessValue === undefined) delete process.env.WORKER_DELEGATION_TEST_SECRET;
@@ -335,6 +337,7 @@ const providerState = createServerState({
   siteRoot: providerRoot,
   allowedRoot: providerRoot,
   runRoot: providerRunRoot,
+  defaultRuntime: 'codex',
   codexCommand: process.execPath,
   providerRegistryPath,
   secretLookupCommand: process.execPath,
@@ -349,10 +352,10 @@ assert.equal(deepseekResolve.result?.structuredContent.runtime_availability.avai
 assert.equal(JSON.stringify(deepseekResolve.result?.structuredContent).includes('deepseek-from-secret-store'), false);
 
 if (process.platform === 'win32') {
-  const mixedCaseState = createServerState({ allowedRoot: root.toLowerCase(), runRoot, codexCommand: process.execPath });
+  const mixedCaseState = createServerState({ allowedRoot: root.toLowerCase(), runRoot, defaultRuntime: 'codex', codexCommand: process.execPath });
   assert.equal(mixedCaseState.policy.allowedRoots.length, 1);
   assert.equal(mixedCaseState.policy.allowedRoots[0].toLowerCase(), root.toLowerCase());
-  assert.equal(createServerState({ allowedRoot: platformRootCase, runRoot, codexCommand: process.execPath }).policy.allowedRoots[0].toLowerCase(), root.toLowerCase());
+  assert.equal(createServerState({ allowedRoot: platformRootCase, runRoot, defaultRuntime: 'codex', codexCommand: process.execPath }).policy.allowedRoots[0].toLowerCase(), root.toLowerCase());
   assert.equal(resolveWorkingDirectory(platformRootCase, mixedCaseState.policy).toLowerCase(), root.toLowerCase());
   const mixedCaseChild = join(platformRootCase, 'Child');
   mkdirSync(mixedCaseChild, { recursive: true });
@@ -366,7 +369,7 @@ $out = $args[$args.IndexOf('-o') + 1]
 Set-Content -LiteralPath $out -Encoding UTF8 -Value '{"summary":"ps1 worker ok","deliverables":[],"open_questions":[],"next_actions":[],"edits_performed":false,"target_state_changed":false,"changes":[],"verification":[],"verification_budget_respected":null,"broad_unrelated_failures":[],"exit_interview":null}'
 Write-Output '{"thread_id":"ps1-thread"}'
 `, 'utf8');
-  const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), codexCommand: 'codex.ps1' }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
+  const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), defaultRuntime: 'codex', codexCommand: 'codex.ps1' }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
   const ps1Run = await rpc({ jsonrpc: '2.0', id: 158, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('ps1 command lookup') } }, ps1State);
   const ps1RunDir = ps1Run.result?.structuredContent.run_dir ?? ps1Run.error?.data.details.run_dir;
   assert.equal(typeof ps1RunDir, 'string');
@@ -445,7 +448,7 @@ assert.deepEqual(parseArgs(['--agent-runtime-server-command-arg', 'server.js', '
 assert.equal(parseArgs(['--cognition-low-reasoning-effort', 'minimal']).cognitionLowReasoningEffort, 'minimal');
 assert.equal(parseArgs(['--cognition-high-model', 'gpt-test-high']).cognitionHighModel, 'gpt-test-high');
 
-const busyState = createServerState({ allowedRoot: root, runRoot: join(root, 'busy'), codexCommand: process.execPath, maxParallelRuns: 1 });
+const busyState = createServerState({ allowedRoot: root, runRoot: join(root, 'busy'), defaultRuntime: 'codex', codexCommand: process.execPath, maxParallelRuns: 1 });
 busyState.activeRunCount = 1;
 const busyRun = await rpc({
   jsonrpc: '2.0',
@@ -1022,7 +1025,7 @@ assert.match(String(summaryOnlyWait.result?.structuredContent.run.progress.lates
 const verboseWait = await rpc({ jsonrpc: '2.0', id: 527, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: asyncRun.result?.structuredContent.run_id, timeout_ms: 0, verbose: true } } }, state);
 assert.equal(verboseWait.result?.structuredContent.full_run.summary, 'worker ok');
 
-const prefixedState = createServerState({ allowedRoot: root, runRoot: join(root, 'prefixed'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const prefixedState = createServerState({ allowedRoot: root, runRoot: join(root, 'prefixed'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
 const prefixedRun = await rpc({
   jsonrpc: '2.0',
   id: 53,
@@ -1112,7 +1115,7 @@ const defaultEditRun = await rpc({
 assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, null);
 assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 
-const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
+const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
 const customLowCognition = await rpc({
   jsonrpc: '2.0',
   id: 562,
@@ -1146,7 +1149,7 @@ assert.equal(editSessionRecord.origin_tool, 'worker_edit');
 assert.equal(editSessionRecord.resolved_worker_config.authority, 'write');
 assert.equal(editSessionRecord.resolved_worker_config.cognition, 'low');
 assert.equal(editSessionRecord.resolved_worker_config.model, null);
-const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] }, { PATH: process.env.PATH });
+const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] }, { PATH: process.env.PATH });
 const resumedEdit = await rpc({
   jsonrpc: '2.0',
   id: 565,
@@ -1226,7 +1229,7 @@ const missingVerificationCommand = parseLastMessage(missingVerificationCommandPa
 assert.equal(missingVerificationCommand.ok, false);
 assert.match(missingVerificationCommand.ok ? '' : missingVerificationCommand.message, /nullable string tool and command/);
 
-const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), codexCommand: join(root, 'missing-codex.exe') });
+const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), defaultRuntime: 'codex', codexCommand: join(root, 'missing-codex.exe') });
 const spawnFailure = await rpc({
   jsonrpc: '2.0',
   id: 61,
@@ -1238,7 +1241,7 @@ assert.match(spawnFailure.error?.data.details.reason, /command not found/);
 assert.equal(typeof spawnFailure.error?.data.details.remediation, 'string');
 
 const unavailableRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-unavailable-'));
-const unavailableState = createServerState({ allowedRoot: unavailableRoot, runRoot: join(unavailableRoot, 'runs'), codexCommand: 'definitely-not-a-real-codex-binary' });
+const unavailableState = createServerState({ allowedRoot: unavailableRoot, runRoot: join(unavailableRoot, 'runs'), defaultRuntime: 'codex', codexCommand: 'definitely-not-a-real-codex-binary' });
 const unavailableRun = await rpc({
   jsonrpc: '2.0',
   id: 611,
@@ -1270,7 +1273,7 @@ process.stdin.on('end', () => {
   fs.writeFileSync(lastMessagePath, JSON.stringify({ summary: 'ok', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [] }));
 });
 `, 'utf8');
-const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), codexCommand: process.execPath, codexCommandArgs: [badEventScript] });
+const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [badEventScript] });
 const badEvent = await rpc({
   jsonrpc: '2.0',
   id: 62,
@@ -1282,7 +1285,7 @@ assert.equal(badEvent.result?.structuredContent.summary, 'ok');
 assert.match(badEvent.result?.structuredContent.error, /invalid json event/);
 assert.equal(badEvent.result?.structuredContent.warning_count, 0);
 
-const completedWithToolErrorState = createServerState({ allowedRoot: root, runRoot: join(root, 'completed-with-tool-error'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexErrorScript] });
+const completedWithToolErrorState = createServerState({ allowedRoot: root, runRoot: join(root, 'completed-with-tool-error'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexErrorScript] });
 const completedWithToolError = await rpc({
   jsonrpc: '2.0',
   id: 621,
@@ -1334,7 +1337,7 @@ process.stdin.on('end', () => {
   process.exit(1);
 });
 `, 'utf8');
-const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), codexCommand: process.execPath, codexCommandArgs: [runtimeErrorScript] });
+const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [runtimeErrorScript] });
 const runtimeError = await rpc({
   jsonrpc: '2.0',
   id: 63,
@@ -1344,7 +1347,7 @@ const runtimeError = await rpc({
 assert.equal(runtimeError.error?.data.code, 'worker_runtime_failed');
 assert.equal(runtimeError.error?.data.details.error, 'model not available for account');
 
-const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript] });
+const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript] });
 const prestartFailure = await rpc({
   jsonrpc: '2.0',
   id: 631,

@@ -95,7 +95,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const deepseekCfg = asRecord(runtimes.deepseek);
   const naradaAgentRuntimeServerCfg = asRecord(runtimes.narada_agent_runtime_server ?? runtimes.naradaAgentRuntimeServer);
 
-  const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? 'codex');
+  const defaultRuntime = stringValue(merged.defaultRuntime ?? worker.default_runtime ?? 'narada-agent-runtime-server');
   if (!isWorkerRuntime(defaultRuntime)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: defaultRuntime });
 
   const allowedRuntimes = runtimeList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
