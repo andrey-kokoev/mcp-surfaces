@@ -29,7 +29,9 @@
           "agent_context_hydrate_current",
           "agent_context_startup_sequence",
           "agent_context_rehydrate",
-          "agent_context_list_sessions"
+          "agent_context_list_sessions",
+          "agent_context_tool_surface_readiness",
+          "mcp_output_show"
         ],
         "mutating_tools": [
           "agent_context_start_session",
@@ -82,6 +84,38 @@
       "tool_contract": {
         "read_only_tools": [],
         "mutating_tools": [],
+        "refused_tools": []
+      },
+      "registered_live_tools": []
+    },
+    {
+      "surface_id": "inbox-mcp.local",
+      "display_name": "mcp-surfaces-inbox",
+      "server_name": "mcp-surfaces-inbox",
+      "authority_boundary": {
+        "posture": "generated_conservative_transport_registry",
+        "grants_tool_authority": true,
+        "granted_tool_authority_kind": "declared_inbox_contract"
+      },
+      "client_config": {
+        "generated_path": ".ai/mcp/mcp-surfaces-inbox-mcp.json",
+        "generated_file": "mcp-surfaces-inbox-mcp.json"
+      },
+      "tool_contract": {
+        "read_only_tools": [
+          "inbox_doctor",
+          "inbox_list",
+          "inbox_show",
+          "inbox_audit",
+          "inbox_next",
+          "capa_queue"
+        ],
+        "mutating_tools": [
+          "inbox_submit",
+          "inbox_acknowledge",
+          "inbox_dismiss",
+          "inbox_promote_capa"
+        ],
         "refused_tools": []
       },
       "registered_live_tools": []
