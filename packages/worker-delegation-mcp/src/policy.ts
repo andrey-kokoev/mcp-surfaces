@@ -2,6 +2,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 
+export const NARADA_SITE_ROOT_MARKERS = ['.narada/', '.ai/mcp/'] as const;
+export const NARADA_AGENT_RUNTIME_SITE_REMEDIATION = 'Run narada-agent-runtime-server workers from inside a Narada Site root containing .narada/ or .ai/mcp/, add one of those markers, or pass constraints.site_root pointing at that Site root.';
+
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type PrimitiveConfigValue = string | number | boolean;
 export type WorkerAuthority = 'read' | 'write' | 'command';
@@ -178,8 +181,10 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
-function isNaradaSiteRoot(path: string): boolean {
-  return isDirectory(join(path, '.narada')) || isDirectory(join(path, '.ai', 'mcp'));
+function naradaSiteRootMarker(path: string): string | null {
+  if (isDirectory(join(path, '.narada'))) return '.narada/';
+  if (isDirectory(join(path, '.ai', 'mcp'))) return '.ai/mcp/';
+  return null;
 }
 
 function isDirectory(path: string): boolean {
@@ -241,6 +246,15 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     allowed_config_keys: policy.allowedConfigKeys,
     allow_raw_config_overrides: policy.allowRawConfigOverrides,
     allow_danger_full_access: policy.allowDangerFullAccess,
+    nars_site_semantics: {
+      runtime: 'narada-agent-runtime-server',
+      site_bound: true,
+      required_markers: [...NARADA_SITE_ROOT_MARKERS],
+      site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
+      workspace_root: 'worker cwd inside the resolved Site root',
+      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT'],
+      remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
+    },
     max_parallel_runs: policy.maxParallelRuns,
     max_prompt_bytes: policy.maxPromptBytes,
     max_output_bytes: policy.maxOutputBytes,
@@ -287,6 +301,11 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         json_events: policy.runtimes.naradaAgentRuntimeServer.jsonEvents,
         carrier_kind: 'agent-cli',
         carrier_transport: 'jsonl-stdio',
+        site_bound: true,
+        site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
+        site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
+        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT'],
+        site_root_required_remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
       },
     },
   };
@@ -300,24 +319,45 @@ export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): s
   return cwd;
 }
 
-export function resolveNaradaSiteRoot(cwd: string, policy: WorkerPolicy, explicitSiteRoot?: unknown): string {
+export type NaradaSiteBinding = {
+  siteRoot: string;
+  marker: string;
+  source: 'explicit' | 'nearest_marker';
+};
+
+export function resolveNaradaSiteBinding(cwd: string, policy: WorkerPolicy, explicitSiteRoot?: unknown): NaradaSiteBinding {
   if (explicitSiteRoot !== undefined && explicitSiteRoot !== null && String(explicitSiteRoot).trim()) {
     const siteRoot = resolveWorkingDirectory(explicitSiteRoot, policy);
-    if (!isNaradaSiteRoot(siteRoot)) {
-      throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', { cwd, site_root: siteRoot, explicit: true });
+    const marker = naradaSiteRootMarker(siteRoot);
+    if (!marker) {
+      throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', siteRootNotFoundDetails({ cwd, site_root: siteRoot, explicit: true }));
     }
-    return siteRoot;
+    return { siteRoot, marker, source: 'explicit' };
   }
 
   let current = resolve(cwd);
   while (true) {
-    if (isNaradaSiteRoot(current)) return current;
+    const marker = naradaSiteRootMarker(current);
+    if (marker) return { siteRoot: current, marker, source: 'nearest_marker' };
     const parent = dirname(current);
     if (parent === current) break;
     if (!policy.allowedRoots.some((root) => areSamePath(parent, root) || isPathInside(parent, root))) break;
     current = parent;
   }
-  throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', { cwd, explicit: false, remediation: 'Run narada-agent-runtime-server workers from inside a Narada Site or pass constraints.site_root.' });
+  throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', siteRootNotFoundDetails({ cwd, explicit: false }));
+}
+
+function siteRootNotFoundDetails(base: Record<string, unknown>): Record<string, unknown> {
+  const details = {
+    ...base,
+    required_markers: [...NARADA_SITE_ROOT_MARKERS],
+    remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
+  };
+  return { ...details, details };
+}
+
+export function resolveNaradaSiteRoot(cwd: string, policy: WorkerPolicy, explicitSiteRoot?: unknown): string {
+  return resolveNaradaSiteBinding(cwd, policy, explicitSiteRoot).siteRoot;
 }
 
 export function validateRuntime(value: unknown, policy: WorkerPolicy): WorkerRuntimeId {
@@ -480,7 +520,13 @@ function cognitionList(value: unknown): WorkerCognition[] {
 }
 
 function defaultRunRoot(): string {
-  const home = process.env.CODEX_HOME || process.env.USERPROFILE || process.env.HOME || process.cwd();
+  const siteRoot = process.env.NARADA_SITE_ROOT;
+  if (siteRoot) return resolve(siteRoot, '.narada', 'runtime', 'worker-delegation');
+  const userHome = process.env.USERPROFILE || process.env.HOME;
+  if (userHome && existsSync(resolve(userHome, 'Narada'))) {
+    return resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation');
+  }
+  const home = process.env.CODEX_HOME || userHome || process.cwd();
   return resolve(home, 'worker-delegation', 'runs');
 }
 

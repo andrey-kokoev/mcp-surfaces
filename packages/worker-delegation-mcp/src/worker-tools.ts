@@ -5,7 +5,7 @@ import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
 import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaSiteRoot, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
 import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
@@ -103,7 +103,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     invocation = deepseekBuildInvocation(resolvedWorkerConfig, environment);
   } else if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
-    const siteRoot = resolveNaradaSiteRoot(cwd, state.policy, request.constraints.site_root);
+    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
+    const siteRoot = resolvedSiteBinding.siteRoot;
+    const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = cwd;
     const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
@@ -117,6 +119,10 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       cwd,
       site_root: siteRoot,
       workspace_root: cwd,
+      site_bound: true,
+      site_marker: resolvedSiteBinding.marker,
+      site_root_source: resolvedSiteBinding.source,
+      site_binding: siteBinding,
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -188,6 +194,19 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       : { available: false, reason: runtimeAvailability.reason ?? null, remediation: runtimeAvailability.remediation ?? null, command: runtimeAvailability.command ?? null },
     config_resolution: configResolution,
     warnings,
+  };
+}
+
+function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: string; marker: string; source: 'explicit' | 'nearest_marker' }): Record<string, unknown> {
+  return {
+    site_bound: true,
+    site_root: siteBinding.siteRoot,
+    workspace_root: cwd,
+    source: siteBinding.source === 'explicit' ? 'constraints.site_root' : 'nearest_parent_marker',
+    matched_marker: siteBinding.marker,
+    required_markers: [...NARADA_SITE_ROOT_MARKERS],
+    environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT'],
+    remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
   };
 }
 
@@ -578,10 +597,12 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     invocation = deepseekBuildInvocation(baseConfig, environment);
   } else if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
-    const siteRoot = resolveNaradaSiteRoot(cwd, state.policy, request.constraints.site_root);
+    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
+    const siteRoot = resolvedSiteBinding.siteRoot;
+    const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = cwd;
-    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
+    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? runRecord.runId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,
@@ -592,6 +613,10 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       cwd,
       site_root: siteRoot,
       workspace_root: cwd,
+      site_bound: true,
+      site_marker: resolvedSiteBinding.marker,
+      site_root_source: resolvedSiteBinding.source,
+      site_binding: siteBinding,
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,

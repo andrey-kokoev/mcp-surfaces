@@ -86,8 +86,9 @@ export function createServerState(options: JsonRecord = {}): State {
   if (!allowedRoots.some((root) => taskRoot === root || inside(taskRoot, root))) {
     throw diag('delegated_task_root_outside_allowed_roots', 'delegated_task_root_outside_allowed_roots', { task_root: taskRoot, allowed_roots: allowedRoots });
   }
+  const workerPolicyOptions = rec(options.workerPolicy);
   const workerState: WorkerMcpState = {
-    policy: createWorkerPolicy({ ...rec(options.workerPolicy), allowedRoots }),
+    policy: createWorkerPolicy({ runRoot: resolve(taskRoot, '.narada', 'runtime', 'worker-delegation'), ...workerPolicyOptions, allowedRoots }),
     env: stateEnv,
     activeRunCount: 0,
   };
