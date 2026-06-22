@@ -32,6 +32,7 @@ try {
     taskRoot: root,
     allowedRoots: [root],
     providerRegistryPath,
+    workerPolicy: { defaultRuntime: 'codex' },
     secretLookupCommand: process.execPath,
     secretLookupCommandArgs: ['-e', 'process.stdout.write(process.env.NARADA_SECRET_LOOKUP_NAME === "delegated-task-provider-secret" ? "provider-secret-from-store" : "")'],
     policy: { allowed_workflow_kinds: ['worker', 'review', 'repair', 'verify', 'research', 'gate', 'join', 'note'] },
@@ -314,6 +315,30 @@ try {
   assert.deepEqual(additiveWorkOrderView.workflow_preview.work_order.scope, ['packages/delegated-task-mcp']);
   assert.deepEqual(additiveWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement']);
 
+  const declarativeWorkOrder = await callTool(state, 'delegated_task_validate', {
+    objective: 'Declarative item map workflow',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      work_order: {
+        items: [{ id: 'alpha', path: 'src/main.ts' }, { id: 'beta', path: 'src/policy.ts' }],
+        stage_policy: { execution: { schedule_by_disjoint_write_set: true } },
+        budget: { max_minutes: 10, allowed_repositories: [root] },
+        stages: [
+          { id: 'research', kind: 'research', mode: 'map', instruction: 'Research {{item.id}} at {{item.path}}', join: true },
+          { id: 'synthesize', kind: 'worker', depends_on: ['research'], instruction: 'Synthesize write plan' },
+          { id: 'execute', kind: 'worker', mode: 'map', depends_on: ['synthesize'], instruction: 'Execute {{item.id}}', write_set: ['{{item.path}}'], join: { id: 'execution-join' } },
+          { id: 'review', kind: 'review', depends_on: ['execute'], instruction: 'Review derived execution topology' },
+        ],
+      },
+    },
+  });
+  const declarativeWorkOrderView = declarativeWorkOrder.result.structuredContent as Record<string, any>;
+  assert.equal(declarativeWorkOrderView.status, 'ok');
+  assert.equal(declarativeWorkOrderView.workflow_preview.declarative_expansion.expanded, true);
+  assert.deepEqual(declarativeWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['research-alpha', 'research-beta', 'research-join', 'synthesize', 'execute-alpha', 'execute-beta', 'execution-join', 'review']);
+  assert.deepEqual(declarativeWorkOrderView.workflow_preview.steps.find((step: Record<string, any>) => step.id === 'execute-alpha').write_set, ['src/main.ts']);
+  assert.equal(declarativeWorkOrderView.workflow_preview.shape.edges.some((edge: Record<string, unknown>) => edge.from === 'research-join' && edge.to === 'synthesize'), true);
+
   const publishGate = await callTool(state, 'delegated_task_validate', {
     objective: 'Implement and git push the branch',
     constraints: { authority: 'write', cwd: root },
@@ -567,6 +592,32 @@ try {
   assert.deepEqual(recoveredResultView.result.progress.running_run_ids, []);
   assert.deepEqual(recoveredResultView.result.progress.historical_run_ids, [recoveredRunId]);
   assert.equal(recoveredResultView.result.step_states['async-recover'].current_run_id, null);
+
+  const writeSetRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise disjoint write-set scheduling',
+    constraints: { authority: 'write', cwd: root, max_concurrency: 3 },
+    workflow: {
+      work_order: {
+        items: [{ id: 'a', path: 'src/main.ts' }, { id: 'b', path: 'src/main.ts' }],
+        stage_policy: { execution: { schedule_by_disjoint_write_set: true } },
+        stages: [{ id: 'execute', kind: 'worker', mode: 'map', instruction: 'async worker write-set {{item.id}}', write_set: ['{{item.path}}'], join: true }],
+      },
+    },
+    execution: { start: true, wait_for_completion: false, max_concurrency: 3 },
+  });
+  const writeSetRunView = writeSetRun.result.structuredContent as Record<string, any>;
+  assert.equal(writeSetRunView.task_status, 'running');
+  const writeSetStatus = await callTool(state, 'delegated_task_status', { task_id: writeSetRunView.task_id });
+  const writeSetStatusView = writeSetStatus.result.structuredContent as Record<string, any>;
+  assert.deepEqual(writeSetStatusView.scheduler_state.running_step_ids, ['execute-a']);
+  assert.deepEqual(writeSetStatusView.scheduler_state.write_set_conflicts.map((item: Record<string, unknown>) => item.step_id), ['execute-b']);
+  const writeSetAdvance = await callTool(state, 'delegated_task_advance', { task_id: writeSetRunView.task_id });
+  const writeSetAdvanceView = writeSetAdvance.result.structuredContent as Record<string, any>;
+  assert.equal(writeSetAdvanceView.scheduler_state.running_step_ids.includes('execute-b'), true);
+  const writeSetResult = await callTool(state, 'delegated_task_result', { task_id: writeSetRunView.task_id, include_diagnostics: true });
+  const writeSetResultView = writeSetResult.result.structuredContent as Record<string, any>;
+  assert.equal(writeSetResultView.result.graph_execution_synthesis.derived_topology.write_set_scheduling, true);
+  assert.equal(writeSetResultView.result.graph_execution_synthesis.derived_topology.write_sets.length, 2);
 
   const implicitPositiveReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise staccato positive review summary without explicit verdict',
