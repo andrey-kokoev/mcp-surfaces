@@ -463,6 +463,25 @@ try {
   const blockedError = blocked.error as Record<string, any>;
   assert.equal(blockedError.data.code, 'delegated_task_validation_failed');
 
+  const beforeMappedWorkerCalls = workerCalls.length;
+  const mappedWorkerRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Map delegated task worker convenience constraints',
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot, runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
+    workflow: { steps: [{ id: 'mapped-worker', kind: 'research', instruction: 'Inspect mapped worker args' }] },
+    execution: { wait_for_completion: true, resumable: false, max_concurrency: 1 },
+  });
+  assert.equal((mappedWorkerRun.result.structuredContent as Record<string, any>).task_status, 'completed');
+  const mappedWorkerCall = workerCalls.slice(beforeMappedWorkerCalls).find((call) => call.name === 'worker_run');
+  assert.ok(mappedWorkerCall);
+  const mappedConstraints = mappedWorkerCall.args.constraints as Record<string, any>;
+  assert.equal(mappedConstraints.runtime, undefined);
+  assert.equal(mappedConstraints.model, undefined);
+  assert.equal(mappedConstraints.sandbox, undefined);
+  assert.equal(mappedConstraints.skip_git_repo_check, undefined);
+  assert.equal(mappedConstraints.max_concurrency, undefined);
+  assert.equal(mappedConstraints.site_root, siteRoot);
+  assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
+
   const missing = await callTool(state, 'delegated_task_status', { task_id: 'task_missing' });
   const missingError = missing.error as Record<string, any>;
   assert.equal(missingError.data.code, 'delegated_task_not_found');

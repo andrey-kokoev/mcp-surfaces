@@ -839,7 +839,16 @@ function nestedWorkflowRecords(output: JsonRecord): JsonRecord[] { return unique
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const constraints = { ...task.constraints, ...step.constraints };
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
-  return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' ? 'audit_only' : undefined }, constraints: { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true } };
+  const workerConstraints: JsonRecord = { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true };
+  const overrides = { ...rec(workerConstraints.overrides) };
+  for (const key of ['runtime', 'model', 'reasoning_effort', 'sandbox', 'skip_git_repo_check']) {
+    if (workerConstraints[key] !== undefined) overrides[key] = workerConstraints[key];
+    delete workerConstraints[key];
+  }
+  for (const key of ['max_concurrency', 'max_retries', 'profile', 'repair_policy']) delete workerConstraints[key];
+  if (Object.keys(overrides).length > 0) workerConstraints.overrides = overrides;
+  else delete workerConstraints.overrides;
+  return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' ? 'audit_only' : undefined }, constraints: workerConstraints };
 }
 function workerInstruction(task: Task, step: WorkflowStep): string { return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, `Step kind: ${step.kind}`, `Acceptance: ${JSON.stringify(task.acceptance)}`, 'Return a concise result with changes, verification, residual risks, and observed incoherencies.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord { return { total: Object.keys(states).length, ...stepStatusCounts(task, states), running_run_ids: Object.values(states).filter((step) => step.status === 'running').map((step) => step.current_run_id).filter(Boolean) }; }
