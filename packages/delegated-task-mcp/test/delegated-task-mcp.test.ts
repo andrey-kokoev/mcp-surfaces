@@ -66,6 +66,8 @@ try {
         status,
         run_id: runId,
         run_dir: join(root, 'worker-runs', runId),
+        output_ref: `output-${runId}`,
+        result_ref: `result-${runId}`,
         worker_session_id: null,
         runtime: 'codex',
         provider: 'openai',
@@ -253,10 +255,30 @@ try {
   assert.equal(resultView.result.verification.length, 1);
   assert.equal(resultView.result.verification_count, 1);
   assert.equal(resultView.result.terminal_summary.acceptance_verdict, 'passed');
+  assert.equal(resultView.result.terminal_summary.steps_terminal, true);
+  assert.equal(resultView.result.terminal_summary.acceptance_terminal, true);
+  assert.deepEqual(resultView.result.terminal_summary.pending_acceptance_items, []);
   assert.equal(resultView.result.terminal_summary.real_changed_files_count, 1);
   assert.equal(resultView.result.closeout_synthesis.closeout_ready, true);
   assert.equal(resultView.result.closeout_synthesis.condition_language, 'acceptance:passed');
   assert.equal(resultView.result.review_consensus.consensus, 'passed');
+  assert.equal(resultView.result.operator_summary.root_cause, 'none');
+  assert.equal(resultView.result.operator_summary.next_directive, 'ready_for_closeout');
+  assert.equal(resultView.result.target_state_changed.repo_files_changed.changed, true);
+  assert.deepEqual(resultView.result.target_state_changed.repo_files_changed.paths, ['src/main.ts']);
+  assert.equal(resultView.result.target_state_changed.delegated_task_artifacts_created.changed, true);
+  assert.match(resultView.result.target_state_changed.delegated_task_artifacts_created.paths[0], /tasks/);
+  assert.equal(resultView.result.target_state_changed.worker_runtime_artifacts_created.changed, true);
+  assert.equal(resultView.result.graph_execution_synthesis.parent_workflow_status, 'completed');
+  assert.equal(resultView.result.graph_execution_synthesis.synthesized_verdict, 'accepted');
+  assert.equal(resultView.result.graph_execution_synthesis.orchestration_success, true);
+  assert.equal(resultView.result.graph_execution_synthesis.step_status.length, 6);
+  assert.equal(resultView.result.graph_execution_synthesis.worker_summaries.length, 3);
+  assert.match(resultView.result.graph_execution_synthesis.worker_summaries[0].output_ref, /^output-run-test-/);
+  assert.equal(resultView.result.graph_execution_synthesis.worker_summaries[0].diagnostic_flags.verification_count, 1);
+  assert.equal(resultView.result.join_syntheses.length, 1);
+  assert.equal(resultView.result.join_syntheses[0].worker_ref_count, 3);
+  assert.equal(resultView.result.join_syntheses[0].worker_summaries.length, 3);
   assert.equal(resultView.diagnostics.task_id, runResult.task_id);
 
   const compactResult = await callTool(state, 'delegated_task_result', { task_id: runResult.task_id });
@@ -264,6 +286,8 @@ try {
   assert.equal(compactResultView.result.worker_refs, undefined);
   assert.equal(compactResultView.result.worker_ref_count, 3);
   assert.equal(compactResultView.result.worker_refs_redacted, true);
+  assert.equal(compactResultView.result.operator_summary.root_cause, 'none');
+  assert.match(compactResultView.result.graph_execution_synthesis.worker_summaries[0].result_ref, /^result-run-test-/);
 
   const summary = await callTool(state, 'delegated_task_summary', { task_id: runResult.task_id });
   const summaryView = summary.result.structuredContent as Record<string, any>;
@@ -296,6 +320,9 @@ try {
   assert.deepEqual(nestedResultView.result.affected_refs, ['nested/output.txt']);
   assert.deepEqual(nestedResultView.result.changed_file_refs, [{ path: 'nested/output.txt', kind: 'affected_ref' }]);
   assert.equal(nestedResultView.result.terminal_summary.affected_refs_count, 1);
+  assert.equal(nestedResultView.result.target_state_changed.repo_files_changed.changed, false);
+  assert.equal(nestedResultView.result.target_state_changed.nested_delegated_task_changed_files.changed, true);
+  assert.equal(nestedResultView.result.graph_execution_synthesis.nested_delegated_task_calls[0].task_status, 'failed');
 
   const failedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise explicit review failure',
@@ -378,6 +405,12 @@ try {
   assert.equal(repairWithoutRereviewResultView.result.acceptance_verdict, 'pending');
   assert.deepEqual(repairWithoutRereviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 0, failed: 0, status: 'pending' });
   assert.equal(repairWithoutRereviewResultView.result.terminal_summary.next_action, 'await_review_resolution');
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.steps_terminal, true);
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.acceptance_terminal, false);
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.pending_acceptance_items.some((item: Record<string, any>) => item.kind === 'review_quorum'), true);
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.pending_review_items.some((item: Record<string, any>) => item.kind === 'review_quorum'), true);
+  assert.equal(repairWithoutRereviewResultView.result.graph_execution_synthesis.synthesized_verdict, 'workflow_complete_acceptance_pending');
+  assert.equal(repairWithoutRereviewResultView.result.operator_summary.root_cause, 'acceptance_pending');
 
   const skippedRepairRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise rejected review with skipped repair',
