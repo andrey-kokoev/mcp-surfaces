@@ -30,6 +30,7 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_run_batch') return workerRunBatch(args, state, context);
   if (name === 'worker_run_wait_batch') return workerRunWaitBatch(args, state);
   if (name === 'worker_runs_synthesize') return workerRunsSynthesize(args, state);
+  if (name === 'worker_dashboard_describe') return workerDashboardDescribe(args, state);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
 }
 
@@ -59,7 +60,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const outputContract = outputContractForRequest(request, requestedMode);
   const environment = environmentForWorker(state.env);
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
-  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
+  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
   const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
@@ -558,7 +559,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     });
   }
 
-  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
+  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;
   const ephemeral = !resumable;
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
@@ -904,6 +905,7 @@ function buildWorkerRunPayload(options: {
       duration_ms: options.finishedAt ? options.finishedAt.getTime() - options.startedAt.getTime() : null,
     },
     error: options.error,
+    error_classification: options.error ? classifyRuntimeError(options.error) : null,
     ...(options.workerOutputError ? { worker_output_error: options.workerOutputError } : {}),
   };
 }
@@ -1035,6 +1037,70 @@ function workerRunsSynthesize(args: Record<string, unknown>, state: WorkerMcpSta
   };
 }
 
+function workerDashboardDescribe(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  const mode = dashboardMode(args.mode, args.run_id);
+  const includeTerminal = args.include_terminal === undefined ? mode === 'single_run' : Boolean(args.include_terminal);
+  const limit = boundedInteger(args.limit, 25, 1, 200, 'worker_runs_list_limit_invalid');
+  const explicitRunIds = args.run_ids === undefined || args.run_ids === null ? null : normalizeOptionalRunIds(args.run_ids);
+  const selectedRunIds = typeof args.run_id === 'string' && args.run_id.trim()
+    ? [requiredNonEmptyString(args.run_id, 'worker_run_id_required')]
+    : explicitRunIds
+      ? explicitRunIds
+      : mode === 'all_active'
+        ? listRunIds(state)
+        : [];
+  const runs = selectedRunIds
+    .map((runId) => readRunResult(state, runId, mode === 'single_run'))
+    .filter((run): run is Record<string, unknown> => Boolean(run))
+    .filter((run) => includeTerminal || !isTerminalRunStatus(String(run.status ?? '')))
+    .sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)))
+    .slice(0, limit);
+  const compactRuns = runs.map((run) => dashboardRun(run));
+  const pendingJoinGates = compactRuns.filter((run) => !isTerminalRunStatus(String(run.status ?? ''))).map((run) => ({
+    gate_id: `join:${run.run_id}`,
+    run_id: run.run_id,
+    status: 'pending',
+    waiting_for: [run.run_id],
+  }));
+  return {
+    schema: 'narada.worker.dashboard.v1',
+    status: 'ok',
+    mode,
+    include_terminal: includeTerminal,
+    dashboard: {
+      kind: 'read_only_dashboard_descriptor',
+      server: { started: false, reason: 'mcp_tool_is_request_response; use the listed JSON API tool calls or wrap them in a local HTTP process if a long-lived dashboard is required' },
+      suggested_local_command: null,
+      api_endpoints: dashboardApiEndpoints(),
+      refresh: { recommended_poll_ms: 1000, cacheable: false },
+    },
+    counts: {
+      total: compactRuns.length,
+      active: compactRuns.filter((run) => !isTerminalRunStatus(String(run.status ?? ''))).length,
+      terminal: compactRuns.filter((run) => isTerminalRunStatus(String(run.status ?? ''))).length,
+      failed: compactRuns.filter((run) => run.status === 'failed' || run.status === 'completed_with_errors').length,
+    },
+    runs: compactRuns,
+    topology: {
+      graph_kind: 'run_dag',
+      dependency_source: 'worker-delegation run records; explicit inter-run dependencies are not currently recorded',
+      nodes: compactRuns.map((run) => ({ id: run.run_id, label: run.run_id, status: run.status, worker_session_id: run.worker_session_id ?? null })),
+      edges: [],
+    },
+    steps: compactRuns.map((run) => ({
+      step_id: `run:${run.run_id}`,
+      run_id: run.run_id,
+      state: isTerminalRunStatus(String(run.status ?? '')) ? 'completed' : 'running',
+      status: run.status,
+      started_at: run.started_at,
+      finished_at: run.finished_at,
+      duration_ms: run.duration_ms,
+    })),
+    pending_join_gates: pendingJoinGates,
+    event_stream: compactRuns.flatMap((run) => Array.isArray(run.events) ? run.events.map((event) => ({ run_id: run.run_id, ...asRecord(event) })) : []),
+  };
+}
+
 function normalizeBatchRequests(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_batch_requests_required', 'worker_run_batch_requests_required');
   if (value.length > 50) throw diagnosticError('worker_run_batch_too_large', 'worker_run_batch_too_large', { max_requests: 50 });
@@ -1044,6 +1110,102 @@ function normalizeBatchRequests(value: unknown): Record<string, unknown>[] {
 function normalizeRunIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_ids_required', 'worker_run_ids_required');
   return uniqueStrings(value.map((item) => requiredNonEmptyString(item, 'worker_run_id_required')));
+}
+
+function normalizeOptionalRunIds(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  return normalizeRunIds(value);
+}
+
+function dashboardMode(value: unknown, runId: unknown): 'all_active' | 'single_run' {
+  if (value === undefined || value === null || value === '') return typeof runId === 'string' && runId.trim() ? 'single_run' : 'all_active';
+  const mode = String(value).trim();
+  if (mode === 'all_active' || mode === 'single_run') return mode;
+  throw diagnosticError('worker_invalid_dashboard_mode', 'worker_invalid_dashboard_mode', { mode });
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return status === 'completed' || status === 'completed_with_errors' || status === 'failed' || status === 'cancelled';
+}
+
+function dashboardRun(run: Record<string, unknown>): Record<string, unknown> {
+  const timing = asRecord(run.timing);
+  const config = asRecord(run.resolved_worker_config);
+  const progress = asRecord(run.progress);
+  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
+  return {
+    run_id: run.run_id,
+    status: run.status,
+    completion_state: run.completion_state ?? run.confidence ?? null,
+    requested_mode: modeWithInference(run).requestedMode,
+    runtime: run.runtime ?? config.runtime ?? null,
+    authority: config.authority ?? null,
+    worker_session_id: run.worker_session_id ?? null,
+    started_at: timing.started_at ?? null,
+    finished_at: timing.finished_at ?? null,
+    duration_ms: timing.duration_ms ?? null,
+    retry: { attempt: 1, max_attempts: 1, source: 'not_recorded' },
+    failure: {
+      error_preview: previewString(compactRunError(run), 180),
+      error_classification: run.error_classification ?? null,
+      warning_count: run.warning_count ?? 0,
+    },
+    result_refs: dashboardResultRefs(run),
+    progress: {
+      event_count: progress.event_count ?? 0,
+      latest_event_type: progress.latest_event_type ?? null,
+      latest_event_preview: progress.latest_event_preview ?? null,
+      latest_event_at: progress.latest_event_at ?? null,
+      readable: progress.readable ?? false,
+    },
+    events: runDir ? compactEventStream(resolve(runDir, 'events.jsonl'), 8) : [],
+    status_liveness: run.status_liveness ?? null,
+  };
+}
+
+function dashboardResultRefs(run: Record<string, unknown>): Record<string, unknown>[] {
+  const refs = [];
+  const artifactReadback = asRecord(run.artifact_readback);
+  if (typeof run.run_dir === 'string') refs.push({ name: 'run_dir', kind: 'local_path', ref: run.run_dir });
+  if (typeof artifactReadback.events_tail === 'string') refs.push({ name: 'events_tail', kind: 'inline_preview', ref: 'artifact_readback.events_tail' });
+  if (Array.isArray(run.artifacts)) {
+    for (const artifact of run.artifacts.map(asRecord)) {
+      if (typeof artifact.name === 'string' && typeof artifact.path === 'string') refs.push({ name: artifact.name, kind: 'local_path', ref: artifact.path });
+    }
+  }
+  return refs;
+}
+
+function compactEventStream(eventsPath: string, limit: number): Record<string, unknown>[] {
+  if (!existsSync(eventsPath)) return [];
+  try {
+    const text = readFileSync(eventsPath, 'utf8').trim();
+    if (!text) return [];
+    return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-limit).map((line) => {
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        return {
+          type: eventType(parsed),
+          timestamp: eventTimestamp(parsed)?.toISOString() ?? null,
+          preview: previewString(latestEventText(parsed), 180),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { type: 'parse_error', timestamp: null, preview: previewString(message, 180) };
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+function dashboardApiEndpoints(): Record<string, unknown>[] {
+  return [
+    { path: 'mcp://tools/worker_dashboard_describe', method: 'tools/call', description: 'Read-only compact dashboard payload for one run or all active runs.', arguments: { mode: 'all_active|single_run', run_id: 'optional run id', include_terminal: 'boolean', limit: '1..200' } },
+    { path: 'mcp://tools/worker_runs_list', method: 'tools/call', description: 'Recent run index with compact status fields.', arguments: { include_running: true, include_completed: true, verbose: false } },
+    { path: 'mcp://tools/worker_run_status', method: 'tools/call', description: 'Full status for one run, including artifact readback and progress.', arguments: { run_id: 'run-*' } },
+    { path: 'mcp://resources/worker-artifact', method: 'resources/read', description: 'Read run artifacts such as events.jsonl and result.json for primary run-root records.' },
+  ];
 }
 
 function synthesizeRuns(runs: Record<string, unknown>[]): Record<string, unknown> {
@@ -1240,11 +1402,18 @@ function previewJsonValue(value: unknown): unknown {
 function uniqueStrings(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 
 function classifyDiagnosticTail(text: string): string {
+  return classifyRuntimeError(text) ?? 'runtime_prestart_diagnostic';
+}
+
+function classifyRuntimeError(text: string): string | null {
   const lower = text.toLowerCase();
+  if (lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('429')) return 'provider_rate_limited';
+  if (lower.includes('unauthorized') || lower.includes('authentication') || lower.includes('api key') || lower.includes('401') || lower.includes('403')) return 'provider_auth';
+  if (lower.includes('invalid_request') || lower.includes('invalid request') || lower.includes('function name is invalid') || lower.includes('400')) return 'provider_invalid_request';
   if (lower.includes('not inside a trusted directory') || lower.includes('--skip-git-repo-check')) return 'codex_untrusted_directory';
   if (lower.includes('permission denied') || lower.includes('access is denied')) return 'permission_denied';
   if (lower.includes('command not found') || lower.includes('not recognized as')) return 'runtime_command_unavailable';
-  return 'runtime_prestart_diagnostic';
+  return null;
 }
 
 function runWaitPayload(run: Record<string, unknown>, options: { status: 'finished' | 'timed_out'; timeoutMs: number; elapsedMs: number; verbose: boolean; summaryOnly: boolean }): Record<string, unknown> {
@@ -1317,7 +1486,8 @@ function readRunProgress(eventsPath: string): WorkerProgressPreview {
 
 function eventType(value: unknown): string | null {
   const record = asRecord(value);
-  return typeof record.type === 'string' && record.type.trim() ? record.type.trim() : null;
+  if (typeof record.type === 'string' && record.type.trim()) return record.type.trim();
+  return typeof record.event === 'string' && record.event.trim() ? record.event.trim() : null;
 }
 
 function latestEventText(value: unknown): string | null {
@@ -1489,6 +1659,9 @@ function buildPreflight(options: { cwd: string; authority: string; mode: WorkerD
   } else {
     checks.push({ name: 'mode_authority_alignment', status: 'ok', message: `${options.mode} is allowed with ${options.authority} authority` });
   }
+  if (options.authority === 'read') {
+    checks.push({ name: 'effective_authority', status: 'warning', message: 'effective_authority=read; raw MCP surfaces may advertise mutation-capable tools, but this delegation permits inspection and reporting only' });
+  }
   checks.push({ name: 'execution_style', status: options.waitForCompletion ? 'ok' : 'warning', message: options.waitForCompletion ? 'caller will wait for completion' : 'async run; caller must use worker_run_status, worker_runs_list, or worker_run_wait to rediscover result' });
   if (options.isResume) checks.push({ name: 'resume', status: 'ok', message: 'continuing an existing worker session' });
   for (const item of options.preflightPaths) checks.push(preflightPathCheck(item, options.allowedRoots));
@@ -1619,8 +1792,11 @@ function mcpToolVerification(requestedTools: string[]): Record<string, unknown> 
 function outputContractForRequest(request: WorkerRunToolInput, mode: WorkerDelegationMode): Record<string, unknown> {
   const base = outputContractForMode(mode);
   const targetPaths = request.constraints.preflight_paths?.map((item) => resolve(item.path)) ?? [];
+  const authority = request.constraints.authority ?? 'read';
   return {
     ...base,
+    effective_authority: authority,
+    tool_capability_note: authority === 'read' ? 'If a raw MCP surface advertises write-capable roots or mutation tools, treat them as unavailable for this delegation unless the requested authority is escalated by the caller.' : null,
     target_paths: targetPaths,
     forbidden_adjacent_paths: targetPaths.length > 0 ? ['Paths outside target_paths and allowed roots unless explicitly required by the task.'] : [],
   };
@@ -1641,7 +1817,7 @@ function outputContractForMode(mode: WorkerDelegationMode): Record<string, unkno
   };
 }
 
-function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: WorkerDelegationMode; preflight: WorkerPreflightCheck[]; outputContract: Record<string, unknown>; exitInterview: boolean }): string {
+function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: WorkerDelegationMode; runtime: string; preflight: WorkerPreflightCheck[]; outputContract: Record<string, unknown>; exitInterview: boolean }): string {
   return [
     'Intent',
     options.intent.instruction,
@@ -1666,6 +1842,15 @@ function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: W
     'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
     'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
     'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    ...(options.runtime === 'narada-agent-runtime-server' ? [
+      '',
+      'NARS worker completion guard',
+      'You are running under narada-agent-runtime-server as an automated worker. Complete this turn by returning the required JSON object; do not wait for operator input.',
+      'Do not call lifecycle, pause, sleep, wait, delegation, or worker_* tools from inside this worker turn.',
+      'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as narada-andrey-filesystem when they are not explicitly available.',
+      'If a tool call returns admission_required, surface_registry_tool_not_declared, mcp_runtime_fault, or any unavailable-tool error, stop using that tool family and return the required JSON with the issue in residual_risks or observed_incoherencies.',
+      'For tasks answerable from the delegated intent, preflight evidence, or current prompt, do not probe filesystem tools just to gather extra context.',
+    ] : []),
     '',
     'Structured output contract',
     JSON.stringify(options.outputContract),

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
-import { parseLastMessage, resultStatus, type Invocation, type ResolvedWorkerConfig, type WorkerOutput, type WorkerOutputParseResult, type WorkerRunTerminalStatus } from './codex-adapter.js';
+import { parseLastMessage, resultStatus, type Invocation, type ResolvedWorkerConfig, type WorkerChange, type WorkerExitInterview, type WorkerOutput, type WorkerOutputParseResult, type WorkerRunTerminalStatus, type WorkerVerification } from './codex-adapter.js';
 
 export type { Invocation, ResolvedWorkerConfig, WorkerOutputParseResult, WorkerRunTerminalStatus };
 
@@ -143,11 +143,11 @@ export async function runAgentRuntimeServerInvocation(options: {
       if (typeof record.session_id === 'string' && record.session_id) workerSessionId ||= record.session_id;
       if (record.event === 'assistant_message' && typeof record.content === 'string') finalAssistantMessage = record.content;
       if (record.event === 'error') {
-        const message = [record.code, record.message].filter(Boolean).join(': ');
+        const message = eventErrorMessage(record);
         if (message) runtimeError ||= message;
       }
       if (record.event === 'turn_failed') {
-        runtimeError ||= String(record.error ?? record.message ?? record.reason ?? 'turn_failed');
+        runtimeError = eventErrorMessage(record) ?? runtimeError ?? 'turn_failed';
         turnCompleted = true;
         closeAfterTurn();
       }
@@ -193,7 +193,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     child.on('error', (error) => finish({ exit_code: null, signal: null, cancelled: false, error: error.message }));
     child.on('close', (code, signal) => {
       if (stdoutBuffer.trim()) eventError ||= 'unterminated json event';
-      const missingTurnOutput = !cancelled && code === 0 && finalAssistantMessage === null ? 'agent runtime server exited without assistant_message' : null;
+      const missingTurnOutput = !cancelled && code === 0 && finalAssistantMessage === null ? runtimeError ?? 'agent runtime server exited without assistant_message' : null;
       finish({ exit_code: code, signal, cancelled, error: missingTurnOutput });
     });
 
@@ -209,6 +209,26 @@ export async function runAgentRuntimeServerInvocation(options: {
       },
     })}\n`);
   });
+}
+
+function eventErrorMessage(record: Record<string, unknown>): string | null {
+  const candidates = [
+    compactString(record.error),
+    compactString(record.message),
+    compactString(record.reason),
+    compactString(record.code),
+  ].filter((value): value is string => Boolean(value));
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  if (candidates[0].includes(candidates[1])) return candidates[0];
+  return candidates.join(': ');
+}
+
+function compactString(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim()) return value.replace(/\s+/g, ' ').trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return compactString(record.message) ?? compactString(record.error) ?? compactString(record.reason) ?? compactString(record.code);
 }
 
 function workerOutputFromAgentMessage(message: string): WorkerOutput {
@@ -235,16 +255,93 @@ function parseWorkerOutputJson(message: string): WorkerOutput | null {
   ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(candidate) as WorkerOutput;
-      if (typeof parsed.summary !== 'string') continue;
-      if (!Array.isArray(parsed.deliverables) || !Array.isArray(parsed.open_questions) || !Array.isArray(parsed.next_actions) || !Array.isArray(parsed.changes) || !Array.isArray(parsed.verification)) continue;
-      if (typeof parsed.edits_performed !== 'boolean' || typeof parsed.target_state_changed !== 'boolean') continue;
-      return { ...parsed, exit_interview: parsed.exit_interview ?? null };
+      const parsed = normalizeWorkerOutput(JSON.parse(candidate));
+      if (parsed) return parsed;
     } catch {
       // Try next candidate.
     }
   }
   return null;
+}
+
+function normalizeWorkerOutput(value: unknown): WorkerOutput | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const summary = typeof record.summary === 'string'
+    ? record.summary
+    : typeof record.message === 'string'
+      ? record.message
+      : null;
+  if (!summary) return null;
+  return {
+    summary,
+    deliverables: arrayOf(record.deliverables, asDeliverable),
+    open_questions: stringArray(record.open_questions),
+    next_actions: stringArray(record.next_actions),
+    edits_performed: typeof record.edits_performed === 'boolean' ? record.edits_performed : false,
+    target_state_changed: typeof record.target_state_changed === 'boolean' ? record.target_state_changed : false,
+    changes: arrayOf(record.changes, asChange),
+    verification: normalizeVerification(record.verification),
+    exit_interview: normalizeExitInterview(record.exit_interview),
+  };
+}
+
+function arrayOf<T>(value: unknown, mapper: (value: unknown) => T | null): T[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(mapper).filter((item): item is T => Boolean(item));
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
+function asDeliverable(value: unknown): { path: string; description: string } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.path !== 'string') return null;
+  return { path: record.path, description: typeof record.description === 'string' ? record.description : '' };
+}
+
+function asChange(value: unknown): WorkerChange | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.path !== 'string') return null;
+  return { path: record.path, status: typeof record.status === 'string' ? record.status : 'reported', summary: typeof record.summary === 'string' ? record.summary : '' };
+}
+
+function normalizeVerification(value: unknown): WorkerVerification[] {
+  if (Array.isArray(value)) return arrayOf(value, asVerification);
+  const single = asVerification(value);
+  return single ? [single] : [];
+}
+
+function asVerification(value: unknown): WorkerVerification | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    tool: typeof record.tool === 'string' ? record.tool : null,
+    command: typeof record.command === 'string' ? record.command : null,
+    status: typeof record.status === 'string' ? record.status : 'reported',
+    summary: typeof record.summary === 'string'
+      ? record.summary
+      : typeof record.message === 'string'
+        ? record.message
+        : '',
+  };
+}
+
+function normalizeExitInterview(value: unknown): WorkerExitInterview | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.ergonomics_feedback !== 'string') return null;
+  return {
+    ergonomics_feedback: record.ergonomics_feedback,
+    friction_points: stringArray(record.friction_points),
+    missing_affordances: stringArray(record.missing_affordances),
+    observed_incoherencies: stringArray(record.observed_incoherencies),
+    suggested_improvements: stringArray(record.suggested_improvements),
+  };
 }
 
 function extractJsonObject(text: string): string | null {

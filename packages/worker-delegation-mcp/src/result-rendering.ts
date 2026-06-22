@@ -17,6 +17,7 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.worker.run_batch.v1') return renderRunBatch(record);
   if (record.schema === 'narada.worker.run_wait_batch.v1') return renderRunWaitBatch(record);
   if (record.schema === 'narada.worker.runs_synthesis.v1') return renderRunsSynthesis(record);
+  if (record.schema === 'narada.worker.dashboard.v1') return renderDashboard(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
 }
 
@@ -156,6 +157,26 @@ function renderRunsSynthesis(record: Record<string, unknown>): string {
     'worker_runs_synthesize: ok',
     `requested_count: ${record.requested_count ?? ''}`,
     `rows: ${arrayCount(synthesis.rows)}`,
+  ]);
+}
+
+function renderDashboard(record: Record<string, unknown>): string {
+  const counts = asRecord(record.counts);
+  const runs = Array.isArray(record.runs) ? record.runs : [];
+  const topology = asRecord(record.topology);
+  return compactLines([
+    'worker_dashboard_describe: ok',
+    `mode: ${record.mode ?? ''}`,
+    `active: ${counts.active ?? 0}`,
+    `terminal: ${counts.terminal ?? 0}`,
+    `runs: ${runs.length}`,
+    `topology_nodes: ${arrayCount(topology.nodes)}`,
+    `topology_edges: ${arrayCount(topology.edges)}`,
+    ...runs.map((run) => {
+      const item = asRecord(run);
+      const progress = asRecord(item.progress);
+      return `- ${item.status ?? ''} ${item.run_id ?? ''} session=${item.worker_session_id ?? 'null'} ${progress.latest_event_preview ?? ''}`.trim();
+    }),
   ]);
 }
 

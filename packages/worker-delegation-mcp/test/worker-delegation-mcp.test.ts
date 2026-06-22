@@ -14,6 +14,8 @@ type RpcResponse = {
 
 const root = mkdtempSync(join(tmpdir(), 'worker-delegation-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
+process.env.NARADA_SITE_ROOT = root;
+process.env.CODEX_HOME = root;
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec.cjs');
@@ -92,6 +94,30 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     const frame = JSON.parse(line);
     if (frame.method === 'conversation.send') {
+      if (frame.params.message.includes('agent runtime provider failure')) {
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-provider-failed' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_failed', request_id: frame.id, turn_id: 'turn-provider-failed', error: 'API error 429: rate_limit_reached_error: quota exhausted' }) + '\\n');
+        continue;
+      }
+      if (frame.params.message.includes('server runtime loose output')) {
+        const output = {
+          summary: 'loose agent runtime worker ok',
+          edits_performed: false,
+          target_state_changed: false,
+          verification: { tool: 'fake-agent-runtime-server', status: 'passed', summary: 'loose verification object accepted' },
+          exit_interview: {
+            ergonomics_feedback: 'loose output preserved',
+            friction_points: ['verification object was not an array'],
+            missing_affordances: ['normalizer should preserve exit interviews'],
+            observed_incoherencies: [],
+            suggested_improvements: ['normalize salvageable NARS worker JSON']
+          }
+        };
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-worker-loose' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'assistant_message', request_id: frame.id, turn_id: 'turn-worker-loose', content: '\`\`\`json\\n' + JSON.stringify(output, null, 2) + '\\n\`\`\`' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-worker-loose', terminal_state: 'completed' }) + '\\n');
+        continue;
+      }
       const output = {
         summary: 'agent runtime worker ok',
         deliverables: [{ path: 'server-result.txt', description: 'server runtime saw ' + (frame.params.message.includes('Intent') ? 'intent' : 'prompt') }],
@@ -135,6 +161,7 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_run_batch',
   'worker_run_wait_batch',
   'worker_runs_synthesize',
+  'worker_dashboard_describe',
 ]);
 for (const tool of tools.result?.tools ?? []) {
   assert.equal(tool.outputSchema?.type, 'object', tool.name);
@@ -154,8 +181,10 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list'
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait_batch.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.outputSchema?.properties?.schema?.const, 'narada.worker.dashboard.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.some((tool) => tool.name === 'worker_output_show'), false);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.authority?.enum, ['read', 'write', 'command']);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
@@ -470,7 +499,28 @@ assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.si
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
 assert.equal(agentRuntimeRun.result?.structuredContent.verification_results[0].tool, 'fake-agent-runtime-server');
+const agentRuntimePrompt = readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8');
+assert.match(agentRuntimePrompt, /NARS worker completion guard/);
+assert.match(agentRuntimePrompt, /Do not call lifecycle, pause, sleep, wait, delegation, or worker_\* tools/);
+assert.match(agentRuntimePrompt, /Do not invent or guess tool names such as narada-andrey-filesystem/);
+assert.match(agentRuntimePrompt, /admission_required, surface_registry_tool_not_declared, mcp_runtime_fault/);
 assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
+const agentRuntimeFailed = await rpc({ jsonrpc: '2.0', id: 5021, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime provider failure', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeFailed.error?.data.code, 'worker_runtime_failed');
+assert.match(agentRuntimeFailed.error?.data.details.error, /rate_limit_reached_error/);
+const agentRuntimeFailedRunId = String(agentRuntimeFailed.error?.data.details.run_id);
+const agentRuntimeFailedStatus = await rpc({ jsonrpc: '2.0', id: 5022, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);
+assert.match(agentRuntimeFailedStatus.result?.structuredContent.error, /rate_limit_reached_error/);
+assert.equal(agentRuntimeFailedStatus.result?.structuredContent.error_classification, 'provider_rate_limited');
+assert.equal(agentRuntimeFailedStatus.result?.structuredContent.progress.latest_event_type, 'turn_failed');
+const agentRuntimeFailedWait = await rpc({ jsonrpc: '2.0', id: 5023, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);
+assert.match(agentRuntimeFailedWait.result?.structuredContent.run.error_preview, /rate_limit_reached_error/);
+const agentRuntimeLoose = await rpc({ jsonrpc: '2.0', id: 5024, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime loose output', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeLoose.result?.structuredContent.status, 'completed');
+assert.equal(agentRuntimeLoose.result?.structuredContent.summary, 'loose agent runtime worker ok');
+assert.equal(agentRuntimeLoose.result?.structuredContent.verification_results[0].summary, 'loose verification object accepted');
+assert.equal(agentRuntimeLoose.result?.structuredContent.exit_interview.ergonomics_feedback, 'loose output preserved');
+assert.deepEqual(agentRuntimeLoose.result?.structuredContent.exit_interview.friction_points, ['verification object was not an array']);
 const nonSiteRoot = join(root, 'not-a-site-outside-site-root');
 mkdirSync(nonSiteRoot, { recursive: true });
 const nonSiteState = createServerState({
@@ -608,6 +658,24 @@ assert.match(String(directStatus.result?.structuredContent.progress.latest_event
 assert.equal(directStatus.result?.structuredContent.exit_interview, null);
 assert.equal(directStatus.result?.structuredContent.artifact_readback.readable_via_worker_delegation, true);
 assert.equal(directStatus.result?.structuredContent.artifact_readback.local_filesystem_access_required, false);
+const runDashboard = await rpc({ jsonrpc: '2.0', id: 52315, method: 'tools/call', params: { name: 'worker_dashboard_describe', arguments: { run_id: asyncRun.result?.structuredContent.run_id } } }, state);
+assert.equal(runDashboard.result?.structuredContent.schema, 'narada.worker.dashboard.v1');
+assert.equal(runDashboard.result?.structuredContent.mode, 'single_run');
+assert.equal(runDashboard.result?.structuredContent.include_terminal, true);
+assert.equal(runDashboard.result?.structuredContent.dashboard.server.started, false);
+assert.equal(runDashboard.result?.structuredContent.dashboard.api_endpoints.some((endpoint) => endpoint.path === 'mcp://tools/worker_run_status'), true);
+assert.equal(runDashboard.result?.structuredContent.runs[0].run_id, asyncRun.result?.structuredContent.run_id);
+assert.equal(runDashboard.result?.structuredContent.runs[0].worker_session_id, 'thread-created');
+assert.equal(runDashboard.result?.structuredContent.runs[0].result_refs.some((ref) => ref.name === 'events.jsonl'), true);
+assert.equal(runDashboard.result?.structuredContent.topology.nodes[0].id, asyncRun.result?.structuredContent.run_id);
+assert.deepEqual(runDashboard.result?.structuredContent.topology.edges, []);
+assert.equal(runDashboard.result?.structuredContent.steps[0].step_id, `run:${asyncRun.result?.structuredContent.run_id}`);
+assert.equal(runDashboard.result?.structuredContent.event_stream.some((event) => event.run_id === asyncRun.result?.structuredContent.run_id && String(event.preview).includes('thread-created')), true);
+assert.match(runDashboard.result?.content[0].text, /worker_dashboard_describe: ok/);
+const activeDashboard = await rpc({ jsonrpc: '2.0', id: 52316, method: 'tools/call', params: { name: 'worker_dashboard_describe', arguments: { mode: 'all_active', limit: 50 } } }, state);
+assert.equal(activeDashboard.result?.structuredContent.mode, 'all_active');
+assert.equal(activeDashboard.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), false);
+assert.equal(activeDashboard.result?.structuredContent.counts.terminal, 0);
 const batchRun = await rpc({ jsonrpc: '2.0', id: 52311, method: 'tools/call', params: { name: 'worker_run_batch', arguments: { requests: [
   { intent: { instruction: 'batch one' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
   { intent: { instruction: 'batch two' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['local-filesystem.fs_read_file'] } },
@@ -1026,6 +1094,7 @@ assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Do not use direct shell commands for file discovery or file reads/);
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Requested mode\naudit_only/);
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Audit only: inspect and report/);
+assert.doesNotMatch(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /NARS worker completion guard/);
 assert.match(readFileSync(join(completedRunDir, 'events.jsonl'), 'utf8'), /thread-created/);
 assert.equal(readdirSync(runRoot).some((name) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);
 assert.equal(existsSync(join(auditLogDir, 'worker-delegation-mcp.jsonl')), true);
@@ -1157,6 +1226,10 @@ assert.equal(preflightRun.result?.structuredContent.requested_mode, 'plan_only')
 assert.equal(preflightRun.result?.structuredContent.edits_performed, false);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('old authority') && check.status === 'ok'), true);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('new repo') && check.status === 'ok'), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'effective_authority' && check.status === 'warning' && check.message.includes('raw MCP surfaces may advertise mutation-capable tools')), true);
+assert.equal(preflightRun.result?.structuredContent.output_contract.effective_authority, 'read');
+assert.match(preflightRun.result?.structuredContent.output_contract.tool_capability_note, /mutation tools/);
+assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /effective_authority=read/);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('not_verified_by_delegation') && check.message.includes('structured-command.structured_command_execute')), true);
 
 const blockedPreflight = await rpc({

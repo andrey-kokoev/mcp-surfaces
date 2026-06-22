@@ -63,7 +63,30 @@ export function listTools(): WorkerToolDefinition[] {
     { name: 'worker_runs_synthesize', description: 'Return a normalized cross-worker synthesis for completed or running worker run ids.', inputSchema: objectSchema({
       run_ids: { type: 'array', minItems: 1, items: { type: 'string' } },
     }, ['run_ids']) },
+    { name: 'worker_dashboard_describe', description: 'Return a read-only local dashboard/API descriptor plus compact run topology, status, result refs, pending joins, and event stream data for one run or all active runs.', inputSchema: objectSchema({
+      mode: { type: 'string', enum: ['all_active', 'single_run'], description: 'Defaults to single_run when run_id is provided, otherwise all_active.' },
+      run_id: { type: 'string', description: 'Inspect one worker run.' },
+      run_ids: { type: 'array', items: { type: 'string' }, description: 'Optional explicit run set when mode is all_active. Defaults to all known runs filtered to active unless include_terminal is true.' },
+      include_terminal: { type: 'boolean', description: 'Include completed, failed, cancelled, and completed_with_errors runs. Defaults to true for single_run and false for all_active.' },
+      limit: { type: 'integer', minimum: 1, maximum: 200 },
+    }) },
   ]);
+}
+
+function workerDashboardOutputSchema(): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: 'narada.worker.dashboard.v1' },
+    status: { type: 'string', const: 'ok' },
+    mode: { type: 'string', enum: ['all_active', 'single_run'] },
+    include_terminal: { type: 'boolean' },
+    dashboard: { type: 'object', additionalProperties: true },
+    counts: { type: 'object', additionalProperties: true },
+    runs: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    topology: { type: 'object', additionalProperties: true },
+    steps: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    pending_join_gates: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    event_stream: { type: 'array', items: { type: 'object', additionalProperties: true } },
+  }, ['schema', 'status', 'mode', 'include_terminal', 'dashboard', 'counts', 'runs', 'topology', 'steps', 'pending_join_gates', 'event_stream']);
 }
 
 function workerRunsListOutputSchema(): Record<string, unknown> {
@@ -163,7 +186,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !startsWorker,
     destructiveHint: false,
-    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait|synthesize/.test(name),
+    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait|synthesize|dashboard_describe/.test(name),
     openWorldHint: true,
   };
 }
@@ -177,6 +200,7 @@ function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_run_batch') return batchOutputSchema('narada.worker.run_batch.v1');
   if (name === 'worker_run_wait_batch') return batchOutputSchema('narada.worker.run_wait_batch.v1');
   if (name === 'worker_runs_synthesize') return batchOutputSchema('narada.worker.runs_synthesis.v1');
+  if (name === 'worker_dashboard_describe') return workerDashboardOutputSchema();
   return { type: 'object', additionalProperties: true };
 }
 
