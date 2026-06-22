@@ -56,6 +56,7 @@ try {
       }
 
       const instruction = JSON.stringify(args);
+      if (instruction.includes('launch failure worker')) throw new Error('worker launch denied by test policy');
       const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run').length}`;
       const status = instruction.includes('async missing status worker') ? 'recover_with_wait'
         : instruction.includes('async worker') || instruction.includes('timeout worker') ? 'running'
@@ -76,16 +77,24 @@ try {
         status_liveness: { state: 'active', process_liveness: 'unknown', started_at: new Date().toISOString(), last_activity_at: new Date().toISOString(), max_run_ms: 600000, stale_for_ms: 0 },
         timing: { started_at: new Date().toISOString(), finished_at: status === 'running' ? null : new Date().toISOString(), duration_ms: status === 'running' ? null : 1 },
         confidence: 'complete',
-        summary: instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
+        summary: instruction.includes('accepted findings summary only') ? 'review_verdict=accepted_with_findings; edits_performed=false; reviewed successfully' : instruction.includes('positive summary no explicit verdict') ? 'artifact passed required content, forbidden pattern, privacy posture, core answer, and Slidev structure checks' : instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
         timeout_forever: instruction.includes('timeout worker'),
         acceptance_verdict: instruction.includes('Step kind: review')
-          ? instruction.includes('Step instruction: inconclusive review') ? undefined : instruction.includes('Step instruction: explicit review failure') || instruction.includes('Step instruction: rejected review') ? 'failed' : 'accepted'
+          ? instruction.includes('Step instruction: inconclusive review') || instruction.includes('positive summary no explicit verdict') || instruction.includes('accepted findings summary only') ? undefined : instruction.includes('Step instruction: explicit review failure') || instruction.includes('Step instruction: rejected review') ? 'failed' : 'accepted'
           : undefined,
         changed_files: instruction.includes('nested probe') ? [] : ['src/main.ts'],
+        deliverables: instruction.includes('read-only audit readback') ? [{ path: 'src/policy.ts', description: 'Read during audit' }] : [],
         nested_workflows: instruction.includes('nested probe') ? [{ task_id: 'task_nested_probe', task_status: 'failed', acceptance_verdict: 'passed', changed_files: ['nested/output.txt'], verification: [{ tool: 'delegated-task', command: 'nested probe', status: 'failed' }] }] : [],
         verification_results: [{ tool: 'structured-command', command: 'pnpm test:delegated-task', status: 'passed' }],
         residual_risks: status === 'running' ? ['worker still running'] : [],
         observed_incoherencies: [],
+        exit_interview: (args.constraints as Record<string, unknown> | undefined)?.exit_interview === true ? {
+          ergonomics_feedback: 'Worker exit interview captured by delegated task.',
+          friction_points: ['exit interview propagation required explicit test coverage'],
+          missing_affordances: ['delegated task handoff should aggregate exit interviews'],
+          observed_incoherencies: ['delegated_task_exit_interview_path_was_previously_unprocessed'],
+          suggested_improvements: ['surface exit interview count in terminal summary'],
+        } : null,
       };
       runStatuses.set(runId, result);
       return result;
@@ -111,12 +120,25 @@ try {
   assert.equal(policyView.allowed_workflow_kinds.includes('review'), true);
   assert.equal(policyView.condition_language.includes('all(<expr>,<expr>)'), true);
   assert.equal(policyView.policy_schema, 'narada.delegated_task.policy.v1');
+  assert.equal(policyView.workflow_engine.milestone_support.workflow_milestones, true);
+  assert.equal(policyView.workflow_engine.authority_gate_support.delegated_task_executes_git, false);
+  assert.equal(policyView.template_catalog.some((template: Record<string, any>) => template.template_id === 'commit_push_guarded'), true);
+
+  const catalog = await callTool(state, 'delegated_task_template_catalog', { template_id: 'commit_push_guarded' });
+  const catalogView = catalog.result.structuredContent as Record<string, any>;
+  assert.equal(catalogView.status, 'ok');
+  assert.equal(catalogView.templates[0].feedback_ids.includes('sfb_98a64342-379'), true);
+  assert.equal(catalogView.templates[0].authority_gates.push.required_authority, 'command');
+  assert.equal(catalogView.templates[0].worker_delegation_contract.routed_feedback_ids.includes('sfb_7e043d77-074'), true);
 
   const tools = await handleRequest({ jsonrpc: '2.0', id: 'tools-list', method: 'tools/list', params: {} }, state);
   const toolsView = tools?.result as Record<string, any>;
   const runTool = toolsView.tools.find((item: Record<string, any>) => item.name === 'delegated_task_run');
   assert.equal(Array.isArray(runTool.inputSchema.properties.workflow.examples), true);
   assert.equal(runTool.inputSchema.properties.workflow.description.includes('Workflow DAG'), true);
+  assert.ok(runTool.inputSchema.properties.workflow.properties.instruction);
+  assert.ok(runTool.inputSchema.properties.workflow.properties.milestones);
+  assert.ok(runTool.inputSchema.properties.workflow.properties.authority_gates);
 
   const invalid = await callTool(state, 'delegated_task_validate', {
     objective: 'Invalid graph',
@@ -182,6 +204,115 @@ try {
   assert.deepEqual(presetView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement', 'review', 'repair', 'verify']);
   assert.deepEqual(presetView.workflow_preview.shape.entry_step_ids, ['implement']);
   assert.equal(presetView.workflow_preview.shape.edges.some((edge: Record<string, unknown>) => edge.from === 'implement' && edge.to === 'review'), true);
+  assert.equal(presetView.workflow_preview.shape.edges.some((edge: Record<string, unknown>) => edge.from === 'repair' && edge.to === 'verify'), true);
+  assert.deepEqual(presetView.workflow_preview.authority_gates, {
+    commit: {
+      operation: 'commit',
+      mode: 'requires_explicit_authority',
+      reason: 'commit is modeled as an explicit gate and is never executed by delegated-task-mcp',
+      required_authority: 'write',
+    },
+    push: {
+      operation: 'push',
+      mode: 'requires_explicit_authority',
+      reason: 'push must stay opt-in and owned by caller policy or worker constraints',
+      required_authority: 'command',
+    },
+  });
+
+  const noImplicitGates = await callTool(state, 'delegated_task_validate', {
+    objective: 'Plain workflow has no publication gates',
+    workflow: { steps: [{ id: 'implement', kind: 'worker' }] },
+  });
+  const noImplicitGatesView = noImplicitGates.result.structuredContent as Record<string, any>;
+  assert.equal(noImplicitGatesView.status, 'ok');
+  assert.deepEqual(noImplicitGatesView.workflow_preview.authority_gates, {});
+
+  const milestoneTemplate = await callTool(state, 'delegated_task_validate', {
+    objective: 'Preview guarded template milestones',
+    constraints: { authority: 'command', cwd: root },
+    workflow: { template_id: 'commit_push_guarded' },
+  });
+  const milestoneTemplateView = milestoneTemplate.result.structuredContent as Record<string, any>;
+  assert.equal(milestoneTemplateView.status, 'ok');
+  assert.equal(milestoneTemplateView.workflow_preview.template_id, 'commit_push_guarded');
+  assert.equal(milestoneTemplateView.workflow_preview.milestones.some((milestone: Record<string, any>) => milestone.id === 'publication-gate'), true);
+  assert.equal(milestoneTemplateView.workflow_preview.steps.some((step: Record<string, any>) => step.authority_gate?.operation === 'push'), true);
+
+  const milestonePreview = await callTool(state, 'delegated_task_validate', {
+    objective: 'Preview explicit milestones',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      milestones: [{ id: 'ship', title: 'Ship', step_ids: ['implement'], acceptance_scope: ['required_tests'] }],
+      authority_gates: { commit: { mode: 'requires_explicit_authority', required_authority: 'write' } },
+      steps: [{ id: 'implement', kind: 'worker', milestone_id: 'ship', authority_gate: { operation: 'commit', mode: 'requires_explicit_authority', required_authority: 'write' } }],
+    },
+  });
+  const milestonePreviewView = milestonePreview.result.structuredContent as Record<string, any>;
+  assert.equal(milestonePreviewView.status, 'ok');
+  assert.equal(milestonePreviewView.workflow_preview.milestones[0].id, 'ship');
+  assert.equal(milestonePreviewView.workflow_preview.steps[0].milestone_id, 'ship');
+  assert.equal(milestonePreviewView.workflow_preview.steps[0].authority_gate.required_authority, 'write');
+
+  const templateCatalog = await callTool(state, 'delegated_task_template_catalog', {});
+  const templateCatalogView = templateCatalog.result.structuredContent as Record<string, any>;
+  assert.equal(templateCatalogView.status, 'ok');
+  assert.equal(templateCatalogView.templates.some((template: Record<string, unknown>) => template.template_id === 'implement_review_repair_verify'), true);
+
+  const legacyWorkOrder = await callTool(state, 'delegated_task_validate', {
+    objective: 'Legacy work order graph',
+    workflow: {
+      template_id: 'implement_review',
+      imports: ['task_a70abebd40847000', 'task_aedc86df78be77f4'],
+      work_order: [
+        { id: 'implement', kind: 'worker', imports: ['sfb_074b9629-4a8'], instruction: 'Implement without git commit or push' },
+        { id: 'review', kind: 'review', depends_on: ['implement'] },
+      ],
+      migration: { from: 'legacy-work-order' },
+    },
+  });
+  const legacyWorkOrderView = legacyWorkOrder.result.structuredContent as Record<string, any>;
+  assert.equal(legacyWorkOrderView.status, 'ok');
+  assert.deepEqual(legacyWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement', 'review']);
+  assert.deepEqual(legacyWorkOrderView.workflow_preview.imports.workflow, ['task_a70abebd40847000', 'task_aedc86df78be77f4']);
+  assert.deepEqual(legacyWorkOrderView.workflow_preview.imports.by_step.implement, ['sfb_074b9629-4a8']);
+
+  const publishGate = await callTool(state, 'delegated_task_validate', {
+    objective: 'Implement and git push the branch',
+    constraints: { authority: 'write', cwd: root },
+    workflow: { steps: [{ id: 'implement', kind: 'worker', instruction: 'git commit and push the changes' }] },
+  });
+  const publishGateView = publishGate.result.structuredContent as Record<string, any>;
+  assert.equal(publishGateView.status, 'rejected');
+  assert.equal(publishGateView.diagnostics.some((item: Record<string, unknown>) => item.code === 'git_publish_requires_command_authority'), true);
+
+  const commitReadGate = await callTool(state, 'delegated_task_validate', {
+    objective: 'Implement and git commit the changes',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'implement', kind: 'worker', instruction: 'git commit the changes' }] },
+  });
+  const commitReadGateView = commitReadGate.result.structuredContent as Record<string, any>;
+  assert.equal(commitReadGateView.status, 'rejected');
+  assert.equal(commitReadGateView.diagnostics.some((item: Record<string, unknown>) => item.code === 'git_publish_requires_write_authority'), true);
+
+  const commitWriteGate = await callTool(state, 'delegated_task_validate', {
+    objective: 'Implement and git commit the changes',
+    constraints: { authority: 'write', cwd: root },
+    workflow: { steps: [{ id: 'implement', kind: 'worker', instruction: 'git commit the changes' }] },
+  });
+  const commitWriteGateView = commitWriteGate.result.structuredContent as Record<string, any>;
+  assert.equal(commitWriteGateView.status, 'ok');
+  assert.equal(commitWriteGateView.diagnostics.some((item: Record<string, unknown>) => String(item.code).startsWith('git_publish_requires_')), false);
+
+  const conditionHint = await callTool(state, 'delegated_task_validate', {
+    objective: 'Invalid condition suggestion',
+    workflow: { steps: [{ id: 'a', kind: 'worker' }, { id: 'b', kind: 'note', depends_on: ['a'], if: 'all(step:a:completed)' }] },
+  });
+  const conditionHintView = conditionHint.result.structuredContent as Record<string, any>;
+  const conditionDiagnostic = conditionHintView.diagnostics.find((item: Record<string, unknown>) => item.code === 'invalid_condition');
+  assert.ok(conditionDiagnostic);
+  assert.equal(Array.isArray(conditionDiagnostic.suggestions), true);
+  assert.equal(conditionHintView.validation_hints.condition_language.includes('step:<step_id>:<status>'), true);
 
   const run = await callTool(state, 'delegated_task_run', {
     objective: 'Implement complete delegated task orchestration',
@@ -250,7 +381,7 @@ try {
   assert.equal(resultView.result.parent_changed_files_count, 0);
   assert.deepEqual(resultView.result.worker_reported_changed_files, ['src/main.ts']);
   assert.equal(resultView.result.worker_reported_changed_files_count, 1);
-  assert.deepEqual(resultView.result.observed_files, []);
+  assert.deepEqual(resultView.result.observed_files, ['src/main.ts']);
   assert.deepEqual(resultView.result.nested_workflow_changed_files, []);
   assert.equal(resultView.result.verification.length, 1);
   assert.equal(resultView.result.verification_count, 1);
@@ -324,6 +455,25 @@ try {
   assert.equal(nestedResultView.result.target_state_changed.nested_delegated_task_changed_files.changed, true);
   assert.equal(nestedResultView.result.graph_execution_synthesis.nested_delegated_task_calls[0].task_status, 'failed');
 
+  const readOnlyAuditRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise read-only audit readback separation',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'audit', kind: 'research', instruction: 'read-only audit readback' }] },
+    execution: { wait_for_completion: true },
+  });
+  const readOnlyAuditView = readOnlyAuditRun.result.structuredContent as Record<string, any>;
+  assert.equal(readOnlyAuditView.task_status, 'completed');
+  const readOnlyAuditResult = await callTool(state, 'delegated_task_result', { task_id: readOnlyAuditView.task_id, include_diagnostics: true });
+  const readOnlyAuditResultView = readOnlyAuditResult.result.structuredContent as Record<string, any>;
+  assert.deepEqual(readOnlyAuditResultView.result.changed_files, []);
+  assert.deepEqual(readOnlyAuditResultView.result.real_changed_files, []);
+  assert.deepEqual(readOnlyAuditResultView.result.worker_reported_changed_files, []);
+  assert.deepEqual(readOnlyAuditResultView.result.observed_files, ['src/policy.ts', 'src/main.ts']);
+  assert.equal(readOnlyAuditResultView.result.target_state_changed.repo_files_changed.changed, false);
+  assert.deepEqual(readOnlyAuditResultView.result.target_state_changed.repo_files_changed.paths, []);
+  assert.equal(readOnlyAuditResultView.result.target_state_changed.worker_observed_changed_files.changed, true);
+  assert.deepEqual(readOnlyAuditResultView.result.target_state_changed.worker_observed_changed_files.paths, ['src/policy.ts', 'src/main.ts']);
+
   const failedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise explicit review failure',
     constraints: { authority: 'read', cwd: root },
@@ -358,6 +508,72 @@ try {
   const recoveredStatusView = recoveredStatus.result.structuredContent as Record<string, any>;
   assert.equal(recoveredStatusView.task_status, 'completed');
   assert.equal(workerCalls.some((call) => call.name === 'worker_run_wait' && String(call.args.run_id) === recoveredRunId), true);
+  const recoveredResult = await callTool(state, 'delegated_task_result', { task_id: recoveredWaitRunView.task_id, include_diagnostics: true });
+  const recoveredResultView = recoveredResult.result.structuredContent as Record<string, any>;
+  assert.equal(recoveredResultView.result.steps_terminal, true);
+  assert.equal(recoveredResultView.result.residual_risks.includes('worker_runs_still_in_progress'), false);
+
+  const implicitPositiveReviewRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise staccato positive review summary without explicit verdict',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'implement', kind: 'worker', instruction: 'Create top10 supplement' },
+        { id: 'review', kind: 'review', depends_on: ['implement'], instruction: 'positive summary no explicit verdict' },
+      ],
+    },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 }, residual_risk_policy: 'allow' },
+    execution: { wait_for_completion: true },
+  });
+  const implicitPositiveReviewView = implicitPositiveReviewRun.result.structuredContent as Record<string, any>;
+  assert.equal(implicitPositiveReviewView.task_status, 'completed');
+  const implicitPositiveReviewResult = await callTool(state, 'delegated_task_result', { task_id: implicitPositiveReviewView.task_id, include_diagnostics: true });
+  const implicitPositiveReviewResultView = implicitPositiveReviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(implicitPositiveReviewResultView.result.acceptance_verdict, 'passed');
+  assert.deepEqual(implicitPositiveReviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 1, failed: 0, status: 'passed' });
+  assert.deepEqual(implicitPositiveReviewResultView.result.terminal_summary.pending_review_items, []);
+  assert.deepEqual(implicitPositiveReviewResultView.result.residual_risks, []);
+  assert.equal(implicitPositiveReviewResultView.result.review_consensus.consensus, 'passed');
+  const implicitPositiveReviewCall = workerCalls.find((call) => call.name === 'worker_run' && JSON.stringify(call.args).includes('positive summary no explicit verdict'));
+  assert.match(JSON.stringify(implicitPositiveReviewCall?.args), /review_verdict as one of accepted, rejected, or accepted_with_findings/);
+
+  const acceptedFindingsSummaryRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise accepted_with_findings summary parsing',
+    constraints: { authority: 'write', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'implement', kind: 'worker', instruction: 'Implement summary verdict case' },
+        { id: 'review', kind: 'review', depends_on: ['implement'], instruction: 'accepted findings summary only' },
+      ],
+    },
+    acceptance: { review_quorum: { min_passed: 1, max_failed: 0 }, residual_risk_policy: 'allow' },
+    execution: { wait_for_completion: true },
+  });
+  const acceptedFindingsSummaryView = acceptedFindingsSummaryRun.result.structuredContent as Record<string, any>;
+  assert.equal(acceptedFindingsSummaryView.task_status, 'completed');
+  const acceptedFindingsSummaryResult = await callTool(state, 'delegated_task_result', { task_id: acceptedFindingsSummaryView.task_id, include_diagnostics: true });
+  const acceptedFindingsSummaryResultView = acceptedFindingsSummaryResult.result.structuredContent as Record<string, any>;
+  assert.deepEqual(acceptedFindingsSummaryResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 1, failed: 0, status: 'passed' });
+  assert.equal(acceptedFindingsSummaryResultView.result.review_consensus.consensus, 'passed');
+
+  const exitInterviewRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise delegated task exit interview propagation',
+    constraints: { authority: 'read', cwd: root, exit_interview: true },
+    workflow: { steps: [{ id: 'audit', kind: 'research', instruction: 'exit interview requested through constraints' }] },
+    result_policy: { expose_worker_refs: false },
+    execution: { wait_for_completion: true },
+  });
+  const exitInterviewView = exitInterviewRun.result.structuredContent as Record<string, any>;
+  assert.equal(exitInterviewView.task_status, 'completed');
+  const exitInterviewCall = workerCalls.find((call) => call.name === 'worker_run' && JSON.stringify(call.args).includes('exit interview requested through constraints'));
+  assert.equal((exitInterviewCall?.args.constraints as Record<string, unknown>).exit_interview, true);
+  const exitInterviewResult = await callTool(state, 'delegated_task_result', { task_id: exitInterviewView.task_id, include_diagnostics: true });
+  const exitInterviewResultView = exitInterviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(exitInterviewResultView.result.exit_interview_count, 1);
+  assert.equal(exitInterviewResultView.result.exit_interviews[0].step_id, 'audit');
+  assert.deepEqual(exitInterviewResultView.result.exit_interview_feedback.friction_points, ['exit interview propagation required explicit test coverage']);
+  assert.equal(exitInterviewResultView.result.observed_incoherencies.includes('delegated_task_exit_interview_path_was_previously_unprocessed'), true);
+  assert.equal(exitInterviewResultView.result.terminal_summary.exit_interview_count, 1);
 
   const repairedReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise rejected review repair routing',
@@ -539,6 +755,37 @@ try {
   assert.equal(timedOutView.timeout_diagnostics.next_action, 'continue_or_verify');
   await callTool(state, 'delegated_task_cancel', { task_id: timeoutTask.task_id, reason: 'caller stopped timeout test' });
 
+  const readOnlyRefreshRunCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
+  const readOnlyRefreshStatusCalls = workerCalls.filter((call) => call.name === 'worker_run_status').length;
+  const readOnlyRefreshRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Refresh running worker without scheduling dependent step',
+    constraints: { authority: 'read', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'first', kind: 'worker', instruction: 'async worker read-only refresh first' },
+        { id: 'second', kind: 'worker', depends_on: ['first'], instruction: 'second worker should not start from status refresh' },
+      ],
+    },
+  });
+  const readOnlyRefreshTask = readOnlyRefreshRun.result.structuredContent as Record<string, any>;
+  assert.equal(readOnlyRefreshTask.task_status, 'running');
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
+  const staleStatus = await callTool(state, 'delegated_task_status', { task_id: readOnlyRefreshTask.task_id });
+  const staleStatusView = staleStatus.result.structuredContent as Record<string, any>;
+  assert.equal(staleStatusView.task_status, 'running');
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run_status').length, readOnlyRefreshStatusCalls);
+  const refreshedStatus = await callTool(state, 'delegated_task_status', { task_id: readOnlyRefreshTask.task_id, refresh: true });
+  const refreshedStatusView = refreshedStatus.result.structuredContent as Record<string, any>;
+  assert.equal(refreshedStatusView.step_status_counts.completed, 1);
+  assert.equal(refreshedStatusView.step_status_counts.pending, 1);
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
+  const refreshedResult = await callTool(state, 'delegated_task_result', { task_id: readOnlyRefreshTask.task_id, refresh: true, include_diagnostics: true });
+  const refreshedResultView = refreshedResult.result.structuredContent as Record<string, any>;
+  assert.equal(refreshedResultView.result.step_states.first.status, 'completed');
+  assert.equal(refreshedResultView.result.step_states.second.status, 'pending');
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
+  await callTool(state, 'delegated_task_cancel', { task_id: readOnlyRefreshTask.task_id, reason: 'caller stopped read-only refresh test' });
+
   const retryRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise retry repair',
     constraints: { authority: 'write', cwd: root, max_retries: 1 },
@@ -578,6 +825,21 @@ try {
   assert.equal(mappedConstraints.max_concurrency, undefined);
   assert.equal(mappedConstraints.site_root, siteRoot);
   assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
+
+  const launchFailureRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise worker launch failure diagnostics',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'launch-failure', kind: 'research', instruction: 'launch failure worker' }] },
+    execution: { wait_for_completion: true },
+  });
+  const launchFailureView = launchFailureRun.result.structuredContent as Record<string, any>;
+  assert.equal(launchFailureView.task_status, 'failed');
+  const launchFailureResult = await callTool(state, 'delegated_task_result', { task_id: launchFailureView.task_id, include_diagnostics: true });
+  const launchFailureResultView = launchFailureResult.result.structuredContent as Record<string, any>;
+  assert.equal(launchFailureResultView.result.worker_launch_failure_count, 1);
+  assert.equal(launchFailureResultView.result.worker_launch_failures[0].step_id, 'launch-failure');
+  assert.match(launchFailureResultView.result.worker_launch_failures[0].message, /worker launch denied/);
+  assert.equal(launchFailureResultView.result.observed_incoherencies.some((item: string) => item.includes('worker_launch_failed:launch-failure')), true);
 
   const missing = await callTool(state, 'delegated_task_status', { task_id: 'task_missing' });
   const missingError = missing.error as Record<string, any>;

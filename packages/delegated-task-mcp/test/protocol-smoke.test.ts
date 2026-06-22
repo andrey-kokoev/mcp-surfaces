@@ -39,6 +39,7 @@ try {
   const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), [
     'delegated_task_policy_inspect',
+    'delegated_task_template_catalog',
     'delegated_task_validate',
     'delegated_task_run',
     'delegated_task_status',
@@ -56,6 +57,11 @@ try {
   const validateTool = tools.find((tool: { name: string; annotations: Record<string, unknown> }) => tool.name === 'delegated_task_validate');
   assert.equal(validateTool.annotations.readOnlyHint, true);
 
+  const templateCatalogTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> }; annotations: Record<string, unknown> }) => tool.name === 'delegated_task_template_catalog');
+  assert.equal(templateCatalogTool.annotations.readOnlyHint, true);
+  assert.equal(typeof templateCatalogTool.description, 'string');
+  assert.ok(templateCatalogTool.inputSchema.properties.template_id);
+
   const runTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> }; annotations: Record<string, unknown> }) => tool.name === 'delegated_task_run');
   assert.equal(runTool.annotations.readOnlyHint, false);
   assert.ok(runTool.inputSchema.properties.objective);
@@ -68,6 +74,7 @@ try {
   assert.ok(runTool.inputSchema.properties.idempotency_key);
   const constraints = runTool.inputSchema.properties.constraints as Record<string, any>;
   assert.equal(constraints.additionalProperties, false);
+  assert.ok(constraints.properties.authority_gates);
   assert.ok(constraints.properties.required_mcp_tools);
   assert.ok(constraints.properties.preflight_paths);
   assert.equal(constraints.properties.overrides.additionalProperties, false);
@@ -79,6 +86,11 @@ try {
   assert.ok(resultPolicy.max_result_items);
   assert.ok(resultPolicy.compact_completed_worker_refs);
   assert.equal((runTool.inputSchema.properties.result_policy as Record<string, any>).additionalProperties, false);
+  const workflow = runTool.inputSchema.properties.workflow as Record<string, any>;
+  assert.ok(workflow.properties.template_id);
+  assert.ok(workflow.properties.instruction);
+  assert.ok(workflow.properties.work_order);
+  assert.ok(workflow.properties.imports);
 
   const waitTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'delegated_task_wait');
   assert.ok(waitTool.inputSchema.properties.task_id);

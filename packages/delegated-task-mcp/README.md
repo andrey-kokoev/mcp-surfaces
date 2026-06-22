@@ -16,6 +16,7 @@ Use this package when a caller wants to delegate a task outcome rather than manu
 ## Tools
 
 - `delegated_task_policy_inspect`: inspect orchestration policy, defaults, allowed workflow kinds/profiles, condition language, and the composed worker policy.
+- `delegated_task_template_catalog`: list built-in workflow templates, milestone objects, authority gates, and worker-delegation output contracts.
 - `delegated_task_validate`: preflight a task request without creating or running it.
 - `delegated_task_run`: create a durable delegated task from intent/objective, constraints, workflow, acceptance contract, result policy, and execution policy; by default it starts worker/review steps through `worker-delegation-mcp`.
 - `delegated_task_status`: return compact lifecycle state for one task.
@@ -37,13 +38,15 @@ Minimal `delegated_task_run` payload with a single worker step:
     "cwd": "/home/user/project",
     "allowed_roots": ["/home/user/project"]
   },
-  "workflow": [
-    {
-      "id": "fix-typo",
-      "kind": "worker",
-      "intent": "Fix the typo in README.md"
-    }
-  ],
+  "workflow": {
+    "steps": [
+      {
+        "id": "fix-typo",
+        "kind": "worker",
+        "instruction": "Fix the typo in README.md"
+      }
+    ]
+  },
   "execution": {
     "wait_for_completion": true
   }
@@ -59,6 +62,12 @@ The MCP writes JSON task records under its configured task root. By default, the
 This surface is orchestration-state first and execution-capable. It does not run shell commands or mutate files itself; worker, review, repair, verify, and research steps are delegated through `worker-delegation-mcp` under the supplied mechanical constraints. Local gate, join, and note steps update orchestration state only.
 
 Workflow state is durable in the task result. Steps move through `pending`, `running`, `completed`, `failed`, `skipped`, `blocked`, and `noted`; dependencies, richer string conditions, concurrency, retries, repair/review/quorum policy, and worker status refresh are handled at the task level. The consolidated task result records child worker `run_id`s in `worker_refs` by default. A caller may set `result_policy.expose_worker_refs` to `false` to hide detailed refs from compact result views, while `max_worker_refs`, `max_result_items`, and event limits keep large workflow handoffs bounded. Diagnostics still expose accountability evidence.
+
+Workflow templates can be addressed by `workflow.template_id`, `workflow.strategy`, or legacy `workflow.template`. The built-in catalog includes milestone objects (`milestones[]` with `id`, `title`, `depends_on`, `step_ids`, and `acceptance_scope`) and step-level `milestone_id` so callers can preview and report progress at a coarser level than individual worker runs.
+
+Commit and push are modeled as explicit authority gates, not executed by this surface. `workflow.authority_gates` and step-level `authority_gate` can declare `commit` or `push` with `mode`, `required_authority`, and `reason`; validation rejects natural-language commit requests without write authority and push requests without command authority. Actual git inspection/publication remains owned by the git and worker surfaces under caller policy.
+
+The template catalog carries the routed worker-delegation schema contract for child worker outputs: workers should return summaries, changes, verification, residual risks, and observed incoherencies. `delegated-task-mcp` records those as evidence but does not become a worker runtime or shell.
 
 Large sections are compacted by default and materialized as task-local output references under the configured task root. Default results include counts, truncation flags, and output ref metadata so callers can page into full `worker_refs`, verification, changed files, residual risks, or incoherencies when needed.
 
