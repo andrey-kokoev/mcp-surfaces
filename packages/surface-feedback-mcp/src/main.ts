@@ -16,8 +16,12 @@ type JsonRecord = Record<string, unknown>;
 
 type FeedbackState = {
   feedbackRoot: string;
+  dbPath: string;
+  canonicalFeedbackRoot: string;
   db: DatabaseSync;
 };
+
+const DEFAULT_CANONICAL_FEEDBACK_ROOT = 'D:/code/mcp-surfaces';
 
 const CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS feedback_entries (
@@ -29,6 +33,8 @@ const CREATE_TABLES = [
     summary TEXT NOT NULL,
     details TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'submitted',
+    resolution_note TEXT,
+    resolved_by TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT`,
@@ -36,13 +42,16 @@ const CREATE_TABLES = [
 
 export function createServerState(options: JsonRecord = {}): FeedbackState {
   const feedbackRoot = resolve(String(options.feedbackRoot ?? options.outputRoot ?? process.cwd()));
+  const canonicalFeedbackRoot = resolve(String(options.canonicalFeedbackRoot ?? process.env.NARADA_SURFACE_FEEDBACK_ROOT ?? DEFAULT_CANONICAL_FEEDBACK_ROOT));
   const dbPath = resolve(feedbackRoot, '.feedback', 'surface-feedback.db');
   const dbDir = resolve(dbPath, '..');
   mkdirSync(dbDir, { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA journal_mode=WAL');
   for (const sql of CREATE_TABLES) db.exec(sql);
-  return { feedbackRoot, db };
+  ensureColumn(db, 'feedback_entries', 'resolution_note', 'TEXT');
+  ensureColumn(db, 'feedback_entries', 'resolved_by', 'TEXT');
+  return { feedbackRoot, dbPath, canonicalFeedbackRoot, db };
 }
 
 export async function handleRequest(request: JsonRecord, state: FeedbackState) {
@@ -89,6 +98,13 @@ function dispatchMethod(method: string, params: JsonRecord, state: FeedbackState
 export function listTools() {
   return [
     {
+      name: 'surface_feedback_doctor',
+      description: 'Inspect surface feedback MCP storage posture and backing store path.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { title: 'surface_feedback_doctor', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'surface_feedback_submit',
       description: 'Submit feedback about an MCP surface. Cross-site: any site may submit feedback about any surface.',
       inputSchema: {
@@ -108,16 +124,38 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
-      name: 'surface_feedback_list',
-      description: 'List feedback entries with optional filters.',
+      name: 'surface_feedback_update_status',
+      description: 'Update one feedback entry status with a concise resolution or routing note.',
       inputSchema: {
         type: 'object',
         properties: {
-          surface_id: { type: 'string' },
-          submitter_site_id: { type: 'string' },
-          kind: { type: 'string', enum: FEEDBACK_KINDS },
+          feedback_id: { type: 'string' },
           status: { type: 'string', enum: FEEDBACK_STATUSES },
+          resolved_by: { type: 'string', description: 'Principal updating the feedback status.' },
+          resolution_note: { type: 'string', description: 'Reason, fix summary, route destination, or acknowledgement note.' },
+        },
+        required: ['feedback_id', 'status', 'resolved_by', 'resolution_note'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_update_status', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'surface_feedback_list',
+      description: 'List feedback entries scoped by caller site visibility. When caller_site_id is provided, entries are filtered to: (a) feedback for surfaces in owned_surface_ids, and (b) feedback submitted by the caller site. When absent, returns all feedback.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          surface_id: { type: 'string', description: 'Filter by surface identifier.' },
+          submitter_site_id: { type: 'string', description: 'Filter by submitter site ID.' },
+          kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Filter by feedback kind.' },
+          status: { type: 'string', enum: FEEDBACK_STATUSES, description: 'Filter by status.' },
+          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
+          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site. When provided with caller_site_id, the caller also sees all feedback for these surfaces.' },
+          since: { type: 'string', description: 'ISO 8601 start date.' },
+          until: { type: 'string', description: 'ISO 8601 end date.' },
           limit: { type: 'number', default: 50 },
+          offset: { type: 'number', default: 0 },
         },
         additionalProperties: false,
       },
@@ -126,14 +164,33 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_show',
-      description: 'Show one feedback entry by feedback_id.',
+      description: 'Show one feedback entry by feedback_id, scoped by visibility when caller_site_id is provided.',
       inputSchema: {
         type: 'object',
-        properties: { feedback_id: { type: 'string' } },
+        properties: {
+          feedback_id: { type: 'string' },
+          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
+          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+        },
         required: ['feedback_id'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'surface_feedback_stats',
+      description: 'Return aggregated feedback counts by surface, kind, and status, scoped by caller site visibility.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          surface_id: { type: 'string', description: 'Optional surface ID filter.' },
+          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
+          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_stats', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
   ];
@@ -144,12 +201,35 @@ function callTool(params: JsonRecord, state: FeedbackState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
+    case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;
     case 'surface_feedback_list': result = feedbackList(args, state); break;
     case 'surface_feedback_show': result = feedbackShow(args, state); break;
+    case 'surface_feedback_stats': result = feedbackStats(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+}
+
+function feedbackDoctor(state: FeedbackState): JsonRecord {
+  const row = state.db.prepare('SELECT COUNT(*) AS count FROM feedback_entries').get() as JsonRecord;
+  const usesCanonicalStore = samePath(state.feedbackRoot, state.canonicalFeedbackRoot);
+  return {
+    schema: 'narada.surface_feedback.doctor.v1',
+    status: usesCanonicalStore ? 'ok' : 'warning',
+    server_name: SERVER_NAME,
+    server_version: SERVER_VERSION,
+    protocol_version: PROTOCOL_VERSION,
+    storage_posture: usesCanonicalStore ? 'canonical_feedback_root' : 'noncanonical_feedback_root',
+    feedback_root: state.feedbackRoot,
+    canonical_feedback_root: state.canonicalFeedbackRoot,
+    uses_canonical_store: usesCanonicalStore,
+    db_path: state.dbPath,
+    total_feedback_entries: Number(row.count ?? 0),
+    diagnostic: usesCanonicalStore ? null : 'This server is writing feedback to a site-local/noncanonical store. Cross-site feedback may be invisible to maintainers using the canonical mcp-surfaces store.',
+    remediation: usesCanonicalStore ? null : `Configure this surface with --feedback-root ${state.canonicalFeedbackRoot}`,
+  };
 }
 
 function feedbackSubmit(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -168,29 +248,118 @@ function feedbackSubmit(args: JsonRecord, state: FeedbackState): JsonRecord {
   return { status: 'submitted', feedback_id: feedbackId, surface_id: surfaceId, submitter_site_id: siteId, kind, summary, created_at: now };
 }
 
+function feedbackUpdateStatus(args: JsonRecord, state: FeedbackState): JsonRecord {
+  const feedbackId = requiredString(args.feedback_id, 'feedback_requires_feedback_id');
+  const status = requiredString(args.status, 'feedback_requires_status');
+  if (!FEEDBACK_STATUSES.includes(status as typeof FEEDBACK_STATUSES[number])) throw diagnosticError('feedback_invalid_status', `feedback_invalid_status:${status}`, { allowed: FEEDBACK_STATUSES });
+  const resolvedBy = requiredString(args.resolved_by, 'feedback_requires_resolved_by');
+  const resolutionNote = requiredString(args.resolution_note, 'feedback_requires_resolution_note');
+  const existing = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+  if (!existing) throw feedbackNotFound(feedbackId, state);
+  const now = nowIso();
+  state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+  const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
+  return { status: 'updated', feedback: hydrateFeedback(updated) };
+}
+
+function visibilityClause(callerSiteId: string | null, ownedSurfaceIds: string[]): { sql: string; params: string[] } {
+  if (!callerSiteId) return { sql: '', params: [] };
+  if (ownedSurfaceIds.length > 0) {
+    const placeholders = ownedSurfaceIds.map(() => '?').join(', ');
+    return { sql: ` AND (submitter_site_id = ? OR surface_id IN (${placeholders}))`, params: [callerSiteId, ...ownedSurfaceIds] };
+  }
+  return { sql: ' AND submitter_site_id = ?', params: [callerSiteId] };
+}
+
+function ownedSurfaceIds(args: JsonRecord): string[] {
+  const raw = args.owned_surface_ids;
+  if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
+  return [];
+}
+
 function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   const limit = clamp(integer(args.limit, 50, 1, 200), 1, 200);
+  const offset = Math.max(0, integer(args.offset, 0, 0, 10000));
   const surfaceId = optionalString(args.surface_id);
   const siteId = optionalString(args.submitter_site_id);
   const kind = optionalString(args.kind);
   const status = optionalString(args.status);
+  const callerSiteId = optionalString(args.caller_site_id);
+  const owned = ownedSurfaceIds(args);
+  const since = optionalString(args.since);
+  const until = optionalString(args.until);
+  const vis = visibilityClause(callerSiteId, owned);
   let sql = 'SELECT * FROM feedback_entries WHERE 1=1';
   const params: (string | number)[] = [];
   if (surfaceId) { sql += ' AND surface_id = ?'; params.push(surfaceId); }
   if (siteId) { sql += ' AND submitter_site_id = ?'; params.push(siteId); }
   if (kind) { sql += ' AND kind = ?'; params.push(kind); }
   if (status) { sql += ' AND status = ?'; params.push(status); }
-  sql += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(limit);
+  if (since) { sql += ' AND created_at >= ?'; params.push(since); }
+  if (until) { sql += ' AND created_at <= ?'; params.push(until); }
+  sql += vis.sql;
+  params.push(...vis.params);
+  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  params.push(limit, offset);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
-  return { items: rows.map(hydrateFeedback), count: rows.length };
+  return { items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
 }
 
 function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
   const feedbackId = requiredString(args.feedback_id, 'feedback_requires_feedback_id');
+  const callerSiteId = optionalString(args.caller_site_id);
+  const owned = ownedSurfaceIds(args);
   const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
-  if (!row) throw diagnosticError('feedback_not_found', `feedback_not_found:${feedbackId}`);
+  if (!row) throw feedbackNotFound(feedbackId, state);
+  if (!isVisible(row, callerSiteId, owned)) throw diagnosticError('feedback_not_visible', `feedback_not_visible:${feedbackId}`);
   return hydrateFeedback(row);
+}
+
+function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
+  const surfaceId = optionalString(args.surface_id);
+  const callerSiteId = optionalString(args.caller_site_id);
+  const owned = ownedSurfaceIds(args);
+  const vis = visibilityClause(callerSiteId, owned);
+  const bySurface: Record<string, number> = {};
+  const byKind: Record<string, number> = {};
+  const byStatus: Record<string, number> = {};
+  let sql = 'SELECT surface_id, kind, status FROM feedback_entries WHERE 1=1';
+  const params: string[] = [];
+  if (surfaceId) { sql += ' AND surface_id = ?'; params.push(surfaceId); }
+  sql += vis.sql;
+  params.push(...vis.params);
+  const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
+  for (const row of rows) {
+    const s = String(row.surface_id);
+    const k = String(row.kind);
+    const st = String(row.status);
+    bySurface[s] = (bySurface[s] ?? 0) + 1;
+    byKind[k] = (byKind[k] ?? 0) + 1;
+    byStatus[st] = (byStatus[st] ?? 0) + 1;
+  }
+  return { by_surface: bySurface, by_kind: byKind, by_status: byStatus, total: rows.length };
+}
+
+function isVisible(row: JsonRecord, callerSiteId: string | null, ownedSurfaceIds: string[]): boolean {
+  if (!callerSiteId) return true;
+  if (String(row.submitter_site_id) === callerSiteId) return true;
+  if (ownedSurfaceIds.includes(String(row.surface_id))) return true;
+  return false;
+}
+
+function feedbackNotFound(feedbackId: string, state: FeedbackState) {
+  return diagnosticError('feedback_not_found', `feedback_not_found:${feedbackId}`, {
+    feedback_id: feedbackId,
+    feedback_root: state.feedbackRoot,
+    db_path: state.dbPath,
+    store_hint: 'Feedback IDs are local to the configured feedback_root. If this ID was created from another site/session, compare surface_feedback_doctor.db_path for both sessions and migrate/rebind stale site-local feedback roots to the shared feedback root.',
+  });
+}
+
+function ensureColumn(db: DatabaseSync, table: string, column: string, definition: string): void {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as JsonRecord[];
+  if (rows.some((row) => String(row.name) === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
 function hydrateFeedback(row: JsonRecord): JsonRecord {
@@ -203,12 +372,35 @@ function hydrateFeedback(row: JsonRecord): JsonRecord {
     summary: String(row.summary),
     details: String(row.details),
     status: String(row.status),
+    resolution_note: optionalString(row.resolution_note),
+    resolved_by: optionalString(row.resolved_by),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
 }
 
 function renderResult(result: JsonRecord): string {
+  if (result.by_surface !== undefined) {
+    const parts: string[] = [];
+    const bySurface = result.by_surface as Record<string, number>;
+    const byKind = result.by_kind as Record<string, number>;
+    const byStatus = result.by_status as Record<string, number>;
+    parts.push(`feedback stats: ${result.total} total`);
+    for (const [s, c] of Object.entries(bySurface)) parts.push(`  surface ${s}: ${c}`);
+    for (const [k, c] of Object.entries(byKind)) parts.push(`  kind ${k}: ${c}`);
+    for (const [s, c] of Object.entries(byStatus)) parts.push(`  status ${s}: ${c}`);
+    return parts.join('\n');
+  }
+  if (result.schema === 'narada.surface_feedback.doctor.v1') return compactLines([
+    `surface_feedback_doctor: ${result.status}`,
+    `storage_posture: ${result.storage_posture}`,
+    `feedback_root: ${result.feedback_root}`,
+    `canonical_feedback_root: ${result.canonical_feedback_root}`,
+    `db_path: ${result.db_path}`,
+    `total_feedback_entries: ${result.total_feedback_entries}`,
+    result.diagnostic ? `diagnostic: ${result.diagnostic}` : null,
+    result.remediation ? `remediation: ${result.remediation}` : null,
+  ]);
   if (result.items !== undefined) {
     const items = result.items as JsonRecord[];
     return [`feedback: ${result.count ?? 0} entries`, ...items.map((i) => `  ${i.feedback_id} [${i.kind}] ${String(i.summary ?? '').slice(0, 80)} (${i.surface_id} <- ${i.submitter_site_id})`)].join('\n');
@@ -241,6 +433,16 @@ function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
 }
 
+function samePath(a: string, b: string): boolean {
+  const left = resolve(a);
+  const right = resolve(b);
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function compactLines(lines: Array<string | null | undefined>): string {
+  return lines.filter((line): line is string => Boolean(line)).join('\n');
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -253,7 +455,8 @@ function diagnosticError(code: string, message: string = code, details: JsonReco
 
 function errorDiagnostic(error: unknown) {
   const record = asRecord(error);
-  return { schema: 'narada.surface_feedback.error.v1', code: String(record.codeName ?? 'surface_feedback_error'), message: error instanceof Error ? error.message : String(error), details: asRecord(record.details) };
+  const details = asRecord(record.details);
+  return { schema: 'narada.surface_feedback.error.v1', code: String(record.codeName ?? 'surface_feedback_error'), message: error instanceof Error ? error.message : String(error), ...details, details };
 }
 
 function drainJsonLines(buffer: string) {
@@ -293,6 +496,7 @@ function parseArgs(argv: string[]) {
     const arg = argv[i];
     if (arg === '--feedback-root') options.feedbackRoot = argv[++i];
     else if (arg === '--output-root') options.outputRoot = argv[++i];
+    else if (arg === '--canonical-feedback-root') options.canonicalFeedbackRoot = argv[++i];
   }
   return options;
 }
