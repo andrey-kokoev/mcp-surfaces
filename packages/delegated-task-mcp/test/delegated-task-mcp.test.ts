@@ -12,6 +12,9 @@ try {
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'main.ts'), 'export const ok = true;\n', 'utf8');
   writeFileSync(join(root, 'src', 'policy.ts'), 'export const policy = "review";\n', 'utf8');
+  const multiRepoRoot = join(root, 'multi-repo-workspace');
+  mkdirSync(join(multiRepoRoot, 'repo-a', '.git'), { recursive: true });
+  mkdirSync(join(multiRepoRoot, 'repo-b', '.git'), { recursive: true });
   const originalDelegatedTaskSecret = process.env.DELEGATED_TASK_TEST_SECRET;
   delete process.env.DELEGATED_TASK_TEST_SECRET;
   const siteRoot = join(root, 'site-root');
@@ -122,6 +125,24 @@ try {
   });
   const siteRootShapeView = siteRootShape.result.structuredContent as Record<string, any>;
   assert.equal(siteRootShapeView.status, 'ok');
+
+  const crossRepoShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Cross-repo research graph',
+    constraints: { authority: 'read', cwd: multiRepoRoot },
+    workflow: { steps: [{ id: 'research', kind: 'research', instruction: 'Inspect all repos' }] },
+  });
+  const crossRepoShapeView = crossRepoShape.result.structuredContent as Record<string, any>;
+  assert.equal(crossRepoShapeView.status, 'ok');
+  assert.equal(crossRepoShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'codex_cross_repo_workspace_requires_skip_git_repo_check' && item.severity === 'warning'), true);
+
+  const crossRepoSkippedShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Cross-repo research graph with skip',
+    constraints: { authority: 'read', cwd: multiRepoRoot, skip_git_repo_check: true },
+    workflow: { steps: [{ id: 'research', kind: 'research', instruction: 'Inspect all repos' }] },
+  });
+  const crossRepoSkippedShapeView = crossRepoSkippedShape.result.structuredContent as Record<string, any>;
+  assert.equal(crossRepoSkippedShapeView.status, 'ok');
+  assert.equal(crossRepoSkippedShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'codex_cross_repo_workspace_requires_skip_git_repo_check'), false);
 
   const preset = await callTool(state, 'delegated_task_validate', {
     objective: 'Preset graph',

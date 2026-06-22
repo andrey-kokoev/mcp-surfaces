@@ -603,6 +603,7 @@ function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): Jso
   for (const cycle of cycles) diagnostics.push({ severity: 'error', code: 'workflow_cycle', cycle });
   diagnostics.push(...unknownKeyDiagnostics(rec(args.constraints), ['authority', 'cwd', 'site_root', 'profile', 'cognition', 'model', 'sandbox', 'runtime', 'skip_git_repo_check', 'resumable', 'wait_for_completion', 'exit_interview', 'max_concurrency', 'max_retries', 'repair_policy', 'required_mcp_tools', 'preflight_paths', 'overrides'], 'constraints'));
   diagnostics.push(...unknownKeyDiagnostics(rec(rec(args.constraints).overrides), ['runtime', 'sandbox', 'model', 'reasoning_effort', 'config', 'skip_git_repo_check'], 'constraint_overrides'));
+  diagnostics.push(...gitTrustDiagnostics(rec(args.constraints), steps, state));
   diagnostics.push(...unknownKeyDiagnostics(rec(args.result_policy), ['include_diagnostics_by_default', 'expose_worker_refs', 'compact_completed_worker_refs', 'max_events', 'max_worker_refs', 'max_result_items'], 'result_policy'));
   const acceptanceDiagnostics = validateAcceptanceContract(rec(args.acceptance));
   diagnostics.push(...acceptanceDiagnostics);
@@ -795,6 +796,32 @@ function unknownKeyDiagnostics(value: JsonRecord, allowed: string[], scope: stri
   if (Object.keys(value).length === 0) return [];
   const allowedSet = new Set(allowed);
   return Object.keys(value).filter((key) => !allowedSet.has(key)).map((key) => ({ severity: 'error', code: `${scope}_unknown_key`, scope, key, allowed }));
+}
+function gitTrustDiagnostics(constraints: JsonRecord, steps: WorkflowStep[], state: State): JsonRecord[] {
+  if (constraints.skip_git_repo_check === true || rec(constraints.overrides).skip_git_repo_check === true) return [];
+  const runtime = opt(rec(constraints.overrides).runtime) ?? opt(constraints.runtime) ?? state.workerState.policy.defaultRuntime;
+  if (runtime !== 'codex') return [];
+  const cwd = resolve(opt(constraints.cwd) ?? state.allowedRoots[0]);
+  if (isGitRepositoryRoot(cwd)) return [];
+  const childRepos = directChildGitRepositories(cwd).slice(0, 8);
+  if (!steps.some((step) => WORKER_KINDS.has(step.kind)) || childRepos.length === 0) return [];
+  return [{
+    severity: 'warning',
+    code: 'codex_cross_repo_workspace_requires_skip_git_repo_check',
+    locus: 'constraints.cwd',
+    cwd,
+    child_git_repositories: childRepos,
+    recommendation: 'Set constraints.skip_git_repo_check=true for read-only cross-repo research DAGs, or use a trusted repository root as cwd.',
+  }];
+}
+function isGitRepositoryRoot(path: string): boolean { return existsSync(join(path, '.git')); }
+function directChildGitRepositories(path: string): string[] {
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(path, entry.name))
+      .filter(isGitRepositoryRoot);
+  } catch { return []; }
 }
 function runningCount(states: Record<string, StepState>): number { return Object.values(states).filter((state) => state.status === 'running').length; }
 function workerRefs(task: Task): JsonRecord[] { return records(rec(task.result).worker_refs); }
