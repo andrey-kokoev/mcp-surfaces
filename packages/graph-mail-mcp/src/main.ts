@@ -219,6 +219,7 @@ export function listTools(): unknown[] {
     tool('graph_mail_reply_draft_create', 'Create a reply draft for an existing message.', replyDraftProperties(), ['message_id']),
     tool('graph_mail_reply_all_draft_create', 'Create a reply-all draft for an existing message.', replyDraftProperties(), ['message_id']),
     tool('graph_mail_forward_draft_create', 'Create a forward draft for an existing message.', forwardDraftProperties(), ['message_id']),
+    tool('graph_mail_reply_all_to_last_in_thread_draft_create', 'Create a reply-all draft addressed to the last message in a conversation thread.', replyAllToThreadProperties(), ['conversation_id']),
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       draft_id: { type: 'string', description: 'Draft message id.' },
@@ -254,6 +255,16 @@ function replyDraftProperties() {
   return {
     mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
     message_id: { type: 'string', description: 'Original message id.' },
+    comment: { type: 'string', description: 'Optional reply comment.' },
+    body_text: { type: 'string', description: 'Optional replacement body text.' },
+    body_html: { type: 'string', description: 'Optional replacement body HTML.' },
+  };
+}
+
+function replyAllToThreadProperties() {
+  return {
+    mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+    conversation_id: { type: 'string', description: 'Conversation/thread id.' },
     comment: { type: 'string', description: 'Optional reply comment.' },
     body_text: { type: 'string', description: 'Optional replacement body text.' },
     body_html: { type: 'string', description: 'Optional replacement body HTML.' },
@@ -470,6 +481,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
     case 'graph_mail_forward_draft_create':
       result = await graphMailDerivedDraftCreate(args, state, 'createForward');
       break;
+    case 'graph_mail_reply_all_to_last_in_thread_draft_create':
+      result = await graphMailReplyAllToLastInThreadDraftCreate(args, state);
+      break;
     case 'graph_mail_draft_update':
       result = await graphMailDraftUpdate(args, state);
       break;
@@ -660,6 +674,31 @@ async function graphMailDerivedDraftCreate(args: GraphMailRecord, state: GraphMa
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'POST', path, body });
   recordGraphMailAudit(state.siteRoot, { event_kind: `${action}_completed`, mailbox_id: args.mailbox_id ?? 'me', message_id: messageId, draft_id: asRecord(graph).id ?? null });
   return { schema: 'narada.graph_mail_mcp.draft.v1', status: 'created', draft: graph };
+}
+
+async function graphMailReplyAllToLastInThreadDraftCreate(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
+  const conversationId = requiredString(args, 'conversation_id');
+  const mailboxId = args.mailbox_id ?? 'me';
+  const messagesPath = graphMailboxPath(mailboxId, `messages`, policy);
+  const filter = `conversationId eq '${conversationId.replace(/'/g, "''")}'`;
+  const query = { '$filter': filter, '$orderby': 'receivedDateTime desc', '$top': 1, '$select': 'id,conversationId,receivedDateTime' };
+  const messagesResult = await graphRequest({ policy, accessToken, fetchImpl }, { path: messagesPath, query });
+  const messages = asRecord(messagesResult).value as unknown[] | undefined;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    throw new Error('graph_mail_thread_no_messages');
+  }
+  const lastMessage = asRecord(messages[0]);
+  const messageId = String(lastMessage.id ?? '');
+  if (!messageId) {
+    throw new Error('graph_mail_thread_last_message_missing_id');
+  }
+  const body = derivedDraftBody(args, 'createReplyAll');
+  const path = graphMailboxPath(mailboxId, `messages/${encodeURIComponent(messageId)}/createReplyAll`, policy);
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'createReplyAll_to_last_in_thread_requested', mailbox_id: mailboxId, conversation_id: conversationId, message_id: messageId });
+  const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'POST', path, body });
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'createReplyAll_to_last_in_thread_completed', mailbox_id: mailboxId, conversation_id: conversationId, message_id: messageId, draft_id: asRecord(graph).id ?? null });
+  return { schema: 'narada.graph_mail_mcp.draft.v1', status: 'created', source_message_id: messageId, draft: graph };
 }
 
 function derivedDraftBody(args: GraphMailRecord, action: 'createReply' | 'createReplyAll' | 'createForward'): GraphMailRecord {

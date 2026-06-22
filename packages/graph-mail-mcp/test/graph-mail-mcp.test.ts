@@ -91,6 +91,7 @@ try {
     'graph_mail_reply_draft_create',
     'graph_mail_reply_all_draft_create',
     'graph_mail_forward_draft_create',
+    'graph_mail_reply_all_to_last_in_thread_draft_create',
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
