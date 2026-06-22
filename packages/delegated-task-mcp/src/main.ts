@@ -73,6 +73,7 @@ type StepState = {
   blocked_by: string[];
   error: string | null;
   summary: string | null;
+  active_posture?: JsonRecord | null;
 };
 type AdvanceOptions = { waitUntilTerminal?: boolean; timeoutMs?: number; pollMs?: number };
 
@@ -165,7 +166,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const task = args.refresh === false ? readTask(state, taskId(args)) : await advanceTask(readTask(state, taskId(args)), state);
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, active_step_posture: activeStepPosture(task), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export function delegatedTaskValidate(args: JsonRecord, state: State): JsonRecord {
@@ -179,8 +180,8 @@ export async function delegatedTaskWait(args: JsonRecord, state: State): Promise
   const task = await advanceTask(readTask(state, taskId(args)), state, { waitUntilTerminal: true, timeoutMs, pollMs });
   const result = delegatedTaskResultView(task, state, args.include_diagnostics === true);
   const waitStatus = TERMINAL.has(task.status) ? 'finished' : 'timeout';
-  const response: JsonRecord = { schema: 'narada.delegated_task.wait.v1', status: waitStatus, elapsed_ms: Date.now() - started, timeout_ms: timeoutMs, poll_ms: pollMs, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, result };
-  if (waitStatus === 'timeout') response.timeout_diagnostics = { active_steps: activeStepIds(task), message: 'delegated_task_wait timed out before task reached a terminal status' };
+  const response: JsonRecord = { schema: 'narada.delegated_task.wait.v1', status: waitStatus, elapsed_ms: Date.now() - started, timeout_ms: timeoutMs, poll_ms: pollMs, task_id: task.task_id, task_status: task.status, progress: rec(task.result).progress, active_step_posture: activeStepPosture(task), result };
+  if (waitStatus === 'timeout') response.timeout_diagnostics = { active_steps: activeStepIds(task), active_step_posture: activeStepPosture(task), message: 'delegated_task_wait timed out before task reached a terminal status' };
   return response;
 }
 
@@ -393,6 +394,7 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
     const workerRef = summarizeWorkerRef({ id: stepState.step_id, kind: stepState.kind, profile: null, instruction: null, depends_on: [], if: null, acceptance_scope: [], constraints: {} }, statusResult);
     upsertWorkerRef(task, workerRef, statusResult);
     const refreshedStatus = String(statusResult.status ?? 'unknown');
+    stepState.active_posture = refreshedStatus === 'running' ? workerActivePosture(stepState, statusResult) : null;
     if (refreshedStatus === 'completed') {
       markStep(stepState, 'completed', opt(statusResult.summary));
       stepState.worker_session_id = opt(statusResult.worker_session_id);
@@ -440,6 +442,7 @@ async function launchWorkerStep(task: Task, state: State, step: WorkflowStep, st
   if (stepState.current_run_id) stepState.run_ids = uniqueStrings([...stepState.run_ids, stepState.current_run_id]);
   stepState.summary = opt(workerResult.summary);
   stepState.error = opt(workerResult.error);
+  stepState.active_posture = stepState.status === 'running' ? workerActivePosture(stepState, workerResult) : null;
   const workerRef = summarizeWorkerRef(step, workerResult);
   upsertWorkerRef(task, workerRef, workerResult);
   if (stepState.status === 'failed' && stepState.attempts <= executionPolicy(task).max_retries) {
@@ -855,6 +858,44 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
 function workerInstruction(task: Task, step: WorkflowStep): string { return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, `Step kind: ${step.kind}`, `Acceptance: ${JSON.stringify(task.acceptance)}`, 'Return a concise result with changes, verification, residual risks, and observed incoherencies.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord { return { total: Object.keys(states).length, ...stepStatusCounts(task, states), running_run_ids: Object.values(states).filter((step) => step.status === 'running').map((step) => step.current_run_id).filter(Boolean) }; }
 function activeStepIds(task: Task): string[] { return Object.entries(stepStateMap(task)).filter(([, step]) => step.status === 'running').map(([stepId]) => stepId); }
+function activeStepPosture(task: Task): JsonRecord[] { return Object.values(stepStateMap(task)).filter((step) => step.status === 'running').map((step) => step.active_posture ? rec(step.active_posture) : fallbackActivePosture(step)); }
+function fallbackActivePosture(step: StepState): JsonRecord { return { step_id: step.step_id, step_kind: step.kind, run_id: step.current_run_id, worker_session_id: step.worker_session_id, worker_status: 'running', status_liveness: 'unknown', latest_event_kind: null, latest_event_preview: null, heartbeat_age_ms: ageMs(step.started_at), expected_timeout_ms: null, deadline_at: null, deadline_in_ms: null, runtime: null, provider: null };
+}
+function workerActivePosture(step: StepState, result: JsonRecord): JsonRecord {
+  const progress = rec(result.progress);
+  const liveness = rec(result.status_liveness);
+  const resolvedConfig = rec(result.resolved_worker_config);
+  const timing = rec(result.timing);
+  const startedAt = opt(liveness.started_at) ?? opt(timing.started_at) ?? step.started_at;
+  const lastActivityAt = opt(liveness.last_activity_at) ?? opt(progress.latest_event_at) ?? startedAt;
+  const maxRunMs = numberOrNull(liveness.max_run_ms ?? resolvedConfig.max_run_ms);
+  const deadlineAt = startedAt && maxRunMs !== null ? isoAfter(startedAt, maxRunMs) : null;
+  return {
+    step_id: step.step_id,
+    step_kind: step.kind,
+    run_id: step.current_run_id,
+    worker_session_id: opt(result.worker_session_id) ?? step.worker_session_id,
+    worker_status: String(result.status ?? 'running'),
+    runtime: opt(result.runtime) ?? opt(resolvedConfig.runtime),
+    provider: opt(result.provider) ?? opt(resolvedConfig.provider),
+    status_liveness: opt(liveness.state) ?? 'unknown',
+    process_liveness: opt(liveness.process_liveness),
+    started_at: startedAt,
+    last_activity_at: lastActivityAt,
+    heartbeat_age_ms: ageMs(lastActivityAt),
+    latest_event_kind: opt(progress.latest_event_type),
+    latest_event_preview: opt(progress.latest_event_preview),
+    latest_event_at: opt(progress.latest_event_at),
+    event_count: typeof progress.event_count === 'number' ? progress.event_count : null,
+    expected_timeout_ms: maxRunMs,
+    deadline_at: deadlineAt,
+    deadline_in_ms: deadlineAt ? Math.max(0, Date.parse(deadlineAt) - Date.now()) : null,
+    stale_for_ms: numberOrNull(liveness.stale_for_ms),
+  };
+}
+function numberOrNull(value: unknown): number | null { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
+function ageMs(timestamp: string | null | undefined): number | null { const parsed = Date.parse(String(timestamp ?? '')); return Number.isFinite(parsed) ? Math.max(0, Date.now() - parsed) : null; }
+function isoAfter(timestamp: string, deltaMs: number): string | null { const parsed = Date.parse(timestamp); return Number.isFinite(parsed) ? new Date(parsed + deltaMs).toISOString() : null; }
 function stepStatusCounts(task: Task, states?: Record<string, StepState>): JsonRecord { const counts: Record<string, number> = {}; for (const step of Object.values(states ?? stepStateMap(task))) counts[step.status] = (counts[step.status] ?? 0) + 1; return counts; }
 function summaryForTask(task: Task, states: Record<string, StepState>, acceptance: { verdict: string }): string { const progress = progressSummary(task, states); return `delegated task ${task.status}; steps=${progress.total}; acceptance=${acceptance.verdict}`; }
 function stepCounts(workflow: JsonRecord): JsonRecord { const by_kind: Record<string, number> = {}; const steps = workflowSteps(workflow); for (const step of steps) by_kind[step.kind] = (by_kind[step.kind] ?? 0) + 1; return { total: steps.length, by_kind }; }

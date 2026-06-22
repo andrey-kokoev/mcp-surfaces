@@ -66,6 +66,12 @@ try {
         run_id: runId,
         run_dir: join(root, 'worker-runs', runId),
         worker_session_id: null,
+        runtime: 'codex',
+        provider: 'openai',
+        resolved_worker_config: { runtime: 'codex', provider: 'openai', max_run_ms: 600000 },
+        progress: { event_count: 2, latest_event_type: 'assistant.delta', latest_event_preview: `${runId} heartbeat`, latest_event_at: new Date().toISOString(), readable: true, tail_truncated: false },
+        status_liveness: { state: 'active', process_liveness: 'unknown', started_at: new Date().toISOString(), last_activity_at: new Date().toISOString(), max_run_ms: 600000, stale_for_ms: 0 },
+        timing: { started_at: new Date().toISOString(), finished_at: status === 'running' ? null : new Date().toISOString(), duration_ms: status === 'running' ? null : 1 },
         confidence: 'complete',
         summary: instruction.includes('fail once') ? 'fail once recovered' : `${runId} ${status}`,
         acceptance_verdict: instruction.includes('Step kind: review')
@@ -421,6 +427,16 @@ try {
   const limitedStatus = await callTool(state, 'delegated_task_status', { task_id: limitedView.task_id, refresh: false });
   const limitedStatusView = limitedStatus.result.structuredContent as Record<string, any>;
   assert.equal(limitedStatusView.acceptance_verdict, 'pending');
+  assert.equal(limitedStatusView.active_step_posture.length, 2);
+  assert.equal(limitedStatusView.active_step_posture[0].worker_status, 'running');
+  assert.equal(limitedStatusView.active_step_posture[0].status_liveness, 'active');
+  assert.equal(limitedStatusView.active_step_posture[0].runtime, 'codex');
+  assert.equal(limitedStatusView.active_step_posture[0].provider, 'openai');
+  assert.equal(limitedStatusView.active_step_posture[0].latest_event_kind, 'assistant.delta');
+  assert.match(limitedStatusView.active_step_posture[0].latest_event_preview, /heartbeat/);
+  assert.equal(typeof limitedStatusView.active_step_posture[0].heartbeat_age_ms, 'number');
+  assert.equal(limitedStatusView.active_step_posture[0].expected_timeout_ms, 600000);
+  assert.match(limitedStatusView.active_step_posture[0].deadline_at, /T/);
   const limitedResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, refresh: false, include_diagnostics: true });
   const limitedResultView = limitedResult.result.structuredContent as Record<string, any>;
   assert.equal(limitedResultView.result.acceptance_verdict, 'pending');
