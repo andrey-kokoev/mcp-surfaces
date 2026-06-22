@@ -42,6 +42,7 @@ try {
     'scheduler_task_show',
     'scheduler_task_create',
     'scheduler_task_delete',
+    'scheduler_task_update_action',
     'scheduler_task_enable',
     'scheduler_task_disable',
     'scheduler_task_run',

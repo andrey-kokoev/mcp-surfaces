@@ -1,7 +1,25 @@
 import assert from 'node:assert/strict';
-import { createServerState, handleRequest } from '../src/main.js';
+import { buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerFailureDetails } from '../src/main.js';
 
 const state = createServerState({});
+
+const grouped = compactScheduledTaskRows([
+  { TaskName: '\\Narada-Sonar-Daemon', Status: 'Ready', 'Schedule Type': 'At logon time', 'Next Run Time': 'N/A', 'Last Run Time': 'today', 'Last Result': '0', 'Task To Run': 'pwsh.exe' },
+  { TaskName: '\\Narada-Sonar-Daemon', Status: 'Ready', 'Schedule Type': 'One Time Only, Minute', 'Next Run Time': 'soon', 'Last Run Time': 'today', 'Last Result': '0', 'Task To Run': 'pwsh.exe', 'Repeat: Every': '5 minutes' },
+]);
+assert.equal(grouped.length, 1);
+assert.equal(grouped[0].task_name, '\\Narada-Sonar-Daemon');
+assert.equal(grouped[0].trigger_count, 2);
+assert.deepEqual((grouped[0].triggers as Record<string, unknown>[]).map((trigger) => trigger.schedule), ['At logon time', 'One Time Only, Minute']);
+
+const accessDenied = schedulerFailureDetails({ operation: 'create', exitCode: 1, stderr: 'ERROR: Access is denied.', taskName: '\\NeedsAdmin', command: 'pwsh.exe -File tool.ps1' });
+assert.equal(accessDenied.classification, 'requires_elevation');
+assert.equal(accessDenied.requires_elevation, true);
+assert.match(String(accessDenied.remediation), /elevated PowerShell/);
+
+const invalidArgs = schedulerFailureDetails({ operation: 'create', exitCode: 2147500037, stderr: '', taskName: '\\BadTask' });
+assert.equal(invalidArgs.classification, 'invalid_arguments_or_unsupported_scheduler_option');
+assert.equal(buildTaskRunCommand('pwsh.exe', '-File tool.ps1'), 'pwsh.exe -File tool.ps1');
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
   return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -31,5 +49,18 @@ if (knownTask) {
   const historyData = view(history);
   assert.ok(Array.isArray(historyData.items), 'history should return items');
 }
+
+const dryRunUpdate = await callTool('scheduler_task_update_action', {
+  task_name: '\\Narada-Sonar-Daemon',
+  command: 'pwsh.exe',
+  arguments: '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start',
+  working_dir: 'D:\\code\\narada.sonar',
+  dry_run: true,
+});
+const dryRunUpdateData = view(dryRunUpdate);
+assert.equal(dryRunUpdateData.status, 'planned');
+assert.equal(dryRunUpdateData.preserves_triggers, true);
+assert.deepEqual(dryRunUpdateData.schtasks_args.slice(0, 4), ['/change', '/tn', '\\Narada-Sonar-Daemon', '/tr']);
+assert.match(dryRunUpdateData.working_dir_warning, /cannot set Start In/);
 
 console.log('scheduler-mcp behavior ok');
