@@ -114,5 +114,8 @@ export type WorkerExecutorRequest = {
   intent: WorkerIntent;
   requested_mode: WorkerDelegationMode;
   preflight: WorkerPreflightCheck[];
+  requested_mcp_tools: string[];
+  mcp_tool_verification: Record<string, unknown>;
+  output_contract: Record<string, unknown>;
   resolved_execution_policy: WorkerResolvedExecutionPolicy;
 };

@@ -14,6 +14,9 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.worker.run.v1') return renderRun(record);
   if (record.schema === 'narada.worker.runs_list.v1') return renderRunsList(record);
   if (record.schema === 'narada.worker.run_wait.v1') return renderRunWait(record);
+  if (record.schema === 'narada.worker.run_batch.v1') return renderRunBatch(record);
+  if (record.schema === 'narada.worker.run_wait_batch.v1') return renderRunWaitBatch(record);
+  if (record.schema === 'narada.worker.runs_synthesis.v1') return renderRunsSynthesis(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
 }
 
@@ -125,6 +128,34 @@ function renderRunWait(record: Record<string, unknown>): string {
     `summary: ${run.summary ?? run.summary_preview ?? ''}`,
     run.progress_preview ? `progress: ${run.progress_preview}` : null,
     run.error_preview ? `error: ${run.error_preview}` : null,
+  ]);
+}
+
+function renderRunBatch(record: Record<string, unknown>): string {
+  return compactLines([
+    `worker_run_batch: ${record.status ?? ''}`,
+    `requested_count: ${record.requested_count ?? ''}`,
+    `started_count: ${record.started_count ?? ''}`,
+    `failed_count: ${record.failed_count ?? 0}`,
+    `run_ids: ${arrayList(record.run_ids)}`,
+  ]);
+}
+
+function renderRunWaitBatch(record: Record<string, unknown>): string {
+  return compactLines([
+    'worker_run_wait_batch: ok',
+    `requested_count: ${record.requested_count ?? ''}`,
+    `finished_count: ${record.finished_count ?? ''}`,
+    `timed_out_count: ${record.timed_out_count ?? 0}`,
+  ]);
+}
+
+function renderRunsSynthesis(record: Record<string, unknown>): string {
+  const synthesis = asRecord(record.synthesis);
+  return compactLines([
+    'worker_runs_synthesize: ok',
+    `requested_count: ${record.requested_count ?? ''}`,
+    `rows: ${arrayCount(synthesis.rows)}`,
   ]);
 }
 

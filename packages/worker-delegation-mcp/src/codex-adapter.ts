@@ -57,6 +57,19 @@ export function commandRequiresWindowsShell(command: string, platform: NodeJS.Pl
   return extension === '.cmd' || extension === '.bat' || extension === '.ps1';
 }
 
+function spawnCommandForInvocation(invocation: Invocation): { command: string; argv: string[]; shell: boolean } {
+  const extension = extname(invocation.command).toLowerCase();
+  if (process.platform === 'win32' && extension === '.ps1') {
+    const command = `& ${powershellSingleQuoted(invocation.command)} ${invocation.argv.map(powershellSingleQuoted).join(' ')}`;
+    return { command: 'powershell.exe', argv: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], shell: false };
+  }
+  return { command: invocation.command, argv: invocation.argv, shell: commandRequiresWindowsShell(invocation.command) };
+}
+
+function powershellSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 export async function runCodexInvocation(options: {
   invocation: Invocation;
   prompt: string;
@@ -71,10 +84,11 @@ export async function runCodexInvocation(options: {
       resolvePromise({ exit_code: null, signal: null, cancelled: true, worker_session_id: null, error: null, event_error: null, runtime_error: null });
       return;
     }
-    const child = spawn(options.invocation.command, options.invocation.argv, {
+    const spawnSpec = spawnCommandForInvocation(options.invocation);
+    const child = spawn(spawnSpec.command, spawnSpec.argv, {
       cwd: options.invocation.cwd,
       env: options.invocation.environment,
-      shell: commandRequiresWindowsShell(options.invocation.command),
+      shell: spawnSpec.shell,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -147,7 +161,7 @@ export async function runCodexInvocation(options: {
 export function parseLastMessage(path: string): WorkerOutputParseResult {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'));
+    parsed = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, reason: message.includes('ENOENT') ? 'missing_file' : 'invalid_json', message };

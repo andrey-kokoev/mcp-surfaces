@@ -49,6 +49,20 @@ export function listTools(): WorkerToolDefinition[] {
       summary_only: { type: 'boolean', description: 'Return only run id, status, summary, and error preview.' },
       verbose: { type: 'boolean', description: 'Include the full worker run payload as full_run.' },
     }, ['run_id']) },
+    { name: 'worker_run_batch', description: 'Start multiple worker runs from one request and return compact per-run status plus launch diagnostics.', inputSchema: objectSchema({
+      requests: { type: 'array', minItems: 1, maxItems: 50, items: objectSchema({ intent: intentSchema(), constraints: constraintRequestSchema() }, ['intent', 'constraints']) },
+      max_parallel_runs: { type: 'integer', minimum: 1, maximum: 50 },
+    }, ['requests']) },
+    { name: 'worker_run_wait_batch', description: 'Wait briefly for multiple worker runs and return compact per-run statuses plus normalized synthesis.', inputSchema: objectSchema({
+      run_ids: { type: 'array', minItems: 1, items: { type: 'string' } },
+      timeout_ms: { type: 'integer', minimum: 0, maximum: 300000 },
+      poll_ms: { type: 'integer', minimum: 25, maximum: 10000 },
+      summary_only: { type: 'boolean' },
+      verbose: { type: 'boolean' },
+    }, ['run_ids']) },
+    { name: 'worker_runs_synthesize', description: 'Return a normalized cross-worker synthesis for completed or running worker run ids.', inputSchema: objectSchema({
+      run_ids: { type: 'array', minItems: 1, items: { type: 'string' } },
+    }, ['run_ids']) },
   ]);
 }
 
@@ -144,12 +158,12 @@ function decorateTools(tools: WorkerToolDefinition[]): WorkerToolDefinition[] {
 }
 
 function toolAnnotations(name: string) {
-  const startsWorker = name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume';
+  const startsWorker = name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_batch';
   return {
     title: name,
     readOnlyHint: !startsWorker,
     destructiveHint: false,
-    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait/.test(name),
+    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait|synthesize/.test(name),
     openWorldHint: true,
   };
 }
@@ -160,7 +174,21 @@ function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();
   if (name === 'worker_run_wait') return workerRunWaitOutputSchema();
   if (name === 'worker_runs_list') return workerRunsListOutputSchema();
+  if (name === 'worker_run_batch') return batchOutputSchema('narada.worker.run_batch.v1');
+  if (name === 'worker_run_wait_batch') return batchOutputSchema('narada.worker.run_wait_batch.v1');
+  if (name === 'worker_runs_synthesize') return batchOutputSchema('narada.worker.runs_synthesis.v1');
   return { type: 'object', additionalProperties: true };
+}
+
+function batchOutputSchema(schemaConst: string): Record<string, unknown> {
+  return objectSchema({
+    schema: { type: 'string', const: schemaConst },
+    status: { type: 'string' },
+    runs: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    synthesis: { type: 'object', additionalProperties: true },
+    failures: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    run_ids: stringArraySchema(),
+  }, ['schema', 'status']);
 }
 
 function workerConfigResolveOutputSchema(): Record<string, unknown> {
@@ -173,6 +201,9 @@ function workerConfigResolveOutputSchema(): Record<string, unknown> {
     resolved_worker_config: { type: 'object', additionalProperties: true },
     invocation: { type: 'object', additionalProperties: true },
     preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
+    requested_mcp_tools: stringArraySchema(),
+    mcp_tool_verification: { type: 'object', additionalProperties: true },
+    output_contract: { type: 'object', additionalProperties: true },
     runtime_availability: { type: 'object', additionalProperties: true },
     config_resolution: { type: 'object', additionalProperties: true },
     warnings: stringArraySchema(),
@@ -225,6 +256,9 @@ function workerRunOutputSchema(): Record<string, unknown> {
     blocked_paths: stringArraySchema(),
     verification: stringArraySchema(),
     runtime_warnings: stringArraySchema(),
+    requested_mcp_tools: stringArraySchema(),
+    mcp_tool_verification: { type: 'object', additionalProperties: true },
+    output_contract: { type: 'object', additionalProperties: true },
     warning_count: { type: 'integer' },
     preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
     final_checklist: stringArraySchema(),

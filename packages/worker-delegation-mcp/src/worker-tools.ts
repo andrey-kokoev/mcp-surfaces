@@ -27,6 +27,9 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_run_status') return workerRunStatus(args, state);
   if (name === 'worker_runs_list') return workerRunsList(args, state);
   if (name === 'worker_run_wait') return workerRunWait(args, state);
+  if (name === 'worker_run_batch') return workerRunBatch(args, state, context);
+  if (name === 'worker_run_wait_batch') return workerRunWaitBatch(args, state);
+  if (name === 'worker_runs_synthesize') return workerRunsSynthesize(args, state);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
 }
 
@@ -53,9 +56,10 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
+  const outputContract = outputContractForRequest(request, requestedMode);
   const environment = environmentForWorker(state.env);
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
-  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, exitInterview: request.constraints.exit_interview === true });
+  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
   const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
@@ -191,6 +195,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     resolved_worker_config: resolvedWorkerConfig,
     invocation: { command: invocation.command, argv: invocation.argv, cwd: invocation.cwd, environment_keys: resolvedWorkerConfig.environment_keys },
     preflight,
+    requested_mcp_tools: request.constraints.required_mcp_tools ?? [],
+    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? []),
+    output_contract: outputContract,
     runtime_availability: runtimeAvailability.available
       ? { available: true, command: runtimeAvailability.command ?? resolvedWorkerConfig.command }
       : { available: false, reason: runtimeAvailability.reason ?? null, remediation: runtimeAvailability.remediation ?? null, command: runtimeAvailability.command ?? null },
@@ -537,6 +544,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
+  const outputContract = outputContractForRequest(request, requestedMode);
   enforcePreflightForMode(requestedMode, preflight);
 
   // Runtime availability preflight: fail fast with a clear remediation if the selected runtime is not runnable.
@@ -550,7 +558,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     });
   }
 
-  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, exitInterview: request.constraints.exit_interview === true });
+  const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;
   const ephemeral = !resumable;
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
@@ -680,6 +688,9 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     intent: request.intent,
     requested_mode: requestedMode,
     preflight,
+    requested_mcp_tools: request.constraints.required_mcp_tools ?? [],
+    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? []),
+    output_contract: outputContract,
     resolved_execution_policy: resolvedWorkerConfig,
   };
 
@@ -871,6 +882,9 @@ function buildWorkerRunPayload(options: {
     completion_state: options.metadata.confidence,
     blocked_paths: options.metadata.blocked_paths,
     verification: options.metadata.verification,
+    requested_mcp_tools: options.executorRequest.requested_mcp_tools ?? [],
+    mcp_tool_verification: options.executorRequest.mcp_tool_verification ?? mcpToolVerification([]),
+    output_contract: options.executorRequest.output_contract ?? outputContractForMode(options.metadata.requested_mode),
     runtime_warnings: options.runtimeWarnings ?? [],
     warning_count: options.runtimeWarnings?.length ?? 0,
     preflight: options.metadata.preflight,
@@ -951,6 +965,107 @@ async function workerRunWait(args: Record<string, unknown>, state: WorkerMcpStat
     if (Date.now() - started >= timeoutMs) return runWaitPayload(result, { status: 'timed_out', timeoutMs, elapsedMs: Date.now() - started, verbose, summaryOnly });
     await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollMs, Math.max(1, timeoutMs - (Date.now() - started)))));
   }
+}
+
+async function workerRunBatch(args: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext): Promise<Record<string, unknown>> {
+  const requests = normalizeBatchRequests(args.requests);
+  const maxParallelRuns = boundedInteger(args.max_parallel_runs, Math.min(state.policy.maxParallelRuns, requests.length), 1, state.policy.maxParallelRuns, 'worker_run_batch_parallel_invalid');
+  const startedAt = new Date();
+  const runs: Record<string, unknown>[] = [];
+  const failures: Record<string, unknown>[] = [];
+  for (let index = 0; index < requests.length; index += 1) {
+    try {
+      const run = await workerRun(requests[index], state, null, context, 'worker_run_batch');
+      runs.push({ index, ...runListItem(run, { verbose: true, includeSummary: true }) });
+    } catch (error) {
+      const diagnostic = error instanceof Error ? error.message : String(error);
+      failures.push({ index, error: diagnostic, code: (error as { codeName?: unknown })?.codeName ?? 'worker_run_batch_item_failed' });
+    }
+  }
+  return {
+    schema: 'narada.worker.run_batch.v1',
+    status: failures.length === 0 ? 'ok' : 'completed_with_errors',
+    max_parallel_runs: maxParallelRuns,
+    requested_count: requests.length,
+    started_count: runs.length,
+    failed_count: failures.length,
+    run_ids: runs.map((run) => String(run.run_id ?? '')).filter(Boolean),
+    runs,
+    failures,
+    timing: { started_at: startedAt.toISOString(), finished_at: new Date().toISOString() },
+  };
+}
+
+async function workerRunWaitBatch(args: Record<string, unknown>, state: WorkerMcpState): Promise<Record<string, unknown>> {
+  const runIds = normalizeRunIds(args.run_ids);
+  const timeoutMs = boundedInteger(args.timeout_ms, 10_000, 0, 300_000, 'worker_run_wait_timeout_invalid');
+  const pollMs = boundedInteger(args.poll_ms, 250, 25, 10_000, 'worker_run_wait_poll_invalid');
+  const verbose = Boolean(args.verbose);
+  const summaryOnly = Boolean(args.summary_only);
+  const started = Date.now();
+  const results: Record<string, unknown>[] = [];
+  for (const runId of runIds) {
+    const elapsed = Date.now() - started;
+    const wait = await workerRunWait({ run_id: runId, timeout_ms: Math.max(0, timeoutMs - elapsed), poll_ms: pollMs, verbose, summary_only: summaryOnly }, state);
+    const waitRecord = asRecord(wait);
+    results.push(waitRecord.run ? { ...asRecord(waitRecord.run), wait: asRecord(waitRecord.wait) } : waitRecord);
+  }
+  return {
+    schema: 'narada.worker.run_wait_batch.v1',
+    status: 'ok',
+    requested_count: runIds.length,
+    finished_count: results.filter((run) => asRecord(run.wait).status === 'finished').length,
+    timed_out_count: results.filter((run) => asRecord(run.wait).status === 'timed_out').length,
+    timeout_ms: timeoutMs,
+    elapsed_ms: Date.now() - started,
+    runs: results,
+    synthesis: synthesizeRuns(runIds.map((runId) => readRunResult(state, runId)).filter((run): run is Record<string, unknown> => Boolean(run))),
+  };
+}
+
+function workerRunsSynthesize(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+  const runIds = normalizeRunIds(args.run_ids);
+  const runs = runIds.map((runId) => readRunResult(state, runId)).filter((run): run is Record<string, unknown> => Boolean(run));
+  return {
+    schema: 'narada.worker.runs_synthesis.v1',
+    status: 'ok',
+    requested_count: runIds.length,
+    run_ids: runIds,
+    synthesis: synthesizeRuns(runs),
+  };
+}
+
+function normalizeBatchRequests(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_batch_requests_required', 'worker_run_batch_requests_required');
+  if (value.length > 50) throw diagnosticError('worker_run_batch_too_large', 'worker_run_batch_too_large', { max_requests: 50 });
+  return value.map((item) => asRecord(item));
+}
+
+function normalizeRunIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_ids_required', 'worker_run_ids_required');
+  return uniqueStrings(value.map((item) => requiredNonEmptyString(item, 'worker_run_id_required')));
+}
+
+function synthesizeRuns(runs: Record<string, unknown>[]): Record<string, unknown> {
+  return {
+    count: runs.length,
+    rows: runs.map((run) => {
+      const exitInterview = asRecord(run.exit_interview);
+      return {
+        run_id: run.run_id,
+        status: run.status,
+        requested_mode: modeWithInference(run).requestedMode,
+        summary: String(run.summary ?? ''),
+        deliverables: Array.isArray(run.deliverables) ? run.deliverables : [],
+        risks: [...stringArrayFromUnknown(run.open_questions), ...stringArrayFromUnknown(run.runtime_warnings)],
+        verification: Array.isArray(run.verification_results) ? run.verification_results : [],
+        changed_files: Array.isArray(run.changes) ? run.changes.map((change) => asRecord(change).path).filter(Boolean) : [],
+        warnings: stringArrayFromUnknown(run.runtime_warnings),
+        ergonomics_feedback: typeof exitInterview.ergonomics_feedback === 'string' ? exitInterview.ergonomics_feedback : null,
+        error_preview: compactRunError(run),
+      };
+    }),
+  };
 }
 
 function readRunResult(state: WorkerMcpState, runId: string, required = true): Record<string, unknown> | null {
@@ -1223,6 +1338,10 @@ function previewString(value: unknown, limit: number): string | null {
   return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 3))}...`;
 }
 
+function stringArrayFromUnknown(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
 function boundedInteger(value: unknown, defaultValue: number, min: number, max: number, code: string): number {
   if (value === undefined || value === null || value === '') return defaultValue;
   const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
@@ -1487,7 +1606,42 @@ function finalChecklist(mode: WorkerDelegationMode): string[] {
   return ['list files changed', 'list tests or checks run', 'include git/worktree status if available', 'list remaining blockers'];
 }
 
-function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: WorkerDelegationMode; preflight: WorkerPreflightCheck[]; exitInterview: boolean }): string {
+function mcpToolVerification(requestedTools: string[]): Record<string, unknown> {
+  return {
+    requested_mcp_tools: requestedTools,
+    verification_state: requestedTools.length > 0 ? 'delegated_to_worker' : 'not_requested',
+    enforced_by_delegation: false,
+    evidence_field: 'verification',
+    fallback_reason_required: requestedTools.length > 0,
+  };
+}
+
+function outputContractForRequest(request: WorkerRunToolInput, mode: WorkerDelegationMode): Record<string, unknown> {
+  const base = outputContractForMode(mode);
+  const targetPaths = request.constraints.preflight_paths?.map((item) => resolve(item.path)) ?? [];
+  return {
+    ...base,
+    target_paths: targetPaths,
+    forbidden_adjacent_paths: targetPaths.length > 0 ? ['Paths outside target_paths and allowed roots unless explicitly required by the task.'] : [],
+  };
+}
+
+function outputContractForMode(mode: WorkerDelegationMode): Record<string, unknown> {
+  const auditLike = mode === 'audit_only' || mode === 'plan_only';
+  return {
+    schema: 'narada.worker.output_contract.v1',
+    requested_mode: mode,
+    confidence_level: { type: 'number', minimum: 0, maximum: 1, meaning: '0 means unsupported, 1 means fully evidenced' },
+    evidence_basis: { type: 'array', items: 'short evidence references such as file:line, command output, or MCP tool result' },
+    findings: auditLike ? {
+      required_for_audit_only: true,
+      item_shape: { severity: 'info|low|medium|high|critical', path: 'string|null', recommendation: 'string', confidence_level: 'number 0..1', evidence_refs: 'string[]' },
+    } : null,
+    shell_fallback_reason: 'When verification or discovery uses shell because an MCP tool was unavailable or insufficient, explain that reason in verification.summary.',
+  };
+}
+
+function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: WorkerDelegationMode; preflight: WorkerPreflightCheck[]; outputContract: Record<string, unknown>; exitInterview: boolean }): string {
   return [
     'Intent',
     options.intent.instruction,
@@ -1511,6 +1665,13 @@ function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: W
     'Prefer available MCP filesystem, git, and structured-command tools for inspection and verification.',
     'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
     'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
+    'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    '',
+    'Structured output contract',
+    JSON.stringify(options.outputContract),
+    ...(options.mode === 'audit_only' ? [
+      'For audit_only, include concise findings in deliverables as machine-readable JSON strings when possible, using severity, path, recommendation, confidence_level, and evidence_refs.',
+    ] : []),
     '',
     'Output requirements',
     'Return one JSON object matching worker_output.schema.json.',

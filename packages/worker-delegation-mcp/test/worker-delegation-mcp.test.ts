@@ -16,10 +16,10 @@ const root = mkdtempSync(join(tmpdir(), 'worker-delegation-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
-const fakeCodexScript = join(root, 'exec');
-const fakeCodexErrorScript = join(root, 'exec-error-with-output');
-const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure');
-const fakeAgentRuntimeServerScript = join(root, 'agent-runtime-server');
+const fakeCodexScript = join(root, 'exec.cjs');
+const fakeCodexErrorScript = join(root, 'exec-error-with-output.cjs');
+const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure.cjs');
+const fakeAgentRuntimeServerScript = join(root, 'agent-runtime-server.cjs');
 const platformRootCase = process.platform === 'win32' ? root.toUpperCase() : root;
 writeFileSync(fakeCodexScript, `
 const fs = require('fs');
@@ -118,6 +118,7 @@ const state = createServerState({
   runRoot,
   auditLogDir,
   codexCommand: process.execPath,
+  codexCommandArgs: [fakeCodexScript],
   maxOutputBytes: 2 * 1024 * 1024,
 }, { PATH: process.env.PATH, KIMI_CODE_API_KEY: 'kimi-secret-must-not-leak', WORKER_SECRET: 'must-not-leak' });
 
@@ -131,6 +132,9 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_run_status',
   'worker_runs_list',
   'worker_run_wait',
+  'worker_run_batch',
+  'worker_run_wait_batch',
+  'worker_runs_synthesize',
 ]);
 for (const tool of tools.result?.tools ?? []) {
   assert.equal(tool.outputSchema?.type, 'object', tool.name);
@@ -147,6 +151,11 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.ou
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait_batch.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.some((tool) => tool.name === 'worker_output_show'), false);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.authority?.enum, ['read', 'write', 'command']);
 assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
@@ -213,6 +222,10 @@ assert.equal(configPreview.result?.structuredContent.resolved_worker_config.mode
 assert.equal(configPreview.result?.structuredContent.config_resolution.model_source, 'runtime_default_opaque');
 assert.equal(configPreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'runtime_default_opaque');
 assert.equal(configPreview.result?.structuredContent.runtime_availability.available, true);
+assert.deepEqual(configPreview.result?.structuredContent.requested_mcp_tools, ['mcp__narada_andrey_local_filesystem']);
+assert.equal(configPreview.result?.structuredContent.mcp_tool_verification.verification_state, 'delegated_to_worker');
+assert.equal(configPreview.result?.structuredContent.output_contract.schema, 'narada.worker.output_contract.v1');
+assert.equal(configPreview.result?.structuredContent.output_contract.findings.required_for_audit_only, true);
 assert.equal(configPreview.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
 assert.equal(JSON.stringify(configPreview.result?.structuredContent).includes('kimi-secret-must-not-leak'), false);
 assert.match(configPreview.result?.structuredContent.invocation.argv.join(' '), /<dry-run>\/worker_output\.schema\.json/);
@@ -323,9 +336,9 @@ Write-Output '{"thread_id":"ps1-thread"}'
   @SET "NODE_PATH=${root}\\node_modules"
 )
 @IF EXIST "%~dp0\\node.exe" (
-  "%~dp0\\node.exe" "%~dp0\\..\\agent-runtime-server" %*
+  "%~dp0\\node.exe" "%~dp0\\..\\agent-runtime-server.cjs" %*
 ) ELSE (
-  node "%~dp0\\..\\agent-runtime-server" %*
+  node "%~dp0\\..\\agent-runtime-server.cjs" %*
 )
 `, 'utf8');
   const agentRuntimeShimState = createServerState({
@@ -515,7 +528,7 @@ assert.equal(resolvedConfig.runtime, 'codex');
 assert.equal(resolvedConfig.authority, 'read');
 assert.equal(resolvedConfig.cognition, 'low');
 assert.equal(resolvedConfig.command, process.execPath);
-assert.deepEqual(resolvedConfig.command_args, []);
+assert.deepEqual(resolvedConfig.command_args, [fakeCodexScript]);
 assert.equal(resolvedConfig.resumable, false);
 assert.equal(resolvedConfig.ephemeral, true);
 assert.equal(resolvedConfig.config.model, 'gpt-test');
@@ -533,7 +546,8 @@ assert.equal(executorRequest.resolved_execution_policy.cwd, root);
 assert.equal(executorRequest.resolved_execution_policy.authority, 'read');
 assert.equal(executorRequest.resolved_execution_policy.cognition, 'low');
 const invocation = JSON.parse(readFileSync(join(completedRunDir, 'worker_invocation.json'), 'utf8'));
-assert.equal(invocation.argv[0], 'exec');
+assert.equal(invocation.argv[0], fakeCodexScript);
+assert.equal(invocation.argv[1], 'exec');
 assert.equal(invocation.argv.includes('--ephemeral'), true);
 assert.equal(invocation.argv.includes('--json'), true);
 assert.equal(invocation.argv.at(-1), '-');
@@ -594,6 +608,25 @@ assert.match(String(directStatus.result?.structuredContent.progress.latest_event
 assert.equal(directStatus.result?.structuredContent.exit_interview, null);
 assert.equal(directStatus.result?.structuredContent.artifact_readback.readable_via_worker_delegation, true);
 assert.equal(directStatus.result?.structuredContent.artifact_readback.local_filesystem_access_required, false);
+const batchRun = await rpc({ jsonrpc: '2.0', id: 52311, method: 'tools/call', params: { name: 'worker_run_batch', arguments: { requests: [
+  { intent: { instruction: 'batch one' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
+  { intent: { instruction: 'batch two' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['local-filesystem.fs_read_file'] } },
+] } } }, state);
+assert.equal(batchRun.result?.structuredContent.schema, 'narada.worker.run_batch.v1');
+assert.equal(batchRun.result?.structuredContent.status, 'ok');
+assert.equal(batchRun.result?.structuredContent.run_ids.length, 2);
+const batchWait = await rpc({ jsonrpc: '2.0', id: 52312, method: 'tools/call', params: { name: 'worker_run_wait_batch', arguments: { run_ids: batchRun.result?.structuredContent.run_ids, timeout_ms: 0, summary_only: true } } }, state);
+assert.equal(batchWait.result?.structuredContent.schema, 'narada.worker.run_wait_batch.v1');
+assert.equal(batchWait.result?.structuredContent.finished_count, 2);
+assert.equal(batchWait.result?.structuredContent.synthesis.rows.length, 2);
+assert.equal(batchWait.result?.structuredContent.synthesis.rows[1].verification[0].tool, 'fake-codex');
+const batchSynthesis = await rpc({ jsonrpc: '2.0', id: 52313, method: 'tools/call', params: { name: 'worker_runs_synthesize', arguments: { run_ids: batchRun.result?.structuredContent.run_ids } } }, state);
+assert.equal(batchSynthesis.result?.structuredContent.schema, 'narada.worker.runs_synthesis.v1');
+assert.equal(batchSynthesis.result?.structuredContent.synthesis.rows[0].summary, 'worker ok');
+const batchSecondStatus = await rpc({ jsonrpc: '2.0', id: 52314, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: batchRun.result?.structuredContent.run_ids[1] } } }, state);
+assert.deepEqual(batchSecondStatus.result?.structuredContent.requested_mcp_tools, ['local-filesystem.fs_read_file']);
+assert.equal(batchSecondStatus.result?.structuredContent.mcp_tool_verification.fallback_reason_required, true);
+assert.equal(batchSecondStatus.result?.structuredContent.output_contract.confidence_level.minimum, 0);
 const exitInterviewRun = await rpc({ jsonrpc: '2.0', id: 5233, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'ask for ergonomics feedback' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, exit_interview: true } } } }, state);
 assert.equal(exitInterviewRun.result?.structuredContent.status, 'completed');
 assert.equal(exitInterviewRun.result?.structuredContent.exit_interview.ergonomics_feedback, 'fake worker found the exit interview easy to answer');
@@ -930,7 +963,7 @@ const defaultEditRun = await rpc({
 assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, null);
 assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
 
-const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), codexCommand: process.execPath, cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
+const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
 const customLowCognition = await rpc({
   jsonrpc: '2.0',
   id: 562,
@@ -964,7 +997,7 @@ assert.equal(editSessionRecord.origin_tool, 'worker_edit');
 assert.equal(editSessionRecord.resolved_worker_config.authority, 'write');
 assert.equal(editSessionRecord.resolved_worker_config.cognition, 'low');
 assert.equal(editSessionRecord.resolved_worker_config.model, null);
-const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath }, { PATH: process.env.PATH });
+const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] }, { PATH: process.env.PATH });
 const resumedEdit = await rpc({
   jsonrpc: '2.0',
   id: 565,
@@ -1076,7 +1109,8 @@ assert.equal(deepseekUnavailable.error?.data.code, 'worker_runtime_unavailable')
 assert.match(String(deepseekUnavailable.error?.data.details.reason), /DEEPSEEK_API_KEY/);
 
 const eventRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-bad-event-'));
-writeFileSync(join(eventRoot, 'exec'), `
+const badEventScript = join(eventRoot, 'exec.cjs');
+writeFileSync(badEventScript, `
 const fs = require('fs');
 const args = process.argv.slice(2);
 const lastMessagePath = args[args.indexOf('-o') + 1];
@@ -1086,7 +1120,7 @@ process.stdin.on('end', () => {
   fs.writeFileSync(lastMessagePath, JSON.stringify({ summary: 'ok', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [] }));
 });
 `, 'utf8');
-const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), codexCommand: process.execPath });
+const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), codexCommand: process.execPath, codexCommandArgs: [badEventScript] });
 const badEvent = await rpc({
   jsonrpc: '2.0',
   id: 62,
@@ -1137,7 +1171,8 @@ assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check)
 assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check) => check.name === 'mode_authority_alignment'), true);
 
 const runtimeErrorRoot = mkdtempSync(join(tmpdir(), 'worker-delegation-runtime-error-'));
-writeFileSync(join(runtimeErrorRoot, 'exec'), `
+const runtimeErrorScript = join(runtimeErrorRoot, 'exec.cjs');
+writeFileSync(runtimeErrorScript, `
 process.stdin.resume();
 process.stdin.on('end', () => {
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'thread-runtime-error' }) + '\\n');
@@ -1145,7 +1180,7 @@ process.stdin.on('end', () => {
   process.exit(1);
 });
 `, 'utf8');
-const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), codexCommand: process.execPath });
+const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), codexCommand: process.execPath, codexCommandArgs: [runtimeErrorScript] });
 const runtimeError = await rpc({
   jsonrpc: '2.0',
   id: 63,
