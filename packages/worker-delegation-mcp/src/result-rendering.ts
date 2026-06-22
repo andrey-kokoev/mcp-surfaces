@@ -22,6 +22,7 @@ function renderConfigResolve(record: Record<string, unknown>): string {
   const invocation = asRecord(record.invocation);
   const runtimeAvailability = asRecord(record.runtime_availability);
   const configResolution = asRecord(record.config_resolution);
+  const siteBinding = asRecord(resolved.site_binding);
   return compactLines([
     'worker_config_resolve: ok',
     `runtime: ${resolved.runtime ?? ''}`,
@@ -32,6 +33,13 @@ function renderConfigResolve(record: Record<string, unknown>): string {
     `model_source: ${configResolution.model_source ?? ''}`,
     `reasoning_effort: ${resolved.reasoning_effort ?? 'null'}`,
     `reasoning_effort_source: ${configResolution.reasoning_effort_source ?? ''}`,
+    resolved.runtime === 'narada-agent-runtime-server' ? `site_bound: ${Boolean(resolved.site_bound)}` : null,
+    resolved.runtime === 'narada-agent-runtime-server' ? `site_root: ${resolved.site_root ?? 'missing'}` : null,
+    resolved.runtime === 'narada-agent-runtime-server' ? `workspace_root: ${resolved.workspace_root ?? 'missing'}` : null,
+    siteBinding.source ? `site_root_source: ${siteBinding.source}` : null,
+    siteBinding.matched_marker ? `site_matched_marker: ${siteBinding.matched_marker}` : null,
+    siteBinding.required_markers ? `site_required_markers: ${arrayList(siteBinding.required_markers)}` : null,
+    resolved.runtime === 'narada-agent-runtime-server' ? `site_environment: NARADA_SITE_ROOT=${arrayIncludes(resolved.environment_keys, 'NARADA_SITE_ROOT')} NARADA_WORKSPACE_ROOT=${arrayIncludes(resolved.environment_keys, 'NARADA_WORKSPACE_ROOT')} NARADA_AGENT_ID=${arrayIncludes(resolved.environment_keys, 'NARADA_AGENT_ID')} NARADA_CARRIER_SESSION_ID=${arrayIncludes(resolved.environment_keys, 'NARADA_CARRIER_SESSION_ID')}` : null,
     `runtime_available: ${runtimeAvailability.available ?? false}`,
     runtimeAvailability.reason ? `runtime_reason: ${runtimeAvailability.reason}` : null,
     `command: ${invocation.command ?? ''}`,
@@ -42,12 +50,16 @@ function renderConfigResolve(record: Record<string, unknown>): string {
 }
 
 function renderPolicy(record: Record<string, unknown>): string {
+  const narsSiteSemantics = asRecord(record.nars_site_semantics);
   return compactLines([
     'worker_policy: ok',
     `default_runtime: ${record.default_runtime ?? ''}`,
     `run_root: ${record.run_root ?? ''}`,
     `allowed_roots: ${arrayCount(record.allowed_roots)}`,
     `allowed_runtimes: ${arrayCount(record.allowed_runtimes)}`,
+    `nars_site_bound: ${asRecord(record.runtimes)['narada-agent-runtime-server'] ? asRecord(asRecord(record.runtimes)['narada-agent-runtime-server']).site_bound ?? false : false}`,
+    `nars_site_markers: ${arrayList(asRecord(asRecord(record.runtimes)['narada-agent-runtime-server']).site_root_markers)}`,
+    narsSiteSemantics.remediation ? `nars_site_remediation: ${narsSiteSemantics.remediation}` : null,
     `allowed_sandboxes: ${arrayList(record.allowed_sandboxes)}`,
     `allowed_config_keys: ${arrayList(record.allowed_config_keys)}`,
     `allow_raw_config_overrides: ${record.allow_raw_config_overrides ?? false}`,
@@ -118,6 +130,10 @@ function renderRunWait(record: Record<string, unknown>): string {
 
 function arrayCount(value: unknown): number {
   return Array.isArray(value) ? value.length : 0;
+}
+
+function arrayIncludes(value: unknown, item: string): boolean {
+  return Array.isArray(value) && value.includes(item);
 }
 
 function arrayList(value: unknown): string {

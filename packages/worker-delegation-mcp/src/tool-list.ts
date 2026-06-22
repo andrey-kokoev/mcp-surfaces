@@ -8,8 +8,8 @@ type WorkerToolDefinition = {
 
 export function listTools(): WorkerToolDefinition[] {
   return decorateTools([
-    { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy.', inputSchema: objectSchema({}) },
-    { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker.', inputSchema: objectSchema({
+    { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
+    { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker, including narada-agent-runtime-server Site binding status.', inputSchema: objectSchema({
       worker_session_id: { type: 'string', description: 'Optional existing worker session whose constraints should be inherited like worker_resume.' },
       intent: intentSchema(),
       constraints: constraintRequestSchema(),
@@ -197,6 +197,7 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
     allowed_config_keys: stringArraySchema(),
     allow_raw_config_overrides: { type: 'boolean' },
     allow_danger_full_access: { type: 'boolean' },
+    nars_site_semantics: { type: 'object', additionalProperties: true },
     max_parallel_runs: { type: 'integer' },
     max_prompt_bytes: { type: 'integer' },
     max_output_bytes: { type: 'integer' },
@@ -242,8 +243,8 @@ function workerRunOutputSchema(): Record<string, unknown> {
     }, additionalProperties: false },
     progress: progressPreviewSchema(),
     artifacts: { type: 'array', items: objectSchema({ name: { type: 'string' }, path: { type: 'string' } }, ['name', 'path']) },
-    timing: { type: 'object', additionalProperties: true },
     artifact_readback: { type: 'object', additionalProperties: true },
+    timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
     worker_output_error: { type: 'object', additionalProperties: true },
     diagnostic_tail: nullableStringSchema(),

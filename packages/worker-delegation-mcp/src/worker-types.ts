@@ -88,6 +88,10 @@ export type WorkerResolvedExecutionPolicy = {
   argv: string[];
   cwd: string;
   site_root?: string;
+  site_bound?: boolean;
+  site_marker?: string | null;
+  site_root_source?: 'explicit' | 'nearest_marker';
+  site_binding?: Record<string, unknown>;
   workspace_root?: string;
   sandbox: SandboxMode;
   model: string | null;

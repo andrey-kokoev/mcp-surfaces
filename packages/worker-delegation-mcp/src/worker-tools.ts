@@ -207,7 +207,7 @@ function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: str
     source: siteBinding.source === 'explicit' ? 'constraints.site_root' : 'nearest_parent_marker',
     matched_marker: siteBinding.marker,
     required_markers: [...NARADA_SITE_ROOT_MARKERS],
-    environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT'],
+    environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
     remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
   };
 }

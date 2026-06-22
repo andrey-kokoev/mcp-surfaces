@@ -188,7 +188,7 @@ assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].id, 'deep
 assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].default_sandbox, 'read-only');
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
@@ -431,6 +431,7 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_confi
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.source, 'nearest_parent_marker');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.matched_marker, '.narada/');
 assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.required_markers, ['.narada/', '.ai/mcp/']);
+assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_binding.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID']);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.workspace_root, root);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
@@ -442,7 +443,7 @@ assert.match(agentRuntimeResolve.result?.content[0].text, /workspace_root: /);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_root_source: nearest_parent_marker/);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_matched_marker: \.narada\//);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_required_markers: \.narada\/,.ai\/mcp\//);
-assert.match(agentRuntimeResolve.result?.content[0].text, /site_environment: NARADA_SITE_ROOT=true NARADA_WORKSPACE_ROOT=true/);
+assert.match(agentRuntimeResolve.result?.content[0].text, /site_environment: NARADA_SITE_ROOT=true NARADA_WORKSPACE_ROOT=true NARADA_AGENT_ID=true NARADA_CARRIER_SESSION_ID=true/);
 const agentRuntimeRun = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime worker', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeRun.result?.structuredContent.status, 'completed');
 assert.equal(agentRuntimeRun.result?.structuredContent.runtime, 'narada-agent-runtime-server');
