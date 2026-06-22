@@ -48,6 +48,11 @@ try {
   assert.equal(view(create).version, 1);
   assert.equal(view(create).step_count, 3);
 
+  const doctor = await call('sop_doctor', {});
+  assert.equal(view(doctor).schema, 'narada.sop.doctor.v1');
+  assert.equal(view(doctor).full_step_definitions_path, 'structuredContent.steps');
+  assert.equal((view(doctor).recovery_tools as string[]).includes('sop_template_export'), true);
+
   const dup = await call('sop_template_create', {
     sop_id: 'site-onboarding',
     title: 'Site Onboarding SOP v2',
@@ -60,10 +65,18 @@ try {
   assert.equal(view(show).sop_id, 'site-onboarding');
   assert.equal(view(show).version, 2);
   assert.equal(view(show).title, 'Site Onboarding SOP v2');
+  assert.equal(view(show).schema, 'narada.sop.template.v1');
+  assert.equal(view(show).render_mode, 'summary_text_with_full_structured_content');
+  assert.equal(view(show).full_step_definitions_path, 'structuredContent.steps');
+  assert.equal((view(show).steps as Array<Record<string, any>>)[0].instructions, 'Just this.');
 
   const showV1 = await call('sop_template_show', { sop_id: 'site-onboarding', version: 1 });
   assert.equal(view(showV1).version, 1);
   assert.equal(view(showV1).title, 'Site Onboarding SOP');
+  const exportV1 = await call('sop_template_export', { sop_id: 'site-onboarding', version: 1 });
+  assert.equal(view(exportV1).export_schema, 'narada.sop.template_export.v1');
+  assert.equal(JSON.parse(view(exportV1).raw.steps_json).length, 3);
+  assert.equal((view(exportV1).steps as Array<Record<string, any>>)[0].cwd, null);
 
   const list = await call('sop_template_list', {});
   assert.equal((view(list).items as Array<unknown>).length >= 1, true);

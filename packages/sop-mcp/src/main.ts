@@ -29,6 +29,9 @@ type SopState = {
 };
 
 type SopTemplate = {
+  schema: string;
+  render_mode: string;
+  full_step_definitions_path: string;
   sop_id: string;
   version: number;
   title: string;
@@ -62,6 +65,7 @@ type SopRun = {
   sop_title: string;
   status: string;
   step_states: SopStepState[];
+  step_states_parse_error?: string | null;
   trigger_source_kind: string;
   trigger_source_ref: string;
   triggered_by: string;
@@ -222,6 +226,13 @@ async function dispatchMethod(method: string, params: JsonRecord, state: SopStat
 export function listTools() {
   return [
     {
+      name: 'sop_doctor',
+      description: 'Inspect SOP MCP server posture, build/schema metadata, database path, and available recovery tools.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { title: 'sop_doctor', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'sop_template_create',
       description: 'Create a new versioned SOP template with ordered steps.',
       inputSchema: {
@@ -273,6 +284,21 @@ export function listTools() {
         additionalProperties: false,
       },
       annotations: { title: 'sop_template_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_template_export',
+      description: 'Export one SOP template version with raw persisted JSON and full parsed step definitions for recovery workflows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sop_id: { type: 'string' },
+          version: { type: 'number', description: 'Specific version; defaults to latest.' },
+        },
+        required: ['sop_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_template_export', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -476,8 +502,10 @@ async function callTool(params: JsonRecord, state: SopState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'sop_doctor': result = sopDoctor(state); break;
     case 'sop_template_create': result = sopTemplateCreate(args, state); break;
     case 'sop_template_show': result = sopTemplateShow(args, state); break;
+    case 'sop_template_export': result = sopTemplateExport(args, state); break;
     case 'sop_template_list': result = sopTemplateList(args, state); break;
     case 'sop_template_search': result = sopTemplateSearch(args, state); break;
     case 'sop_template_import_yaml': result = sopTemplateImportYaml(args, state); break;
@@ -522,6 +550,41 @@ function sopTemplateShow(args: JsonRecord, state: SopState) {
     : state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? ORDER BY version DESC LIMIT 1').get(sopId) as JsonRecord | undefined;
   if (!row) throw diagnosticError('sop_not_found', `sop_not_found:${sopId}${version ? `@v${version}` : ''}`);
   return hydrateTemplate(row);
+}
+
+function sopTemplateExport(args: JsonRecord, state: SopState) {
+  const sopId = requiredString(args.sop_id, 'sop_requires_sop_id');
+  const version = args.version !== undefined && args.version !== null ? Number(args.version) : undefined;
+  const row = version !== undefined
+    ? state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? AND version = ?').get(sopId, version) as JsonRecord | undefined
+    : state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? ORDER BY version DESC LIMIT 1').get(sopId) as JsonRecord | undefined;
+  if (!row) throw diagnosticError('sop_not_found', `sop_not_found:${sopId}${version ? `@v${version}` : ''}`);
+  return {
+    ...hydrateTemplate(row),
+    export_schema: 'narada.sop.template_export.v1',
+    raw: {
+      steps_json: String(row.steps_json),
+      acceptance_criteria_json: String(row.acceptance_criteria_json),
+      evidence_requirements_json: String(row.evidence_requirements_json),
+    },
+  };
+}
+
+function sopDoctor(state: SopState): JsonRecord {
+  return {
+    schema: 'narada.sop.doctor.v1',
+    status: 'ok',
+    server_name: state.serverName,
+    server_version: SERVER_VERSION,
+    protocol_version: PROTOCOL_VERSION,
+    template_response_schema: 'narada.sop.template.v1',
+    template_show_render_mode: 'summary_text_with_full_structured_content',
+    full_step_definitions_path: 'structuredContent.steps',
+    recovery_tools: ['sop_template_show', 'sop_template_export'],
+    sop_root: state.sopRoot,
+    db_path: resolve(state.sopRoot, '.sop', 'sop.db'),
+    sops_dirs: state.sopsDirs,
+  };
 }
 
 function sopTemplateList(args: JsonRecord, state: SopState) {
@@ -732,6 +795,8 @@ async function sopRunAdvance(args: JsonRecord, state: SopState) {
   const run = hydrateRun(row);
   if (RUN_TERMINAL.has(run.status)) throw diagnosticError('sop_run_terminal', `sop_run_terminal:${runId}`, { status: run.status });
   const stepStates = run.step_states;
+  if (run.step_states_parse_error) throw diagnosticError('sop_run_corrupt', `sop_run_corrupt:${runId}`, { reason: run.step_states_parse_error });
+  if (!Array.isArray(stepStates) || (stepStates.length === 0 && !RUN_TERMINAL.has(run.status))) throw diagnosticError('sop_run_corrupt', `sop_run_corrupt:${runId}`, { reason: 'step_states missing or empty for non-terminal run' });
   const target = stepStates.find((s) => s.step_id === stepId);
   if (!target) throw diagnosticError('sop_step_not_found', `sop_step_not_found:${stepId}`);
   if (!target.blocking) throw diagnosticError('sop_step_not_blocking', `sop_step_not_blocking:${stepId}`, { blocking: target.blocking });
@@ -930,6 +995,9 @@ function hydrateTemplate(row: JsonRecord): SopTemplate {
   const steps: JsonRecord[] = JSON.parse(String(row.steps_json));
   const migrated = steps.map(migrateStep);
   return {
+    schema: 'narada.sop.template.v1',
+    render_mode: 'summary_text_with_full_structured_content',
+    full_step_definitions_path: 'structuredContent.steps',
     sop_id: String(row.sop_id),
     version: Number(row.version),
     title: String(row.title),
@@ -962,13 +1030,28 @@ function migrateStep(step: JsonRecord): SopStep {
 }
 
 function hydrateRun(row: JsonRecord): SopRun {
+  let stepStates: SopStepState[];
+  let parseError: string | null = null;
+  try {
+    const parsed = JSON.parse(String(row.step_states_json));
+    if (!Array.isArray(parsed)) {
+      parseError = 'step_states_json is not an array';
+      stepStates = [];
+    } else {
+      stepStates = parsed;
+    }
+  } catch (e) {
+    parseError = String(e instanceof Error ? e.message : e);
+    stepStates = [];
+  }
   return {
     run_id: String(row.run_id),
     sop_id: String(row.sop_id),
     sop_version: Number(row.sop_version),
     sop_title: String(row.sop_title),
     status: String(row.status),
-    step_states: JSON.parse(String(row.step_states_json)),
+    step_states: stepStates,
+    step_states_parse_error: parseError,
     trigger_source_kind: String(row.trigger_source_kind),
     trigger_source_ref: String(row.trigger_source_ref),
     triggered_by: String(row.triggered_by),
@@ -1036,7 +1119,9 @@ function renderResult(result: JsonRecord): string {
       `title: ${result.title ?? ''}`,
       `description: ${String(result.description ?? '').slice(0, 120)}`,
       `trigger: ${result.trigger_kind ?? ''}`,
-      `steps: ${(result.steps as JsonRecord[]).map((s: JsonRecord) => `${s.id} (${s.executor}${s.blocking ? ':block' : ''})`).join(', ')}`,
+      `render_mode: ${result.render_mode ?? 'summary_text'}`,
+      `full_step_definitions: ${result.full_step_definitions_path ?? 'structuredContent.steps'}`,
+      `steps_summary: ${(result.steps as JsonRecord[]).map((s: JsonRecord) => `${s.id} (${s.executor}${s.blocking ? ':block' : ''})`).join(', ')}`,
       result.acceptance_criteria ? `criteria: ${JSON.stringify(result.acceptance_criteria)}` : '',
     ].filter(Boolean).join('\n');
   }

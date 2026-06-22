@@ -38,8 +38,10 @@ try {
 
   const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
   const expectedTools = [
+    'sop_doctor',
     'sop_template_create',
     'sop_template_show',
+    'sop_template_export',
     'sop_template_list',
     'sop_template_search',
     'sop_template_update',
