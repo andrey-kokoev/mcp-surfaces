@@ -1027,43 +1027,37 @@ try {
   assert.equal(timedOutView.timeout_diagnostics.next_action, 'wait_or_refresh_running_workers');
   await callTool(state, 'delegated_task_cancel', { task_id: timeoutTask.task_id, reason: 'caller stopped timeout test' });
 
-  const readOnlyRefreshRunCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
+  const autoAdvanceRefreshRunCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
   const readOnlyRefreshStatusCalls = workerCalls.filter((call) => call.name === 'worker_run_status').length;
   const readOnlyRefreshRun = await callTool(state, 'delegated_task_run', {
-    objective: 'Refresh running worker without scheduling dependent step',
+    objective: 'Refresh running worker and schedule dependent step',
     constraints: { authority: 'read', cwd: root },
     workflow: {
       steps: [
-        { id: 'first', kind: 'worker', instruction: 'async worker read-only refresh first' },
-        { id: 'second', kind: 'worker', depends_on: ['first'], instruction: 'second worker should not start from status refresh' },
+        { id: 'first', kind: 'worker', instruction: 'async worker auto-advance refresh first' },
+        { id: 'second', kind: 'worker', depends_on: ['first'], instruction: 'second worker should start from status refresh' },
       ],
     },
   });
   const readOnlyRefreshTask = readOnlyRefreshRun.result.structuredContent as Record<string, any>;
   assert.equal(readOnlyRefreshTask.task_status, 'running');
-  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - autoAdvanceRefreshRunCalls, 1);
   const staleStatus = await callTool(state, 'delegated_task_status', { task_id: readOnlyRefreshTask.task_id });
   const staleStatusView = staleStatus.result.structuredContent as Record<string, any>;
   assert.equal(staleStatusView.task_status, 'running');
   assert.equal(workerCalls.filter((call) => call.name === 'worker_run_status').length, readOnlyRefreshStatusCalls);
   const refreshedStatus = await callTool(state, 'delegated_task_status', { task_id: readOnlyRefreshTask.task_id, refresh: true });
   const refreshedStatusView = refreshedStatus.result.structuredContent as Record<string, any>;
-  assert.equal(refreshedStatusView.step_status_counts.completed, 1);
-  assert.equal(refreshedStatusView.step_status_counts.pending, 1);
-  assert.equal(refreshedStatusView.scheduler_state.state, 'ready_pending_steps');
-  assert.deepEqual(refreshedStatusView.scheduler_state.ready_step_ids, ['second']);
-  assert.equal(refreshedStatusView.operator_posture.next_action, 'advance_ready_steps');
-  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
+  assert.equal(refreshedStatusView.task_status, 'completed');
+  assert.equal(refreshedStatusView.step_status_counts.completed, 2);
+  assert.equal(refreshedStatusView.scheduler_state.state, 'terminal_no_active_execution');
+  assert.deepEqual(refreshedStatusView.scheduler_state.ready_step_ids, []);
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - autoAdvanceRefreshRunCalls, 2);
   const refreshedResult = await callTool(state, 'delegated_task_result', { task_id: readOnlyRefreshTask.task_id, refresh: true, include_diagnostics: true });
   const refreshedResultView = refreshedResult.result.structuredContent as Record<string, any>;
   assert.equal(refreshedResultView.result.step_states.first.status, 'completed');
-  assert.equal(refreshedResultView.result.step_states.second.status, 'pending');
-  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 1);
-  const advancedReady = await callTool(state, 'delegated_task_advance', { task_id: readOnlyRefreshTask.task_id });
-  const advancedReadyView = advancedReady.result.structuredContent as Record<string, any>;
-  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - readOnlyRefreshRunCalls, 2);
-  assert.equal(advancedReadyView.task_status, 'completed');
-  assert.deepEqual(advancedReadyView.scheduler_state.ready_step_ids, []);
+  assert.equal(refreshedResultView.result.step_states.second.status, 'completed');
+  assert.equal(workerCalls.filter((call) => call.name === 'worker_run').length - autoAdvanceRefreshRunCalls, 2);
 
   const retryRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise retry repair',

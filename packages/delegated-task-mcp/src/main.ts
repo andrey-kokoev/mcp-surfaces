@@ -138,12 +138,12 @@ export function listTools() {
     tool('delegated_task_template_catalog', 'List built-in delegated workflow templates, milestones, and worker delegation contracts.', { template_id: { type: 'string' } }, [], true, false, true),
     tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema() }, [], true, false, true),
     tool('delegated_task_run', 'Create and optionally start a durable delegated workflow task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), idempotency_key: { type: 'string' } }, [], false, false, false),
-    tool('delegated_task_status', 'Return compact delegated task status. Set refresh=true to update already-running worker steps without scheduling new steps.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
+    tool('delegated_task_status', 'Return compact delegated task status. Set refresh=true to refresh running workers and schedule any newly ready steps once.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
     tool('delegated_task_advance', 'Explicitly advance a delegated task by refreshing workers and scheduling ready pending steps once.', { task_id: { type: 'string' }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], false, false, false),
     tool('delegated_task_wait', 'Wait for a delegated task to advance toward terminal status.', { task_id: { type: 'string' }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 30000 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
     tool('delegated_tasks_list', 'List delegated tasks by lifecycle and site scope. Defaults to the current site active_queue when a site can be resolved.', { limit: { type: 'integer', minimum: 1, maximum: 200, default: 20 }, view: { type: 'string', enum: ['active_queue', 'operator_inbox', 'history', 'acknowledged_archive', 'all'], default: 'active_queue' }, site_scope: { type: 'string', enum: ['current_site', 'all_sites', 'user_global'], description: 'current_site is the default when a current site is known. all_sites/user_global must be requested explicitly for shared queues and legacy records.' }, owner_site_id: { type: 'string', description: 'Optional owner-site filter. Requires site_scope=all_sites or user_global when it differs from the current site.' }, include_terminal: { type: 'boolean', default: false, description: 'Legacy lifecycle filter override. Prefer view.' }, include_active: { type: 'boolean', default: true, description: 'Legacy lifecycle filter override. Prefer view.' }, include_acknowledged: { type: 'boolean', default: false } }, [], true, false, true),
-    tool('delegated_task_result', 'Return delegated task result handoff. Set refresh=true to update already-running worker steps without scheduling new steps.', { task_id: { type: 'string' }, include_diagnostics: { type: 'boolean', default: false }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
-    tool('delegated_task_summary', 'Return a compact human review summary for one delegated task. Set refresh=true to update already-running worker steps without scheduling new steps.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
+    tool('delegated_task_result', 'Return delegated task result handoff. Set refresh=true to refresh running workers and schedule any newly ready steps once.', { task_id: { type: 'string' }, include_diagnostics: { type: 'boolean', default: false }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
+    tool('delegated_task_summary', 'Return a compact human review summary for one delegated task. Set refresh=true to refresh running workers and schedule any newly ready steps once.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
     tool('delegated_task_events', 'List delegated task events.', { task_id: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 }, offset: { type: 'integer', minimum: 0, default: 0 } }, ['task_id'], true, false, true),
     tool('delegated_task_cancel', 'Cancel a nonterminal delegated task. Known cross-site ownership requires allow_cross_site=true.', { task_id: { type: 'string' }, reason: { type: 'string' }, expected_owner_site_id: { type: 'string' }, allow_cross_site: { type: 'boolean', default: false } }, ['task_id'], false, true, false),
     tool('delegated_task_acknowledge', 'Acknowledge a terminal delegated task and move it into the archive projection. Known cross-site ownership requires allow_cross_site=true.', { task_id: { type: 'string' }, acknowledged_by: { type: 'string' }, note: { type: 'string' }, expected_owner_site_id: { type: 'string' }, allow_cross_site: { type: 'boolean', default: false } }, ['task_id'], false, false, false),
@@ -199,7 +199,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
-  const task = args.refresh === true ? await refreshTaskStatus(before, state) : before;
+  const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
   return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
@@ -274,13 +274,13 @@ export function delegatedTaskPolicyInspect(state: State): JsonRecord {
 
 export async function delegatedTaskResult(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
-  const task = args.refresh === true ? await refreshTaskStatus(before, state) : before;
+  const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
   return delegatedTaskResultView(task, state, args.include_diagnostics === true);
 }
 
 export async function delegatedTaskSummary(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
-  const task = args.refresh === true ? await refreshTaskStatus(before, state) : before;
+  const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
   return {
     schema: 'narada.delegated_task.summary.v1',
     status: 'ok',
