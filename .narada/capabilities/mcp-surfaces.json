@@ -1,0 +1,118 @@
+{
+  "schema": "narada.site.capabilities.mcp_surfaces.v1",
+  "site_id": "mcp-surfaces",
+  "generated_by": "tools/mcp-fabric/generate-mcp-surface-registry.mjs",
+  "generated_at": "2026-06-09T03:30:28.891Z",
+  "generation_policy": {
+    "source": ".ai/mcp",
+    "mode": "conservative_transport_authority",
+    "note": "This registry binds live MCP client configs to Site authority. It may declare narrowly inferred read-only startup/lifecycle tools; all other tools remain unlisted until explicitly classified."
+  },
+  "surfaces": [
+    {
+      "surface_id": "agent-context-mcp.local",
+      "display_name": "mcp-surfaces-agent-context",
+      "server_name": "mcp-surfaces-agent-context",
+      "authority_boundary": {
+        "posture": "generated_conservative_transport_registry",
+        "grants_tool_authority": true,
+        "granted_tool_authority_kind": "read_only_declared_startup_or_lifecycle_contract"
+      },
+      "client_config": {
+        "generated_path": ".ai/mcp/mcp-surfaces-agent-context-mcp.json",
+        "generated_file": "mcp-surfaces-agent-context-mcp.json"
+      },
+      "tool_contract": {
+        "read_only_tools": [
+          "agent_context_doctor",
+          "agent_context_whoami",
+          "agent_context_hydrate_current",
+          "agent_context_startup_sequence",
+          "agent_context_rehydrate",
+          "agent_context_list_sessions"
+        ],
+        "mutating_tools": [
+          "agent_context_start_session",
+          "agent_context_checkpoint"
+        ],
+        "refused_tools": []
+      },
+      "registered_live_tools": []
+    },
+    {
+      "surface_id": "filesystem-mcp.local",
+      "display_name": "mcp-surfaces-filesystem",
+      "server_name": "mcp-surfaces-filesystem",
+      "authority_boundary": {
+        "posture": "generated_conservative_transport_registry",
+        "grants_tool_authority": true,
+        "granted_tool_authority_kind": "read_only_declared_filesystem_contract"
+      },
+      "client_config": {
+        "generated_path": ".ai/mcp/mcp-surfaces-filesystem-mcp.json",
+        "generated_file": "mcp-surfaces-filesystem-mcp.json"
+      },
+      "tool_contract": {
+        "read_only_tools": [
+          "fs_read_file",
+          "fs_read_file_range",
+          "fs_stat",
+          "fs_glob_search",
+          "fs_grep_search",
+          "fs_doctor"
+        ],
+        "mutating_tools": [],
+        "refused_tools": []
+      },
+      "registered_live_tools": []
+    },
+    {
+      "surface_id": "shell-mcp.local",
+      "display_name": "mcp-surfaces-shell",
+      "server_name": "mcp-surfaces-shell",
+      "authority_boundary": {
+        "posture": "generated_conservative_transport_registry",
+        "grants_tool_authority": false,
+        "granted_tool_authority_kind": "none"
+      },
+      "client_config": {
+        "generated_path": ".ai/mcp/mcp-surfaces-shell-mcp.json",
+        "generated_file": "mcp-surfaces-shell-mcp.json"
+      },
+      "tool_contract": {
+        "read_only_tools": [],
+        "mutating_tools": [],
+        "refused_tools": []
+      },
+      "registered_live_tools": []
+    },
+    {
+      "surface_id": "task-lifecycle-mcp.local",
+      "display_name": "mcp-surfaces-task-lifecycle",
+      "server_name": "mcp-surfaces-task-lifecycle",
+      "authority_boundary": {
+        "posture": "generated_conservative_transport_registry",
+        "grants_tool_authority": true,
+        "granted_tool_authority_kind": "read_only_declared_startup_or_lifecycle_contract"
+      },
+      "client_config": {
+        "generated_path": ".ai/mcp/mcp-surfaces-task-lifecycle-mcp.json",
+        "generated_file": "mcp-surfaces-task-lifecycle-mcp.json"
+      },
+      "tool_contract": {
+        "read_only_tools": [
+          "task_lifecycle_audit",
+          "task_lifecycle_inspect",
+          "task_lifecycle_list",
+          "task_lifecycle_next",
+          "task_lifecycle_obligations",
+          "task_lifecycle_roster",
+          "task_lifecycle_show"
+        ],
+        "mutating_tools": [],
+        "refused_tools": []
+      },
+      "registered_live_tools": []
+    }
+  ]
+}
