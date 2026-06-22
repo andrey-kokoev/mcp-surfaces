@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -178,6 +178,18 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
+function isNaradaSiteRoot(path: string): boolean {
+  return isDirectory(join(path, '.narada')) || isDirectory(join(path, '.ai', 'mcp'));
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function runtimeList(value: unknown): WorkerRuntimeId[] {
   const list = stringList(value).map((runtime) => {
     if (!isWorkerRuntime(runtime)) throw diagnosticError('worker_runtime_not_allowed', 'worker_runtime_not_allowed', { runtime });
@@ -286,6 +298,26 @@ export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): s
     throw diagnosticError('worker_cwd_outside_allowed_roots', 'worker_cwd_outside_allowed_roots', { cwd, allowed_roots: policy.allowedRoots });
   }
   return cwd;
+}
+
+export function resolveNaradaSiteRoot(cwd: string, policy: WorkerPolicy, explicitSiteRoot?: unknown): string {
+  if (explicitSiteRoot !== undefined && explicitSiteRoot !== null && String(explicitSiteRoot).trim()) {
+    const siteRoot = resolveWorkingDirectory(explicitSiteRoot, policy);
+    if (!isNaradaSiteRoot(siteRoot)) {
+      throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', { cwd, site_root: siteRoot, explicit: true });
+    }
+    return siteRoot;
+  }
+
+  let current = resolve(cwd);
+  while (true) {
+    if (isNaradaSiteRoot(current)) return current;
+    const parent = dirname(current);
+    if (parent === current) break;
+    if (!policy.allowedRoots.some((root) => areSamePath(parent, root) || isPathInside(parent, root))) break;
+    current = parent;
+  }
+  throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', { cwd, explicit: false, remediation: 'Run narada-agent-runtime-server workers from inside a Narada Site or pass constraints.site_root.' });
 }
 
 export function validateRuntime(value: unknown, policy: WorkerPolicy): WorkerRuntimeId {

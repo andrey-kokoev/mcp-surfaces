@@ -22,10 +22,11 @@ export function buildAgentRuntimeServerArgv(options: {
 }
 
 export function buildInvocation(resolvedWorkerConfig: ResolvedWorkerConfig, environment: Record<string, string>): Invocation {
+  const naradaConfig = resolvedWorkerConfig as ResolvedWorkerConfig & { site_root?: string; workspace_root?: string };
   const serverEnvironment = {
     ...environment,
-    NARADA_SITE_ROOT: environment.NARADA_SITE_ROOT || resolvedWorkerConfig.cwd,
-    NARADA_WORKSPACE_ROOT: environment.NARADA_WORKSPACE_ROOT || resolvedWorkerConfig.cwd,
+    NARADA_SITE_ROOT: environment.NARADA_SITE_ROOT || naradaConfig.site_root || resolvedWorkerConfig.cwd,
+    NARADA_WORKSPACE_ROOT: environment.NARADA_WORKSPACE_ROOT || naradaConfig.workspace_root || resolvedWorkerConfig.cwd,
   };
   const commandArgs = [...resolvedWorkerConfig.command_args];
   let command = resolvedWorkerConfig.command;

@@ -13,6 +13,7 @@ type RpcResponse = {
 };
 
 const root = mkdtempSync(join(tmpdir(), 'worker-delegation-'));
+mkdirSync(join(root, '.narada'), { recursive: true });
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec');
@@ -413,6 +414,9 @@ const agentRuntimeState = createServerState({
 const agentRuntimeResolve = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: runArgs('server runtime resolve', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
 assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.argv, ['--raw-jsonl']);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_root, root);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.workspace_root, root);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_SITE_ROOT'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
 const agentRuntimeRun = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime worker', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeRun.result?.structuredContent.status, 'completed');
@@ -422,8 +426,22 @@ assert.equal(agentRuntimeRun.result?.structuredContent.summary, 'agent runtime w
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.command, process.execPath);
 assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.command_args, [fakeAgentRuntimeServerScript]);
 assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.argv, ['--raw-jsonl']);
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.site_root, root);
 assert.equal(agentRuntimeRun.result?.structuredContent.verification_results[0].tool, 'fake-agent-runtime-server');
 assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
+const nonSiteRoot = join(root, 'not-a-site-outside-site-root');
+mkdirSync(nonSiteRoot, { recursive: true });
+const nonSiteState = createServerState({
+  allowedRoot: nonSiteRoot,
+  runRoot: join(root, 'non-site-runs'),
+  agentRuntimeServerCommand: process.execPath,
+  agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+});
+const nonSiteResolve = await rpc({ jsonrpc: '2.0', id: 503, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
+  intent: { instruction: 'server runtime outside site' },
+  constraints: { cwd: nonSiteRoot, authority: 'read', cognition: 'low', wait_for_completion: true, overrides: { runtime: 'narada-agent-runtime-server' } },
+} } }, nonSiteState);
+assert.equal(nonSiteResolve.error?.data.code, 'worker_narada_site_root_not_found');
 
 if (process.platform === 'win32') {
   const caseInsensitiveRun = await rpc({

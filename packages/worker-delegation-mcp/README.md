@@ -69,7 +69,7 @@ Defaults:
 - max output bytes: `2097152`
 - max run time: `1800000` ms
 
-Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_BASE_URL`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY`, and `NARADA_WORKER_MCP_CONFIG` when present. The `narada-agent-runtime-server` adapter also projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from `cwd` when absent. Run records store environment key names, not secret values.
+Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_BASE_URL`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY`, and `NARADA_WORKER_MCP_CONFIG` when present. For `narada-agent-runtime-server`, worker-delegation resolves a real Narada Site root before launch and projects `NARADA_SITE_ROOT` plus `NARADA_WORKSPACE_ROOT` into the worker environment. Run records store environment key names, not secret values.
 
 ## Run
 
@@ -104,7 +104,7 @@ Common flags:
 Agents should use `worker_policy_inspect` before delegating. A delegation request separates non-mechanically-enforceable intent from mechanically-enforceable constraints:
 
 - `intent.instruction`: what the worker is asked to do and how it should report. This is prompt intent, not enforcement.
-- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `authority` selects read, write, or command capability, `cognition` selects the default model and reasoning tier, `resumable` controls whether the returned session can be continued, `wait_for_completion` controls whether the MCP call blocks, and `overrides` carries explicit low-level execution overrides when policy admits them.
+- `constraints`: the executable bounds the server validates or applies. `cwd` selects the worker directory, `site_root` optionally selects the Narada Site root for `narada-agent-runtime-server`, `authority` selects read, write, or command capability, `cognition` selects the default model and reasoning tier, `resumable` controls whether the returned session can be continued, `wait_for_completion` controls whether the MCP call blocks, and `overrides` carries explicit low-level execution overrides when policy admits them.
 
 The worker MCP surface enforces constraints and records the resolved executor request. It does not admit worker output as task evidence, close work, or create Narada role authority by itself.
 
@@ -129,6 +129,7 @@ Delegation mode is explicit intent, not mechanical authority. `intent.mode` may 
 - `intent.step_kind` (string, optional): `"worker"` for delegated work.
 - `intent.acceptance` (object, optional): acceptance criteria such as `required_files`.
 - `constraints.cwd` (string, required): working directory inside an allowed root.
+- `constraints.site_root` (string, optional): explicit Narada Site root for `narada-agent-runtime-server`; when omitted, the nearest parent Site marker above `cwd` is used.
 - `constraints.authority` (string, default `"read"`): `"read"`, `"write"`, or `"command"`.
 - `constraints.cognition` (string, default `"low"`): `"low"`, `"medium"`, or `"high"`.
 - `constraints.resumable` (boolean, default `false`): enable continuation via `worker_resume`.
@@ -137,7 +138,7 @@ Delegation mode is explicit intent, not mechanical authority. `intent.mode` may 
 - `constraints.preflight_paths` (array, optional): path existence/access checks before delegation.
 - `constraints.required_mcp_tools` (array, optional): MCP tool names the worker must have.
 
-`worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, `instruction`, optional `resumable`, optional `wait_for_completion`, and optional `overrides`, then mechanically compiles to `authority: "write"`, `cognition: "low"`, and `mode: "implement"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
+`worker_edit` is only MCP surface sugar: it accepts top-level `cwd`, optional `site_root`, `instruction`, optional `resumable`, optional `wait_for_completion`, and optional `overrides`, then mechanically compiles to `authority: "write"`, `cognition: "low"`, and `mode: "implement"`. It may use the worker runtime's admitted tools and MCP surfaces; use deterministic filesystem MCP tools when the requested operation is a direct file mutation rather than delegated agent work. Do not ask a worker to call `worker_run`, `worker_edit`, `worker_resume`, or other `worker_*` tools.
 
 When a resumable run completes, the server records a session entry under `run_root/sessions`. `worker_resume` uses that entry to inherit the original authority, cognition, sandbox, model, reasoning effort, and config unless the caller explicitly overrides them. This keeps resumable `worker_edit` sessions on write authority and low cognition across continuations and MCP restarts.
 

@@ -42,6 +42,7 @@ export type WorkerProgressPreview = {
 
 export type WorkerConstraintRequest = {
   cwd: string;
+  site_root?: string;
   authority?: string;
   cognition?: string;
   resumable?: boolean;
@@ -68,6 +69,7 @@ export type WorkerRunToolInput = {
 
 export type WorkerEditToolInput = {
   cwd: string;
+  site_root?: string;
   instruction: string;
   resumable?: boolean;
   wait_for_completion?: boolean;
@@ -85,6 +87,8 @@ export type WorkerResolvedExecutionPolicy = {
   command_args: string[];
   argv: string[];
   cwd: string;
+  site_root?: string;
+  workspace_root?: string;
   sandbox: SandboxMode;
   model: string | null;
   reasoning_effort: string | null;
