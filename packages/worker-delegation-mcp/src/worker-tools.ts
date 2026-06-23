@@ -2,8 +2,7 @@ import { constants, accessSync, closeSync, existsSync, mkdirSync, openSync, read
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { diagnosticError } from './errors.js';
-import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput } from './codex-adapter.js';
-import { buildDeepseekArgv, buildInvocation as deepseekBuildInvocation, runDeepseekInvocation } from './deepseek-adapter.js';
+import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput, type WorkerOutputParseResult } from './codex-adapter.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
 import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
@@ -75,40 +74,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
-  if (runtime === 'deepseek-api') {
-    const deepseekRuntime = state.policy.runtimes.deepseek;
-    const mcpConfigPath = environment.NARADA_WORKER_MCP_CONFIG || null;
-    const argv = buildDeepseekArgv({
-      schemaPath: dryRunPaths.schemaPath,
-      lastMessagePath: dryRunPaths.lastMessagePath,
-      model: resolvedConfigInput.model,
-      reasoningEffort: resolvedConfigInput.reasoning_effort,
-      mcpConfigPath,
-      workerSessionId: resumeSessionId ?? undefined,
-    });
-    resolvedWorkerConfig = {
-      runtime: 'deepseek-api',
-      authority,
-      cognition,
-      command: runtimeAvailability.command ?? deepseekRuntime.command,
-      command_args: deepseekRuntime.commandArgs,
-      argv,
-      cwd,
-      sandbox,
-      model: resolvedConfigInput.model,
-      reasoning_effort: resolvedConfigInput.reasoning_effort,
-      config: resolvedConfigInput.config,
-      skip_git_repo_check: skipGitRepoCheck,
-      resumable,
-      ephemeral,
-      json_events: deepseekRuntime.jsonEvents,
-      prompt_byte_length: promptBytes,
-      max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
-      environment_keys: Object.keys(environment).sort(),
-    };
-    invocation = deepseekBuildInvocation(resolvedWorkerConfig, environment);
-  } else if (runtime === 'narada-agent-runtime-server') {
+  if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
     const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
     const siteRoot = resolvedSiteBinding.siteRoot;
@@ -669,41 +635,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
 
-  if (runtime === 'deepseek-api') {
-    const deepseekRuntime = state.policy.runtimes.deepseek;
-    const mcpConfigPath = environment.NARADA_WORKER_MCP_CONFIG || null;
-    const argv = buildDeepseekArgv({
-      schemaPath: runRecord.schemaPath,
-      lastMessagePath: runRecord.lastMessagePath,
-      model: resolvedConfigInput.model,
-      reasoningEffort: resolvedConfigInput.reasoning_effort,
-      mcpConfigPath,
-      workerSessionId: resumeSessionId ?? undefined,
-    });
-    const baseConfig: ResolvedWorkerConfig = {
-      runtime: 'deepseek-api',
-      authority,
-      cognition,
-      command: runtimeAvailability.command ?? deepseekRuntime.command,
-      command_args: deepseekRuntime.commandArgs,
-      argv,
-      cwd,
-      sandbox,
-      model: resolvedConfigInput.model,
-      reasoning_effort: resolvedConfigInput.reasoning_effort,
-      config: resolvedConfigInput.config,
-      skip_git_repo_check: skipGitRepoCheck,
-      resumable,
-      ephemeral,
-      json_events: deepseekRuntime.jsonEvents,
-      prompt_byte_length: promptBytes,
-      max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
-      environment_keys: Object.keys(environment).sort(),
-    };
-    resolvedWorkerConfig = baseConfig;
-    invocation = deepseekBuildInvocation(baseConfig, environment);
-  } else if (runtime === 'narada-agent-runtime-server') {
+  if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
     const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
     const siteRoot = resolvedSiteBinding.siteRoot;
@@ -880,9 +812,7 @@ async function completeWorkerRun(options: {
 }): Promise<Record<string, unknown>> {
   const { state, runRecord, invocation, prompt, resolvedWorkerConfig, runtime, resumeSessionId, resumable, startedAt, executorRequest, auditTool } = options;
   try {
-  const runner = runtime === 'deepseek-api'
-    ? runDeepseekInvocation
-    : runtime === 'narada-agent-runtime-server'
+  const runner = runtime === 'narada-agent-runtime-server'
       ? runAgentRuntimeServerInvocation
       : runCodexInvocation;
   const codexResult = await runner({
@@ -899,6 +829,14 @@ async function completeWorkerRun(options: {
   const outcome = resultStatus(codexResult, parsed);
   const output = parsed.ok ? parsed.data : null;
   const finishedAt = new Date();
+  const runtimeDiagnostics = buildRuntimeDiagnostics({
+    runtime,
+    codexResult,
+    parsed,
+    outcomeError: outcome.error,
+    eventsPath: runRecord.eventsPath,
+    diagnosticPath: runRecord.diagnosticPath,
+  });
   const payload = buildWorkerRunPayload({
     status: outcome.status,
     runRecord,
@@ -912,6 +850,7 @@ async function completeWorkerRun(options: {
     runtimeWarnings: outcome.warnings,
     output,
     workerOutputError: parsed.ok === false ? { reason: parsed.reason, message: parsed.message } : undefined,
+    runtimeDiagnostics,
     metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: outcome.status, output, error: outcome.error }),
   });
   writeJson(runRecord.resultPath, payload);
@@ -946,12 +885,86 @@ async function completeWorkerRun(options: {
       startedAt,
       finishedAt,
       error: message,
+      runtimeDiagnostics: {
+        schema: 'narada.worker.runtime_diagnostics.v1',
+        phase: 'worker_delegation_exception',
+        runtime,
+        error: message,
+        remediation: runtimeFailureRemediation('worker_delegation_exception'),
+        diagnostic_tail: readDiagnosticTail(runRecord.diagnosticPath),
+        stdout_tail: readTextTail(runRecord.eventsPath, 800),
+      },
       metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: 'failed', output: null, error: message }),
     });
     writeJson(runRecord.resultPath, payload);
     audit(state.policy, { tool: auditTool, payload });
     throw error;
   }
+}
+
+function buildRuntimeDiagnostics(options: {
+  runtime: string;
+  codexResult: { exit_code: number | null; signal: string | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null };
+  parsed: WorkerOutputParseResult;
+  outcomeError: string | null;
+  eventsPath: string;
+  diagnosticPath: string;
+}): Record<string, unknown> | undefined {
+  if (!options.outcomeError && options.parsed.ok) return undefined;
+  const phase = runtimeFailurePhase(options.codexResult, options.parsed, options.outcomeError);
+  const diagnosticTail = readDiagnosticTail(options.diagnosticPath);
+  const stdoutTail = readTextTail(options.eventsPath, 1200);
+  const resultExtraction = runtimeResultExtraction(options.parsed);
+  return {
+    schema: 'narada.worker.runtime_diagnostics.v1',
+    phase,
+    runtime: options.runtime,
+    exit_code: options.codexResult.exit_code,
+    signal: options.codexResult.signal,
+    cancelled: options.codexResult.cancelled,
+    error: options.outcomeError,
+    runtime_error: options.codexResult.runtime_error ?? null,
+    event_error: options.codexResult.event_error ?? null,
+    result_extraction: resultExtraction,
+    diagnostic_tail: diagnosticTail,
+    stdout_tail: stdoutTail,
+    tail_status: {
+      diagnostic_tail_available: Boolean(diagnosticTail),
+      stdout_tail_available: Boolean(stdoutTail),
+      diagnostic_tail_limit_chars: 800,
+      stdout_tail_limit_chars: 1200,
+    },
+    remediation: runtimeFailureRemediation(phase),
+  };
+}
+
+function runtimeResultExtraction(parsed: WorkerOutputParseResult): Record<string, unknown> {
+  if (parsed.ok) return { status: 'ok' };
+  const failed = parsed as Extract<WorkerOutputParseResult, { ok: false }>;
+  return { status: 'failed', reason: failed.reason, message: failed.message };
+}
+
+function runtimeFailurePhase(
+  result: { exit_code: number | null; error: string | null; event_error?: string | null; runtime_error?: string | null },
+  parsed: WorkerOutputParseResult,
+  outcomeError: string | null,
+): string {
+  const error = String(outcomeError ?? result.error ?? result.event_error ?? result.runtime_error ?? '').toLowerCase();
+  if (error.includes('without assistant_message') || error.includes('did_not_produce_last_message')) return 'pre_first_assistant_failure';
+  if (!parsed.ok && !result.error && !result.event_error && !result.runtime_error) return 'result_extraction_failure';
+  if (result.exit_code === null && result.error) return 'startup_failure';
+  if (result.event_error) return 'event_stream_failure';
+  if (result.runtime_error) return 'runtime_reported_failure';
+  return 'runtime_process_failure';
+}
+
+function runtimeFailureRemediation(phase: string): string[] {
+  if (phase === 'startup_failure') return ['Check runtime command availability and argv.', 'Inspect diagnostic_tail for process launch errors.'];
+  if (phase === 'pre_first_assistant_failure') return ['Inspect stdout_tail for startup/session events and diagnostic_tail for stderr.', 'Retry with the same run_id only if the runtime supports resume; otherwise route to runtime repair.'];
+  if (phase === 'result_extraction_failure') return ['Inspect result_extraction.message and last_message.json artifact.', 'Repair worker output JSON shape or parser normalization.'];
+  if (phase === 'event_stream_failure') return ['Inspect stdout_tail for malformed JSONL or protocol drift.', 'Verify the runtime is emitting raw JSONL events.'];
+  if (phase === 'worker_delegation_exception') return ['Inspect worker-delegation exception and bounded tails.', 'Route to worker-delegation surface repair if the runtime process reached a normal terminal state.'];
+  return ['Inspect runtime_diagnostics exit_code, signal, stdout_tail, and diagnostic_tail.', 'Use worker_run_status or worker_run_wait with the run_id for current persisted state.'];
 }
 
 function buildWorkerRunPayload(options: {
@@ -967,8 +980,17 @@ function buildWorkerRunPayload(options: {
   runtimeWarnings?: string[];
   output?: WorkerOutput | null;
   workerOutputError?: { reason: string; message: string };
+  runtimeDiagnostics?: Record<string, unknown>;
   metadata: WorkerRunMetadata;
 }): Record<string, unknown> {
+  const resultState = options.status === 'running'
+    ? {
+        state: 'pending',
+        terminal: false,
+        scaffold: true,
+        message: 'Worker run is active; terminal result fields are not available until worker_run_wait or worker_run_status returns a terminal status.',
+      }
+    : { state: options.metadata.confidence, terminal: true, scaffold: false };
   return {
     schema: 'narada.worker.run.v1',
     status: options.status,
@@ -982,7 +1004,8 @@ function buildWorkerRunPayload(options: {
     edits_performed: options.metadata.edits_performed,
     target_state_changed: options.metadata.target_state_changed,
     confidence: options.metadata.confidence,
-    completion_state: options.metadata.confidence,
+    completion_state: options.status === 'running' ? 'pending' : options.metadata.confidence,
+    result_state: resultState,
     blocked_paths: options.metadata.blocked_paths,
     verification: options.metadata.verification,
     requested_mcp_tools: options.executorRequest.requested_mcp_tools ?? [],
@@ -1010,6 +1033,8 @@ function buildWorkerRunPayload(options: {
     },
     error: options.error,
     error_classification: options.error ? classifyRuntimeError(options.error) : null,
+    ...(options.runtimeDiagnostics ? { runtime_diagnostics: options.runtimeDiagnostics } : {}),
+    ...(typeof options.runtimeDiagnostics?.diagnostic_tail === 'string' ? { diagnostic_tail: options.runtimeDiagnostics.diagnostic_tail } : {}),
     ...(options.workerOutputError ? { worker_output_error: options.workerOutputError } : {}),
   };
 }
@@ -1155,20 +1180,34 @@ async function workerRunWaitBatch(args: Record<string, unknown>, state: WorkerMc
   const results: Record<string, unknown>[] = [];
   for (const runId of runIds) {
     const elapsed = Date.now() - started;
-    const wait = await workerRunWait({ run_id: runId, timeout_ms: Math.max(0, timeoutMs - elapsed), poll_ms: pollMs, verbose, summary_only: summaryOnly }, state);
-    const waitRecord = asRecord(wait);
-    results.push(waitRecord.run ? { ...asRecord(waitRecord.run), wait: asRecord(waitRecord.wait) } : waitRecord);
+    try {
+      const wait = await workerRunWait({ run_id: runId, timeout_ms: Math.max(0, timeoutMs - elapsed), poll_ms: pollMs, verbose, summary_only: summaryOnly }, state);
+      const waitRecord = asRecord(wait);
+      results.push(waitRecord.run ? { ...asRecord(waitRecord.run), wait: asRecord(waitRecord.wait) } : waitRecord);
+    } catch (error) {
+      results.push({
+        run_id: runId,
+        status: 'error',
+        wait: {
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+          code: (error as { codeName?: unknown })?.codeName ?? 'worker_run_wait_batch_item_failed',
+        },
+      });
+    }
   }
+  const errored = results.filter((run) => asRecord(run.wait).status === 'error');
   return {
     schema: 'narada.worker.run_wait_batch.v1',
-    status: 'ok',
+    status: errored.length === 0 ? 'ok' : 'partial',
     requested_count: runIds.length,
     finished_count: results.filter((run) => asRecord(run.wait).status === 'finished').length,
     timed_out_count: results.filter((run) => asRecord(run.wait).status === 'timed_out').length,
+    errored_count: errored.length,
     timeout_ms: timeoutMs,
     elapsed_ms: Date.now() - started,
     runs: results,
-    synthesis: synthesizeRuns(runIds.map((runId) => readRunResult(state, runId)).filter((run): run is Record<string, unknown> => Boolean(run))),
+    synthesis: synthesizeRuns(runIds.map((runId) => readRunResult(state, runId, false)).filter((run): run is Record<string, unknown> => Boolean(run))),
   };
 }
 
@@ -1694,7 +1733,7 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
   state.activeRunCount = Math.max(0, state.activeRunCount - 1);
 }
 
-function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: WorkerRuntimeId = 'deepseek-api'): void {
+function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: WorkerRuntimeId = 'codex'): void {
   const defaults = defaultConfigForCognition(cognition, state.policy);
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
@@ -1722,25 +1761,22 @@ function configResolutionMetadata(options: {
       hasResolvedValue: options.resolvedConfigInput.model !== null,
       cognitionDefault: cognitionDefaults.model,
       runtime: options.runtime,
-      deepseekAdapterDefault: 'deepseek-v4-flash',
     }),
     reasoning_effort_source: configValueSource({
       explicit: options.requestedOverrides.reasoning_effort !== undefined || config.model_reasoning_effort !== undefined,
       hasResolvedValue: options.resolvedConfigInput.reasoning_effort !== null,
       cognitionDefault: cognitionDefaults.reasoningEffort,
       runtime: options.runtime,
-      deepseekAdapterDefault: 'high',
     }),
     allowed_config_keys: options.policy.allowedConfigKeys,
     explicit_config_keys: Object.keys(options.resolvedConfigInput.config).sort(),
   };
 }
 
-function configValueSource(options: { explicit: boolean; hasResolvedValue: boolean; cognitionDefault: string | null; runtime: WorkerRuntimeId; deepseekAdapterDefault: string }): string {
+function configValueSource(options: { explicit: boolean; hasResolvedValue: boolean; cognitionDefault: string | null; runtime: WorkerRuntimeId }): string {
   if (options.explicit) return 'request_override';
   if (options.hasResolvedValue && options.cognitionDefault) return 'cognition_default';
   if (options.hasResolvedValue) return 'resolved_config';
-  if (options.runtime === 'deepseek-api') return `adapter_default:${options.deepseekAdapterDefault}`;
   return 'runtime_default_opaque';
 }
 
@@ -1829,6 +1865,9 @@ function buildPreflight(options: { cwd: string; authority: string; mode: WorkerD
   if (options.authority === 'read') {
     checks.push({ name: 'effective_authority', status: 'warning', message: 'effective_authority=read; raw MCP surfaces may advertise mutation-capable tools, but this delegation permits inspection and reporting only' });
   }
+  for (const item of options.preflightPaths.filter((path) => path.access === 'write' || path.access === 'create')) {
+    if (options.authority === 'read') checks.push({ name: 'read_authority_mutation_boundary', status: 'blocked', message: `read authority cannot perform ${item.access} preflight for ${resolve(item.path)}` });
+  }
   checks.push({ name: 'execution_style', status: options.waitForCompletion ? 'ok' : 'warning', message: options.waitForCompletion ? 'caller will wait for completion' : 'async run; caller must use worker_run_status, worker_runs_list, or worker_run_wait to rediscover result' });
   if (options.isResume) checks.push({ name: 'resume', status: 'ok', message: 'continuing an existing worker session' });
   for (const item of options.preflightPaths) checks.push(preflightPathCheck(item, options.allowedRoots));
@@ -1872,16 +1911,6 @@ function areSamePath(left: string, right: string): boolean {
 }
 
 function checkRuntimeAvailability(runtime: WorkerRuntimeId, policy: WorkerPolicy, env: Record<string, string>): { available: boolean; reason?: string; remediation?: string; command?: string } {
-  if (runtime === 'deepseek-api') {
-    const key = policy.runtimes.deepseek.command === 'node' ? 'DEEPSEEK_API_KEY' : null;
-    if (key && !env[key]) {
-      return { available: false, reason: `${key} not set`, remediation: `set ${key} in the environment or choose a different runtime` };
-    }
-    if (policy.runtimes.deepseek.command === 'node') {
-      return { available: true, command: policy.runtimes.deepseek.command };
-    }
-    return commandAvailable(policy.runtimes.deepseek.command, env);
-  }
   if (runtime === 'narada-agent-runtime-server') return commandAvailable(policy.runtimes.naradaAgentRuntimeServer.command, env);
   return commandAvailable(policy.runtimes.codex.command, env);
 }
@@ -1911,7 +1940,6 @@ function normalizePathComparisonKey(path: string): string {
 }
 
 function enforcePreflightForMode(mode: WorkerDelegationMode, preflight: WorkerPreflightCheck[]): void {
-  if (mode !== 'implement' && mode !== 'implement_and_verify') return;
   const blocked = preflight.filter((check) => check.status === 'blocked');
   if (blocked.length === 0) return;
   throw diagnosticError('worker_preflight_blocked', 'worker_preflight_blocked', { requested_mode: mode, blocked_preflight: blocked });
@@ -1931,7 +1959,7 @@ function buildRunMetadata(options: {
     requested_mode: options.requestedMode,
     edits_performed: options.status === 'running' ? null : options.output ? options.output.edits_performed : readOnlyMode ? false : null,
     target_state_changed: options.status === 'running' ? null : options.output ? options.output.target_state_changed : readOnlyMode ? false : null,
-    confidence: options.error || blockedPaths.length > 0 || options.status === 'completed_with_errors' || options.status === 'failed' ? 'partial' : 'complete',
+    confidence: options.status === 'running' ? 'pending' : options.error || blockedPaths.length > 0 || options.status === 'completed_with_errors' || options.status === 'failed' ? 'partial' : 'complete',
     blocked_paths: blockedPaths,
     verification,
     preflight: options.preflight,

@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/worker-delegation-mcp.test.js && node dist/test/protocol-smoke.test.js && node dist/test/deepseek-adapter.test.js"
+    "test": "pnpm build && node dist/test/worker-delegation-mcp.test.js && node dist/test/protocol-smoke.test.js"
   },
   "files": [
     "dist/",

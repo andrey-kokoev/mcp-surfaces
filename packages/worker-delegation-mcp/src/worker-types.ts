@@ -32,7 +32,7 @@ export type WorkerRunMetadata = {
   requested_mode: WorkerDelegationMode;
   edits_performed: boolean | null;
   target_state_changed: boolean | null;
-  confidence: 'complete' | 'partial';
+  confidence: 'complete' | 'partial' | 'pending';
   blocked_paths: string[];
   verification: string[];
   preflight: WorkerPreflightCheck[];
@@ -90,7 +90,7 @@ export type WorkerEditToolInput = {
   overrides?: WorkerConstraintOverrides;
 };
 
-export type SupportedRuntime = 'codex' | 'deepseek-api' | 'narada-agent-runtime-server';
+export type SupportedRuntime = 'codex' | 'narada-agent-runtime-server';
 
 export type WorkerResolvedExecutionPolicy = {
   runtime: SupportedRuntime;

@@ -4,7 +4,7 @@ Policy-gated MCP surface for delegating bounded work to a worker runtime.
 
 The surface starts or resumes one worker run at a time, records the worker request and artifacts under a run directory, and returns deterministic text plus authoritative `structuredContent`. Large results are materialized as `worker_output:*` refs and can be read with `worker_output_show`.
 
-Supported runtimes: `codex` (Codex CLI), `deepseek-api` (self-contained agent loop using DeepSeek `/chat/completions`), and `narada-agent-runtime-server` (Narada Agent Runtime Server over JSONL stdio). The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
+Supported runtimes: `codex` (Codex CLI) and `narada-agent-runtime-server` (Narada Agent Runtime Server over JSONL stdio). DeepSeek is available as the NARS provider `deepseek-api`, not as a direct worker runtime. The worker prompt includes a recursion guard: workers must not call `worker_*` MCP tools.
 
 ## Quick Start
 
@@ -50,14 +50,14 @@ The server requires at least one allowed root. A worker `cwd` must be inside an 
 
 Defaults:
 
-- runtime: `narada-agent-runtime-server` (default), with `codex` and `deepseek-api` available by explicit override
+- runtime: `narada-agent-runtime-server` (default), with `codex` available by explicit override
 - default authority: `read`
 - default cognition: `low`
-- allowed runtimes: `codex`, `deepseek-api`, `narada-agent-runtime-server`
+- allowed runtimes: `codex`, `narada-agent-runtime-server`
 - allowed authorities: `read`, `write`, `command`
 - allowed cognition: `low`, `medium`, `high`
 - allowed sandboxes: `read-only`, `workspace-write`
-- default sandbox: `read-only` (codex), `read-only` (deepseek), `workspace-write` (narada-agent-runtime-server)
+- default sandbox: `read-only` (codex), `workspace-write` (narada-agent-runtime-server)
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
@@ -86,9 +86,6 @@ Common flags:
 - `--audit-log-dir <path>`: append worker delegation audit events.
 - `--codex-command <command>`: Codex executable, default `codex`.
 - `--codex-command-arg <arg>`: prepend a fixed argument to the Codex runtime invocation; repeatable.
-- `--deepseek-command <command>`: Node.js executable for the DeepSeek worker, default `node`.
-- `--deepseek-command-arg <arg>`: prepend a fixed argument to the DeepSeek worker invocation; repeatable.
-- `--deepseek-model <model>`: override default model for DeepSeek runtime.
 - `--agent-runtime-server-command <command>`: Narada Agent Runtime Server executable, default `narada-agent-runtime-server`.
 - `--agent-runtime-server-command-arg <arg>`: prepend a fixed argument to the Agent Runtime Server invocation; repeatable.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
@@ -136,7 +133,8 @@ Delegation mode is explicit intent, not mechanical authority. `intent.mode` may 
 - `constraints.wait_for_completion` (boolean, default `false`): block until worker finishes.
 - `constraints.verification_budget` (object, optional): advisory verification discipline, with fields such as `focus` (`"focused"` or `"broad"`), `max_commands`, `max_minutes`, `stop_on_first_failure`, `broad_commands_allowed`, and `notes`.
 - `constraints.test_budget` (object, optional): advisory test discipline using the same shape as `verification_budget`.
-- `constraints.overrides` (object, optional): set `runtime` (`"codex"`, `"deepseek-api"`, or `"narada-agent-runtime-server"`), `sandbox`, `model`, or `reasoning_effort`.
+- `constraints.provider` (string, optional): NARS intelligence provider, only valid with `overrides.runtime: "narada-agent-runtime-server"`; `"deepseek-api"` routes DeepSeek through NARS.
+- `constraints.overrides` (object, optional): set `runtime` (`"codex"` or `"narada-agent-runtime-server"`), `sandbox`, `model`, or `reasoning_effort`.
 - `constraints.preflight_paths` (array, optional): path existence/access checks before delegation.
 - `constraints.required_mcp_tools` (array, optional): MCP tool names the worker must have.
 
@@ -173,26 +171,31 @@ If a response is materialized, call `worker_output_show` with the returned `outp
 
 Override the runtime with `overrides.runtime: 'narada-agent-runtime-server'` on `worker_run` or `worker_edit`. This starts a Narada Agent Runtime Server in raw JSONL stdio mode, sends one `conversation.send` frame, records the server event stream in `events.jsonl`, and materializes the final `assistant_message` into the normal worker `last_message.json` contract.
 
-This runtime is a carrier-server posture, not a direct model substrate. It projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from the worker `cwd` when those variables are absent, so the child runtime has an explicit Site/workspace anchor. On Windows, npm/pnpm `.cmd` shims are unwrapped to `node <agent-runtime-server entrypoint>` before launch so the JSONL pipe is attached to the real server process; the resolved config records the configured command, while `worker_invocation.json` records the actual spawned command. Use this runtime for delegated work that benefits from Narada carrier semantics, Site MCP fabric, durable session evidence, or later resume/handoff behavior. Keep `codex` or `deepseek-api` for cheap direct one-shot substrate work.
+This runtime is a carrier-server posture, not a direct model substrate. It projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from the worker `cwd` when those variables are absent, so the child runtime has an explicit Site/workspace anchor. On Windows, npm/pnpm `.cmd` shims are unwrapped to `node <agent-runtime-server entrypoint>` before launch so the JSONL pipe is attached to the real server process; the resolved config records the configured command, while `worker_invocation.json` records the actual spawned command. Use this runtime for delegated work that benefits from Narada carrier semantics, Site MCP fabric, durable session evidence, later resume/handoff behavior, or non-Codex model providers.
 
-## DeepSeek Runtime
+## DeepSeek Provider
 
-Override the runtime with `overrides.runtime: 'deepseek-api'` on `worker_run` or `worker_edit`. The deepseek worker implements its own agent loop using `node:https` (no external dependencies). It connects to MCP servers via the config file at `NARADA_WORKER_MCP_CONFIG` environment variable.
+DeepSeek is routed through `narada-agent-runtime-server` with `constraints.provider: "deepseek-api"`. Direct `overrides.runtime: "deepseek-api"` is rejected with a migration diagnostic; use the provider form instead:
 
-Key differences from Codex runtime:
+```json
+{
+  "intent": {
+    "instruction": "Inspect the issue and report findings.",
+    "mode": "audit_only"
+  },
+  "constraints": {
+    "cwd": "D:/code/mcp-surfaces",
+    "site_root": "D:/code/mcp-surfaces",
+    "authority": "read",
+    "provider": "deepseek-api",
+    "overrides": {
+      "runtime": "narada-agent-runtime-server"
+    }
+  }
+}
+```
 
-- The deepseek worker spawns as a subprocess, reads the prompt from stdin, and runs the agent loop autonomously.
-- Thinking mode is always enabled (`thinking: { type: "enabled" }`) with `reasoning_effort: "high"`.
-- When tools are used, `reasoning_content` is preserved across turns (required by DeepSeek API).
-- The worker writes debug artifacts: `api_requests.jsonl`, `api_responses.jsonl`, `mcp_tools.json`, `conversation.json`.
-- Session resume is supported: use `worker_resume` with the returned `worker_session_id`.
-- If no MCP config is available, the worker runs without tools (degraded single-shot mode).
-
-Environment variables:
-
-- `DEEPSEEK_API_KEY`: required; used for `Authorization: Bearer` header.
-- `DEEPSEEK_API_BASE_URL`: optional; defaults to `https://api.deepseek.com`.
-- `NARADA_WORKER_MCP_CONFIG`: path to MCP server config JSON (shape: `{ mcpServers: { name: { command, args, env } } }`).
+Provider credentials are loaded through the Narada provider registry and secret lookup path used by NARS. Run records expose provider names and environment key names, not secret values.
 
 ## Example Tool Arguments
 

@@ -103,6 +103,12 @@ process.stdin.on('data', (chunk) => {
         process.stdout.write(JSON.stringify({ event: 'turn_failed', request_id: frame.id, turn_id: 'turn-provider-failed', error: 'API error 429: rate_limit_reached_error: quota exhausted' }) + '\\n');
         continue;
       }
+      if (frame.params.message.includes('agent runtime no assistant message')) {
+        process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime-no-assistant', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-no-assistant' }) + '\\n');
+        process.stderr.write('pre-assistant diagnostic detail from runtime\\n');
+        process.exit(0);
+      }
       if (frame.params.message.includes('server runtime loose output')) {
         const output = {
           summary: 'loose agent runtime worker ok',
@@ -233,23 +239,20 @@ assert.equal(policy.result?.structuredContent.schema, 'narada.worker.policy.v1')
 assert.equal(policy.result?.structuredContent.default_runtime, 'codex');
 assert.equal(policy.result?.structuredContent.default_authority, 'read');
 assert.equal(policy.result?.structuredContent.default_cognition, 'low');
-assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex', 'deepseek-api', 'narada-agent-runtime-server']);
-assert.deepEqual(policy.result?.structuredContent.allowed_narada_agent_runtime_providers, ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription']);
+assert.deepEqual(policy.result?.structuredContent.allowed_runtimes, ['codex', 'narada-agent-runtime-server']);
+assert.deepEqual(policy.result?.structuredContent.allowed_narada_agent_runtime_providers, ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription', 'deepseek-api']);
 assert.deepEqual(policy.result?.structuredContent.allowed_authorities, ['read', 'write', 'command']);
 assert.deepEqual(policy.result?.structuredContent.allowed_cognition, ['low', 'medium', 'high']);
 assert.equal(policy.result?.structuredContent.allow_raw_config_overrides, false);
 assert.equal(policy.result?.structuredContent.runtimes.codex.ephemeral, true);
 assert.equal(policy.result?.structuredContent.runtimes.codex.id, 'codex');
-assert.equal(policy.result?.structuredContent.runtimes.deepseek.ephemeral, true);
-assert.equal(policy.result?.structuredContent.runtimes.deepseek.id, 'deepseek-api');
-assert.equal(policy.result?.structuredContent.runtimes.deepseek.default_sandbox, 'read-only');
-assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].id, 'deepseek-api');
-assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'].default_sandbox, 'read-only');
+assert.equal(policy.result?.structuredContent.runtimes.deepseek, undefined);
+assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'], undefined);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID']);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription', 'deepseek-api']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
@@ -302,7 +305,8 @@ assert.equal(explicitConfig.result?.structuredContent.config_resolution.model_so
 assert.equal(explicitConfig.result?.structuredContent.config_resolution.reasoning_effort_source, 'request_override');
 assert.doesNotMatch(explicitConfig.result?.structuredContent.warnings.join('\n'), /runtime_default/);
 
-assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_runtime_not_allowed/);
+assert.throws(() => createServerState({ allowedRoot: root, allowedRuntime: 'agent-cli' }), /worker_invalid_runtime/);
+assert.throws(() => createServerState({ allowedRoot: root, defaultRuntime: 'deepseek-api' }), /worker_runtime_migrated_to_nars_provider/);
 assert.throws(() => createServerState({ allowedRoot: root, allowedSandbox: 'invalid' }), /worker_invalid_sandbox/);
 assert.throws(() => createServerState({ allowedRoot: root, allowedSandbox: 'danger-full-access' }), /worker_danger_full_access_not_allowed/);
 createServerState({ allowedRoot: root, allowedSandboxes: ['read-only', 'workspace-write'] });
@@ -324,6 +328,7 @@ const providerRunRoot = join(root, 'provider-secret-runs');
 const providerRegistryPath = join(providerRoot, 'provider-registry.json');
 const providerSecretLookupScript = join(providerRoot, 'secret-lookup.js');
 mkdirSync(providerRoot, { recursive: true });
+mkdirSync(join(providerRoot, '.narada'), { recursive: true });
 writeFileSync(providerRegistryPath, JSON.stringify({
   schema: 'narada.carrier.provider_registry.v1',
   providers: {
@@ -351,6 +356,7 @@ const providerState = createServerState({
   runRoot: providerRunRoot,
   defaultRuntime: 'codex',
   codexCommand: process.execPath,
+  agentRuntimeServerCommand: process.execPath,
   providerRegistryPath,
   secretLookupCommand: process.execPath,
   secretLookupCommandArgs: [providerSecretLookupScript],
@@ -359,8 +365,14 @@ assert.equal(providerState.env.DEEPSEEK_API_KEY, 'deepseek-from-secret-store');
 assert.equal(providerState.env.DEEPSEEK_API_BASE_URL, 'https://api.deepseek.com');
 const providerPolicy = await rpc({ jsonrpc: '2.0', id: 197, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, providerState);
 assert.equal(JSON.stringify(providerPolicy.result?.structuredContent).includes('deepseek-from-secret-store'), false);
-const deepseekResolve = await rpc({ jsonrpc: '2.0', id: 198, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek secret check' }, constraints: { cwd: providerRoot, overrides: { runtime: 'deepseek-api' } } } } }, providerState);
+assert.equal(providerPolicy.result?.structuredContent.allowed_narada_agent_runtime_providers.includes('deepseek-api'), true);
+const directDeepseekResolve = await rpc({ jsonrpc: '2.0', id: 198, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek direct runtime rejected' }, constraints: { cwd: providerRoot, overrides: { runtime: 'deepseek-api' } } } } }, providerState);
+assert.equal(directDeepseekResolve.error?.data.code, 'worker_runtime_migrated_to_nars_provider');
+assert.match(String(directDeepseekResolve.error?.data.details.remediation), /provider="deepseek-api"/);
+const deepseekResolve = await rpc({ jsonrpc: '2.0', id: 199, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek secret check' }, constraints: { cwd: providerRoot, provider: 'deepseek-api', overrides: { runtime: 'narada-agent-runtime-server' } } } } }, providerState);
 assert.equal(deepseekResolve.result?.structuredContent.runtime_availability.available, true);
+assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
+assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');
 assert.equal(JSON.stringify(deepseekResolve.result?.structuredContent).includes('deepseek-from-secret-store'), false);
 
 if (process.platform === 'win32') {
@@ -569,9 +581,21 @@ const agentRuntimeFailedRunId = String(agentRuntimeFailed.error?.data.details.ru
 const agentRuntimeFailedStatus = await rpc({ jsonrpc: '2.0', id: 5022, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);
 assert.match(agentRuntimeFailedStatus.result?.structuredContent.error, /rate_limit_reached_error/);
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.error_classification, 'provider_rate_limited');
+assert.equal(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.phase, 'runtime_reported_failure');
+assert.equal(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.exit_code, 0);
+assert.match(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.stdout_tail, /turn_failed/);
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.progress.latest_event_type, 'turn_failed');
 const agentRuntimeFailedWait = await rpc({ jsonrpc: '2.0', id: 5023, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);
 assert.match(agentRuntimeFailedWait.result?.structuredContent.run.error_preview, /rate_limit_reached_error/);
+const agentRuntimeNoAssistant = await rpc({ jsonrpc: '2.0', id: 50231, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime no assistant message', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeNoAssistant.error?.data.code, 'worker_runtime_failed');
+const agentRuntimeNoAssistantRunId = String(agentRuntimeNoAssistant.error?.data.details.run_id);
+const agentRuntimeNoAssistantStatus = await rpc({ jsonrpc: '2.0', id: 50232, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: agentRuntimeNoAssistantRunId } } }, agentRuntimeState);
+assert.equal(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.phase, 'pre_first_assistant_failure');
+assert.equal(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.exit_code, 0);
+assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.diagnostic_tail, /pre-assistant diagnostic detail/);
+assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.stdout_tail, /turn-no-assistant/);
+assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.remediation.join(' '), /stdout_tail/);
 const agentRuntimeLoose = await rpc({ jsonrpc: '2.0', id: 5024, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime loose output', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeLoose.result?.structuredContent.status, 'completed');
 assert.equal(agentRuntimeLoose.result?.structuredContent.summary, 'loose agent runtime worker ok');
@@ -695,6 +719,11 @@ const asyncRun = await rpc({
   params: { name: 'worker_run', arguments: { intent: { instruction: 'default async run' }, constraints: { cwd: root, authority: 'read', cognition: 'low' } } },
 }, state);
 assert.equal(asyncRun.result?.structuredContent.status, 'running');
+assert.equal(asyncRun.result?.structuredContent.confidence, 'pending');
+assert.equal(asyncRun.result?.structuredContent.completion_state, 'pending');
+assert.equal(asyncRun.result?.structuredContent.result_state.state, 'pending');
+assert.equal(asyncRun.result?.structuredContent.result_state.scaffold, true);
+assert.equal(asyncRun.result?.structuredContent.result_state.terminal, false);
 assert.deepEqual(asyncRun.result?.content.map((item) => item.type), ['text']);
 assert.equal(asyncRun.result?.structuredContent.timing.finished_at, null);
 assert.deepEqual(asyncRun.result?.structuredContent.progress, { event_count: 0, latest_event_type: null, latest_event_preview: null, latest_event_at: null, readable: true, tail_truncated: false });
@@ -704,7 +733,7 @@ assert.ok(listedRuns.result, JSON.stringify(listedRuns.error));
 assert.equal(listedRuns.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), true);
 assert.equal(listedRuns.result?.structuredContent.runs[0].summary, undefined);
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].summary_preview === 'string' || listedRuns.result?.structuredContent.runs[0].summary_preview === null, true);
-assert.equal(['complete', 'partial', null].includes(listedRuns.result?.structuredContent.runs[0].completion_state), true);
+assert.equal(['complete', 'partial', 'pending', null].includes(listedRuns.result?.structuredContent.runs[0].completion_state), true);
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].requested_mode, 'string');
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].authority, 'string');
 const asyncStatus = await rpc({ jsonrpc: '2.0', id: 523, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: asyncRun.result?.structuredContent.run_id, timeout_ms: 5000, poll_ms: 25 } } }, state);
@@ -760,8 +789,17 @@ assert.equal(batchRun.result?.structuredContent.run_ids.length, 2);
 const batchWait = await rpc({ jsonrpc: '2.0', id: 52312, method: 'tools/call', params: { name: 'worker_run_wait_batch', arguments: { run_ids: batchRun.result?.structuredContent.run_ids, timeout_ms: 0, summary_only: true } } }, state);
 assert.equal(batchWait.result?.structuredContent.schema, 'narada.worker.run_wait_batch.v1');
 assert.equal(batchWait.result?.structuredContent.finished_count, 2);
+assert.equal(batchWait.result?.structuredContent.errored_count, 0);
 assert.equal(batchWait.result?.structuredContent.synthesis.rows.length, 2);
 assert.equal(batchWait.result?.structuredContent.synthesis.rows[1].verification[0].tool, 'fake-codex');
+const partialBatchWait = await rpc({ jsonrpc: '2.0', id: 523121, method: 'tools/call', params: { name: 'worker_run_wait_batch', arguments: { run_ids: [batchRun.result?.structuredContent.run_ids[0], 'run-missing-for-partial-batch'], timeout_ms: 0, summary_only: true } } }, state);
+assert.equal(partialBatchWait.error, undefined);
+assert.equal(partialBatchWait.result?.structuredContent.status, 'partial');
+assert.equal(partialBatchWait.result?.structuredContent.requested_count, 2);
+assert.equal(partialBatchWait.result?.structuredContent.finished_count, 1);
+assert.equal(partialBatchWait.result?.structuredContent.errored_count, 1);
+assert.equal(partialBatchWait.result?.structuredContent.runs[1].run_id, 'run-missing-for-partial-batch');
+assert.equal(partialBatchWait.result?.structuredContent.runs[1].wait.status, 'error');
 const batchSynthesis = await rpc({ jsonrpc: '2.0', id: 52313, method: 'tools/call', params: { name: 'worker_runs_synthesize', arguments: { run_ids: batchRun.result?.structuredContent.run_ids } } }, state);
 assert.equal(batchSynthesis.result?.structuredContent.schema, 'narada.worker.runs_synthesis.v1');
 assert.equal(batchSynthesis.result?.structuredContent.synthesis.rows[0].summary, 'worker ok');
@@ -1288,15 +1326,15 @@ const unavailableRun = await rpc({
 assert.equal(unavailableRun.error?.data.code, 'worker_runtime_unavailable');
 
 const deepseekRoot = mkdtempSync(join(testTempRoot(), 'worker-delegation-deepseek-spawn-'));
-const deepseekState = createServerState({ allowedRoot: deepseekRoot, runRoot: join(deepseekRoot, 'runs'), defaultRuntime: 'deepseek-api' }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
+const deepseekState = createServerState({ allowedRoot: deepseekRoot, runRoot: join(deepseekRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
 const deepseekUnavailable = await rpc({
   jsonrpc: '2.0',
   id: 612,
   method: 'tools/call',
   params: { name: 'worker_run', arguments: { intent: { instruction: 'deepseek unavailable' }, constraints: { cwd: deepseekRoot, wait_for_completion: true, overrides: { runtime: 'deepseek-api' } } } },
 }, deepseekState);
-assert.equal(deepseekUnavailable.error?.data.code, 'worker_runtime_unavailable');
-assert.match(String(deepseekUnavailable.error?.data.details.reason), /DEEPSEEK_API_KEY/);
+assert.equal(deepseekUnavailable.error?.data.code, 'worker_runtime_migrated_to_nars_provider');
+assert.match(String(deepseekUnavailable.error?.data.details.remediation), /narada-agent-runtime-server/);
 
 const eventRoot = mkdtempSync(join(testTempRoot(), 'worker-delegation-bad-event-'));
 const badEventScript = join(eventRoot, 'exec.cjs');
@@ -1341,17 +1379,25 @@ const preflightRun = await rpc({
   jsonrpc: '2.0',
   id: 623,
   method: 'tools/call',
-  params: { name: 'worker_run', arguments: { intent: { instruction: 'preflight paths', mode: 'plan_only' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, preflight_paths: [{ path: root, access: 'read', label: 'old authority' }, { path: join(root, 'new-repo'), access: 'create', label: 'new repo' }], required_mcp_tools: ['local-filesystem-read.fs_glob_search', 'structured-command.structured_command_execute'] } } },
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'preflight paths', mode: 'plan_only' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, preflight_paths: [{ path: root, access: 'read', label: 'old authority' }], required_mcp_tools: ['local-filesystem-read.fs_glob_search', 'structured-command.structured_command_execute'] } } },
 }, state);
 assert.equal(preflightRun.result?.structuredContent.requested_mode, 'plan_only');
 assert.equal(preflightRun.result?.structuredContent.edits_performed, false);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('old authority') && check.status === 'ok'), true);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('new repo') && check.status === 'ok'), true);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'effective_authority' && check.status === 'warning' && check.message.includes('raw MCP surfaces may advertise mutation-capable tools')), true);
 assert.equal(preflightRun.result?.structuredContent.output_contract.effective_authority, 'read');
 assert.match(preflightRun.result?.structuredContent.output_contract.tool_capability_note, /mutation tools/);
 assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /effective_authority=read/);
 assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('not_verified_by_delegation') && check.message.includes('structured-command.structured_command_execute')), true);
+
+const readOnlyCreatePreflight = await rpc({
+  jsonrpc: '2.0',
+  id: 6231,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'read authority cannot create paths', mode: 'plan_only' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, preflight_paths: [{ path: join(root, 'new-repo'), access: 'create', label: 'new repo' }] } } },
+}, state);
+assert.equal(readOnlyCreatePreflight.error?.data.code, 'worker_preflight_blocked');
+assert.equal(readOnlyCreatePreflight.error?.data.details.blocked_preflight.some((check) => check.name === 'read_authority_mutation_boundary' && check.message.includes('create')), true);
 
 const blockedPreflight = await rpc({
   jsonrpc: '2.0',

@@ -172,10 +172,11 @@ function renderRunBatch(record: Record<string, unknown>): string {
 
 function renderRunWaitBatch(record: Record<string, unknown>): string {
   return compactLines([
-    'worker_run_wait_batch: ok',
+    `worker_run_wait_batch: ${record.status ?? 'ok'}`,
     `requested_count: ${record.requested_count ?? ''}`,
     `finished_count: ${record.finished_count ?? ''}`,
     `timed_out_count: ${record.timed_out_count ?? 0}`,
+    `errored_count: ${record.errored_count ?? 0}`,
   ]);
 }
 
