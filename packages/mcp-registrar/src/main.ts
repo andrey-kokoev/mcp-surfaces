@@ -258,6 +258,7 @@ const KNOWN_SITES: SiteDef[] = [
   { site_id: 'narada-cpy', root: 'D:/code/narada.cpy', config_path: 'D:/code/narada.cpy/config.json', surfaces: [] },
   { site_id: 'narada-utz', root: 'D:/code/narada.utz', config_path: 'D:/code/narada.utz/config.json', surfaces: [] },
   { site_id: 'narada-timour', root: 'D:/code/narada.timour-marketing-agent', config_path: 'D:/code/narada.timour-marketing-agent/config.json', surfaces: [] },
+  { site_id: 'smart-scheduling', root: 'D:/code/smart-scheduling/.narada', config_path: 'D:/code/smart-scheduling/.narada/config.json', surfaces: [] },
 ];
 
 const CARRIERS: CarrierDef[] = [
