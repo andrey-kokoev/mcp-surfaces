@@ -2,7 +2,7 @@
 # narada_template_id: narada.agent_cli.windows_wrapper
 # narada_template_version: 2
 # narada_template_source: @narada2/agent-cli ./windows-wrapper-template
-# narada_template_hash: ce078f7acd21a2b9c1390919b37b50ed6b175e55ed6c7b9da87764084da5e5d4
+# narada_template_hash: 50502c74cbd55e308e2ca5651bcee85306f432458a4adab221b46a59ce4e241d
 
 param(
     [Parameter(Mandatory)]
@@ -211,7 +211,7 @@ function Resolve-NaradaPackageExport {
 }
 
 $AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'narada-agent-cli'
-$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'agent-runtime-server'
+$AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-runtime-server' -BinName 'narada-agent-runtime-server'
 $ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/agent-cli' -ExportName './intelligence-providers'
 $ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
 $providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value
