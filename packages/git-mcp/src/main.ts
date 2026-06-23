@@ -10,6 +10,7 @@ export {
 } from './mcp-server.js';
 export {
   gitAdd,
+  gitChangedSummary,
   gitCommit,
   gitDiff,
   gitLog,

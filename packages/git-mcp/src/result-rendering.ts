@@ -18,6 +18,7 @@ export function renderToolResultText(value: unknown): string {
   }
   if (record.schema === 'narada.git.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.git.status.v1') return renderStatus(record);
+  if (record.schema === 'narada.git.changed_summary.v1') return renderChangedSummary(record);
   if (record.schema === 'narada.git.repositories_summary.v1') return renderRepositoriesSummary(record);
   if (record.schema === 'narada.git.workflow_record.v1') return renderWorkflowRecord(record);
   if (record.schema === 'narada.git.diff.v1') return renderPatchResult('git_diff', record, 'diff');
@@ -27,6 +28,32 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.git.log.v1') return renderLog(record);
   if (record.schema === 'narada.git.show.v1') return renderPatchResult('git_show', record, 'patch');
   throw diagnosticError('git_unrenderable_result_schema', 'git_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderChangedSummary(record: Record<string, unknown>): string {
+  const groups = Array.isArray(record.untracked_groups) ? record.untracked_groups.map(asRecord) : [];
+  return compactLines([
+    `git_changed_summary: ${record.status ?? 'ok'}`,
+    `working_directory: ${record.working_directory ?? ''}`,
+    `repository_root: ${record.repository_root ?? ''}`,
+    `branch: ${record.branch ?? 'null'}`,
+    `clean: ${record.clean ?? false}`,
+    `tracked_changed: ${record.tracked_changed_count ?? 0}`,
+    ...arrayLines(record.tracked_changed_paths),
+    `staged: ${record.staged_count ?? 0}`,
+    `unstaged: ${record.unstaged_count ?? 0}`,
+    `conflicts: ${record.conflict_count ?? 0}`,
+    `untracked: ${record.untracked_count ?? 0}`,
+    ...groups.flatMap((group) => [
+      `- ${group.top_level}: ${group.count}`,
+      ...arrayLines(group.sample).map((line) => `  ${line}`),
+      Number(group.sample_omitted ?? 0) > 0 ? `  sample_omitted: ${group.sample_omitted}` : null,
+    ]),
+    `relevant_changed: ${record.relevant_changed_count ?? 0}`,
+    ...arrayLines(record.relevant_changed_paths),
+    'full_diffs_omitted: true',
+    `diff_tool: ${record.diff_tool ?? 'git_diff'}`,
+  ]);
 }
 
 function renderStatus(record: Record<string, unknown>): string {

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
   listOutputResources,
+  outputShow,
   readOutputResource,
 } from '@narada2/mcp-transport';
 import { diagnosticError, GitMcpError } from './git-errors.js';
@@ -170,6 +171,7 @@ function completeArgument(params: Record<string, unknown>, state: GitMcpState) {
 async function callTool(params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
+  if (name === 'git_output_show') return toolResult(outputShow({ siteRoot: state.outputRoot, args }), state, name);
   const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);
 }
@@ -188,6 +190,7 @@ function toolResult(value: unknown, state: GitMcpState, toolName: string) {
     toolName,
     value,
     limit: INLINE_RESULT_BYTE_LIMIT,
+    readerTool: 'git_output_show',
   });
 }
 

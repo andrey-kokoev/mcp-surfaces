@@ -32,6 +32,7 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   const runContext = { ...context, env: state.env };
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, runContext);
+  if (name === 'git_changed_summary') return gitChangedSummary(args, state, runContext);
   if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, runContext);
   if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, runContext);
   if (name === 'git_diff') return gitDiff(args, state, runContext);
@@ -41,6 +42,47 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   if (name === 'git_log') return gitLog(args, state, runContext);
   if (name === 'git_show') return gitShow(args, state, runContext);
   throw diagnosticError('git_mcp_unknown_tool', `git_mcp_unknown_tool:${name}`, { tool_name: name });
+}
+
+export async function gitChangedSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
+  const status = await gitStatus(args, state, context);
+  const entries = Array.isArray(status.status_entries) ? status.status_entries.map(asStatusEntry) : [];
+  const trackedEntries = entries.filter((entry) => !entry.untracked);
+  const untrackedEntries = entries.filter((entry) => entry.untracked);
+  const relevanceFilters: string[] = [...stringArray(args.pathspecs), ...stringArray(args.expected_paths)];
+  const singlePathspec = optionalNonEmptyString(args.pathspec);
+  if (singlePathspec) relevanceFilters.unshift(singlePathspec);
+  const untrackedSampleLimit = clampInteger(args.untracked_sample_limit, 0, 200, 20);
+  const trackedChangedPaths = trackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const untrackedPaths = untrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const untrackedGroups = groupUntrackedPaths(untrackedPaths, untrackedSampleLimit);
+  const relevantEntries = relevanceFilters.length > 0
+    ? entries.filter((entry) => relevanceFilters.some((filter) => pathMatchesFilter(String(entry.display_path ?? entry.path ?? ''), filter)))
+    : [];
+  return {
+    schema: 'narada.git.changed_summary.v1',
+    status: 'ok',
+    working_directory: status.working_directory,
+    repository_root: status.repository_root,
+    branch: status.branch,
+    clean: status.clean,
+    tracked_changed_count: trackedChangedPaths.length,
+    staged_count: Array.isArray(status.staged) ? status.staged.length : 0,
+    unstaged_count: Array.isArray(status.unstaged) ? status.unstaged.length : 0,
+    conflict_count: Array.isArray(status.conflicts) ? status.conflicts.length : 0,
+    untracked_count: untrackedPaths.length,
+    tracked_changed_paths: trackedChangedPaths,
+    staged_paths: status.staged,
+    unstaged_paths: status.unstaged,
+    conflict_paths: status.conflicts,
+    untracked_groups: untrackedGroups,
+    relevance_filters: relevanceFilters,
+    relevant_changed_count: relevantEntries.length,
+    relevant_changed_paths: relevantEntries.map((entry) => entry.display_path).filter(Boolean),
+    relevant_entries: relevantEntries,
+    full_diffs_omitted: true,
+    diff_tool: 'git_diff',
+  };
 }
 
 export async function gitStatus(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
@@ -517,6 +559,33 @@ function clampInteger(value: unknown, min: number, max: number, defaultValue: nu
 
 function firstNonEmptyLine(value: string): string | null {
   return value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? null;
+}
+
+function groupUntrackedPaths(paths: string[], sampleLimit: number): Array<Record<string, unknown>> {
+  const groups = new Map<string, string[]>();
+  for (const path of paths) {
+    const normalized = path.replaceAll('\\', '/');
+    const top = normalized.includes('/') ? normalized.split('/')[0] : '(root)';
+    const list = groups.get(top) ?? [];
+    list.push(path);
+    groups.set(top, list);
+  }
+  let remainingSamples = sampleLimit;
+  return [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).map(([top_level, groupPaths]) => {
+    const sample = remainingSamples > 0 ? groupPaths.slice(0, remainingSamples) : [];
+    remainingSamples = Math.max(0, remainingSamples - sample.length);
+    return { top_level, count: groupPaths.length, sample, sample_omitted: Math.max(0, groupPaths.length - sample.length) };
+  });
+}
+
+function pathMatchesFilter(path: string, filter: string): boolean {
+  const normalizedPath = path.replaceAll('\\', '/');
+  const normalizedFilter = String(filter ?? '').trim().replaceAll('\\', '/').replace(/^\.\//, '');
+  if (!normalizedFilter) return false;
+  if (normalizedPath === normalizedFilter) return true;
+  if (normalizedPath.startsWith(`${normalizedFilter.replace(/\/$/, '')}/`)) return true;
+  if (normalizedFilter.endsWith('/**')) return normalizedPath.startsWith(normalizedFilter.slice(0, -3));
+  return false;
 }
 
 function asStatusEntry(value: unknown): Record<string, unknown> {

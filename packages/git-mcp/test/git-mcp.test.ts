@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   createServerState,
   gitAdd,
+  gitChangedSummary,
   gitCommit,
   gitDiff,
   gitLog,
@@ -69,9 +70,11 @@ const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {
 const toolNames = tools.result?.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_add',
+  'git_changed_summary',
   'git_commit',
   'git_diff',
   'git_log',
+  'git_output_show',
   'git_policy_inspect',
   'git_push',
   'git_repositories_summary',
@@ -130,14 +133,31 @@ assert.equal(missingRemotePush.error?.data.details.effective_target.reason, 'rem
 assert.match(missingRemotePush.error?.data.details.remediation.message, /No remote named origin/);
 
 writeFileSync(join(repo, 'README.md'), 'hello\n', 'utf8');
+mkdirSync(join(repo, 'runtime', 'tmp'), { recursive: true });
+mkdirSync(join(repo, 'notes'), { recursive: true });
+writeFileSync(join(repo, 'runtime', 'tmp', 'artifact.log'), 'runtime artifact\n', 'utf8');
+writeFileSync(join(repo, 'notes', 'task.md'), 'task note\n', 'utf8');
 status = await gitStatus({ working_directory: repo }, state);
-assert.deepEqual(status.untracked, ['README.md']);
+assert.deepEqual(status.untracked, ['README.md', 'notes/task.md', 'runtime/tmp/artifact.log']);
+const changedSummary = await gitChangedSummary({ working_directory: repo, expected_paths: ['README.md', 'notes'], untracked_sample_limit: 2 }, state);
+assert.equal(changedSummary.schema, 'narada.git.changed_summary.v1');
+assert.equal(changedSummary.tracked_changed_count, 0);
+assert.equal(changedSummary.untracked_count, 3);
+assert.deepEqual((changedSummary.untracked_groups as any[]).map((group) => ({ top_level: group.top_level, count: group.count })), [
+  { top_level: '(root)', count: 1 },
+  { top_level: 'notes', count: 1 },
+  { top_level: 'runtime', count: 1 },
+]);
+assert.deepEqual(changedSummary.relevant_changed_paths, ['README.md', 'notes/task.md']);
 const untrackedDiff = await gitDiff({ working_directory: repo, scope: 'working', pathspec: 'README.md', include_untracked: true }, state);
 assert.deepEqual(untrackedDiff.untracked_paths, ['README.md']);
 assert.match(untrackedDiff.diff, /\+hello/);
 
 const addResult = await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 assert.deepEqual((addResult.post_status as any).staged, ['README.md']);
+const postAddSummary = await gitChangedSummary({ working_directory: repo, pathspec: 'README.md' }, state);
+assert.deepEqual(postAddSummary.tracked_changed_paths, ['README.md']);
+assert.deepEqual(postAddSummary.relevant_changed_paths, ['README.md']);
 
 const stagedDiff = await gitDiff({ working_directory: repo, scope: 'staged' }, state);
 assert.match(stagedDiff.diff, /README\.md/);
@@ -194,7 +214,7 @@ await gitCommit({ working_directory: repo, message: 'Update readme' }, state);
 git(repo, ['mv', 'README.md', 'RENAMED.md']);
 const renameStatus = await gitStatus({ working_directory: repo }, state);
 assert.deepEqual(renameStatus.staged, ['README.md <- RENAMED.md']);
-assert.deepEqual((renameStatus.status_entries as any[]).map((entry) => ({
+assert.deepEqual((renameStatus.status_entries as any[]).filter((entry) => !entry.untracked).map((entry) => ({
   x: entry.x,
   y: entry.y,
   path: entry.path,
@@ -282,8 +302,9 @@ const statusCall = await rpc({
   params: { name: 'git_status', arguments: { working_directory: repo } },
 }, state);
 assert.match(statusCall.result?.content[0].text, /git_status: ok/);
-assert.match(statusCall.result?.content[0].text, /clean: true/);
-assert.equal(statusCall.result?.structuredContent.clean, true);
+assert.match(statusCall.result?.content[0].text, /clean: false/);
+assert.match(statusCall.result?.content[0].text, /untracked: 2/);
+assert.equal(statusCall.result?.structuredContent.clean, false);
 
 const outside = await rpc({
   jsonrpc: '2.0',
@@ -357,6 +378,28 @@ const diffPage2 = await gitDiff({ working_directory: repo, scope: 'working', pat
 assert.equal(diffPage2.offset, 4000);
 assert.equal(diffPage2.limit, 2000);
 assert.equal(diffPage2.diff.length, 2000);
+
+const largeInlineDiff = await rpc({
+  jsonrpc: '2.0',
+  id: 71,
+  method: 'tools/call',
+  params: { name: 'git_diff', arguments: { working_directory: repo, scope: 'working', pathspec: 'RENAMED.md', limit: 12000 } },
+}, state);
+assert.equal(largeInlineDiff.result?.structuredContent.schema, 'narada.producer_output_page.v1');
+assert.equal(largeInlineDiff.result?.structuredContent.result_materialized, true);
+assert.equal(largeInlineDiff.result?.structuredContent.reader_tool, 'git_output_show');
+assert.match(String(largeInlineDiff.result?.structuredContent.output_ref), /^mcp_output:/);
+assert.match(String(largeInlineDiff.result?.structuredContent.remediation), /original tool's own next_offset/);
+const shownLargeInlineDiff = await rpc({
+  jsonrpc: '2.0',
+  id: 72,
+  method: 'tools/call',
+  params: { name: 'git_output_show', arguments: { ref: largeInlineDiff.result?.structuredContent.output_ref, limit: 30000 } },
+}, state);
+assert.equal(shownLargeInlineDiff.result?.structuredContent.schema, 'narada.mcp_output_page.v1');
+assert.match(shownLargeInlineDiff.result?.structuredContent.output_text, /"schema": "narada.git.diff.v1"/);
+assert.match(shownLargeInlineDiff.result?.structuredContent.output_text, /"limit": 12000/);
+assert.match(shownLargeInlineDiff.result?.structuredContent.output_text, /"next_offset": 12000/);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });

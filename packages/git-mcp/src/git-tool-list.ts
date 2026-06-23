@@ -13,6 +13,28 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       }),
     },
     {
+      name: 'git_output_show',
+      description: 'Read a materialized Git MCP output_ref produced when a large structured result exceeds inline transport limits. Use the original git_diff next_offset inside the materialized result for diff paging; output_show offset pages the materialized JSON wrapper.',
+      inputSchema: objectSchema({
+        ref: { type: 'string', description: 'Materialized output ref, e.g. mcp_output:<id>. Alias: output_ref.' },
+        output_ref: { type: 'string', description: 'Alias for ref.' },
+        target_site_root: { type: 'string', description: 'Optional target site root for cross-site materialized output readback.' },
+        offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
+        limit: { type: 'integer', default: 10000, description: 'Maximum output characters to return.' },
+      }),
+    },
+    {
+      name: 'git_changed_summary',
+      description: 'Return a compact dirty-state summary: tracked changed paths, untracked counts grouped by top-level directory, and optional pathspec/expected-path relevance matches. Does not include file diffs.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
+        pathspec: { type: 'string', description: 'Optional single pathspec/prefix to highlight as relevant.' },
+        pathspecs: { type: 'array', items: { type: 'string' }, description: 'Optional pathspec/prefix list to highlight as relevant.' },
+        expected_paths: { type: 'array', items: { type: 'string' }, description: 'Optional expected dirty paths or prefixes for ownership/task relevance.' },
+        untracked_sample_limit: { type: 'integer', default: 20, description: 'Maximum untracked path samples to include across groups.' },
+      }),
+    },
+    {
       name: 'git_repositories_summary',
       description: 'Summarize multiple repositories for multi-repo handoff and publication checks, including dirty paths, latest commit, remotes, and push readiness.',
       inputSchema: objectSchema({
