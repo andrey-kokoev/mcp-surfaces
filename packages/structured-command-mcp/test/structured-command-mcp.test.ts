@@ -121,6 +121,16 @@ const defaultPwshCommand = decideStructuredCommandExecution({
 assert.equal(defaultPwshCommand.status, 'refused');
 assert.ok(defaultPwshCommand.reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
 
+const defaultPnpmTest = decideStructuredCommandExecution({ command: 'pnpm', args: ['test'], workingDirectory: root }, stateWithDefaultCommands.policy);
+assert.equal(defaultPnpmTest.status, 'allowed');
+assert.deepEqual(defaultPnpmTest.reasons, []);
+const defaultPnpmFilteredTest = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada2/structured-command-mcp', 'test'], workingDirectory: root }, stateWithDefaultCommands.policy);
+assert.equal(defaultPnpmFilteredTest.status, 'allowed');
+assert.deepEqual(defaultPnpmFilteredTest.reasons, []);
+const defaultPnpmFilteredDeploy = decideStructuredCommandExecution({ command: 'pnpm', args: ['--filter', '@narada2/structured-command-mcp', 'deploy'], workingDirectory: root }, stateWithDefaultCommands.policy);
+assert.equal(defaultPnpmFilteredDeploy.status, 'refused');
+assert.ok(defaultPnpmFilteredDeploy.reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
+
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 
@@ -133,6 +143,8 @@ assert.deepEqual(toolNames, [
   'structured_command_input_create',
 ]);
 const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
+assert.equal(executeTool.canonical_name, 'structured_command_execute');
+assert.equal(executeTool.annotations.canonicalName, 'structured_command_execute');
 assert.ok(executeTool.inputSchema.properties.execution_ref);
 assert.ok(executeTool.inputSchema.properties.stdout_offset);
 assert.ok(executeTool.inputSchema.properties.stdout_limit);
@@ -212,6 +224,22 @@ assert.equal(timedOut.timed_out, true);
 assert.equal(timedOut.cancelled, false);
 assert.match(String(timedOut.execution_ref), /^structured_command_execution:/);
 
+const stateWithTinyOutput = createServerState({
+  allowedRoot: root,
+  allowCommand: ['node'],
+  auditLogDir: join(root, 'audit-tiny-output'),
+  maxOutputBytes: 120,
+});
+const truncatedTail = await exec({
+  command: 'node',
+  args: ['-e', 'process.stdout.write("prefix-".repeat(200) + "TAIL_SENTINEL")'],
+  working_directory: root,
+}, stateWithTinyOutput);
+assert.equal(truncatedTail.status, 'ok');
+assert.equal(truncatedTail.stdout_truncated, true);
+assert.match(truncatedTail.stdout, /preserved tail/);
+assert.match(truncatedTail.stdout, /TAIL_SENTINEL/);
+
 const okFromTrustConfig = await exec({
   command: 'node',
   args: ['--version'],
@@ -281,7 +309,15 @@ const refusedGitAdd = await exec({
   working_directory: root,
 }, state);
 assert.equal(refusedGitAdd.status, 'refused');
-assert.deepEqual(refusedGitAdd.remediation_hints, ['Use the governed Git MCP tool git_git_add instead of shelling out to git.']);
+assert.deepEqual(refusedGitAdd.remediation_hints, ['Use the governed Git MCP tool git_add instead of shelling out to git.']);
+
+const refusedGitStatus = await exec({
+  command: 'git',
+  args: ['status', '--short'],
+  working_directory: root,
+}, stateWithDefaultCommands);
+assert.equal(refusedGitStatus.status, 'refused');
+assert.deepEqual(refusedGitStatus.remediation_hints, ['Use the governed Git MCP tool git_status instead of shelling out to git.']);
 
 const refusedSearch = await rpc({
   jsonrpc: '2.0',
@@ -294,7 +330,29 @@ const refusedSearch = await rpc({
 }, state);
 assert.equal(refusedSearch.result.structuredContent.status, 'refused');
 assert.deepEqual(refusedSearch.result.structuredContent.remediation_hints, ['Use local-filesystem fs_grep_search for content search or fs_glob_search for file pattern search.']);
+assert.deepEqual(refusedSearch.result.structuredContent.mcp_fallbacks[0], {
+  surface_id: 'local-filesystem',
+  tool_name: 'fs_grep_search',
+  canonical_name: 'fs_grep_search',
+  purpose: 'content_search',
+  arguments: {
+    pattern: 'needle',
+    path: root,
+    output_mode: 'content',
+  },
+});
+assert.equal(refusedSearch.result.structuredContent.mcp_fallbacks[1].tool_name, 'fs_glob_search');
+assert.equal(refusedSearch.result.structuredContent.decision.mcp_fallbacks[0].tool_name, 'fs_grep_search');
 assert.match(refusedSearch.result.content[0].text, /remediation_hints: Use local-filesystem fs_grep_search/);
+
+const refusedRgFiles = await exec({
+  command: 'rg',
+  args: ['--files', '-g', '*.ts'],
+  working_directory: root,
+}, state);
+assert.equal(refusedRgFiles.status, 'refused');
+assert.equal(refusedRgFiles.mcp_fallbacks[0].tool_name, 'fs_glob_search');
+assert.deepEqual(refusedRgFiles.mcp_fallbacks[0].arguments, { pattern: '*.ts', directory: root });
 
 const longInlineScript = `${' '.repeat(318)}process.stdout.write('long-inline-ok')`;
 const okLongInlineArg = await exec({
@@ -332,6 +390,10 @@ assert.equal(policy.result.structuredContent.allowed_commands.includes('railway'
 assert.equal(policy.result.structuredContent.allowed_commands.includes('wrangler'), true);
 assert.deepEqual(policy.result.structuredContent.default_allowed_commands, ['railway', 'wrangler']);
 assert.deepEqual(policy.result.structuredContent.default_allowed_prefixes, [
+  'pnpm test',
+  'pnpm build',
+  'pnpm typecheck',
+  'pnpm --filter',
   'pwsh -file',
   'pwsh -noprofile -file',
   'pwsh -noprofile -executionpolicy bypass -file',

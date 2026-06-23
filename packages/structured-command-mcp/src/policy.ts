@@ -19,6 +19,10 @@ const DEFAULT_ALLOWED_COMMANDS = new Set([
 ]);
 
 const DEFAULT_ALLOWED_PREFIXES = [
+  ['pnpm', 'test'],
+  ['pnpm', 'build'],
+  ['pnpm', 'typecheck'],
+  ['pnpm', '--filter'],
   ['pwsh', '-file'],
   ['pwsh', '-noprofile', '-file'],
   ['pwsh', '-noprofile', '-executionpolicy', 'bypass', '-file'],
@@ -108,6 +112,7 @@ export function decideStructuredCommandExecution({ command, args = [], workingDi
     status: reasons.length === 0 ? 'allowed' : 'refused',
     reasons,
     remediation_hints: reasons.length === 0 ? [] : buildRemediationHints(argv, reasons),
+    mcp_fallbacks: reasons.length === 0 ? [] : buildMcpFallbacks(argv, reasons, cwd),
     command: normalizedCommand,
     args: argv.slice(1),
     working_directory: cwd,
@@ -122,15 +127,15 @@ function buildRemediationHints(argv, reasons) {
 
   if (command === 'git') {
     const toolBySubcommand = {
-      add: 'git_git_add',
-      commit: 'git_git_commit',
-      diff: 'git_git_diff',
-      log: 'git_git_log',
-      push: 'git_git_push',
-      show: 'git_git_show',
-      status: 'git_git_status',
+      add: 'git_add',
+      commit: 'git_commit',
+      diff: 'git_diff',
+      log: 'git_log',
+      push: 'git_push',
+      show: 'git_show',
+      status: 'git_status',
     };
-    const tool = toolBySubcommand[subcommand] ?? 'git_git_status';
+    const tool = toolBySubcommand[subcommand] ?? 'git_status';
     hints.push(`Use the governed Git MCP tool ${tool} instead of shelling out to git.`);
   }
 
@@ -153,6 +158,81 @@ function buildRemediationHints(argv, reasons) {
   return [...new Set(hints)];
 }
 
+function buildMcpFallbacks(argv, reasons, cwd) {
+  const command = argv[0]?.toLowerCase();
+  const args = argv.slice(1);
+  const fallbacks = [];
+  const refusedByCommandPolicy = reasons.some((reason) => String(reason).startsWith('command_not_allowed:'));
+  if (!refusedByCommandPolicy) return fallbacks;
+
+  if (command === 'rg' || command === 'grep' || command === 'findstr') {
+    const searchPattern = firstSearchPatternArg(args);
+    const filesMode = command === 'rg' && args.some((arg) => String(arg).toLowerCase() === '--files');
+    if (!filesMode) {
+      fallbacks.push({
+        surface_id: 'local-filesystem',
+        tool_name: 'fs_grep_search',
+        canonical_name: 'fs_grep_search',
+        purpose: 'content_search',
+        arguments: {
+          pattern: searchPattern ?? '<search pattern>',
+          path: cwd,
+          output_mode: 'content',
+        },
+      });
+    }
+    fallbacks.push({
+      surface_id: 'local-filesystem',
+      tool_name: 'fs_glob_search',
+      canonical_name: 'fs_glob_search',
+      purpose: filesMode ? 'file_listing' : 'file_pattern_search',
+      arguments: {
+        pattern: firstGlobArg(args) ?? '*',
+        directory: cwd,
+      },
+    });
+  }
+
+  if (command === 'ls' || command === 'dir' || command === 'find') {
+    fallbacks.push({
+      surface_id: 'local-filesystem',
+      tool_name: 'fs_glob_search',
+      canonical_name: 'fs_glob_search',
+      purpose: 'filesystem_listing',
+      arguments: {
+        pattern: '*',
+        directory: cwd,
+      },
+    });
+  }
+
+  return fallbacks;
+}
+
+function firstSearchPatternArg(args) {
+  const optionsWithValues = new Set(['-g', '--glob', '-t', '--type', '-T', '--type-not', '-e', '--regexp']);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = String(args[index] ?? '');
+    if (!arg) continue;
+    if (optionsWithValues.has(arg)) {
+      if (arg === '-e' || arg === '--regexp') return args[index + 1] ? String(args[index + 1]) : null;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    return arg;
+  }
+  return null;
+}
+
+function firstGlobArg(args) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = String(args[index] ?? '');
+    if (arg === '-g' || arg === '--glob') return args[index + 1] ? String(args[index + 1]) : null;
+  }
+  return null;
+}
+
 export function publicExecutionPolicy(policy) {
   return {
     schema: 'narada.structured_command.execution_policy.v0',
@@ -172,7 +252,15 @@ function isCommandAllowed(argv, policy) {
   const command = argv[0]?.toLowerCase();
   if (!command) return false;
   if (policy.allowedCommands.has(command)) return true;
-  return policy.allowedPrefixes.some((prefix) => prefix.every((part, index) => commandPartMatches(argv[index], part, index)));
+  return policy.allowedPrefixes.some((prefix) => prefix.every((part, index) => commandPartMatches(argv[index], part, index)) && prefixAllowedByAdditionalGuards(prefix, argv));
+}
+
+function prefixAllowedByAdditionalGuards(prefix, argv) {
+  if (prefix[0] === 'pnpm' && prefix[1] === '--filter') {
+    const script = argv[3]?.toLowerCase();
+    return script === 'test' || script === 'build' || script === 'typecheck' || String(script ?? '').startsWith('test:');
+  }
+  return true;
 }
 
 function commandPartMatches(actual, expected, index) {

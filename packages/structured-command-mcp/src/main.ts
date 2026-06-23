@@ -317,6 +317,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
       decision,
       refusal_reasons: decision.reasons,
       remediation_hints: decision.remediation_hints,
+      mcp_fallbacks: decision.mcp_fallbacks,
       command: decision.command,
       args: decision.args,
       working_directory: decision.working_directory,
@@ -668,6 +669,7 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
       working_directory: payload.working_directory,
       refusal_reasons: payload.refusal_reasons ?? payload.decision?.reasons ?? [],
       remediation_hints: payload.remediation_hints ?? payload.decision?.remediation_hints ?? [],
+      mcp_fallbacks: payload.mcp_fallbacks ?? payload.decision?.mcp_fallbacks ?? [],
       decision: payload.decision ?? null,
       execution_ref: payload.execution_ref ?? null,
       truncated,
@@ -889,7 +891,14 @@ function sha256Text(value) {
 
 function truncateUtf8(value, maxBytes) {
   let out = value;
-  while (Buffer.byteLength(out, 'utf8') > maxBytes) out = out.slice(0, -1);
+  if (Buffer.byteLength(out, 'utf8') <= maxBytes) return out;
+  const marker = '[structured-command omitted earlier output; preserved tail]\n';
+  if (maxBytes <= Buffer.byteLength(marker, 'utf8')) {
+    while (Buffer.byteLength(out, 'utf8') > maxBytes) out = out.slice(1);
+    return out;
+  }
+  out = `${marker}${out}`;
+  while (Buffer.byteLength(out, 'utf8') > maxBytes) out = `${marker}${out.slice(marker.length + 1)}`;
   return out;
 }
 
@@ -898,7 +907,12 @@ function objectSchema(properties, required = []) {
 }
 
 function decorateTools(tools) {
-  return tools.map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+  return tools.map((tool) => ({
+    ...tool,
+    canonical_name: tool.name,
+    annotations: { ...toolAnnotations(tool.name), canonicalName: tool.name },
+    outputSchema: genericToolOutputSchema(),
+  }));
 }
 
 function toolAnnotations(name) {
