@@ -143,7 +143,26 @@
           "task_lifecycle_roster",
           "task_lifecycle_show"
         ],
-        "mutating_tools": [],
+        "mutating_tools": [
+          "task_lifecycle_admit_evidence",
+          "task_lifecycle_bridge_poll",
+          "task_lifecycle_chapter_add_task",
+          "task_lifecycle_claim",
+          "task_lifecycle_close",
+          "task_lifecycle_continue",
+          "task_lifecycle_create",
+          "task_lifecycle_defer",
+          "task_lifecycle_disposition_closeout",
+          "task_lifecycle_finish",
+          "task_lifecycle_prove_criteria",
+          "task_lifecycle_reopen",
+          "task_lifecycle_review",
+          "task_lifecycle_roster_admit",
+          "task_lifecycle_run_tests",
+          "task_lifecycle_set_routing",
+          "task_lifecycle_submit_observation",
+          "task_lifecycle_unclaim"
+        ],
         "refused_tools": []
       },
       "registered_live_tools": []

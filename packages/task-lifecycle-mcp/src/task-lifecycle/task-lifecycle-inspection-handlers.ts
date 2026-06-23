@@ -87,6 +87,7 @@ export function createTaskLifecycleInspectionHandlers({
       const routing = readTaskRouting(store, lifecycle.task_id, spec);
       const obligations = store.listDirectedObligationsForTask(lifecycle.task_id, null);
       const reports = store.db.prepare('SELECT report_id, agent_id, submitted_at as reported_at FROM task_reports WHERE task_id = ?').all(lifecycle.task_id);
+      const observations = store.db.prepare('SELECT * FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
       const reviewRows = store.db.prepare('SELECT * FROM task_reviews WHERE task_id = ? ORDER BY reviewed_at DESC').all(lifecycle.task_id);
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
       const reviews = reviewRows.map((review) => ({
@@ -124,6 +125,8 @@ export function createTaskLifecycleInspectionHandlers({
         routing_assignment_divergence: buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, reports }),
         assignment_intents: assignmentIntents,
         reports: reports || [],
+        observations: observations || [],
+        observation_artifact_count: observations.length,
         reviews: reviews || [],
         obligations: obligations.map((obligation) => ({ obligation_id: obligation.obligation_id, kind: obligation.kind, status: obligation.status })),
         eligible_reviewers: eligibleReviewers,
@@ -206,12 +209,16 @@ export function createTaskLifecycleInspectionHandlers({
         FROM evidence_admission_results
         WHERE admitted_at >= ? AND admitted_at <= ?
         UNION ALL
+        SELECT 'observation', CAST(COALESCE(task_number, '') AS TEXT), COALESCE(agent_id, source_operator), created_at, 'submitted', artifact_id
+        FROM observation_artifacts
+        WHERE created_at >= ? AND created_at <= ?
+        UNION ALL
         SELECT 'close', CAST(task_number AS TEXT), closed_by, closed_at, closure_mode, task_id
         FROM task_lifecycle
         WHERE closed_at IS NOT NULL AND closed_at >= ? AND closed_at <= ?
         ORDER BY occurred_at DESC
       `;
-      const rows = store.db.prepare(sql).all(sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal);
+      const rows = store.db.prepare(sql).all(sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal);
       return jsonToolResult({
         status: 'ok',
         schema: 'narada.task.mcp.audit.v0',

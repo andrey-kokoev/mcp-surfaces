@@ -139,5 +139,19 @@ export function validationErrorResult(validationErrors) {
     status: 'error',
     schema: 'narada.task.mcp.validation_error.v0',
     validation_errors: validationErrors,
+    accepted_payload_shapes: buildAcceptedPayloadShapeHints(validationErrors),
   };
+}
+
+function buildAcceptedPayloadShapeHints(validationErrors) {
+  const hints = [];
+  if (validationErrors.some((error) => String(error.field).startsWith('findings'))) {
+    hints.push({
+      field: 'findings',
+      accepted_shape: [{ severity: 'note|blocking', description: '<finding text>', location: '<optional location>' }],
+      payload_ref_retry_shape: { findings: [{ severity: 'note', description: '<short finding text>' }] },
+      rule: 'findings must be an array of finding objects, not an object keyed by index and not an array of strings.',
+    });
+  }
+  return hints;
 }

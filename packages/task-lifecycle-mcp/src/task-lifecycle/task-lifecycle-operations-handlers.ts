@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_submit_observation",
   "task_lifecycle_bridge_poll",
@@ -270,8 +273,23 @@ export function createTaskLifecycleOperationsHandlers(context) {
       if (taskNumber && !lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
       const targets = testTargetsForSelector(selector);
       const results = [];
+      const testServer = resolveTestMcpServerPath(siteRoot);
+      if (!testServer.found) {
+        return jsonToolResult({
+          schema: 'narada.task_lifecycle.run_tests.v0',
+          status: 'failed',
+          error: 'test_mcp_server_not_found',
+          selector,
+          task_number: taskNumber ?? null,
+          task_id: lifecycle?.task_id ?? null,
+          agent_id: agentId,
+          configured_test_server_path: testServer.primary,
+          candidate_test_server_paths: testServer.candidates,
+          remediation: 'Configure the site Test MCP server path for this workspace or run package/root tests through structured-command and submit the resulting execution refs as evidence.',
+        }, true);
+      }
       for (const target of targets) {
-        const result = await testMcpTool(siteRoot, 'tools/mcp-servers/test/test-mcp-server.js', 'run_test', target, { timeoutSeconds });
+        const result = await testMcpTool(siteRoot, testServer.path, 'run_test', target, { timeoutSeconds });
         results.push(result);
       }
       const failed = results.filter((result) => result.status !== 'passed');
@@ -312,4 +330,16 @@ export function createTaskLifecycleOperationsHandlers(context) {
   }
 
   return Object.fromEntries(TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES.map((name) => [name, (args, dispatchContext) => dispatchOperationsTool(name, args, dispatchContext)]));
+}
+
+function resolveTestMcpServerPath(siteRoot) {
+  const candidates = [
+    'tools/mcp-servers/test/test-mcp-server.js',
+    'packages/test-mcp-server/dist/test-mcp-server.js',
+  ];
+  for (const candidate of candidates) {
+    const fullPath = resolve(siteRoot, candidate);
+    if (existsSync(fullPath)) return { found: true, path: candidate, primary: resolve(siteRoot, candidates[0]), candidates: candidates.map((item) => resolve(siteRoot, item)) };
+  }
+  return { found: false, path: null, primary: resolve(siteRoot, candidates[0]), candidates: candidates.map((item) => resolve(siteRoot, item)) };
 }

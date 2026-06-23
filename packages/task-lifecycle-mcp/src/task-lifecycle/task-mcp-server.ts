@@ -14,7 +14,7 @@ import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admiss
 import { randomUUID } from 'crypto';
 import { relative, resolve, join, sep } from 'path';
 import { pathToFileURL } from 'url';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'child_process';
 import { pollInboxBridge, targetInboxEnvelope, readUnprocessedEnvelopes, evaluateEnvelopeSeverity } from './inbox-bridge.js';
 import { readAdmissionLog, resolveEnvelopeStatus } from '../inbox/admission-log.js';
@@ -103,9 +103,66 @@ const TOOL_ALIASES = TASK_LIFECYCLE_TOOL_ALIASES;
 
 function taskLifecycleTools() {
   return [
-    ...taskLifecycleDomainTools(),
+    ...taskLifecycleDomainTools().map(patchLocalToolDefinition),
+    {
+      name: 'task_lifecycle_payload_schema',
+      description: 'Show accepted payload_ref shapes for lifecycle finish, closeout, review, and evidence payloads.',
+      inputSchema: objectSchema({
+        tool: stringSchema('Optional lifecycle tool name such as task_lifecycle_review or task_lifecycle_finish.'),
+      }),
+      annotations: { title: 'task_lifecycle_payload_schema', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'task_lifecycle_chapter_add_task',
+      description: 'Add an existing task to a named chapter membership list. Defaults to appending after the current maximum order_index.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chapter_id: { type: 'string', description: 'Stable chapter identifier.' },
+          task_number: { type: 'number', description: 'Existing task number to add.' },
+          order_index: { type: 'number', description: 'Optional explicit order index. Used as an insertion point only when append is false.' },
+          append: { type: 'boolean', description: 'When omitted or true, append after the current maximum order_index.' },
+          note: { type: 'string', description: 'Optional membership note.' },
+          actor_agent_id: { type: 'string', description: 'Principal adding the membership.' },
+        },
+        required: ['chapter_id', 'task_number'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'task_lifecycle_chapter_add_task', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'task_lifecycle_chapter_show',
+      description: 'Show task memberships for one chapter, ordered by order_index.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          chapter_id: { type: 'string', description: 'Stable chapter identifier.' },
+        },
+        required: ['chapter_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'task_lifecycle_chapter_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
     ...listPayloadTools(),
   ];
+}
+
+function patchLocalToolDefinition(toolDef) {
+  if (toolDef?.name !== 'task_lifecycle_review') return toolDef;
+  return {
+    ...toolDef,
+    description: `${toolDef.description} For long findings, create payload { findings: [{ severity, description, location? }] } and retry with payload_ref plus top-level task_number, agent_id, and verdict.`,
+    inputSchema: {
+      ...toolDef.inputSchema,
+      properties: {
+        ...(toolDef.inputSchema?.properties ?? {}),
+        findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
+      },
+    },
+  };
 }
 
 let siteRoot = null;
@@ -952,6 +1009,8 @@ function getTaskLifecycleHandlerRegistry() {
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
         mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
+        task_lifecycle_chapter_add_task: (args) => jsonToolResult(taskLifecycleChapterAddTask(args)),
+        task_lifecycle_chapter_show: (args) => jsonToolResult(taskLifecycleChapterShow(args)),
       },
     });
   }
@@ -1033,6 +1092,123 @@ function taskLifecycleRestart(args) {
     reason: stringField(args, 'reason') ?? 'task_lifecycle_restart requested through MCP',
     note: 'This tool cannot restart its own stdio MCP process. Restart the carrier/session MCP servers externally to load task-lifecycle source changes.',
   });
+}
+
+function chapterStorePath() {
+  return join(siteRoot, '.ai', 'do-not-open', 'task-chapters.json');
+}
+
+function readChapterStore() {
+  const path = chapterStorePath();
+  if (!existsSync(path)) {
+    return { schema: 'narada.task.chapters.v1', chapters: {} };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    return {
+      schema: 'narada.task.chapters.v1',
+      chapters: parsed && typeof parsed.chapters === 'object' && !Array.isArray(parsed.chapters) ? parsed.chapters : {},
+    };
+  } catch (error) {
+    throw new Error(`task_chapter_store_unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function writeChapterStore(doc) {
+  mkdirSync(join(siteRoot, '.ai', 'do-not-open'), { recursive: true });
+  writeFileSync(chapterStorePath(), JSON.stringify({ schema: 'narada.task.chapters.v1', updated_at: new Date().toISOString(), chapters: doc.chapters ?? {} }, null, 2) + '\n', 'utf8');
+}
+
+function taskLifecycleChapterAddTask(args) {
+  refreshStore();
+  const chapterId = normalizeChapterId(args.chapter_id);
+  const taskNumber = normalizeChapterTaskNumber(args.task_number);
+  const taskSpec = store.getTaskSpecByNumber(taskNumber);
+  const lifecycle = store.getLifecycleByNumber(taskNumber);
+  if (!taskSpec && !lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+
+  const doc = readChapterStore();
+  const chapters = doc.chapters ?? {};
+  const chapter = chapters[chapterId] && typeof chapters[chapterId] === 'object' ? chapters[chapterId] : {};
+  const memberships = Array.isArray(chapter.memberships) ? chapter.memberships : [];
+  const existing = memberships.find((item) => Number(item.task_number) === taskNumber);
+  if (existing) {
+    return buildChapterMembershipResult({ status: 'already_present', chapterId, taskNumber, memberships });
+  }
+
+  const appendMode = args.append !== false || args.order_index === undefined || args.order_index === null;
+  const now = new Date().toISOString();
+  let orderIndex = appendMode
+    ? memberships.reduce((max, item) => Math.max(max, Number(item.order_index ?? 0)), 0) + 1
+    : normalizeOrderIndex(args.order_index);
+  if (!appendMode) {
+    for (const item of memberships) {
+      if (Number(item.order_index ?? 0) >= orderIndex) item.order_index = Number(item.order_index ?? 0) + 1;
+    }
+  }
+  memberships.push({
+    task_number: taskNumber,
+    order_index: orderIndex,
+    note: stringField(args, 'note') ?? null,
+    added_by: stringField(args, 'actor_agent_id') ?? process.env.NARADA_AGENT_ID ?? null,
+    added_at: now,
+  });
+  memberships.sort(compareChapterMemberships);
+  chapters[chapterId] = { chapter_id: chapterId, updated_at: now, memberships };
+  writeChapterStore({ chapters });
+  return buildChapterMembershipResult({ status: 'added', chapterId, taskNumber, memberships, appendMode });
+}
+
+function taskLifecycleChapterShow(args) {
+  const chapterId = normalizeChapterId(args.chapter_id);
+  const doc = readChapterStore();
+  const chapter = doc.chapters?.[chapterId];
+  const memberships = Array.isArray(chapter?.memberships) ? [...chapter.memberships].sort(compareChapterMemberships) : [];
+  return {
+    schema: 'narada.task.chapter.v1',
+    status: 'ok',
+    chapter_id: chapterId,
+    membership_count: memberships.length,
+    memberships,
+  };
+}
+
+function buildChapterMembershipResult({ status, chapterId, taskNumber, memberships, appendMode = null }) {
+  const ordered = [...memberships].sort(compareChapterMemberships);
+  const membership = ordered.find((item) => Number(item.task_number) === taskNumber) ?? null;
+  return {
+    schema: 'narada.task.chapter_membership.v1',
+    status,
+    chapter_id: chapterId,
+    task_number: taskNumber,
+    order_index: membership ? Number(membership.order_index) : null,
+    append_mode: appendMode,
+    membership_count: ordered.length,
+    membership,
+    memberships: ordered,
+  };
+}
+
+function compareChapterMemberships(a, b) {
+  return Number(a.order_index ?? 0) - Number(b.order_index ?? 0) || Number(a.task_number ?? 0) - Number(b.task_number ?? 0);
+}
+
+function normalizeChapterId(value) {
+  const text = String(value ?? '').trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) throw new Error('invalid_chapter_id');
+  return text;
+}
+
+function normalizeChapterTaskNumber(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_task_number: ${value}`);
+  return number;
+}
+
+function normalizeOrderIndex(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_order_index: ${value}`);
+  return number;
 }
 
 async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
@@ -1341,6 +1517,13 @@ function legacyTaskLifecycleToolsSnapshot() {
       inputSchema: objectSchema({}),
     },
     {
+      name: 'task_lifecycle_payload_schema',
+      description: 'Show accepted payload_ref shapes for lifecycle finish, closeout, review, and evidence payloads.',
+      inputSchema: objectSchema({
+        tool: stringSchema('Optional lifecycle tool name such as task_lifecycle_review or task_lifecycle_finish.'),
+      }),
+    },
+    {
       name: 'task_lifecycle_roster_admit',
       description: 'Append an admitted roster identity event and project it into the agent_roster read model.',
       inputSchema: objectSchema({
@@ -1516,12 +1699,12 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_review',
-      description: 'Review a task in_review: accept, accept_with_notes, or reject. Response includes close_blocked when evidence admission blocks closure despite accepted review.',
+      description: 'Review a task in_review: accept, accept_with_notes, or reject. Response includes close_blocked when evidence admission blocks closure despite accepted review. For long findings, create payload { findings: [{ severity, description, location? }] } and retry with payload_ref plus top-level task_number, agent_id, and verdict.',
       inputSchema: objectSchema({
         task_number: numberSchema('Task number to review.'),
         agent_id: stringSchema('Reviewer agent id.'),
         verdict: stringSchema('Verdict: accepted, accepted_with_notes, rejected.'),
-        findings: { type: 'array', description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
+        findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
         single_operator_review: { type: 'boolean', description: 'Set to true to allow and annotate a same-operator review (reviewer and finisher share operator_identity).' },
       }, ['task_number', 'agent_id', 'verdict']),
     },

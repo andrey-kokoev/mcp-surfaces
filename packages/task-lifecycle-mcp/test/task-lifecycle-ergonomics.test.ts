@@ -10,13 +10,14 @@ process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE = '1';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-ergonomics-'));
 
-function writeTask(taskNumber: number, taskId: string, status: string) {
+function writeTask(taskNumber: number, taskId: string, status: string, extraFrontMatter = '') {
   writeFileSync(
     join(siteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`),
     `---
 task_id: ${taskId}
 task_number: ${taskNumber}
 status: ${status}
+${extraFrontMatter}
 ---
 
 # Task ${taskNumber}
@@ -82,6 +83,12 @@ try {
 
   const inReviewTaskId = '20260604-9201-ergonomics-in-review';
   writeTask(9201, inReviewTaskId, 'in_review');
+  const roleMismatchTaskId = '20260604-9202-role-mismatch-diagnostics';
+  writeTask(9202, roleMismatchTaskId, 'opened', 'target_role: qa');
+  const chapterTaskId = '20260604-9203-chapter-membership';
+  writeTask(9203, chapterTaskId, 'opened');
+  const reopenedTaskId = '20260604-9204-reopened-fresh-review';
+  writeTask(9204, reopenedTaskId, 'claimed', 'reopened_at: 2026-06-04T02:00:00Z\nreopened_by: operator');
 
   const store = openTaskLifecycleStore(siteRoot);
   try {
@@ -94,6 +101,19 @@ try {
       status: 'active',
       task_number: null,
       last_done: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertLifecycle({
+      task_id: chapterTaskId,
+      task_number: 9203,
+      status: 'opened',
+      governed_by: null,
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
     store.upsertRosterEntry({
@@ -120,6 +140,85 @@ try {
       continuation_packet_json: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
+    store.upsertLifecycle({
+      task_id: roleMismatchTaskId,
+      task_number: 9202,
+      status: 'opened',
+      governed_by: null,
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertLifecycle({
+      task_id: reopenedTaskId,
+      task_number: 9204,
+      status: 'claimed',
+      governed_by: 'builder',
+      closed_at: '2026-06-04T01:00:00Z',
+      closed_by: 'smart-scheduling.architect',
+      closure_mode: 'peer_reviewed',
+      reopened_at: '2026-06-04T02:00:00Z',
+      reopened_by: 'operator',
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T02:00:00Z',
+    });
+    store.insertAssignment({
+      assignment_id: 'assign-reopened-fresh-review',
+      task_id: reopenedTaskId,
+      agent_id: 'smart-scheduling.builder',
+      claimed_at: '2026-06-04T02:05:00Z',
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
+    const staleReport = {
+      report_id: 'report-reopened-stale-pre-reopen',
+      task_number: 9204,
+      task_id: reopenedTaskId,
+      agent_id: 'smart-scheduling.builder',
+      assignment_id: 'assign-reopened-before-reopen',
+      directive_id: null,
+      reported_at: '2026-06-04T00:20:00Z',
+      summary: 'Stale pre-reopen implementation report.',
+      changed_files: ['src/stale.ts'],
+      verification: [{ command: 'stale', result: 'passed before reopen' }],
+      known_residuals: [],
+      ready_for_review: true,
+      report_status: 'accepted',
+    };
+    store.upsertReportRecord({
+      report_id: staleReport.report_id,
+      task_id: reopenedTaskId,
+      assignment_id: staleReport.assignment_id,
+      agent_id: staleReport.agent_id,
+      reported_at: staleReport.reported_at,
+      report_json: JSON.stringify(staleReport),
+    });
+    store.insertReview({
+      review_id: 'review-reopened-stale-pre-reopen',
+      task_id: reopenedTaskId,
+      reviewer_agent_id: 'smart-scheduling.architect',
+      verdict: 'accepted',
+      findings_json: null,
+      reviewed_at: '2026-06-04T00:30:00Z',
+    });
+    store.db.exec(`
+      CREATE TABLE IF NOT EXISTS narada_andrey_task_role_preferences (
+        task_id TEXT PRIMARY KEY,
+        preferred_role TEXT,
+        target_role TEXT,
+        preferred_agent_id TEXT,
+        updated_at TEXT
+      )
+    `);
+    store.db.prepare(`
+      INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(roleMismatchTaskId, 'qa', 'qa', null, '2026-06-04T00:00:00Z');
   } finally {
     store.db.close();
   }
@@ -233,6 +332,190 @@ try {
   const rosterAdmitNoopPayload = await responsePayload(rosterAdmitNoopResponse, builderRuntime, 10);
   assert.equal(rosterAdmitNoopPayload.status, 'already_present');
   assert.equal(rosterAdmitNoopPayload.capabilities_changed, false);
+
+  // 5. Payload schema and validation diagnostics expose accepted findings shape.
+  const schemaResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 101,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_payload_schema',
+      arguments: { tool: 'task_lifecycle_review' },
+    },
+  }, builderRuntime);
+  const schemaPayload = await responsePayload(schemaResponse, builderRuntime, 102);
+  assert.equal(schemaPayload.status, 'ok');
+  assert.deepEqual(schemaPayload.schemas.task_lifecycle_review.payload_ref_shape.findings[0].description, '<finding text>');
+
+  const toolsListResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1011,
+    method: 'tools/list',
+    params: {},
+  }, builderRuntime);
+  const reviewTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_review');
+  assert.equal(reviewTool.inputSchema.properties.findings.type, 'array');
+  assert.equal(reviewTool.inputSchema.properties.findings.items.type, 'object');
+  assert.match(reviewTool.inputSchema.properties.findings.description, /finding objects/);
+
+  const invalidFindingsResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 103,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_review',
+      arguments: {
+        task_number: 9201,
+        agent_id: 'smart-scheduling.architect',
+        verdict: 'accepted_with_notes',
+        findings: ['not an object'],
+      },
+    },
+  }, architectRuntime);
+  const invalidFindingsPayload = await responsePayload(invalidFindingsResponse, architectRuntime, 104);
+  assert.equal(invalidFindingsPayload.status, 'error');
+  assert.equal(invalidFindingsPayload.validation_errors[0].field, 'findings[0]');
+  assert.match(invalidFindingsPayload.accepted_payload_shapes[0].rule, /array of finding objects/);
+
+  // 6. Role-target claim failures include MCP-native remediation paths.
+  const roleMismatchClaimResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 105,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_claim',
+      arguments: { task_number: 9202, agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const roleMismatchClaimPayload = await responsePayload(roleMismatchClaimResponse, builderRuntime, 106);
+  assert.equal(roleMismatchClaimPayload.status, 'role_mismatch');
+  assert.equal(roleMismatchClaimPayload.remediation.roster_admit.tool, 'task_lifecycle_roster_admit');
+  assert.equal(roleMismatchClaimPayload.remediation.reroute.tool, 'task_lifecycle_set_routing');
+
+  // 7. run_tests reports configured Test MCP paths instead of surfacing MODULE_NOT_FOUND.
+  const runTestsResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 107,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_run_tests',
+      arguments: { selector: 'task-lifecycle', agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const runTestsPayload = await responsePayload(runTestsResponse, builderRuntime, 108);
+  assert.equal(runTestsPayload.status, 'failed');
+  assert.equal(runTestsPayload.error, 'test_mcp_server_not_found');
+  assert.match(runTestsPayload.configured_test_server_path, /tools[\\/]mcp-servers[\\/]test[\\/]test-mcp-server\.js/);
+  assert.match(runTestsPayload.remediation, /structured-command/);
+
+  // 8. Reopened tasks ignore pre-reopen reports/reviews and create a fresh review epoch.
+  const reopenedFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 120,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9204,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Fresh post-reopen implementation report.',
+        changed_files: ['src/fresh.ts'],
+        reviewer: 'smart-scheduling.architect',
+      },
+    },
+  }, builderRuntime);
+  const reopenedFinishPayload = await responsePayload(reopenedFinishResponse, builderRuntime, 121);
+  assert.equal(reopenedFinishPayload.status, 'success');
+  assert.equal(reopenedFinishPayload.completion_mode, 'report');
+  assert.equal(reopenedFinishPayload.report_action, 'submitted');
+  assert.notEqual(reopenedFinishPayload.report_id, 'report-reopened-stale-pre-reopen');
+  assert.equal(reopenedFinishPayload.review_action, 'skipped');
+  assert.equal(reopenedFinishPayload.close_action, 'skipped');
+  assert.equal(reopenedFinishPayload.new_status, 'in_review');
+
+  const reopenedReviewResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 122,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_review',
+      arguments: {
+        task_number: 9204,
+        agent_id: 'smart-scheduling.architect',
+        verdict: 'accepted',
+        auto_accept_single_operator: true,
+      },
+    },
+  }, architectRuntime);
+  const reopenedReviewPayload = await responsePayload(reopenedReviewResponse, architectRuntime, 123);
+  assert.equal(reopenedReviewPayload.status, 'success');
+  assert.notEqual(reopenedReviewPayload.review_id, 'review-reopened-stale-pre-reopen');
+  assert.equal(reopenedReviewPayload.lifecycle_status, 'closed');
+
+  // 9. Chapter membership add defaults to append and preserves explicit insertion order.
+  const chapterAppendResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 109,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_chapter_add_task',
+      arguments: { chapter_id: 'launch-plan', task_number: 9201, actor_agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const chapterAppendPayload = await responsePayload(chapterAppendResponse, builderRuntime, 110);
+  assert.equal(chapterAppendPayload.status, 'added');
+  assert.equal(chapterAppendPayload.order_index, 1);
+  assert.equal(chapterAppendPayload.append_mode, true);
+
+  const chapterAppendSecondResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 111,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_chapter_add_task',
+      arguments: { chapter_id: 'launch-plan', task_number: 9202, actor_agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const chapterAppendSecondPayload = await responsePayload(chapterAppendSecondResponse, builderRuntime, 112);
+  assert.equal(chapterAppendSecondPayload.status, 'added');
+  assert.equal(chapterAppendSecondPayload.order_index, 2);
+
+  const chapterInsertResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 113,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_chapter_add_task',
+      arguments: { chapter_id: 'launch-plan', task_number: 9203, order_index: 2, append: false, actor_agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const chapterInsertPayload = await responsePayload(chapterInsertResponse, builderRuntime, 114);
+  assert.equal(chapterInsertPayload.status, 'added');
+  assert.equal(chapterInsertPayload.append_mode, false);
+  assert.deepEqual(chapterInsertPayload.memberships.map((item: Record<string, unknown>) => item.task_number), [9201, 9203, 9202]);
+  assert.deepEqual(chapterInsertPayload.memberships.map((item: Record<string, unknown>) => item.order_index), [1, 2, 3]);
+
+  const chapterDuplicateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 115,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_chapter_add_task',
+      arguments: { chapter_id: 'launch-plan', task_number: 9203, actor_agent_id: 'smart-scheduling.builder' },
+    },
+  }, builderRuntime);
+  const chapterDuplicatePayload = await responsePayload(chapterDuplicateResponse, builderRuntime, 116);
+  assert.equal(chapterDuplicatePayload.status, 'already_present');
+  assert.equal(chapterDuplicatePayload.membership_count, 3);
+
+  const chapterShowResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 117,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_chapter_show', arguments: { chapter_id: 'launch-plan' } },
+  }, builderRuntime);
+  const chapterShowPayload = await responsePayload(chapterShowResponse, builderRuntime, 118);
+  assert.deepEqual(chapterShowPayload.memberships.map((item: Record<string, unknown>) => item.task_number), [9201, 9203, 9202]);
 } finally {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -458,6 +741,49 @@ try {
   }, scopedRuntime);
   const payloadRefFinishPayload = await responsePayload(payloadRefFinishResponse, scopedRuntime, 22);
   assert.equal(payloadRefFinishPayload.status, 'success');
+
+  const observationResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 230,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_observation',
+      arguments: {
+        task_number: 9303,
+        agent_id: 'scoped.builder',
+        artifact_uri: 'artifact://task-9303/observation',
+        content: { note: 'Observation readback regression' },
+      },
+    },
+  }, scopedRuntime);
+  const observationPayload = await responsePayload(observationResponse, scopedRuntime, 231);
+  assert.equal(observationPayload.status, 'submitted');
+  const observationShowResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 232,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_show', arguments: { task_number: 9303 } },
+  }, scopedRuntime);
+  const observationShowPayload = await responsePayload(observationShowResponse, scopedRuntime, 233);
+  assert.equal(observationShowPayload.observations.length, 1);
+  assert.equal(observationShowPayload.observations[0].artifact_uri, 'artifact://task-9303/observation');
+  const observationInspectResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 234,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect', arguments: { task_number: 9303 } },
+  }, scopedRuntime);
+  const observationInspectPayload = await responsePayload(observationInspectResponse, scopedRuntime, 235);
+  assert.equal(observationInspectPayload.observation_artifact_count, 1);
+  assert.equal(observationInspectPayload.observations[0].artifact_uri, 'artifact://task-9303/observation');
+  const observationAuditResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 236,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_audit', arguments: {} },
+  }, scopedRuntime);
+  const observationAuditPayload = await responsePayload(observationAuditResponse, scopedRuntime, 237);
+  assert.ok(observationAuditPayload.events.some((event: Record<string, unknown>) => event.event_type === 'observation' && event.task === '9303'));
 
   const followUpPreflightResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',

@@ -37,11 +37,25 @@ export function createTaskLifecycleAssignmentHandlers({
       if (!eligibility.eligible) {
         return jsonToolResult({
           status: 'role_mismatch',
+          schema: 'narada.task.claim.role_mismatch.v1',
           task_number: taskNumber,
           target_role: eligibility.targetRole,
           agent_role: eligibility.agentRole,
           role_resolution: eligibility.roleResolution,
           message: eligibility.warning,
+          remediation: {
+            summary: 'Use MCP-native roster admission or routing repair before claiming role-targeted work.',
+            roster_admit: {
+              tool: 'task_lifecycle_roster_admit',
+              required_authority_basis: { kind: 'operator_direct_instruction', summary: '<operator authorized this agent/role binding>' },
+              example_args: { agent_id: agentId, role: eligibility.targetRole ?? '<target_role>', actor_agent_id: '<admitted_operator_agent>', authority_basis: { kind: 'operator_direct_instruction', summary: '<why this roster admission is authorized>' } },
+            },
+            reroute: {
+              tool: 'task_lifecycle_set_routing',
+              required_authority_basis: { kind: 'operator_direct_instruction', summary: '<operator authorized routing change>' },
+              example_args: { task_number: taskNumber, actor_agent_id: '<admitted_operator_agent>', target_role: eligibility.agentRole ?? '<agent_role>', authority_basis: { kind: 'operator_direct_instruction', summary: '<why reroute is authorized>' } },
+            },
+          },
         }, true);
       }
       const mismatchAuthority = validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId });
@@ -125,11 +139,16 @@ export function createTaskLifecycleAssignmentHandlers({
       if (!eligibility.eligible) {
         return jsonToolResult({
           status: 'role_mismatch',
+          schema: 'narada.task.claim.role_mismatch.v1',
           task_number: taskNumber,
           target_role: eligibility.targetRole,
           agent_role: eligibility.agentRole,
           role_resolution: eligibility.roleResolution,
           message: eligibility.warning,
+          remediation: {
+            summary: 'Use task_lifecycle_roster_admit with operator_direct_instruction authority or task_lifecycle_set_routing with explicit authority before continuing this task as the requested agent.',
+            required_authority_basis: { kind: 'operator_direct_instruction', summary: '<operator authorized roster or routing repair>' },
+          },
         }, true);
       }
 
