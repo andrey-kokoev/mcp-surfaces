@@ -484,6 +484,27 @@ try {
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries.length, 3);
   assert.match(resultView.result.graph_execution_synthesis.worker_summaries[0].output_ref, /^output-run-test-/);
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries[0].diagnostic_flags.verification_count, 1);
+
+  const researchBudgetRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Research evidence should not consume verification budget',
+    constraints: { authority: 'read', cwd: root, max_concurrency: 2 },
+    workflow: {
+      steps: [
+        { id: 'research-a', kind: 'research', instruction: 'Research slice A' },
+        { id: 'research-b', kind: 'research', instruction: 'Research slice B' },
+      ],
+    },
+    acceptance: { verification_budget: { max_attempts: 1, max_commands: 1 } },
+    execution: { wait_for_completion: true, max_concurrency: 2 },
+  });
+  const researchBudgetView = researchBudgetRun.result.structuredContent as Record<string, any>;
+  const researchBudgetResult = await callTool(state, 'delegated_task_result', { task_id: researchBudgetView.task_id, include_diagnostics: true });
+  const researchBudgetResultView = researchBudgetResult.result.structuredContent as Record<string, any>;
+  const researchBudgetCheck = researchBudgetResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'verification_budget');
+  assert.equal(researchBudgetResultView.result.verification.length, 1);
+  assert.equal(researchBudgetCheck.verification_count, 0);
+  assert.equal(researchBudgetCheck.status, 'passed');
+
   assert.equal(resultView.result.join_syntheses.length, 1);
   assert.equal(resultView.result.join_syntheses[0].worker_ref_count, 3);
   assert.equal(resultView.result.join_syntheses[0].worker_summaries.length, 3);

@@ -11,6 +11,7 @@ import {
   payloadCreate,
   payloadShow,
   readOutputResource,
+  resolveToolPayloadArgs,
 } from '../src/mcp-payload-file.js';
 
 const exactly200 = 'x'.repeat(200);
@@ -94,6 +95,16 @@ try {
   });
   const createdPayloadEnvelope = (createdPayloadResult as { structuredContent: Record<string, unknown> }).structuredContent;
   assert.match(String(createdPayloadEnvelope.payload_ref), /^mcp_payload:/);
+
+  const mergePayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { task_number: 1, agent_id: 'payload.agent', summary: 'from payload' } } });
+  const merged = resolveToolPayloadArgs({
+    siteRoot: tempRoot,
+    toolName: 'representative_tool',
+    args: { payload_ref: mergePayload.ref, task_number: 2, agent_id: 'top.agent' },
+    allowedTools: ['representative_tool'],
+    payloadRefMode: 'merge_args',
+  });
+  assert.deepEqual(merged.args, { task_number: 2, agent_id: 'top.agent', summary: 'from payload' });
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

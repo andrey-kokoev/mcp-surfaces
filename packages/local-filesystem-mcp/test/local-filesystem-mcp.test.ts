@@ -564,6 +564,22 @@ trust_level = "untrusted"
   assert.equal(moveResponse.result.structuredContent.to.relative_path, 'renamed.txt');
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_move_path/);
 
+  writeFileSync(join(trusted, 'sentinel-source.txt'), 'sentinel', 'utf8');
+  const sentinelMove = call(writeState, 402, 'fs_move_path', {
+    from: join(trusted, 'sentinel-source.txt'),
+    to: join(trusted, 'sentinel-dest.txt'),
+    expected_from: { mtime: '', size: 0, sha256: '', tree_sha256: '', entry_count: 0 },
+    expected_to: { mtime: '', size: 0, sha256: '', tree_sha256: '', entry_count: 0 },
+  });
+  assert.equal(sentinelMove.result.structuredContent.status, 'moved');
+  writeFileSync(join(trusted, 'nonzero-source.txt'), 'nonzero', 'utf8');
+  const structuredZeroGuard = call(writeState, 403, 'fs_move_path', {
+    from: join(trusted, 'nonzero-source.txt'),
+    to: join(trusted, 'nonzero-dest.txt'),
+    expected_from: { size: 0 },
+  });
+  assert.equal(structuredZeroGuard.error.data.code, 'fs_move_path_expected_metadata_mismatch');
+
   const outsideMove = call(writeState, 25, 'fs_move_path', { from: join(trusted, 'renamed.txt'), to: join(other, 'outside-renamed.txt') });
   assert.equal(outsideMove.error.data.code, 'path_outside_allowed_roots');
   assert.equal(outsideMove.error.data.details.operation, 'fs_move_path');

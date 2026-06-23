@@ -386,6 +386,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
             close_blocked: true,
             close_blockers: followUpValidation.errors,
             task_number: taskNumber,
+            remediation: 'Add a ## Follow-Up Ledger section to the task, with one accepted ledger line for each preserved follow-up or remaining-work disposition. Accepted prefixes include created #N, covered by #N, envelope env_<id>, CAPA <capa_id>, deferred:, and no follow-up needed: .',
             next_command: `Update task ${taskNumber} with a ## Follow-Up Ledger linking each preserved follow-up to created #N, covered by #N, envelope env_<id>, CAPA <capa_id>, deferred: <reason>, or no follow-up needed: <rationale>.`,
             schema: 'narada.task.mcp.finish.follow_up_ledger_gate.v0',
             examples: finishGateExamples('follow_up_ledger'),

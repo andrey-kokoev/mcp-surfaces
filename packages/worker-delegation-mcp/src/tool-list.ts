@@ -246,10 +246,19 @@ function batchOutputSchema(schemaConst: string): Record<string, unknown> {
   return objectSchema({
     schema: { type: 'string', const: schemaConst },
     status: { type: 'string' },
+    max_parallel_runs: { type: 'integer' },
+    requested_count: { type: 'integer' },
+    started_count: { type: 'integer' },
+    failed_count: { type: 'integer' },
+    finished_count: { type: 'integer' },
+    timed_out_count: { type: 'integer' },
+    timeout_ms: { type: 'integer' },
+    elapsed_ms: { type: 'integer' },
     runs: { type: 'array', items: { type: 'object', additionalProperties: true } },
     synthesis: { type: 'object', additionalProperties: true },
     failures: { type: 'array', items: { type: 'object', additionalProperties: true } },
     run_ids: stringArraySchema(),
+    timing: { type: 'object', additionalProperties: true },
   }, ['schema', 'status']);
 }
 

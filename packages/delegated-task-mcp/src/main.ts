@@ -759,7 +759,7 @@ function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { ver
   if (Object.keys(verificationBudget).length > 0) {
     const maxAttempts = integer(verificationBudget.max_attempts, Number.MAX_SAFE_INTEGER, 1, Number.MAX_SAFE_INTEGER);
     const maxCommands = integer(verificationBudget.max_commands, Number.MAX_SAFE_INTEGER, 1, Number.MAX_SAFE_INTEGER);
-    const count = records(result.verification).length;
+    const count = verificationBudgetRecords(task, result).length;
     checks.push({ kind: 'verification_budget', verification_count: count, max_attempts: maxAttempts, max_commands: maxCommands, status: count <= maxAttempts && count <= maxCommands ? 'passed' : 'failed' });
   }
   const resultText = JSON.stringify(result);
@@ -786,6 +786,32 @@ function evaluateAcceptance(task: Task, state: State, result: JsonRecord): { ver
   if (checks.some((check) => check.status === 'failed')) return { verdict: 'failed', checks };
   if (checks.some((check) => check.status === 'pending')) return { verdict: 'pending', checks };
   return { verdict: 'passed', checks };
+}
+
+function verificationBudgetRecords(task: Task, result: JsonRecord): JsonRecord[] {
+  const refs = records(result.worker_refs);
+  if (refs.length === 0) return uniqueRecords(records(result.verification));
+  const targets = acceptanceTestTargets(task.acceptance);
+  const scoped = refs.flatMap((ref) => {
+    const stepKind = String(ref.step_kind ?? '');
+    const output = rec(ref.output);
+    const verification = [...records(output.verification_results), ...records(output.verification)];
+    return verification.filter((record) => stepKind === 'verify' || verificationRecordMatchesTarget(record, targets));
+  });
+  const nested = records(result.nested_workflow_verification).filter((record) => verificationRecordMatchesTarget(record, targets));
+  return uniqueRecords([...scoped, ...nested]);
+}
+
+function acceptanceTestTargets(acceptance: JsonRecord): string[] {
+  return uniqueStrings([...acceptanceItems(acceptance.required_tests), ...acceptanceItems(acceptance.focused_tests)]
+    .map((item) => String(item.command ?? item.target ?? item.value ?? '').trim())
+    .filter(Boolean));
+}
+
+function verificationRecordMatchesTarget(record: JsonRecord, targets: string[]): boolean {
+  if (targets.length === 0) return false;
+  const text = JSON.stringify(record);
+  return targets.some((target) => text.includes(target));
 }
 
 function delegatedTaskResultView(task: Task, state: State, explicitDiagnostics: boolean): JsonRecord {

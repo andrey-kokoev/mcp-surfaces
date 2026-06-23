@@ -1441,11 +1441,12 @@ function assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedKeys) {
 
 function assertExpectedMetadata(args, target, { operation, objectKey = null, mtimeKey, sizeKey, shaKey = null, treeShaKey = null, entryCountKey = null }) {
   const expectedObject = objectKey ? asRecord(asRecord(args)[objectKey]) : {};
-  const expectedMtime = stringField(expectedObject, 'mtime') ?? stringField(args, mtimeKey);
-  const expectedSize = integerField(expectedObject, 'size') ?? integerField(args, sizeKey);
-  const expectedSha = stringField(expectedObject, 'sha256') ?? (shaKey ? stringField(args, shaKey) : null);
-  const expectedTreeSha = stringField(expectedObject, 'tree_sha256') ?? (treeShaKey ? stringField(args, treeShaKey) : null);
-  const expectedEntryCount = integerField(expectedObject, 'entry_count') ?? (entryCountKey ? integerField(args, entryCountKey) : null);
+  const useObjectGuard = !isEmptyStructuredMetadataGuard(expectedObject);
+  const expectedMtime = (useObjectGuard ? stringField(expectedObject, 'mtime') : null) ?? stringField(args, mtimeKey);
+  const expectedSize = (useObjectGuard ? integerField(expectedObject, 'size') : null) ?? integerField(args, sizeKey);
+  const expectedSha = (useObjectGuard ? stringField(expectedObject, 'sha256') : null) ?? (shaKey ? stringField(args, shaKey) : null);
+  const expectedTreeSha = (useObjectGuard ? stringField(expectedObject, 'tree_sha256') : null) ?? (treeShaKey ? stringField(args, treeShaKey) : null);
+  const expectedEntryCount = (useObjectGuard ? integerField(expectedObject, 'entry_count') : null) ?? (entryCountKey ? integerField(args, entryCountKey) : null);
   if (!expectedMtime && expectedSize === null && !expectedSha && !expectedTreeSha && expectedEntryCount === null) return;
   const stat = statSync(target.path);
   const actualMtime = stat.mtime.toISOString();
@@ -1484,6 +1485,20 @@ function assertExpectedMetadata(args, target, { operation, objectKey = null, mti
   if (expectedEntryCount !== null && directoryFingerprint?.entry_count !== expectedEntryCount) {
     throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, details);
   }
+}
+
+function isEmptyStructuredMetadataGuard(value: Record<string, unknown>): boolean {
+  const keys = Object.keys(value);
+  if (keys.length === 0) return true;
+  const allowedKeys = new Set(['mtime', 'size', 'sha256', 'tree_sha256', 'entry_count']);
+  if (keys.some((key) => !allowedKeys.has(key))) return false;
+  if (keys.length !== allowedKeys.size) return false;
+  return keys.every((key) => {
+    const field = value[key];
+    if (typeof field === 'string') return field.trim().length === 0;
+    if (typeof field === 'number') return field === 0;
+    return field === null || field === undefined;
+  });
 }
 
 function normalizePathKey(path) {

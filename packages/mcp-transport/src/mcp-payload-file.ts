@@ -66,9 +66,7 @@ export function resolveToolPayloadArgs({
 
   if (payloadRef) {
     const revision = readPayloadRevision({ siteRoot, ref: payloadRef, maxBytes, payloadDir });
-    const resolvedArgs = payloadRefMode === 'payload_field' && hasPayloadRefCompanionArgs(input)
-      ? { ...withoutPayloadTransport(input), payload: revision.payload }
-      : revision.payload;
+    const resolvedArgs = resolvePayloadRefArgs({ input, payload: revision.payload, payloadRefMode });
     return {
       args: resolvedArgs,
       payloadSource: {
@@ -120,6 +118,12 @@ export function resolveToolPayloadArgs({
       transient_not_authority: true,
     },
   };
+}
+
+function resolvePayloadRefArgs({ input, payload, payloadRefMode }) {
+  if (payloadRefMode === 'merge_args') return { ...asRecord(payload), ...withoutPayloadTransport(input) };
+  if (payloadRefMode === 'payload_field' && hasPayloadRefCompanionArgs(input)) return { ...withoutPayloadTransport(input), payload };
+  return payload;
 }
 
 function hasPayloadRefCompanionArgs(input) {

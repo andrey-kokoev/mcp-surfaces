@@ -1146,6 +1146,7 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     remediation: item.remediation,
     examples: item.examples,
   }));
+  const remediationSummary = blockers.map((item) => `${item.id}: ${item.remediation}`);
   return {
     status: blockers.length === 0 ? 'ready' : 'blocked',
     schema: 'narada.task.mcp.evidence_preflight.v0',
@@ -1154,6 +1155,8 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     lifecycle_status: lifecycle.status,
     verdict: evidence.verdict,
     finish_ready: blockers.length === 0,
+    remediation_summary: remediationSummary,
+    next_action: blockers.length === 0 ? 'Submit finish/report evidence.' : 'Resolve each remediation_summary item before finish/report closeout.',
     blockers,
     requirements,
     structured_artifact_policy: {

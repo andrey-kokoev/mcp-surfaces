@@ -277,12 +277,18 @@ try {
   );
   const scopedTaskId = '20260604-9301-scoped-changed-files';
   const fullTaskId = '20260604-9302-full-changed-files';
-  for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302]] as const) {
+  const payloadRefTaskId = '20260604-9303-payload-ref-finish';
+  const followUpTaskId = '20260604-9304-follow-up-ledger';
+  for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303]] as const) {
     writeFileSync(
       join(scopedSiteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`),
       `---\ntask_id: ${taskId}\ntask_number: ${taskNumber}\nstatus: claimed\ngoverned_by: builder\n---\n\n# Task ${taskNumber}\n\n## Goal\n\nTest changed-file scoping.\n\n## Execution Notes\n\nDone.\n\n## Verification\n\nChecked.\n\n## Acceptance Criteria\n\n- [x] Criterion.\n`,
     );
   }
+  writeFileSync(
+    join(scopedSiteRoot, '.ai', 'do-not-open', 'tasks', `${followUpTaskId}.md`),
+    `---\ntask_id: ${followUpTaskId}\ntask_number: 9304\nstatus: claimed\ngoverned_by: builder\n---\n\n# Task 9304\n\n## Goal\n\nTest follow-up ledger remediation.\n\n## Execution Notes\n\nDisposition preserves a remaining follow-up item for later triage.\n\n## Verification\n\nChecked.\n\n## Acceptance Criteria\n\n- [x] Criterion.\n`,
+  );
   const scopedStore = openTaskLifecycleStore(scopedSiteRoot);
   try {
     scopedStore.upsertRosterEntry({
@@ -307,7 +313,7 @@ try {
       last_done: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
-    for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302]] as const) {
+    for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303], [followUpTaskId, 9304]] as const) {
       scopedStore.upsertLifecycle({
         task_id: taskId,
         task_number: taskNumber,
@@ -419,6 +425,69 @@ try {
   const fullChangedFiles = fullPreflight.requirements.find((r) => r.id === 'changed_files')?.observed?.changed_files ?? [];
   assert.ok(fullChangedFiles.includes('packages/example/src/index.ts'));
   assert.ok(fullChangedFiles.includes('.ai/tmp/scratch.json'));
+
+  const payloadCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 19,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          task_number: 9999,
+          agent_id: 'payload.agent',
+          summary: 'Payload summary should be merged with authoritative top-level fields.',
+          no_files_changed: true,
+        },
+      },
+    },
+  }, scopedRuntime);
+  const payloadCreatePayload = await responsePayload(payloadCreateResponse, scopedRuntime, 20);
+  const payloadRefFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 21,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        payload_ref: payloadCreatePayload.ref,
+        task_number: 9303,
+        agent_id: 'scoped.builder',
+      },
+    },
+  }, scopedRuntime);
+  const payloadRefFinishPayload = await responsePayload(payloadRefFinishResponse, scopedRuntime, 22);
+  assert.equal(payloadRefFinishPayload.status, 'success');
+
+  const followUpPreflightResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 23,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_evidence_preflight',
+      arguments: { task_number: 9304 },
+    },
+  }, scopedRuntime);
+  const followUpPreflight = await responsePayload(followUpPreflightResponse, scopedRuntime, 24);
+  assert.equal(followUpPreflight.status, 'blocked');
+  assert.ok(followUpPreflight.remediation_summary.some((item: string) => item.includes('follow_up_ledger')));
+  const followUpFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 25,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9304,
+        agent_id: 'scoped.builder',
+        summary: 'Attempt closeout to exercise readable follow-up remediation.',
+        no_files_changed: true,
+      },
+    },
+  }, scopedRuntime);
+  const followUpFinishPayload = await responsePayload(followUpFinishResponse, scopedRuntime, 26);
+  assert.equal(followUpFinishPayload.error, 'follow_up_ledger_required');
+  assert.match(followUpFinishPayload.remediation, /Follow-Up Ledger/);
 } finally {
   try {
     rmSync(scopedSiteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

@@ -191,6 +191,10 @@ assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait_batch.v1');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.requested_count?.type, 'integer');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.timing?.type, 'object');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.finished_count?.type, 'integer');
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.elapsed_ms?.type, 'integer');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.outputSchema?.properties?.schema?.const, 'narada.worker.dashboard.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
