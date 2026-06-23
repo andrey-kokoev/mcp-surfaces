@@ -29,7 +29,7 @@ try {
   assert.equal((init.result as Record<string, any>).serverInfo.name, 'speech-mcp');
 
   const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
-  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_speak', 'speech_voices']);
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
 
   const speakTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'speech_speak');
   assert.equal(speakTool.annotations.readOnlyHint, false);
@@ -40,6 +40,17 @@ try {
   assert.ok(speakTool.inputSchema.properties.model);
   assert.ok(speakTool.inputSchema.properties.speed);
   assert.ok(speakTool.inputSchema.properties.api_key);
+
+  const listenStartTool = tools.find((t: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => t.name === 'speech_listen_start');
+  assert.equal(listenStartTool.annotations.readOnlyHint, false);
+  assert.deepEqual(listenStartTool.inputSchema.properties.provider.enum, ['local_sapi', 'remote_transcription']);
+  assert.ok(listenStartTool.inputSchema.properties.duration_seconds);
+
+  const listenStatusTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'speech_listen_status');
+  assert.equal(listenStatusTool.annotations.readOnlyHint, true);
+
+  const listenStopTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'speech_listen_stop');
+  assert.equal(listenStopTool.annotations.idempotentHint, true);
 
   console.log('speech-mcp protocol smoke ok');
 } finally {

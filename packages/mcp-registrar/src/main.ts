@@ -45,6 +45,7 @@ type SiteDef = {
   config_path: string;
   surfaces: string[];
   local_surface_allowlist?: string[];
+  surface_overrides?: Record<string, SurfaceOverride>;
 };
 
 type SiteMcpFabricMode = 'empty' | 'aggregate' | 'sidecar';
@@ -216,7 +217,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--feedback-root', 'D:/code/mcp-surfaces'],
-    tools: ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+    tools: ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
   },
   {
     id: 'launcher', package: 'launcher-mcp',
@@ -230,7 +231,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: [],
-    tools: ['speech_speak', 'speech_voices'],
+    tools: ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     env_vars: ['OPENAI_API_KEY'],
   },
   {
@@ -414,6 +415,17 @@ function siteMcpFabricMode(site: SiteDef): SiteMcpFabricMode {
 }
 
 export function siteBindSidecarRefusal(site: SiteDef, surfaceId: string, options: JsonRecord = {}): JsonRecord | null {
+  if (site.surface_overrides?.[surfaceId]?.enabled === false && options.allow_disabled_sidecar !== true) {
+    return {
+      status: 'refused',
+      reason_code: 'registrar_site_bind_refused_surface_disabled',
+      site_id: site.site_id,
+      surface_id: surfaceId,
+      sidecar_state: 'disabled_by_site_override',
+      reason: 'This Site explicitly disables the requested surface, so registrar_site_bind will not materialize a sidecar for it.',
+      required_next_step: 'Enable the surface in the Site override or pass allow_disabled_sidecar=true only for an intentional compatibility sidecar.',
+    };
+  }
   const fabricMode = siteMcpFabricMode(site);
   if (fabricMode !== 'aggregate' || options.allow_sidecar === true) return null;
   return {
@@ -499,6 +511,8 @@ export function listTools() {
         properties: {
           site_id: { type: 'string', description: 'Site identifier, e.g. narada-sonar.' },
           surface_id: { type: 'string', description: 'Surface identifier, e.g. scheduler.' },
+          allow_sidecar: { type: 'boolean', description: 'Allow creating a compatibility sidecar even when an authoritative aggregate MCP fabric exists.' },
+          allow_disabled_sidecar: { type: 'boolean', description: 'Allow binding a surface explicitly disabled by site override; intended only for compatibility repair.' },
         },
         required: ['site_id', 'surface_id'],
         additionalProperties: false,
