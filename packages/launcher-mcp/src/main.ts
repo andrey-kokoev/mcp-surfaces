@@ -7,7 +7,7 @@ const SERVER_NAME = 'launcher-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_NARADA_ROOT = 'C:/Users/Andrey/Narada';
-const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'ConfigPath', 'RegistryPath', 'Runtime', 'IntelligenceProvider', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
+const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'Profile', 'ConfigPath', 'RegistryPath', 'Runtime', 'IntelligenceProvider', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
 const COVERED_OPTIONS = [...DECLARED_OPTIONS];
 
 type JsonRecord = Record<string, unknown>;
@@ -22,6 +22,7 @@ type AgentRecord = {
   workspace_root: string;
   launcher_path: string;
   runtime: string;
+  profile: string;
   enable_native_shell: boolean;
   config_path: string;
 };
@@ -95,6 +96,7 @@ export function listTools() {
           agent: { type: 'array', items: { type: 'string' }, description: 'Optional exact agent id filter.' },
           role: { type: 'array', items: { type: 'string' }, description: 'Optional role filter.' },
           site: { type: 'array', items: { type: 'string' }, description: 'Optional site filter; accepts site id, short site, or agent prefix.' },
+          profile: { type: 'array', items: { type: 'string' }, description: 'Optional profile filter.' },
           limit: { type: 'number', default: 100 },
         },
         additionalProperties: false,
@@ -114,7 +116,10 @@ export function listTools() {
           config_path: { type: 'array', items: { type: 'string' }, description: 'Alternate registry path(s); selecting config_path implies all records in those files.' },
           role: { type: 'array', items: { type: 'string' } },
           site: { type: 'array', items: { type: 'string' } },
+          profile: { type: 'array', items: { type: 'string' } },
           runtime: { type: 'string' },
+          launch_profile: { type: 'string', description: 'Override the agent profile passed to Start-NaradaAgent.ps1.' },
+          startup_stagger_seconds: { type: 'integer', minimum: 0, maximum: 300, description: 'Plan-only stagger interval between selected profile-aware startup entries.' },
           intelligence_provider: { type: 'string' },
           enable_native_shell: { type: 'boolean' },
           no_wait_for_enter_before_exec: { type: 'boolean' },
@@ -203,10 +208,13 @@ function launcherRegistryList(args: JsonRecord, state: LauncherState): JsonRecor
 function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
   const selected = selectRecords(args, state, { requireSelection: true });
   const wtArgs: string[] = [];
+  const staggerSeconds = clampNumber(args.startup_stagger_seconds, 0, 0, 300);
   for (const record of selected.records) {
     const launchRuntime = optionalString(args.runtime) ?? record.runtime;
+    const launchProfile = optionalString(args.launch_profile) ?? record.profile;
     if (wtArgs.length > 0) wtArgs.push(';');
     wtArgs.push('new-tab', '--title', record.title, '-d', record.narada_root, 'pwsh', '-NoExit', '-File', join(selected.naradaRoot, 'Start-NaradaAgent.ps1'), '-NaradaRoot', record.narada_root, '-SiteRoot', record.site_root, '-Agent', record.agent, '-Runtime', launchRuntime, '-LauncherPath', record.launcher_path);
+    if (launchProfile) wtArgs.push('-Profile', launchProfile);
     if (record.workspace_root) wtArgs.push('-WorkspaceRoot', record.workspace_root);
     if (args.enable_native_shell === true || record.enable_native_shell) wtArgs.push('-EnableNativeShell');
     const provider = optionalString(args.intelligence_provider);
@@ -221,6 +229,31 @@ function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
     registry_paths: selected.registryPaths,
     wt_args: wtArgs,
     records: selected.records,
+    startup_profile_plan: startupProfilePlan(selected.records, optionalString(args.launch_profile), staggerSeconds),
+  };
+}
+
+function startupProfilePlan(selectedRecords: AgentRecord[], launchProfile: string | null, staggerSeconds: number): JsonRecord {
+  const entries = selectedRecords.map((record, index) => ({
+    agent: record.agent,
+    site: record.site,
+    role: record.role,
+    registry_profile: record.profile || null,
+    launch_profile: launchProfile ?? (record.profile || null),
+    start_after_seconds: index * staggerSeconds,
+    diagnostics: record.profile ? [] : ['registry_profile_missing'],
+  }));
+  const profiles = uniqueStrings(entries.map((entry) => String(entry.launch_profile ?? '')).filter(Boolean));
+  const diagnostics = entries.flatMap((entry) => (entry.diagnostics as string[]).map((diagnostic) => ({ agent: entry.agent, diagnostic })));
+  return {
+    schema: 'narada.launcher.profile_startup_plan.v1',
+    execution_posture: 'planned_not_started_by_mcp',
+    selected_count: selectedRecords.length,
+    stagger_seconds: staggerSeconds,
+    profile_count: profiles.length,
+    profiles,
+    entries,
+    diagnostics,
   };
 }
 
@@ -232,7 +265,8 @@ function launcherOptionMatrix(args: JsonRecord, state: LauncherState): JsonRecor
   const role = representative?.role ?? '';
   const agent = representative?.agent ?? '';
   const runtime = representative?.runtime ?? 'codex';
-  const caseNames = ['selection_required', 'unknown_agent', 'missing_role_filter', 'missing_site_filter', 'agent_exact_dry_run', 'all_site_role_dry_run', 'config_path_selects_without_all', 'runtime_override', 'native_shell_flag', 'intelligence_provider_flag', 'no_wait_flag', 'smoke_agent_cli_contract', 'smoke_site_role_filter_contract'];
+  const profile = representative?.profile ?? '';
+  const caseNames = ['selection_required', 'unknown_agent', 'missing_role_filter', 'missing_site_filter', 'missing_profile_filter', 'agent_exact_dry_run', 'all_site_role_dry_run', 'profile_aware_startup', 'config_path_selects_without_all', 'runtime_override', 'native_shell_flag', 'intelligence_provider_flag', 'no_wait_flag', 'smoke_agent_cli_contract', 'smoke_site_role_filter_contract'];
   return {
     schema: 'narada.launcher.option_matrix_model.v1',
     status: 'modeled',
@@ -242,6 +276,7 @@ function launcherOptionMatrix(args: JsonRecord, state: LauncherState): JsonRecor
     representative_site: site,
     representative_role: role,
     representative_runtime: runtime,
+    representative_profile: profile,
     declared_options: DECLARED_OPTIONS,
     covered_options: COVERED_OPTIONS,
     case_count: caseNames.length,
@@ -300,6 +335,11 @@ function selectRecords(args: JsonRecord, state: LauncherState, options: { requir
     selected = selected.filter((record) => siteAliases(record).some((alias) => sites.has(alias.toLowerCase())));
     if (selected.length === 0) throw diagnosticError('no_agents_match_site_filter', `no_agents_match_site_filter:${stringArray(args.site).join(', ')}`);
   }
+  const profiles = lowerSet(stringArray(args.profile));
+  if (profiles.size > 0) {
+    selected = selected.filter((record) => record.profile && profiles.has(record.profile.toLowerCase()));
+    if (selected.length === 0) throw diagnosticError('no_agents_match_profile_filter', `no_agents_match_profile_filter:${stringArray(args.profile).join(', ')}`);
+  }
   return { records: selected, registryPaths, naradaRoot: state.naradaRoot };
 }
 
@@ -319,6 +359,7 @@ function toAgentRecord(agent: JsonRecord, config: JsonRecord, configPath: string
   const launcher = text(agent.Launcher ?? config.Launcher);
   const launcherPath = text(agent.LauncherPath ?? config.LauncherPath) || (launcher ? join(naradaRoot, launcher) : join(naradaRoot, 'narada-andrey.ps1'));
   const runtime = text(agent.Runtime ?? config.Runtime) || 'codex';
+  const profile = text(agent.Profile ?? config.Profile);
   return {
     agent: agentId,
     title: text(agent.Title) || agentId.split('.').at(-1) || agentId,
@@ -329,6 +370,7 @@ function toAgentRecord(agent: JsonRecord, config: JsonRecord, configPath: string
     workspace_root: workspaceRoot ? normalizePath(workspaceRoot) : '',
     launcher_path: normalizePath(launcherPath),
     runtime,
+    profile,
     enable_native_shell: Boolean(agent.EnableNativeShell),
     config_path: normalizePath(configPath),
   };
@@ -429,6 +471,7 @@ function siteAliases(record: AgentRecord): string[] {
 }
 
 function lowerSet(values: string[]): Set<string> { return new Set(values.map((value) => value.toLowerCase())); }
+function uniqueStrings(values: string[]): string[] { return Array.from(new Set(values)); }
 function normalizePath(value: string): string { return value ? resolve(value).replace(/\\/g, '/') : value; }
 function optionalString(value: unknown): string | undefined { const v = text(value); return v || undefined; }
 function text(value: unknown): string { return typeof value === 'string' ? value : ''; }
