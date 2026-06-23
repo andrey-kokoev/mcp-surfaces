@@ -41,8 +41,8 @@
           },
           "executor": {
             "type": "string",
-            "enum": ["engine", "agent", "operator"],
-            "description": "Who performs: engine (auto), agent (programmatic), operator (human)."
+            "enum": ["engine", "agent", "operator", "sop"],
+            "description": "Who performs: engine (auto), agent (programmatic), operator (human), sop (child SOP run)."
           },
           "blocking": {
             "type": "boolean",
@@ -77,6 +77,19 @@
           "cwd": {
             "type": "string",
             "description": "For command steps: working directory."
+          },
+          "sop_id": {
+            "type": "string",
+            "description": "For sop steps: child SOP identifier to start."
+          },
+          "sop_version": {
+            "type": "number",
+            "description": "For sop steps: optional child SOP version; defaults to latest active."
+          },
+          "wait_policy": {
+            "type": "string",
+            "enum": ["wait"],
+            "description": "For sop steps: wait for the child run to reach a terminal status."
           }
         },
         "required": ["id", "executor", "title", "instructions"],

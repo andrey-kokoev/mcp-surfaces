@@ -4,7 +4,7 @@ Versioned standard operating procedure runbook engine with SQLite-backed templat
 
 ## Purpose
 
-Manages reusable procedural templates (versioned) and durable run execution. Steps flow through a dependency DAG — non-blocking engine steps auto-execute with command spawning and context handoff (`{{step_id.field}}`), while blocking agent/operator steps pause for confirmation.
+Manages reusable procedural templates (versioned) and durable run execution. Steps flow through a dependency DAG: non-blocking engine steps auto-execute with command spawning and context handoff (`{{step_id.field}}`), SOP steps start child runs and wait for terminal status, while blocking agent/operator steps pause for confirmation.
 
 ## Tools
 
@@ -27,10 +27,12 @@ Manages reusable procedural templates (versioned) and durable run execution. Ste
 
 Two dimensions, independent:
 
-- **executor**: `engine` (auto), `agent` (programmatic), `operator` (human)
+- **executor**: `engine` (auto), `agent` (programmatic), `operator` (human), `sop` (child SOP run)
 - **blocking**: `true` (pauses run, awaits `sop_run_advance`), `false` (auto-advances)
 
 Engine steps with `command` + `args` spawn actual subprocesses. Context handoff via `{{step_id.field}}` interpolation in instructions, commands, and arguments.
+
+SOP steps use `executor: sop`, `sop_id`, optional `sop_version`, and `wait_policy: wait`. When dependencies are complete the parent run creates a child SOP run, records `child_run_id` on the parent step, and keeps the step running until the child is `completed`, `failed`, or `cancelled`. Child completion completes the parent step; child failure or cancellation fails it and prevents dependent work from continuing successfully. `sop_run_status` and `sop_run_events` expose the parent-child relationship for recovery.
 
 ## Quick Start
 

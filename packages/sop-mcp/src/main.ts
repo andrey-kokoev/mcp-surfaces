@@ -15,7 +15,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const TEMPLATE_STATUSES = ['draft', 'active', 'deprecated'] as const;
 const RUN_STATUSES = ['pending', 'running', 'completed', 'failed', 'cancelled', 'awaiting_confirmation'] as const;
 const RUN_TERMINAL = new Set(['completed', 'failed', 'cancelled']);
-const STEP_EXECUTORS = ['engine', 'agent', 'operator'] as const;
+const STEP_EXECUTORS = ['engine', 'agent', 'operator', 'sop'] as const;
 const STEP_STATUSES = ['pending', 'running', 'completed', 'failed', 'skipped'] as const;
 const STEP_TERMINAL = new Set(['completed', 'failed', 'skipped']);
 
@@ -56,6 +56,9 @@ type SopStep = {
   args: string[] | null;
   timeout_ms: number | null;
   cwd: string | null;
+  sop_id: string | null;
+  sop_version: number | null;
+  wait_policy: string | null;
 };
 
 type SopRun = {
@@ -86,6 +89,10 @@ type SopStepState = {
   args: string[] | null;
   timeout_ms: number | null;
   cwd: string | null;
+  sop_id: string | null;
+  sop_version: number | null;
+  wait_policy: string | null;
+  child_run_id: string | null;
   started_at: string | null;
   completed_at: string | null;
   result: JsonRecord;
@@ -247,7 +254,7 @@ export function listTools() {
               type: 'object',
               properties: {
                 id: { type: 'string', description: 'Step identifier, e.g. verify_identity.' },
-                executor: { type: 'string', enum: STEP_EXECUTORS, description: 'Who performs: engine (auto), agent (programmatic), operator (human).' },
+                executor: { type: 'string', enum: STEP_EXECUTORS, description: 'Who performs: engine (auto), agent (programmatic), operator (human), sop (child SOP run).' },
                 blocking: { type: 'boolean', description: 'If true, the run pauses and waits for sop_run_advance to complete this step. If false, auto-advances when dependencies are met.' },
                 title: { type: 'string' },
                 depends_on: { type: 'array', items: { type: 'string' }, description: 'Step IDs this step depends on.' },
@@ -256,6 +263,9 @@ export function listTools() {
                 args: { type: 'array', items: { type: 'string' }, description: 'For engine command steps: argv.' },
                 timeout_ms: { type: 'number', description: 'For engine command steps: timeout.' },
                 cwd: { type: 'string', description: 'For command steps: working directory.' },
+                sop_id: { type: 'string', description: 'For sop steps: child SOP identifier to start.' },
+                sop_version: { type: 'number', description: 'For sop steps: optional child SOP version; defaults to latest active.' },
+                wait_policy: { type: 'string', enum: ['wait'], description: 'For sop steps: wait for the child run to reach a terminal status.' },
               },
               required: ['id', 'executor', 'title', 'instructions'],
               additionalProperties: false,
@@ -355,6 +365,9 @@ export function listTools() {
                 args: { type: 'array', items: { type: 'string' } },
                 timeout_ms: { type: 'number' },
                 cwd: { type: 'string' },
+                sop_id: { type: 'string' },
+                sop_version: { type: 'number' },
+                wait_policy: { type: 'string', enum: ['wait'] },
               },
               required: ['id', 'executor', 'title', 'instructions'],
               additionalProperties: false,
@@ -420,7 +433,7 @@ export function listTools() {
     },
     {
       name: 'sop_run_status',
-      description: 'Get the status of an SOP run including step states.',
+      description: 'Get the status of an SOP run including step states. Read-only; use sop_run_refresh to synchronize parent runs with child SOP terminal status.',
       inputSchema: {
         type: 'object',
         properties: { run_id: { type: 'string' } },
@@ -428,6 +441,18 @@ export function listTools() {
         additionalProperties: false,
       },
       annotations: { title: 'sop_run_status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_run_refresh',
+      description: 'Refresh a non-terminal SOP run by synchronizing running child SOP steps from their current terminal status and continuing automatic advancement.',
+      inputSchema: {
+        type: 'object',
+        properties: { run_id: { type: 'string' } },
+        required: ['run_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_run_refresh', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -512,7 +537,8 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_template_update': result = sopTemplateUpdate(args, state); break;
     case 'sop_template_deprecate': result = sopTemplateDeprecate(args, state); break;
     case 'sop_run_start': result = await sopRunStart(args, state); break;
-    case 'sop_run_status': result = sopRunStatus(args, state); break;
+    case 'sop_run_status': result = await sopRunStatus(args, state); break;
+    case 'sop_run_refresh': result = await sopRunRefresh(args, state); break;
     case 'sop_run_advance': result = await sopRunAdvance(args, state); break;
     case 'sop_run_list': result = sopRunList(args, state); break;
     case 'sop_run_cancel': result = sopRunCancel(args, state); break;
@@ -736,6 +762,9 @@ function nextStep(stepStates: SopStepState[]): JsonRecord | null {
     title: next.title,
     instructions: ((next.result as JsonRecord).instructions as string) || next.instructions,
     command: next.command,
+    child_run_id: next.child_run_id ?? asRecord(next.result).child_run_id,
+    child_sop_id: next.sop_id ?? asRecord(next.result).child_sop_id,
+    child_status: asRecord(next.result).child_status,
     result: next.result,
     prior_auto_steps: autoBefore.length ? autoBefore : undefined,
   };
@@ -764,6 +793,10 @@ async function sopRunStart(args: JsonRecord, state: SopState) {
     args: step.args,
     timeout_ms: step.timeout_ms,
     cwd: step.cwd,
+    sop_id: step.sop_id,
+    sop_version: step.sop_version,
+    wait_policy: step.wait_policy,
+    child_run_id: null,
     started_at: null,
     completed_at: null,
     result: {},
@@ -778,12 +811,36 @@ async function sopRunStart(args: JsonRecord, state: SopState) {
   return { status: advanced.status, run_id: runId, sop_id: sopId, sop_version: version, sop_title: template.title, step_states: advanced.stepStates, next_awaits_confirmation: advanced.awaitingConfirmation, next_step: nextStep(advanced.stepStates) };
 }
 
-function sopRunStatus(args: JsonRecord, state: SopState) {
+async function sopRunStatus(args: JsonRecord, state: SopState) {
   const runId = requiredString(args.run_id, 'sop_requires_run_id');
   const row = state.db.prepare('SELECT * FROM sop_runs WHERE run_id = ?').get(runId) as JsonRecord | undefined;
   if (!row) throw diagnosticError('sop_run_not_found', `sop_run_not_found:${runId}`);
   const run = hydrateRun(row);
-  return { ...run, next_step: nextStep(run.step_states) };
+  const childRefreshAvailable = !RUN_TERMINAL.has(run.status) && !run.step_states_parse_error && run.step_states.some((s) => s.executor === 'sop' && s.status === 'running' && s.child_run_id);
+  return {
+    ...run,
+    next_step: nextStep(run.step_states),
+    relationship_refresh: childRefreshAvailable ? { available: true, tool: 'sop_run_refresh', reason: 'running_child_sop_step' } : { available: false },
+  };
+}
+
+async function sopRunRefresh(args: JsonRecord, state: SopState) {
+  const runId = requiredString(args.run_id, 'sop_requires_run_id');
+  const row = state.db.prepare('SELECT * FROM sop_runs WHERE run_id = ?').get(runId) as JsonRecord | undefined;
+  if (!row) throw diagnosticError('sop_run_not_found', `sop_run_not_found:${runId}`);
+  const run = hydrateRun(row);
+  if (RUN_TERMINAL.has(run.status) || run.step_states_parse_error) {
+    return { ...run, next_step: nextStep(run.step_states), relationship_refresh: { refreshed: false, reason: RUN_TERMINAL.has(run.status) ? 'terminal_run' : 'step_state_parse_error' } };
+  }
+  const hadRunningChild = run.step_states.some((s) => s.executor === 'sop' && s.status === 'running' && s.child_run_id);
+  const advanced = await advanceAutoSteps(runId, run.step_states, state);
+  const refreshed = getRunById(runId, state);
+  return {
+    ...refreshed,
+    step_states: advanced.stepStates,
+    next_step: nextStep(advanced.stepStates),
+    relationship_refresh: { refreshed: hadRunningChild, kind: hadRunningChild ? 'child_sop_status' : 'none' },
+  };
 }
 
 async function sopRunAdvance(args: JsonRecord, state: SopState) {
@@ -886,7 +943,33 @@ async function executeStepCommand(command: string, args: string[], cwd: string |
 async function advanceAutoSteps(runId: string, stepStates: SopStepState[], state: SopState): Promise<{ status: string; stepStates: SopStepState[]; awaitingConfirmation: boolean }> {
   let awaitingConfirmation = false;
   for (const stepState of stepStates) {
+    if (stepState.status !== 'running' || stepState.executor !== 'sop' || !stepState.child_run_id) continue;
+    const child = getRunById(stepState.child_run_id, state);
+    stepState.result = { ...stepState.result, child_run_id: stepState.child_run_id, child_status: child.status };
+    if (child.status === 'completed') {
+      stepState.status = 'completed';
+      stepState.completed_at = nowIso();
+      appendRunEvent(state, runId, stepState.step_id, 'child_sop_completed', { child_run_id: child.run_id, child_status: child.status });
+    } else if (child.status === 'failed' || child.status === 'cancelled') {
+      stepState.status = 'failed';
+      stepState.completed_at = nowIso();
+      stepState.error_message = `child_sop_${child.status}:${child.run_id}`;
+      appendRunEvent(state, runId, stepState.step_id, 'child_sop_failed', { child_run_id: child.run_id, child_status: child.status });
+    }
+  }
+  for (const stepState of stepStates) {
     if (stepState.status !== 'pending') continue;
+    const failedDeps = stepState.depends_on.filter((depId) => {
+      const dep = stepStates.find((s) => s.step_id === depId);
+      return dep && (dep.status === 'failed' || dep.status === 'skipped');
+    });
+    if (failedDeps.length) {
+      stepState.status = 'failed';
+      stepState.completed_at = nowIso();
+      stepState.error_message = `failed_dependency:${failedDeps.join(',')}`;
+      appendRunEvent(state, runId, stepState.step_id, 'step_failed', { failed_dependencies: failedDeps });
+      continue;
+    }
     const allDepsReady = stepState.depends_on.every((depId) => {
       const dep = stepStates.find((s) => s.step_id === depId);
       return dep && dep.status === 'completed';
@@ -903,6 +986,23 @@ async function advanceAutoSteps(runId: string, stepStates: SopStepState[], state
     const resolvedInstructions = interpolateContext(stepState.instructions ?? null, stepStates);
     stepState.started_at = nowIso();
     let execResult: { exitCode: number; stdout: string; stderr: string; timedOut: boolean } | null = null;
+    if (stepState.executor === 'sop') {
+      const child = await startChildSopRun(runId, stepState, state);
+      stepState.status = child.status === 'completed' ? 'completed' : child.status === 'failed' || child.status === 'cancelled' ? 'failed' : 'running';
+      stepState.child_run_id = child.run_id;
+      stepState.result = {
+        child_run_id: child.run_id,
+        child_sop_id: child.sop_id,
+        child_sop_version: child.sop_version,
+        child_status: child.status,
+        wait_policy: stepState.wait_policy ?? 'wait',
+      };
+      if (stepState.status === 'completed' || stepState.status === 'failed') stepState.completed_at = nowIso();
+      if (stepState.status === 'failed') stepState.error_message = `child_sop_${child.status}:${child.run_id}`;
+      appendRunEvent(state, runId, stepState.step_id, 'child_sop_started', { child_run_id: child.run_id, child_sop_id: child.sop_id, child_sop_version: child.sop_version, child_status: child.status });
+      if (stepState.status === 'running') break;
+      continue;
+    }
     if (resolvedCmd) {
       stepState.status = 'running';
       appendRunEvent(state, runId, stepState.step_id, 'step_started', { executor: stepState.executor, blocking: stepState.blocking, command: resolvedCmd });
@@ -950,6 +1050,27 @@ async function advanceAutoSteps(runId: string, stepStates: SopStepState[], state
   return { status: activeStatus, stepStates, awaitingConfirmation };
 }
 
+function getRunById(runId: string, state: SopState): SopRun {
+  const row = state.db.prepare('SELECT * FROM sop_runs WHERE run_id = ?').get(runId) as JsonRecord | undefined;
+  if (!row) throw diagnosticError('sop_run_not_found', `sop_run_not_found:${runId}`);
+  return hydrateRun(row);
+}
+
+async function startChildSopRun(parentRunId: string, stepState: SopStepState, state: SopState): Promise<SopRun> {
+  const childSopId = stepState.sop_id;
+  if (!childSopId) throw diagnosticError('sop_step_requires_child_sop_id', `sop_step_requires_child_sop_id:${stepState.step_id}`, { step_id: stepState.step_id });
+  const start = await sopRunStart({
+    sop_id: childSopId,
+    sop_version: stepState.sop_version ?? undefined,
+    trigger_source_kind: 'parent_sop_step',
+    trigger_source_ref: `${parentRunId}:${stepState.step_id}`,
+    triggered_by: `sop:${parentRunId}`,
+  }, state);
+  const childRunId = String(start.run_id);
+  appendRunEvent(state, childRunId, null, 'child_run_linked_to_parent', { parent_run_id: parentRunId, parent_step_id: stepState.step_id });
+  return getRunById(childRunId, state);
+}
+
 function validateSteps(steps: JsonRecord[], state: SopState): SopStep[] {
   const validated: SopStep[] = [];
   const ids = new Set<string>();
@@ -959,7 +1080,15 @@ function validateSteps(steps: JsonRecord[], state: SopState): SopStep[] {
     ids.add(id);
     const executor = requiredString(step.executor, 'sop_step_requires_executor', { step_id: id });
     if (!STEP_EXECUTORS.includes(executor as typeof STEP_EXECUTORS[number])) throw diagnosticError('sop_invalid_executor', `sop_invalid_executor:${executor}`, { step_id: id, allowed: STEP_EXECUTORS });
-    const blocking = step.blocking !== undefined ? Boolean(step.blocking) : true;
+    const blocking = executor === 'sop' ? false : step.blocking !== undefined ? Boolean(step.blocking) : true;
+    const sopId = optionalString(step.sop_id);
+    const sopVersion = step.sop_version !== undefined && step.sop_version !== null ? Number(step.sop_version) : null;
+    const waitPolicy = optionalString(step.wait_policy) ?? (executor === 'sop' ? 'wait' : null);
+    if (executor === 'sop') {
+      if (!sopId) throw diagnosticError('sop_step_requires_child_sop_id', `sop_step_requires_child_sop_id:${id}`, { step_id: id });
+      if (waitPolicy !== 'wait') throw diagnosticError('sop_invalid_wait_policy', `sop_invalid_wait_policy:${waitPolicy}`, { step_id: id, allowed: ['wait'] });
+      if (sopVersion !== null && (!Number.isInteger(sopVersion) || sopVersion < 1)) throw diagnosticError('sop_invalid_child_sop_version', `sop_invalid_child_sop_version:${sopVersion}`, { step_id: id });
+    }
     validated.push({
       id,
       executor,
@@ -971,6 +1100,9 @@ function validateSteps(steps: JsonRecord[], state: SopState): SopStep[] {
       args: stringList(step.args),
       timeout_ms: step.timeout_ms !== undefined ? clamp(integer(step.timeout_ms, 30000, 1000, 600000), 1000, 600000) : null,
       cwd: optionalString(step.cwd),
+      sop_id: sopId,
+      sop_version: sopVersion,
+      wait_policy: waitPolicy,
     });
   }
   for (const step of validated) {
@@ -1018,7 +1150,7 @@ function migrateStep(step: JsonRecord): SopStep {
   return {
     id: String(step.id),
     executor: STEP_EXECUTORS.includes(executor as typeof STEP_EXECUTORS[number]) ? executor : 'operator',
-    blocking,
+    blocking: executor === 'sop' ? false : blocking,
     title: String(step.title),
     depends_on: Array.isArray(step.depends_on) ? step.depends_on.map(String) : [],
     instructions: String(step.instructions),
@@ -1026,6 +1158,34 @@ function migrateStep(step: JsonRecord): SopStep {
     args: Array.isArray(step.args) ? step.args.map(String) : [],
     timeout_ms: step.timeout_ms != null ? clamp(Number(step.timeout_ms), 1000, 600000) : null,
     cwd: step.cwd != null ? String(step.cwd) : null,
+    sop_id: step.sop_id != null ? String(step.sop_id) : null,
+    sop_version: step.sop_version != null ? Number(step.sop_version) : null,
+    wait_policy: step.wait_policy != null ? String(step.wait_policy) : (executor === 'sop' ? 'wait' : null),
+  };
+}
+
+function migrateStepState(step: JsonRecord): SopStepState {
+  const migrated = migrateStep(step);
+  return {
+    step_id: String(step.step_id ?? migrated.id),
+    executor: migrated.executor,
+    blocking: migrated.blocking,
+    title: migrated.title,
+    status: String(step.status ?? 'pending'),
+    depends_on: migrated.depends_on,
+    instructions: migrated.instructions,
+    command: migrated.command,
+    args: migrated.args,
+    timeout_ms: migrated.timeout_ms,
+    cwd: migrated.cwd,
+    sop_id: migrated.sop_id,
+    sop_version: migrated.sop_version,
+    wait_policy: migrated.wait_policy,
+    child_run_id: step.child_run_id != null ? String(step.child_run_id) : (asRecord(step.result).child_run_id != null ? String(asRecord(step.result).child_run_id) : null),
+    started_at: step.started_at != null ? String(step.started_at) : null,
+    completed_at: step.completed_at != null ? String(step.completed_at) : null,
+    result: asRecord(step.result),
+    error_message: step.error_message != null ? String(step.error_message) : null,
   };
 }
 
@@ -1038,7 +1198,7 @@ function hydrateRun(row: JsonRecord): SopRun {
       parseError = 'step_states_json is not an array';
       stepStates = [];
     } else {
-      stepStates = parsed;
+      stepStates = parsed.map((s) => migrateStepState(asRecord(s)));
     }
   } catch (e) {
     parseError = String(e instanceof Error ? e.message : e);

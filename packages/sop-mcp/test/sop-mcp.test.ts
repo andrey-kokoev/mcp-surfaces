@@ -323,6 +323,97 @@ steps:
   assert.equal(useStep.status, 'completed');
   assert.equal(useStep.result.stdout, 'got: hello world', `expected 'got: hello world', got: ${JSON.stringify(useStep.result.stdout)}`);
 
+  await call('sop_template_create', {
+    sop_id: 'child-success',
+    title: 'Child Success',
+    steps: [
+      { id: 'confirm', ...op, title: 'Confirm child', instructions: 'Confirm child run.', depends_on: [] },
+    ],
+  });
+  await call('sop_template_create', {
+    sop_id: 'parent-success',
+    title: 'Parent Success',
+    steps: [
+      { id: 'prep', ...eng, title: 'Prep parent', instructions: 'Prep.', depends_on: [] },
+      { id: 'child', executor: 'sop', title: 'Run child', instructions: 'Run child SOP.', depends_on: ['prep'], sop_id: 'child-success', wait_policy: 'wait' },
+      { id: 'after', ...eng, title: 'After child', instructions: 'After.', depends_on: ['child'] },
+    ],
+  });
+  const parentRun = await call('sop_run_start', { sop_id: 'parent-success', triggered_by: 'test' });
+  const parentRunId = String(view(parentRun).run_id);
+  const parentSteps = view(parentRun).step_states as Array<Record<string, any>>;
+  const parentChildStep = parentSteps.find((s) => s.step_id === 'child')!;
+  assert.equal(parentChildStep.status, 'running');
+  assert.equal(parentChildStep.executor, 'sop');
+  assert.ok(parentChildStep.child_run_id);
+  assert.equal(parentChildStep.result.child_sop_id, 'child-success');
+  assert.equal(view(parentRun).next_step.child_run_id, parentChildStep.child_run_id);
+
+  const childStatus = await call('sop_run_status', { run_id: String(parentChildStep.child_run_id) });
+  assert.equal(view(childStatus).trigger_source_kind, 'parent_sop_step');
+  assert.equal(view(childStatus).trigger_source_ref, `${parentRunId}:child`);
+  assert.equal((view(childStatus).step_states as Array<Record<string, any>>).find((s) => s.step_id === 'confirm')!.status, 'running');
+
+  await call('sop_run_advance', { run_id: String(parentChildStep.child_run_id), step_id: 'confirm', result: { ok: true } });
+  const staleParent = await call('sop_run_status', { run_id: parentRunId });
+  assert.equal(view(staleParent).status, 'running');
+  assert.equal(view(staleParent).relationship_refresh.available, true);
+  assert.equal(view(staleParent).relationship_refresh.tool, 'sop_run_refresh');
+
+  const refreshedParent = await call('sop_run_refresh', { run_id: parentRunId });
+  assert.equal(view(refreshedParent).status, 'completed');
+  assert.equal(view(refreshedParent).relationship_refresh.refreshed, true);
+  const refreshedParentSteps = view(refreshedParent).step_states as Array<Record<string, any>>;
+  assert.equal(refreshedParentSteps.find((s) => s.step_id === 'child')!.status, 'completed');
+  assert.equal(refreshedParentSteps.find((s) => s.step_id === 'child')!.result.child_status, 'completed');
+  assert.equal(refreshedParentSteps.find((s) => s.step_id === 'after')!.status, 'completed');
+  const parentEvents = view(await call('sop_run_events', { run_id: parentRunId })).items as Array<Record<string, any>>;
+  assert.equal(parentEvents.some((e) => e.event_kind === 'child_sop_started' && e.details.child_run_id === parentChildStep.child_run_id), true);
+  assert.equal(parentEvents.some((e) => e.event_kind === 'child_sop_completed'), true);
+
+  await call('sop_template_create', {
+    sop_id: 'child-failure',
+    title: 'Child Failure',
+    steps: [
+      { id: 'fail', executor: 'engine', blocking: false, title: 'Fail', instructions: 'Fail.', command: 'node', args: ['-e', 'process.exit(7)'], depends_on: [] },
+    ],
+  });
+  await call('sop_template_create', {
+    sop_id: 'parent-failure',
+    title: 'Parent Failure',
+    steps: [
+      { id: 'child', executor: 'sop', title: 'Run failing child', instructions: 'Run child SOP.', depends_on: [], sop_id: 'child-failure', wait_policy: 'wait' },
+      { id: 'after', ...eng, title: 'After failed child', instructions: 'Should not succeed.', depends_on: ['child'] },
+    ],
+  });
+  const failingParent = await call('sop_run_start', { sop_id: 'parent-failure', triggered_by: 'test' });
+  assert.equal(view(failingParent).status, 'failed');
+  const failingParentSteps = view(failingParent).step_states as Array<Record<string, any>>;
+  assert.equal(failingParentSteps.find((s) => s.step_id === 'child')!.status, 'failed');
+  assert.equal(failingParentSteps.find((s) => s.step_id === 'child')!.result.child_status, 'failed');
+  assert.equal(failingParentSteps.find((s) => s.step_id === 'after')!.status, 'failed');
+  assert.match(String(failingParentSteps.find((s) => s.step_id === 'after')!.error_message), /failed_dependency:child/);
+
+  writeFileSync(join(sopsDir, 'sub-sop-yaml.sop.yaml'), `
+sop_id: sub-sop-yaml
+title: Sub SOP YAML
+steps:
+  - id: child
+    executor: sop
+    title: Child SOP
+    instructions: Run child SOP.
+    depends_on: []
+    sop_id: child-success
+    wait_policy: wait
+`.trim() + '\n', 'utf8');
+  const importedSubSop = await call('sop_template_import_yaml', { sop_id: 'sub-sop-yaml' });
+  assert.equal(view(importedSubSop).status, 'created');
+  const importedSubSopShow = await call('sop_template_show', { sop_id: 'sub-sop-yaml' });
+  const importedSubSopStep = (view(importedSubSopShow).steps as Array<Record<string, any>>)[0];
+  assert.equal(importedSubSopStep.executor, 'sop');
+  assert.equal(importedSubSopStep.sop_id, 'child-success');
+  assert.equal(importedSubSopStep.wait_policy, 'wait');
+
   console.log('sop-mcp behavior ok');
 } finally {
   if (state) state.db.close();
