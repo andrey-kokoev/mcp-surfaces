@@ -14,6 +14,8 @@ type SchedulerState = {
   allowedRoots: string[];
 };
 
+const SCHTASKS_TIMEOUT_MS = 30_000;
+
 export function createServerState(options: JsonRecord = {}): SchedulerState {
   const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots);
   return { allowedRoots };
@@ -228,20 +230,32 @@ async function callTool(params: JsonRecord, state: SchedulerState) {
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
 }
 
-async function schtasks(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function schtasks(args: string[], timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
   return new Promise((resolveExecution) => {
     const child = spawn('schtasks.exe', args, { windowsHide: true });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const finish = (result: { stdout: string; stderr: string; exitCode: number; timedOut?: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveExecution(result);
+    };
+    const timer = setTimeout(() => {
+      stderr = `${stderr}\nschtasks.exe timed out after ${timeoutMs}ms`.trim();
+      child.kill();
+      finish({ stdout, stderr, exitCode: -2, timedOut: true });
+    }, timeoutMs);
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.on('close', (code) => {
-      resolveExecution({ stdout, stderr, exitCode: code ?? -1 });
+      finish({ stdout, stderr, exitCode: code ?? -1 });
     });
     child.on('error', (err) => {
-      resolveExecution({ stdout, stderr: `${stderr}\n${err.message}`, exitCode: -1 });
+      finish({ stdout, stderr: `${stderr}\n${err.message}`, exitCode: -1 });
     });
   });
 }
@@ -405,31 +419,7 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
   const description = optionalString(args.description);
   const taskRun = cmdArgs ? `${command} ${cmdArgs}` : command;
   const schArgs = ['/create', '/tn', taskName, '/tr', taskRun, '/f'];
-  switch (schedule) {
-    case 'daily': {
-      const startTime = optionalString(args.start_time) ?? '09:00';
-      schArgs.push('/sc', 'daily', '/st', startTime);
-      break;
-    }
-    case 'hourly': {
-      const interval = clamp(integer(args.interval_minutes, 60, 1, 1440), 1, 1440);
-      schArgs.push('/sc', 'hourly', '/mo', String(interval));
-      break;
-    }
-    case 'at_startup':
-      schArgs.push('/sc', 'onstart');
-      break;
-    case 'at_logon':
-      schArgs.push('/sc', 'onlogon');
-      break;
-    case 'once': {
-      const startTime = optionalString(args.start_time) ?? '09:00';
-      schArgs.push('/sc', 'once', '/st', startTime);
-      break;
-    }
-    default:
-      throw diagnosticError('scheduler_invalid_schedule', `scheduler_invalid_schedule:${schedule}`);
-  }
+  schArgs.push(...buildCreateScheduleArgs(schedule, args));
   const realTr = workingDir ? `${command} ${cmdArgs ?? ''}`.trim() : taskRun;
   schArgs[schArgs.indexOf('/tr') + 1] = realTr;
   const { stdout, stderr, exitCode } = await schtasks(schArgs);
@@ -446,6 +436,27 @@ async function schedulerTaskDelete(args: JsonRecord, _state: SchedulerState): Pr
 
 export function buildTaskRunCommand(command: string, cmdArgs?: string): string {
   return cmdArgs ? `${command} ${cmdArgs}` : command;
+}
+
+export function buildCreateScheduleArgs(schedule: string, args: JsonRecord): string[] {
+  switch (schedule) {
+    case 'daily':
+      return ['/sc', 'daily', '/st', optionalString(args.start_time) ?? '09:00'];
+    case 'hourly': {
+      const interval = clamp(integer(args.interval_minutes, 60, 1, 1440), 1, 1440);
+      if (interval < 60) return ['/sc', 'minute', '/mo', String(interval)];
+      if (interval % 60 !== 0) return ['/sc', 'minute', '/mo', String(interval)];
+      return ['/sc', 'hourly', '/mo', String(Math.max(1, interval / 60))];
+    }
+    case 'at_startup':
+      return ['/sc', 'onstart'];
+    case 'at_logon':
+      return ['/sc', 'onlogon'];
+    case 'once':
+      return ['/sc', 'once', '/st', optionalString(args.start_time) ?? '09:00'];
+    default:
+      throw diagnosticError('scheduler_invalid_schedule', `scheduler_invalid_schedule:${schedule}`);
+  }
 }
 
 async function schedulerTaskUpdateAction(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {

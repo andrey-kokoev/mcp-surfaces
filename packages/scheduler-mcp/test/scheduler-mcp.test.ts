@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerFailureDetails } from '../src/main.js';
+import { buildCreateScheduleArgs, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerFailureDetails } from '../src/main.js';
 
 const state = createServerState({});
 
@@ -20,6 +20,9 @@ assert.match(String(accessDenied.remediation), /elevated PowerShell/);
 const invalidArgs = schedulerFailureDetails({ operation: 'create', exitCode: 2147500037, stderr: '', taskName: '\\BadTask' });
 assert.equal(invalidArgs.classification, 'invalid_arguments_or_unsupported_scheduler_option');
 assert.equal(buildTaskRunCommand('pwsh.exe', '-File tool.ps1'), 'pwsh.exe -File tool.ps1');
+assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 15 }), ['/sc', 'minute', '/mo', '15']);
+assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 120 }), ['/sc', 'hourly', '/mo', '2']);
+assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 90 }), ['/sc', 'minute', '/mo', '90']);
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
   return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
