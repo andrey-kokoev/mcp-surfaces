@@ -126,6 +126,18 @@ try {
     'scheduler',
     { allow_sidecar: true },
   ), null);
+  const disabledSidecarRefusal = siteBindSidecarRefusal(
+    { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [], surface_overrides: { scheduler: { enabled: false } } },
+    'scheduler',
+  );
+  assert.equal(disabledSidecarRefusal?.status, 'refused');
+  assert.equal(disabledSidecarRefusal?.reason_code, 'registrar_site_bind_refused_surface_disabled');
+  assert.equal(disabledSidecarRefusal?.sidecar_state, 'disabled_by_site_override');
+  assert.equal(siteBindSidecarRefusal(
+    { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [], surface_overrides: { scheduler: { enabled: false } } },
+    'scheduler',
+    { allow_disabled_sidecar: true, allow_sidecar: true },
+  ), null);
 
   console.log('mcp-registrar behavior ok');
 } finally {
