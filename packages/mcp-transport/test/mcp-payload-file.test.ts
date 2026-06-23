@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -30,13 +31,21 @@ assert.throws(
   /inline_payload_too_long: field=summary length=201 threshold=200 remediation=call mcp_payload_create then retry_with_payload_ref.*mcp_payload_create_args=.*"summary":"<move original summary here>".*retry_args=.*"payload_ref":"mcp_payload:<id>@v1"/
 );
 
+assert.throws(
+  () => enforceInlinePayloadLimit({
+    toolName: 'task_lifecycle_review',
+    args: { findings: [{ severity: 'note', description: over200 }] },
+  }),
+  /mcp_payload_create_args=.*"findings":\[\{"description":"<move original findings\.0\.description here>"\}\]/
+);
+
 assert.doesNotThrow(() => enforceInlinePayloadLimit({
   toolName: 'mcp_payload_create',
   args: { payload: { summary: over200 } },
   allowPayloadCreation: true,
 }));
 
-assert.deepEqual(listOutputTools(), []);
+assert.equal(listOutputTools()[0].name, 'mcp_output_show');
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {
@@ -50,14 +59,21 @@ try {
   const envelope = JSON.parse(longResult.content[0].text);
   const structuredEnvelope = (longResult as { structuredContent: Record<string, unknown> }).structuredContent;
   assert.equal(envelope.truncated, true);
-  assert.equal(envelope.output_ref, undefined);
+  assert.match(String(structuredEnvelope.output_ref), /^mcp_output:/);
   assert.equal(structuredEnvelope.schema, 'narada.producer_output_page.v1');
   assert.equal(structuredEnvelope.offset, 0);
   assert.equal(structuredEnvelope.next_offset, 200);
+  assert.equal(structuredEnvelope.transport_next_offset, 200);
   assert.equal(typeof structuredEnvelope.site_root, 'string');
-  assert.equal(envelope.reader_tool, null);
+  assert.equal(structuredEnvelope.reader_tool, 'mcp_output_show');
+  assert.match(String(structuredEnvelope.read_command), /mcp_output_show/);
   assert.equal(longResult.content.length, 1);
   assert.equal(longResult.content[0].type, 'text');
+
+  const shownLongResult = outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, limit: 10 } });
+  assert.equal(shownLongResult.schema, 'narada.mcp_output_page.v1');
+  assert.equal(shownLongResult.output_text.length, 10);
+  assert.equal(shownLongResult.next_offset, 10);
 
   const bulkyResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
@@ -66,12 +82,12 @@ try {
   });
   const bulkyEnvelope = JSON.parse(bulkyResult.content[0].text);
   const bulkyStructuredEnvelope = (bulkyResult as { structuredContent: Record<string, unknown> }).structuredContent;
-  assert.equal(bulkyEnvelope.output_ref, undefined);
+  assert.match(String(bulkyStructuredEnvelope.output_ref), /^mcp_output:/);
   assert.match(String(bulkyStructuredEnvelope.payload_ref), /^mcp_payload:/);
   assert.equal(bulkyEnvelope.truncated, true);
 
   const resources = listOutputResources({ siteRoot: tempRoot }).resources;
-  assert.equal(resources.length, 0);
+  assert.equal(resources.length >= 2, true);
 
   const wrappedFirstPage = buildOutputRefToolContent({
     siteRoot: tempRoot,
@@ -86,6 +102,13 @@ try {
     () => readOutputResource({ siteRoot: tempRoot, uri: 'mcp-output:mcp_output%3Amissing' }),
     /output_ref_not_found/
   );
+
+  assert.throws(
+    () => payloadCreate({ siteRoot: tempRoot, args: { payload: {} } }),
+    /payload_create_empty_payload_requires_allow_empty.*put domain fields under payload/
+  );
+  const emptyPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: {}, allow_empty: true, payload_id: 'empty_payload_ok' } });
+  assert.equal(emptyPayload.status, 'created');
 
   const createdPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { summary: 'x'.repeat(500) } } });
   const createdPayloadResult = buildOutputRefToolContent({
@@ -105,6 +128,34 @@ try {
     payloadRefMode: 'merge_args',
   });
   assert.deepEqual(merged.args, { task_number: 2, agent_id: 'top.agent', summary: 'from payload' });
+
+  const outputId = 'o_alias_test';
+  const outputRef = `mcp_output:${outputId}`;
+  const fullOutput = { status: 'ok', nested: { value: 42 } };
+  const fullText = JSON.stringify(fullOutput, null, 2);
+  const outputRecord = {
+    schema: 'narada.mcp_output_ref.v1',
+    ref: outputRef,
+    output_id: outputId,
+    tool_name: 'alias_fixture',
+    created_at: new Date().toISOString(),
+    created_by: 'test',
+    content_type: 'application/json',
+    inline_char_limit: 1,
+    full_output_char_length: fullText.length,
+    truncated: true,
+    sha256: createHash('sha256').update(fullText).digest('hex'),
+    max_bytes: 10_000,
+    full_output: fullOutput,
+  };
+  mkdirSync(join(tempRoot, '.ai/tmp/mcp-outputs/workspace'), { recursive: true });
+  writeFileSync(join(tempRoot, '.ai/tmp/mcp-outputs/workspace', `${outputId}.json`), `${JSON.stringify(outputRecord)}\n`, 'utf8');
+  assert.equal(outputShow({ siteRoot: tempRoot, args: { ref: outputRef } }).ref, outputRef);
+  assert.equal(outputShow({ siteRoot: tempRoot, args: { output_ref: outputRef } }).ref, outputRef);
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: outputRef, output_ref: 'mcp_output:o_other_alias' } }),
+    /output_show_ref_alias_conflict/
+  );
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
 }

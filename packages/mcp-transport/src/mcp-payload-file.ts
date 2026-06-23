@@ -182,12 +182,18 @@ function assignPath(target, path, value) {
   for (let index = 0; index < path.length; index++) {
     const key = path[index];
     if (index === path.length - 1) {
-      current[key] = value;
+      current[containerKey(key)] = value;
       return;
     }
-    current[key] = isPlainObject(current[key]) ? current[key] : {};
-    current = current[key];
+    const targetKey = containerKey(key);
+    const nextContainer = /^\d+$/.test(path[index + 1] ?? '') ? [] : {};
+    current[targetKey] = isPlainObject(current[targetKey]) || Array.isArray(current[targetKey]) ? current[targetKey] : nextContainer;
+    current = current[targetKey];
   }
+}
+
+function containerKey(key) {
+  return /^\d+$/.test(String(key)) ? Number(key) : key;
 }
 
 function visitInlinePayload(value, path, context) {
@@ -227,6 +233,9 @@ function isPayloadWorkspaceTool(toolName) {
 export function payloadCreate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
   const input = asRecord(args);
   const payload = asPayloadObject(input.payload, 'payload_create_payload_must_be_object');
+  if (Object.keys(payload).length === 0 && input.allow_empty !== true) {
+    throw new Error('payload_create_empty_payload_requires_allow_empty: payload object is empty; pass allow_empty=true only when an empty immutable payload is intentional. Common mistake: put domain fields under payload, e.g. {"payload":{"summary":"..."}}, not alongside it.');
+  }
   const payloadId = input.payload_id ? validatePayloadId(String(input.payload_id)) : randomPayloadId();
   const createdAt = new Date().toISOString();
   const ref = buildPayloadRef(payloadId, 1);
@@ -281,6 +290,7 @@ export function buildOutputRefToolContent({
   isError = false,
   limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
   createdBy = process.env.NARADA_AGENT_ID || null,
+  readerTool = 'mcp_output_show',
 }: Record<string, unknown> = {}) {
   const outputSiteRoot = typeof siteRoot === 'string' ? siteRoot : process.cwd();
   const outputToolName = typeof toolName === 'string' ? toolName : 'unknown_tool';
@@ -300,6 +310,9 @@ export function buildOutputRefToolContent({
   }
 
   const payloadRef = typeof valueRecord.ref === 'string' && valueRecord.ref.startsWith('mcp_payload:') ? valueRecord.ref : null;
+  const materialized = outputCreate({ siteRoot: outputSiteRoot, toolName: outputToolName, value, fullText, inlineLimit, createdBy: outputCreatedBy });
+  const outputRef = String(materialized.ref ?? '');
+  const outputReaderTool = typeof readerTool === 'string' && readerTool.trim().length > 0 ? readerTool.trim() : null;
   const outputText = fullText.slice(0, inlineLimit);
   const nextOffset = outputText.length < fullText.length ? outputText.length : null;
   const envelope = {
@@ -307,16 +320,24 @@ export function buildOutputRefToolContent({
     status: outputStatus(value, isError),
     truncated: true,
     ...(payloadRef ? { payload_ref: payloadRef } : {}),
+    output_ref: outputRef,
+    ref: outputRef,
+    result_materialized: true,
     tool_name: outputToolName,
     offset: 0,
     limit: inlineLimit,
     next_offset: nextOffset,
+    transport_offset: 0,
+    transport_limit: inlineLimit,
+    transport_next_offset: nextOffset,
     output_text: outputText,
     output_truncated: nextOffset !== null,
-    reader_tool: null,
+    reader_tool: outputReaderTool,
     site_root: outputSiteRoot,
-    read_command: null,
-    remediation: 'Re-call the original producing tool with its own paging arguments; separate mcp_output_show reader tools are not exposed.',
+    read_command: outputReaderTool ? `${outputReaderTool}({ "ref": "${outputRef}", "offset": 0, "limit": ${DEFAULT_OUTPUT_SHOW_CHAR_LIMIT} })` : null,
+    remediation: outputReaderTool
+      ? `Use ${outputReaderTool} with output_ref/ref=${outputRef} to read the full produced JSON output; use transport_next_offset only for transport-envelope text, and use the original tool's own next_offset for domain paging after reading the materialized result.`
+      : 'Use the output_ref resource to read the full produced JSON output; separate reader tools are not exposed for this surface.',
     inline_limit: inlineLimit,
     full_output_char_length: fullText.length,
   };
@@ -390,7 +411,24 @@ function outputRefFromResourceUri(uri) {
 }
 
 export function listOutputTools() {
-  return [];
+  return [
+    {
+      name: 'mcp_output_show',
+      description: 'Read a materialized MCP output ref with offset/limit paging.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: 'Materialized output ref, e.g. mcp_output:<id>. Alias: output_ref.' },
+          output_ref: { type: 'string', description: 'Alias for ref.' },
+          target_site_root: { type: 'string', description: 'Optional target site root for cross-site materialized output readback.' },
+          offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
+          limit: { type: 'integer', default: DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, description: 'Maximum output characters to return.' },
+        },
+        required: [],
+        additionalProperties: false,
+      },
+    },
+  ];
 }
 
 function outputCreate({ siteRoot, toolName, value, fullText, inlineLimit, createdBy, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
@@ -530,6 +568,9 @@ function parseOutputRef(ref) {
 
 function requireOutputRef(args, message, field = 'ref') {
   const record = asRecord(args);
+  if (field === 'ref' && typeof record.ref === 'string' && typeof record.output_ref === 'string' && record.ref.trim() !== record.output_ref.trim()) {
+    throw new Error('output_show_ref_alias_conflict: provide either ref or output_ref, or provide matching values');
+  }
   const value = record[field] ?? (field === 'ref' ? record.output_ref : undefined);
   if (typeof value !== 'string' || value.trim().length === 0) throw new Error(message);
   return value.trim();
@@ -602,7 +643,8 @@ export function listPayloadTools() {
         additionalProperties: false,
         properties: {
           payload_id: { type: 'string', description: 'Optional stable id segment. Defaults to a generated id.' },
-          payload: { type: 'object', description: 'JSON object payload to store as v1.' },
+          payload: { type: 'object', description: 'Required nested domain object to store as v1. Put tool arguments inside this field, e.g. {"payload":{"summary":"..."}}. Empty objects require allow_empty=true.' },
+          allow_empty: { type: 'boolean', description: 'Set true only when intentionally creating an empty payload object.' },
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
         required: ['payload'],
