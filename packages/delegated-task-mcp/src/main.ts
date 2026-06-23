@@ -33,6 +33,7 @@ const CONDITION_LANGUAGE = [
 
 type JsonRecord = Record<string, unknown>;
 type WorkerTool = (name: string, args: JsonRecord, state: WorkerMcpState) => Promise<JsonRecord>;
+type SourceTaskBacklinkTool = (args: JsonRecord) => Promise<JsonRecord>;
 type TaskStatus = 'accepted_for_execution' | 'running' | 'completed' | 'failed' | 'cancelled';
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'blocked' | 'noted';
 type State = {
@@ -49,6 +50,7 @@ type State = {
   outputRoot: string;
   workerState: WorkerMcpState;
   workerTool: WorkerTool;
+  sourceTaskBacklinkTool: SourceTaskBacklinkTool | null;
 };
 type Task = {
   schema: 'narada.delegated_task.task.v1';
@@ -74,6 +76,8 @@ type Task = {
 };
 type WorkflowStep = {
   id: string;
+  title: string | null;
+  label: string | null;
   kind: string;
   profile: string | null;
   instruction: string | null;
@@ -85,6 +89,10 @@ type WorkflowStep = {
   write_set: string[];
   constraints: JsonRecord;
   authority_gate: JsonRecord;
+  output_schema: JsonRecord;
+  agent_slot: string | null;
+  resume_from: string | null;
+  session_affinity: JsonRecord;
 };
 type StepState = {
   step_id: string;
@@ -100,6 +108,7 @@ type StepState = {
   error: string | null;
   summary: string | null;
   active_posture?: JsonRecord | null;
+  affinity?: JsonRecord | null;
 };
 type AdvanceOptions = { waitUntilTerminal?: boolean; timeoutMs?: number; pollMs?: number };
 
@@ -129,15 +138,15 @@ export function createServerState(options: JsonRecord = {}): State {
     maxWorkerRefs: integer(policy.max_worker_refs, 50, 1, 1000),
     maxListItems: integer(policy.max_list_items, 200, 1, 5000),
   };
-  return { taskRoot, siteRoot, currentSiteId, allowedRoots, allowedWorkflowKinds, allowedProfiles: profiles.length ? profiles : null, resultCompaction, outputRoot: resolve(taskRoot, 'outputs'), workerState, workerTool: workerToolOption(options.workerTool) };
+  return { taskRoot, siteRoot, currentSiteId, allowedRoots, allowedWorkflowKinds, allowedProfiles: profiles.length ? profiles : null, resultCompaction, outputRoot: resolve(taskRoot, 'outputs'), workerState, workerTool: workerToolOption(options.workerTool), sourceTaskBacklinkTool: sourceTaskBacklinkToolOption(options.sourceTaskBacklinkTool) };
 }
 
 export function listTools() {
   return [
     tool('delegated_task_policy_inspect', 'Inspect delegated task orchestration policy and defaults.', {}, [], true, false, true),
     tool('delegated_task_template_catalog', 'List built-in delegated workflow templates, milestones, and worker delegation contracts.', { template_id: { type: 'string' } }, [], true, false, true),
-    tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema() }, [], true, false, true),
-    tool('delegated_task_run', 'Create and optionally start a durable delegated workflow task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), idempotency_key: { type: 'string' } }, [], false, false, false),
+    tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema() }, [], true, false, true),
+    tool('delegated_task_run', 'Create and optionally start a durable delegated workflow task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema(), idempotency_key: { type: 'string' } }, [], false, false, false),
     tool('delegated_task_status', 'Return compact delegated task status. Set refresh=true to refresh running workers and schedule any newly ready steps once.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
     tool('delegated_task_advance', 'Explicitly advance a delegated task by refreshing workers and scheduling ready pending steps once.', { task_id: { type: 'string' }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], false, false, false),
     tool('delegated_task_wait', 'Wait for a delegated task to advance toward terminal status.', { task_id: { type: 'string' }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 30000 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
@@ -186,13 +195,18 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
     updated_at: now(),
     cancelled_at: null,
     summary: null,
-    result: handoff(),
+    result: { ...handoff(), external_dependencies: externalDependencies(args) },
   };
   task.result = { ...task.result, step_states: initialStepStates(task.workflow), progress: progressSummary(task) };
   const validation = validateTaskShape({ ...args, workflow: task.workflow, acceptance: task.acceptance, execution, result_policy: task.result_policy }, state, false);
   if (validation.status === 'rejected') throw diag('delegated_task_validation_failed', 'delegated_task_validation_failed', { diagnostics: validation.diagnostics });
   writeTask(state, task);
   appendEvent(state, taskId, 'task_created', { intent: taskIntent, status: task.status, ownership: ownershipProjection(task) });
+  const sourceRef = rec(rec(rec(task.result).external_dependencies).source_task_ref);
+  if (Object.keys(sourceRef).length > 0) {
+    appendEvent(state, taskId, 'source_task_backlink_observation', { source_task_ref: sourceRef, delegated_task_id: taskId, observation_kind: 'delegated_task_created_from_source' });
+    await writeSourceTaskBacklinkObservation(state, task, sourceRef);
+  }
   const advanced = execution.start === false ? task : await advanceTask(task, state, { waitUntilTerminal: execution.wait_for_completion === true, timeoutMs: execution.wait_for_completion === true ? integer(execution.timeout_ms, 30000, 0, 600000) : integer(execution.timeout_ms, 0, 0, 600000), pollMs: integer(execution.poll_ms, 500, 50, 30000) });
   return runResult(advanced, paths, true);
 }
@@ -200,7 +214,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
   const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export async function delegatedTaskAdvance(args: JsonRecord, state: State): Promise<JsonRecord> {
@@ -487,8 +501,24 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
 
 async function refreshRunningSteps(task: Task, state: State, stepStates: Record<string, StepState>): Promise<void> {
   let dataChanged = false;
+  const stepsById = new Map(workflowSteps(task.workflow).map((step) => [step.id, step]));
   for (const stepState of Object.values(stepStates)) {
     if (stepState.status !== 'running' || !stepState.current_run_id) continue;
+    const step = stepsById.get(stepState.step_id) ?? { id: stepState.step_id, title: null, label: null, kind: stepState.kind, profile: null, instruction: null, milestone_id: null, depends_on: [], imports: [], if: null, acceptance_scope: [], write_set: [], constraints: {}, authority_gate: {}, output_schema: {}, agent_slot: null, resume_from: null, session_affinity: normalizeSessionAffinity({}, null) };
+    const supersededRunIds = stepState.run_ids.filter((runId) => runId !== stepState.current_run_id);
+    for (const supersededRunId of supersededRunIds) {
+      const existing = workerRefs(task).find((ref) => ref.run_id === supersededRunId && ref.step_id === stepState.step_id);
+      if (existing && !['running', 'unknown'].includes(String(existing.status ?? 'unknown'))) continue;
+      try {
+        const supersededStatus = await state.workerTool('worker_run_status', { run_id: supersededRunId }, state.workerState);
+        const supersededRef = summarizeWorkerRef(step, { ...supersededStatus, superseded_by_run_id: stepState.current_run_id }, stepState.affinity ?? null);
+        upsertWorkerRef(task, step, { ...supersededRef, superseded_by_run_id: stepState.current_run_id }, supersededStatus);
+        appendEvent(state, task.task_id, 'step_superseded_run_reconciled', { step_id: stepState.step_id, run_id: supersededRunId, current_run_id: stepState.current_run_id, status: supersededStatus.status ?? 'unknown' });
+        dataChanged = true;
+      } catch (error) {
+        appendEvent(state, task.task_id, 'step_superseded_run_unresolved', { step_id: stepState.step_id, run_id: supersededRunId, current_run_id: stepState.current_run_id, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
     let statusResult: JsonRecord;
     try {
       statusResult = await state.workerTool('worker_run_status', { run_id: stepState.current_run_id }, state.workerState);
@@ -501,8 +531,9 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
         continue;
       }
     }
-    const workerRef = summarizeWorkerRef({ id: stepState.step_id, kind: stepState.kind, profile: null, instruction: null, milestone_id: null, depends_on: [], imports: [], if: null, acceptance_scope: [], write_set: [], constraints: {}, authority_gate: {} }, statusResult);
-    upsertWorkerRef(task, workerRef, statusResult);
+    stepState.affinity = finalizeAffinityEvidence(stepState.affinity, statusResult);
+    const workerRef = summarizeWorkerRef(step, statusResult, stepState.affinity ?? null);
+    upsertWorkerRef(task, step, workerRef, statusResult);
     const refreshedStatus = String(statusResult.status ?? 'unknown');
     stepState.active_posture = refreshedStatus === 'running' ? workerActivePosture(stepState, statusResult) : null;
     if (refreshedStatus === 'completed') {
@@ -547,7 +578,31 @@ async function recoverWorkerRunStatus(runId: string, state: State, originalError
 }
 
 async function launchWorkerStep(task: Task, state: State, step: WorkflowStep, stepState: StepState): Promise<void> {
-  const workerResult = await state.workerTool('worker_run', buildWorkerArgs(task, step, state), state.workerState);
+  const launch = resolveWorkerLaunch(task, state, step, stepState);
+  stepState.affinity = launch.affinity;
+  if (launch.blocked) {
+    markStep(stepState, 'failed', String(launch.affinity.reason ?? 'session_affinity_unavailable'));
+    appendEvent(state, task.task_id, 'step_affinity_failed', launch.affinity);
+    return;
+  }
+  let workerResult: JsonRecord;
+  try {
+    workerResult = await state.workerTool(launch.tool_name, launch.args, state.workerState);
+  } catch (error) {
+    const failure = error instanceof Error ? error.message : String(error);
+    if (!launch.affinity || launch.tool_name === 'worker_run') throw error;
+    if (launch.canFallbackToNewSession) {
+      const fallbackArgs = buildWorkerArgs(task, step, state);
+      workerResult = await state.workerTool('worker_run', fallbackArgs, state.workerState);
+      stepState.affinity = { ...launch.affinity, actual: 'new_session', fallback_used: 'new_session', fallback_reason: failure, tool_name: 'worker_run' };
+      appendEvent(state, task.task_id, 'step_affinity_fallback_used', stepState.affinity);
+    } else {
+      stepState.affinity = { ...launch.affinity, actual: 'failed', error: failure };
+      markStep(stepState, 'failed', failure);
+      appendEvent(state, task.task_id, 'step_affinity_failed', stepState.affinity);
+      return;
+    }
+  }
   stepState.status = String(workerResult.status) === 'completed' ? 'completed' : FAILED_WORKER_STATUSES.has(String(workerResult.status)) ? 'failed' : 'running';
   stepState.attempts += 1;
   stepState.started_at ??= now();
@@ -558,8 +613,9 @@ async function launchWorkerStep(task: Task, state: State, step: WorkflowStep, st
   stepState.summary = opt(workerResult.summary);
   stepState.error = opt(workerResult.error);
   stepState.active_posture = stepState.status === 'running' ? workerActivePosture(stepState, workerResult) : null;
-  const workerRef = summarizeWorkerRef(step, workerResult);
-  upsertWorkerRef(task, workerRef, workerResult);
+  stepState.affinity = finalizeAffinityEvidence(stepState.affinity, workerResult);
+  const workerRef = summarizeWorkerRef(step, workerResult, stepState.affinity ?? null);
+  upsertWorkerRef(task, step, workerRef, workerResult);
   if (stepState.status === 'failed' && stepState.attempts <= executionPolicy(task).max_retries) {
     const runId = stepState.current_run_id;
     stepState.status = 'pending';
@@ -598,6 +654,8 @@ function completeLocalStep(task: Task, state: State, step: WorkflowStep, stepSta
     const dependencyRefs = workerRefs(task).filter((ref) => step.depends_on.includes(String(ref.step_id ?? '')));
     const summary = `joined ${dependencyRefs.length} worker result${dependencyRefs.length === 1 ? '' : 's'}`;
     const joinSynthesis = synthesizeJoinStep(step, dependencyRefs);
+    const validation = validateStepOutputSchema(step, joinSynthesis);
+    if (validation.status !== 'not_applicable') joinSynthesis.output_schema_validation = validation;
     const existing = records(rec(task.result).join_syntheses).filter((item) => item.step_id !== step.id);
     task.result = { ...rec(task.result), join_syntheses: [...existing, joinSynthesis] };
     markStep(stepState, 'completed', summary);
@@ -644,6 +702,7 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
 function consolidateResult(task: Task, _state: State, stepStates: Record<string, StepState>): JsonRecord {
   const refs = workerRefs(task);
   const outputs = refs.map((ref) => rec(ref.output));
+  const external = rec(task.result).external_dependencies ?? {};
   const parentChangedFiles = uniqueStrings(stringList(rec(task.result).parent_changed_files));
   const workerReportedChangedFiles = uniqueStrings(refs.flatMap((ref) => writeCapableWorkerRef(task, ref) ? changedPathsFromOutput(rec(ref.output)) : []));
   const observedFiles = uniqueStrings(refs.flatMap((ref) => {
@@ -668,7 +727,7 @@ function consolidateResult(task: Task, _state: State, stepStates: Record<string,
   const workerLaunchFailures = records(rec(task.result).worker_launch_failures);
   const launchFailureIncoherencies = workerLaunchFailures.map((failure) => `worker_launch_failed:${failure.step_id ?? 'unknown'}:${failure.message ?? 'unknown_error'}`);
   const joinSyntheses = records(rec(task.result).join_syntheses);
-  return { schema: 'narada.delegated_task.handoff.v1', changed_files: changedFiles, changed_file_refs: changedFileRefs, real_changed_files: realChangedFiles, affected_refs: affectedRefs, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflows: nestedWorkflows, nested_workflow_changed_files: nestedWorkflowChangedFiles, nested_workflow_verification: nestedWorkflowVerification, join_syntheses: joinSyntheses, verification, residual_risks: residualRisks, observed_incoherencies: uniqueStrings([...observedIncoherencies, ...launchFailureIncoherencies]), worker_terminal_diagnostics: workerTerminalDiagnostics, worker_terminal_diagnostic_count: workerTerminalDiagnostics.length, exit_interviews: exitInterviews, exit_interview_count: exitInterviews.length, exit_interview_feedback: exitInterviewFeedback, worker_launch_failures: workerLaunchFailures, worker_refs: refs, worker_ref_count: refs.length };
+  return { schema: 'narada.delegated_task.handoff.v1', external_dependencies: external, changed_files: changedFiles, changed_file_refs: changedFileRefs, real_changed_files: realChangedFiles, affected_refs: affectedRefs, parent_changed_files: parentChangedFiles, worker_reported_changed_files: workerReportedChangedFiles, observed_files: observedFiles, nested_workflows: nestedWorkflows, nested_workflow_changed_files: nestedWorkflowChangedFiles, nested_workflow_verification: nestedWorkflowVerification, join_syntheses: joinSyntheses, verification, residual_risks: residualRisks, observed_incoherencies: uniqueStrings([...observedIncoherencies, ...launchFailureIncoherencies]), worker_terminal_diagnostics: workerTerminalDiagnostics, worker_terminal_diagnostic_count: workerTerminalDiagnostics.length, exit_interviews: exitInterviews, exit_interview_count: exitInterviews.length, exit_interview_feedback: exitInterviewFeedback, worker_launch_failures: workerLaunchFailures, worker_refs: refs, worker_ref_count: refs.length };
 }
 
 function workerTerminalDiagnosticRecords(refs: JsonRecord[]): JsonRecord[] {
@@ -828,13 +887,15 @@ function tool(name: string, description: string, properties: JsonRecord, require
 }
 function intentSchema(): JsonRecord { return { type: 'object', properties: { objective: { type: 'string' }, instructions: { type: 'string' }, behavior: { type: 'string' }, mode: { type: 'string' } }, additionalProperties: false }; }
 function constraintsSchema(): JsonRecord { return { type: 'object', properties: { authority: { type: 'string', enum: ['read', 'write', 'command'] }, cwd: { type: 'string' }, site_root: { type: 'string', description: 'Optional Narada Site root forwarded to worker-delegation for site-bound runtimes.' }, provider: { type: 'string', description: 'Optional NARS intelligence provider forwarded to worker-delegation as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' }, profile: { type: 'string' }, cognition: { type: 'string', enum: ['low', 'medium', 'high'] }, model: { type: 'string' }, sandbox: { type: 'string' }, runtime: { type: 'string' }, skip_git_repo_check: { type: 'boolean' }, resumable: { type: 'boolean' }, wait_for_completion: { type: 'boolean' }, exit_interview: { type: 'boolean' }, max_concurrency: { type: 'integer', minimum: 1 }, max_retries: { type: 'integer', minimum: 0 }, repair_policy: repairPolicySchema(), authority_gates: authorityGatesSchema(), required_mcp_tools: { type: 'array', items: { type: 'string' } }, preflight_paths: { type: 'array', items: { type: 'object', properties: { path: { type: 'string' }, access: { type: 'string', enum: ['read', 'write', 'create'] }, label: { type: 'string' } }, required: ['path', 'access'], additionalProperties: false } }, overrides: constraintOverridesSchema() }, additionalProperties: false }; }
+function sourceTaskRefSchema(): JsonRecord { return { type: 'object', properties: { kind: { type: 'string', enum: ['task_lifecycle', 'delegated_task', 'worker_run'] }, task_number: { type: 'integer' }, task_id: { type: 'string' }, run_id: { type: 'string' } }, additionalProperties: false }; }
 function constraintOverridesSchema(): JsonRecord { return { type: 'object', properties: { runtime: { type: 'string' }, sandbox: { type: 'string', enum: ['read-only', 'workspace-write', 'danger-full-access'] }, model: { type: 'string' }, reasoning_effort: { type: 'string' }, config: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] } }, skip_git_repo_check: { type: 'boolean' } }, additionalProperties: false }; }
 function workflowSchema(): JsonRecord {
   const templateIds = workflowTemplateCatalog().map((template) => String(template.template_id));
-  const stepSchema = { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' }, profile: { type: 'string' }, instruction: { type: 'string' }, milestone_id: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, imports: { type: 'array', items: { type: 'string' }, description: 'Optional explicit external dependency or context labels imported by this step; advisory only, not scheduling dependencies.' }, if: { type: 'string' }, acceptance_scope: { type: 'array', items: { type: 'string' } }, write_set: { type: 'array', items: { type: 'string' }, description: 'Advisory paths/resources this step may write. Used for disjoint write-set scheduling when enabled.' }, authority_gate: authorityGateSchema(), constraints: constraintsSchema() }, required: ['id', 'kind'], additionalProperties: false };
+  const stepSchema = { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, label: { type: 'string' }, kind: { type: 'string' }, profile: { type: 'string' }, instruction: { type: 'string' }, milestone_id: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, needs: { type: 'array', items: { type: 'string' }, description: 'Alias for depends_on.' }, imports: { type: 'array', items: { type: 'string' }, description: 'Optional explicit external dependency or context labels imported by this step; advisory only, not scheduling dependencies.' }, if: { type: 'string' }, acceptance_scope: { type: 'array', items: { type: 'string' } }, write_set: { type: 'array', items: { type: 'string' }, description: 'Advisory paths/resources this step may write. Used for disjoint write-set scheduling when enabled.' }, agent_slot: { type: 'string', description: 'Logical worker/agent slot, e.g. A or reviewer-1. Advisory identity for session-affinity readback.' }, resume_from: { type: 'string', description: 'Prior workflow step id whose worker_session_id should be resumed when session_affinity requests it.' }, session_affinity: sessionAffinitySchema(), authority_gate: authorityGateSchema(), constraints: constraintsSchema(), output_schema: { type: 'object', additionalProperties: true } }, required: ['id', 'kind'], additionalProperties: false };
   return { type: 'object', description: 'Workflow DAG: every depends_on value must name a step id in this request, and cycles are rejected by delegated_task_validate. work_order may be a legacy step-list alias or a governing contract layered over explicit steps.', properties: { template_id: { type: 'string', enum: templateIds }, strategy: { type: 'string', enum: templateIds }, template: { type: 'string', enum: templateIds, description: 'Alias for strategy for template-oriented callers.' }, instruction: { type: 'string', description: 'Optional template-level instruction used by built-in templates when a step omits its own instruction.' }, milestones: { type: 'array', items: milestoneSchema() }, authority_gates: authorityGatesSchema(), steps: { type: 'array', items: stepSchema }, work_order: workOrderSchema(stepSchema), imports: { type: 'array', items: { type: 'string' }, description: 'Workflow-level external dependency or context labels imported by this DAG; advisory only.' }, migration: { type: 'object', additionalProperties: { type: ['string', 'number', 'boolean'] }, description: 'Optional caller migration metadata preserved in the task record.' } }, additionalProperties: false, examples: [{ template_id: 'implement_review_repair_verify', instruction: 'Implement, review, repair if needed, and verify.' }, { template: 'implement_review_repair_verify' }, { work_order: [{ id: 'implement', kind: 'worker' }, { id: 'review', kind: 'review', depends_on: ['implement'] }] }, { steps: [{ id: 'implement', kind: 'worker' }], work_order: { scope: ['packages/delegated-task-mcp'], budget: { max_verification_attempts: 1 }, verification: { focused_tests: ['pnpm --filter @narada2/delegated-task-mcp test'] }, acceptance: { residual_risk_policy: 'allow' } } }, { steps: [{ id: 'research-a', kind: 'research', milestone_id: 'research' }, { id: 'research-b', kind: 'research', milestone_id: 'research' }, { id: 'synthesize', kind: 'worker', depends_on: ['research-a', 'research-b'] }, { id: 'review', kind: 'review', depends_on: ['synthesize'] }] }] };
 }
-function workOrderSchema(stepSchema: JsonRecord): JsonRecord { return { oneOf: [{ type: 'array', items: stepSchema, description: 'Backward-compatible alias for steps when workflow.steps is omitted.' }, { type: 'object', properties: { scope: { type: 'array', items: { type: 'string' } }, budget: { type: 'object', properties: { max_worker_runs: { type: 'integer', minimum: 1 }, max_verification_attempts: { type: 'integer', minimum: 1 }, timeout_ms: { type: 'integer', minimum: 0 }, max_minutes: { type: 'number', minimum: 0 }, allowed_repositories: { type: 'array', items: { type: 'string' } } }, additionalProperties: false }, verification: { type: 'object', properties: { required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, focused_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, verification_budget: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1 }, max_commands: { type: 'integer', minimum: 1 } }, additionalProperties: false } }, additionalProperties: false }, acceptance: acceptanceSchema(), steps: { type: 'array', items: stepSchema }, items: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] }, description: 'Declarative item set used by map stages.' }, stages: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Declarative stages expanded into explicit steps before scheduling.' }, stage_policy: { type: 'object', additionalProperties: true } }, additionalProperties: false, description: 'First-class governing contract layered over the workflow DAG. Optional items/stages are expanded into explicit DAG steps.' }] }; }
+function workOrderSchema(stepSchema: JsonRecord): JsonRecord { return { oneOf: [{ type: 'array', items: stepSchema, description: 'Backward-compatible alias for steps when workflow.steps is omitted.' }, { type: 'object', properties: { authority: { type: 'string', enum: ['read', 'write', 'command'] }, allowed_roots: { type: 'array', items: { type: 'string' } }, allowed_repositories: { type: 'array', items: { type: 'string' } }, mutation_boundaries: { type: 'array', items: { type: 'string' } }, verification_budget: { type: 'object', additionalProperties: true }, test_budget: { type: 'object', additionalProperties: true }, max_concurrency: { type: 'integer', minimum: 1 }, required_tests: { type: 'array', items: { type: 'string' } }, unrelated_failure_policy: { type: 'string', enum: ['residual_risk', 'fail_task'] }, escalation_policy: { type: 'object', additionalProperties: true }, deliverables: { type: 'array', items: { type: 'string' } }, exit_interview_policy: { type: 'object', additionalProperties: true }, scope: { type: 'array', items: { type: 'string' } }, budget: { type: 'object', properties: { max_worker_runs: { type: 'integer', minimum: 1 }, max_verification_attempts: { type: 'integer', minimum: 1 }, timeout_ms: { type: 'integer', minimum: 0 }, max_minutes: { type: 'number', minimum: 0 }, allowed_repositories: { type: 'array', items: { type: 'string' } } }, additionalProperties: false }, verification: { type: 'object', properties: { required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, focused_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, verification_budget: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1 }, max_commands: { type: 'integer', minimum: 1 } }, additionalProperties: false } }, additionalProperties: false }, acceptance: acceptanceSchema(), steps: { type: 'array', items: stepSchema }, items: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] }, description: 'Declarative item set used by map stages.' }, stages: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Declarative stages expanded into explicit steps before scheduling.' }, stage_policy: { type: 'object', additionalProperties: true } }, additionalProperties: false, description: 'First-class governing contract layered over the workflow DAG. Optional items/stages are expanded into explicit DAG steps.' }] }; }
+function sessionAffinitySchema(): JsonRecord { return { type: 'object', properties: { mode: { type: 'string', enum: ['none', 'prefer_same_session', 'require_same_session'] }, require_same_session: { type: 'boolean', description: 'Alias for mode=require_same_session.' }, fallback: { type: 'string', enum: ['fail', 'new_session'], description: 'Behavior when the source session is missing or resume fails.' }, source_step_id: { type: 'string', description: 'Alias for resume_from.' } }, additionalProperties: false }; }
 function milestoneSchema(): JsonRecord { return { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, depends_on: { type: 'array', items: { type: 'string' } }, step_ids: { type: 'array', items: { type: 'string' } }, acceptance_scope: { type: 'array', items: { type: 'string' } } }, required: ['id', 'title'], additionalProperties: false }; }
 function authorityGateSchema(): JsonRecord { return { type: 'object', properties: { operation: { type: 'string', enum: ['commit', 'push'] }, mode: { type: 'string', enum: ['disallowed', 'requires_explicit_authority', 'allowed'] }, reason: { type: 'string' }, required_authority: { type: 'string', enum: ['write', 'command'] } }, additionalProperties: false }; }
 function authorityGatesSchema(): JsonRecord { return { type: 'object', properties: { commit: authorityGateSchema(), push: authorityGateSchema() }, additionalProperties: false }; }
@@ -843,7 +904,7 @@ function acceptanceSchema(): JsonRecord { return { type: 'object', properties: {
 function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
 function executionSchema(): JsonRecord { return { type: 'object', properties: { start: { type: 'boolean', default: true }, wait_for_completion: { type: 'boolean', default: false }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 0 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, resumable: { type: 'boolean', default: true }, exit_interview: { type: 'boolean', default: false }, max_concurrency: { type: 'integer', minimum: 1, maximum: 32, default: 10 }, max_retries: { type: 'integer', minimum: 0, maximum: 10, default: 0 } }, additionalProperties: false }; }
 
-function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { return { schema: 'narada.delegated_task.run.v1', status: created ? 'accepted_for_execution' : 'existing', task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, worker_refs: rec(task.result).worker_refs ?? [] }; }
+function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { return { schema: 'narada.delegated_task.run.v1', status: created ? 'accepted_for_execution' : 'existing', task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, worker_refs: rec(task.result).worker_refs ?? [] }; }
 function handoff(): JsonRecord { return { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', changed_files: [], verification: [], residual_risks: [], observed_incoherencies: [], exit_interviews: [], exit_interview_count: 0, exit_interview_feedback: exitInterviewFeedbackSummary([]), worker_refs: [], worker_ref_count: 0, summary: null }; }
 function normalizeIntent(args: JsonRecord): { objective: string; instructions: string | null; behavior: string | null; mode: string | null } { const intent = rec(args.intent); return { objective: required(intent.objective ?? args.objective, 'delegated_task_requires_objective'), instructions: opt(intent.instructions), behavior: opt(intent.behavior), mode: opt(intent.mode) }; }
 function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): JsonRecord {
@@ -860,6 +921,11 @@ function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): Jso
     for (const dependency of step.depends_on) {
       if (!steps.some((candidate) => candidate.id === dependency)) diagnostics.push({ severity: 'error', code: 'unknown_dependency', step_id: step.id, dependency });
     }
+    if (step.resume_from && !steps.some((candidate) => candidate.id === step.resume_from)) diagnostics.push({ severity: 'error', code: 'unknown_resume_from_step', step_id: step.id, resume_from: step.resume_from });
+    if (step.resume_from === step.id) diagnostics.push({ severity: 'error', code: 'self_resume_from_step', step_id: step.id });
+    const affinityMode = opt(step.session_affinity.mode);
+    if (affinityMode !== 'none' && !step.resume_from) diagnostics.push({ severity: 'error', code: 'session_affinity_requires_resume_from', step_id: step.id, mode: affinityMode });
+    if (step.resume_from && !WORKER_KINDS.has(step.kind)) diagnostics.push({ severity: 'error', code: 'session_affinity_requires_worker_step', step_id: step.id, kind: step.kind });
     const condition = validateCondition(step.if);
     if (condition.status === 'invalid') diagnostics.push({ severity: 'error', code: 'invalid_condition', step_id: step.id, condition: step.if, message: condition.message, allowed: condition.allowed, suggestions: conditionSuggestions(step.if, step, steps) });
   }
@@ -880,7 +946,7 @@ function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): Jso
     if (strategy !== 'retry_same_step' && strategy !== 'named_repair_step') diagnostics.push({ severity: 'error', code: 'repair_policy_strategy_invalid', strategy });
     if (strategy === 'named_repair_step' && !ids.has(String(repairPolicy.repair_step_id ?? ''))) diagnostics.push({ severity: 'error', code: 'repair_policy_repair_step_missing', repair_step_id: repairPolicy.repair_step_id });
   }
-  return { schema: 'narada.delegated_task.validate.v1', status: diagnostics.some((item) => item.severity === 'error') ? 'rejected' : 'ok', dry_run: dryRun, diagnostics, workflow_preview: { template_id: opt(workflow.template_id) ?? opt(workflow.strategy) ?? opt(workflow.template) ?? null, step_count: steps.length, milestones: records(workflow.milestones), authority_gates: rec(workflow.authority_gates), work_order: rec(workflow.work_order), declarative_expansion: rec(rec(workflow.work_order).declarative_expansion), steps: steps.map((step) => ({ id: step.id, kind: step.kind, milestone_id: step.milestone_id, depends_on: step.depends_on, imports: step.imports, if: step.if, acceptance_scope: step.acceptance_scope, write_set: step.write_set, authority_gate: step.authority_gate })), shape: workflowShape(steps), imports: workflowImports(rec(args.workflow), steps), condition_language: CONDITION_LANGUAGE }, validation_hints: workflowValidationHints(steps, diagnostics), policy: { allowed_workflow_kinds: state.allowedWorkflowKinds, allowed_profiles: state.allowedProfiles, allowed_roots: state.allowedRoots } };
+  return { schema: 'narada.delegated_task.validate.v1', status: diagnostics.some((item) => item.severity === 'error') ? 'rejected' : 'ok', dry_run: dryRun, diagnostics, workflow_preview: { template_id: opt(workflow.template_id) ?? opt(workflow.strategy) ?? opt(workflow.template) ?? null, step_count: steps.length, milestones: records(workflow.milestones), authority_gates: rec(workflow.authority_gates), work_order: rec(workflow.work_order), external_dependencies: externalDependencies(args), declarative_expansion: rec(rec(workflow.work_order).declarative_expansion), session_affinity: steps.filter((step) => opt(step.session_affinity.mode) !== 'none' || step.resume_from || step.agent_slot).map((step) => stepAffinityPlan(step)), steps: steps.map((step) => ({ id: step.id, title: step.title, label: step.label, kind: step.kind, milestone_id: step.milestone_id, depends_on: step.depends_on, imports: step.imports, if: step.if, acceptance_scope: step.acceptance_scope, write_set: step.write_set, agent_slot: step.agent_slot, resume_from: step.resume_from, session_affinity: step.session_affinity, authority_gate: step.authority_gate, output_schema: step.output_schema })), shape: workflowShape(steps), imports: workflowImports(rec(args.workflow), steps), condition_language: CONDITION_LANGUAGE }, validation_hints: workflowValidationHints(steps, diagnostics), policy: { allowed_workflow_kinds: state.allowedWorkflowKinds, allowed_profiles: state.allowedProfiles, allowed_roots: state.allowedRoots } };
 }
 function expandWorkflowPreset(workflow: JsonRecord): JsonRecord {
   if (Array.isArray(workflow.steps) || Array.isArray(workflow.work_order)) return workflow;
@@ -927,6 +993,18 @@ function normalizeWorkOrder(value: unknown): JsonRecord {
     schema: 'narada.delegated_task.work_order.v1',
     source: 'governing_contract',
     scope: stringList(input.scope),
+    authority: input.authority ?? null,
+    allowed_roots: stringList(input.allowed_roots),
+    allowed_repositories: stringList(input.allowed_repositories),
+    mutation_boundaries: stringList(input.mutation_boundaries),
+    verification_budget: rec(input.verification_budget),
+    test_budget: rec(input.test_budget),
+    max_concurrency: input.max_concurrency ?? null,
+    required_tests: input.required_tests ?? null,
+    unrelated_failure_policy: input.unrelated_failure_policy ?? null,
+    escalation_policy: rec(input.escalation_policy),
+    deliverables: Array.isArray(input.deliverables) ? input.deliverables : [],
+    exit_interview_policy: rec(input.exit_interview_policy),
     budget: rec(input.budget),
     verification,
     acceptance,
@@ -957,6 +1035,8 @@ function expandDeclarativeWorkOrder(workOrder: JsonRecord): JsonRecord[] {
     const mapMode = stage.map === true || stage.mode === 'map' || stage.each === true;
     const rawDepends = stringList(stage.depends_on).flatMap((dependency) => aliases.get(dependency) ?? [dependency]);
     const common = {
+      title: stage.title,
+      label: stage.label,
       kind: opt(stage.kind) ?? 'worker',
       profile: stage.profile,
       milestone_id: stage.milestone_id,
@@ -965,6 +1045,10 @@ function expandDeclarativeWorkOrder(workOrder: JsonRecord): JsonRecord[] {
       acceptance_scope: stage.acceptance_scope,
       constraints: stage.constraints,
       authority_gate: stage.authority_gate,
+      output_schema: stage.output_schema,
+      agent_slot: stage.agent_slot,
+      resume_from: stage.resume_from,
+      session_affinity: stage.session_affinity,
     };
     let produced: string[] = [];
     if (mapMode) {
@@ -997,7 +1081,7 @@ function expandDeclarativeWorkOrder(workOrder: JsonRecord): JsonRecord[] {
     const joinSpec = stage.join === true ? { id: `${stageId}-join` } : rec(stage.join);
     if (Object.keys(joinSpec).length > 0) {
       const joinId = opt(joinSpec.id) ?? `${stageId}-join`;
-      steps.push({ id: joinId, kind: opt(joinSpec.kind) ?? 'join', depends_on: produced, instruction: opt(joinSpec.instruction), milestone_id: joinSpec.milestone_id ?? stage.milestone_id, declarative: { stage_id: stageId, mode: 'join' } });
+      steps.push({ id: joinId, title: joinSpec.title ?? null, label: joinSpec.label ?? null, kind: opt(joinSpec.kind) ?? 'join', depends_on: produced, instruction: opt(joinSpec.instruction), milestone_id: joinSpec.milestone_id ?? stage.milestone_id, output_schema: joinSpec.output_schema, declarative: { stage_id: stageId, mode: 'join' } });
       aliases.set(stageId, [joinId]);
       aliases.set(joinId, [joinId]);
     }
@@ -1027,7 +1111,127 @@ function normalizeStep(value: unknown, state?: State): WorkflowStep {
   if (state && !state.allowedWorkflowKinds.includes(kind)) throw diag('delegated_task_workflow_kind_not_allowed', 'delegated_task_workflow_kind_not_allowed', { kind, allowed_workflow_kinds: state.allowedWorkflowKinds });
   const profile = opt(step.profile);
   if (state?.allowedProfiles && profile && !state.allowedProfiles.includes(profile)) throw diag('delegated_task_profile_not_allowed', 'delegated_task_profile_not_allowed', { profile, allowed_profiles: state.allowedProfiles });
-  return { ...step, id: opt(step.id) ?? `step_${hash(JSON.stringify(step)).slice(0, 8)}`, kind, profile, instruction: opt(step.instruction), milestone_id: opt(step.milestone_id), depends_on: Array.isArray(step.depends_on) ? step.depends_on.map(String).filter(Boolean) : [], imports: stringList(step.imports), if: opt(step.if), acceptance_scope: Array.isArray(step.acceptance_scope) ? step.acceptance_scope.map(String).filter(Boolean) : [], write_set: stringList(step.write_set), constraints: rec(step.constraints), authority_gate: normalizeAuthorityGate(step.authority_gate) };
+  const dependsOn = Array.isArray(step.depends_on) ? step.depends_on : Array.isArray(step.needs) ? step.needs : [];
+  const resumeFrom = opt(step.resume_from) ?? opt(rec(step.session_affinity).source_step_id);
+  return { ...step, id: opt(step.id) ?? `step_${hash(JSON.stringify(step)).slice(0, 8)}`, title: opt(step.title), label: opt(step.label), kind, profile, instruction: opt(step.instruction), milestone_id: opt(step.milestone_id), depends_on: dependsOn.map(String).filter(Boolean), imports: stringList(step.imports), if: opt(step.if), acceptance_scope: Array.isArray(step.acceptance_scope) ? step.acceptance_scope.map(String).filter(Boolean) : [], write_set: stringList(step.write_set), agent_slot: opt(step.agent_slot), resume_from: resumeFrom, session_affinity: normalizeSessionAffinity(step.session_affinity, resumeFrom), constraints: rec(step.constraints), authority_gate: normalizeAuthorityGate(step.authority_gate), output_schema: stepOutputSchema(step, kind, profile) };
+}
+
+function normalizeSessionAffinity(value: unknown, resumeFrom: string | null): JsonRecord {
+  const input = rec(value);
+  const requireSame = input.require_same_session === true;
+  const rawMode = opt(input.mode) ?? (requireSame ? 'require_same_session' : resumeFrom ? 'prefer_same_session' : 'none');
+  const mode = ['none', 'prefer_same_session', 'require_same_session'].includes(rawMode) ? rawMode : 'none';
+  const rawFallback = opt(input.fallback);
+  const fallback = rawFallback === 'new_session' || rawFallback === 'fail'
+    ? rawFallback
+    : mode === 'prefer_same_session' ? 'new_session' : 'fail';
+  return { mode, fallback, require_same_session: mode === 'require_same_session', source_step_id: resumeFrom };
+}
+
+function stepAffinityPlan(step: WorkflowStep): JsonRecord {
+  const affinity = rec(step.session_affinity);
+  return {
+    step_id: step.id,
+    agent_slot: step.agent_slot,
+    resume_from: step.resume_from,
+    mode: opt(affinity.mode) ?? 'none',
+    fallback: opt(affinity.fallback) ?? 'fail',
+    require_same_session: affinity.require_same_session === true,
+  };
+}
+
+function initialAffinityEvidence(step: WorkflowStep): JsonRecord | null {
+  const affinity = rec(step.session_affinity);
+  const mode = opt(affinity.mode) ?? 'none';
+  if (mode === 'none' && !step.agent_slot && !step.resume_from) return null;
+  return {
+    schema: 'narada.delegated_task.session_affinity.v1',
+    step_id: step.id,
+    agent_slot: step.agent_slot,
+    requested_mode: mode,
+    fallback: opt(affinity.fallback) ?? 'fail',
+    require_same_session: mode === 'require_same_session',
+    source_step_id: step.resume_from,
+    source_worker_session_id: null,
+    worker_session_id: null,
+    run_id: null,
+    tool_name: null,
+    actual: 'pending',
+    fallback_used: null,
+    reason: null,
+  };
+}
+
+function resolveWorkerLaunch(task: Task, state: State, step: WorkflowStep, stepState: StepState): { tool_name: string; args: JsonRecord; affinity: JsonRecord | null; blocked: boolean; canFallbackToNewSession: boolean } {
+  const args = buildWorkerArgs(task, step, state);
+  const planned = initialAffinityEvidence(step);
+  const affinity = planned ? { ...planned } : null;
+  const mode = opt(rec(step.session_affinity).mode) ?? 'none';
+  const fallback = opt(rec(step.session_affinity).fallback) ?? 'fail';
+  if (mode === 'none') {
+    return { tool_name: 'worker_run', args, affinity: affinity ? { ...affinity, tool_name: 'worker_run', actual: 'new_session' } : null, blocked: false, canFallbackToNewSession: false };
+  }
+  const source = resolveSourceWorkerSession(task, step);
+  const sourceSession = source.worker_session_id;
+  const baseAffinity = { ...affinity, source_step_id: step.resume_from, source_worker_session_id: sourceSession, source_run_id: source.run_id, source_status: source.status } as JsonRecord;
+  if (!sourceSession) {
+    if (fallback === 'new_session') {
+      return { tool_name: 'worker_run', args, affinity: { ...baseAffinity, tool_name: 'worker_run', actual: 'new_session', fallback_used: 'new_session', reason: 'source_worker_session_missing' }, blocked: false, canFallbackToNewSession: false };
+    }
+    return { tool_name: 'worker_run', args, affinity: { ...baseAffinity, tool_name: null, actual: 'failed', reason: 'source_worker_session_missing' }, blocked: true, canFallbackToNewSession: false };
+  }
+  return {
+    tool_name: 'worker_resume',
+    args: { ...args, worker_session_id: sourceSession },
+    affinity: { ...baseAffinity, tool_name: 'worker_resume', actual: 'resume_requested' },
+    blocked: false,
+    canFallbackToNewSession: fallback === 'new_session',
+  };
+}
+
+function resolveSourceWorkerSession(task: Task, step: WorkflowStep): JsonRecord {
+  const sourceStepId = step.resume_from;
+  if (!sourceStepId) return { worker_session_id: null, run_id: null, status: null };
+  const sourceState = stepStateMap(task)[sourceStepId];
+  const sourceRef = [...workerRefs(task)].reverse().find((ref) => ref.step_id === sourceStepId && ref.worker_session_id);
+  return {
+    step_id: sourceStepId,
+    worker_session_id: opt(sourceState?.worker_session_id) ?? opt(sourceRef?.worker_session_id),
+    run_id: opt(sourceState?.current_run_id) ?? stringList(sourceState?.run_ids).at(-1) ?? opt(sourceRef?.run_id),
+    status: opt(sourceState?.status) ?? opt(sourceRef?.status),
+  };
+}
+
+function finalizeAffinityEvidence(value: JsonRecord | null | undefined, workerResult: JsonRecord): JsonRecord | null {
+  if (!value) return null;
+  const workerSessionId = opt(workerResult.worker_session_id);
+  const sourceSessionId = opt(value.source_worker_session_id);
+  const priorActual = opt(value.actual);
+  let actual = priorActual ?? 'new_session';
+  if (priorActual === 'failed') actual = 'failed';
+  else if (sourceSessionId && workerSessionId === sourceSessionId) actual = 'same_session';
+  else if (sourceSessionId && workerSessionId && workerSessionId !== sourceSessionId) actual = 'rehydrated';
+  else if (!sourceSessionId && priorActual === 'new_session') actual = 'new_session';
+  else if (!workerSessionId && priorActual === 'resume_requested') actual = 'rehydrated';
+  return { ...value, actual, worker_session_id: workerSessionId, run_id: opt(workerResult.run_id), tool_name: value.tool_name ?? null };
+}
+
+function externalDependencies(value: JsonRecord): JsonRecord {
+  return {
+    depends_on_task_ids: stringList(value.depends_on_task_ids),
+    import_task_outputs: stringList(value.import_task_outputs),
+    import_worker_refs: stringList(value.import_worker_refs),
+    source_task_ref: rec(value.source_task_ref),
+  };
+}
+
+function stepOutputSchema(step: JsonRecord, kind: string, profile: string | null): JsonRecord {
+  const explicit = rec(step.output_schema);
+  if (Object.keys(explicit).length > 0) return explicit;
+  const schemaName = opt(step.output_contract) ?? opt(step.output_shape) ?? profile ?? kind;
+  if (schemaName === 'dependency_map') return { schema: 'narada.delegated_task.worker_output_schema.v1', name: 'dependency_map', required_fields: ['dependencies', 'files'], fields: { dependencies: 'array', files: 'array', notes: 'array' } };
+  if (schemaName === 'behavior_shape') return { schema: 'narada.delegated_task.worker_output_schema.v1', name: 'behavior_shape', required_fields: ['behaviors', 'inputs', 'outputs'], fields: { behaviors: 'array', inputs: 'array', outputs: 'array', notes: 'array' } };
+  return {};
 }
 function normalizeMilestones(value: unknown, steps: WorkflowStep[]): JsonRecord[] {
   const explicit = records(value).map((milestone) => ({ ...milestone, id: required(milestone.id, 'delegated_task_milestone_requires_id'), title: required(milestone.title, 'delegated_task_milestone_requires_title'), depends_on: stringList(milestone.depends_on), step_ids: stringList(milestone.step_ids), acceptance_scope: stringList(milestone.acceptance_scope) }));
@@ -1060,7 +1264,7 @@ function normalizeAcceptance(value: unknown, workflow: JsonRecord): JsonRecord {
   };
 }
 function initialStepStates(workflow: JsonRecord): Record<string, StepState> { return Object.fromEntries(workflowSteps(workflow).map((step) => [step.id, initialStepState(step)])); }
-function initialStepState(step: WorkflowStep): StepState { return { step_id: step.id, kind: step.kind, status: 'pending', attempts: 0, run_ids: [], current_run_id: null, worker_session_id: null, started_at: null, finished_at: null, blocked_by: [], error: null, summary: null }; }
+function initialStepState(step: WorkflowStep): StepState { return { step_id: step.id, kind: step.kind, status: 'pending', attempts: 0, run_ids: [], current_run_id: null, worker_session_id: null, started_at: null, finished_at: null, blocked_by: [], error: null, summary: null, affinity: initialAffinityEvidence(step) }; }
 function workflowSteps(workflow: JsonRecord): WorkflowStep[] { return Array.isArray(workflow.steps) ? workflow.steps.map((step) => normalizeStep(step)) : []; }
 function stepStateMap(task: Task): Record<string, StepState> { return { ...initialStepStates(task.workflow), ...rec(rec(task.result).step_states) as Record<string, StepState> }; }
 function executionPolicy(task: Task): { max_concurrency: number; max_retries: number } { return { max_concurrency: integer(task.constraints.max_concurrency ?? task.execution.max_concurrency, 10, 1, 32), max_retries: integer(task.constraints.max_retries ?? task.execution.max_retries, 0, 0, 10) }; }
@@ -1233,16 +1437,18 @@ function unknownKeyDiagnostics(value: JsonRecord, allowed: string[], scope: stri
 function workflowShapeDiagnostics(workflow: JsonRecord): JsonRecord[] {
   const diagnostics = unknownKeyDiagnostics(workflow, ['template_id', 'strategy', 'template', 'milestones', 'authority_gates', 'steps', 'work_order', 'imports', 'migration', 'instruction'], 'workflow');
   const workOrder = rec(workflow.work_order);
-  diagnostics.push(...unknownKeyDiagnostics(workOrder, ['schema', 'source', 'scope', 'budget', 'verification', 'acceptance', 'steps', 'items', 'stages', 'stage_policy', 'declarative_expansion'], 'workflow_work_order'));
+  diagnostics.push(...unknownKeyDiagnostics(workOrder, ['schema', 'source', 'authority', 'allowed_roots', 'allowed_repositories', 'mutation_boundaries', 'verification_budget', 'test_budget', 'max_concurrency', 'required_tests', 'unrelated_failure_policy', 'escalation_policy', 'deliverables', 'exit_interview_policy', 'scope', 'budget', 'verification', 'acceptance', 'steps', 'items', 'stages', 'stage_policy', 'declarative_expansion'], 'workflow_work_order'));
   diagnostics.push(...unknownKeyDiagnostics(rec(workOrder.budget), ['max_worker_runs', 'max_verification_attempts', 'timeout_ms', 'max_minutes', 'allowed_repositories'], 'workflow_work_order_budget'));
   diagnostics.push(...unknownKeyDiagnostics(rec(workOrder.verification), ['required_tests', 'focused_tests', 'verification_budget'], 'workflow_work_order_verification'));
   diagnostics.push(...unknownKeyDiagnostics(rec(rec(workOrder.stage_policy).execution), ['schedule_by_disjoint_write_set'], 'workflow_work_order_stage_policy_execution'));
   for (const stage of records(workOrder.stages)) {
-    diagnostics.push(...unknownKeyDiagnostics(stage, ['id', 'kind', 'mode', 'map', 'each', 'items', 'profile', 'instruction', 'milestone_id', 'depends_on', 'imports', 'if', 'acceptance_scope', 'write_set', 'authority_gate', 'constraints', 'join', 'derive_from'], 'workflow_work_order_stage').map((diagnostic) => ({ ...diagnostic, stage_id: stage.id ?? null })));
+    diagnostics.push(...unknownKeyDiagnostics(stage, ['id', 'title', 'label', 'kind', 'mode', 'map', 'each', 'items', 'profile', 'instruction', 'milestone_id', 'depends_on', 'needs', 'imports', 'if', 'acceptance_scope', 'write_set', 'agent_slot', 'resume_from', 'session_affinity', 'authority_gate', 'constraints', 'join', 'derive_from', 'output_schema', 'output_contract', 'output_shape'], 'workflow_work_order_stage').map((diagnostic) => ({ ...diagnostic, stage_id: stage.id ?? null })));
+    diagnostics.push(...unknownKeyDiagnostics(rec(stage.session_affinity), ['mode', 'require_same_session', 'fallback', 'source_step_id'], 'workflow_work_order_stage_session_affinity').map((diagnostic) => ({ ...diagnostic, stage_id: stage.id ?? null })));
   }
   const stepValues = Array.isArray(workflow.steps) ? workflow.steps : Array.isArray(workflow.work_order) ? workflow.work_order : Array.isArray(workOrder.steps) ? workOrder.steps : [];
   for (const step of stepValues.map(rec)) {
-    diagnostics.push(...unknownKeyDiagnostics(step, ['id', 'kind', 'profile', 'instruction', 'milestone_id', 'depends_on', 'imports', 'if', 'acceptance_scope', 'write_set', 'authority_gate', 'constraints', 'declarative'], 'workflow_step').map((diagnostic) => ({ ...diagnostic, step_id: step.id ?? null })));
+    diagnostics.push(...unknownKeyDiagnostics(step, ['id', 'title', 'label', 'kind', 'profile', 'instruction', 'milestone_id', 'depends_on', 'needs', 'imports', 'if', 'acceptance_scope', 'write_set', 'agent_slot', 'resume_from', 'session_affinity', 'authority_gate', 'constraints', 'declarative', 'output_schema', 'output_contract', 'output_shape'], 'workflow_step').map((diagnostic) => ({ ...diagnostic, step_id: step.id ?? null })));
+    diagnostics.push(...unknownKeyDiagnostics(rec(step.session_affinity), ['mode', 'require_same_session', 'fallback', 'source_step_id'], 'workflow_step_session_affinity').map((diagnostic) => ({ ...diagnostic, step_id: step.id ?? null })));
   }
   return diagnostics;
 }
@@ -1317,18 +1523,31 @@ function directChildGitRepositories(path: string): string[] {
 }
 function runningCount(states: Record<string, StepState>): number { return Object.values(states).filter((state) => state.status === 'running').length; }
 function workerRefs(task: Task): JsonRecord[] { return records(rec(task.result).worker_refs); }
-function upsertWorkerRef(task: Task, workerRef: JsonRecord, output: JsonRecord): void {
+function upsertWorkerRef(task: Task, step: WorkflowStep, workerRef: JsonRecord, output: JsonRecord): void {
   const refs = workerRefs(task);
   const index = refs.findIndex((ref) => ref.run_id === workerRef.run_id && ref.step_id === workerRef.step_id);
-  const next = { ...workerRef, output: summarizeWorkerOutput(output) };
+  const summarizedOutput = summarizeWorkerOutput(output);
+  const outputSchemaValidation = validateStepOutputSchema(step, summarizedOutput);
+  const next = { ...workerRef, output: summarizedOutput, output_schema_validation: outputSchemaValidation };
   if (index >= 0) refs[index] = { ...refs[index], ...next }; else refs.push(next);
   task.result = { ...rec(task.result), worker_refs: refs, worker_ref_count: refs.length };
 }
-function summarizeWorkerRef(step: WorkflowStep, result: JsonRecord): JsonRecord { return { step_id: step.id, step_kind: step.kind, run_id: result.run_id, worker_session_id: result.worker_session_id ?? null, status: String(result.status ?? 'unknown'), confidence: result.confidence ?? null, summary: result.summary ?? '', run_dir: result.run_dir, output_ref: result.output_ref ?? null, result_ref: result.result_ref ?? null, write_set: step.write_set, declarative: rec(step).declarative ?? null }; }
-function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], nested_workflows: nestedWorkflowRecords(output), verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], exit_interview: output.exit_interview ?? null, review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null, error_classification: output.error_classification ?? null, diagnostic_tail: output.diagnostic_tail ?? null, runtime_warnings: output.runtime_warnings ?? [], completion_state: output.completion_state ?? null }; }
+function summarizeWorkerRef(step: WorkflowStep, result: JsonRecord, affinity?: JsonRecord | null): JsonRecord { return { step_id: step.id, step_title: step.title, step_label: step.label, step_kind: step.kind, run_id: result.run_id, worker_session_id: result.worker_session_id ?? null, status: String(result.status ?? 'unknown'), confidence: result.confidence ?? null, summary: result.summary ?? '', run_dir: result.run_dir, output_ref: result.output_ref ?? null, result_ref: result.result_ref ?? null, write_set: step.write_set, output_schema: step.output_schema, agent_slot: step.agent_slot, resume_from: step.resume_from, affinity: affinity ?? null, declarative: rec(step).declarative ?? null }; }
+function summarizeWorkerOutput(output: JsonRecord): JsonRecord { return { summary: output.summary ?? '', deliverables: output.deliverables ?? [], changes: output.changes ?? [], changed_files: output.changed_files ?? [], dependencies: output.dependencies ?? [], files: output.files ?? [], behaviors: output.behaviors ?? [], inputs: output.inputs ?? [], outputs: output.outputs ?? [], structured_outputs: output.structured_outputs ?? {}, output_schema: output.output_schema ?? null, nested_workflows: nestedWorkflowRecords(output), verification_results: output.verification_results ?? output.verification ?? [], residual_risks: output.residual_risks ?? [], observed_incoherencies: output.observed_incoherencies ?? [], exit_interview: output.exit_interview ?? null, review_verdict: output.review_verdict ?? null, acceptance_verdict: output.acceptance_verdict ?? null, verdict: output.verdict ?? null, error: output.error ?? null, error_classification: output.error_classification ?? null, diagnostic_tail: output.diagnostic_tail ?? null, runtime_warnings: output.runtime_warnings ?? [], completion_state: output.completion_state ?? null }; }
 function nestedWorkflowRecords(output: JsonRecord): JsonRecord[] { return uniqueRecords([...recordList(output.nested_workflows), ...recordList(output.nested_workflow), ...recordList(output.nested_tasks), ...recordList(output.nested_task_results)]); }
+function validateStepOutputSchema(step: WorkflowStep, output: JsonRecord): JsonRecord {
+  const schema = rec(step.output_schema);
+  const name = String(schema.name ?? schema.kind ?? '').trim();
+  if (!name) return { status: 'not_applicable' };
+  const required = name === 'dependency_map' ? ['dependencies', 'files']
+    : name === 'behavior_shape' ? ['behaviors', 'inputs', 'outputs']
+      : stringList(schema.required);
+  const missing = required.filter((field) => !Array.isArray(output[field]));
+  return { schema: 'narada.delegated_task.output_schema_validation.v1', status: missing.length === 0 ? 'passed' : 'failed', step_id: step.id, output_schema: schema, required_array_fields: required, missing_fields: missing };
+}
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
-  const constraints = { ...task.constraints, ...step.constraints };
+  const workOrderConstraints = workOrderWorkerConstraints(task.workflow);
+  const constraints = { ...task.constraints, ...workOrderConstraints, ...step.constraints };
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
   const workerConstraints: JsonRecord = { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true || constraints.exit_interview === true };
   const overrides = { ...rec(workerConstraints.overrides) };
@@ -1341,7 +1560,25 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
   else delete workerConstraints.overrides;
   return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' ? 'audit_only' : undefined }, constraints: workerConstraints };
 }
-function workerInstruction(task: Task, step: WorkflowStep): string { return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, `Step kind: ${step.kind}`, step.write_set.length > 0 ? `Step write_set: ${JSON.stringify(step.write_set)}` : null, Object.keys(rec(task.workflow.work_order)).length > 0 ? `Work order: ${JSON.stringify(task.workflow.work_order)}` : null, `Acceptance: ${JSON.stringify(task.acceptance)}`, step.kind === 'review' ? 'Review output contract: include review_verdict as one of accepted, rejected, or accepted_with_findings.' : null, 'Return a concise result with changes, verification, residual risks, and observed incoherencies.'].filter((line): line is string => Boolean(line)).join('\n'); }
+function workOrderWorkerConstraints(workflow: JsonRecord): JsonRecord {
+  const workOrder = rec(workflow.work_order);
+  if (Object.keys(workOrder).length === 0) return {};
+  const budget = rec(workOrder.budget);
+  const verificationBudget = Object.keys(rec(workOrder.verification_budget)).length > 0 ? rec(workOrder.verification_budget) : rec(rec(workOrder.verification).verification_budget);
+  return Object.fromEntries(Object.entries({
+    authority: workOrder.authority ?? undefined,
+    allowed_roots: stringList(workOrder.allowed_roots),
+    allowed_repositories: uniqueStrings([...stringList(workOrder.allowed_repositories), ...stringList(budget.allowed_repositories)]),
+    mutation_boundaries: Array.isArray(workOrder.mutation_boundaries) ? workOrder.mutation_boundaries : undefined,
+    verification_budget: Object.keys(verificationBudget).length > 0 ? verificationBudget : undefined,
+    test_budget: Object.keys(rec(workOrder.test_budget)).length > 0 ? rec(workOrder.test_budget) : undefined,
+    required_tests: workOrder.required_tests ?? rec(workOrder.verification).required_tests ?? undefined,
+    unrelated_failure_policy: workOrder.unrelated_failure_policy ?? undefined,
+    deliverables: Array.isArray(workOrder.deliverables) && workOrder.deliverables.length > 0 ? workOrder.deliverables : undefined,
+    exit_interview_policy: Object.keys(rec(workOrder.exit_interview_policy)).length > 0 ? rec(workOrder.exit_interview_policy) : undefined,
+  }).filter(([, value]) => value !== undefined && (!Array.isArray(value) || value.length > 0)));
+}
+function workerInstruction(task: Task, step: WorkflowStep): string { const external = rec(task.result.external_dependencies); return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, step.title ? `Step title: ${step.title}` : null, step.label ? `Step label: ${step.label}` : null, `Step kind: ${step.kind}`, step.agent_slot ? `Agent slot: ${step.agent_slot}` : null, step.resume_from ? `Resume from step: ${step.resume_from}` : null, opt(step.session_affinity.mode) !== 'none' ? `Session affinity: ${JSON.stringify(step.session_affinity)}` : null, step.write_set.length > 0 ? `Step write_set: ${JSON.stringify(step.write_set)}` : null, Object.keys(step.output_schema).length > 0 ? `Expected output schema: ${JSON.stringify(step.output_schema)}` : null, Object.keys(external).length > 0 ? `External dependency imports: ${JSON.stringify(external)}` : null, Object.keys(rec(task.workflow.work_order)).length > 0 ? `Work order: ${JSON.stringify(task.workflow.work_order)}` : null, `Acceptance: ${JSON.stringify(task.acceptance)}`, step.kind === 'review' ? 'Review output contract: include review_verdict as one of accepted, rejected, or accepted_with_findings.' : null, 'Return a concise result with changes, verification, residual risks, observed incoherencies, and any structured outputs requested by the expected output schema.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord {
   const counts = stepStatusCounts(task, states);
   const runningSteps = Object.values(states).filter((step) => step.status === 'running');
@@ -1684,7 +1921,7 @@ function summaryForTask(task: Task, states: Record<string, StepState>, acceptanc
 function stepCounts(workflow: JsonRecord): JsonRecord { const by_kind: Record<string, number> = {}; const steps = workflowSteps(workflow); for (const step of steps) by_kind[step.kind] = (by_kind[step.kind] ?? 0) + 1; return { total: steps.length, by_kind }; }
 function count(value: unknown): number { return Array.isArray(value) ? value.length : 0; }
 function acceptanceSummary(acceptance: JsonRecord): JsonRecord { return { required_files: count(acceptance.required_files), required_tests: count(acceptance.required_tests), required_tools: count(acceptance.required_tools), forbidden_patterns: count(acceptance.forbidden_patterns) }; }
-function workflowEngineMetadata(): JsonRecord { return { schema: 'narada.delegated_task.workflow_engine.v1', workflow_kinds: DEFAULT_WORKFLOW_KINDS, local_kinds: [...LOCAL_KINDS], worker_kinds: [...WORKER_KINDS], supports_dag: true, supports_imports: true, supports_review_quorum: true, milestone_support: { workflow_milestones: true, step_milestone_id: true }, authority_gate_support: { commit: 'modeled_only', push: 'modeled_only', delegated_task_executes_git: false }, template_catalog_schema: 'narada.delegated_task.template_catalog.v1' }; }
+function workflowEngineMetadata(): JsonRecord { return { schema: 'narada.delegated_task.workflow_engine.v1', workflow_kinds: DEFAULT_WORKFLOW_KINDS, local_kinds: [...LOCAL_KINDS], worker_kinds: [...WORKER_KINDS], supports_dag: true, supports_imports: true, supports_review_quorum: true, session_affinity_support: { agent_slot: true, resume_from: true, modes: ['none', 'prefer_same_session', 'require_same_session'], worker_resume_tool: 'worker_resume', evidence_schema: 'narada.delegated_task.session_affinity.v1' }, milestone_support: { workflow_milestones: true, step_milestone_id: true }, authority_gate_support: { commit: 'modeled_only', push: 'modeled_only', delegated_task_executes_git: false }, template_catalog_schema: 'narada.delegated_task.template_catalog.v1' }; }
 function workflowTemplateCatalog(): JsonRecord[] {
   return [
     { template_id: 'implement', strategy: 'implement', title: 'Single implementation worker', feedback_ids: ['sfb_f1ea42cb-062', 'sfb_ac8a8731-f1c'], milestones: [{ id: 'implement', title: 'Implement', step_ids: ['implement'] }], steps: [{ id: 'implement', kind: 'worker', milestone_id: 'implement' }], worker_delegation_contract: workerDelegationContract(['worker']) },
@@ -1901,7 +2138,8 @@ function graphExecutionSynthesis(task: Task, stepStates: Record<string, StepStat
     next_directive: closeoutSynthesis(result).next_action,
     steps_terminal: terminal.steps_terminal,
     acceptance_terminal: terminal.acceptance_terminal,
-    step_status: Object.values(stepStates).map((step) => ({ step_id: step.step_id, step_kind: step.kind, status: step.status, run_ids: step.run_ids, current_run_id: step.current_run_id, summary: step.summary })),
+    step_status: Object.values(stepStates).map((step) => ({ step_id: step.step_id, step_kind: step.kind, status: step.status, run_ids: step.run_ids, current_run_id: step.current_run_id, worker_session_id: step.worker_session_id, affinity: step.affinity ?? null, summary: step.summary })),
+    session_affinity_evidence: sessionAffinityEvidence(stepStates, refs),
     derived_topology: { shape: workflowShape(workflowSteps(task.workflow)), declarative_expansion: rec(rec(task.workflow).work_order).declarative_expansion ?? null, write_set_scheduling: writeSetSchedulingEnabled(task), write_sets: workflowSteps(task.workflow).filter((step) => step.write_set.length > 0).map((step) => ({ step_id: step.id, write_set: step.write_set })) },
     run_refs: refs.map((ref) => ({ step_id: ref.step_id, run_id: ref.run_id, output_ref: ref.output_ref ?? null, result_ref: ref.result_ref ?? null, run_dir: ref.run_dir ?? null })),
     worker_summaries: refs.map(compactWorkerRef),
@@ -1926,6 +2164,14 @@ function changedFilesBySource(result: JsonRecord): JsonRecord {
     affected_refs: stringList(result.affected_refs),
   };
 }
+
+function sessionAffinityEvidence(stepStates: Record<string, StepState>, refs: JsonRecord[]): JsonRecord[] {
+  const byStep = new Map(refs.map((ref) => [String(ref.step_id ?? ''), rec(ref.affinity)]));
+  return Object.values(stepStates)
+    .map((step) => step.affinity ? rec(step.affinity) : byStep.get(step.step_id) ?? {})
+    .filter((affinity) => Object.keys(affinity).length > 0 && opt(affinity.requested_mode) !== 'none');
+}
+
 function operatorSummary(result: JsonRecord): JsonRecord {
   const graph = rec(result.graph_execution_synthesis);
   const terminal = terminalSummary(result);
@@ -1967,11 +2213,13 @@ function compactWorkerRef(ref: JsonRecord): JsonRecord {
     step_id: ref.step_id,
     step_kind: ref.step_kind,
     run_id: ref.run_id,
+    worker_session_id: ref.worker_session_id ?? null,
     status: ref.status,
     confidence: ref.confidence ?? null,
     summary: ref.summary,
     output_ref: ref.output_ref ?? null,
     result_ref: ref.result_ref ?? null,
+    affinity: rec(ref.affinity),
     diagnostic_flags: diagnostics,
     changed_files_count_by_source: {
       worker_reported: changePaths.length,
@@ -2010,7 +2258,7 @@ function stepFindings(task: Task): JsonRecord[] {
   return Object.values(stepStateMap(task)).map((step) => {
     const ref = refsByStep.get(step.step_id);
     const output = rec(ref?.output);
-    return { step_id: step.step_id, step_kind: step.kind, status: step.status, run_id: ref?.run_id ?? step.current_run_id, summary: step.summary ?? ref?.summary ?? '', verification_count: records(output.verification_results).length || records(output.verification).length, change_count: stringList(output.changed_files).length + records(output.changes).length, residual_risk_count: stringList(output.residual_risks).length, observed_incoherency_count: stringList(output.observed_incoherencies).length };
+    return { step_id: step.step_id, step_kind: step.kind, status: step.status, run_id: ref?.run_id ?? step.current_run_id, worker_session_id: step.worker_session_id ?? ref?.worker_session_id ?? null, affinity: step.affinity ?? rec(ref?.affinity), summary: step.summary ?? ref?.summary ?? '', verification_count: records(output.verification_results).length || records(output.verification).length, change_count: stringList(output.changed_files).length + records(output.changes).length, residual_risk_count: stringList(output.residual_risks).length, observed_incoherency_count: stringList(output.observed_incoherencies).length };
   });
 }
 function progressDelta(before: Task, after: Task): JsonRecord {
@@ -2099,6 +2347,38 @@ function resultForPolicy(result: JsonRecord, resultPolicy: JsonRecord, includeDi
   return { ...rest, worker_refs_redacted: true };
 }
 function workerToolOption(value: unknown): WorkerTool { if (typeof value === 'function') return value as WorkerTool; return async (name, args, state) => rec(await callWorkerTool(name, args, state)); }
+function sourceTaskBacklinkToolOption(value: unknown): SourceTaskBacklinkTool | null { return typeof value === 'function' ? value as SourceTaskBacklinkTool : null; }
+async function writeSourceTaskBacklinkObservation(state: State, task: Task, sourceRef: JsonRecord): Promise<void> {
+  if (String(sourceRef.kind ?? '') !== 'task_lifecycle') return;
+  const taskNumber = sourceRef.task_number;
+  if (typeof taskNumber !== 'number') {
+    appendEvent(state, task.task_id, 'source_task_backlink_observation_skipped', { source_task_ref: sourceRef, reason: 'task_lifecycle_source_ref_requires_task_number' });
+    return;
+  }
+  const payload = {
+    task_number: taskNumber,
+    artifact_uri: `delegated-task://${task.task_id}`,
+    content: {
+      schema: 'narada.delegated_task.source_backlink_observation.v1',
+      delegated_task_id: task.task_id,
+      delegated_task_status: task.status,
+      objective: task.objective,
+      source_task_ref: sourceRef,
+      task_path: taskPaths(state, task.task_id).taskPath,
+      events_path: taskPaths(state, task.task_id).eventsPath,
+    },
+  };
+  if (!state.sourceTaskBacklinkTool) {
+    appendEvent(state, task.task_id, 'source_task_backlink_observation_unavailable', { source_task_ref: sourceRef, required_tool: 'task_lifecycle_submit_observation', payload });
+    return;
+  }
+  try {
+    const result = await state.sourceTaskBacklinkTool(payload);
+    appendEvent(state, task.task_id, 'source_task_backlink_observation_written', { source_task_ref: sourceRef, result });
+  } catch (error) {
+    appendEvent(state, task.task_id, 'source_task_backlink_observation_failed', { source_task_ref: sourceRef, error: error instanceof Error ? error.message : String(error), payload });
+  }
+}
 function materializeOutputSections(state: State, sections: Record<string, unknown>): JsonRecord[] {
   mkdirSync(state.outputRoot, { recursive: true });
   return Object.entries(sections).filter(([, value]) => Array.isArray(value) && value.length > 0).map(([name, value]) => {

@@ -7,6 +7,7 @@ import { createServerState, handleRequest } from '../src/main.js';
 const root = mkdtempSync(join(tmpdir(), 'delegated-task-mcp-behavior-'));
 const workerCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 const runStatuses = new Map<string, Record<string, unknown>>();
+const sourceBacklinkCalls: Record<string, unknown>[] = [];
 
 try {
   mkdirSync(join(root, 'src'), { recursive: true });
@@ -58,11 +59,41 @@ try {
 
       const instruction = JSON.stringify(args);
       if (instruction.includes('launch failure worker')) throw new Error('worker launch denied by test policy');
-      const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run').length}`;
+      if (name === 'worker_resume') {
+        if (instruction.includes('resume failure worker')) throw new Error('worker resume denied by test policy');
+        const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run' || call.name === 'worker_resume').length}`;
+        const sessionId = String(args.worker_session_id);
+        const result = {
+          schema: 'narada.worker.run.v1',
+          status: 'completed',
+          run_id: runId,
+          run_dir: join(root, 'worker-runs', runId),
+          output_ref: `output-${runId}`,
+          result_ref: `result-${runId}`,
+          worker_session_id: sessionId,
+          runtime: 'codex',
+          provider: 'openai',
+          resolved_worker_config: { runtime: 'codex', provider: 'openai', max_run_ms: 600000 },
+          confidence: 'complete',
+          summary: `${runId} resumed ${sessionId}`,
+          changed_files: [],
+          verification_results: [{ tool: 'structured-command', command: 'pnpm test:delegated-task', status: 'passed' }],
+          residual_risks: [],
+          observed_incoherencies: [],
+          exit_interview: null,
+        };
+        runStatuses.set(runId, result);
+        return result;
+      }
+      const runId = `run-test-${workerCalls.filter((call) => call.name === 'worker_run' || call.name === 'worker_resume').length}`;
       const status = instruction.includes('async missing status worker') ? 'recover_with_wait'
         : instruction.includes('async worker') || instruction.includes('timeout worker') ? 'running'
         : instruction.includes('fail once') && ![...runStatuses.values()].some((run) => String(run.summary).includes('fail once')) ? 'failed'
           : 'completed';
+      const workerSessionId = instruction.includes('slot A initial') ? 'session-a'
+        : instruction.includes('slot B initial') ? 'session-b'
+          : instruction.includes('no-session initial') ? null
+            : null;
       const result = {
         schema: 'narada.worker.run.v1',
         status,
@@ -70,7 +101,7 @@ try {
         run_dir: join(root, 'worker-runs', runId),
         output_ref: `output-${runId}`,
         result_ref: `result-${runId}`,
-        worker_session_id: null,
+        worker_session_id: workerSessionId,
         runtime: 'codex',
         provider: 'openai',
         resolved_worker_config: { runtime: 'codex', provider: 'openai', max_run_ms: 600000 },
@@ -112,6 +143,10 @@ try {
       };
       runStatuses.set(runId, result);
       return result;
+    },
+    sourceTaskBacklinkTool: async (args: Record<string, unknown>) => {
+      sourceBacklinkCalls.push(args);
+      return { status: 'submitted', artifact_id: 'source-backlink-test-artifact' };
     },
   });
   assert.equal(state.workerState.env.DELEGATED_TASK_TEST_SECRET, 'from-site-secret');
@@ -315,6 +350,98 @@ try {
   assert.deepEqual(additiveWorkOrderView.workflow_preview.work_order.scope, ['packages/delegated-task-mcp']);
   assert.deepEqual(additiveWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['implement']);
 
+  const richWorkOrder = await callTool(state, 'delegated_task_validate', {
+    objective: 'Rich dependency-aware DAG',
+    depends_on_task_ids: ['task_upstream'],
+    import_task_outputs: ['task_source_a'],
+    import_worker_refs: ['worker_ref_1'],
+    source_task_ref: { kind: 'task_lifecycle', task_number: 1239 },
+    workflow: {
+      steps: [
+        { id: 'map', title: 'Map dependencies', label: 'deps', kind: 'research', output_contract: 'dependency_map' },
+        { id: 'shape', title: 'Shape behavior', label: 'behavior', kind: 'worker', needs: ['map'], output_contract: 'behavior_shape' },
+      ],
+      work_order: {
+        authority: 'read',
+        allowed_roots: [root],
+        allowed_repositories: [root],
+        mutation_boundaries: ['read-only'],
+        verification_budget: { max_attempts: 1 },
+        test_budget: { max_commands: 1 },
+        max_concurrency: 1,
+        required_tests: ['pnpm test:delegated-task'],
+        unrelated_failure_policy: 'residual_risk',
+        escalation_policy: { operator_required_for: ['write'] },
+        deliverables: ['dependency map', 'behavior shape'],
+        exit_interview_policy: { required: true },
+      },
+    },
+  });
+  const richWorkOrderView = richWorkOrder.result.structuredContent as Record<string, any>;
+  assert.equal(richWorkOrderView.status, 'ok');
+  assert.deepEqual(richWorkOrderView.workflow_preview.external_dependencies.depends_on_task_ids, ['task_upstream']);
+  assert.deepEqual(richWorkOrderView.workflow_preview.external_dependencies.import_task_outputs, ['task_source_a']);
+  assert.deepEqual(richWorkOrderView.workflow_preview.external_dependencies.import_worker_refs, ['worker_ref_1']);
+  assert.equal(richWorkOrderView.workflow_preview.external_dependencies.source_task_ref.task_number, 1239);
+  assert.equal(richWorkOrderView.workflow_preview.steps[0].title, 'Map dependencies');
+  assert.equal(richWorkOrderView.workflow_preview.steps[0].output_schema.name, 'dependency_map');
+  assert.deepEqual(richWorkOrderView.workflow_preview.steps[1].depends_on, ['map']);
+  assert.equal(richWorkOrderView.workflow_preview.steps[1].output_schema.name, 'behavior_shape');
+  assert.deepEqual(richWorkOrderView.workflow_preview.work_order.mutation_boundaries, ['read-only']);
+  assert.equal(richWorkOrderView.workflow_preview.work_order.unrelated_failure_policy, 'residual_risk');
+
+  const richWorkerCallsBefore = workerCalls.length;
+  const richRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Run rich dependency-aware DAG',
+    depends_on_task_ids: ['task_upstream'],
+    import_task_outputs: ['task_source_a'],
+    import_worker_refs: ['worker_ref_1'],
+    source_task_ref: { kind: 'task_lifecycle', task_number: 1239 },
+    constraints: { cwd: root },
+    workflow: {
+      steps: [
+        { id: 'map', title: 'Map dependencies', label: 'deps', kind: 'research', output_contract: 'dependency_map' },
+        { id: 'shape', title: 'Shape behavior', label: 'behavior', kind: 'worker', needs: ['map'], output_contract: 'behavior_shape' },
+      ],
+      work_order: {
+        authority: 'read',
+        allowed_roots: [root],
+        allowed_repositories: [root],
+        mutation_boundaries: ['read-only'],
+        verification_budget: { max_attempts: 1 },
+        test_budget: { max_commands: 1 },
+        required_tests: ['pnpm test:delegated-task'],
+        unrelated_failure_policy: 'residual_risk',
+        deliverables: ['dependency map', 'behavior shape'],
+        exit_interview_policy: { required: true },
+      },
+    },
+    execution: { wait_for_completion: true, timeout_ms: 1000 },
+    result_policy: { expose_worker_refs: true },
+  });
+  const richRunView = richRun.result.structuredContent as Record<string, any>;
+  assert.deepEqual(richRunView.external_dependencies.depends_on_task_ids, ['task_upstream']);
+  const richBacklinkCall = sourceBacklinkCalls.find((call: Record<string, any>) => call.task_number === 1239 && call.artifact_uri === `delegated-task://${richRunView.task_id}`);
+  assert.ok(richBacklinkCall);
+  assert.equal((richBacklinkCall.content as Record<string, any>).delegated_task_id, richRunView.task_id);
+  const richWorkerRunCalls = workerCalls.slice(richWorkerCallsBefore).filter((call) => call.name === 'worker_run');
+  assert.equal(richWorkerRunCalls.length, 2);
+  assert.equal((richWorkerRunCalls[0].args.constraints as Record<string, any>).authority, 'read');
+  assert.deepEqual((richWorkerRunCalls[0].args.constraints as Record<string, any>).allowed_roots, [root]);
+  assert.deepEqual((richWorkerRunCalls[0].args.constraints as Record<string, any>).mutation_boundaries, ['read-only']);
+  assert.deepEqual((richWorkerRunCalls[0].args.constraints as Record<string, any>).verification_budget, { max_attempts: 1 });
+  assert.deepEqual((richWorkerRunCalls[0].args.constraints as Record<string, any>).required_tests, ['pnpm test:delegated-task']);
+  const richStatus = await callTool(state, 'delegated_task_status', { task_id: richRunView.task_id });
+  const richStatusView = richStatus.result.structuredContent as Record<string, any>;
+  assert.equal(richStatusView.external_dependencies.source_task_ref.task_number, 1239);
+  const richResult = await callTool(state, 'delegated_task_result', { task_id: richRunView.task_id, include_diagnostics: true });
+  const richResultView = richResult.result.structuredContent as Record<string, any>;
+  assert.equal(richResultView.result.worker_refs.every((ref: Record<string, any>) => ref.output_schema_validation.status === 'passed'), true);
+  const richEvents = await callTool(state, 'delegated_task_events', { task_id: richRunView.task_id });
+  const richEventsView = richEvents.result.structuredContent as Record<string, any>;
+  assert.equal(richEventsView.events.some((event: Record<string, any>) => event.event_kind === 'source_task_backlink_observation' && event.details.source_task_ref.task_number === 1239), true);
+  assert.equal(richEventsView.events.some((event: Record<string, any>) => event.event_kind === 'source_task_backlink_observation_written' && event.details.result.artifact_id === 'source-backlink-test-artifact'), true);
+
   const declarativeWorkOrder = await callTool(state, 'delegated_task_validate', {
     objective: 'Declarative item map workflow',
     constraints: { authority: 'write', cwd: root },
@@ -338,6 +465,32 @@ try {
   assert.deepEqual(declarativeWorkOrderView.workflow_preview.steps.map((step: Record<string, unknown>) => step.id), ['research-alpha', 'research-beta', 'research-join', 'synthesize', 'execute-alpha', 'execute-beta', 'execution-join', 'review']);
   assert.deepEqual(declarativeWorkOrderView.workflow_preview.steps.find((step: Record<string, any>) => step.id === 'execute-alpha').write_set, ['src/main.ts']);
   assert.equal(declarativeWorkOrderView.workflow_preview.shape.edges.some((edge: Record<string, unknown>) => edge.from === 'research-join' && edge.to === 'synthesize'), true);
+
+  const affinityShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Validate affinity DAG branches',
+    workflow: {
+      steps: [
+        { id: 'a-initial', kind: 'research', agent_slot: 'A', instruction: 'slot A initial' },
+        { id: 'b-initial', kind: 'research', agent_slot: 'B', instruction: 'slot B initial' },
+        { id: 'a-revise', kind: 'research', depends_on: ['a-initial', 'b-initial'], agent_slot: 'A', resume_from: 'a-initial', session_affinity: { mode: 'require_same_session' }, instruction: 'slot A revise' },
+        { id: 'b-revise', kind: 'research', depends_on: ['a-initial', 'b-initial'], agent_slot: 'B', resume_from: 'b-initial', session_affinity: { require_same_session: true }, instruction: 'slot B revise' },
+        { id: 'synthesize', kind: 'worker', depends_on: ['a-revise', 'b-revise'], instruction: 'synthesize revised answers' },
+      ],
+    },
+  });
+  const affinityShapeView = affinityShape.result.structuredContent as Record<string, any>;
+  assert.equal(affinityShapeView.status, 'ok');
+  assert.equal(affinityShapeView.workflow_preview.session_affinity.length, 4);
+  assert.equal(affinityShapeView.workflow_preview.steps.find((step: Record<string, any>) => step.id === 'a-revise').resume_from, 'a-initial');
+  assert.equal(affinityShapeView.workflow_preview.steps.find((step: Record<string, any>) => step.id === 'b-revise').session_affinity.mode, 'require_same_session');
+
+  const invalidAffinityShape = await callTool(state, 'delegated_task_validate', {
+    objective: 'Reject unknown affinity source',
+    workflow: { steps: [{ id: 'revise', kind: 'research', resume_from: 'missing', session_affinity: { mode: 'require_same_session' } }] },
+  });
+  const invalidAffinityShapeView = invalidAffinityShape.result.structuredContent as Record<string, any>;
+  assert.equal(invalidAffinityShapeView.status, 'rejected');
+  assert.equal(invalidAffinityShapeView.diagnostics.some((item: Record<string, unknown>) => item.code === 'unknown_resume_from_step'), true);
 
   const publishGate = await callTool(state, 'delegated_task_validate', {
     objective: 'Implement and git push the branch',
@@ -439,7 +592,7 @@ try {
   const result = await callTool(state, 'delegated_task_result', { task_id: runResult.task_id, include_diagnostics: true });
   const resultView = result.result.structuredContent as Record<string, any>;
   assert.equal(resultView.result.acceptance_verdict, 'passed');
-  assert.deepEqual(resultView.result.worker_refs.map((ref: Record<string, unknown>) => ref.run_id), ['run-test-1', 'run-test-2']);
+  assert.deepEqual(resultView.result.worker_refs.map((ref: Record<string, unknown>) => ref.run_id), runResult.worker_refs.slice(0, 2).map((ref: Record<string, unknown>) => ref.run_id));
   assert.equal(resultView.result.worker_refs_truncated, true);
   assert.equal(Array.isArray(resultView.result.output_refs), true);
   assert.equal(resultView.result.output_refs.some((ref: Record<string, unknown>) => ref.name === 'worker_refs'), true);
@@ -479,8 +632,9 @@ try {
   assert.equal(resultView.result.graph_execution_synthesis.synthesized_verdict, 'accepted');
   assert.equal(resultView.result.graph_execution_synthesis.orchestration_success, true);
   assert.equal(resultView.result.graph_execution_synthesis.step_status.length, 6);
+  const implementARunId = runResult.worker_refs.find((ref: Record<string, any>) => ref.step_id === 'implement-a').run_id;
   assert.equal(resultView.result.graph_execution_synthesis.step_status.find((step: Record<string, any>) => step.step_id === 'implement-a').current_run_id, null);
-  assert.deepEqual(resultView.result.graph_execution_synthesis.step_status.find((step: Record<string, any>) => step.step_id === 'implement-a').run_ids, ['run-test-1']);
+  assert.deepEqual(resultView.result.graph_execution_synthesis.step_status.find((step: Record<string, any>) => step.step_id === 'implement-a').run_ids, [implementARunId]);
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries.length, 3);
   assert.match(resultView.result.graph_execution_synthesis.worker_summaries[0].output_ref, /^output-run-test-/);
   assert.equal(resultView.result.graph_execution_synthesis.worker_summaries[0].diagnostic_flags.verification_count, 1);
@@ -652,6 +806,79 @@ try {
   const writeSetResultView = writeSetResult.result.structuredContent as Record<string, any>;
   assert.equal(writeSetResultView.result.graph_execution_synthesis.derived_topology.write_set_scheduling, true);
   assert.equal(writeSetResultView.result.graph_execution_synthesis.derived_topology.write_sets.length, 2);
+
+  const affinityCallsBefore = workerCalls.length;
+  const affinityRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise same-session affinity revisions',
+    constraints: { authority: 'read', cwd: root, max_concurrency: 2 },
+    workflow: {
+      steps: [
+        { id: 'a-initial', kind: 'research', agent_slot: 'A', instruction: 'slot A initial' },
+        { id: 'b-initial', kind: 'research', agent_slot: 'B', instruction: 'slot B initial' },
+        { id: 'a-revise', kind: 'research', depends_on: ['a-initial', 'b-initial'], agent_slot: 'A', resume_from: 'a-initial', session_affinity: { mode: 'require_same_session' }, instruction: 'slot A revise' },
+        { id: 'b-revise', kind: 'research', depends_on: ['a-initial', 'b-initial'], agent_slot: 'B', resume_from: 'b-initial', session_affinity: { require_same_session: true }, instruction: 'slot B revise' },
+        { id: 'synthesize', kind: 'worker', depends_on: ['a-revise', 'b-revise'], instruction: 'synthesize revised answers' },
+      ],
+    },
+    execution: { wait_for_completion: true, timeout_ms: 1000, max_concurrency: 2 },
+    result_policy: { expose_worker_refs: true },
+  });
+  const affinityRunView = affinityRun.result.structuredContent as Record<string, any>;
+  assert.equal(affinityRunView.task_status, 'completed');
+  const affinityCalls = workerCalls.slice(affinityCallsBefore);
+  const affinityResumes = affinityCalls.filter((call) => call.name === 'worker_resume');
+  assert.equal(affinityResumes.length, 2);
+  assert.equal(affinityResumes.some((call) => call.args.worker_session_id === 'session-a'), true);
+  assert.equal(affinityResumes.some((call) => call.args.worker_session_id === 'session-b'), true);
+  const affinityResult = await callTool(state, 'delegated_task_result', { task_id: affinityRunView.task_id, include_diagnostics: true });
+  const affinityResultView = affinityResult.result.structuredContent as Record<string, any>;
+  const affinityEvidence = affinityResultView.result.graph_execution_synthesis.session_affinity_evidence;
+  assert.equal(affinityEvidence.filter((item: Record<string, any>) => item.actual === 'same_session').length, 2);
+  assert.equal(affinityEvidence.find((item: Record<string, any>) => item.step_id === 'a-revise').source_worker_session_id, 'session-a');
+  assert.equal(affinityResultView.result.worker_refs.find((ref: Record<string, any>) => ref.step_id === 'a-revise').affinity.actual, 'same_session');
+
+  const missingAffinityRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise require same session missing source failure',
+    constraints: { authority: 'read', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'no-session-initial', kind: 'research', instruction: 'no-session initial' },
+        { id: 'must-resume', kind: 'research', depends_on: ['no-session-initial'], resume_from: 'no-session-initial', session_affinity: { mode: 'require_same_session' }, instruction: 'must resume' },
+      ],
+    },
+    execution: { wait_for_completion: true },
+  });
+  const missingAffinityView = missingAffinityRun.result.structuredContent as Record<string, any>;
+  assert.equal(missingAffinityView.task_status, 'failed');
+  const missingAffinityResult = await callTool(state, 'delegated_task_result', { task_id: missingAffinityView.task_id, include_diagnostics: true });
+  const missingAffinityResultView = missingAffinityResult.result.structuredContent as Record<string, any>;
+  const failedAffinity = missingAffinityResultView.result.graph_execution_synthesis.session_affinity_evidence.find((item: Record<string, any>) => item.step_id === 'must-resume');
+  assert.equal(failedAffinity.actual, 'failed');
+  assert.equal(failedAffinity.reason, 'source_worker_session_missing');
+
+  const fallbackCallsBefore = workerCalls.length;
+  const fallbackAffinityRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Exercise explicit new-session affinity fallback',
+    constraints: { authority: 'read', cwd: root },
+    workflow: {
+      steps: [
+        { id: 'no-session-initial-fallback', kind: 'research', instruction: 'no-session initial' },
+        { id: 'prefer-resume', kind: 'research', depends_on: ['no-session-initial-fallback'], resume_from: 'no-session-initial-fallback', session_affinity: { mode: 'prefer_same_session', fallback: 'new_session' }, instruction: 'prefer resume fallback' },
+      ],
+    },
+    execution: { wait_for_completion: true },
+  });
+  const fallbackAffinityView = fallbackAffinityRun.result.structuredContent as Record<string, any>;
+  assert.equal(fallbackAffinityView.task_status, 'completed');
+  const fallbackCalls = workerCalls.slice(fallbackCallsBefore);
+  assert.equal(fallbackCalls.some((call) => call.name === 'worker_resume'), false);
+  assert.equal(fallbackCalls.filter((call) => call.name === 'worker_run').length, 2);
+  const fallbackAffinityResult = await callTool(state, 'delegated_task_result', { task_id: fallbackAffinityView.task_id, include_diagnostics: true });
+  const fallbackAffinityResultView = fallbackAffinityResult.result.structuredContent as Record<string, any>;
+  const fallbackAffinity = fallbackAffinityResultView.result.graph_execution_synthesis.session_affinity_evidence.find((item: Record<string, any>) => item.step_id === 'prefer-resume');
+  assert.equal(fallbackAffinity.actual, 'new_session');
+  assert.equal(fallbackAffinity.fallback_used, 'new_session');
+  assert.equal(fallbackAffinity.reason, 'source_worker_session_missing');
 
   const implicitPositiveReviewRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise staccato positive review summary without explicit verdict',
@@ -1117,7 +1344,7 @@ try {
   const beforeMappedWorkerCalls = workerCalls.length;
   const mappedWorkerRun = await callTool(state, 'delegated_task_run', {
     objective: 'Map delegated task worker convenience constraints',
-    constraints: { authority: 'read', cwd: root, site_root: siteRoot, provider: 'codex-subscription', runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot, provider: 'deepseek-api', runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
     workflow: { steps: [{ id: 'mapped-worker', kind: 'research', instruction: 'Inspect mapped worker args' }] },
     execution: { wait_for_completion: true, resumable: false, max_concurrency: 1 },
   });
@@ -1131,7 +1358,7 @@ try {
   assert.equal(mappedConstraints.skip_git_repo_check, undefined);
   assert.equal(mappedConstraints.max_concurrency, undefined);
   assert.equal(mappedConstraints.site_root, siteRoot);
-  assert.equal(mappedConstraints.provider, 'codex-subscription');
+  assert.equal(mappedConstraints.provider, 'deepseek-api');
   assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
 
   const launchFailureRun = await callTool(state, 'delegated_task_run', {
