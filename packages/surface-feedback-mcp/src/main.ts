@@ -10,7 +10,7 @@ const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 const FEEDBACK_KINDS = ['bug', 'improvement', 'gap', 'observation'] as const;
-const FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'closed'] as const;
+const FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task', 'closed'] as const;
 
 type JsonRecord = Record<string, unknown>;
 

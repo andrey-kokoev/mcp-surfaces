@@ -64,6 +64,35 @@ try {
   assert.equal(updateData.resolved_by, 'narada-andrey.test');
   assert.equal(updateData.resolution_note, 'Covered by behavior test.');
 
+  // --- update_status: converted_to_task ---
+  const converted = await call('surface_feedback_submit', {
+    surface_id: 'delegated-task',
+    submitter_site_id: 'narada-andrey',
+    submitter_principal: 'test-agent',
+    kind: 'bug',
+    summary: 'Test converted_to_task status',
+    details: 'Verifying the new status is accepted.',
+  });
+  const convertedId = view(converted).feedback_id;
+  const convertUpdate = await call('surface_feedback_update_status', {
+    feedback_id: convertedId,
+    status: 'converted_to_task',
+    resolved_by: 'narada-andrey.test',
+    resolution_note: 'Task #999 created to address this feedback.',
+  });
+  const convertData = view(convertUpdate).feedback as Record<string, any>;
+  assert.equal(convertData.status, 'converted_to_task');
+  assert.equal(convertData.resolution_note, 'Task #999 created to address this feedback.');
+
+  // --- invalid status still rejected ---
+  const invalidStatus = await call('surface_feedback_update_status', {
+    feedback_id: convertedId,
+    status: 'in_progress',
+    resolved_by: 'narada-andrey.test',
+    resolution_note: 'Should be rejected.',
+  });
+  assert.equal(errorCode(invalidStatus), 'feedback_invalid_status');
+
   await call('surface_feedback_submit', {
     surface_id: 'scheduler',
     submitter_site_id: 'narada-proper',
@@ -93,7 +122,7 @@ try {
 
   // --- list: no scope (all visible) ---
   const listAll = await call('surface_feedback_list', {});
-  assert.equal(view(listAll).count, 4);
+  assert.equal(view(listAll).count, 5);
   assert.equal(view(listAll).store.feedback_root, root);
   assert.equal(view(listAll).store.uses_canonical_store, true);
 
@@ -123,7 +152,7 @@ try {
     caller_site_id: 'narada-andrey',
     owned_surface_ids: ['sop'],
   });
-  assert.equal(view(listAndreyMaintainer).count, 2); // narada-andrey's sop gap submission overlaps with sop surface ownership
+  assert.equal(view(listAndreyMaintainer).count, 3); // narada-andrey's own submissions overlap with sop surface ownership
 
   // --- visibility: different site with no owned surfaces sees nothing ---
   const listStranger = await call('surface_feedback_list', { caller_site_id: 'narada-revolution' });
@@ -203,13 +232,14 @@ try {
   // --- stats: no scope ---
   const statsAll = await call('surface_feedback_stats', {});
   const statsAllData = view(statsAll);
-  assert.equal(statsAllData.total, 5);
+  assert.equal(statsAllData.total, 6);
   assert.ok(statsAllData.by_surface.sop >= 2);
   assert.ok(statsAllData.by_kind.improvement >= 1);
   assert.ok(statsAllData.by_kind.bug >= 1);
   assert.ok(statsAllData.by_kind.gap >= 1);
   assert.ok(statsAllData.by_status.submitted >= 3);
   assert.ok(statsAllData.by_status.closed >= 1);
+  assert.ok(statsAllData.by_status.converted_to_task >= 1);
 
   // --- stats: scoped to caller_site_id ---
   const statsSonar = await call('surface_feedback_stats', { caller_site_id: 'narada-sonar' });
@@ -220,7 +250,7 @@ try {
     caller_site_id: 'narada-andrey',
     owned_surface_ids: ['sop'],
   });
-  assert.equal(view(statsAndrey).total, 2); // overlaps: own submission is also a sop surface entry
+  assert.equal(view(statsAndrey).total, 3); // overlaps: own submissions are also sop surface entries
 
   // --- stats: surface filter ---
   const statsSop = await call('surface_feedback_stats', { surface_id: 'sop' });
