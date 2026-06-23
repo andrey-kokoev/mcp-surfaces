@@ -141,6 +141,36 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'surface_feedback_update_status_batch',
+      description: 'Update multiple feedback entries with per-item status, task refs, and resolution notes. Reports partial failures without rolling back successful updates.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          resolved_by: { type: 'string', description: 'Default principal updating feedback statuses.' },
+          updates: {
+            type: 'array',
+            minItems: 1,
+            items: {
+              type: 'object',
+              properties: {
+                feedback_id: { type: 'string' },
+                status: { type: 'string', enum: FEEDBACK_STATUSES },
+                resolved_by: { type: 'string', description: 'Optional per-item principal override.' },
+                resolution_note: { type: 'string', description: 'Per-item resolution or route note.' },
+                task_ref: { type: 'string', description: 'Optional task reference, e.g. task #1276 or 20260623-1276-...' },
+              },
+              required: ['feedback_id', 'status', 'resolution_note'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['resolved_by', 'updates'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_update_status_batch', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'surface_feedback_import',
       description: 'Import explicit feedback entries from another local surface-feedback store into this store. Intended for repairing split-brain site-local stores.',
       inputSchema: {
@@ -220,6 +250,7 @@ function callTool(params: JsonRecord, state: FeedbackState) {
     case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
     case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;
+    case 'surface_feedback_update_status_batch': result = feedbackUpdateStatusBatch(args, state); break;
     case 'surface_feedback_import': result = feedbackImport(args, state); break;
     case 'surface_feedback_list': result = feedbackList(args, state); break;
     case 'surface_feedback_show': result = feedbackShow(args, state); break;
@@ -277,6 +308,42 @@ function feedbackUpdateStatus(args: JsonRecord, state: FeedbackState): JsonRecor
   state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
   const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
   return { status: 'updated', feedback: hydrateFeedback(updated) };
+}
+
+function feedbackUpdateStatusBatch(args: JsonRecord, state: FeedbackState): JsonRecord {
+  const defaultResolvedBy = requiredString(args.resolved_by, 'feedback_requires_resolved_by');
+  const updates = arrayOfRecords(args.updates, 'feedback_batch_requires_updates');
+  const succeeded: JsonRecord[] = [];
+  const failed: JsonRecord[] = [];
+  for (const [index, update] of updates.entries()) {
+    try {
+      const feedbackId = requiredString(update.feedback_id, 'feedback_requires_feedback_id', { index });
+      const status = requiredString(update.status, 'feedback_requires_status', { feedback_id: feedbackId, index });
+      if (!FEEDBACK_STATUSES.includes(status as typeof FEEDBACK_STATUSES[number])) throw diagnosticError('feedback_invalid_status', `feedback_invalid_status:${status}`, { feedback_id: feedbackId, index, allowed: FEEDBACK_STATUSES });
+      const resolvedBy = optionalString(update.resolved_by) ?? defaultResolvedBy;
+      const baseNote = requiredString(update.resolution_note, 'feedback_requires_resolution_note', { feedback_id: feedbackId, index });
+      const taskRef = optionalString(update.task_ref);
+      const resolutionNote = taskRef ? `${baseNote} Task: ${taskRef}` : baseNote;
+      const existing = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+      if (!existing) throw feedbackNotFound(feedbackId, state);
+      const now = nowIso();
+      state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+      const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
+      succeeded.push({ feedback_id: feedbackId, status, task_ref: taskRef, feedback: hydrateFeedback(updated) });
+    } catch (error) {
+      const diagnostic = errorDiagnostic(error);
+      failed.push({ index, feedback_id: optionalString(update.feedback_id), code: diagnostic.code, message: diagnostic.message, details: diagnostic.details });
+    }
+  }
+  return {
+    schema: 'narada.surface_feedback.status_batch.v1',
+    status: failed.length ? (succeeded.length ? 'partial' : 'failed') : 'updated',
+    requested_count: updates.length,
+    updated_count: succeeded.length,
+    failed_count: failed.length,
+    updates: succeeded,
+    failures: failed,
+  };
 }
 
 function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -548,6 +615,11 @@ function clamp(value: number, min: number, max: number): number {
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function arrayOfRecords(value: unknown, code: string): JsonRecord[] {
+  if (!Array.isArray(value) || value.length === 0) throw diagnosticError(code, code);
+  return value.map(asRecord);
 }
 
 function samePath(a: string, b: string): boolean {

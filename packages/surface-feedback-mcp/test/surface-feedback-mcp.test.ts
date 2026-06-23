@@ -84,6 +84,39 @@ try {
   assert.equal(convertData.status, 'converted_to_task');
   assert.equal(convertData.resolution_note, 'Task #999 created to address this feedback.');
 
+  const batchA = await call('surface_feedback_submit', {
+    surface_id: 'surface-feedback',
+    submitter_site_id: 'narada-andrey',
+    submitter_principal: 'test-agent',
+    kind: 'improvement',
+    summary: 'Batch convert first item',
+    details: 'First batch item.',
+  });
+  const batchB = await call('surface_feedback_submit', {
+    surface_id: 'task-lifecycle',
+    submitter_site_id: 'narada-andrey',
+    submitter_principal: 'test-agent',
+    kind: 'gap',
+    summary: 'Batch convert second item',
+    details: 'Second batch item.',
+  });
+  const batchUpdate = await call('surface_feedback_update_status_batch', {
+    resolved_by: 'narada-andrey.batch-test',
+    updates: [
+      { feedback_id: view(batchA).feedback_id, status: 'converted_to_task', task_ref: 'task #1276', resolution_note: 'Created task from feedback.' },
+      { feedback_id: view(batchB).feedback_id, status: 'routed', resolution_note: 'Routed for follow-up.', resolved_by: 'narada-andrey.router' },
+      { feedback_id: 'sfb_missing_batch', status: 'converted_to_task', task_ref: 'task #9999', resolution_note: 'Missing item should not block successful updates.' },
+    ],
+  });
+  const batchData = view(batchUpdate);
+  assert.equal(batchData.status, 'partial');
+  assert.equal(batchData.updated_count, 2);
+  assert.equal(batchData.failed_count, 1);
+  assert.equal(batchData.updates[0].task_ref, 'task #1276');
+  assert.match(batchData.updates[0].feedback.resolution_note, /Task: task #1276/);
+  assert.equal(batchData.updates[1].feedback.resolved_by, 'narada-andrey.router');
+  assert.equal(batchData.failures[0].code, 'feedback_not_found');
+
   // --- invalid status still rejected ---
   const invalidStatus = await call('surface_feedback_update_status', {
     feedback_id: convertedId,
@@ -122,7 +155,7 @@ try {
 
   // --- list: no scope (all visible) ---
   const listAll = await call('surface_feedback_list', {});
-  assert.equal(view(listAll).count, 5);
+  assert.equal(view(listAll).count, 7);
   assert.equal(view(listAll).store.feedback_root, root);
   assert.equal(view(listAll).store.uses_canonical_store, true);
 
@@ -152,7 +185,7 @@ try {
     caller_site_id: 'narada-andrey',
     owned_surface_ids: ['sop'],
   });
-  assert.equal(view(listAndreyMaintainer).count, 3); // narada-andrey's own submissions overlap with sop surface ownership
+  assert.equal(view(listAndreyMaintainer).count, 5); // narada-andrey's own submissions overlap with sop surface ownership
 
   // --- visibility: different site with no owned surfaces sees nothing ---
   const listStranger = await call('surface_feedback_list', { caller_site_id: 'narada-revolution' });
@@ -232,12 +265,13 @@ try {
   // --- stats: no scope ---
   const statsAll = await call('surface_feedback_stats', {});
   const statsAllData = view(statsAll);
-  assert.equal(statsAllData.total, 6);
+  assert.equal(statsAllData.total, 8);
   assert.ok(statsAllData.by_surface.sop >= 2);
   assert.ok(statsAllData.by_kind.improvement >= 1);
   assert.ok(statsAllData.by_kind.bug >= 1);
   assert.ok(statsAllData.by_kind.gap >= 1);
   assert.ok(statsAllData.by_status.submitted >= 3);
+  assert.ok(statsAllData.by_status.routed >= 1);
   assert.ok(statsAllData.by_status.closed >= 1);
   assert.ok(statsAllData.by_status.converted_to_task >= 1);
 
@@ -250,7 +284,7 @@ try {
     caller_site_id: 'narada-andrey',
     owned_surface_ids: ['sop'],
   });
-  assert.equal(view(statsAndrey).total, 3); // overlaps: own submissions are also sop surface entries
+  assert.equal(view(statsAndrey).total, 5); // overlaps: own submissions are also sop surface entries
 
   // --- stats: surface filter ---
   const statsSop = await call('surface_feedback_stats', { surface_id: 'sop' });
