@@ -5,15 +5,20 @@ import {
   runtimeIntrospectionAnalyze,
   runtimeIntrospectionFormats,
   runtimeIntrospectionShow,
+  runtimeIntrospectionShowEvent,
   runtimeIntrospectionTop,
+  runtimeIntrospectionTopEvents,
 } from '../src/main.js';
 
 const tools = listTools();
 assert.deepEqual(tools.map((tool) => tool.name), [
   'runtime_introspection_formats',
+  'runtime_introspection_top_events',
+  'runtime_introspection_analyze_trace',
   'runtime_introspection_analyze',
   'runtime_introspection_top',
   'runtime_introspection_show',
+  'runtime_introspection_show_event',
 ]);
 assert.equal(tools.every((tool) => tool.annotations.readOnlyHint === true), true);
 assert.equal(tools.every((tool) => tool.inputSchema.additionalProperties === false), true);
@@ -57,6 +62,9 @@ const analysis = runtimeIntrospectionAnalyze({
 });
 assert.equal(analysis.format, 'codex-transcript');
 assert.equal(analysis.summary.event_count, 3);
+assert.equal(analysis.schema, 'narada.runtime_introspection.analysis.v0');
+assert.ok(analysis.summary.total_bytes > 0);
+assert.ok(analysis.summary.estimated_tokens > 0);
 assert.equal(analysis.summary.refused_count, 1);
 assert.deepEqual(analysis.summary.input_adapters, ['codex']);
 assert.equal(analysis.counts.by_surface['local-filesystem'], 1);
@@ -83,6 +91,15 @@ assert.equal(Array.isArray(showTimeline.data), true);
 const timelineData = showTimeline.data as typeof analysis.timeline;
 assert.equal(timelineData.length, 2);
 assert.deepEqual(timelineData.map((event) => event.event_id), ['1', '2']);
+
+const topEvents = runtimeIntrospectionTopEvents({ analysis, limit: 2 });
+assert.equal(topEvents.schema, 'narada.runtime_introspection.top_events.v0');
+assert.equal(topEvents.events.length, 2);
+assert.ok(Number(topEvents.events[0].bytes) >= Number(topEvents.events[1].bytes));
+
+const shownEvent = runtimeIntrospectionShowEvent({ analysis, event_id: '2' });
+assert.equal(shownEvent.schema, 'narada.runtime_introspection.event.v0');
+assert.equal(shownEvent.event.event_id, '2');
 
 const jsonlAnalysis = runtimeIntrospectionAnalyze({
   format: 'codex-jsonl',

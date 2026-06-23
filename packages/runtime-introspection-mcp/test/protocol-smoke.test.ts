@@ -48,13 +48,16 @@ try {
   const listedTools = responses.find((message) => message.id === 2)?.result.tools;
   assert.deepEqual(listedTools.map((tool) => tool.name), [
     'runtime_introspection_formats',
+    'runtime_introspection_top_events',
+    'runtime_introspection_analyze_trace',
     'runtime_introspection_analyze',
     'runtime_introspection_top',
     'runtime_introspection_show',
+    'runtime_introspection_show_event',
   ]);
   assert.equal(listedTools.every((tool) => tool.annotations.readOnlyHint === true), true);
   const analysis = responses.find((message) => message.id === 3)?.result.structuredContent;
-  assert.equal(analysis.schema, 'narada.runtime_introspection.analysis.v1');
+  assert.equal(analysis.schema, 'narada.runtime_introspection.analysis.v0');
   assert.equal(analysis.summary.event_count, 1);
   assert.equal(analysis.counts.by_surface['local-filesystem'], 1);
   assert.equal(stderr.trim(), '');

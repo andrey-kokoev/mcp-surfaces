@@ -27,7 +27,7 @@ type RuntimeEvent = {
 };
 
 type RuntimeAnalysis = {
-  schema: 'narada.runtime_introspection.analysis.v1';
+  schema: 'narada.runtime_introspection.analysis.v0';
   status: 'analyzed';
   analysis_id: string;
   generated_at: string;
@@ -41,6 +41,9 @@ type RuntimeAnalysis = {
     tool_count: number;
     input_adapters: string[];
     total_duration_ms: number;
+    total_bytes: number;
+    total_chars: number;
+    estimated_tokens: number;
   };
   counts: {
     by_surface: JsonRecord;
@@ -55,6 +58,8 @@ type RuntimeAnalysis = {
     errors: RuntimeEvent[];
   };
   timeline: RuntimeEvent[];
+  largest_events: JsonRecord[];
+  token_estimate_by_category: JsonRecord;
   notes: string[];
 };
 
@@ -115,6 +120,28 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'runtime_introspection_top_events',
+      description: 'Return the N largest normalized runtime trace events by serialized size.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...inputSchema.properties,
+          analysis: { type: 'object', additionalProperties: true },
+          limit: { type: 'integer', minimum: 1, maximum: 200 },
+        },
+        additionalProperties: false,
+      },
+      annotations: readOnlyAnnotations('runtime_introspection_top_events'),
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'runtime_introspection_analyze_trace',
+      description: 'Analyze saved or inline runtime trace/session JSONL composition into Narada runtime introspection metrics.',
+      inputSchema,
+      annotations: readOnlyAnnotations('runtime_introspection_analyze_trace'),
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'runtime_introspection_analyze',
       description: 'Analyze inline runtime events or Codex adapter records into Narada runtime composition metrics.',
       inputSchema,
@@ -152,6 +179,22 @@ export function listTools() {
         additionalProperties: false,
       },
       annotations: readOnlyAnnotations('runtime_introspection_show'),
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'runtime_introspection_show_event',
+      description: 'Show one normalized runtime trace event by event_id or zero-based index.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...inputSchema.properties,
+          analysis: { type: 'object', additionalProperties: true },
+          event_id: { type: 'string' },
+          index: { type: 'integer', minimum: 0 },
+        },
+        additionalProperties: false,
+      },
+      annotations: readOnlyAnnotations('runtime_introspection_show_event'),
       outputSchema: { type: 'object', additionalProperties: true },
     },
   ];
@@ -223,6 +266,7 @@ function callTool(params: JsonRecord) {
       result = runtimeIntrospectionFormats();
       break;
     case 'runtime_introspection_analyze':
+    case 'runtime_introspection_analyze_trace':
       result = runtimeIntrospectionAnalyze(args);
       break;
     case 'runtime_introspection_top':
@@ -230,6 +274,12 @@ function callTool(params: JsonRecord) {
       break;
     case 'runtime_introspection_show':
       result = runtimeIntrospectionShow(args);
+      break;
+    case 'runtime_introspection_top_events':
+      result = runtimeIntrospectionTopEvents(args);
+      break;
+    case 'runtime_introspection_show_event':
+      result = runtimeIntrospectionShowEvent(args);
       break;
     default:
       throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
@@ -277,6 +327,9 @@ export function runtimeIntrospectionAnalyze(args: JsonRecord = {}): RuntimeAnaly
   const errors = sortedEvents.filter((event) => isErrorEvent(event));
   const refused = sortedEvents.filter((event) => event.status === 'refused');
   const totalDuration = sortedEvents.reduce((sum, event) => sum + (event.duration_ms ?? 0), 0);
+  const eventSizes = sortedEvents.map((event, index) => eventSizeRecord(event, index));
+  const totalBytes = eventSizes.reduce((sum, event) => sum + Number(event.bytes ?? 0), 0);
+  const totalChars = eventSizes.reduce((sum, event) => sum + Number(event.chars ?? 0), 0);
   const analysisId = optionalString(args.analysis_id) ?? stableAnalysisId(format, sortedEvents);
   const notes = [
     'codex_records_are_treated_as_input_adapter_not_narada_surface',
@@ -284,7 +337,7 @@ export function runtimeIntrospectionAnalyze(args: JsonRecord = {}): RuntimeAnaly
     ...sortedEvents.some((event) => event.surface_id === null && event.tool_name !== null) ? ['some_tools_do_not_map_to_narada_surface'] : [],
   ];
   return {
-    schema: 'narada.runtime_introspection.analysis.v1',
+    schema: 'narada.runtime_introspection.analysis.v0',
     status: 'analyzed',
     analysis_id: analysisId,
     generated_at: new Date().toISOString(),
@@ -298,6 +351,9 @@ export function runtimeIntrospectionAnalyze(args: JsonRecord = {}): RuntimeAnaly
       tool_count: Object.keys(byTool).length,
       input_adapters: Object.keys(byAdapter).sort(),
       total_duration_ms: totalDuration,
+      total_bytes: totalBytes,
+      total_chars: totalChars,
+      estimated_tokens: estimateTokens(totalChars),
     },
     counts: {
       by_surface: bySurface,
@@ -312,7 +368,36 @@ export function runtimeIntrospectionAnalyze(args: JsonRecord = {}): RuntimeAnaly
       errors: errors.slice(0, 10),
     },
     timeline: sortedEvents,
+    largest_events: eventSizes.sort((left, right) => Number(right.bytes ?? 0) - Number(left.bytes ?? 0)).slice(0, 10),
+    token_estimate_by_category: tokenEstimateByCategory(sortedEvents),
     notes,
+  };
+}
+
+export function runtimeIntrospectionTopEvents(args: JsonRecord = {}) {
+  const analysis = analysisFromArgs(args);
+  const limit = boundedInteger(args.limit, 10, 1, 200);
+  return {
+    schema: 'narada.runtime_introspection.top_events.v0',
+    status: 'ok',
+    analysis_id: analysis.analysis_id,
+    limit,
+    events: analysis.timeline.map((event, index) => eventSizeRecord(event, index)).sort((left, right) => Number(right.bytes ?? 0) - Number(left.bytes ?? 0)).slice(0, limit),
+  };
+}
+
+export function runtimeIntrospectionShowEvent(args: JsonRecord = {}) {
+  const analysis = analysisFromArgs(args);
+  const eventId = optionalString(args.event_id);
+  const index = args.index === undefined ? null : boundedInteger(args.index, 0, 0, Math.max(0, analysis.timeline.length - 1));
+  const event = eventId ? analysis.timeline.find((candidate) => candidate.event_id === eventId) : index === null ? null : analysis.timeline[index];
+  if (!event) throw diagnosticError('runtime_introspection_event_not_found', 'runtime_introspection_event_not_found', { event_id: eventId, index });
+  return {
+    schema: 'narada.runtime_introspection.event.v0',
+    status: 'ok',
+    analysis_id: analysis.analysis_id,
+    event,
+    size: eventSizeRecord(event, analysis.timeline.indexOf(event)),
   };
 }
 
@@ -505,8 +590,26 @@ function showData(analysis: RuntimeAnalysis, view: ShowView, limit: number) {
 
 function analysisFromArgs(args: JsonRecord): RuntimeAnalysis {
   const supplied = asRecord(args.analysis);
-  if (supplied.schema === 'narada.runtime_introspection.analysis.v1') return supplied as RuntimeAnalysis;
+  if (supplied.schema === 'narada.runtime_introspection.analysis.v0' || supplied.schema === 'narada.runtime_introspection.analysis.v1') return supplied as RuntimeAnalysis;
   return runtimeIntrospectionAnalyze(args);
+}
+
+function eventSizeRecord(event: RuntimeEvent, index: number): JsonRecord {
+  const serialized = JSON.stringify(event);
+  return { index, event_id: event.event_id, kind: event.kind, status: event.status, surface_id: event.surface_id, tool_name: event.tool_name, bytes: Buffer.byteLength(serialized, 'utf8'), chars: serialized.length, estimated_tokens: estimateTokens(serialized.length) };
+}
+
+function estimateTokens(chars: number): number {
+  return Math.ceil(chars / 4);
+}
+
+function tokenEstimateByCategory(events: RuntimeEvent[]): JsonRecord {
+  const categories: Record<string, number> = {};
+  for (const event of events) {
+    const category = event.kind === 'message' ? (event.tool_name ?? 'message') : event.surface_id ?? event.kind;
+    categories[category] = (categories[category] ?? 0) + estimateTokens(JSON.stringify(event).length);
+  }
+  return categories;
 }
 
 function compareRanked(left: JsonRecord, right: JsonRecord, sort: string): number {
@@ -596,7 +699,7 @@ function errorDiagnostic(error: unknown) {
 
 function renderResult(record: JsonRecord): string {
   const schema = String(record.schema ?? 'narada.runtime_introspection.result.v1');
-  if (schema.endsWith('.analysis.v1')) {
+  if (schema.endsWith('.analysis.v0') || schema.endsWith('.analysis.v1')) {
     const summary = asRecord(record.summary);
     return [
       `runtime_introspection_analyze: ${record.status ?? 'ok'}`,
@@ -613,6 +716,12 @@ function renderResult(record: JsonRecord): string {
   }
   if (schema.endsWith('.show.v1')) {
     return `runtime_introspection_show: ${record.view ?? ''}`;
+  }
+  if (schema.endsWith('.top_events.v0')) {
+    return `runtime_introspection_top_events: ${Array.isArray(record.events) ? record.events.length : 0}`;
+  }
+  if (schema.endsWith('.event.v0')) {
+    return `runtime_introspection_show_event: ${asRecord(record.event).event_id ?? ''}`;
   }
   if (schema.endsWith('.formats.v1')) {
     return 'runtime_introspection_formats: generic-events,codex-jsonl,codex-transcript';
