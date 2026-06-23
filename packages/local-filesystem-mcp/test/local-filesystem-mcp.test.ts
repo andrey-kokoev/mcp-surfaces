@@ -53,8 +53,12 @@ try {
   writeFileSync(join(trusted, 'a.txt'), 'alpha\nbeta\n', 'utf8');
   writeFileSync(join(trusted, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
   writeFileSync(join(trusted, 'large-read.txt'), `${'x'.repeat(7000)}\n`, 'utf8');
+  writeFileSync(join(trusted, 'bounded-read.txt'), Array.from({ length: 700 }, (_, index) => `line-${String(index + 1).padStart(3, '0')} ${'x'.repeat(70)}`).join('\n'), 'utf8');
   writeFileSync(join(trusted, 'grep-one.txt'), 'alpha\nneedle one\n', 'utf8');
   writeFileSync(join(trusted, 'grep-two.txt'), 'needle two\nplain\n', 'utf8');
+  const sourcePath = join(trusted, 'packages', 'task-lifecycle-mcp', 'src');
+  mkdirSync(sourcePath, { recursive: true });
+  writeFileSync(join(sourcePath, 'mcp-freshness-service.ts'), "import { createHash } from 'node:crypto';\nexport const classifierFalsePositive = false;\n", 'utf8');
   const danglingRoot = join(tempRoot, 'dangling-root');
   mkdirSync(danglingRoot, { recursive: true });
   let danglingSymlinkCreated = false;
@@ -187,6 +191,27 @@ trust_level = "untrusted"
   assert.match(readResponse.result.content[0].text, /total_lines_status: unknown_after_window/);
   assert.match(readResponse.result.content[0].text, /content:\nalpha$/);
 
+  const boundedReadResponse = call(readState, 1011, 'fs_read_file', { path: join(trusted, 'bounded-read.txt'), limit: 100 });
+  assert.equal(boundedReadResponse.result.structuredContent.schema, 'local.filesystem.read.v1');
+  assert.equal(boundedReadResponse.result.structuredContent.returned_lines, 100);
+  assert.equal(boundedReadResponse.result.structuredContent.next_offset, 101);
+  assert.match(boundedReadResponse.result.structuredContent.content, /line-100/);
+
+  const oversizedReadResponse = call(readState, 1012, 'fs_read_file', { path: join(trusted, 'bounded-read.txt'), limit: 500 });
+  assert.equal(oversizedReadResponse.result.structuredContent.schema, 'local.filesystem.read_window_too_large.v1');
+  assert.equal(oversizedReadResponse.result.structuredContent.status, 'truncated');
+  assert.equal(oversizedReadResponse.result.structuredContent.content_omitted, true);
+  assert.equal(oversizedReadResponse.result.structuredContent.path, join(trusted, 'bounded-read.txt'));
+  assert.equal(oversizedReadResponse.result.structuredContent.limit, 500);
+  assert.equal(oversizedReadResponse.result.structuredContent.recommended_tool, 'fs_read_file_range');
+  assert.deepEqual(oversizedReadResponse.result.structuredContent.recommended_args, {
+    path: join(trusted, 'bounded-read.txt'),
+    start_line: 1,
+    end_line: 100,
+  });
+  assert.equal(String(oversizedReadResponse.result.content[0].text).includes('line-500'), false);
+  assert.match(oversizedReadResponse.result.content[0].text, /read_window_too_large/);
+
   const rangeResponse = call(readState, 11, 'fs_read_file_range', { path: join(trusted, 'a.txt'), start_line: 2, end_line: 2 });
   assert.equal(rangeResponse.result.structuredContent.content, 'beta');
   assert.equal(rangeResponse.result.structuredContent.next_offset, null);
@@ -196,6 +221,12 @@ trust_level = "untrusted"
   assert.equal(rangeResponse.result.structuredContent.line_window_complete, true);
   assert.match(rangeResponse.result.content[0].text, /lines: 2-2 of 2/);
   assert.match(rangeResponse.result.content[0].text, /content:\nbeta$/);
+
+  const sourceReadResponse = call(readState, 111, 'fs_read_file', { path: join(sourcePath, 'mcp-freshness-service.ts') });
+  assert.equal(sourceReadResponse.result.structuredContent.schema, 'local.filesystem.read.v1');
+  assert.match(sourceReadResponse.result.structuredContent.content, /classifierFalsePositive/);
+  const sourceRangeResponse = call(readState, 112, 'fs_read_file_range', { path: join(sourcePath, 'mcp-freshness-service.ts'), start_line: 1, end_line: 1 });
+  assert.equal(sourceRangeResponse.result.structuredContent.content, "import { createHash } from 'node:crypto';");
 
   const revolutionConfigPath = join(revolutionRoot, 'config', 'config.json');
   const revolutionReadResponse = call(readState, 12, 'fs_read_file', { path: revolutionConfigPath });
@@ -369,6 +400,11 @@ trust_level = "untrusted"
   assert.equal(outsideWrite.error.data.code, 'path_outside_allowed_roots');
   assert.equal(outsideWrite.error.data.details.operation, 'fs_write_file');
   assert.equal(outsideWrite.error.data.details.requested_path, join(other, 'outside.txt'));
+  assert.equal(typeof outsideWrite.error.data.details.active_resolution_base, 'string');
+  assert.match(outsideWrite.error.data.details.remediation, /absolute path/);
+  assert.equal(outsideWrite.error.data.details.diagnostic_owner, 'local-filesystem-mcp');
+  assert.equal(outsideWrite.error.data.details.diagnostic_rule, 'surface_policy_or_tool_validation');
+  assert.match(outsideWrite.error.data.details.false_positive_route, /surface_id=local-filesystem/);
   assert.deepEqual(outsideWrite.error.data.details.allowed_roots, roots);
 
   const writeResponse = call(writeState, 3, 'fs_write_file', { path: join(trusted, 'b.txt'), content: 'created' });

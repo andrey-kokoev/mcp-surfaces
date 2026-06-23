@@ -17,6 +17,7 @@ import { RIPGREP_FIELD_SEPARATOR, grepMatchObject as buildGrepMatchObject, runRi
 
 const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
+const READ_RESULT_INLINE_CHAR_LIMIT = 20_000;
 const READ_BUFFER_BYTES = 64 * 1024;
 const ROOTS_LIST_REQUEST_PREFIX = 'local_filesystem_roots_';
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
@@ -466,7 +467,7 @@ function readFileTool(args, state) {
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
   const value = readFileRange({ path, root, offset, limit });
-  return cappedToolValue({ state, value, summary: readSummary(value) });
+  return capReadFileResult(value);
 }
 
 function readFileRangeTool(args, state) {
@@ -476,7 +477,45 @@ function readFileRangeTool(args, state) {
   if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
   const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
-  return cappedToolValue({ state, value, summary: readSummary(value) });
+  return capReadFileResult(value);
+}
+
+function capReadFileResult(value) {
+  const rendered = renderFilesystemToolResultText(value);
+  if (rendered.length <= READ_RESULT_INLINE_CHAR_LIMIT) return value;
+  const endLine = value.returned_lines > 0 ? value.offset + value.returned_lines - 1 : value.offset - 1;
+  const suggestedSpan = Math.max(1, Math.min(100, Math.floor(value.returned_lines / 2) || 1));
+  return {
+    schema: 'local.filesystem.read_window_too_large.v1',
+    status: 'truncated',
+    error: 'read_window_too_large',
+    path: value.path,
+    root: value.root,
+    relative_path: value.relative_path,
+    offset: value.offset,
+    limit: value.limit,
+    returned_lines: value.returned_lines,
+    requested_line_window: { start_line: value.offset, end_line: endLine },
+    total_lines: value.total_lines,
+    total_lines_exact: value.total_lines_exact,
+    total_lines_status: value.total_lines_status,
+    line_window_complete: value.line_window_complete,
+    next_offset: value.next_offset,
+    content_sha256: value.content_sha256,
+    rendered_text_char_length: rendered.length,
+    content_char_length: value.content.length,
+    content_omitted: true,
+    remediation: [
+      'Retry with a smaller fs_read_file limit and adjusted offset.',
+      'Prefer fs_read_file_range for precise bounded slices of large or dense files.',
+    ],
+    recommended_tool: 'fs_read_file_range',
+    recommended_args: {
+      path: value.path,
+      start_line: value.offset,
+      end_line: Math.min(endLine, value.offset + suggestedSpan - 1),
+    },
+  };
 }
 
 function readFileRange({ path, root, offset, limit }) {
@@ -1097,6 +1136,8 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
       throw diagnosticError(codeName, message, {
         ...context,
         requested_path: inputPath ?? null,
+        active_resolution_base: process.cwd(),
+        remediation: 'Pass an absolute path under an allowed root, or inspect fs_doctor for allowed_roots and active policy before retrying relative paths.',
         allowed_roots: Array.isArray(allowedRoots) && allowedRoots.length > 0 && typeof allowedRoots[0] === 'object'
           ? allowedRoots.map((entry) => entry.root)
           : allowedRoots,
@@ -1541,6 +1582,9 @@ function normalizeDiagnosticDetails(details) {
   const record = asRecord(details);
   const normalized = { ...record };
   if (activeToolName && String(activeToolName).startsWith('fs_') && !normalized.operation) normalized.operation = activeToolName;
+  normalized.diagnostic_owner = 'local-filesystem-mcp';
+  normalized.diagnostic_rule = normalized.diagnostic_rule ?? 'surface_policy_or_tool_validation';
+  normalized.false_positive_route = 'Submit surface feedback with surface_id=local-filesystem, the refusal code, requested_path, and why the path classification is wrong. Do not include secret content.';
   return normalized;
 }
 
