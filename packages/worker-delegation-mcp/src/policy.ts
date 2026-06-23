@@ -124,7 +124,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const deepseekDefaultSandbox = validateSandbox(merged.deepseekDefaultSandbox ?? deepseekCfg.default_sandbox ?? 'read-only');
   if (!allowedSandboxes.includes(deepseekDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: deepseekDefaultSandbox });
 
-  const naradaAgentRuntimeServerCommand = stringValue(merged.naradaAgentRuntimeServerCommand ?? merged.agentRuntimeServerCommand ?? naradaAgentRuntimeServerCfg.command ?? 'agent-runtime-server');
+  const naradaAgentRuntimeServerCommand = stringValue(merged.naradaAgentRuntimeServerCommand ?? merged.agentRuntimeServerCommand ?? naradaAgentRuntimeServerCfg.command ?? 'narada-agent-runtime-server');
   const naradaAgentRuntimeServerCommandArgs = stringList(merged.naradaAgentRuntimeServerCommandArg ?? merged.naradaAgentRuntimeServerCommandArgs ?? merged.agentRuntimeServerCommandArg ?? merged.agentRuntimeServerCommandArgs ?? naradaAgentRuntimeServerCfg.command_args);
   const naradaAgentRuntimeServerDefaultSandbox = validateSandbox(merged.naradaAgentRuntimeServerDefaultSandbox ?? naradaAgentRuntimeServerCfg.default_sandbox ?? 'workspace-write');
   if (!allowedSandboxes.includes(naradaAgentRuntimeServerDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: naradaAgentRuntimeServerDefaultSandbox });

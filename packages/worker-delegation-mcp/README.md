@@ -89,7 +89,7 @@ Common flags:
 - `--deepseek-command <command>`: Node.js executable for the DeepSeek worker, default `node`.
 - `--deepseek-command-arg <arg>`: prepend a fixed argument to the DeepSeek worker invocation; repeatable.
 - `--deepseek-model <model>`: override default model for DeepSeek runtime.
-- `--agent-runtime-server-command <command>`: Narada Agent Runtime Server executable, default `agent-runtime-server`.
+- `--agent-runtime-server-command <command>`: Narada Agent Runtime Server executable, default `narada-agent-runtime-server`.
 - `--agent-runtime-server-command-arg <arg>`: prepend a fixed argument to the Agent Runtime Server invocation; repeatable.
 - `--allowed-sandbox <mode>`: add an allowed sandbox; repeatable.
 - `--allowed-config-key <key>`: allow a Codex config key; repeatable. Omit model overrides unless the runtime account is known to accept the selected model.
