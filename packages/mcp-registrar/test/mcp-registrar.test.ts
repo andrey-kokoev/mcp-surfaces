@@ -94,6 +94,10 @@ try {
     assert.match(content, /--feedback-root/);
     assert.match(content, /D:\/code\/mcp-surfaces/);
     assert.doesNotMatch(content, /--feedback-root["',\s\]]+[A-Z]:\/code\/narada(?!\/mcp-surfaces)/i);
+    if (carrierId === 'codex-andrey') {
+      assert.match(content, /--anchored-allowed-root/);
+      assert.match(content, /user_home:\.codex/);
+    }
   }
 
   const aggregateSiteRoot = join(root, 'aggregate-site');

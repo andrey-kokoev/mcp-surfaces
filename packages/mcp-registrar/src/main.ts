@@ -94,7 +94,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'local-filesystem', package: 'local-filesystem-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--mode', 'write', '--allowed-root', '{site_root}', '--output-root', '{site_root}'],
+    args: ['--mode', 'write', '--allowed-root', '{site_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
     tools: ['fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
   },
   {
@@ -919,6 +919,15 @@ function collectCarrierServers(carrier: CarrierDef): Record<string, Materialized
   return servers;
 }
 
+function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): string[] {
+  return Object.entries(collectCarrierServers(carrier))
+    .filter(([, server]) => {
+      const serverSurfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+      return serverSurfaceId === surfaceId;
+    })
+    .map(([key]) => key);
+}
+
 function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, surfaceId: string): MaterializedServer {
   const overrides = carrier.surface_overrides?.[surfaceId];
   if (!overrides) return server;
@@ -1196,7 +1205,12 @@ function parseCodexToml(content: string): JsonRecord {
     if (line.startsWith('#') || line.length === 0) continue;
     const sectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\]$/);
     if (sectionMatch) {
-      currentKey = sectionMatch[1];
+      const sectionPath = sectionMatch[1];
+      if (sectionPath.includes('.tools.')) {
+        currentKey = null;
+        continue;
+      }
+      currentKey = sectionPath;
       (result.mcpServers as JsonRecord)[currentKey] = {};
       continue;
     }
@@ -1558,6 +1572,19 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
   const resolvedEntrypoint = interpolateArg(surface.entrypoint, defaultSiteId, siteRoot);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
 
+  const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);
+  if (aggregateServerKeys.length > 0) {
+    const applied = registrarCarrierApply({ carrier_id: carrierId });
+    writeSiteAllowedRootsConfig(carrier);
+    return {
+      ...applied,
+      status: 'applied',
+      surface_id: surfaceId,
+      server_keys: aggregateServerKeys,
+      binding_model: 'aggregate_carrier_config',
+    };
+  }
+
   let result: JsonRecord;
   switch (carrier.kind) {
     case 'opencode':
@@ -1580,6 +1607,19 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const carrier = lookupCarrier(carrierId);
+  const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);
+  if (aggregateServerKeys.length > 0) {
+    throw diagnosticError(
+      'registrar_carrier_unbind_refused_aggregate_surface',
+      `registrar_carrier_unbind_refused_aggregate_surface:${surfaceId}`,
+      {
+        carrier_id: carrierId,
+        surface_id: surfaceId,
+        server_keys: aggregateServerKeys,
+        remediation: 'This surface is produced by the aggregate carrier model. Remove it from the carrier site binding/source model, then run registrar_carrier_apply.',
+      },
+    );
+  }
   let result: JsonRecord;
   switch (carrier.kind) {
     case 'opencode':

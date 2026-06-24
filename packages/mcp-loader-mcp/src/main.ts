@@ -495,7 +495,7 @@ function isUnderPath(child: string, parent: string): boolean {
 }
 
 const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string[] }> = {
-  'local-filesystem': { entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`, args: ['--mode', 'write', '--allowed-root', '{site_root}', '--output-root', '{site_root}'] },
+  'local-filesystem': { entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`, args: ['--mode', 'write', '--allowed-root', '{site_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'] },
   'structured-command': { entrypoint: `${MCP_SURFACES_ROOT}/structured-command-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'] },
   'git': { entrypoint: `${MCP_SURFACES_ROOT}/git-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--mode', 'write'] },
   'completion-audit': { entrypoint: `${MCP_SURFACES_ROOT}/completion-audit-mcp/dist/src/main.js`, args: ['--audit-root', '{site_root}'] },
