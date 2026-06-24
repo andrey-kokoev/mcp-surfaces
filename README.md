@@ -29,7 +29,10 @@ pnpm install
 pnpm test
 ```
 
-## Surface Ergonomics
+## Surface Target And Ergonomics
+
+See `docs/mcp-surfaces-target-shape.md` for the implementation-driving target
+shape for MCP surfaces as Narada's governed crossing layer.
 
 See `docs/agent-ergonomics-surfaces.md` for the boundary between mechanical MCP
 evidence, multi-repository Git summaries, and agent completion audits.
