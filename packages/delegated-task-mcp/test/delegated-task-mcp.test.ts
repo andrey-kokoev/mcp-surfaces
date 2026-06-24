@@ -1000,9 +1000,13 @@ try {
   });
   const repairWithoutRereviewView = repairWithoutRereviewRun.result.structuredContent as Record<string, any>;
   assert.equal(repairWithoutRereviewView.task_status, 'completed');
+  assert.equal(repairWithoutRereviewView.completion_posture.status, 'completed_blocked');
+  assert.equal(repairWithoutRereviewView.completion_posture.blocked, true);
   const repairWithoutRereviewResult = await callTool(state, 'delegated_task_result', { task_id: repairWithoutRereviewView.task_id, include_diagnostics: true });
   const repairWithoutRereviewResultView = repairWithoutRereviewResult.result.structuredContent as Record<string, any>;
+  assert.equal(repairWithoutRereviewResultView.completion_posture.status, 'completed_blocked');
   assert.equal(repairWithoutRereviewResultView.result.acceptance_verdict, 'pending');
+  assert.equal(repairWithoutRereviewResultView.result.terminal_summary.completion_posture.status, 'completed_blocked');
   assert.deepEqual(repairWithoutRereviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 0, failed: 0, status: 'pending' });
   assert.equal(repairWithoutRereviewResultView.result.terminal_summary.next_action, 'await_review_resolution');
   assert.equal(repairWithoutRereviewResultView.result.terminal_summary.steps_terminal, true);

@@ -214,7 +214,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
   const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), completion_posture: completionPosture(task.status, task.result), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export async function delegatedTaskAdvance(args: JsonRecord, state: State): Promise<JsonRecord> {
@@ -306,6 +306,7 @@ export async function delegatedTaskSummary(args: JsonRecord, state: State): Prom
     objective: task.objective,
     summary: task.summary,
     acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending',
+    completion_posture: completionPosture(task.status, task.result),
     changed_files: stringList(rec(task.result).changed_files),
     real_changed_files: stringList(rec(task.result).real_changed_files),
     affected_refs: stringList(rec(task.result).affected_refs),
@@ -877,7 +878,7 @@ function delegatedTaskResultView(task: Task, state: State, explicitDiagnostics: 
   const workflowSummary = stepCounts(task.workflow);
   const includeDiagnostics = explicitDiagnostics || task.result_policy.include_diagnostics_by_default === true;
   const resultView = resultForPolicy(task.result, task.result_policy, includeDiagnostics, state);
-  const result: JsonRecord = { schema: 'narada.delegated_task.result.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), result: resultView, workflow_summary: { ...workflowSummary, step_count: workflowSummary.total }, acceptance_summary: acceptanceSummary(task.acceptance), retry_replacement: retryReplacementPlan(task) };
+  const result: JsonRecord = { schema: 'narada.delegated_task.result.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), completion_posture: completionPosture(task.status, task.result), result: resultView, workflow_summary: { ...workflowSummary, step_count: workflowSummary.total }, acceptance_summary: acceptanceSummary(task.acceptance), retry_replacement: retryReplacementPlan(task) };
   if (includeDiagnostics) result.diagnostics = { task_id: task.task_id, task_path: taskPaths(state, task.task_id).taskPath, events_path: taskPaths(state, task.task_id).eventsPath, constraints: task.constraints, workflow: task.workflow, result_policy: task.result_policy, execution: task.execution };
   return result;
 }
@@ -904,7 +905,7 @@ function acceptanceSchema(): JsonRecord { return { type: 'object', properties: {
 function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
 function executionSchema(): JsonRecord { return { type: 'object', properties: { start: { type: 'boolean', default: true }, wait_for_completion: { type: 'boolean', default: false }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 0 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, resumable: { type: 'boolean', default: true }, exit_interview: { type: 'boolean', default: false }, max_concurrency: { type: 'integer', minimum: 1, maximum: 32, default: 10 }, max_retries: { type: 'integer', minimum: 0, maximum: 10, default: 0 } }, additionalProperties: false }; }
 
-function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { return { schema: 'narada.delegated_task.run.v1', status: created ? 'accepted_for_execution' : 'existing', task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, worker_refs: rec(task.result).worker_refs ?? [] }; }
+function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { return { schema: 'narada.delegated_task.run.v1', status: created ? 'accepted_for_execution' : 'existing', task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), completion_posture: completionPosture(task.status, task.result), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, worker_refs: rec(task.result).worker_refs ?? [] }; }
 function handoff(): JsonRecord { return { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', changed_files: [], verification: [], residual_risks: [], observed_incoherencies: [], exit_interviews: [], exit_interview_count: 0, exit_interview_feedback: exitInterviewFeedbackSummary([]), worker_refs: [], worker_ref_count: 0, summary: null }; }
 function normalizeIntent(args: JsonRecord): { objective: string; instructions: string | null; behavior: string | null; mode: string | null } { const intent = rec(args.intent); return { objective: required(intent.objective ?? args.objective, 'delegated_task_requires_objective'), instructions: opt(intent.instructions), behavior: opt(intent.behavior), mode: opt(intent.mode) }; }
 function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): JsonRecord {
@@ -2066,6 +2067,7 @@ function terminalSummary(result: JsonRecord): JsonRecord {
     pending_acceptance_items: records(result.pending_acceptance_items),
     pending_review_items: records(result.pending_review_items),
     acceptance_verdict: result.acceptance_verdict ?? 'pending',
+    completion_posture: completionPosture(String(result.workflow_status ?? 'completed'), result),
     task_summary: result.summary ?? '',
     review_passed_count: review.passed,
     review_failed_count: review.failed,
@@ -2092,6 +2094,35 @@ function terminalSemantics(task: Task, stepStates: Record<string, StepState>, re
     pending_acceptance_items: pendingAcceptanceItems(result),
     pending_review_items: pendingReviewItems(result),
   };
+}
+function completionPosture(taskStatus: string, result: JsonRecord): JsonRecord {
+  const acceptanceVerdict = String(result.acceptance_verdict ?? 'pending');
+  const terminal = TERMINAL.has(taskStatus);
+  const accepted = taskStatus === 'completed' && acceptanceVerdict === 'passed';
+  const blocked = taskStatus === 'completed' && acceptanceVerdict !== 'passed';
+  const status = accepted ? 'accepted_completed'
+    : blocked ? 'completed_blocked'
+      : taskStatus === 'failed' ? 'failed'
+        : taskStatus === 'cancelled' ? 'cancelled'
+          : 'active';
+  return {
+    schema: 'narada.delegated_task.completion_posture.v1',
+    status,
+    task_status: taskStatus,
+    acceptance_verdict: acceptanceVerdict,
+    terminal,
+    accepted,
+    blocked,
+    reason: blocked ? `workflow_completed_but_acceptance_${acceptanceVerdict}` : null,
+    next_action: completionPostureNextAction(taskStatus, acceptanceVerdict),
+  };
+}
+function completionPostureNextAction(taskStatus: string, acceptanceVerdict: string): string {
+  if (taskStatus === 'cancelled') return 'acknowledge_cancelled_history';
+  if (acceptanceVerdict === 'passed') return 'acknowledge_closeout';
+  if (acceptanceVerdict === 'failed') return 'inspect_terminal_failure';
+  if (taskStatus === 'completed') return 'inspect_terminal_pending_acceptance';
+  return 'continue_or_verify';
 }
 function pendingAcceptanceItems(result: JsonRecord): JsonRecord[] {
   const verdict = String(result.acceptance_verdict ?? 'pending');
