@@ -103,6 +103,8 @@ try {
   writeTask(9206, blockedPayloadTaskId, 'claimed');
   const genericEngineerTaskId = '20260604-9207-generic-engineer-parent-role';
   writeTask(9207, genericEngineerTaskId, 'opened', 'target_role: engineer');
+  const submitWorkTaskId = '20260604-9208-submit-work-helper';
+  writeTask(9208, submitWorkTaskId, 'opened');
 
   const store = openTaskLifecycleStore(siteRoot);
   try {
@@ -115,6 +117,19 @@ try {
       status: 'active',
       task_number: null,
       last_done: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertLifecycle({
+      task_id: submitWorkTaskId,
+      task_number: 9208,
+      status: 'opened',
+      governed_by: null,
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
     store.upsertRosterEntry({
@@ -582,7 +597,7 @@ try {
     },
   }, builderRuntime);
   const unDeferBlockedPayload = await responsePayload(unDeferBlockedResponse, builderRuntime, 1019);
-  assert.equal(unDeferBlockedPayload.status, 'un_deferred');
+  assert.equal(unDeferBlockedPayload.status, 'un_deferred', JSON.stringify(unDeferBlockedPayload));
 
   const freshCompletionAfterBlockedResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -595,11 +610,12 @@ try {
         agent_id: 'smart-scheduling.builder',
         summary: 'Fresh completion evidence after the stale blocker was resolved.',
         changed_files: ['src/resolved-blocker.ts'],
+        reviewer: 'smart-scheduling.architect',
       },
     },
   }, builderRuntime);
   const freshCompletionAfterBlockedPayload = await responsePayload(freshCompletionAfterBlockedResponse, builderRuntime, 1021);
-  assert.equal(freshCompletionAfterBlockedPayload.status, 'success');
+  assert.equal(freshCompletionAfterBlockedPayload.status, 'success', JSON.stringify(freshCompletionAfterBlockedPayload));
 
   const supersedingReport = {
     report_id: 'report-blocked-superseding-completion',
@@ -726,6 +742,56 @@ try {
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.kind, 'operator_direct_instruction');
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.target_role, 'engineer');
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.agent_role, 'mcp-surfaces-engineer');
+
+  const submitWorkToolList = await handleTaskLifecycleMcpRequest({ jsonrpc: '2.0', id: 10560, method: 'tools/list' }, builderRuntime);
+  assert.ok(submitWorkToolList.result.tools.some((tool: any) => tool.name === 'task_lifecycle_submit_work'));
+
+  const submitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1057,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9208,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Submitted compound helper work through the governed primitive lifecycle path.',
+        execution_notes: 'Implemented the requested work and recorded the concrete execution steps through the compound helper.',
+        verification: 'Verified by exercising task_lifecycle_submit_work inside the task lifecycle ergonomics regression suite.',
+        changed_files: [`.ai/do-not-open/tasks/${submitWorkTaskId}.md`],
+        reviewer: 'smart-scheduling.architect',
+      },
+    },
+  }, builderRuntime);
+  const submitWorkPayload = await responsePayload(submitWorkResponse, builderRuntime, 1058);
+  assert.equal(submitWorkPayload.status, 'submitted', JSON.stringify(submitWorkPayload));
+  assert.deepEqual(submitWorkPayload.primitive_results.map((entry: any) => entry.tool), [
+    'task_lifecycle_claim',
+    'task_lifecycle_submit_work.write_task_notes',
+    'task_lifecycle_prove_criteria',
+    'task_lifecycle_admit_evidence',
+    'task_lifecycle_finish',
+  ]);
+  assert.equal(submitWorkPayload.primitive_results.at(-1).result.status, 'success');
+  assert.equal(submitWorkPayload.primitive_results.at(-1).result.new_status, 'in_review');
+
+  const submitWorkPlaceholderResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1059,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9208,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Placeholder rejection check.',
+        execution_notes: '<!-- Record what was done -->',
+        verification: 'Verified by attempting placeholder text rejection.',
+        changed_files: [`.ai/do-not-open/tasks/${submitWorkTaskId}.md`],
+      },
+    },
+  }, builderRuntime);
+  assert.match(submitWorkPlaceholderResponse.error?.message ?? '', /task_lifecycle_submit_work_execution_notes_not_substantive/);
 
   // 7. run_tests reports configured Test MCP paths instead of surfacing MODULE_NOT_FOUND.
   const runTestsResponse = await handleTaskLifecycleMcpRequest({

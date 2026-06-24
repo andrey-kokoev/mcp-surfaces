@@ -78,6 +78,7 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_admit_evidence',
   'task_lifecycle_prove_criteria',
   'task_lifecycle_finish',
+  'task_lifecycle_submit_work',
   'task_lifecycle_report_blocked',
   'task_lifecycle_close',
   'task_lifecycle_defer',
@@ -174,6 +175,29 @@ function taskLifecycleTools() {
         additionalProperties: false,
       },
       annotations: { title: 'task_lifecycle_chapter_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'task_lifecycle_submit_work',
+      description: 'Compound governed work submission helper: optionally claim, write execution/verification notes, prove criteria, admit evidence, and finish while preserving primitive lifecycle records and gates.',
+      inputSchema: objectSchema({
+        task_number: numberSchema('Task number to submit work for.'),
+        agent_id: stringSchema('Agent id submitting the work.'),
+        summary: stringSchema('Finish/report summary.'),
+        execution_notes: stringSchema('Substantive authored ## Execution Notes replacement text.'),
+        verification: stringSchema('Substantive authored ## Verification replacement text.'),
+        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias for the generated review obligation.'),
+        changed_files: { type: 'array', items: { type: 'string' }, description: 'Changed-file evidence for finish. Mutually exclusive with no_files_changed.' },
+        no_files_changed: { type: 'boolean', description: 'Declare no files changed for legitimate no-edit work. Mutually exclusive with changed_files.' },
+        claim: { type: 'boolean', description: 'When true, call task_lifecycle_claim first. Defaults true unless task is already claimed.' },
+        prove_criteria: { type: 'boolean', description: 'When true, call task_lifecycle_prove_criteria after writing notes. Defaults true.' },
+        admit_evidence: { type: 'boolean', description: 'When true, call task_lifecycle_admit_evidence before finish. Defaults true.' },
+        finish: { type: 'boolean', description: 'When true, call task_lifecycle_finish after evidence admission. Defaults true.' },
+        authority_basis: authorityBasisSchema('Required by underlying claim when crossing role/preferred-agent gates.'),
+        recovery_truthfulness: { type: 'object', additionalProperties: true, description: 'Passed through to task_lifecycle_finish when recovery truthfulness is triggered.' },
+        self_certification: { type: 'object', additionalProperties: true, description: 'Passed through to evidence admission/finish when self-certification gates are triggered.' },
+      }, ['task_number', 'agent_id', 'summary', 'execution_notes', 'verification']),
+      annotations: { title: 'task_lifecycle_submit_work', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     ...listPayloadTools(),
@@ -1230,6 +1254,7 @@ function getTaskLifecycleHandlerRegistry() {
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
         task_lifecycle_chapter_add_task: (args) => jsonToolResult(taskLifecycleChapterAddTask(args)),
         task_lifecycle_chapter_show: (args) => jsonToolResult(taskLifecycleChapterShow(args)),
+        task_lifecycle_submit_work: (args) => taskLifecycleSubmitWork(args),
       },
     });
   }
@@ -1405,6 +1430,101 @@ function taskLifecycleChapterShow(args) {
     membership_count: memberships.length,
     memberships,
   };
+}
+
+async function taskLifecycleSubmitWork(args) {
+  const taskNumber = numberField(args, 'task_number');
+  const agentId = stringField(args, 'agent_id');
+  const summary = stringField(args, 'summary');
+  const executionNotes = stringField(args, 'execution_notes');
+  const verification = stringField(args, 'verification');
+  const reviewer = stringField(args, 'reviewer');
+  const changedFiles = stringArrayField(args, 'changed_files');
+  const noFilesChanged = booleanField(args, 'no_files_changed') === true;
+  if (!taskNumber) throw new Error('task_number_required');
+  if (!agentId) throw new Error('agent_id_required');
+  if (!summary) throw new Error('summary_required');
+  assertSubstantiveSubmitWorkText(executionNotes, 'execution_notes');
+  assertSubstantiveSubmitWorkText(verification, 'verification');
+  if (changedFiles && noFilesChanged) throw new Error('changed_files_conflicts_with_no_files_changed');
+  enforceSessionIdentity(agentId);
+
+  const lifecycle = store.getLifecycleByNumber(taskNumber);
+  if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+  const primitiveResults = [];
+  const claim = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
+  if (claim) {
+    const claimArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
+    const authorityBasis = objectField(args, 'authority_basis');
+    if (authorityBasis) claimArgs.authority_basis = authorityBasis;
+    const claimResult = await dispatchTool('task_lifecycle_claim', claimArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    primitiveResults.push({ tool: 'task_lifecycle_claim', result: claimResult.structuredContent ?? null, is_error: claimResult.isError === true });
+    if (claimResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_claim' }, true);
+  }
+
+  const taskFile = await findTaskFile(siteRoot, String(taskNumber));
+  if (!taskFile) return jsonToolResult(buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
+  const original = readFileSync(taskFile.path, 'utf8');
+  const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
+  const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
+  writeFileSync(taskFile.path, withVerification, 'utf8');
+  primitiveResults.push({
+    tool: 'task_lifecycle_submit_work.write_task_notes',
+    result: { status: 'written', task_number: taskNumber, path: relativeSitePath(siteRoot, taskFile.path), sections: ['Execution Notes', 'Verification'] },
+    is_error: false,
+  });
+
+  if (args.prove_criteria !== false) {
+    const proveResult = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
+    primitiveResults.push({ tool: 'task_lifecycle_prove_criteria', result: proveResult.structuredContent ?? null, is_error: proveResult.isError === true });
+    if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria' }, true);
+  }
+
+  if (args.admit_evidence !== false) {
+    const admitArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
+    const selfCertification = objectField(args, 'self_certification');
+    if (selfCertification) admitArgs.self_certification = selfCertification;
+    const admitResult = await dispatchTool('task_lifecycle_admit_evidence', admitArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    primitiveResults.push({ tool: 'task_lifecycle_admit_evidence', result: admitResult.structuredContent ?? null, is_error: admitResult.isError === true });
+    if (admitResult.isError || admitResult.structuredContent?.status === 'rejected') return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_admit_evidence' }, true);
+  }
+
+  if (args.finish !== false) {
+    const finishArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId, summary };
+    if (reviewer) finishArgs.reviewer = reviewer;
+    if (changedFiles) finishArgs.changed_files = changedFiles;
+    if (noFilesChanged) finishArgs.no_files_changed = true;
+    const recoveryTruthfulness = objectField(args, 'recovery_truthfulness');
+    const selfCertification = objectField(args, 'self_certification');
+    if (recoveryTruthfulness) finishArgs.recovery_truthfulness = recoveryTruthfulness;
+    if (selfCertification) finishArgs.self_certification = selfCertification;
+    const finishResult = await dispatchTool('task_lifecycle_finish', finishArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    primitiveResults.push({ tool: 'task_lifecycle_finish', result: finishResult.structuredContent ?? null, is_error: finishResult.isError === true });
+    if (finishResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_finish' }, true);
+  }
+
+  return submitWorkResult({ status: 'submitted', taskNumber, agentId, primitiveResults, blockedAt: null }, false);
+}
+
+function submitWorkResult({ status, taskNumber, agentId, primitiveResults, blockedAt }, isError) {
+  return jsonToolResult({
+    schema: 'narada.task.mcp.submit_work.v0',
+    status,
+    task_number: taskNumber,
+    agent_id: agentId,
+    blocked_at: blockedAt,
+    primitive_record_count: primitiveResults.length,
+    primitive_results: primitiveResults,
+    review_obligation_preserved: true,
+    authority_gates_preserved: true,
+  }, isError);
+}
+
+function assertSubstantiveSubmitWorkText(value, field) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (text.length < 20 || /Record what was done|Record commands run|<!--|TODO|TBD/i.test(text)) {
+    throw new Error(`task_lifecycle_submit_work_${field}_not_substantive`);
+  }
 }
 
 function buildChapterMembershipResult({ status, chapterId, taskNumber, memberships, appendMode = null }) {
@@ -2042,16 +2162,16 @@ function legacyTaskLifecycleToolsSnapshot() {
 
 function testResultArtifactGate(store, taskId) {
   const rows = store.db.prepare("SELECT artifact_id, artifact_uri, admitted_view_json, created_at FROM observation_artifacts WHERE task_id = ? AND artifact_type = 'test_result' ORDER BY created_at DESC, artifact_id DESC").all(taskId);
-  const latestBySelector = new Map();
-  const latestPassingBySelector = new Map();
+  const latestBySelector = new Map<string, Record<string, unknown>>();
+  const latestPassing = new Map<string, Record<string, unknown>>();
   for (const artifact of rows.flatMap(parseTestResultArtifact)) {
     const selectorKey = artifact.selector ?? '__unknown_selector__';
     if (!latestBySelector.has(selectorKey)) latestBySelector.set(selectorKey, artifact);
-    if (artifact.status === 'passed' && !latestPassingBySelector.has(selectorKey)) latestPassingBySelector.set(selectorKey, artifact);
+    if (artifact.status === 'passed' && !latestPassing.has(selectorKey)) latestPassing.set(selectorKey, artifact);
   }
   return {
     failed_test_artifacts: [...latestBySelector.values()].filter((artifact) => artifact.status === 'failed'),
-    latest_passing_artifacts: [...latestPassingBySelector.values()],
+    latest_passing_artifacts: [...latestPassing.values()],
   };
 }
 
