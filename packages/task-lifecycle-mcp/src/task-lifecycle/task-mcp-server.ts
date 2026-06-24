@@ -1005,7 +1005,7 @@ function getTaskLifecycleHandlerRegistry() {
           createRecurringTaskInstance,
           insertRecurringRun,
         }),
-        mcp_payload_create: (args) => jsonToolResult(payloadCreate({ siteRoot, args })),
+        mcp_payload_create: (args) => jsonToolResult(taskLifecyclePayloadCreate(args)),
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
         mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
@@ -1117,6 +1117,14 @@ function readChapterStore() {
 function writeChapterStore(doc) {
   mkdirSync(join(siteRoot, '.ai', 'do-not-open'), { recursive: true });
   writeFileSync(chapterStorePath(), JSON.stringify({ schema: 'narada.task.chapters.v1', updated_at: new Date().toISOString(), chapters: doc.chapters ?? {} }, null, 2) + '\n', 'utf8');
+}
+
+function taskLifecyclePayloadCreate(args) {
+  const payload = args && typeof args === 'object' && !Array.isArray(args) ? args.payload : null;
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 0) {
+    throw new Error('task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field');
+  }
+  return payloadCreate({ siteRoot, args });
 }
 
 function taskLifecycleChapterAddTask(args) {

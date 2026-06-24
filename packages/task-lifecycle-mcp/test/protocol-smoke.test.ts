@@ -38,4 +38,18 @@ assert.equal(names.includes('task_lifecycle_chapter_add_task'), true);
 assert.equal(names.includes('task_lifecycle_chapter_show'), true);
 assert.equal(names.includes('mcp_output_show'), false);
 
+const emptyPayloadCreate = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 3,
+  method: 'tools/call',
+  params: {
+    name: 'mcp_payload_create',
+    arguments: { payload: {}, allow_empty: true },
+  },
+}, runtimeOptions);
+assert.equal(
+  emptyPayloadCreate.error?.message,
+  'task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field',
+);
+
 console.log('task-lifecycle-mcp protocol smoke ok');
