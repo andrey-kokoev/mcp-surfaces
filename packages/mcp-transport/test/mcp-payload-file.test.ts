@@ -105,7 +105,7 @@ try {
 
   assert.throws(
     () => payloadCreate({ siteRoot: tempRoot, args: { payload: {} } }),
-    /payload_create_empty_payload_requires_allow_empty.*put domain fields under payload/
+    /payload_create_empty_payload_requires_allow_empty.*Use either.*payload_json.*payload:\{\}/
   );
   const emptyPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: {}, allow_empty: true, payload_id: 'empty_payload_ok' } });
   assert.equal(emptyPayload.status, 'created');
@@ -118,6 +118,26 @@ try {
   });
   const createdPayloadEnvelope = (createdPayloadResult as { structuredContent: Record<string, unknown> }).structuredContent;
   assert.match(String(createdPayloadEnvelope.payload_ref), /^mcp_payload:/);
+
+  const jsonPayload = payloadCreate({ siteRoot: tempRoot, args: { payload_json: '{"x":"y"}', payload_id: 'json_payload_ok' } });
+  assert.equal(jsonPayload.status, 'created');
+  const jsonPayloadShown = payloadShow({ siteRoot: tempRoot, args: { ref: jsonPayload.ref } });
+  assert.deepEqual(jsonPayloadShown.payload, { x: 'y' });
+
+  const jsonPayloadWithEmptyObjectPlaceholder = payloadCreate({ siteRoot: tempRoot, args: { payload: {}, payload_json: '{"x":"z"}', payload_id: 'json_payload_with_placeholder_ok' } });
+  assert.equal(jsonPayloadWithEmptyObjectPlaceholder.status, 'created');
+  const jsonPlaceholderShown = payloadShow({ siteRoot: tempRoot, args: { ref: jsonPayloadWithEmptyObjectPlaceholder.ref } });
+  assert.deepEqual(jsonPlaceholderShown.payload, { x: 'z' });
+
+  assert.throws(
+    () => payloadCreate({ siteRoot: tempRoot, args: { payload: { x: 'object' }, payload_json: '{"x":"json"}' } }),
+    /payload_create_must_choose_one_of_payload_or_payload_json/
+  );
+
+  assert.throws(
+    () => payloadCreate({ siteRoot: tempRoot, args: { payload_json: '[]' } }),
+    /payload_create_payload_json_must_be_object/
+  );
 
   const mergePayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { task_number: 1, agent_id: 'payload.agent', summary: 'from payload' } } });
   const merged = resolveToolPayloadArgs({

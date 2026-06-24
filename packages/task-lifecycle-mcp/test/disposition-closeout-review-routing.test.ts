@@ -214,6 +214,10 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(payload.finish_result.status, 'success');
   assert.equal(payload.finish_result.close_action, 'skipped');
   assert.equal(payload.finish_result.new_status, 'in_review');
+  assert.deepEqual(payload.lifecycle_store_paths, ['.ai/do-not-open/tasks/20260604-9001-review-routing-closeout.md']);
+  assert.deepEqual(payload.commit_ready.stage_paths, []);
+  assert.deepEqual(payload.commit_ready.non_committable_lifecycle_store_paths, ['.ai/do-not-open/tasks/20260604-9001-review-routing-closeout.md']);
+  assert.deepEqual(payload.committable_path_set.ordinary_task_closeout_paths, []);
 
   const architectRuntimeOptions = {
     argv: ['--site-root', siteRoot],

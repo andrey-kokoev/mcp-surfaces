@@ -40,6 +40,7 @@ import {
   listPayloadTools,
   payloadCreate,
   payloadDerive,
+  payloadObjectFromArgs,
   payloadShow,
   payloadValidate,
   readOutputResource,
@@ -77,6 +78,7 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_admit_evidence',
   'task_lifecycle_prove_criteria',
   'task_lifecycle_finish',
+  'task_lifecycle_report_blocked',
   'task_lifecycle_close',
   'task_lifecycle_defer',
   'task_lifecycle_un_defer',
@@ -106,11 +108,39 @@ function taskLifecycleTools() {
     ...taskLifecycleDomainTools().map(patchLocalToolDefinition),
     {
       name: 'task_lifecycle_payload_schema',
-      description: 'Show accepted payload_ref shapes for lifecycle finish, closeout, review, and evidence payloads.',
+      description: 'Show accepted payload_ref shapes, inline length thresholds, and examples for lifecycle create, finish, closeout, blocked-report, review, and evidence payloads.',
       inputSchema: objectSchema({
         tool: stringSchema('Optional lifecycle tool name such as task_lifecycle_review or task_lifecycle_finish.'),
       }),
       annotations: { title: 'task_lifecycle_payload_schema', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'task_lifecycle_inspect_range',
+      description: 'Read-only compact inspection for an explicit task-number range or chapter membership, including closure/evidence posture.',
+      inputSchema: objectSchema({
+        start_task_number: { type: 'number', description: 'First task number in the inclusive range.' },
+        end_task_number: { type: 'number', description: 'Last task number in the inclusive range.' },
+        chapter_id: { type: 'string', description: 'Optional chapter id to inspect instead of a numeric range.' },
+        limit: { type: 'number', description: 'Maximum tasks to return; defaults to 50.' },
+        include_body: { type: 'boolean', description: 'Include task body snippets. Defaults false.' },
+      }),
+      annotations: { title: 'task_lifecycle_inspect_range', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'task_lifecycle_report_blocked',
+      description: 'Record exact blockers for claimed work without implying finish/completion. Defaults to deferring the task after writing a blocked report. For long next_action/blocker details, create a payload and call with payload_ref plus top-level task_number and agent_id.',
+      inputSchema: objectSchema({
+        task_number: numberSchema('Task number to report blocked.'),
+        agent_id: stringSchema('Agent id reporting the blocker.'),
+        reason: stringSchema('Concise blocker summary.'),
+        blockers: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Specific blocker objects, including evidence limits or required external decisions.' },
+        next_action: stringSchema('Concrete action needed to unblock continuation. Inline strings over 200 chars should be carried in payload_ref.'),
+        payload_ref: stringSchema('Optional immutable payload ref carrying long reason, blockers, next_action, or defer. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
+        defer: { type: 'boolean', description: 'When false, record the blocked report without transitioning to deferred. Defaults true.' },
+      }, ['task_number', 'agent_id', 'reason']),
+      annotations: { title: 'task_lifecycle_report_blocked', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -148,6 +178,192 @@ function taskLifecycleTools() {
     },
     ...listPayloadTools(),
   ];
+}
+
+function changedFileEvidenceSupersedesBlockedPosture(changedFileEvidence) {
+  return Boolean(changedFileEvidence)
+    && (changedFileEvidence.changedFiles.length > 0 || changedFileEvidence.noFilesChangedDeclarations.length > 0);
+}
+
+function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence = null }) {
+  const records = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
+  const sqliteReports = store.listReports ? store.listReports(lifecycle.task_id) : [];
+  const parsedReports = records.map((record) => {
+    try {
+      const parsed = JSON.parse(record.report_json ?? '{}');
+      return { record, parsed };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  for (const report of sqliteReports) {
+    parsedReports.push({ record: report, parsed: normalizeSqliteTaskReportForBlockedPosture(report) });
+  }
+  const completionReports = parsedReports
+    .filter(({ parsed }) => reportSupersedesBlockedPosture(parsed))
+    .sort((a, b) => reportTimestamp(b).localeCompare(reportTimestamp(a)));
+  const blockedReports = parsedReports
+    .filter(({ parsed }) => parsed?.blocked === true || parsed?.report_status === 'blocked')
+    .sort((a, b) => String(b.parsed.reported_at ?? b.record.reported_at ?? '').localeCompare(String(a.parsed.reported_at ?? a.record.reported_at ?? '')));
+  const latest = blockedReports[0] ?? null;
+  if (!latest) {
+    return {
+      state: 'no_blocked_report',
+      lifecycle_status: lifecycle.status,
+      report_id: null,
+      blocker_count: 0,
+      blockers: [],
+    };
+  }
+  const blockers = Array.isArray(latest.parsed.known_residuals) ? latest.parsed.known_residuals : [];
+  const supersedingReport = completionReports.find((candidate) => reportTimestamp(candidate) > reportTimestamp(latest)) ?? null;
+  if (supersedingReport) {
+    return {
+      state: 'stale_blocked_report_superseded',
+      lifecycle_status: lifecycle.status,
+      report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
+      agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
+      reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
+      reason: latest.parsed.summary ?? null,
+      next_action: latest.parsed.next_action ?? null,
+      blocker_count: blockers.length,
+      blockers,
+      superseded_by: {
+        report_id: supersedingReport.parsed.report_id ?? supersedingReport.record.report_id ?? null,
+        agent_id: supersedingReport.parsed.agent_id ?? supersedingReport.record.agent_id ?? null,
+        reported_at: supersedingReport.parsed.reported_at ?? supersedingReport.record.reported_at ?? null,
+        evidence: summarizeBlockedReportSupersessionEvidence(supersedingReport.parsed),
+      },
+    };
+  }
+  if (changedFileEvidenceSupersedesBlockedPosture(changedFileEvidence)) {
+    return {
+      state: 'stale_blocked_report_superseded',
+      lifecycle_status: lifecycle.status,
+      report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
+      agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
+      reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
+      reason: latest.parsed.summary ?? null,
+      next_action: latest.parsed.next_action ?? null,
+      blocker_count: blockers.length,
+      blockers,
+      superseded_by: {
+        evidence: {
+          changed_files_count: changedFileEvidence.changedFiles.length,
+          no_files_changed_declaration_count: changedFileEvidence.noFilesChangedDeclarations.length,
+        },
+      },
+    };
+  }
+  return {
+    state: 'blocked_reported',
+    lifecycle_status: lifecycle.status,
+    report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
+    agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
+    reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
+    reason: latest.parsed.summary ?? null,
+    next_action: latest.parsed.next_action ?? null,
+    blocker_count: blockers.length,
+    blockers,
+  };
+}
+
+function reportTimestamp(entry) {
+  return String(entry?.parsed?.reported_at ?? entry?.record?.reported_at ?? '');
+}
+
+function normalizeSqliteTaskReportForBlockedPosture(report) {
+  let changedFiles = [];
+  let verification = [];
+  try {
+    const parsed = JSON.parse(report.changed_files_json ?? '[]');
+    if (Array.isArray(parsed)) changedFiles = parsed;
+  } catch {
+    changedFiles = [];
+  }
+  try {
+    const parsed = JSON.parse(report.verification_json ?? '[]');
+    if (Array.isArray(parsed)) verification = parsed;
+  } catch {
+    verification = [];
+  }
+  return {
+    report_id: report.report_id ?? null,
+    task_id: report.task_id ?? null,
+    agent_id: report.agent_id ?? null,
+    reported_at: report.submitted_at ?? null,
+    summary: report.summary ?? null,
+    changed_files: changedFiles,
+    no_files_changed: changedFiles.includes(NO_FILES_CHANGED_MARKER),
+    verification,
+    report_status: 'submitted',
+    ready_for_review: true,
+  };
+}
+
+function reportSupersedesBlockedPosture(parsed) {
+  if (!parsed || parsed.blocked === true || parsed.report_status === 'blocked') return false;
+  const changedFiles = Array.isArray(parsed.changed_files) ? parsed.changed_files.filter((file) => typeof file === 'string' && file.trim().length > 0) : [];
+  if (changedFiles.length > 0) return true;
+  if (parsed.no_files_changed === true) return true;
+  if (Array.isArray(parsed.verification) && parsed.verification.length > 0 && parsed.ready_for_review === true) return true;
+  return false;
+}
+
+function summarizeBlockedReportSupersessionEvidence(parsed) {
+  const changedFiles = Array.isArray(parsed.changed_files) ? parsed.changed_files.filter((file) => typeof file === 'string' && file.trim().length > 0) : [];
+  return {
+    changed_files_count: changedFiles.length,
+    no_files_changed: parsed.no_files_changed === true || changedFiles.includes(NO_FILES_CHANGED_MARKER),
+    verification_count: Array.isArray(parsed.verification) ? parsed.verification.length : 0,
+    ready_for_review: parsed.ready_for_review === true,
+    report_status: parsed.report_status ?? null,
+  };
+}
+
+function recordBlockedTaskReport({ store, report }) {
+  const reportJson = JSON.stringify(report);
+  if (store.upsertReportRecord) {
+    store.upsertReportRecord({
+      report_id: report.report_id,
+      task_id: report.task_id,
+      assignment_id: report.assignment_id,
+      agent_id: report.agent_id,
+      reported_at: report.reported_at,
+      report_json: reportJson,
+    });
+  }
+  const tableExists = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
+  if (!tableExists) return;
+  store.db.prepare(`
+    INSERT INTO task_reports (
+      report_id, task_id, agent_id, summary, changed_files_json, verification_json, submitted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(report_id) DO UPDATE SET
+      task_id = excluded.task_id,
+      agent_id = excluded.agent_id,
+      summary = excluded.summary,
+      changed_files_json = excluded.changed_files_json,
+      verification_json = excluded.verification_json,
+      submitted_at = excluded.submitted_at
+  `).run(
+    report.report_id,
+    report.task_id,
+    report.agent_id,
+    report.summary,
+    JSON.stringify([]),
+    JSON.stringify([]),
+    report.reported_at,
+  );
+}
+
+function gitVisiblePathSubset(cwd, files) {
+  return files.filter((file) => {
+    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (tracked.status === 0) return true;
+    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return untracked.status === 0 && untracked.stdout.trim().length > 0;
+  });
 }
 
 function patchLocalToolDefinition(toolDef) {
@@ -896,6 +1112,7 @@ function getTaskLifecycleHandlerRegistry() {
           inspectTaskEvidence,
           readTaskRouting,
           buildTaskEvidencePreflight,
+          buildBlockedTaskReportPosture,
           buildRoutingAssignmentDivergence,
           searchTasksService,
           findRelatedTasks,
@@ -937,6 +1154,8 @@ function getTaskLifecycleHandlerRegistry() {
           detectGitChangedFiles,
           scopeChangedFiles,
           buildTaskEvidencePreflight,
+          buildBlockedTaskReportPosture,
+          recordBlockedTaskReport,
           buildPostCloseoutContinuation,
           emitCheckpoint,
           evaluatePostTransitionFollowups,
@@ -1120,8 +1339,15 @@ function writeChapterStore(doc) {
 }
 
 function taskLifecyclePayloadCreate(args) {
-  const payload = args && typeof args === 'object' && !Array.isArray(args) ? args.payload : null;
-  if (payload && typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 0) {
+  const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  const payload = payloadObjectFromArgs(input, {
+    objectField: 'payload',
+    jsonField: 'payload_json',
+    objectMessage: 'payload_create_payload_must_be_object',
+    jsonMessage: 'payload_create_payload_json_must_be_object',
+    ambiguityMessage: 'payload_create_must_choose_one_of_payload_or_payload_json: send either non-empty payload object or payload_json string; empty payload object may accompany payload_json only as a client placeholder',
+  });
+  if (Object.keys(payload).length === 0) {
     throw new Error('task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field');
   }
   return payloadCreate({ siteRoot, args });
@@ -1234,6 +1460,7 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
   const verificationRuns = store.listVerificationRunsForTask ? store.listVerificationRunsForTask(lifecycle.task_id) : [];
   const observations = store.db.prepare('SELECT artifact_uri, created_at FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
   const changedFileEvidence = collectChangedFileEvidenceFromReports(reports, sqliteReports);
+  const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence });
   const closedComplete = lifecycle.status === 'closed' && evidence.verdict === 'complete';
   const followUpValidation = validateFollowUpLedger(body);
   const recoveryTruthfulnessValidation = validateRecoveryTruthfulnessBody({ body, summary: '', context: `task:${taskNumber}` });
@@ -1315,11 +1542,14 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
       changed_files: changedFileEvidence.changedFiles,
       no_files_changed_declarations: changedFileEvidence.noFilesChangedDeclarations,
       closed_complete_exemption: closedComplete,
+      blocked_report_present: blockedWorkPosture.state === 'blocked_reported',
     },
     remediation: closedComplete
       ? 'Task is already closed with complete evidence; changed-file evidence is an active finish gate, not a post-close blocker.'
       : changedFileEvidence.changedFiles.length > 0 || changedFileEvidence.noFilesChangedDeclarations.length > 0
       ? 'Changed-file evidence is present in task reports, or an explicit no-files-changed declaration was submitted.'
+      : blockedWorkPosture.state === 'blocked_reported'
+      ? 'A blocked-work report is recorded. Do not finish as complete until blockers are resolved; continue or defer the task instead.'
       : 'Finish/closeout must include changed files, or explicitly declare no files changed for design-only/research work.',
     examples: finishGateExamples('changed_files'),
   });
@@ -1340,7 +1570,10 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     verdict: evidence.verdict,
     finish_ready: blockers.length === 0,
     remediation_summary: remediationSummary,
-    next_action: blockers.length === 0 ? 'Submit finish/report evidence.' : 'Resolve each remediation_summary item before finish/report closeout.',
+    next_action: blockedWorkPosture.state === 'blocked_reported'
+      ? 'Blocked report is recorded. Resolve blockers, then continue or finish with completion evidence.'
+      : blockers.length === 0 ? 'Submit finish/report evidence.' : 'Resolve each remediation_summary item before finish/report closeout.',
+    blocked_work_posture: blockedWorkPosture,
     blockers,
     requirements,
     structured_artifact_policy: {
@@ -1526,7 +1759,7 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_payload_schema',
-      description: 'Show accepted payload_ref shapes for lifecycle finish, closeout, review, and evidence payloads.',
+      description: 'Show accepted payload_ref shapes, inline length thresholds, and examples for lifecycle create, finish, closeout, blocked-report, review, and evidence payloads.',
       inputSchema: objectSchema({
         tool: stringSchema('Optional lifecycle tool name such as task_lifecycle_review or task_lifecycle_finish.'),
       }),
@@ -1612,6 +1845,8 @@ function legacyTaskLifecycleToolsSnapshot() {
       inputSchema: objectSchema({
         task_number: numberSchema('Task number to admit evidence for.'),
         agent_id: stringSchema('Agent id performing the admission.'),
+        self_certification: { type: 'object', description: 'Optional self-certification guard metadata for closure-sensitive evidence.', additionalProperties: true },
+        payload_ref: stringSchema('Optional immutable payload ref carrying self_certification guard metadata. Evidence is read from the lifecycle store.'),
       }, ['task_number', 'agent_id']),
     },
     {
@@ -1624,13 +1859,14 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_disposition_closeout',
-      description: 'Prepare or complete a lightweight inbox-disposition close-out: resolve envelope status, write execution/verification notes, optionally prove criteria and finish, and return task-owned changed files.',
+      description: 'Prepare or complete a lightweight inbox-disposition close-out: resolve envelope status, write execution/verification notes, optionally prove criteria and finish, and return task-owned changed files. For long summaries, create a payload and call with payload_ref plus top-level task_number and agent_id.',
       inputSchema: objectSchema({
         task_number: numberSchema('Task number to close out.'),
         agent_id: stringSchema('Agent id performing the close-out.'),
         envelope_id: stringSchema('Optional envelope id. If omitted, the task body is scanned for env_<id>.'),
         disposition: stringSchema('Optional disposition label, e.g. already_promoted, acknowledged, dismissed, no_code.'),
-        summary: stringSchema('Optional close-out summary.'),
+        summary: stringSchema('Optional close-out summary. Inline strings over 200 chars should be carried in payload_ref.'),
+        payload_ref: stringSchema('Optional immutable payload ref carrying long summary, changed_files, or no_files_changed. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
         dry_run: { type: 'boolean', description: 'Plan without writing task notes or finishing.' },
         prove_criteria: { type: 'boolean', description: 'Auto-check criteria after writing notes. Default false.' },
         finish: { type: 'boolean', description: 'Finish the task after writing/proving. Default false.' },
@@ -1669,6 +1905,19 @@ function legacyTaskLifecycleToolsSnapshot() {
         mode: stringSchema('Closure mode: operator_direct, peer_reviewed, agent_finish, emergency. Defaults to agent_finish.'),
         no_continuation_needed: stringSchema('Rationale for closing without a continuation task (for design-only/spike tasks).'),
       }, ['task_number', 'agent_id']),
+    },
+    {
+      name: 'task_lifecycle_report_blocked',
+      description: 'Record exact blockers for claimed work without implying finish/completion. Defaults to deferring the task after writing a blocked report. For long next_action/blocker details, create a payload and call with payload_ref plus top-level task_number and agent_id.',
+      inputSchema: objectSchema({
+        task_number: numberSchema('Task number to report blocked.'),
+        agent_id: stringSchema('Agent id reporting the blocker.'),
+        reason: stringSchema('Concise blocker summary.'),
+        blockers: { type: 'array', items: { type: ['string', 'object'] }, description: 'Specific blockers, including evidence limits or required external decisions.' },
+        next_action: stringSchema('Concrete action needed to unblock continuation. Inline strings over 200 chars should be carried in payload_ref.'),
+        payload_ref: stringSchema('Optional immutable payload ref carrying long reason, blockers, next_action, or defer. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
+        defer: { type: 'boolean', description: 'When false, record the blocked report without transitioning to deferred. Defaults true.' },
+      }, ['task_number', 'agent_id', 'reason']),
     },
     {
       name: 'task_lifecycle_search',
@@ -1750,9 +1999,9 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_create',
-      description: 'Create a new task from an immutable payload_ref carrying title, goal, context, required work, non-goals, acceptance criteria, and optional preferred/target roles.',
+      description: 'Create a new task from an immutable payload_ref carrying title, goal, context, required work, non-goals, acceptance criteria, and optional preferred/target roles. required_work and non_goals accept markdown strings or string arrays normalized to newline text.',
       inputSchema: objectSchema({
-        payload_ref: stringSchema('Required immutable transient payload ref such as mcp_payload:<id>@v1. Payload must contain the task definition.'),
+        payload_ref: stringSchema('Required immutable transient payload ref such as mcp_payload:<id>@v1. Payload must contain the task definition. Use task_lifecycle_payload_schema with tool=task_lifecycle_create for exact shapes and examples.'),
       }, ['payload_ref']),
     },
     ...listPayloadTools(),
@@ -2463,6 +2712,7 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
   const envelopeStatus = envelope?.status ?? null;
   const inferredDisposition = disposition ?? inferDisposition(envelopeStatus);
   const changedFiles = [relativeSitePath(siteRoot, taskFile.path)];
+  const gitVisibleChangedFiles = gitVisiblePathSubset(siteRoot, changedFiles);
   const now = new Date().toISOString();
   const executionNotes = [
     `- Close-out workflow: \`task_lifecycle_disposition_closeout\` invoked by \`${agentId}\` at ${now}.`,
@@ -2560,20 +2810,25 @@ async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, a
     disposition: inferredDisposition,
     capa_corrective_action_coverage: capaCoverageValidation,
     changed_files: changedFiles,
+    lifecycle_store_paths: changedFiles,
     committable_path_set: {
       schema: 'narada.task.disposition_closeout.committable_path_set.v0',
-      task_owned_paths: changedFiles,
-      ordinary_task_closeout_paths: changedFiles,
+      task_owned_paths: gitVisibleChangedFiles,
+      ordinary_task_closeout_paths: gitVisibleChangedFiles,
+      lifecycle_store_paths: changedFiles,
+      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
       ignored_envelope_projection_paths: [],
       envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
-      guidance: 'Stage ordinary_task_closeout_paths with git_task_closeout_commit_and_push. Ignored .ai/inbox-envelopes projections are not ordinary task-owned paths; use git_handoff_inbox_envelope_export for an exact admitted envelope JSON export when one must be committed.',
+      guidance: 'Stage ordinary_task_closeout_paths only. lifecycle_store_paths are durable closeout records and may be outside Git or ignored by repository policy.',
     },
     notes_written: !dryRun,
     criteria_result: criteriaResult,
     finish_result: finishResult,
     commit_ready: {
-      stage_paths: changedFiles,
-      ordinary_task_closeout_paths: changedFiles,
+      stage_paths: gitVisibleChangedFiles,
+      ordinary_task_closeout_paths: gitVisibleChangedFiles,
+      lifecycle_store_paths: changedFiles,
+      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
       ignored_envelope_projection_paths: [],
       envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
       exclude_unrelated_dirty_files: true,

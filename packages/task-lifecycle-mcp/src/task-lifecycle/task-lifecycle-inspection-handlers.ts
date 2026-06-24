@@ -1,9 +1,11 @@
 import { join } from 'path';
+import { existsSync, readFileSync } from 'node:fs';
 import { findReviewerCapableAgents } from './operator-identity.js';
 
 export const TASK_LIFECYCLE_INSPECTION_TOOL_NAMES = Object.freeze([
   'task_lifecycle_show',
   'task_lifecycle_inspect',
+  'task_lifecycle_inspect_range',
   'task_lifecycle_diagnose_task_ref',
   'task_lifecycle_evidence_preflight',
   'task_lifecycle_audit',
@@ -25,6 +27,7 @@ export function createTaskLifecycleInspectionHandlers({
   inspectTaskEvidence,
   readTaskRouting,
   buildTaskEvidencePreflight,
+  buildBlockedTaskReportPosture,
   buildRoutingAssignmentDivergence,
   searchTasksService,
   findRelatedTasks,
@@ -89,7 +92,9 @@ export function createTaskLifecycleInspectionHandlers({
       const reports = store.db.prepare('SELECT report_id, agent_id, submitted_at as reported_at FROM task_reports WHERE task_id = ?').all(lifecycle.task_id);
       const observations = store.db.prepare('SELECT * FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
       const reviewRows = store.db.prepare('SELECT * FROM task_reviews WHERE task_id = ? ORDER BY reviewed_at DESC').all(lifecycle.task_id);
+      const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle });
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
+
       const reviews = reviewRows.map((review) => ({
         review_id: review.review_id,
         reviewer_agent_id: review.reviewer_agent_id,
@@ -120,6 +125,7 @@ export function createTaskLifecycleInspectionHandlers({
           violations: evidence.violations,
         } : null,
         evidence_preflight: await buildTaskEvidencePreflight({ siteRoot, store, taskNumber }),
+        blocked_work_posture: blockedWorkPosture,
         assignment: assignment ? { agent_id: assignment.agent_id, claimed_at: assignment.claimed_at, intent: assignment.intent } : null,
         routing,
         routing_assignment_divergence: buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, reports }),
@@ -131,6 +137,72 @@ export function createTaskLifecycleInspectionHandlers({
         obligations: obligations.map((obligation) => ({ obligation_id: obligation.obligation_id, kind: obligation.kind, status: obligation.status })),
         eligible_reviewers: eligibleReviewers,
         schema: 'narada.task.mcp.inspect.v0',
+      });
+    },
+
+    task_lifecycle_inspect_range: async (args) => {
+      const chapterId = stringField(args, 'chapter_id');
+      const startTaskNumber = numberField(args, 'start_task_number');
+      const endTaskNumber = numberField(args, 'end_task_number');
+      const limit = Math.max(1, Math.min(200, numberField(args, 'limit') ?? 50));
+      const includeBody = args.include_body === true;
+      let rows = [];
+      if (chapterId) {
+        const chapterTaskNumbers = readChapterTaskNumbers(siteRoot, chapterId).slice(0, limit);
+        rows = chapterTaskNumbers.map((taskNumber) => store.getLifecycleByNumber(taskNumber)).filter(Boolean);
+      } else {
+        if (!startTaskNumber || !endTaskNumber) throw new Error('start_task_number_and_end_task_number_required');
+        const low = Math.min(startTaskNumber, endTaskNumber);
+        const high = Math.max(startTaskNumber, endTaskNumber);
+        rows = store.db.prepare('SELECT * FROM task_lifecycle WHERE task_number >= ? AND task_number <= ? ORDER BY task_number ASC LIMIT ?').all(low, high, limit);
+      }
+      const tasks = [];
+      for (const lifecycle of rows) {
+        const taskNumber = lifecycle.task_number;
+        const spec = store.getTaskSpecByNumber(taskNumber);
+        const evidence = await inspectTaskEvidence(siteRoot, String(taskNumber), store).catch(() => null);
+        const evidencePreflight = await buildTaskEvidencePreflight({ siteRoot, store, taskNumber }).catch((error) => ({ status: 'unavailable', error: error instanceof Error ? error.message : String(error) }));
+        const closureAuthority = deriveClosureAuthority(lifecycle);
+        let body = null;
+        if (includeBody) {
+          const taskFile = await findTaskFile(siteRoot, String(taskNumber)).catch(() => null);
+          body = taskFile ? (await readTaskFile(taskFile.path).catch(() => ({ body: null }))).body : null;
+        }
+        tasks.push({
+          task_number: taskNumber,
+          task_id: lifecycle.task_id,
+          title: spec?.title ?? null,
+          lifecycle: {
+            status: lifecycle.status,
+            governed_by: lifecycle.governed_by,
+            closed_at: lifecycle.closed_at,
+            closed_by: lifecycle.closed_by,
+            closure_mode: lifecycle.closure_mode,
+            reopened_at: lifecycle.reopened_at,
+            updated_at: lifecycle.updated_at,
+          },
+          closure_authority: closureAuthority,
+          closure_evidence_posture: closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight }),
+          evidence: evidence ? {
+            verdict: evidence.verdict,
+            all_criteria_checked: evidence.all_criteria_checked,
+            unchecked_count: evidence.unchecked_count,
+            has_report: evidence.has_report,
+            has_execution_notes: evidence.has_execution_notes,
+            has_verification: evidence.has_verification,
+            violation_count: Array.isArray(evidence.violations) ? evidence.violations.length : 0,
+          } : null,
+          evidence_preflight: evidencePreflight,
+          ...(includeBody ? { body } : {}),
+        });
+      }
+      return jsonToolResult({
+        status: 'ok',
+        schema: 'narada.task.mcp.inspect_range.v0',
+        query: { chapter_id: chapterId ?? null, start_task_number: startTaskNumber ?? null, end_task_number: endTaskNumber ?? null, limit, include_body: includeBody },
+        count: tasks.length,
+        read_only: true,
+        tasks,
       });
     },
 
@@ -251,6 +323,44 @@ export function createTaskLifecycleInspectionHandlers({
       const result = findRelatedTasks({ tasksDir: join(siteRoot, '.ai', 'do-not-open', 'tasks'), targetTaskNumber: taskNumber, limit });
       return jsonToolResult(result);
     },
+  };
+}
+
+function readChapterTaskNumbers(siteRoot, chapterId) {
+  const path = join(siteRoot, '.ai', 'do-not-open', 'task-chapters.json');
+  if (!existsSync(path)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const memberships = parsed?.chapters?.[chapterId]?.memberships;
+    if (!Array.isArray(memberships)) return [];
+    return memberships
+      .map((item) => ({ task_number: Number(item.task_number), order_index: Number(item.order_index ?? 0) }))
+      .filter((item) => Number.isInteger(item.task_number) && item.task_number > 0)
+      .sort((a, b) => a.order_index - b.order_index || a.task_number - b.task_number)
+      .map((item) => item.task_number);
+  } catch {
+    return [];
+  }
+}
+
+function closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight }) {
+  const status = String(lifecycle.status ?? '');
+  const preflight = evidencePreflight && typeof evidencePreflight === 'object' ? evidencePreflight : {};
+  const blockers = Array.isArray(preflight.blockers) ? preflight.blockers : [];
+  const closed = status === 'closed' || status === 'confirmed';
+  if (closed && closureAuthority?.has_closure_evidence) {
+    return {
+      state: blockers.length > 0 ? 'closed_with_stale_or_non_authoritative_preflight_debt' : 'closed_current_authority_consistent',
+      current_closure_authority_dominates: closureAuthority.closure_dominates === true,
+      stale_preflight_blocker_count: blockers.length,
+      guidance: blockers.length > 0 ? 'Treat blockers as historical/pre-review unless a fresh reopen or review obligation supersedes closure authority.' : null,
+    };
+  }
+  return {
+    state: blockers.length > 0 ? 'open_or_reviewing_with_current_preflight_blockers' : 'open_or_reviewing_without_preflight_blockers',
+    current_closure_authority_dominates: false,
+    stale_preflight_blocker_count: 0,
+    guidance: null,
   };
 }
 

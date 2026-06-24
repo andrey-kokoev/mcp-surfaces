@@ -1,5 +1,13 @@
 type TaskLifecyclePayload = Record<string, unknown>;
 
+type GenericEngineerClaimAuthorityArgs = {
+  args: TaskLifecyclePayload;
+  eligibility: TaskLifecyclePayload;
+  lifecycle: TaskLifecyclePayload;
+  taskNumber: number;
+  agentId: string;
+};
+
 export const TASK_LIFECYCLE_ASSIGNMENT_TOOL_NAMES = Object.freeze([
   'task_lifecycle_claim',
   'task_lifecycle_continue',
@@ -34,7 +42,8 @@ export function createTaskLifecycleAssignmentHandlers({
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
 
       const eligibility = checkTaskRoleEligibilityLocal({ store, siteRoot, taskId: lifecycle.task_id, taskNumber, agentId });
-      if (!eligibility.eligible) {
+      const genericEngineerAuthority = validateGenericEngineerClaimAuthority({ args, eligibility, lifecycle, taskNumber, agentId });
+      if (!eligibility.eligible && genericEngineerAuthority.status !== 'ok') {
         return jsonToolResult({
           status: 'role_mismatch',
           schema: 'narada.task.claim.role_mismatch.v1',
@@ -45,6 +54,11 @@ export function createTaskLifecycleAssignmentHandlers({
           message: eligibility.warning,
           remediation: {
             summary: 'Use MCP-native roster admission or routing repair before claiming role-targeted work.',
+            claim_with_authority: {
+              applies_when: 'target_role is engineer and the rostered agent role is a site-specific engineer role ending with -engineer',
+              required_authority_basis: { kind: 'operator_direct_instruction', summary: '<operator authorized this repo-specific engineer to claim generic engineer work>' },
+              example_args: { task_number: taskNumber, agent_id: agentId, authority_basis: { kind: 'operator_direct_instruction', summary: '<why this repo-specific engineer claim is authorized>' } },
+            },
             roster_admit: {
               tool: 'task_lifecycle_roster_admit',
               required_authority_basis: { kind: 'operator_direct_instruction', summary: '<operator authorized this agent/role binding>' },
@@ -98,7 +112,12 @@ export function createTaskLifecycleAssignmentHandlers({
         }, true);
       }
       const result: TaskLifecyclePayload = { status: 'claimed', assignment_id: serviceResult.assignment_id, task_number: taskNumber };
-      if (eligibility.warning) {
+      if (genericEngineerAuthority.status === 'ok') {
+        result.role_mismatch_authority = genericEngineerAuthority.authority_basis;
+        result.role_claim_warning = genericEngineerAuthority.role_claim_warning;
+        result.pre_claim_warnings = [genericEngineerAuthority.role_claim_warning];
+      }
+      if (eligibility.preferredAgentId && eligibility.preferredAgentId !== agentId && eligibility.warning) {
         result.preferred_agent_warning = {
           kind: 'preferred_agent_mismatch',
           severity: 'requires_authority',
@@ -107,7 +126,7 @@ export function createTaskLifecycleAssignmentHandlers({
           claiming_agent: agentId,
           message: eligibility.warning,
         };
-        result.pre_claim_warnings = [result.preferred_agent_warning];
+        result.pre_claim_warnings = [...(Array.isArray(result.pre_claim_warnings) ? result.pre_claim_warnings : []), result.preferred_agent_warning];
         result.preferred_agent_mismatch_authority = mismatchAuthority.authority_basis;
       }
       recordClaimIntent({
@@ -117,7 +136,7 @@ export function createTaskLifecycleAssignmentHandlers({
         agentId,
         status: 'claimed',
         assignmentId: serviceResult.assignment_id,
-        authorityBasis: mismatchAuthority.authority_basis,
+        authorityBasis: genericEngineerAuthority.authority_basis ?? mismatchAuthority.authority_basis,
         preferredAgentWarning: result.preferred_agent_warning ?? null,
       });
       if (identityWarning) result.identity_warning = identityWarning;
@@ -166,4 +185,43 @@ export function createTaskLifecycleAssignmentHandlers({
       return jsonToolResult(serviceResult, ['not_claimed', 'claimed_by_other', 'closure_authority_blocks_unclaim'].includes(serviceResult.status));
     },
   };
+}
+
+function validateGenericEngineerClaimAuthority({ args, eligibility, lifecycle, taskNumber, agentId }: GenericEngineerClaimAuthorityArgs) {
+  if (eligibility.eligible) return { status: 'not_required', authority_basis: null, role_claim_warning: null };
+  if (eligibility.targetRole !== 'engineer') return { status: 'not_applicable', authority_basis: null, role_claim_warning: null };
+  if (typeof eligibility.agentRole !== 'string' || !eligibility.agentRole.endsWith('-engineer')) {
+    return { status: 'not_applicable', authority_basis: null, role_claim_warning: null };
+  }
+  const authorityBasis = normalizeGenericEngineerAuthorityBasis(args.authority_basis);
+  if (!authorityBasis) return { status: 'authority_required', authority_basis: null, role_claim_warning: null };
+  const roleClaimWarning = {
+    kind: 'generic_engineer_role_claim',
+    severity: 'authority_recorded',
+    task_number: taskNumber,
+    target_role: eligibility.targetRole,
+    agent_role: eligibility.agentRole,
+    claiming_agent: agentId,
+    message: eligibility.warning,
+  };
+  return {
+    status: 'ok',
+    authority_basis: {
+      ...authorityBasis,
+      task_id: lifecycle.task_id,
+      task_number: taskNumber,
+      target_role: eligibility.targetRole,
+      agent_role: eligibility.agentRole,
+      claiming_agent: agentId,
+    },
+    role_claim_warning: roleClaimWarning,
+  };
+}
+
+function normalizeGenericEngineerAuthorityBasis(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const kind = typeof value.kind === 'string' ? value.kind.trim() : '';
+  const summary = typeof value.summary === 'string' ? value.summary.trim() : '';
+  if (kind !== 'operator_direct_instruction' || !summary) return null;
+  return { kind, summary };
 }

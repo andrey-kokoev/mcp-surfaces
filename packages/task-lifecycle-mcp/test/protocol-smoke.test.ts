@@ -37,6 +37,8 @@ assert.equal(names.includes('task_lifecycle_doctor'), true);
 assert.equal(names.includes('task_lifecycle_chapter_add_task'), true);
 assert.equal(names.includes('task_lifecycle_chapter_show'), true);
 assert.equal(names.includes('mcp_output_show'), false);
+const payloadCreateTool = tools.result.tools.find((tool) => tool.name === 'mcp_payload_create');
+assert.equal(Boolean(payloadCreateTool?.inputSchema?.properties?.payload_json), true);
 
 const emptyPayloadCreate = await handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',
@@ -49,6 +51,31 @@ const emptyPayloadCreate = await handleTaskLifecycleMcpRequest({
 }, runtimeOptions);
 assert.equal(
   emptyPayloadCreate.error?.message,
+  'task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field',
+);
+
+const jsonPayloadCreate = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 4,
+  method: 'tools/call',
+  params: {
+    name: 'mcp_payload_create',
+    arguments: { payload: {}, payload_json: '{"x":"y"}', payload_id: 'json_payload_ok' },
+  },
+}, runtimeOptions);
+assert.equal(jsonPayloadCreate.result?.structuredContent?.status, 'created');
+
+const emptyJsonPayloadCreate = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 5,
+  method: 'tools/call',
+  params: {
+    name: 'mcp_payload_create',
+    arguments: { payload_json: '{}' },
+  },
+}, runtimeOptions);
+assert.equal(
+  emptyJsonPayloadCreate.error?.message,
   'task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field',
 );
 

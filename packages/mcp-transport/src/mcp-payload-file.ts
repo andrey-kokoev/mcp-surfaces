@@ -232,9 +232,15 @@ function isPayloadWorkspaceTool(toolName) {
 
 export function payloadCreate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
   const input = asRecord(args);
-  const payload = asPayloadObject(input.payload, 'payload_create_payload_must_be_object');
+  const payload = payloadObjectFromArgs(input, {
+    objectField: 'payload',
+    jsonField: 'payload_json',
+    objectMessage: 'payload_create_payload_must_be_object',
+    jsonMessage: 'payload_create_payload_json_must_be_object',
+    ambiguityMessage: 'payload_create_must_choose_one_of_payload_or_payload_json: send either non-empty payload object or payload_json string; empty payload object may accompany payload_json only as a client placeholder',
+  });
   if (Object.keys(payload).length === 0 && input.allow_empty !== true) {
-    throw new Error('payload_create_empty_payload_requires_allow_empty: payload object is empty; pass allow_empty=true only when an empty immutable payload is intentional. Common mistake: put domain fields under payload, e.g. {"payload":{"summary":"..."}}, not alongside it.');
+    throw new Error('payload_create_empty_payload_requires_allow_empty: payload object is empty; pass allow_empty=true only when an empty immutable payload is intentional. Use either {"payload":{"summary":"..."}} or {"payload_json":"{\\"summary\\":\\"...\\"}"}. For OpenCode-style clients, payload:{} may accompany payload_json only as a placeholder.');
   }
   const payloadId = input.payload_id ? validatePayloadId(String(input.payload_id)) : randomPayloadId();
   const createdAt = new Date().toISOString();
@@ -265,7 +271,13 @@ export function payloadValidate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, 
 export function payloadDerive({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
   const input = asRecord(args);
   const source = readPayloadRevision({ siteRoot, ref: requireRef(input, 'payload_derive_requires_source_ref', 'source_ref'), maxBytes, payloadDir });
-  const overlay = asPayloadObject(input.overlay, 'payload_derive_overlay_must_be_object');
+  const overlay = payloadObjectFromArgs(input, {
+    objectField: 'overlay',
+    jsonField: 'overlay_json',
+    objectMessage: 'payload_derive_overlay_must_be_object',
+    jsonMessage: 'payload_derive_overlay_json_must_be_object',
+    ambiguityMessage: 'payload_derive_must_choose_one_of_overlay_or_overlay_json: send either non-empty overlay object or overlay_json string; empty overlay object may accompany overlay_json only as a client placeholder',
+  });
   const payload = overlayObject(source.payload, overlay);
   const revision = source.revision + 1;
   const ref = buildPayloadRef(source.payload_id, revision);
@@ -643,11 +655,12 @@ export function listPayloadTools() {
         additionalProperties: false,
         properties: {
           payload_id: { type: 'string', description: 'Optional stable id segment. Defaults to a generated id.' },
-          payload: { type: 'object', description: 'Required nested domain object to store as v1. Put tool arguments inside this field, e.g. {"payload":{"summary":"..."}}. Empty objects require allow_empty=true.' },
+          payload: { type: 'object', additionalProperties: true, description: 'Normal route for clients that can transmit nested objects: the non-empty domain object to store, e.g. {"payload":{"summary":"..."}}. Do not send with payload_json unless payload is exactly {} as a client placeholder.' },
+          payload_json: { type: 'string', description: 'String route for clients that cannot transmit free-form nested objects, especially OpenCode: JSON object text, e.g. "{\\"summary\\":\\"...\\"}". Authoritative when present; may be accompanied only by payload:{} as a placeholder.' },
           allow_empty: { type: 'boolean', description: 'Set true only when intentionally creating an empty payload object.' },
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
-        required: ['payload'],
+        anyOf: [{ required: ['payload'] }, { required: ['payload_json'] }],
       },
     }),
     toolDefinition({
@@ -668,10 +681,12 @@ export function listPayloadTools() {
         additionalProperties: false,
         properties: {
           source_ref: { type: 'string', description: 'Source payload ref, e.g. mcp_payload:<id>@v1.' },
-          overlay: { type: 'object', description: 'Recursive object overlay. No deletion semantics.' },
+          overlay: { type: 'object', additionalProperties: true, description: 'Normal route for clients that can transmit nested objects: recursive object overlay. No deletion semantics. Do not send with overlay_json unless overlay is exactly {} as a client placeholder.' },
+          overlay_json: { type: 'string', description: 'String route for clients that cannot transmit free-form nested objects, especially OpenCode: JSON object text for the overlay. Authoritative when present; may be accompanied only by overlay:{} as a placeholder.' },
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
-        required: ['source_ref', 'overlay'],
+        required: ['source_ref'],
+        anyOf: [{ required: ['overlay'] }, { required: ['overlay_json'] }],
       },
     }),
     toolDefinition({
@@ -717,6 +732,29 @@ function asRecord(value) {
 function asPayloadObject(value, message) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
   return value;
+}
+
+export function payloadObjectFromArgs(input, { objectField, jsonField, objectMessage, jsonMessage, ambiguityMessage }) {
+  const rawObject = input[objectField];
+  const rawJson = stringOrNull(input[jsonField]);
+  if (rawJson) {
+    if (rawObject !== undefined && rawObject !== null) {
+      const objectPayload = asPayloadObject(rawObject, objectMessage);
+      if (Object.keys(objectPayload).length > 0) throw new Error(ambiguityMessage);
+    }
+    return parsePayloadJsonObject(rawJson, jsonMessage);
+  }
+  return asPayloadObject(rawObject, objectMessage);
+}
+
+function parsePayloadJsonObject(value, message) {
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`${message}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return asPayloadObject(parsed, message);
 }
 
 function readPayloadRevision({ siteRoot, ref, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {

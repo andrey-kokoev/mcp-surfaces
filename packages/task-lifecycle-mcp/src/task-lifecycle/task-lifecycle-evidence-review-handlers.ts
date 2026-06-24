@@ -1,9 +1,17 @@
+import { randomUUID } from 'node:crypto';
+
 type TaskLifecyclePayload = Record<string, unknown>;
 
 const ACTIVE_REMEDIATION_TASK_STATUSES = new Set(['opened', 'claimed', 'in_review', 'deferred']);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function normalizeBlockedReportBlockers(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value.filter((item) => item !== null && item !== undefined);
+  const text = nonEmptyString(value);
+  return text ? [text] : [];
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -113,6 +121,7 @@ export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_prove_criteria",
   "task_lifecycle_disposition_closeout",
   "task_lifecycle_finish",
+  "task_lifecycle_report_blocked",
   "task_lifecycle_close",
   "task_lifecycle_defer",
   "task_lifecycle_un_defer",
@@ -166,6 +175,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     testResultArtifactGate,
     validateFollowUpLedger,
     ensureStaticRosterAgentInSql,
+    recordBlockedTaskReport,
   } = context;
 
   async function dispatchEvidenceReviewTool(canonicalName, args, dispatchContext = {}) {
@@ -523,6 +533,58 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       enforceSessionIdentity(agentId);
       const serviceResult = await transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus: 'deferred', resultStatus: 'deferred' });
       return jsonToolResult(serviceResult, serviceResult.status === 'error');
+    }
+
+    case 'task_lifecycle_report_blocked': {
+      const taskNumber = numberField(args, 'task_number');
+      const agentId = stringField(args, 'agent_id');
+      const reason = stringField(args, 'reason');
+      if (!taskNumber) throw new Error('task_number_required');
+      if (!agentId) throw new Error('agent_id_required');
+      if (!reason) throw new Error('reason_required');
+      enforceSessionIdentity(agentId);
+      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+      const blockers = normalizeBlockedReportBlockers(args.blockers);
+      const nextAction = stringField(args, 'next_action');
+      const defer = booleanField(args, 'defer') !== false;
+      const now = new Date().toISOString();
+      const activeAssignment = store.getActiveAssignment ? store.getActiveAssignment(lifecycle.task_id) : null;
+      const reportId = `blocked_${randomUUID()}`;
+      const report = {
+        report_id: reportId,
+        task_number: taskNumber,
+        task_id: lifecycle.task_id,
+        assignment_id: activeAssignment?.assignment_id ?? null,
+        agent_id: agentId,
+        reported_at: now,
+        summary: reason,
+        changed_files: [],
+        verification: [],
+        known_residuals: blockers,
+        ready_for_review: false,
+        report_status: 'blocked',
+        blocked: true,
+        next_action: nextAction,
+      };
+      recordBlockedTaskReport({ store, report });
+      let lifecycleTransition = null;
+      if (defer && lifecycle.status !== 'deferred') {
+        lifecycleTransition = await transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus: 'deferred', resultStatus: 'deferred' });
+      }
+      return jsonToolResult({
+        status: 'blocked_reported',
+        schema: 'narada.task.mcp.blocked_report.v0',
+        task_number: taskNumber,
+        task_id: lifecycle.task_id,
+        report_id: reportId,
+        report_status: 'blocked',
+        lifecycle_status: store.getLifecycleByNumber(taskNumber)?.status ?? lifecycle.status,
+        lifecycle_transition: lifecycleTransition,
+        blockers,
+        reason,
+        next_action: nextAction ?? 'Resolve blockers, then continue or finish with completion evidence.',
+      }, false);
     }
 
     case 'task_lifecycle_un_defer': {

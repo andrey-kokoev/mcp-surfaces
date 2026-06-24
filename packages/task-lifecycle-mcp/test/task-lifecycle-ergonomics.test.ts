@@ -62,6 +62,13 @@ function seedRoster() {
           first_seen_at: '2026-06-04T00:00:00Z',
           last_active_at: '2026-06-04T00:00:00Z',
         },
+        {
+          agent_id: 'mcp-surfaces.codex',
+          role: 'mcp-surfaces-engineer',
+          capabilities: ['implementation_work'],
+          first_seen_at: '2026-06-04T00:00:00Z',
+          last_active_at: '2026-06-04T00:00:00Z',
+        },
       ],
     }, null, 2),
   );
@@ -70,6 +77,7 @@ function seedRoster() {
 async function responsePayload(response: any, runtimeOptions: any, id: number) {
   void runtimeOptions;
   void id;
+  if (response.error) throw new Error(`json_rpc_error: ${response.error.message ?? JSON.stringify(response.error)}`);
   if (response.result.structuredContent) return response.result.structuredContent;
   const initialPayload = JSON.parse(response.result.content[0].text);
   if (!initialPayload.output_ref) return initialPayload;
@@ -89,6 +97,12 @@ try {
   writeTask(9203, chapterTaskId, 'opened');
   const reopenedTaskId = '20260604-9204-reopened-fresh-review';
   writeTask(9204, reopenedTaskId, 'claimed', 'reopened_at: 2026-06-04T02:00:00Z\nreopened_by: operator');
+  const blockedTaskId = '20260604-9205-blocked-claimed-work';
+  writeTask(9205, blockedTaskId, 'claimed');
+  const blockedPayloadTaskId = '20260604-9206-blocked-payload-ref-work';
+  writeTask(9206, blockedPayloadTaskId, 'claimed');
+  const genericEngineerTaskId = '20260604-9207-generic-engineer-parent-role';
+  writeTask(9207, genericEngineerTaskId, 'opened', 'target_role: engineer');
 
   const store = openTaskLifecycleStore(siteRoot);
   try {
@@ -103,9 +117,33 @@ try {
       last_done: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
+    store.upsertRosterEntry({
+      agent_id: 'mcp-surfaces.codex',
+      role: 'mcp-surfaces-engineer',
+      capabilities_json: JSON.stringify(['implementation_work']),
+      first_seen_at: '2026-06-04T00:00:00Z',
+      last_active_at: '2026-06-04T00:00:00Z',
+      status: 'active',
+      task_number: null,
+      last_done: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
     store.upsertLifecycle({
       task_id: chapterTaskId,
       task_number: 9203,
+      status: 'opened',
+      governed_by: null,
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertLifecycle({
+      task_id: genericEngineerTaskId,
+      task_number: 9207,
       status: 'opened',
       governed_by: null,
       closed_at: null,
@@ -175,6 +213,50 @@ try {
       release_reason: null,
       intent: 'primary',
     });
+    store.upsertLifecycle({
+      task_id: blockedTaskId,
+      task_number: 9205,
+      status: 'claimed',
+      governed_by: 'builder',
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T03:00:00Z',
+    });
+    store.insertAssignment({
+      assignment_id: 'assign-blocked-claimed-work',
+      task_id: blockedTaskId,
+      agent_id: 'smart-scheduling.builder',
+      claimed_at: '2026-06-04T03:05:00Z',
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
+    store.upsertLifecycle({
+      task_id: blockedPayloadTaskId,
+      task_number: 9206,
+      status: 'claimed',
+      governed_by: 'builder',
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T03:10:00Z',
+    });
+    store.insertAssignment({
+      assignment_id: 'assign-blocked-payload-ref-work',
+      task_id: blockedPayloadTaskId,
+      agent_id: 'smart-scheduling.builder',
+      claimed_at: '2026-06-04T03:11:00Z',
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
     const staleReport = {
       report_id: 'report-reopened-stale-pre-reopen',
       task_number: 9204,
@@ -219,6 +301,10 @@ try {
       INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
       VALUES (?, ?, ?, ?, ?)
     `).run(roleMismatchTaskId, 'qa', 'qa', null, '2026-06-04T00:00:00Z');
+    store.db.prepare(`
+      INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(genericEngineerTaskId, 'engineer', 'engineer', null, '2026-06-04T00:00:00Z');
   } finally {
     store.db.close();
   }
@@ -235,6 +321,14 @@ try {
     argv: ['--site-root', siteRoot],
     cwd: siteRoot,
     env: { ...process.env, NARADA_AGENT_ID: 'smart-scheduling.architect' },
+    stdout: { write: () => true },
+    stderr: { write: () => true },
+  };
+
+  const surfaceEngineerRuntime = {
+    argv: ['--site-root', siteRoot],
+    cwd: siteRoot,
+    env: { ...process.env, NARADA_AGENT_ID: 'mcp-surfaces.codex' },
     stdout: { write: () => true },
     stderr: { write: () => true },
   };
@@ -347,6 +441,49 @@ try {
   assert.equal(schemaPayload.status, 'ok');
   assert.deepEqual(schemaPayload.schemas.task_lifecycle_review.payload_ref_shape.findings[0].description, '<finding text>');
 
+  const createSchemaResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1014,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_payload_schema',
+      arguments: { tool: 'task_lifecycle_create' },
+    },
+  }, builderRuntime);
+  const createSchemaPayload = await responsePayload(createSchemaResponse, builderRuntime, 1015);
+  assert.equal(createSchemaPayload.status, 'ok');
+  assert.equal(createSchemaPayload.schemas.task_lifecycle_create.payload_ref_required, true);
+  assert.match(createSchemaPayload.schemas.task_lifecycle_create.payload_ref_shape.required_work, /string\[\]/);
+  assert.match(createSchemaPayload.schemas.task_lifecycle_create.normalized_fields.required_work, /joins with newline/);
+
+  const closeoutSchemaResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1016,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_payload_schema',
+      arguments: { tool: 'task_lifecycle_report_blocked' },
+    },
+  }, builderRuntime);
+  const blockedSchemaPayload = await responsePayload(closeoutSchemaResponse, builderRuntime, 1017);
+  assert.equal(blockedSchemaPayload.status, 'ok');
+  assert.deepEqual(blockedSchemaPayload.schemas.task_lifecycle_report_blocked.top_level_fields_remain_required, ['task_number', 'agent_id']);
+  assert.match(blockedSchemaPayload.schemas.task_lifecycle_report_blocked.inline_payload_limit.remediation, /payload_ref/);
+
+  const admitSchemaResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1012,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_payload_schema',
+      arguments: { tool: 'task_lifecycle_admit_evidence' },
+    },
+  }, builderRuntime);
+  const admitSchemaPayload = await responsePayload(admitSchemaResponse, builderRuntime, 1013);
+  assert.equal(admitSchemaPayload.status, 'ok');
+  assert.deepEqual(Object.keys(admitSchemaPayload.schemas.task_lifecycle_admit_evidence.payload_ref_shape), ['self_certification']);
+  assert.match(admitSchemaPayload.schemas.task_lifecycle_admit_evidence.note, /lifecycle store/);
+
   const toolsListResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 1011,
@@ -357,6 +494,154 @@ try {
   assert.equal(reviewTool.inputSchema.properties.findings.type, 'array');
   assert.equal(reviewTool.inputSchema.properties.findings.items.type, 'object');
   assert.match(reviewTool.inputSchema.properties.findings.description, /finding objects/);
+  const blockedReportTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_report_blocked');
+  assert.equal(blockedReportTool.inputSchema.required.includes('reason'), true);
+  assert.match(blockedReportTool.description, /without implying finish/);
+  assert.match(blockedReportTool.inputSchema.properties.next_action.description, /200 chars/);
+  assert.match(blockedReportTool.inputSchema.properties.payload_ref.description, /long reason/);
+
+  const blockedReportResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1014,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_report_blocked',
+      arguments: {
+        task_number: 9205,
+        agent_id: 'smart-scheduling.builder',
+        reason: 'Blocked on operator approval for external credential rotation.',
+        blockers: [{ kind: 'operator_decision_required', question: 'Approve credential rotation window.' }],
+        next_action: 'Operator selects the credential rotation window.',
+      },
+    },
+  }, builderRuntime);
+  const blockedReportPayload = await responsePayload(blockedReportResponse, builderRuntime, 1015);
+  assert.equal(blockedReportPayload.status, 'blocked_reported');
+  assert.equal(blockedReportPayload.report_status, 'blocked');
+  assert.equal(blockedReportPayload.lifecycle_status, 'deferred');
+  assert.equal(blockedReportPayload.blockers.length, 1);
+
+  const longBlockedPayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1018,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          reason: 'Blocked on an external approval.',
+          blockers: [{ kind: 'operator_decision_required', detail: 'A deliberately detailed blocker packet belongs in payload_ref.' }],
+          next_action: 'Operator reviews the proposed external approval window, confirms the exact acceptable time, records the decision in the task thread, and then the assigned agent resumes the deferred work with the decision as explicit authority.',
+        },
+      },
+    },
+  }, builderRuntime);
+  const longBlockedPayload = await responsePayload(longBlockedPayloadResponse, builderRuntime, 1019);
+  assert.equal(longBlockedPayload.status, 'created');
+  const longBlockedReportResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1020,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_report_blocked',
+      arguments: {
+        task_number: 9206,
+        agent_id: 'smart-scheduling.builder',
+        payload_ref: longBlockedPayload.ref,
+      },
+    },
+  }, builderRuntime);
+  const longBlockedReportPayload = await responsePayload(longBlockedReportResponse, builderRuntime, 1021);
+  assert.equal(longBlockedReportPayload.status, 'blocked_reported');
+  assert.match(longBlockedReportPayload.next_action, /records the decision/);
+
+  const blockedInspectResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1016,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect', arguments: { task_number: 9205 } },
+  }, builderRuntime);
+  const blockedInspectPayload = await responsePayload(blockedInspectResponse, builderRuntime, 1017);
+  assert.equal(blockedInspectPayload.lifecycle.status, 'deferred');
+  assert.equal(blockedInspectPayload.blocked_work_posture.state, 'blocked_reported');
+  assert.equal(blockedInspectPayload.blocked_work_posture.report_id, blockedReportPayload.report_id);
+  assert.equal(blockedInspectPayload.evidence_preflight.blocked_work_posture.state, 'blocked_reported');
+  assert.match(blockedInspectPayload.evidence_preflight.next_action, /Blocked report is recorded/);
+
+  const unDeferBlockedResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1018,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_un_defer',
+      arguments: {
+        task_number: 9205,
+        agent_id: 'smart-scheduling.builder',
+        reason: 'Operator supplied the missing decision; continue with completion evidence.',
+      },
+    },
+  }, builderRuntime);
+  const unDeferBlockedPayload = await responsePayload(unDeferBlockedResponse, builderRuntime, 1019);
+  assert.equal(unDeferBlockedPayload.status, 'un_deferred');
+
+  const freshCompletionAfterBlockedResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1020,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9205,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Fresh completion evidence after the stale blocker was resolved.',
+        changed_files: ['src/resolved-blocker.ts'],
+      },
+    },
+  }, builderRuntime);
+  const freshCompletionAfterBlockedPayload = await responsePayload(freshCompletionAfterBlockedResponse, builderRuntime, 1021);
+  assert.equal(freshCompletionAfterBlockedPayload.status, 'success');
+
+  const supersedingReport = {
+    report_id: 'report-blocked-superseding-completion',
+    task_number: 9205,
+    task_id: blockedTaskId,
+    agent_id: 'smart-scheduling.builder',
+    assignment_id: 'assign-blocked-claimed-work',
+    directive_id: null,
+    reported_at: '2026-06-04T04:00:00Z',
+    summary: 'Fresh completion evidence after the stale blocker was resolved.',
+    changed_files: ['src/resolved-blocker.ts'],
+    verification: [{ command: 'focused regression', result: 'passed' }],
+    known_residuals: [],
+    ready_for_review: true,
+    report_status: 'accepted',
+  };
+  const supersessionStore = openTaskLifecycleStore(siteRoot);
+  try {
+    supersessionStore.upsertReportRecord({
+      report_id: supersedingReport.report_id,
+      task_id: blockedTaskId,
+      assignment_id: supersedingReport.assignment_id,
+      agent_id: supersedingReport.agent_id,
+      reported_at: supersedingReport.reported_at,
+      report_json: JSON.stringify(supersedingReport),
+    });
+  } finally {
+    supersessionStore.db.close();
+  }
+
+  const supersededBlockedInspectResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1022,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect', arguments: { task_number: 9205 } },
+  }, builderRuntime);
+  const supersededBlockedInspectPayload = await responsePayload(supersededBlockedInspectResponse, builderRuntime, 1023);
+  assert.equal(supersededBlockedInspectPayload.evidence_preflight.blocked_work_posture.state, 'stale_blocked_report_superseded');
+  assert.equal(supersededBlockedInspectPayload.evidence_preflight.blocked_work_posture.report_id, blockedReportPayload.report_id);
+  assert.equal(supersededBlockedInspectPayload.evidence_preflight.blocked_work_posture.superseded_by.evidence.changed_files_count, 1);
+  assert.equal(supersededBlockedInspectPayload.evidence_preflight.requirements.find((item: any) => item.id === 'changed_files').observed.blocked_report_present, false);
+  assert.doesNotMatch(supersededBlockedInspectPayload.evidence_preflight.next_action, /Blocked report is recorded/);
 
   const invalidFindingsResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -391,6 +676,56 @@ try {
   assert.equal(roleMismatchClaimPayload.status, 'role_mismatch');
   assert.equal(roleMismatchClaimPayload.remediation.roster_admit.tool, 'task_lifecycle_roster_admit');
   assert.equal(roleMismatchClaimPayload.remediation.reroute.tool, 'task_lifecycle_set_routing');
+  assert.equal(roleMismatchClaimPayload.remediation.claim_with_authority.required_authority_basis.kind, 'operator_direct_instruction');
+
+  const qaTargetWithAuthorityResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1051,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_claim',
+      arguments: {
+        task_number: 9202,
+        agent_id: 'mcp-surfaces.codex',
+        authority_basis: { kind: 'operator_direct_instruction', summary: 'Operator asked this repo-specific engineer to try claiming QA work.' },
+      },
+    },
+  }, surfaceEngineerRuntime);
+  const qaTargetWithAuthorityPayload = await responsePayload(qaTargetWithAuthorityResponse, surfaceEngineerRuntime, 1052);
+  assert.equal(qaTargetWithAuthorityPayload.status, 'role_mismatch');
+
+  const genericEngineerWithoutAuthorityResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1053,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_claim',
+      arguments: { task_number: 9207, agent_id: 'mcp-surfaces.codex' },
+    },
+  }, surfaceEngineerRuntime);
+  const genericEngineerWithoutAuthorityPayload = await responsePayload(genericEngineerWithoutAuthorityResponse, surfaceEngineerRuntime, 1054);
+  assert.equal(genericEngineerWithoutAuthorityPayload.status, 'role_mismatch');
+  assert.equal(genericEngineerWithoutAuthorityPayload.remediation.claim_with_authority.example_args.agent_id, 'mcp-surfaces.codex');
+
+  const genericEngineerWithAuthorityResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1055,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_claim',
+      arguments: {
+        task_number: 9207,
+        agent_id: 'mcp-surfaces.codex',
+        authority_basis: { kind: 'operator_direct_instruction', summary: 'Operator instructed this repo-specific engineer to do generic engineer work.' },
+      },
+    },
+  }, surfaceEngineerRuntime);
+  const genericEngineerWithAuthorityPayload = await responsePayload(genericEngineerWithAuthorityResponse, surfaceEngineerRuntime, 1056);
+  assert.equal(genericEngineerWithAuthorityPayload.status, 'claimed');
+  assert.equal(genericEngineerWithAuthorityPayload.role_claim_warning.kind, 'generic_engineer_role_claim');
+  assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.kind, 'operator_direct_instruction');
+  assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.target_role, 'engineer');
+  assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.agent_role, 'mcp-surfaces-engineer');
 
   // 7. run_tests reports configured Test MCP paths instead of surfacing MODULE_NOT_FOUND.
   const runTestsResponse = await handleTaskLifecycleMcpRequest({
@@ -516,6 +851,26 @@ try {
   }, builderRuntime);
   const chapterShowPayload = await responsePayload(chapterShowResponse, builderRuntime, 118);
   assert.deepEqual(chapterShowPayload.memberships.map((item: Record<string, unknown>) => item.task_number), [9201, 9203, 9202]);
+
+  const inspectRangeResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 119,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect_range', arguments: { start_task_number: 9201, end_task_number: 9204 } },
+  }, builderRuntime);
+  const inspectRangePayload = await responsePayload(inspectRangeResponse, builderRuntime, 120);
+  assert.equal(inspectRangePayload.schema, 'narada.task.mcp.inspect_range.v0');
+  assert.equal(inspectRangePayload.read_only, true);
+  assert.deepEqual(inspectRangePayload.tasks.map((task: Record<string, unknown>) => task.task_number), [9201, 9202, 9203, 9204]);
+  assert.equal(inspectRangePayload.tasks.find((task: Record<string, unknown>) => task.task_number === 9201).closure_evidence_posture.state, 'closed_current_authority_consistent');
+  const inspectChapterResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 121,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect_range', arguments: { chapter_id: 'launch-plan' } },
+  }, builderRuntime);
+  const inspectChapterPayload = await responsePayload(inspectChapterResponse, builderRuntime, 122);
+  assert.deepEqual(inspectChapterPayload.tasks.map((task: Record<string, unknown>) => task.task_number), [9201, 9203, 9202]);
 } finally {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
@@ -726,6 +1081,22 @@ try {
     },
   }, scopedRuntime);
   const payloadCreatePayload = await responsePayload(payloadCreateResponse, scopedRuntime, 20);
+  assert.equal(payloadCreatePayload.status, 'created');
+
+  const emptyPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 201,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {},
+        allow_empty: true,
+      },
+    },
+  }, scopedRuntime);
+  assert.equal(emptyPayloadCreateResponse.error?.message, 'task_lifecycle_payload_create_empty_payload_rejected: payload object must include at least one field');
+
   const payloadRefFinishResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 21,
@@ -741,6 +1112,74 @@ try {
   }, scopedRuntime);
   const payloadRefFinishPayload = await responsePayload(payloadRefFinishResponse, scopedRuntime, 22);
   assert.equal(payloadRefFinishPayload.status, 'success');
+
+  const createPayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 210,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          title: 'Payload-ref create normalization',
+          goal: 'Exercise list-like create payload fields.',
+          required_work: ['Inspect the payload.', 'Create the task.'],
+          non_goals: ['Do not loosen routing validation.'],
+          acceptance_criteria: ['Task is created with normalized markdown fields.'],
+          target_role: 'builder',
+        },
+      },
+    },
+  }, scopedRuntime);
+  const createPayload = await responsePayload(createPayloadResponse, scopedRuntime, 211);
+  assert.equal(createPayload.status, 'created');
+  const createResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 212,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_create', arguments: { payload_ref: createPayload.ref } },
+  }, scopedRuntime);
+  const createdTask = await responsePayload(createResponse, scopedRuntime, 213);
+  assert.equal(createdTask.status, 'created');
+  const createdShowResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 214,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_show', arguments: { task_number: createdTask.task_number } },
+  }, scopedRuntime);
+  const createdShow = await responsePayload(createdShowResponse, scopedRuntime, 215);
+  assert.equal(createdShow.spec.required_work_markdown, 'Inspect the payload.\nCreate the task.');
+  assert.equal(createdShow.spec.non_goals_markdown, 'Do not loosen routing validation.');
+
+  const closeoutPayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 216,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          summary: 'This closeout summary is intentionally long enough to exceed the inline ergonomics threshold while remaining semantically ordinary task execution prose, so it should travel through payload_ref instead of being rejected by inline payload governance.',
+          no_files_changed: true,
+          dry_run: true,
+        },
+      },
+    },
+  }, scopedRuntime);
+  const closeoutPayload = await responsePayload(closeoutPayloadResponse, scopedRuntime, 217);
+  assert.equal(closeoutPayload.status, 'created');
+  const closeoutResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 218,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_closeout',
+      arguments: { task_number: 9303, agent_id: 'scoped.builder', payload_ref: closeoutPayload.ref },
+    },
+  }, scopedRuntime);
+  const closeoutPayloadResult = await responsePayload(closeoutResponse, scopedRuntime, 219);
+  assert.equal(closeoutPayloadResult.status, 'dry_run');
+  assert.equal(closeoutPayloadResult.task_number, 9303);
 
   const observationResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
