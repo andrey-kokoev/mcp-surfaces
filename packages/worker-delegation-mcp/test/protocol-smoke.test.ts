@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
-const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
+const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { bin?: Record<string, string> };
+const serverBin = packageJson.bin?.['worker-delegation-mcp'];
+assert.equal(serverBin, './dist/src/main.js');
+const serverPath = join(packageRoot, serverBin);
 const child = spawn(process.execPath, [serverPath, '--allowed-root', root, '--run-root', join(root, 'runs')], {
   stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,

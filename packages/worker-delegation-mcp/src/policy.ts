@@ -2,6 +2,17 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 
+const IMPLEMENTATION_IDENTITY = Object.freeze({
+  surface_id: 'worker-delegation-mcp',
+  package_name: '@narada2/worker-delegation-mcp',
+  implementation_version: '2026-06-24.runtime-evidence-v1',
+  source_module: 'packages/worker-delegation-mcp/src',
+  stale_server_risk: {
+    status: 'possible_after_source_or_materialization_change',
+    remediation: 'Restart or rematerialize the worker-delegation MCP server when live argv/artifacts disagree with current source or tests.',
+  },
+});
+
 export const NARADA_SITE_ROOT_MARKERS = ['.narada/', '.ai/mcp/'] as const;
 export const NARADA_AGENT_RUNTIME_SITE_REMEDIATION = 'Run narada-agent-runtime-server workers from inside a Narada Site root containing .narada/ or .ai/mcp/, add one of those markers, or pass constraints.site_root pointing at that Site root.';
 
@@ -66,12 +77,15 @@ const ENV_KEYS = [
   'APPDATA',
   'LOCALAPPDATA',
   'CODEX_HOME',
+  'CODEX_MODEL',
   'OPENAI_API_KEY',
   'DEEPSEEK_API_KEY',
   'DEEPSEEK_API_BASE_URL',
   'KIMI_API_KEY',
   'KIMI_CODE_API_KEY',
   'MOONSHOT_API_KEY',
+  'NARADA_AI_MODEL',
+  'NARADA_AI_THINKING',
   'NARADA_WORKER_MCP_CONFIG',
 ];
 const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
@@ -157,6 +171,10 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   };
 }
 
+export function workerImplementationIdentity(): Record<string, unknown> {
+  return { ...IMPLEMENTATION_IDENTITY, stale_server_risk: { ...IMPLEMENTATION_IDENTITY.stale_server_risk } };
+}
+
 function naradaSiteRootMarker(path: string): string | null {
   if (isDirectory(join(path, '.narada'))) return '.narada/';
   if (isDirectory(join(path, '.ai', 'mcp'))) return '.ai/mcp/';
@@ -218,6 +236,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
   return {
     schema: 'narada.worker.policy.v1',
     status: 'ok',
+    implementation_identity: workerImplementationIdentity(),
     default_runtime: policy.defaultRuntime,
     default_authority: policy.defaultAuthority,
     default_cognition: policy.defaultCognition,
@@ -239,7 +258,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       required_markers: [...NARADA_SITE_ROOT_MARKERS],
       site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
       workspace_root: 'worker cwd inside the resolved Site root',
-      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
+      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL'],
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
       remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
@@ -264,6 +283,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       },
       'narada-agent-runtime-server': {
         id: 'narada-agent-runtime-server',
+        implementation_identity: workerImplementationIdentity(),
         command: policy.runtimes.naradaAgentRuntimeServer.command,
         command_args: policy.runtimes.naradaAgentRuntimeServer.commandArgs,
         default_sandbox: policy.runtimes.naradaAgentRuntimeServer.defaultSandbox,
@@ -275,7 +295,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         site_bound: true,
         site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
         site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
-        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
+        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL'],
         provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
         allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
         site_root_required_remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
@@ -374,7 +394,7 @@ export function resolveSandbox(value: unknown, policy: WorkerPolicy, runtime?: W
 
 export function resolveConfig(input: Record<string, unknown>, policy: WorkerPolicy): { config: Record<string, PrimitiveConfigValue>; model: string | null; reasoning_effort: string | null } {
   const config: Record<string, PrimitiveConfigValue> = {};
-  const userConfig = asRecord(input.config);
+  const userConfig = input.config === undefined || input.config === null ? {} : strictRecord(input.config, 'worker_invalid_config_input', 'config must be an object');
   for (const [key, value] of Object.entries(userConfig)) addConfigValue(config, key, value, policy);
   if (input.model !== undefined && input.model !== null && String(input.model).trim()) addConfigValue(config, 'model', String(input.model).trim(), policy);
   if (input.reasoning_effort !== undefined && input.reasoning_effort !== null && String(input.reasoning_effort).trim()) addConfigValue(config, 'model_reasoning_effort', String(input.reasoning_effort).trim(), policy);
@@ -406,17 +426,17 @@ function addConfigValue(target: Record<string, PrimitiveConfigValue>, key: strin
 function parseConfigFile(path: string): Record<string, unknown> {
   const root: Record<string, unknown> = {};
   let current: Record<string, unknown> = root;
-  for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
+  for (const [index, raw] of readFileSync(path, 'utf8').split(/\r?\n/).entries()) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
     const section = line.match(/^\[([^\]]+)\]$/);
     if (section) {
       current = root;
-      for (const part of section[1].split('.')) current = ensureRecord(current, part);
+      for (const part of section[1].split('.')) current = ensureRecord(current, part, index + 1);
       continue;
     }
     const kv = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
-    if (!kv) throw diagnosticError('worker_invalid_config_file', 'worker_invalid_config_file', { line });
+    if (!kv) throw diagnosticError('worker_invalid_config_file', 'worker_invalid_config_file', { line, line_number: index + 1 });
     current[kv[1]] = parseTomlValue(kv[2].trim());
   }
   return root;
@@ -439,7 +459,7 @@ function parseTomlValue(value: string): unknown {
 export function parseTrustedProjectRootsFromTrustConfig(configPath: string): string[] {
   const roots = [];
   let currentProject: string | null = null;
-  for (const rawLine of readFileSync(configPath, 'utf8').split(/\r?\n/)) {
+  for (const [index, rawLine] of readFileSync(configPath, 'utf8').split(/\r?\n/).entries()) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
     const header = line.match(/^\[projects\.'([^']+)'\]$/i) ?? line.match(/^\[projects\.\"([^\"]+)\"\]$/i);
@@ -448,12 +468,14 @@ export function parseTrustedProjectRootsFromTrustConfig(configPath: string): str
       continue;
     }
     if (line.startsWith('[')) {
+      if (!/^\[[A-Za-z0-9_.\-]+\]$/.test(line)) throw diagnosticError('worker_invalid_trust_config', 'worker_invalid_trust_config_section', { line, line_number: index + 1 });
       currentProject = null;
       continue;
     }
     if (!currentProject) continue;
     const trust = line.match(/^trust_level\s*=\s*\"([^\"]+)\"$/i);
     if (trust && trust[1].toLowerCase() === 'trusted') roots.push(currentProject);
+    else throw diagnosticError('worker_invalid_trust_config', 'worker_invalid_trust_project_entry', { line, line_number: index + 1, project: currentProject, expected: 'trust_level = "trusted" or "untrusted"' });
   }
   return normalizeAllowedRoots(roots);
 }
@@ -574,6 +596,11 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function strictRecord(value: unknown, code: string, message: string): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  throw diagnosticError(code, message, { value_type: Array.isArray(value) ? 'array' : typeof value });
+}
+
 function validateAuthority(value: unknown): WorkerAuthority {
   const authority = stringValue(value);
   if (authority !== 'read' && authority !== 'write' && authority !== 'command') throw diagnosticError('worker_invalid_authority', 'worker_invalid_authority', { authority });
@@ -586,9 +613,11 @@ function validateCognition(value: unknown): WorkerCognition {
   return cognition;
 }
 
-function ensureRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+function ensureRecord(parent: Record<string, unknown>, key: string, lineNumber: number): Record<string, unknown> {
+  if (!key.trim()) throw diagnosticError('worker_invalid_config_file', 'worker_invalid_config_section', { line_number: lineNumber });
   const existing = parent[key];
   if (existing && typeof existing === 'object' && !Array.isArray(existing)) return existing as Record<string, unknown>;
+  if (existing !== undefined) throw diagnosticError('worker_invalid_config_file', 'worker_invalid_config_section_conflict', { key, line_number: lineNumber });
   const created: Record<string, unknown> = {};
   parent[key] = created;
   return created;

@@ -14,9 +14,10 @@ export function supportsResume(): boolean {
 }
 
 export function buildAgentRuntimeServerArgv(options: {
+  authority: ResolvedWorkerConfig['authority'];
   workerSessionId?: string;
-} = {}): string[] {
-  const argv = ['--raw-jsonl'];
+}): string[] {
+  const argv = ['--raw-jsonl', '--authority', options.authority];
   if (options.workerSessionId) argv.push('--session', options.workerSessionId);
   return argv;
 }

@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { diagnosticError } from './errors.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput, type WorkerOutputParseResult } from './codex-adapter.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime } from './policy.js';
+import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationIdentity } from './policy.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
 import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
@@ -32,6 +32,101 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_runs_synthesize') return workerRunsSynthesize(args, state);
   if (name === 'worker_dashboard_describe') return workerDashboardDescribe(args, state);
   throw diagnosticError('worker_unknown_tool', `worker_unknown_tool:${name}`, { tool_name: name });
+}
+
+function optionalBoolean(value: unknown, field: string): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'boolean') return value;
+  throw diagnosticError('worker_invalid_tool_input', 'worker_boolean_required', { field, value_type: Array.isArray(value) ? 'array' : typeof value });
+}
+
+function partialFailurePosture(run: Record<string, unknown>): Record<string, unknown> {
+  const changes = Array.isArray(run.changes) ? run.changes : [];
+  const deliverables = Array.isArray(run.deliverables) ? run.deliverables : [];
+  const progress = asRecord(run.progress);
+  const status = String(run.status ?? 'unknown');
+  const errorClassification = typeof run.error_classification === 'string' ? run.error_classification : classifyRuntimeError(String(run.error ?? ''));
+  const productive = changes.length > 0 || deliverables.length > 0 || Number(progress.event_count ?? 0) > 0;
+  return {
+    status: status === 'failed' || status === 'completed_with_errors' || status === 'cancelled' ? (productive ? 'productive_partial_failure' : 'unproductive_failure') : 'not_failed',
+    error_classification: errorClassification,
+    changed_file_count: changes.length,
+    deliverable_count: deliverables.length,
+    progress_event_count: typeof progress.event_count === 'number' ? progress.event_count : 0,
+    provider_quota_limited: errorClassification === 'provider_rate_limited',
+  };
+}
+
+function extractSessionEventEvidence(eventsPath: string): Record<string, unknown> {
+  const empty = {
+    readable: false,
+    event_count: 0,
+    prompt_admission: 'unknown',
+    assistant_message_seen: false,
+    terminal_events: [] as string[],
+    mutation_admission: { carrier_mutation_admitted: null, delegated_mutation_admitted: null },
+    safe_events: [] as Record<string, unknown>[],
+  };
+  if (!existsSync(eventsPath)) return { ...empty, reason: 'events_path_missing' };
+  try {
+    const text = readFileSync(eventsPath, 'utf8').trim();
+    if (!text) return { ...empty, readable: true, reason: 'events_empty' };
+    const safeEvents: Record<string, unknown>[] = [];
+    const terminalEvents = new Set<string>();
+    let eventCount = 0;
+    let promptSent = false;
+    let turnStarted = false;
+    let assistantSeen = false;
+    let carrierMutationAdmitted: boolean | null = null;
+    let delegatedMutationAdmitted: boolean | null = null;
+    for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(-200)) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(line) as unknown; } catch { continue; }
+      const record = asRecord(parsed);
+      eventCount += 1;
+      const type = eventType(record) ?? (typeof record.method === 'string' && record.method.trim() ? record.method.trim() : 'unknown');
+      if (record.method === 'conversation.send') promptSent = true;
+      if (type === 'turn_started') turnStarted = true;
+      if (type === 'assistant_message') assistantSeen = true;
+      if (type === 'turn_complete' || type === 'turn_failed' || type === 'session_closed') terminalEvents.add(type);
+      const admission = extractMutationAdmission(record);
+      if (typeof admission.carrier_mutation_admitted === 'boolean') carrierMutationAdmitted = admission.carrier_mutation_admitted;
+      if (typeof admission.delegated_mutation_admitted === 'boolean') delegatedMutationAdmitted = admission.delegated_mutation_admitted;
+      safeEvents.push({
+        type,
+        request_id: typeof record.request_id === 'string' ? record.request_id : null,
+        turn_id: typeof record.turn_id === 'string' ? record.turn_id : null,
+        terminal_state: typeof record.terminal_state === 'string' ? record.terminal_state : null,
+        reason: previewString(record.reason ?? record.error ?? record.message, 160),
+      });
+    }
+    return {
+      readable: true,
+      event_count: eventCount,
+      prompt_admission: promptSent ? 'conversation_send_frame_seen' : turnStarted ? 'turn_started_without_visible_send_frame' : 'no_prompt_or_turn_event_seen',
+      assistant_message_seen: assistantSeen,
+      terminal_events: [...terminalEvents],
+      mutation_admission: { carrier_mutation_admitted: carrierMutationAdmitted, delegated_mutation_admitted: delegatedMutationAdmitted },
+      safe_events: safeEvents.slice(-12),
+    };
+  } catch (error) {
+    return { ...empty, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function extractMutationAdmission(value: unknown): { carrier_mutation_admitted?: boolean; delegated_mutation_admitted?: boolean } {
+  const record = asRecord(value);
+  const result: { carrier_mutation_admitted?: boolean; delegated_mutation_admitted?: boolean } = {};
+  if (typeof record.carrier_mutation_admitted === 'boolean') result.carrier_mutation_admitted = record.carrier_mutation_admitted;
+  if (typeof record.delegated_mutation_admitted === 'boolean') result.delegated_mutation_admitted = record.delegated_mutation_admitted;
+  for (const item of Object.values(record)) {
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const nested = extractMutationAdmission(item);
+      if (result.carrier_mutation_admitted === undefined && nested.carrier_mutation_admitted !== undefined) result.carrier_mutation_admitted = nested.carrier_mutation_admitted;
+      if (result.delegated_mutation_admitted === undefined && nested.delegated_mutation_admitted !== undefined) result.delegated_mutation_admitted = nested.delegated_mutation_admitted;
+    }
+  }
+  return result;
 }
 
 function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
@@ -64,7 +159,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
-  const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
+  const skipGitRepoCheck = optionalBoolean(overrides.skip_git_repo_check, 'skip_git_repo_check');
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;
   const ephemeral = !resumable;
   const dryRunPaths = {
@@ -85,7 +180,8 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
     const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
-    const argv = buildAgentRuntimeServerArgv({ workerSessionId: resumeSessionId ?? undefined });
+    projectNaradaAgentRuntimeModelEnvironment(environment, resolvedConfigInput, providerResolution.provider);
+    const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId: resumeSessionId ?? undefined });
     resolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,
@@ -111,6 +207,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       resumable,
       ephemeral,
       json_events: agentRuntime.jsonEvents,
+      implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
@@ -145,6 +242,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       resumable,
       ephemeral,
       json_events: codexRuntime.jsonEvents,
+      implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
@@ -167,7 +265,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     requested_mode: requestedMode,
     resume_worker_session_id: resumeSessionId,
     resolved_worker_config: resolvedWorkerConfig,
-    invocation: { command: invocation.command, argv: invocation.argv, cwd: invocation.cwd, environment_keys: resolvedWorkerConfig.environment_keys },
+    invocation: invocationArtifact(invocation, resolvedWorkerConfig),
     preflight,
     requested_mcp_tools: request.constraints.required_mcp_tools ?? [],
     mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? []),
@@ -176,6 +274,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       ? { available: true, command: runtimeAvailability.command ?? resolvedWorkerConfig.command }
       : { available: false, reason: runtimeAvailability.reason ?? null, remediation: runtimeAvailability.remediation ?? null, command: runtimeAvailability.command ?? null },
     config_resolution: configResolution,
+    implementation_identity: workerImplementationIdentity(),
     warnings,
   };
 }
@@ -190,6 +289,20 @@ function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: str
     required_markers: [...NARADA_SITE_ROOT_MARKERS],
     environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
     remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
+  };
+}
+
+function invocationArtifact(invocation: Invocation, resolvedWorkerConfig: ResolvedWorkerConfig): Record<string, unknown> {
+  return {
+    command: invocation.command,
+    argv: invocation.argv,
+    cwd: invocation.cwd,
+    authority: resolvedWorkerConfig.authority,
+    authority_signal: resolvedWorkerConfig.runtime === 'narada-agent-runtime-server'
+      ? { kind: 'argv', name: '--authority', value: resolvedWorkerConfig.authority }
+      : null,
+    implementation_identity: resolvedWorkerConfig.implementation_identity ?? workerImplementationIdentity(),
+    environment_keys: resolvedWorkerConfig.environment_keys,
   };
 }
 
@@ -630,7 +743,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 
   const runRecord = createRunRecord(state.policy);
   writeWorkerOutputSchema(runRecord.schemaPath);
-  const skipGitRepoCheck = Boolean(overrides.skip_git_repo_check);
+  const skipGitRepoCheck = optionalBoolean(overrides.skip_git_repo_check, 'skip_git_repo_check');
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
@@ -647,7 +760,8 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
     const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
-    const argv = buildAgentRuntimeServerArgv({ workerSessionId });
+    projectNaradaAgentRuntimeModelEnvironment(environment, resolvedConfigInput, providerResolution.provider);
+    const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,
@@ -673,6 +787,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       resumable,
       ephemeral,
       json_events: agentRuntime.jsonEvents,
+      implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
@@ -708,6 +823,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       resumable,
       ephemeral,
       json_events: codexRuntime.jsonEvents,
+      implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
@@ -734,7 +850,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   writeJson(runRecord.executorRequestPath, executorRequest);
   writeJson(runRecord.resolvedConfigPath, resolvedWorkerConfig);
   writeText(runRecord.promptPath, prompt);
-  writeJson(runRecord.invocationPath, { command: invocation.command, argv: invocation.argv, cwd: invocation.cwd, environment_keys: resolvedWorkerConfig.environment_keys });
+  writeJson(runRecord.invocationPath, invocationArtifact(invocation, resolvedWorkerConfig));
   writeText(runRecord.eventsPath, '');
   writeText(runRecord.diagnosticPath, '');
 
@@ -824,7 +940,6 @@ async function completeWorkerRun(options: {
     maxRunMs: resolvedWorkerConfig.max_run_ms,
     abortSignal: options.abortSignal,
   });
-  if (!existsSync(runRecord.lastMessagePath)) writeJson(runRecord.lastMessagePath, { absent: true, reason: 'worker_runtime_did_not_produce_last_message' });
   const parsed = parseLastMessage(runRecord.lastMessagePath);
   const outcome = resultStatus(codexResult, parsed);
   const output = parsed.ok ? parsed.data : null;
@@ -849,7 +964,7 @@ async function completeWorkerRun(options: {
     error: outcome.error,
     runtimeWarnings: outcome.warnings,
     output,
-    workerOutputError: parsed.ok === false ? { reason: parsed.reason, message: parsed.message } : undefined,
+    workerOutputError: parsed.ok === false ? { reason: parsed.reason, message: parsed.message, state: workerOutputState(parsed) } : undefined,
     runtimeDiagnostics,
     metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: outcome.status, output, error: outcome.error }),
   });
@@ -915,6 +1030,7 @@ function buildRuntimeDiagnostics(options: {
   const diagnosticTail = readDiagnosticTail(options.diagnosticPath);
   const stdoutTail = readTextTail(options.eventsPath, 1200);
   const resultExtraction = runtimeResultExtraction(options.parsed);
+  const sessionEventEvidence = extractSessionEventEvidence(options.eventsPath);
   return {
     schema: 'narada.worker.runtime_diagnostics.v1',
     phase,
@@ -925,6 +1041,7 @@ function buildRuntimeDiagnostics(options: {
     error: options.outcomeError,
     runtime_error: options.codexResult.runtime_error ?? null,
     event_error: options.codexResult.event_error ?? null,
+    session_event_evidence: sessionEventEvidence,
     result_extraction: resultExtraction,
     diagnostic_tail: diagnosticTail,
     stdout_tail: stdoutTail,
@@ -939,9 +1056,8 @@ function buildRuntimeDiagnostics(options: {
 }
 
 function runtimeResultExtraction(parsed: WorkerOutputParseResult): Record<string, unknown> {
-  if (parsed.ok) return { status: 'ok' };
-  const failed = parsed as Extract<WorkerOutputParseResult, { ok: false }>;
-  return { status: 'failed', reason: failed.reason, message: failed.message };
+  if (parsed.ok === true) return { status: 'ok' };
+  return { status: 'failed', reason: parsed.reason, message: parsed.message };
 }
 
 function runtimeFailurePhase(
@@ -950,8 +1066,9 @@ function runtimeFailurePhase(
   outcomeError: string | null,
 ): string {
   const error = String(outcomeError ?? result.error ?? result.event_error ?? result.runtime_error ?? '').toLowerCase();
+  if (parsed.ok === false && parsed.reason === 'missing_file' && !result.error && !result.event_error && !result.runtime_error) return 'pre_first_assistant_failure';
   if (error.includes('without assistant_message') || error.includes('did_not_produce_last_message')) return 'pre_first_assistant_failure';
-  if (!parsed.ok && !result.error && !result.event_error && !result.runtime_error) return 'result_extraction_failure';
+  if (parsed.ok === false && !result.error && !result.event_error && !result.runtime_error) return 'result_extraction_failure';
   if (result.exit_code === null && result.error) return 'startup_failure';
   if (result.event_error) return 'event_stream_failure';
   if (result.runtime_error) return 'runtime_reported_failure';
@@ -979,7 +1096,7 @@ function buildWorkerRunPayload(options: {
   error: string | null;
   runtimeWarnings?: string[];
   output?: WorkerOutput | null;
-  workerOutputError?: { reason: string; message: string };
+  workerOutputError?: { reason: string; message: string; state: 'absent' | 'invalid_json' | 'invalid_shape' };
   runtimeDiagnostics?: Record<string, unknown>;
   metadata: WorkerRunMetadata;
 }): Record<string, unknown> {
@@ -1015,16 +1132,17 @@ function buildWorkerRunPayload(options: {
     warning_count: options.runtimeWarnings?.length ?? 0,
     preflight: options.metadata.preflight,
     final_checklist: options.metadata.final_checklist,
-    summary: options.output?.summary ?? '',
-    deliverables: options.output?.deliverables ?? [],
-    open_questions: options.output?.open_questions ?? [],
-    next_actions: options.output?.next_actions ?? [],
-    changes: options.output?.changes ?? [],
-    verification_results: options.output?.verification ?? [],
+    summary: options.output ? options.output.summary : null,
+    deliverables: options.output ? options.output.deliverables : null,
+    open_questions: options.output ? options.output.open_questions : null,
+    next_actions: options.output ? options.output.next_actions : null,
+    changes: options.output ? options.output.changes : null,
+    verification_results: options.output ? options.output.verification : null,
     verification_budget_respected: options.output?.verification_budget_respected ?? null,
     broad_unrelated_failures: options.output?.broad_unrelated_failures ?? [],
     exit_interview: options.output?.exit_interview ?? null,
     progress: readRunProgress(options.runRecord.eventsPath),
+    session_event_evidence: extractSessionEventEvidence(options.runRecord.eventsPath),
     artifacts: runArtifacts(options.runRecord),
     timing: {
       started_at: options.startedAt.toISOString(),
@@ -1035,8 +1153,16 @@ function buildWorkerRunPayload(options: {
     error_classification: options.error ? classifyRuntimeError(options.error) : null,
     ...(options.runtimeDiagnostics ? { runtime_diagnostics: options.runtimeDiagnostics } : {}),
     ...(typeof options.runtimeDiagnostics?.diagnostic_tail === 'string' ? { diagnostic_tail: options.runtimeDiagnostics.diagnostic_tail } : {}),
+    worker_output_state: options.status === 'running' ? 'pending' : options.output ? 'available' : options.workerOutputError?.state ?? 'absent',
+    worker_authored_output_present: Boolean(options.output),
     ...(options.workerOutputError ? { worker_output_error: options.workerOutputError } : {}),
   };
+}
+
+function workerOutputState(parsed: WorkerOutputParseResult): 'absent' | 'invalid_json' | 'invalid_shape' {
+  if (parsed.ok === true) return 'invalid_shape';
+  if (parsed.reason === 'missing_file') return 'absent';
+  return parsed.reason;
 }
 
 function runArtifacts(runRecord: RunRecordPaths) {
@@ -1415,6 +1541,10 @@ function synthesizeRuns(runs: Record<string, unknown>[]): Record<string, unknown
         risks: [...stringArrayFromUnknown(run.open_questions), ...stringArrayFromUnknown(run.runtime_warnings)],
         verification: Array.isArray(run.verification_results) ? run.verification_results : [],
         changed_files: Array.isArray(run.changes) ? run.changes.map((change) => asRecord(change).path).filter(Boolean) : [],
+        partial_failure: partialFailurePosture(run),
+        progress: run.progress ?? null,
+        budget_status: run.budget_status ?? workerBudgetStatus(run),
+        session_event_evidence: asRecord(run.runtime_diagnostics).session_event_evidence ?? null,
         warnings: stringArrayFromUnknown(run.runtime_warnings),
         ergonomics_feedback: typeof exitInterview.ergonomics_feedback === 'string' ? exitInterview.ergonomics_feedback : null,
         error_preview: compactRunError(run),
@@ -1746,6 +1876,18 @@ function applyCognitionDefaults(request: WorkerRunToolInput, cognition: Resolved
   if (Object.keys(overrides).length > 0) request.constraints.overrides = overrides;
 }
 
+function projectNaradaAgentRuntimeModelEnvironment(
+  environment: Record<string, string>,
+  resolvedConfigInput: { model: string | null; reasoning_effort: string | null },
+  provider: string | null,
+): void {
+  if (resolvedConfigInput.model) {
+    environment.NARADA_AI_MODEL = resolvedConfigInput.model;
+    if (provider === 'codex-subscription') environment.CODEX_MODEL = resolvedConfigInput.model;
+  }
+  if (resolvedConfigInput.reasoning_effort) environment.NARADA_AI_THINKING = resolvedConfigInput.reasoning_effort;
+}
+
 function configResolutionMetadata(options: {
   requestedOverrides: WorkerConstraintOverrides;
   resolvedConfigInput: { config: Record<string, PrimitiveConfigValue>; model: string | null; reasoning_effort: string | null };
@@ -1835,7 +1977,7 @@ function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEdit
   copyString(overrides, 'reasoning_effort', overridesInput.reasoning_effort);
   const config = primitiveConfigRecord(overridesInput.config);
   if (Object.keys(config).length > 0) overrides.config = config;
-  if (overridesInput.skip_git_repo_check !== undefined) overrides.skip_git_repo_check = Boolean(overridesInput.skip_git_repo_check);
+  if (overridesInput.skip_git_repo_check !== undefined) overrides.skip_git_repo_check = optionalBoolean(overridesInput.skip_git_repo_check, 'skip_git_repo_check');
   if (Object.keys(overrides).length > 0) editInput.overrides = overrides;
   return editInput;
 }
@@ -1873,8 +2015,21 @@ function buildPreflight(options: { cwd: string; authority: string; mode: WorkerD
   for (const item of options.preflightPaths) checks.push(preflightPathCheck(item, options.allowedRoots));
   if (options.requiredMcpTools.length > 0) {
     checks.push({ name: 'required_mcp_tools', status: 'warning', message: `not_verified_by_delegation; worker must verify requested MCP tools before work: ${options.requiredMcpTools.join(', ')}` });
+    const recursiveTools = options.requiredMcpTools.filter(isWorkerDelegationToolName);
+    if (recursiveTools.length > 0) {
+      checks.push({
+        name: 'required_mcp_tools_self_deadlock',
+        status: 'blocked',
+        message: `worker delegation cannot launch a worker whose required MCP tools recurse into worker-delegation: ${recursiveTools.join(', ')}; reroute through the delegating agent or a non-worker repair surface`,
+      });
+    }
   }
   return checks;
+}
+
+function isWorkerDelegationToolName(toolName: string): boolean {
+  const normalized = toolName.toLowerCase();
+  return normalized.includes('worker-delegation') || normalized.includes('worker_delegation') || /(^|[.\/:-])worker_/.test(normalized);
 }
 
 function preflightPathCheck(item: WorkerPreflightPath, allowedRoots: string[]): WorkerPreflightCheck {
@@ -2019,6 +2174,11 @@ function outputContractForMode(mode: WorkerDelegationMode): Record<string, unkno
     verification_budget_respected: { type: ['boolean', 'null'], required: true, meaning: 'true if verification/test budget and stop discipline were respected, false if exceeded, null if no budget was supplied and no verification was run' },
     broad_unrelated_failures: { type: 'array', required: true, meaning: 'Failures from broad commands that appear unrelated to the delegated target; do not mix them with focused verification failures.' },
     stop_discipline: 'Run focused checks first. Stop after the requested tests or first blocking focused failure when stop_on_first_failure is true. Do not run broad suites unless requested, needed, or allowed by budget.',
+    focused_readback: auditLike ? {
+      required: true,
+      behavior: 'Inspect ordinary target source files directly with filesystem read/search MCP tools available to the worker; do not require the delegating caller to pre-materialize output_refs for normal source files.',
+      bounds: 'Keep large/generated/secret outputs bounded and summarize them instead of pasting full content.',
+    } : null,
   };
 }
 
@@ -2047,6 +2207,10 @@ function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: W
     'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
     'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
     'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    ...(options.mode === 'audit_only' || options.mode === 'plan_only' ? [
+      'For focused source inspection, read target files directly through available filesystem MCP tools such as fs_read_file_range and fs_grep_search. Do not ask the delegating caller to provide output_refs for ordinary source files.',
+      'If a file is large, generated, or secret-bearing, keep reads bounded and cite the file/path plus relevant line window rather than copying full content.',
+    ] : []),
     '',
     'Verification budget discipline',
     'Classify every verification command as focused, broad, or not_applicable in verification[].command_classification.',
@@ -2125,7 +2289,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   const config = primitiveConfigRecord(overridesInput.config ?? constraintsInput.config ?? args.config);
   if (Object.keys(config).length > 0) overrides.config = config;
   if (overridesInput.skip_git_repo_check !== undefined || constraintsInput.skip_git_repo_check !== undefined || args.skip_git_repo_check !== undefined) {
-    overrides.skip_git_repo_check = Boolean(overridesInput.skip_git_repo_check ?? constraintsInput.skip_git_repo_check ?? args.skip_git_repo_check);
+    overrides.skip_git_repo_check = optionalBoolean(overridesInput.skip_git_repo_check ?? constraintsInput.skip_git_repo_check ?? args.skip_git_repo_check, 'skip_git_repo_check');
   }
   if (Object.keys(overrides).length > 0) constraints.overrides = overrides;
   return constraints;
@@ -2155,6 +2319,10 @@ function copyString(target: Record<string, unknown>, key: string, value: unknown
 }
 
 function primitiveConfigRecord(value: unknown): Record<string, PrimitiveConfigValue> {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw diagnosticError('worker_invalid_config_input', 'config must be an object', { value_type: Array.isArray(value) ? 'array' : typeof value });
+  }
   const record = asRecord(value);
   const result: Record<string, PrimitiveConfigValue> = {};
   for (const [key, item] of Object.entries(record)) {

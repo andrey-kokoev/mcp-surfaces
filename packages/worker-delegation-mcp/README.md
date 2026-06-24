@@ -69,7 +69,7 @@ Defaults:
 - max output bytes: `2097152`
 - max run time: `1800000` ms
 
-Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_BASE_URL`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY`, and `NARADA_WORKER_MCP_CONFIG` when present. For `narada-agent-runtime-server`, worker-delegation resolves a real Narada Site root before launch and projects `NARADA_SITE_ROOT` plus `NARADA_WORKSPACE_ROOT` into the worker environment. Run records store environment key names, not secret values.
+Only a small environment allowlist is passed to workers: `PATH`, `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `CODEX_HOME`, `CODEX_MODEL`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_BASE_URL`, `KIMI_API_KEY`, `KIMI_CODE_API_KEY`, `MOONSHOT_API_KEY`, `NARADA_AI_MODEL`, `NARADA_AI_THINKING`, and `NARADA_WORKER_MCP_CONFIG` when present. For `narada-agent-runtime-server`, worker-delegation resolves a real Narada Site root before launch and projects `NARADA_SITE_ROOT` plus `NARADA_WORKSPACE_ROOT` into the worker environment. When `constraints.overrides.model` or cognition defaults resolve a model, it projects `NARADA_AI_MODEL`; for `codex-subscription`, it also projects `CODEX_MODEL`. When reasoning effort resolves, it projects `NARADA_AI_THINKING`. Run records store environment key names, not secret values.
 
 ## Run
 

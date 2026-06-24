@@ -231,6 +231,7 @@ export function resultStatus(codexResult: { exit_code: number | null; cancelled:
     ?? (codexResult.exit_code !== 0 && codexResult.exit_code !== null ? codexResult.runtime_error ?? `worker runtime exited with code ${codexResult.exit_code}` : null);
   if (runtimeError && parsed.ok) return { status: 'completed_with_errors', error: runtimeError, warnings };
   if (runtimeError) return { status: 'failed', error: runtimeError, warnings };
+  if (parsed.ok === false && parsed.reason === 'missing_file') return { status: 'failed', error: `absent last_message.json: ${parsed.message}`, warnings };
   if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}`, warnings };
   return { status: 'completed', error: null, warnings };
 }

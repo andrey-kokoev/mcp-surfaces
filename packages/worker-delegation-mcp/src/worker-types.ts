@@ -117,6 +117,7 @@ export type WorkerResolvedExecutionPolicy = {
   resumable: boolean;
   ephemeral: boolean;
   json_events: boolean;
+  implementation_identity?: Record<string, unknown>;
   prompt_byte_length: number;
   max_output_bytes: number;
   max_run_ms: number;

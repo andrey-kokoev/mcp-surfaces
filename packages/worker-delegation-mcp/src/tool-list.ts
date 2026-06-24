@@ -334,12 +334,12 @@ function workerRunOutputSchema(): Record<string, unknown> {
     warning_count: { type: 'integer' },
     preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
     final_checklist: stringArraySchema(),
-    summary: { type: 'string' },
-    deliverables: { type: 'array', items: objectSchema({ path: { type: 'string' }, description: { type: 'string' } }, ['path', 'description']) },
-    open_questions: stringArraySchema(),
-    next_actions: stringArraySchema(),
-    changes: { type: 'array', items: objectSchema({ path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['path', 'status', 'summary']) },
-    verification_results: { type: 'array', items: objectSchema({ tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' }, command_classification: { type: 'string', enum: ['focused', 'broad', 'not_applicable'] } }, ['tool', 'command', 'status', 'summary']) },
+    summary: nullableStringSchema(),
+    deliverables: nullableArraySchema(objectSchema({ path: { type: 'string' }, description: { type: 'string' } }, ['path', 'description'])),
+    open_questions: nullableStringArraySchema(),
+    next_actions: nullableStringArraySchema(),
+    changes: nullableArraySchema(objectSchema({ path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, ['path', 'status', 'summary'])),
+    verification_results: nullableArraySchema(objectSchema({ tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' }, command_classification: { type: 'string', enum: ['focused', 'broad', 'not_applicable'] } }, ['tool', 'command', 'status', 'summary'])),
     verification_budget_respected: { type: ['boolean', 'null'] },
     broad_unrelated_failures: { type: 'array', items: objectSchema({ command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, ['command', 'status', 'summary']) },
     exit_interview: { type: ['object', 'null'], properties: {
@@ -354,6 +354,8 @@ function workerRunOutputSchema(): Record<string, unknown> {
     artifact_readback: { type: 'object', additionalProperties: true },
     timing: { type: 'object', additionalProperties: true },
     error: nullableStringSchema(),
+    worker_output_state: { type: 'string', enum: ['pending', 'available', 'absent', 'invalid_json', 'invalid_shape'] },
+    worker_authored_output_present: { type: 'boolean' },
     worker_output_error: { type: 'object', additionalProperties: true },
     diagnostic_tail: nullableStringSchema(),
     error_classification: nullableStringSchema(),
@@ -366,6 +368,14 @@ function workerRunOutputSchema(): Record<string, unknown> {
 
 function stringArraySchema(): Record<string, unknown> {
   return { type: 'array', items: { type: 'string' } };
+}
+
+function nullableStringArraySchema(): Record<string, unknown> {
+  return { type: ['array', 'null'], items: { type: 'string' } };
+}
+
+function nullableArraySchema(items: Record<string, unknown>): Record<string, unknown> {
+  return { type: ['array', 'null'], items };
 }
 
 function nullableStringSchema(): Record<string, unknown> {
