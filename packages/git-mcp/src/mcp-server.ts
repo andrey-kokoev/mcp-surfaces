@@ -171,9 +171,31 @@ function completeArgument(params: Record<string, unknown>, state: GitMcpState) {
 async function callTool(params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  if (name === 'git_output_show') return toolResult(outputShow({ siteRoot: state.outputRoot, args }), state, name);
+  if (name === 'git_output_show') return toolResult(gitOutputShow(args, state), state, name);
   const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);
+}
+
+function gitOutputShow(args: Record<string, unknown>, state: GitMcpState) {
+  try {
+    const page = outputShow({ siteRoot: state.outputRoot, args });
+    return {
+      ...asRecord(page),
+      output_scope: {
+        reader_tool: 'git_output_show',
+        server_output_root: state.outputRoot,
+        target_site_root: typeof args.target_site_root === 'string' && args.target_site_root.trim() ? resolve(args.target_site_root) : null,
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError('git_output_ref_scope_unreadable', message, {
+      output_root: state.outputRoot,
+      requested_ref: args.ref ?? args.output_ref ?? null,
+      target_site_root: typeof args.target_site_root === 'string' && args.target_site_root.trim() ? resolve(args.target_site_root) : null,
+      remediation: 'Use the same Git MCP server/output root that created the output_ref, or pass target_site_root when the materialized output belongs to another site root that is allowed by this reader.',
+    });
+  }
 }
 
 function toolResult(value: unknown, state: GitMcpState, toolName: string) {

@@ -18,6 +18,7 @@ export {
   gitRepositoriesSummary,
   gitShow,
   gitStatus,
+  gitUnstage,
   gitWorkflowRecord,
 } from './git-tools.js';
 export {

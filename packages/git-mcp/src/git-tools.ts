@@ -37,11 +37,38 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, runContext);
   if (name === 'git_diff') return gitDiff(args, state, runContext);
   if (name === 'git_add') return gitAdd(args, state, runContext);
+  if (name === 'git_unstage') return gitUnstage(args, state, runContext);
   if (name === 'git_commit') return gitCommit(args, state, runContext);
   if (name === 'git_push') return gitPush(args, state, runContext);
   if (name === 'git_log') return gitLog(args, state, runContext);
   if (name === 'git_show') return gitShow(args, state, runContext);
   throw diagnosticError('git_mcp_unknown_tool', `git_mcp_unknown_tool:${name}`, { tool_name: name });
+}
+
+export async function gitUnstage(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_unstage');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context))));
+  if (paths.length === 0) throw diagnosticError('git_unstage_requires_paths');
+  let result = await runGit(cwd, ['restore', '--staged', '--', ...paths], state.policy, context);
+  if (result.exit_code !== 0 && /could not resolve 'HEAD'|ambiguous argument 'HEAD'|unknown revision/i.test(combineOutput(result))) {
+    result = await runGit(cwd, ['rm', '--cached', '--', ...paths], state.policy, context);
+  }
+  ensureGitOk(result, 'git_unstage_failed');
+  const status = await gitStatus({ working_directory: cwd }, state, context);
+  const payload = {
+    schema: 'narada.git.unstage.v1',
+    status: 'ok',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    paths,
+    unstaged_count: paths.length,
+    summary: `unstaged ${paths.length} path${paths.length === 1 ? '' : 's'}`,
+    post_status: status,
+  };
+  audit(state, payload);
+  return payload;
 }
 
 export async function gitChangedSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
@@ -56,6 +83,7 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
   const trackedChangedPaths = trackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
   const untrackedPaths = untrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
   const untrackedGroups = groupUntrackedPaths(untrackedPaths, untrackedSampleLimit);
+  const untrackedClassifications = untrackedPaths.map(classifyAdvisoryPath);
   const relevantEntries = relevanceFilters.length > 0
     ? entries.filter((entry) => relevanceFilters.some((filter) => pathMatchesFilter(String(entry.display_path ?? entry.path ?? ''), filter)))
     : [];
@@ -71,6 +99,8 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
     unstaged_count: Array.isArray(status.unstaged) ? status.unstaged.length : 0,
     conflict_count: Array.isArray(status.conflicts) ? status.conflicts.length : 0,
     untracked_count: untrackedPaths.length,
+    advisory_classification: summarizeAdvisoryClassifications(untrackedClassifications),
+    untracked_classifications: untrackedClassifications,
     tracked_changed_paths: trackedChangedPaths,
     staged_paths: status.staged,
     unstaged_paths: status.unstaged,
@@ -194,7 +224,7 @@ export async function gitWorkflowRecord(args: Record<string, unknown>, state: Gi
 export async function gitDiff(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const cwd = resolveWorkingDirectory(args, state);
   const scope = stringEnum(args.scope, ['working', 'staged', 'commit'], 'working');
-  const pathspec = optionalPathspec(args.pathspec);
+  const pathspecs = optionalPathspecs(args.pathspec, args.pathspecs);
   const offset = clampInteger(args.offset, 0, Number.MAX_SAFE_INTEGER, 0);
   const limit = clampInteger(args.limit ?? args.diff_limit, 1, MAX_DIFF_LIMIT, DEFAULT_DIFF_LIMIT);
   const includeUntracked = args.include_untracked === true;
@@ -204,10 +234,10 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
     : scope === 'commit'
       ? ['show', '--format=', '--patch', '--no-ext-diff', requireCommitish(args.commit)]
       : ['diff', '--no-ext-diff'];
-  if (pathspec) gitArgs.push('--', pathspec);
+  if (pathspecs.length > 0) gitArgs.push('--', ...pathspecs);
   const result = await runGit(cwd, gitArgs, state.policy, context);
   ensureGitOk(result, 'git_diff_failed');
-  const untracked = includeUntracked ? await untrackedDiff(cwd, pathspec, state.policy, context) : null;
+  const untracked = includeUntracked ? await untrackedDiff(cwd, pathspecs, state.policy, context) : null;
   const fullDiff = [result.output_text, untracked?.diff].filter(Boolean).join(result.output_text && untracked?.diff ? '\n' : '');
   const diff = fullDiff.slice(offset, offset + limit);
   const nextOffset = offset + diff.length < fullDiff.length ? offset + diff.length : null;
@@ -216,7 +246,8 @@ export async function gitDiff(args: Record<string, unknown>, state: GitMcpState,
     status: 'ok',
     working_directory: cwd,
     scope,
-    pathspec,
+    pathspec: pathspecs.length === 1 ? pathspecs[0] : null,
+    pathspecs,
     ...(scope === 'commit' ? { commit: String(args.commit) } : {}),
     offset,
     limit,
@@ -449,9 +480,9 @@ async function listRemotes(cwd: string, policy: GitMcpPolicy, context: GitReques
   return [...byKey.values()];
 }
 
-async function untrackedDiff(cwd: string, pathspec: string | null, policy: GitMcpPolicy, context: GitRequestContext = {}) {
+async function untrackedDiff(cwd: string, pathspecs: string[], policy: GitMcpPolicy, context: GitRequestContext = {}) {
   const lsArgs = ['ls-files', '--others', '--exclude-standard', '-z'];
-  if (pathspec) lsArgs.push('--', pathspec);
+  if (pathspecs.length > 0) lsArgs.push('--', ...pathspecs);
   const listed = await runGit(cwd, lsArgs, policy, context);
   ensureGitOk(listed, 'git_diff_failed');
   const paths = listed.output_text.split('\0').filter(Boolean).slice(0, UNTRACKED_FILE_COUNT_LIMIT);
@@ -523,7 +554,21 @@ function appendWorkflowLedger(state: GitMcpState, payload: unknown): string {
 
 function optionalPathspec(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
-  return validateGitPathspec(value);
+  const pathspec = validateGitPathspec(value);
+  if (/\s/.test(pathspec)) {
+    throw diagnosticError('git_pathspec_may_be_multiple_paths', 'git_pathspec_may_be_multiple_paths', {
+      pathspec,
+      remediation: 'Pass multiple paths with the pathspecs array; pathspec is reserved for one unambiguous Git pathspec.',
+    });
+  }
+  return pathspec;
+}
+
+function optionalPathspecs(pathspec: unknown, pathspecs: unknown): string[] {
+  const values = stringArray(pathspecs).map((value) => optionalPathspec(value)).filter((value): value is string => Boolean(value));
+  const single = optionalPathspec(pathspec);
+  if (single && values.length > 0) throw diagnosticError('git_diff_pathspec_conflict', 'git_diff_pathspec_conflict', { remediation: 'Use either pathspec or pathspecs, not both.' });
+  return single ? [single] : values;
 }
 
 function requiredNonEmptyString(value: unknown, code: string): string {
@@ -574,8 +619,37 @@ function groupUntrackedPaths(paths: string[], sampleLimit: number): Array<Record
   return [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).map(([top_level, groupPaths]) => {
     const sample = remainingSamples > 0 ? groupPaths.slice(0, remainingSamples) : [];
     remainingSamples = Math.max(0, remainingSamples - sample.length);
-    return { top_level, count: groupPaths.length, sample, sample_omitted: Math.max(0, groupPaths.length - sample.length) };
+    return { top_level, count: groupPaths.length, sample, sample_omitted: Math.max(0, groupPaths.length - sample.length), advisory_classification: summarizeAdvisoryClassifications(groupPaths.map(classifyAdvisoryPath)) };
   });
+}
+
+function classifyAdvisoryPath(path: string): Record<string, unknown> {
+  const normalized = path.replaceAll('\\', '/').replace(/^\.\//, '');
+  const lower = normalized.toLowerCase();
+  const rules: Array<[string, RegExp, string]> = [
+    ['runtime_artifact', /(^|\/)\.ai\/(runtime|tmp|output)\/|(^|\.)tmp\/|(^|\/)runtime\//, 'runtime or temporary artifact path'],
+    ['dependency_artifact', /(^|\/)node_modules\//, 'dependency install artifact'],
+    ['build_artifact', /(^|\/)(dist|build|coverage|\.wrangler)\//, 'build or coverage artifact'],
+    ['probe_artifact', /(^|\/)(probe|smoke|tmp|temp|scratch|debug)[-_./]|[-_.](probe|smoke|tmp|temp|scratch|debug)\./, 'probe/debug/generated filename pattern'],
+    ['log_artifact', /\.(log|trace|jsonl)$/i, 'log or event stream file'],
+  ];
+  const matched = rules.find(([, pattern]) => pattern.test(lower));
+  return {
+    path,
+    classification: matched?.[0] ?? 'unknown',
+    confidence: matched ? 'medium' : 'unknown',
+    reason: matched?.[2] ?? 'no bounded advisory rule matched',
+    advisory_only: true,
+  };
+}
+
+function summarizeAdvisoryClassifications(classifications: Record<string, unknown>[]): Record<string, unknown> {
+  const byClassification: Record<string, number> = {};
+  for (const item of classifications) {
+    const key = typeof item.classification === 'string' ? item.classification : 'unknown';
+    byClassification[key] = (byClassification[key] ?? 0) + 1;
+  }
+  return { advisory_only: true, classified_count: classifications.filter((item) => item.classification !== 'unknown').length, by_classification: byClassification };
 }
 
 function pathMatchesFilter(path: string, filter: string): boolean {

@@ -79,7 +79,8 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         scope: { type: 'string', enum: ['working', 'staged', 'commit'], default: 'working' },
-        pathspec: { type: 'string', description: 'Optional Git pathspec.' },
+        pathspec: { type: 'string', description: 'Optional single Git pathspec. Use pathspecs for multiple paths.' },
+        pathspecs: { type: 'array', items: { type: 'string' }, description: 'Optional Git pathspec list for multi-path diffs.' },
         commit: { type: 'string', description: 'Required when scope is commit.' },
         offset: { type: 'integer', default: 0, description: 'Character offset into the complete diff. Use next_offset from the prior result to continue.' },
         limit: { type: 'integer', default: 4000, description: 'Maximum diff characters to return in this page.' },
@@ -113,6 +114,15 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to stage.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['paths']),
+    },
+    {
+      name: 'git_unstage',
+      description: 'Unstage explicit file paths from the index without modifying the working tree.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to unstage.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['paths']),
     },
@@ -152,7 +162,7 @@ function decorateTools(tools: Array<Record<string, any>>): Array<Record<string, 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /git_add|git_commit|git_push|git_workflow_record/.test(name);
+  const writes = /git_add|git_unstage|git_commit|git_push|git_workflow_record/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,
