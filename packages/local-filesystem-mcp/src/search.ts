@@ -27,7 +27,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
     const cached = completeSearchCache.get(cacheKey);
     if (cached) return pageFromComplete(cached, { offset, limit, cachePolicy });
   }
-  const complete = offset > 0 || cachePolicy === 'snapshot' || cachePolicy === 'refresh';
+  const complete = cachePolicy === 'snapshot' || cachePolicy === 'refresh';
   const runnerPath = fileURLToPath(new URL('./search-runner.js', import.meta.url));
   const result = spawnSync(process.execPath, [runnerPath], {
     input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),
@@ -114,7 +114,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
     const cached = completeSearchCache.get(cacheKey);
     if (cached) return pageFromComplete(cached, { offset, limit, cachePolicy });
   }
-  const complete = offset > 0 || cachePolicy === 'snapshot' || cachePolicy === 'refresh';
+  const complete = cachePolicy === 'snapshot' || cachePolicy === 'refresh';
   const runnerPath = fileURLToPath(new URL('./search-runner.js', import.meta.url));
   const result = await runSearchHelper(process.execPath, [runnerPath], {
     input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),

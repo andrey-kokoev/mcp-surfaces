@@ -33,6 +33,15 @@ const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/__pycache__/**',
   '**/target/**',
 ];
+const DEFAULT_GREP_IGNORE_PATTERNS = [
+  ...DEFAULT_GLOB_IGNORE_PATTERNS,
+  '**/.ai/runtime/**',
+  '**/.ai/tmp/**',
+  '**/.ai/output/**',
+  '**/.narada/runtime/**',
+  '**/.narada/tmp/**',
+  '**/.tmp-tests/**',
+];
 let activeToolName: string | null = null;
 
 class McpToolError extends Error {
@@ -112,11 +121,14 @@ export function createServerState(options: Record<string, unknown>): Record<stri
   const stateEnv = { ...process.env };
   loadSiteSecrets(siteRoot, stateEnv);
   const explicitRoots = stringList(options.allowedRoots);
+  const anchoredRoots = stringList(options.anchoredAllowedRoots);
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   let allowedRootEntries;
   try {
     allowedRootEntries = buildAllowedRoots({
       codexConfigPath: stringOrNull(options.rootsFromCodexConfig),
+      anchoredRoots,
+      anchors: options.anchors && typeof options.anchors === 'object' && !Array.isArray(options.anchors) ? asRecord(options.anchors) : undefined,
       explicitRoots: [...siteExtraRoots, ...explicitRoots],
       rootsConfigPath: stringOrNull(options.rootsConfig),
     });
@@ -127,6 +139,7 @@ export function createServerState(options: Record<string, unknown>): Record<stri
       roots_from_codex_config: stringOrNull(options.rootsFromCodexConfig),
       roots_config: stringOrNull(options.rootsConfig),
       allowed_roots: [...siteExtraRoots, ...explicitRoots],
+      anchored_allowed_roots: anchoredRoots,
     });
   }
   const outputRoot = resolve(stringOrNull(options.outputRoot) ?? process.cwd());
@@ -312,6 +325,7 @@ export function listTools(mode) {
         pattern: { type: 'string' },
         path: { type: 'string', default: '.' },
         output_mode: { type: 'string', enum: ['files_with_matches', 'count_matches', 'content'], default: 'files_with_matches' },
+        ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude. Defaults also exclude generated dependency/build/runtime directories.' },
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 80 },
         timeout_ms: { type: 'integer', description: 'Optional search timeout in milliseconds.' },
@@ -543,7 +557,7 @@ function statTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_stat' });
   const stat = statSync(path);
   const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other';
-  const directoryFingerprint = type === 'directory' ? directoryTreeFingerprint(path, root) : null;
+  const directoryFingerprint = type === 'directory' ? directoryTreeFingerprint(path, path) : null;
   return {
     schema: 'local.filesystem.stat.v1',
     path,
@@ -583,6 +597,7 @@ function doctorTool(state) {
     read_tools: readTools,
     write_tools: writeTools,
     default_glob_ignore_patterns: DEFAULT_GLOB_IGNORE_PATTERNS,
+    default_grep_ignore_patterns: DEFAULT_GREP_IGNORE_PATTERNS,
   };
 }
 
@@ -645,8 +660,9 @@ function grepSearchTool(args, state) {
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
+  const ignorePatterns = [...DEFAULT_GREP_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const freshness = searchFreshness(path);
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
 async function grepSearchToolAsync(args, state, context) {
@@ -661,8 +677,9 @@ async function grepSearchToolAsync(args, state, context) {
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
+  const ignorePatterns = [...DEFAULT_GREP_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const freshness = searchFreshness(path);
-  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', pattern, path, ...modeArgs], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
+  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page, offset, limit, freshness, cachePolicy });
 }
 
@@ -1310,18 +1327,19 @@ function expectedMetadataSchemaProperties() {
 }
 
 function parseArgs(argv: string[]): Record<string, unknown> {
-  const options: Record<string, unknown> & { allowedRoots: string[] } = { mode: 'read', allowedRoots: [] };
+  const options: Record<string, unknown> & { allowedRoots: string[], anchoredAllowedRoots: string[] } = { mode: 'read', allowedRoots: [], anchoredAllowedRoots: [] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
     if (arg === '--mode') { options.mode = next; i += 1; }
     else if (arg === '--roots-from-trust-config' || arg === '--roots-from-codex-config') { options.rootsFromCodexConfig = next; i += 1; }
     else if (arg === '--allowed-root') { options.allowedRoots.push(next); i += 1; }
+    else if (arg === '--anchored-allowed-root') { options.anchoredAllowedRoots.push(next); i += 1; }
     else if (arg === '--roots-config') { options.rootsConfig = next; i += 1; }
     else if (arg === '--audit-log-dir') { options.auditLogDir = next; i += 1; }
     else if (arg === '--output-root') { options.outputRoot = next; i += 1; }
     else if (arg === '--help') {
-      process.stdout.write('Usage: node dist/src/main.js --mode read|write --roots-from-trust-config <path> [--allowed-root <path>] [--roots-config <json>] [--audit-log-dir <path>]\n');
+      process.stdout.write('Usage: node dist/src/main.js --mode read|write --roots-from-trust-config <path> [--allowed-root <path>] [--anchored-allowed-root user_home:.codex] [--roots-config <json>] [--audit-log-dir <path>]\n');
       process.exit(0);
     }
   }
@@ -1502,6 +1520,7 @@ function assertExpectedMetadata(args, target, { operation, objectKey = null, mti
     actual_size: actualSize,
     expected_tree_sha256: expectedTreeSha,
     actual_tree_sha256: directoryFingerprint?.tree_sha256 ?? null,
+    tree_sha256_basis: 'target_relative',
     expected_entry_count: expectedEntryCount,
     actual_entry_count: directoryFingerprint?.entry_count ?? null,
   };
@@ -1519,6 +1538,15 @@ function assertExpectedMetadata(args, target, { operation, objectKey = null, mti
     if (actualSha !== expectedSha) {
       throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, { ...details, expected_sha256: expectedSha, actual_sha256: actualSha });
     }
+  }
+  if (expectedTreeSha && directoryFingerprint?.tree_truncated === true) {
+    throw diagnosticError(`${operation}_expected_tree_sha256_unstable`, `${operation}_expected_tree_sha256_unstable: ${target.path}`, {
+      ...details,
+      actual_tree_truncated: true,
+      actual_tree_entry_count: directoryFingerprint.tree_entry_count,
+      tree_hash_guard_supported: false,
+      remediation: 'tree_sha256 guards require a complete directory fingerprint; narrow the target directory or use mtime/entry_count guards for large trees.',
+    });
   }
   if (expectedTreeSha && directoryFingerprint?.tree_sha256 !== expectedTreeSha) {
     throw diagnosticError(`${operation}_expected_metadata_mismatch`, `${operation}_expected_metadata_mismatch: ${target.path}`, details);

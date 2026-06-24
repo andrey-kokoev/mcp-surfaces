@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { buildAllowedRoots, normalizeAllowedRoots, parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath, rootEntriesToRoots } from '../src/policy.js';
+import { buildAllowedRoots, normalizeAllowedRoots, parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath, resolveAnchoredAllowedRoot, rootEntriesToRoots } from '../src/policy.js';
 import { createServerState, handleRequest, listTools } from '../src/main.js';
 import { parsePatch } from '../src/patch-apply.js';
 import { RIPGREP_FIELD_SEPARATOR, grepMatchObject, runRipgrepPageAsync } from '../src/search.js';
@@ -79,6 +79,12 @@ try {
   for (let i = 0; i < 120; i += 1) {
     writeFileSync(join(largeRoot, `very-long-file-name-${String(i).padStart(3, '0')}-${'x'.repeat(60)}.txt`), 'needle\n', 'utf8');
   }
+  const largeGrepRoot = join(trusted, 'large-grep-output');
+  mkdirSync(largeGrepRoot, { recursive: true });
+  const largeGrepLine = `${'needle '.repeat(20)}${'x'.repeat(20_000)}\n`;
+  for (let i = 0; i < 80; i += 1) {
+    writeFileSync(join(largeGrepRoot, `large-grep-${String(i).padStart(3, '0')}.txt`), largeGrepLine, 'utf8');
+  }
 
   const ignoredRoot = join(trusted, 'glob-ignore');
   mkdirSync(join(ignoredRoot, 'src'), { recursive: true });
@@ -150,6 +156,30 @@ trust_level = "untrusted"
   assert.ok(writeToolNames.includes('fs_delete_directory'));
   const applyPatchToolDescription = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.description;
   assert.match(String(applyPatchToolDescription), /unified diff or Codex-style apply_patch/);
+
+  const fakeUserHome = join(tempRoot, 'fake-user-home');
+  const fakeCodexRoot = join(fakeUserHome, '.codex');
+  mkdirSync(fakeCodexRoot, { recursive: true });
+  writeFileSync(join(fakeCodexRoot, 'config.toml'), 'model = "test"\n', 'utf8');
+  const anchoredEntry = resolveAnchoredAllowedRoot('user_home:.codex', { user_home: fakeUserHome });
+  assert.equal(anchoredEntry.root, resolve(fakeCodexRoot));
+  assert.equal(anchoredEntry.provenance.anchor, 'user_home');
+  assert.equal(anchoredEntry.provenance.relative_path, '.codex');
+  assert.throws(() => resolveAnchoredAllowedRoot('user_home:../outside', { user_home: fakeUserHome }), /anchored_allowed_root_path_escapes_anchor/);
+  assert.throws(() => resolveAnchoredAllowedRoot('workspace:.codex', { user_home: fakeUserHome }), /anchored_allowed_root_unknown_anchor/);
+  const anchoredRootEntries = buildAllowedRoots({ anchoredRoots: ['user_home:.codex'], anchors: { user_home: fakeUserHome } });
+  assert.deepEqual(rootEntriesToRoots(anchoredRootEntries), [resolve(fakeCodexRoot)]);
+  const anchoredConfigPath = join(tempRoot, 'anchored-roots.json');
+  writeFileSync(anchoredConfigPath, JSON.stringify({ anchored_allowed_roots: ['user_home:.codex'] }), 'utf8');
+  const anchoredConfigEntries = buildAllowedRoots({ rootsConfigPath: anchoredConfigPath, anchors: { user_home: fakeUserHome } });
+  assert.deepEqual(rootEntriesToRoots(anchoredConfigEntries), [resolve(fakeCodexRoot)]);
+  assert.equal(anchoredConfigEntries[0].provenance.source, 'roots_config_anchored_allowed_root');
+  const anchoredState = createServerState({ mode: 'read', anchoredAllowedRoots: ['user_home:.codex'], anchors: { user_home: fakeUserHome }, outputRoot: tempRoot });
+  const anchoredRead = call(anchoredState, 1002, 'fs_read_file', { path: join(fakeCodexRoot, 'config.toml') });
+  assert.equal(anchoredRead.result.structuredContent.content, 'model = "test"');
+  const doctorResponse = call(anchoredState, 1003, 'fs_doctor');
+  assert.equal(doctorResponse.result.structuredContent.allowed_roots[0], resolve(fakeCodexRoot));
+  assert.equal(doctorResponse.result.structuredContent.allowed_root_entries[0].provenance.flag, '--anchored-allowed-root');
 
   const readState = createServerState({ mode: 'read', allowedRoots: [trusted], outputRoot: tempRoot });
   const siteRoot = join(tempRoot, 'site-root');
@@ -356,11 +386,25 @@ trust_level = "untrusted"
   assert.equal(grepContent.result.structuredContent.matches.some((match) => match.includes('needle one')), true);
   assert.equal(grepContent.result.structuredContent.match_objects.some((match) => Number(match.line) === 2 && String(match.text) === 'needle one'), true);
   assert.equal(grepContent.result.content[0].text.includes('needle one'), true);
+  const defaultIgnoredGrep = call(readState, 211, 'fs_grep_search', { path: ignoredRoot, pattern: 'skip|keep|custom', output_mode: 'content', limit: 20 });
+  assert.equal(defaultIgnoredGrep.result.structuredContent.returned, 2);
+  assert.match(defaultIgnoredGrep.result.structuredContent.matches.join('\n'), /keep\.txt/);
+  assert.match(defaultIgnoredGrep.result.structuredContent.matches.join('\n'), /custom\.txt/);
+  assert.doesNotMatch(defaultIgnoredGrep.result.structuredContent.matches.join('\n'), /node_modules/);
+  assert.doesNotMatch(defaultIgnoredGrep.result.structuredContent.matches.join('\n'), /dist/);
+  const callerIgnoredGrep = call(readState, 212, 'fs_grep_search', { path: ignoredRoot, pattern: 'skip|keep|custom', output_mode: 'content', ignore: ['**/custom-skip/**'], limit: 20 });
+  assert.equal(callerIgnoredGrep.result.structuredContent.returned, 1);
+  assert.match(callerIgnoredGrep.result.structuredContent.matches[0], /keep\.txt/);
+  assert.doesNotMatch(callerIgnoredGrep.result.structuredContent.matches.join('\n'), /custom-skip/);
   const grepCounts = call(readState, 22, 'fs_grep_search', { path: join(trusted, 'grep-one.txt'), pattern: 'needle', output_mode: 'count_matches', limit: 10 });
   assert.equal(grepCounts.result.structuredContent.output_mode, 'count_matches');
   assert.equal(grepCounts.result.structuredContent.match_objects.some((match) => String(match.path).includes('grep-one.txt') && Number(match.count) === 1), true);
   assert.equal(grepCounts.result.structuredContent.matches.some((match) => /grep-one\.txt: 1/.test(match.replace(/\\/g, '/'))), true);
   assert.equal(grepCounts.result.structuredContent.matches.some((match) => match.includes('\u001f')), false);
+  writeFileSync(join(trusted, 'grep-leading-dash.txt'), 'prefix --literal-pattern suffix\n', 'utf8');
+  const grepLeadingDashPattern = call(readState, 220, 'fs_grep_search', { path: trusted, pattern: '--literal-pattern', output_mode: 'content', limit: 10 });
+  assert.equal(grepLeadingDashPattern.result.structuredContent.output_mode, 'content');
+  assert.equal(grepLeadingDashPattern.result.structuredContent.matches.some((match) => match.includes('--literal-pattern')), true);
   const emptyGrep = call(readState, 221, 'fs_grep_search', { path: trusted, pattern: 'does-not-exist', output_mode: 'content', limit: 5 });
   assert.equal(emptyGrep.result.structuredContent.schema, 'local.filesystem.grep.v1');
   assert.equal(emptyGrep.result.structuredContent.status, 'ok');
@@ -380,6 +424,12 @@ trust_level = "untrusted"
   assert.equal(timeoutGrep.error.data.details.requested_cache_policy, 'snapshot');
   assert.equal(timeoutGrep.error.data.details.complete_snapshot_required, true);
   assert.equal(timeoutGrep.error.data.details.remediation.some((hint) => String(hint).includes('Narrow the directory/path')), true);
+  const largeGrepSecondPage = call(readState, 223, 'fs_grep_search', { path: largeGrepRoot, pattern: 'needle', output_mode: 'content', offset: 5, limit: 5, cache_policy: 'bypass' });
+  assert.ifError(largeGrepSecondPage.error);
+  assert.equal(largeGrepSecondPage.result.structuredContent.returned, 5);
+  assert.equal(largeGrepSecondPage.result.structuredContent.count_exact, false);
+  assert.equal(largeGrepSecondPage.result.structuredContent.has_more, true);
+  assert.equal(largeGrepSecondPage.result.structuredContent.next_offset, 10);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
@@ -710,9 +760,7 @@ trust_level = "untrusted"
   const deleteDirectoryResponse = call(writeState, 48, 'fs_delete_directory', {
     path: join(trusted, 'folders', 'renamed'),
     recursive: true,
-    expected: {
-      entry_count: 1,
-    },
+    expected: call(writeState, 472, 'fs_stat', { path: join(trusted, 'folders', 'renamed') }).result.structuredContent,
   });
   assert.equal(deleteDirectoryResponse.result.structuredContent.schema, 'local.filesystem.delete_directory.v1');
   assert.equal(deleteDirectoryResponse.result.structuredContent.status, 'deleted');
