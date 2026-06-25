@@ -16,6 +16,7 @@ Current packages:
 - `@narada2/site-inbox-mcp`: governed inbox intake and triage MCP surface.
 - `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
+- `@narada2/calendar-mcp`: policy-gated Microsoft Graph calendar MCP surface for live calendar reads and guarded event management.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
 - `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface.
 - `@narada2/agent-context-mcp`: agent context MCP surface.
@@ -82,6 +83,7 @@ pnpm test:worker-delegation
 pnpm test:inbox
 pnpm test:mailbox
 pnpm test:graph-mail
+pnpm test:calendar
 pnpm test:task-lifecycle
 pnpm test:sonar-site-ops
 pnpm test:agent-context
@@ -115,5 +117,6 @@ Before handing off changes:
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.
+- `calendar-mcp` owns policy-gated Microsoft Graph calendar access and event lifecycle tools; event writes must stay disallowed unless explicit site policy enables them.
 - Task lifecycle/domain behavior belongs in dedicated MCP surface packages with explicit shared-domain dependencies.
 

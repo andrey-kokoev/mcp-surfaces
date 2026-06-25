@@ -11,6 +11,7 @@
     { "path": "./packages/site-inbox-mcp" },
     { "path": "./packages/mailbox-mcp" },
     { "path": "./packages/graph-mail-mcp" },
+    { "path": "./packages/calendar-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },
     { "path": "./packages/sonar-site-ops-mcp" },
     { "path": "./packages/agent-context-mcp" },

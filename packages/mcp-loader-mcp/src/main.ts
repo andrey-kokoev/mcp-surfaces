@@ -502,6 +502,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'site-inbox': { entrypoint: '{site_root}/tools/typed-mcp/inbox-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
   'mailbox': { entrypoint: `${MCP_SURFACES_ROOT}/mailbox-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'graph-mail': { entrypoint: `${MCP_SURFACES_ROOT}/graph-mail-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
+  'calendar': { entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'task-lifecycle': { entrypoint: '{site_root}/tools/task-lifecycle/task-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
   'site-ops': { entrypoint: '{site_root}/tools/site-ops/site-ops-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
   'agent-context': { entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },

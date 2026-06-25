@@ -140,6 +140,13 @@ const SURFACES: SurfaceDef[] = [
     tools: ['graph_mail_doctor', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'],
   },
   {
+    id: 'calendar', package: 'calendar-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: ['--site-root', '{site_root}'],
+    tools: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
+  },
+  {
     id: 'task-lifecycle', package: 'task-lifecycle-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js`,
     kind: 'mcp_surface',
