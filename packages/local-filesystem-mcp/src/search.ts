@@ -30,7 +30,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
   const complete = cachePolicy === 'snapshot' || cachePolicy === 'refresh';
   const runnerPath = fileURLToPath(new URL('./search-runner.js', import.meta.url));
   const result = spawnSync(process.execPath, [runnerPath], {
-    input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),
+    input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES, timeout_ms: effectiveTimeoutMs }),
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 1024 * 1024,
@@ -68,6 +68,17 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
       stderr: String(result.stderr ?? ''),
       output_preview: String(result.stdout ?? '').slice(0, 500),
       parse_error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (page.timed_out) {
+    throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out: ${page.error ?? 'ETIMEDOUT'}`, {
+      operation,
+      status: page.status ?? null,
+      signal: page.signal ?? null,
+      stderr: String(page.stderr ?? ''),
+      error: page.error ?? 'ETIMEDOUT',
+      timeout_ms: effectiveTimeoutMs,
+      ...timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }),
     });
   }
   assertRipgrepOk(page, { operation, noMatchStatus, diagnosticError });
@@ -117,7 +128,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
   const complete = cachePolicy === 'snapshot' || cachePolicy === 'refresh';
   const runnerPath = fileURLToPath(new URL('./search-runner.js', import.meta.url));
   const result = await runSearchHelper(process.execPath, [runnerPath], {
-    input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES }),
+    input: JSON.stringify({ args, offset, limit, complete, max_match_bytes: SEARCH_CACHE_MAX_MATCH_BYTES, timeout_ms: effectiveTimeoutMs }),
     timeoutMs: effectiveTimeoutMs,
     abortSignal,
     env,
@@ -153,6 +164,17 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
       stderr: result.stderr,
       output_preview: result.stdout.slice(0, 500),
       parse_error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  if (page.timed_out) {
+    throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out: ${page.error ?? 'ETIMEDOUT'}`, {
+      operation,
+      status: page.status ?? null,
+      signal: page.signal ?? null,
+      stderr: String(page.stderr ?? ''),
+      error: page.error ?? 'ETIMEDOUT',
+      timeout_ms: effectiveTimeoutMs,
+      ...timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }),
     });
   }
   assertRipgrepOk(page, { operation, noMatchStatus, diagnosticError });

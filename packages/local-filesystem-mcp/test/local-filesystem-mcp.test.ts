@@ -156,6 +156,8 @@ trust_level = "untrusted"
   assert.ok(writeToolNames.includes('fs_delete_directory'));
   const applyPatchToolDescription = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.description;
   assert.match(String(applyPatchToolDescription), /unified diff or Codex-style apply_patch/);
+  const applyPatchToolSchema = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.inputSchema as Record<string, DynamicTestValue>;
+  assert.equal(applyPatchToolSchema.properties.timeout_ms.type, 'integer');
 
   const fakeUserHome = join(tempRoot, 'fake-user-home');
   const fakeCodexRoot = join(fakeUserHome, '.codex');
@@ -539,6 +541,7 @@ trust_level = "untrusted"
   const patchDryRun = call(writeState, 321, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, dry_run: true, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
   assert.equal(patchDryRun.result.structuredContent.status, 'checked');
   assert.equal(patchDryRun.result.structuredContent.dry_run, true);
+  assert.equal(patchDryRun.result.structuredContent.timeout_ms, 10000);
   assert.equal(patchDryRun.result.structuredContent.changed_files[0].operation, 'update');
   assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\ntwo\n');
   const unmatchedPatchGuard = call(writeState, 323, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, expected_sha256: { 'typo-patch.txt': sha256('one\ntwo\n') } });
@@ -552,6 +555,15 @@ trust_level = "untrusted"
   assert.equal(patchResponse.result.structuredContent.changed_files[0].operation, 'update');
   assert.equal(patchResponse.result.structuredContent.changed_files[0].relative_path, 'patch.txt');
   assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\npatched\n');
+
+  writeFileSync(join(trusted, 'patch-timeout.txt'), `${Array.from({ length: 80000 }, (_, index) => `line-${index}`).join('\n')}\n`, 'utf8');
+  const timeoutPatch = call(writeState, 324, 'fs_apply_patch', {
+    patch: `*** Begin Patch\n*** Update File: patch-timeout.txt\n@@\n-missing-line\n+replacement\n*** End Patch\n`,
+    timeout_ms: 1,
+  });
+  assert.equal(timeoutPatch.error.data.code, 'fs_apply_patch_timed_out');
+  assert.equal(timeoutPatch.error.data.details.timeout_kind, 'filesystem_operation_timeout');
+  assert.equal(timeoutPatch.error.data.details.timeout_ms, 1);
 
   writeFileSync(join(trusted, 'patch-header.txt'), 'old\n', 'utf8');
   const headerPatchResponse = call(writeState, 34, 'fs_apply_patch', {

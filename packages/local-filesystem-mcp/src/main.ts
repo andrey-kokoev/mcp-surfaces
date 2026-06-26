@@ -19,6 +19,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
 const READ_RESULT_INLINE_CHAR_LIMIT = 20_000;
 const READ_BUFFER_BYTES = 64 * 1024;
+const DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS = 10_000;
 const ROOTS_LIST_REQUEST_PREFIX = 'local_filesystem_roots_';
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/.git/**',
@@ -381,6 +382,7 @@ export function listTools(mode) {
       inputSchema: objectSchema({
         patch: { type: 'string' },
         dry_run: { type: 'boolean', default: false },
+        timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
         expected_sha256: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional map from patch paths to expected current file sha256 values.' },
       }, ['patch']),
     },
@@ -806,7 +808,11 @@ function applyPatchTool(args, state) {
   const dryRun = booleanField(args, 'dry_run') ?? false;
   const expectedSha256 = expectedSha256Map(args);
   const matchedExpectedSha256Keys = new Set();
-  const files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError });
+  const timeoutMs = filesystemOperationTimeoutMs(args);
+  const checkTimeout = createOperationTimeoutChecker('fs_apply_patch', timeoutMs);
+  checkTimeout('parse_patch_start');
+  const files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError, checkTimeout });
+  checkTimeout('parse_patch_complete');
   if (files.length === 0) {
     throw patchDiagnosticError('patch_contains_no_files', patch, {
       expected_format: 'unified_diff_or_codex_apply_patch',
@@ -814,6 +820,7 @@ function applyPatchTool(args, state) {
     });
   }
   const planned = files.map((filePatch) => {
+    checkTimeout('plan_file_start');
     const source = resolvePatchSource(filePatch, state);
     const target = resolvePatchTarget(filePatch, state);
     if (filePatch.oldPath !== '/dev/null' && !existsSync(source.path)) {
@@ -825,16 +832,20 @@ function applyPatchTool(args, state) {
     const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
     const matchedKey = assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before);
     if (matchedKey) matchedExpectedSha256Keys.add(matchedKey);
-    const patchContext = { diagnosticError };
+    checkTimeout('apply_file_patch_start');
+    const patchContext = { diagnosticError, checkTimeout };
     const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
+    checkTimeout('apply_file_patch_complete');
     return { filePatch, source, target, before, after };
   });
+  checkTimeout('planned_all_files');
   assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedExpectedSha256Keys);
   if (dryRun) {
     return {
       schema: 'local.filesystem.apply_patch.v1',
       status: 'checked',
       dry_run: true,
+      timeout_ms: timeoutMs,
       changed_files: planned.map((item) => ({
         ...pathMetadata(item.target.path, item.target.root),
         operation: patchOperation(item.filePatch, item.source, item.target),
@@ -854,6 +865,7 @@ function applyPatchTool(args, state) {
   }));
   try {
     for (const item of planned) {
+      checkTimeout('write_file_start');
       if (item.filePatch.deleteFile) {
         if (!existsSync(item.source.path)) throw diagnosticError('patch_delete_target_not_found', `patch_delete_target_not_found: ${item.source.path}`, pathMetadata(item.source.path, item.source.root));
         rmSync(item.source.path, { force: false });
@@ -865,12 +877,13 @@ function applyPatchTool(args, state) {
       const afterSha256 = item.filePatch.deleteFile ? null : sha256(item.after);
       appendAudit(state, 'fs_apply_patch', item.target.path, item.target.root, { patch_sha256: sha256(patch), before_sha256: sha256(item.before), after_sha256: afterSha256, hunks: item.filePatch.hunks.length });
       changed.push({ ...pathMetadata(item.target.path, item.target.root), operation: patchOperation(item.filePatch, item.source, item.target), hunks: item.filePatch.hunks.length, deleted: item.filePatch.deleteFile === true, before_sha256: sha256(item.before), after_sha256: afterSha256 });
+      checkTimeout('write_file_complete');
     }
   } catch (error) {
     rollbackPatch(backups);
     throw error;
   }
-  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', changed_files: changed };
+  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', changed_files: changed, timeout_ms: timeoutMs };
 }
 
 function movePathTool(args, state) {
@@ -1058,6 +1071,32 @@ function searchTimeoutMs(args) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return undefined;
   return Math.min(300_000, Math.max(1, value));
+}
+
+function filesystemOperationTimeoutMs(args) {
+  const value = integerField(args, 'timeout_ms');
+  if (value === null) return DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS;
+  return Math.min(300_000, Math.max(1, value));
+}
+
+function createOperationTimeoutChecker(operation, timeoutMs) {
+  const startedAt = Date.now();
+  return (phase = null) => {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs <= timeoutMs) return;
+    throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
+      timeout_kind: 'filesystem_operation_timeout',
+      operation,
+      phase,
+      timeout_ms: timeoutMs,
+      elapsed_ms: elapsedMs,
+      remediation: [
+        'Split the patch into smaller files or hunks and retry.',
+        'Inspect patch context for very large repeated blocks that can make hunk matching expensive.',
+        'Increase timeout_ms only after narrowing the patch scope.',
+      ],
+    });
+  };
 }
 
 function searchCachePolicy(args) {

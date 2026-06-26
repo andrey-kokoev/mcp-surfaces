@@ -15,13 +15,14 @@ async function run() {
   const limit = Math.max(1, Number(input.limit ?? 1));
   const complete = input.complete === true;
   const maxMatchBytes = Math.max(1, Number(input.max_match_bytes ?? 2 * 1024 * 1024));
+  const timeoutMs = Math.min(300_000, Math.max(1, Number(input.timeout_ms ?? 60_000)));
   const testDelayMs = Math.max(0, Number(process.env.NARADA_LOCAL_FILESYSTEM_SEARCH_RUNNER_DELAY_MS ?? 0));
   if (testDelayMs > 0) await delay(testDelayMs);
-  const result = await collectRipgrepPage(args, { offset, limit, complete, maxMatchBytes });
+  const result = await collectRipgrepPage(args, { offset, limit, complete, maxMatchBytes, timeoutMs });
   process.stdout.write(JSON.stringify(result));
 }
 
-function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchBytes }: { offset: number; limit: number; complete: boolean; maxMatchBytes: number }) {
+function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchBytes, timeoutMs }: { offset: number; limit: number; complete: boolean; maxMatchBytes: number; timeoutMs: number }) {
   return new Promise((resolvePromise) => {
     let resolved = false;
     const child = spawn('rg', args, {
@@ -38,6 +39,14 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
     let completeMemoryExceeded = false;
     let matchBytes = 0;
     let childError = null;
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stoppedEarly = true;
+      child.kill();
+      finish({ status: null, signal: null });
+    }, timeoutMs);
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk) => {
@@ -64,6 +73,7 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
     function finish({ status, signal }: { status: number | null; signal: NodeJS.Signals | null }) {
       if (resolved) return;
       resolved = true;
+      clearTimeout(timer);
       if (pending.trim() && !stoppedEarly) consumeLine(pending);
       const countExact = !stoppedEarly && !completeMemoryExceeded;
       const outputMatches = complete && !completeMemoryExceeded ? matches : pageMatches.slice(0, limit);
@@ -72,7 +82,8 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
         status,
         signal,
         stderr,
-        error: childError ? childError.message : null,
+        error: timedOut ? 'ETIMEDOUT' : childError ? childError.message : null,
+        timed_out: timedOut,
         stopped_early: stoppedEarly,
         count: countExact ? seen : null,
         count_exact: countExact,
