@@ -19,6 +19,15 @@ type ValidationFinding = {
 
 type JsonRecord = Record<string, unknown>;
 
+type McpInjectionScope = 'host' | 'user_site' | 'local_site';
+type McpRestartOwner = McpInjectionScope;
+type McpDefaultInjection = 'all_site_bound_sessions' | 'all_carrier_sessions';
+
+type McpAuthorityLocus =
+  | { kind: 'host' }
+  | { kind: 'user_site'; site_root: string }
+  | { kind: 'local_site'; site_root: string };
+
 type SurfaceDef = {
   id: string;
   package: string;
@@ -26,8 +35,23 @@ type SurfaceDef = {
   kind: 'mcp_surface' | 'site_tool';
   args: string[];
   tools: string[];
+  injection_scope?: McpInjectionScope;
+  default_injection?: McpDefaultInjection;
+  restart_owner?: McpRestartOwner;
   env_vars?: string[];
   sops_dir?: string;
+};
+
+type SurfaceScopeMetadata = {
+  injection_scope: McpInjectionScope;
+  authority_locus: McpAuthorityLocus;
+  mutation_locus: McpAuthorityLocus;
+  restart_owner: McpRestartOwner;
+};
+
+type NaradaScopeMetadata = SurfaceScopeMetadata & {
+  bound_into_site?: string;
+  scope_source: 'registrar_surface_catalog' | 'site_config_narada_scope' | 'site_config_legacy_top_level';
 };
 
 type SiteLocalSurface = {
@@ -74,7 +98,8 @@ type MaterializedServer = {
   local?: SiteLocalSurface;
   env_vars?: string[];
   enabled?: boolean;
-};
+  narada_scope: NaradaScopeMetadata;
+} & SurfaceScopeMetadata;
 
 type CarrierDef = {
   carrier_id: string;
@@ -88,6 +113,16 @@ type CarrierDef = {
 };
 
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
+const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
+
+const GIT_TOOLS = ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
+const GRAPH_MAIL_TOOLS = ['graph_mail_doctor', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
+const SITE_INBOX_TOOLS = ['inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_next', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_amend_capa', 'inbox_create_capa', 'inbox_export_disposition_ledger', 'inbox_stage_submission_workflow', 'inbox_submit_observation', 'inbox_submit_typed_envelope', 'capa_queue', 'capa_related', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'mcp_command_author_and_submit', 'mcp_command_create', 'mcp_command_show', 'mcp_command_submit', 'mcp_command_validate', 'mcp_output_show', 'mcp_result_show'];
+const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref'];
+const WORKER_DELEGATION_TOOLS = ['worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe'];
+const DELEGATED_TASK_TOOLS = ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
+const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach'];
+const REGISTRAR_TOOLS = ['registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'];
 
 const SURFACES: SurfaceDef[] = [
   {
@@ -109,7 +144,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/git-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--allowed-root', '{site_root}', '--mode', 'write'],
-    tools: ['git_policy_inspect', 'git_status', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_commit', 'git_push'],
+    tools: GIT_TOOLS,
   },
   {
     id: 'completion-audit', package: 'completion-audit-mcp',
@@ -123,7 +158,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: '{site_root}/tools/typed-mcp/inbox-mcp-server.mjs',
     kind: 'site_tool',
     args: ['--site-root', '{site_root}'],
-    tools: ['inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_next', 'capa_queue', 'capa_related'],
+    tools: SITE_INBOX_TOOLS,
   },
   {
     id: 'mailbox', package: 'mailbox-mcp',
@@ -137,7 +172,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/graph-mail-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['graph_mail_doctor', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'],
+    tools: GRAPH_MAIL_TOOLS,
   },
   {
     id: 'calendar', package: 'calendar-mcp',
@@ -151,7 +186,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['task_lifecycle_doctor'],
+    tools: TASK_LIFECYCLE_TOOLS,
   },
   {
     id: 'site-ops', package: 'site-ops-mcp',
@@ -172,14 +207,14 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence'],
+    tools: ['agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions'],
   },
   {
     id: 'worker-delegation', package: 'worker-delegation-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_root}/.narada/runtime/worker-delegation'],
-    tools: ['worker_policy_inspect', 'worker_output_show', 'worker_run', 'worker_edit', 'worker_resume'],
+    tools: WORKER_DELEGATION_TOOLS,
     env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
   },
   {
@@ -187,14 +222,14 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'],
-    tools: ['delegated_task_policy_inspect', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status'],
+    tools: DELEGATED_TASK_TOOLS,
   },
   {
     id: 'sop', package: 'sop-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'],
-    tools: ['sop_template_create', 'sop_template_show', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_run_start', 'sop_run_status', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events'],
+    tools: ['sop_doctor', 'sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events'],
     sops_dir: `${MCP_SURFACES_ROOT}/sop-mcp/sops`,
   },
   {
@@ -209,14 +244,15 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/mcp-loader-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--allowed-site-root', 'D:/code', '--allowed-entrypoint-prefix', `${MCP_SURFACES_ROOT}/`, '--allowed-entrypoint-prefix', '{site_root}/tools/'],
-    tools: ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_call_tool', 'mcp_loader_detach'],
+    tools: MCP_LOADER_TOOLS,
   },
   {
     id: 'mcp-registrar', package: 'mcp-registrar',
     entrypoint: `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`,
     kind: 'mcp_surface',
     args: [],
-    tools: ['registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync'],
+    tools: REGISTRAR_TOOLS,
+    injection_scope: 'user_site',
     sops_dir: `${MCP_SURFACES_ROOT}/mcp-registrar/sops`,
   },
   {
@@ -224,7 +260,8 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--feedback-root', 'D:/code/mcp-surfaces'],
-    tools: ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+    tools: ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+    injection_scope: 'user_site',
   },
   {
     id: 'launcher', package: 'launcher-mcp',
@@ -232,13 +269,16 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--narada-root', 'C:/Users/Andrey/Narada'],
     tools: ['launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
+    injection_scope: 'user_site',
   },
   {
     id: 'speech', package: 'speech-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: [],
-    tools: ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
+    tools: ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
+    injection_scope: 'host',
+    default_injection: 'all_carrier_sessions',
     env_vars: ['OPENAI_API_KEY'],
   },
   {
@@ -444,6 +484,51 @@ export function siteBindSidecarRefusal(site: SiteDef, surfaceId: string, options
     reason: 'This Site has an authoritative aggregate MCP fabric. registrar_site_bind would create a sidecar snippet, so it is refused unless allow_sidecar is explicitly true.',
     required_next_step: 'Update the aggregate MCP fabric through the Site materialization path, or pass allow_sidecar=true only for an intentional compatibility sidecar.',
   };
+}
+
+function naradaScopeMetadata(surfaceId: string, siteRoot = '{site_root}', boundIntoSite?: string): NaradaScopeMetadata {
+  const metadata = surfaceScopeMetadata(surfaceId, siteRoot);
+  return {
+    ...metadata,
+    ...(boundIntoSite ? { bound_into_site: boundIntoSite } : {}),
+    scope_source: 'registrar_surface_catalog',
+  };
+}
+
+function isInjectionScope(value: unknown): value is McpInjectionScope {
+  return value === 'host' || value === 'user_site' || value === 'local_site';
+}
+
+function locusFromRecord(value: unknown): McpAuthorityLocus | null {
+  const record = asRecord(value);
+  if (record.kind === 'host') return { kind: 'host' };
+  if (record.kind === 'user_site' && typeof record.site_root === 'string') return { kind: 'user_site', site_root: record.site_root };
+  if (record.kind === 'local_site' && typeof record.site_root === 'string') return { kind: 'local_site', site_root: record.site_root };
+  return null;
+}
+
+function naradaScopeFromRecord(record: JsonRecord, source: NaradaScopeMetadata['scope_source']): NaradaScopeMetadata | null {
+  const injectionScope = isInjectionScope(record.injection_scope) ? record.injection_scope : null;
+  const authorityLocus = locusFromRecord(record.authority_locus);
+  const mutationLocus = locusFromRecord(record.mutation_locus);
+  const restartOwner = isInjectionScope(record.restart_owner) ? record.restart_owner : null;
+  if (!injectionScope || !authorityLocus || !mutationLocus || !restartOwner) return null;
+  return {
+    injection_scope: injectionScope,
+    authority_locus: authorityLocus,
+    mutation_locus: mutationLocus,
+    restart_owner: restartOwner,
+    ...(typeof record.bound_into_site === 'string' ? { bound_into_site: record.bound_into_site } : {}),
+    scope_source: source,
+  };
+}
+
+function readNaradaScope(serverRecord: JsonRecord, fallbackSurfaceId: string, fallbackSiteRoot: string, fallbackBoundSite?: string): NaradaScopeMetadata {
+  const nested = naradaScopeFromRecord(asRecord(serverRecord.narada_scope), 'site_config_narada_scope');
+  if (nested) return nested;
+  const legacy = naradaScopeFromRecord(serverRecord, 'site_config_legacy_top_level');
+  if (legacy) return legacy;
+  return naradaScopeMetadata(fallbackSurfaceId, fallbackSiteRoot, fallbackBoundSite);
 }
 
 export async function handleRequest(request: JsonRecord, state: RegistrarState) {
@@ -678,6 +763,20 @@ export function listTools() {
       annotations: { title: 'registrar_site_mcp_fabric_validate', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
+    {
+      name: 'registrar_surface_tool_inventory_check',
+      description: 'Compare registrar surface tool metadata with observed MCP tools/list names and report per-surface drift.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          observed_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Map of surface id to observed tools/list names.' },
+          include_ok: { type: 'boolean', description: 'Include passing surfaces in the output.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'registrar_surface_tool_inventory_check', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
   ];
 }
 
@@ -701,6 +800,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_carrier_diff': result = registrarCarrierDiff(args); break;
     case 'registrar_surface_usage': result = registrarSurfaceUsage(args); break;
     case 'registrar_site_mcp_fabric_validate': result = registrarSiteMcpFabricValidate(args); break;
+    case 'registrar_surface_tool_inventory_check': result = registrarSurfaceToolInventoryCheck(args); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
@@ -784,6 +884,61 @@ function resolveEntrypoint(surface: SurfaceDef, siteId: string, siteRoot: string
   return resolve(interpolated);
 }
 
+function catalogSurface(surfaceId: string): SurfaceDef | undefined {
+  return SURFACES.find((surface) => surface.id === surfaceId);
+}
+
+function injectionScopeForSurface(surfaceId: string): McpInjectionScope {
+  return catalogSurface(surfaceId)?.injection_scope ?? 'local_site';
+}
+
+function restartOwnerForSurface(surfaceId: string, injectionScope: McpInjectionScope): McpRestartOwner {
+  return catalogSurface(surfaceId)?.restart_owner ?? injectionScope;
+}
+
+function locusForScope(scope: McpInjectionScope, siteRoot: string): McpAuthorityLocus {
+  if (scope === 'host') return { kind: 'host' };
+  if (scope === 'user_site') return { kind: 'user_site', site_root: USER_NARADA_ROOT };
+  return { kind: 'local_site', site_root: siteRoot };
+}
+
+function surfaceScopeMetadata(surfaceId: string, siteRoot = '{site_root}'): SurfaceScopeMetadata {
+  const injectionScope = injectionScopeForSurface(surfaceId);
+  const locus = locusForScope(injectionScope, siteRoot);
+  return {
+    injection_scope: injectionScope,
+    authority_locus: locus,
+    mutation_locus: locus,
+    restart_owner: restartOwnerForSurface(surfaceId, injectionScope),
+  };
+}
+
+function scopeDiagnosticClass(scope: McpInjectionScope): string {
+  if (scope === 'host') return 'host_injected_surface_missing_or_misconfigured_in_session';
+  if (scope === 'user_site') return 'user_site_injected_surface_missing_or_misconfigured_in_session';
+  return 'local_site_surface_missing_or_misconfigured';
+}
+
+function validationScopeDetail(surfaceId: string, siteRoot: string): JsonRecord {
+  const metadata = surfaceScopeMetadata(surfaceId, siteRoot);
+  const naradaScope = naradaScopeMetadata(surfaceId, siteRoot);
+  return {
+    ...metadata,
+    narada_scope: naradaScope,
+    diagnostic_class: scopeDiagnosticClass(metadata.injection_scope),
+    required_repair_locus: metadata.mutation_locus,
+  };
+}
+
+function scopeFindingDetail(naradaScope: NaradaScopeMetadata): JsonRecord {
+  return {
+    ...naradaScope,
+    narada_scope: naradaScope,
+    diagnostic_class: scopeDiagnosticClass(naradaScope.injection_scope),
+    required_repair_locus: naradaScope.mutation_locus,
+  };
+}
+
 function resolveLocalEntrypoint(local: SiteLocalSurface, siteRoot: string): string {
   const normalized = local.path.replace(/\\/g, '/');
   return resolve(siteRoot, normalized);
@@ -854,6 +1009,7 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
   const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
+  const naradaScope = naradaScopeMetadata(surfaceId, site.root, site.site_id);
   return {
     key: serverKey,
     server: {
@@ -861,6 +1017,8 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
       entrypoint: resolvedEntrypoint,
       args: resolvedArgs,
       surface,
+      ...naradaScope,
+      narada_scope: naradaScope,
     },
   };
 }
@@ -887,6 +1045,7 @@ function materializeLocalSurface(binding: SiteBinding, site: SiteDef, local: Sit
     }
     args.push('--output-root', site.root);
   }
+  const naradaScope = naradaScopeMetadata(local.surface_id, site.root, site.site_id);
   return {
     key: serverKey,
     server: {
@@ -895,8 +1054,19 @@ function materializeLocalSurface(binding: SiteBinding, site: SiteDef, local: Sit
       command: local.command,
       args,
       local,
+      ...naradaScope,
+      narada_scope: naradaScope,
     },
   };
+}
+
+export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
+  const explicit = binding.surfaces === 'all' ? SURFACES.map((surface) => surface.id) : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
+  const ids = new Set(explicit);
+  for (const surface of SURFACES) {
+    if (surface.default_injection === 'all_site_bound_sessions' || surface.default_injection === 'all_carrier_sessions') ids.add(surface.id);
+  }
+  return Array.from(ids);
 }
 
 function collectCarrierServers(carrier: CarrierDef): Record<string, MaterializedServer> {
@@ -904,7 +1074,7 @@ function collectCarrierServers(carrier: CarrierDef): Record<string, Materialized
   for (const binding of carrier.site_bindings) {
     const site = lookupSite(binding.site_id);
     const extraRoots = dedupeRoots([site.root, ...(carrier.extra_allowed_roots ?? []), ...(binding.extra_allowed_roots ?? [])]);
-    const sharedSurfaceIds = binding.surfaces === 'all' ? SURFACES.map((s) => s.id) : binding.surfaces;
+    const sharedSurfaceIds = sharedSurfaceIdsForBinding(binding);
     for (const surfaceId of sharedSurfaceIds) {
       const { key, server } = materializeSharedSurface(binding, site, surfaceId, extraRoots);
       if (servers[key]) {
@@ -933,6 +1103,23 @@ function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): st
       return serverSurfaceId === surfaceId;
     })
     .map(([key]) => key);
+}
+
+function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
+  const counts: Record<McpInjectionScope, number> = { host: 0, user_site: 0, local_site: 0 };
+  const servers = Object.entries(collectCarrierServers(carrier)).map(([serverKey, server]) => {
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    counts[server.injection_scope]++;
+    return {
+      server_key: serverKey,
+      surface_id: surfaceId,
+      injection_scope: server.injection_scope,
+      authority_locus: server.authority_locus,
+      restart_owner: server.restart_owner,
+      narada_scope: server.narada_scope,
+    };
+  });
+  return { counts, servers };
 }
 
 function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, surfaceId: string): MaterializedServer {
@@ -1028,6 +1215,7 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
 function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
+  const injectionSummary = carrierInjectionSummary(carrier);
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
     case 'opencode': result = emitOpencodeConfig(carrier); break;
@@ -1041,12 +1229,13 @@ function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
     mkdirSync(dir, { recursive: true });
     writeFileSync(outputPath, result.content, 'utf8');
   }
-  return { status: 'materialized', carrier_id: carrierId, kind: carrier.kind, output_path: outputPath, byte_size: Buffer.byteLength(result.content, 'utf8') };
+  return { status: 'materialized', carrier_id: carrierId, kind: carrier.kind, output_path: outputPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scopes: injectionSummary };
 }
 
 function registrarCarrierApply(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
+  const injectionSummary = carrierInjectionSummary(carrier);
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
     case 'opencode': result = emitOpencodeConfig(carrier); break;
@@ -1062,7 +1251,7 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
   const dir = resolve(configPath, '..');
   mkdirSync(dir, { recursive: true });
   writeFileSync(configPath, result.content, 'utf8');
-  return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8') };
+  return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scope_counts: injectionSummary.counts };
 }
 
 function registrarCarrierValidate(args: JsonRecord): JsonRecord {
@@ -1080,11 +1269,12 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
   const rawServers = collectCarrierServers(carrier);
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const scopeDetail = scopeFindingDetail(server.narada_scope);
     if (seenKeys.has(key)) {
-      add('error', 'registrar_duplicate_server_key', `Server key '${key}' is produced by both '${seenKeys.get(key)}' and '${surfaceId}'`, { server_key: key, surface_id: surfaceId });
+      add('error', 'registrar_duplicate_server_key', `Server key '${key}' is produced by both '${seenKeys.get(key)}' and '${surfaceId}'`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
     } else {
       seenKeys.set(key, surfaceId);
-      if (includeOk) add('info', 'registrar_server_key_ok', `Server key '${key}' resolved for surface '${surfaceId}'`, { server_key: key, surface_id: surfaceId });
+      if (includeOk) add('info', 'registrar_server_key_ok', `Server key '${key}' resolved for surface '${surfaceId}'`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
     }
   }
 
@@ -1092,10 +1282,11 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
+    const scopeDetail = scopeFindingDetail(server.narada_scope);
     if (!existsSync(overridden.entrypoint)) {
-      add('error', 'registrar_missing_entrypoint', `Entrypoint for '${key}' does not exist: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint });
+      add('error', 'registrar_missing_entrypoint', `Entrypoint for '${key}' does not exist: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     } else if (includeOk) {
-      add('info', 'registrar_entrypoint_exists', `Entrypoint for '${key}' exists: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint });
+      add('info', 'registrar_entrypoint_exists', `Entrypoint for '${key}' exists: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     }
 
     // Allowed-root requirement
@@ -1107,9 +1298,9 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
         }
       }
       if (allowedRoots.length === 0) {
-        add('error', 'registrar_missing_allowed_root', `Surface '${surfaceId}' requires at least one --allowed-root but '${key}' has none`, { server_key: key, surface_id: surfaceId });
+        add('error', 'registrar_missing_allowed_root', `Surface '${surfaceId}' requires at least one --allowed-root but '${key}' has none`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
       } else if (includeOk) {
-        add('info', 'registrar_allowed_root_ok', `Surface '${surfaceId}' on '${key}' has ${allowedRoots.length} allowed root(s)`, { server_key: key, surface_id: surfaceId, allowed_roots: allowedRoots });
+        add('info', 'registrar_allowed_root_ok', `Surface '${surfaceId}' on '${key}' has ${allowedRoots.length} allowed root(s)`, { server_key: key, surface_id: surfaceId, allowed_roots: allowedRoots, ...scopeDetail });
       }
     }
 
@@ -1117,9 +1308,9 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
     if (surfaceId === 'local-filesystem' || surfaceId === 'local-filesystem-mcp.local') {
       const hasOutputRoot = overridden.args.some((a) => a === '--output-root');
       if (!hasOutputRoot) {
-        add('warning', 'registrar_missing_output_root', `Filesystem surface '${key}' is missing --output-root`, { server_key: key, surface_id: surfaceId });
+        add('warning', 'registrar_missing_output_root', `Filesystem surface '${key}' is missing --output-root`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
       } else if (includeOk) {
-        add('info', 'registrar_output_root_ok', `Filesystem surface '${key}' has --output-root`, { server_key: key, surface_id: surfaceId });
+        add('info', 'registrar_output_root_ok', `Filesystem surface '${key}' has --output-root`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
       }
     }
   }
@@ -1134,6 +1325,12 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
     warnings,
     findings,
   };
+}
+
+function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
+  const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
+  const site = lookupSite(siteId);
+  return validateSiteMcpFabric(site, args.include_ok === true);
 }
 
 function registrarCarrierDiff(args: JsonRecord): JsonRecord {
@@ -1237,7 +1434,44 @@ function parseCodexToml(content: string): JsonRecord {
 }
 
 function registrarSurfaceList(_args: JsonRecord): JsonRecord {
-  return { items: SURFACES, count: SURFACES.length };
+  return {
+    items: SURFACES.map((surface) => ({
+      ...surface,
+      ...surfaceScopeMetadata(surface.id),
+      narada_scope: naradaScopeMetadata(surface.id),
+    })),
+    count: SURFACES.length,
+  };
+}
+
+function registrarSurfaceToolInventoryCheck(args: JsonRecord): JsonRecord {
+  const observedInput = asRecord(args.observed_tools);
+  const includeOk = args.include_ok === true;
+  const surfaces = SURFACES.filter((surface) => Object.hasOwn(observedInput, surface.id));
+  const findings = surfaces.flatMap((surface) => {
+    const registered = uniqueStrings(surface.tools);
+    const observed = uniqueStrings(Array.isArray(observedInput[surface.id]) ? (observedInput[surface.id] as unknown[]).map(String) : []);
+    const missing_from_registrar = observed.filter((tool) => !registered.includes(tool));
+    const extra_in_registrar = registered.filter((tool) => !observed.includes(tool));
+    const status = missing_from_registrar.length === 0 && extra_in_registrar.length === 0 ? 'ok' : 'drift';
+    if (status === 'ok' && !includeOk) return [];
+    return [{
+      surface_id: surface.id,
+      package: surface.package,
+      status,
+      registered_count: registered.length,
+      observed_count: observed.length,
+      missing_from_registrar,
+      extra_in_registrar,
+    }];
+  });
+  return {
+    schema: 'narada.registrar.surface_tool_inventory_check.v1',
+    status: findings.some((finding) => finding.status === 'drift') ? 'drift' : 'ok',
+    checked_count: surfaces.length,
+    surfaces_without_observations: SURFACES.map((surface) => surface.id).filter((surfaceId) => !Object.hasOwn(observedInput, surfaceId)),
+    findings,
+  };
 }
 
 function registrarSiteList(_args: JsonRecord): JsonRecord {
@@ -1280,6 +1514,8 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteId}-${surfaceId}-mcp.json`;
   const resolvedArgs = interpolateArgs(surface.args, siteId, site.root);
+  const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root);
+  const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
 
   return {
@@ -1297,7 +1533,10 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
           tools: surface.tools,
           env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT', ...(surface.env_vars ?? [])],
           surface_id: `${surfaceId}-mcp.${siteId}`,
-          authority_posture: 'site_local_mcp_surface',
+          authority_posture: scopeMetadata.injection_scope === 'local_site' ? 'site_local_mcp_surface' : `${scopeMetadata.injection_scope}_injected_mcp_surface`,
+          ...scopeMetadata,
+          bound_into_site: siteId,
+          narada_scope: naradaScope,
         },
       },
     },
@@ -1372,7 +1611,7 @@ function registrarSurfaceUsage(args: JsonRecord): JsonRecord {
   for (const carrier of CARRIERS) {
     for (const binding of carrier.site_bindings) {
       const site = lookupSite(binding.site_id);
-      const sharedIds = binding.surfaces === 'all' ? SURFACES.map((s) => s.id) : binding.surfaces;
+      const sharedIds = sharedSurfaceIdsForBinding(binding);
       if (!isLocal && sharedIds.includes(surfaceId)) {
         matchingCarriers.push({ carrier_id: carrier.carrier_id, kind: carrier.kind, via: 'shared', site_id: binding.site_id });
       }
@@ -1408,6 +1647,7 @@ type SiteMcpFabricServer = {
   args: string[];
   entrypoint: string;
   surface_id?: string;
+  narada_scope: NaradaScopeMetadata;
   source_file: string;
 };
 
@@ -1433,6 +1673,7 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
     const mcpServers = asRecord(cfg.mcpServers);
     for (const [serverKey, rawServer] of Object.entries(mcpServers)) {
       const server = asRecord(rawServer);
+      const surfaceId = fabricSurfaceId(serverKey, site);
       let command = server.command ?? 'node';
       let args: string[] = [];
       if (Array.isArray(command)) {
@@ -1466,6 +1707,7 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
         args: resolvedArgs,
         entrypoint,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
+        narada_scope: readNaradaScope(server, surfaceId, site.root, site.site_id),
         source_file: file,
       });
     }
@@ -1483,10 +1725,8 @@ function fabricSurfaceId(serverKey: string, site: SiteDef): string {
   return serverKey;
 }
 
-function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
-  const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
-  const site = lookupSite(siteId);
-  const includeOk = args.include_ok === true;
+export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRecord {
+  const siteId = site.site_id;
   const findings: ValidationFinding[] = [];
 
   function add(severity: ValidationFinding['severity'], code: string, message: string, detail: JsonRecord = {}) {
@@ -1501,22 +1741,22 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
 
   const seenKeys = new Set<string>();
   for (const server of servers) {
+    const surfaceId = fabricSurfaceId(server.server_key, site);
+    const scopeDetail = scopeFindingDetail(server.narada_scope);
     if (seenKeys.has(server.server_key)) {
-      add('error', 'registrar_site_fabric_duplicate_server_key', `Duplicate server key '${server.server_key}' in site fabric`, { site_id: siteId, server_key: server.server_key, source_file: server.source_file });
+      add('error', 'registrar_site_fabric_duplicate_server_key', `Duplicate server key '${server.server_key}' in site fabric`, { site_id: siteId, server_key: server.server_key, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail });
     } else {
       seenKeys.add(server.server_key);
-      if (includeOk) { add('info', 'registrar_site_fabric_server_key_ok', `Server key '${server.server_key}' found`, { site_id: siteId, server_key: server.server_key, source_file: server.source_file }); }
+      if (includeOk) { add('info', 'registrar_site_fabric_server_key_ok', `Server key '${server.server_key}' found`, { site_id: siteId, server_key: server.server_key, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail }); }
     }
 
     // Entrypoint existence
     const resolvedEntrypoint = resolve(server.entrypoint);
     if (!existsSync(resolvedEntrypoint)) {
-      add('error', 'registrar_site_fabric_missing_entrypoint', `Entrypoint for '${server.server_key}' does not exist: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file });
+      add('error', 'registrar_site_fabric_missing_entrypoint', `Entrypoint for '${server.server_key}' does not exist: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail });
     } else if (includeOk) {
-      add('info', 'registrar_site_fabric_entrypoint_exists', `Entrypoint for '${server.server_key}' exists: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file });
+      add('info', 'registrar_site_fabric_entrypoint_exists', `Entrypoint for '${server.server_key}' exists: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail });
     }
-
-    const surfaceId = fabricSurfaceId(server.server_key, site);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -1527,9 +1767,9 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
         }
       }
       if (allowedRoots.length === 0) {
-        add('error', 'registrar_site_fabric_missing_allowed_root', `Surface '${surfaceId}' requires at least one --allowed-root but '${server.server_key}' has none`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file });
+        add('error', 'registrar_site_fabric_missing_allowed_root', `Surface '${surfaceId}' requires at least one --allowed-root but '${server.server_key}' has none`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       } else if (includeOk) {
-        add('info', 'registrar_site_fabric_allowed_root_ok', `Surface '${surfaceId}' on '${server.server_key}' has ${allowedRoots.length} allowed root(s)`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, allowed_roots: allowedRoots, source_file: server.source_file });
+        add('info', 'registrar_site_fabric_allowed_root_ok', `Surface '${surfaceId}' on '${server.server_key}' has ${allowedRoots.length} allowed root(s)`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, allowed_roots: allowedRoots, source_file: server.source_file, ...scopeDetail });
       }
     }
 
@@ -1537,9 +1777,9 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
     if (surfaceId === 'local-filesystem' || surfaceId === 'local-filesystem-mcp.local') {
       const hasOutputRoot = server.args.some((a) => a === '--output-root');
       if (!hasOutputRoot) {
-        add('warning', 'registrar_site_fabric_missing_output_root', `Filesystem surface '${server.server_key}' is missing --output-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file });
+        add('warning', 'registrar_site_fabric_missing_output_root', `Filesystem surface '${server.server_key}' is missing --output-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       } else if (includeOk) {
-        add('info', 'registrar_site_fabric_output_root_ok', `Filesystem surface '${server.server_key}' has --output-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file });
+        add('info', 'registrar_site_fabric_output_root_ok', `Filesystem surface '${server.server_key}' has --output-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       }
     }
 
@@ -1547,9 +1787,9 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
     if (['agent-context', 'task-lifecycle', 'site-inbox', 'site-ops', 'mailbox', 'graph-mail', 'surface-feedback', 'delegated-task'].includes(surfaceId)) {
       const hasSiteRoot = server.args.some((a) => a === '--site-root');
       if (!hasSiteRoot) {
-        add('warning', 'registrar_site_fabric_missing_site_root', `Surface '${surfaceId}' on '${server.server_key}' is missing --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file });
+        add('warning', 'registrar_site_fabric_missing_site_root', `Surface '${surfaceId}' on '${server.server_key}' is missing --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       } else if (includeOk) {
-        add('info', 'registrar_site_fabric_site_root_ok', `Surface '${surfaceId}' on '${server.server_key}' has --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file });
+        add('info', 'registrar_site_fabric_site_root_ok', `Surface '${surfaceId}' on '${server.server_key}' has --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       }
     }
   }
@@ -1787,6 +2027,10 @@ function optionalString(value: unknown): string | null {
 
 function asRecord(value: unknown): JsonRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return [...new Set(values.map(String).filter(Boolean))];
 }
 
 function diagnosticError(code: string, message: string = code, details: JsonRecord = {}) {

@@ -19,6 +19,10 @@ caller intent
 
 Surfaces must be ergonomic, but ergonomics must compose governed primitives rather than hiding authority or evidence.
 
+Surface visibility inside a session is not the same thing as surface ownership.
+See `mcp-injection-scopes.md` for the doctrine that separates host, user-site,
+and local-site MCP injection scopes from session aliases.
+
 ## Surface Contract Invariants
 
 Every surface should make these properties inspectable or mechanically enforced when relevant:
@@ -31,6 +35,11 @@ Every surface should make these properties inspectable or mechanically enforced 
 - **Observation/evidence separation**: readback, CLI output, and generated summaries are observations until a surface admits them as evidence under its lifecycle rules.
 - **Precise refusal**: expected failures use domain-specific error/status codes with actionable remediation; no policy failure should fall through to a generic unhandled error.
 - **No host-policy leakage**: Codex, OpenCode, `agent-cli`, and other MCP hosts may invoke the same surface, but host identity must not silently change policy.
+- **Explicit injection scope**: bound surfaces should distinguish session alias from authority locus, mutation locus, and restart owner. A host-injected or user-site-injected surface may be visible in a local site session without becoming local-site-owned. New producers should expose this as `narada_scope`; readers should prefer `narada_scope`, then fall back to legacy flattened fields, then catalog/default scope.
+
+See `mcp-output-refusal-conventions.md` for the cross-surface output reference,
+payload reference, and refusal conventions that support these invariants without
+forcing all surfaces into one domain schema.
 
 ## Boundary Rules By Package Family
 
@@ -148,4 +157,3 @@ These candidates are intentionally phrased as task payload material. Before crea
 - Surfaces: `local-filesystem-mcp`, `structured-command-mcp`, `git-mcp`, `worker-delegation-mcp`, `task-lifecycle-mcp`.
 - Public behavior: document and test common output/ref/refusal conventions without forcing all surfaces into one domain schema.
 - Tests: package-local tests for touched surfaces plus root `pnpm test` if shared transport helpers change.
-

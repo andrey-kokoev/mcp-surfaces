@@ -109,6 +109,7 @@ export type WorkerResolvedExecutionPolicy = {
   provider?: string | null;
   provider_source?: string;
   provider_env_key?: string;
+  worker_mcp_projection?: Record<string, unknown>;
   sandbox: SandboxMode;
   model: string | null;
   reasoning_effort: string | null;

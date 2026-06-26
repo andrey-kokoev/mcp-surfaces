@@ -4,7 +4,9 @@ param(
   [string]$Command = "agent-start",
   [Alias("AgentId")]
   [string]$Agent,
-  [string]$Runtime = "agent-cli",
+  [string]$Carrier = "agent-cli",
+
+  [string]$Runtime,
   [switch]$Exec,
   [switch]$DryRun,
   [switch]$Json,
@@ -41,6 +43,7 @@ if (-not $Agent) {
 }
 
 $flags = @($Agent, "--target-site-root", $siteRoot, "--site-root", $siteRoot, "--launch-source", "$($MyInvocation.MyCommand.Name) agent-start")
+if ($Carrier) { $flags += @("--carrier", $Carrier) }
 if ($Runtime) { $flags += @("--runtime", $Runtime) }
 if ($Exec) { $flags += "--exec" }
 if ($DryRun) { $flags += "--dry-run" }

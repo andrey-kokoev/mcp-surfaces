@@ -1,0 +1,78 @@
+import type { WorkerDelegationMode, WorkerIntent, WorkerPreflightCheck } from './worker-types.js';
+
+export type WorkerPromptOptions = {
+  intent: WorkerIntent;
+  cwd: string;
+  mode: WorkerDelegationMode;
+  runtime: string;
+  preflight: WorkerPreflightCheck[];
+  outputContract: Record<string, unknown>;
+  exitInterview: boolean;
+};
+
+export function buildWorkerPrompt(options: WorkerPromptOptions): string {
+  return [
+    'Intent',
+    options.intent.instruction,
+    '',
+    'Requested mode',
+    options.mode,
+    '',
+    'Working directory',
+    options.cwd,
+    '',
+    'Preflight evidence',
+    ...options.preflight.map((check) => `- ${check.status} ${check.name}: ${check.message}`),
+    '',
+    'Mode contract',
+    options.mode === 'audit_only' ? 'Audit only: inspect and report. Do not edit files or change target state.' : options.mode === 'plan_only' ? 'Plan only: produce an implementation plan. Do not edit files or change target state.' : options.mode === 'implement_and_verify' ? 'Implement and verify: make the requested changes, run appropriate checks, and report files changed plus verification.' : 'Implement: make the requested changes and report files changed plus remaining verification needs.',
+    '',
+    'Recursion guard',
+    'Do not call any worker_* MCP tools.',
+    '',
+    'Tool use discipline',
+    'Prefer available MCP filesystem, git, and structured-command tools for inspection and verification.',
+    'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
+    'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
+    'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    ...(options.mode === 'audit_only' || options.mode === 'plan_only' ? [
+      'For focused source inspection, read target files directly through available filesystem MCP tools such as fs_read_file_range and fs_grep_search. Do not ask the delegating caller to provide output_refs for ordinary source files.',
+      'If a file is large, generated, or secret-bearing, keep reads bounded and cite the file/path plus relevant line window rather than copying full content.',
+    ] : []),
+    '',
+    'Verification budget discipline',
+    'Classify every verification command as focused, broad, or not_applicable in verification[].command_classification.',
+    'Focused commands directly validate the requested package or touched files. Broad commands cover unrelated packages, whole-repo suites, or wide scans.',
+    'Respect verification_budget and test_budget from the structured output contract. If stop_on_first_failure is true, stop after the first blocking focused failure.',
+    'Report verification_budget_respected as true, false, or null, and list broad unrelated failures only in broad_unrelated_failures.',
+    ...(options.runtime === 'narada-agent-runtime-server' ? [
+      '',
+      'NARS worker completion guard',
+      'You are running under narada-agent-runtime-server as an automated worker. Complete this turn by returning the required JSON object; do not wait for operator input.',
+      'Do not call lifecycle, pause, sleep, wait, delegation, or worker_* tools from inside this worker turn.',
+      'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as narada-andrey-filesystem when they are not explicitly available.',
+      'If a tool call returns admission_required, surface_registry_tool_not_declared, mcp_runtime_fault, or any unavailable-tool error, stop using that tool family and return the required JSON with the issue in residual_risks or observed_incoherencies.',
+      'For tasks answerable from the delegated intent, preflight evidence, or current prompt, do not probe filesystem tools just to gather extra context.',
+    ] : []),
+    '',
+    'Structured output contract',
+    JSON.stringify(options.outputContract),
+    ...(options.mode === 'audit_only' ? [
+      'For audit_only, include concise findings in deliverables as machine-readable JSON strings when possible, using severity, path, recommendation, confidence_level, and evidence_refs.',
+    ] : []),
+    '',
+    'Output requirements',
+    'Return one JSON object matching worker_output.schema.json.',
+    'For audit_only or plan_only, explicitly state that edits_performed=false in the summary if no files were changed.',
+    'Always include explicit edits_performed, target_state_changed, changes, and verification fields.',
+    'Always include explicit verification_budget_respected and broad_unrelated_failures fields.',
+    'For implement or implement_and_verify, list changed files in changes and checks run in verification.',
+    ...(options.exitInterview ? [
+      '',
+      'Exit interview',
+      'Include exit_interview in the output JSON with ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements.',
+      'Focus on concrete tool/interface friction encountered during this delegated run, including anything that made progress harder, ambiguous, slower, or less observable.',
+    ] : []),
+    '',
+  ].join('\n');
+}

@@ -179,6 +179,12 @@ function launcherDoctor(state: LauncherState): JsonRecord {
     option_matrix_script: matrixScript,
     option_matrix_script_exists: existsSync(matrixScript),
     execution_posture: 'read_only_no_launch_no_shell',
+    mcp_injection_scope_doctrine: {
+      scopes: ['host', 'user_site', 'local_site'],
+      ownership_rule: 'Session visibility is not ownership; launcher diagnostics must preserve the surface authority locus and restart owner.',
+      canonical_host_example: 'speech',
+      scope_source: 'mcp-registrar',
+    },
   };
 }
 

@@ -1,20 +1,13 @@
 import { spawn } from 'node:child_process';
-import { createWriteStream, readFileSync } from 'node:fs';
+import { createWriteStream } from 'node:fs';
 import { extname } from 'node:path';
 import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
+export { parseLastMessage, parseResult, resultStatus } from './output-contract.js';
+export type { WorkerBroadUnrelatedFailure, WorkerChange, WorkerExitInterview, WorkerOutput, WorkerOutputParseResult, WorkerRunTerminalStatus, WorkerVerification, WorkerVerificationCommandClassification } from './output-contract.js';
 
 export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
-export type WorkerChange = { path: string; status: string; summary: string };
-export type WorkerVerificationCommandClassification = 'focused' | 'broad' | 'not_applicable';
-export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string; command_classification?: WorkerVerificationCommandClassification };
-export type WorkerBroadUnrelatedFailure = { command: string | null; status: string; summary: string };
-export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null };
-export type WorkerOutputParseResult =
-  | { ok: true; data: WorkerOutput }
-  | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
 
 export function runtimeName(): 'codex' {
   return 'codex';
@@ -160,81 +153,6 @@ export async function runCodexInvocation(options: {
   });
 }
 
-export function parseLastMessage(path: string): WorkerOutputParseResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, reason: message.includes('ENOENT') ? 'missing_file' : 'invalid_json', message };
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, reason: 'invalid_shape', message: 'last_message must be an object' };
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.summary !== 'string') return { ok: false, reason: 'invalid_shape', message: 'summary must be a string' };
-  if (!Array.isArray(record.deliverables)) return { ok: false, reason: 'invalid_shape', message: 'deliverables must be an array' };
-  if (!Array.isArray(record.open_questions)) return { ok: false, reason: 'invalid_shape', message: 'open_questions must be an array' };
-  if (!Array.isArray(record.next_actions)) return { ok: false, reason: 'invalid_shape', message: 'next_actions must be an array' };
-  if (typeof record.edits_performed !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'edits_performed must be a boolean' };
-  if (typeof record.target_state_changed !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'target_state_changed must be a boolean' };
-  if (!Array.isArray(record.changes)) return { ok: false, reason: 'invalid_shape', message: 'changes must be an array' };
-  if (!Array.isArray(record.verification)) return { ok: false, reason: 'invalid_shape', message: 'verification must be an array' };
-  const deliverables: { path: string; description: string }[] = [];
-  for (let i = 0; i < record.deliverables.length; i += 1) {
-    const deliverable = asDeliverable(record.deliverables[i]);
-    if (!deliverable) return { ok: false, reason: 'invalid_shape', message: `deliverables[${i}] must have string path and description` };
-    deliverables.push(deliverable);
-  }
-  if (!record.open_questions.every((item) => typeof item === 'string')) return { ok: false, reason: 'invalid_shape', message: 'open_questions entries must be strings' };
-  if (!record.next_actions.every((item) => typeof item === 'string')) return { ok: false, reason: 'invalid_shape', message: 'next_actions entries must be strings' };
-  const changes: WorkerChange[] = [];
-  for (let i = 0; i < record.changes.length; i += 1) {
-    const change = asChange(record.changes[i]);
-    if (!change) return { ok: false, reason: 'invalid_shape', message: `changes[${i}] must have string path, status, and summary` };
-    changes.push(change);
-  }
-  const verification: WorkerVerification[] = [];
-  for (let i = 0; i < record.verification.length; i += 1) {
-    const item = asVerification(record.verification[i]);
-    if (!item) return { ok: false, reason: 'invalid_shape', message: `verification[${i}] must have nullable string tool and command, plus string status and summary` };
-    verification.push(item);
-  }
-  const verificationBudgetRespected: boolean | null = record.verification_budget_respected === undefined || record.verification_budget_respected === null
-    ? null
-    : typeof record.verification_budget_respected === 'boolean'
-      ? record.verification_budget_respected
-      : null;
-  if (record.verification_budget_respected !== undefined && record.verification_budget_respected !== null && typeof record.verification_budget_respected !== 'boolean') return { ok: false, reason: 'invalid_shape', message: 'verification_budget_respected must be boolean or null' };
-  const broadUnrelatedFailuresRaw = record.broad_unrelated_failures === undefined ? [] : record.broad_unrelated_failures;
-  if (!Array.isArray(broadUnrelatedFailuresRaw)) return { ok: false, reason: 'invalid_shape', message: 'broad_unrelated_failures must be an array' };
-  const broadUnrelatedFailures: WorkerBroadUnrelatedFailure[] = [];
-  for (let i = 0; i < broadUnrelatedFailuresRaw.length; i += 1) {
-    const item = asBroadUnrelatedFailure(broadUnrelatedFailuresRaw[i]);
-    if (!item) return { ok: false, reason: 'invalid_shape', message: `broad_unrelated_failures[${i}] must have nullable string command plus string status and summary` };
-    broadUnrelatedFailures.push(item);
-  }
-  const exitInterview = record.exit_interview === undefined || record.exit_interview === null ? null : asExitInterview(record.exit_interview);
-  if (record.exit_interview !== undefined && record.exit_interview !== null && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must be null or include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
-  return { ok: true, data: { summary: record.summary, deliverables, open_questions: record.open_questions, next_actions: record.next_actions, edits_performed: record.edits_performed, target_state_changed: record.target_state_changed, changes, verification, verification_budget_respected: verificationBudgetRespected, broad_unrelated_failures: broadUnrelatedFailures, exit_interview: exitInterview } };
-}
-
-export function parseResult(runRecord: { lastMessagePath: string }): WorkerOutputParseResult {
-  return parseLastMessage(runRecord.lastMessagePath);
-}
-
-export type WorkerRunTerminalStatus = 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
-
-export function resultStatus(codexResult: { exit_code: number | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null }, parsed: WorkerOutputParseResult): { status: WorkerRunTerminalStatus; error: string | null; warnings: string[] } {
-  if (codexResult.cancelled) return { status: 'cancelled', error: 'cancelled', warnings: [] };
-  const warnings = [codexResult.runtime_error].filter((value): value is string => typeof value === 'string' && value.length > 0);
-  const runtimeError = codexResult.error
-    ?? codexResult.event_error
-    ?? (codexResult.exit_code !== 0 && codexResult.exit_code !== null ? codexResult.runtime_error ?? `worker runtime exited with code ${codexResult.exit_code}` : null);
-  if (runtimeError && parsed.ok) return { status: 'completed_with_errors', error: runtimeError, warnings };
-  if (runtimeError) return { status: 'failed', error: runtimeError, warnings };
-  if (parsed.ok === false && parsed.reason === 'missing_file') return { status: 'failed', error: `absent last_message.json: ${parsed.message}`, warnings };
-  if (parsed.ok === false) return { status: 'failed', error: `invalid last_message.json: ${parsed.reason}: ${parsed.message}`, warnings };
-  return { status: 'completed', error: null, warnings };
-}
 
 function findRuntimeError(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
@@ -280,61 +198,3 @@ function findSessionId(value: unknown): string | null {
   return null;
 }
 
-function asDeliverable(value: unknown): { path: string; description: string } | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.path !== 'string' || typeof record.description !== 'string') return null;
-  return { path: record.path, description: record.description };
-}
-
-function asChange(value: unknown): WorkerChange | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.path !== 'string' || typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
-  return { path: record.path, status: record.status, summary: record.summary };
-}
-
-function asVerification(value: unknown): WorkerVerification | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (!Object.hasOwn(record, 'tool') || !Object.hasOwn(record, 'command')) return null;
-  if (!nullableString(record.tool) || !nullableString(record.command)) return null;
-  if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
-  const commandClassification = verificationCommandClassification(record.command_classification);
-  if (record.command_classification !== undefined && commandClassification === null) return null;
-  return { tool: record.tool, command: record.command, status: record.status, summary: record.summary, ...(commandClassification ? { command_classification: commandClassification } : {}) };
-}
-
-function verificationCommandClassification(value: unknown): WorkerVerificationCommandClassification | null {
-  return value === 'focused' || value === 'broad' || value === 'not_applicable' ? value : null;
-}
-
-function asBroadUnrelatedFailure(value: unknown): WorkerBroadUnrelatedFailure | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (!nullableString(record.command)) return null;
-  if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
-  return { command: record.command, status: record.status, summary: record.summary };
-}
-
-function nullableString(value: unknown): value is string | null {
-  return value === null || typeof value === 'string';
-}
-
-function asExitInterview(value: unknown): WorkerExitInterview | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.ergonomics_feedback !== 'string') return null;
-  if (!stringArray(record.friction_points) || !stringArray(record.missing_affordances) || !stringArray(record.observed_incoherencies) || !stringArray(record.suggested_improvements)) return null;
-  return {
-    ergonomics_feedback: record.ergonomics_feedback,
-    friction_points: record.friction_points,
-    missing_affordances: record.missing_affordances,
-    observed_incoherencies: record.observed_incoherencies,
-    suggested_improvements: record.suggested_improvements,
-  };
-}
-
-function stringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}

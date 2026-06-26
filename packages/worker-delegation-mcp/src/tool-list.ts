@@ -169,7 +169,7 @@ function constraintRequestSchema(): Record<string, unknown> {
       access: { type: 'string', enum: ['read', 'write', 'create'] },
       label: { type: 'string' },
     }, ['path', 'access']), description: 'Optional path capability checks recorded before the worker starts.' },
-    required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the worker must verify before work. Recorded as advisory preflight because worker-delegation cannot inspect the worker runtime tool inventory.' },
+    required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Tool names the worker must have. For narada-agent-runtime-server, worker-delegation projects these through NARADA_WORKER_MCP_CONFIG; other runtimes record them as worker-verification requirements.' },
     overrides: constraintOverrideSchema(),
   }, ['cwd']);
 }

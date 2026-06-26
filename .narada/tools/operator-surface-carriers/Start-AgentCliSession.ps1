@@ -2,7 +2,7 @@
 # narada_template_id: narada.agent_cli.windows_wrapper
 # narada_template_version: 2
 # narada_template_source: @narada2/agent-cli ./windows-wrapper-template
-# narada_template_hash: 50502c74cbd55e308e2ca5651bcee85306f432458a4adab221b46a59ce4e241d
+# narada_template_hash: a6450fcf3ae24fd72399308bd1be3f1882ea111d2a80dde5f777f64f2647d8c0
 
 param(
     [Parameter(Mandatory)]
@@ -660,7 +660,7 @@ if ($AutoApprove) {
     $argList += '--auto-approve'
 }
 
-Write-Host "Starting agent-cli for $IdentityName..." -ForegroundColor Cyan
+Write-Host "Starting NARS for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
 $displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
@@ -713,7 +713,7 @@ Set-Location $WorkDir
 
 $exitCode = $LASTEXITCODE
 if ($exitCode -ne 0) {
-    Write-Warning "agent-cli exited with code $exitCode"
+    Write-Warning "NARS exited with code $exitCode"
 
     $sessionRecoveryArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--session-recovery-json')
     $sessionRecoveryRaw = & node @sessionRecoveryArgs

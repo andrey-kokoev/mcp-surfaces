@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
+export { writeWorkerOutputSchema } from './output-contract.js';
 import type { WorkerPolicy } from './policy.js';
 import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
 
@@ -59,39 +60,6 @@ export function writeJson(path: string, value: unknown): void {
 export function writeText(path: string, value: string): void {
   writeFileSync(path, value, 'utf8');
 }
-
-export function writeWorkerOutputSchema(path: string): void {
-  writeJson(path, {
-    type: 'object',
-    additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview'],
-    properties: {
-      summary: { type: 'string' },
-      deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
-      open_questions: { type: 'array', items: { type: 'string' } },
-      next_actions: { type: 'array', items: { type: 'string' } },
-      edits_performed: { type: 'boolean' },
-      target_state_changed: { type: 'boolean' },
-      changes: { type: 'array', items: { type: 'object', required: ['path', 'status', 'summary'], properties: { path: { type: 'string' }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
-      verification: { type: 'array', items: { type: 'object', required: ['tool', 'command', 'status', 'summary', 'command_classification'], properties: { tool: { type: ['string', 'null'] }, command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' }, command_classification: { type: 'string', enum: ['focused', 'broad', 'not_applicable'] } }, additionalProperties: false } },
-      verification_budget_respected: { type: ['boolean', 'null'] },
-      broad_unrelated_failures: { type: 'array', items: { type: 'object', required: ['command', 'status', 'summary'], properties: { command: { type: ['string', 'null'] }, status: { type: 'string' }, summary: { type: 'string' } }, additionalProperties: false } },
-      exit_interview: {
-        type: ['object', 'null'],
-        required: ['ergonomics_feedback', 'friction_points', 'missing_affordances', 'observed_incoherencies', 'suggested_improvements'],
-        properties: {
-          ergonomics_feedback: { type: 'string' },
-          friction_points: { type: 'array', items: { type: 'string' } },
-          missing_affordances: { type: 'array', items: { type: 'string' } },
-          observed_incoherencies: { type: 'array', items: { type: 'string' } },
-          suggested_improvements: { type: 'array', items: { type: 'string' } },
-        },
-        additionalProperties: false,
-      },
-    },
-  });
-}
-
 export function audit(policy: WorkerPolicy, payload: unknown): void {
   if (!policy.auditLogDir) return;
   mkdirSync(policy.auditLogDir, { recursive: true });

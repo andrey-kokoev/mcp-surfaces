@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildCodexArgv, createServerState, handleRequest, parseArgs } from '../src/main.js';
-import { commandRequiresWindowsShell, parseLastMessage } from '../src/codex-adapter.js';
+import { commandRequiresWindowsShell } from '../src/codex-adapter.js';
 import { resolveWorkingDirectory } from '../src/policy.js';
 
 type RpcResponse = {
@@ -15,6 +15,7 @@ const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
 process.env.NARADA_SITE_ROOT = root;
 process.env.CODEX_HOME = root;
+process.env.CODEX_CONFIG_DIR = root;
 process.env.NARADA_PROVIDER_SECRET_STORE = 'disabled';
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
@@ -109,6 +110,32 @@ process.stdin.on('data', (chunk) => {
         process.stderr.write('pre-assistant diagnostic detail from runtime\\n');
         process.exit(0);
       }
+      if (frame.params.message.includes('agent runtime terminal no assistant output')) {
+        process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime-terminal-no-assistant', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-terminal-no-assistant' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-terminal-no-assistant', terminal_state: 'completed' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'session_closed', request_id: frame.id, terminal_state: 'closed' }) + '\\n');
+        process.exit(0);
+      }
+      if (frame.params.message.includes('agent runtime assistant message field')) {
+        const output = {
+          summary: 'agent runtime message-field output ok',
+          deliverables: [],
+          open_questions: [],
+          next_actions: [],
+          edits_performed: false,
+          target_state_changed: false,
+          changes: [],
+          verification: [{ tool: 'fake-agent-runtime-server', command: null, status: 'passed', summary: 'assistant message field extracted', command_classification: 'not_applicable' }],
+          verification_budget_respected: true,
+          broad_unrelated_failures: [],
+          exit_interview: null
+        };
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-message-field' }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'assistant_message', request_id: frame.id, turn_id: 'turn-message-field', message: JSON.stringify(output) }) + '\\n');
+        process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-message-field', terminal_state: 'completed', delegated_mutation_admitted: true, carrier_mutation_admitted: true }) + '\\n');
+        continue;
+      }
       if (frame.params.message.includes('server runtime loose output')) {
         const output = {
           summary: 'loose agent runtime worker ok',
@@ -145,7 +172,8 @@ process.stdin.on('data', (chunk) => {
           summary: 'fake server completed env=' + JSON.stringify({
             NARADA_AI_MODEL: process.env.NARADA_AI_MODEL || null,
             NARADA_AI_THINKING: process.env.NARADA_AI_THINKING || null,
-            CODEX_MODEL: process.env.CODEX_MODEL || null
+            CODEX_MODEL: process.env.CODEX_MODEL || null,
+            NARADA_WORKER_MCP_CONFIG: process.env.NARADA_WORKER_MCP_CONFIG || null
           }),
           command_classification: 'not_applicable'
         }],
@@ -261,13 +289,13 @@ assert.equal(policy.result?.structuredContent.runtimes.deepseek, undefined);
 assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'], undefined);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription', 'deepseek-api']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL']);
+assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.match(policy.result?.structuredContent.nars_site_semantics.remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
@@ -568,6 +596,12 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_confi
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_SITE_ROOT'), true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('CODEX_HOME'), true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('CODEX_CONFIG_DIR'), true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), false);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.worker_mcp_projection, undefined);
+assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.enforced_by_delegation, false);
+assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.enforcement_surface, null);
 assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_bound: true/);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_root: /);
@@ -575,7 +609,7 @@ assert.match(agentRuntimeResolve.result?.content[0].text, /workspace_root: /);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_root_source: nearest_parent_marker/);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_matched_marker: \.narada\//);
 assert.match(agentRuntimeResolve.result?.content[0].text, /site_required_markers: \.narada\/,.ai\/mcp\//);
-assert.match(agentRuntimeResolve.result?.content[0].text, /site_environment: NARADA_SITE_ROOT=true NARADA_WORKSPACE_ROOT=true NARADA_AGENT_ID=true NARADA_CARRIER_SESSION_ID=true NARADA_AI_MODEL=false NARADA_AI_THINKING=false CODEX_MODEL=false/);
+assert.match(agentRuntimeResolve.result?.content[0].text, /site_environment: NARADA_SITE_ROOT=true NARADA_WORKSPACE_ROOT=true NARADA_AGENT_ID=true NARADA_CARRIER_SESSION_ID=true NARADA_AI_MODEL=(true|false) NARADA_AI_THINKING=(true|false) CODEX_MODEL=(true|false) CODEX_HOME=true CODEX_CONFIG_DIR=true/);
 assert.match(agentRuntimeResolve.result?.content[0].text, /provider: runtime_default/);
 const agentRuntimeProviderResolve = await rpc({ jsonrpc: '2.0', id: 5011, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'server runtime provider resolve' },
@@ -585,6 +619,21 @@ assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_work
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.provider_source, 'explicit_constraint');
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), true);
+const agentRuntimeScopedMcpResolve = await rpc({ jsonrpc: '2.0', id: 50101, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
+  intent: { instruction: 'server runtime scoped mcp resolve' },
+  constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
+} } }, agentRuntimeState);
+assert.deepEqual(agentRuntimeScopedMcpResolve.result?.structuredContent.resolved_worker_config.worker_mcp_projection, {
+  schema: 'narada.worker.mcp_projection.v1',
+  native_mcp_mode: 'scoped',
+  mcp_tool_allowlist: ['mailbox_messages_list'],
+  include_startup_tools: true,
+  include_output_readback_tools: false,
+  full_site_mcp_requires_explicit_mode: true,
+});
+assert.equal(agentRuntimeScopedMcpResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), true);
+assert.equal(agentRuntimeScopedMcpResolve.result?.structuredContent.mcp_tool_verification.enforced_by_delegation, true);
+assert.equal(agentRuntimeScopedMcpResolve.result?.structuredContent.mcp_tool_verification.enforcement_surface, 'NARADA_WORKER_MCP_CONFIG');
 const agentRuntimeModelResolve = await rpc({ jsonrpc: '2.0', id: 50111, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'server runtime model resolve' },
   constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, provider: 'codex-subscription', overrides: { runtime: 'narada-agent-runtime-server', model: 'gpt-5.5', reasoning_effort: 'medium' } },
@@ -600,7 +649,10 @@ const agentRuntimeProviderMismatch = await rpc({ jsonrpc: '2.0', id: 5012, metho
   constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, provider: 'codex-subscription', overrides: { runtime: 'codex' } },
 } } }, agentRuntimeState);
 assert.equal(agentRuntimeProviderMismatch.error?.data.code, 'worker_narada_provider_runtime_mismatch');
-const agentRuntimeRun = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime worker', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+const agentRuntimeRun = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run', arguments: {
+  intent: { instruction: 'server runtime worker' },
+  constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
+} } }, agentRuntimeState);
 assert.equal(agentRuntimeRun.result?.structuredContent.status, 'completed');
 assert.equal(agentRuntimeRun.result?.structuredContent.runtime, 'narada-agent-runtime-server');
 assert.equal(agentRuntimeRun.result?.structuredContent.worker_session_id, 'carrier-worker-runtime');
@@ -618,7 +670,11 @@ assert.equal(agentRuntimeRun.result?.structuredContent.session_event_evidence.as
 assert.deepEqual(agentRuntimeRun.result?.structuredContent.session_event_evidence.mutation_admission, { carrier_mutation_admitted: true, delegated_mutation_admitted: true });
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), true);
+assert.deepEqual(agentRuntimeRun.result?.structuredContent.resolved_worker_config.worker_mcp_projection.mcp_tool_allowlist, ['mailbox_messages_list']);
+assert.equal(agentRuntimeRun.result?.structuredContent.mcp_tool_verification.enforced_by_delegation, true);
 assert.equal(agentRuntimeRun.result?.structuredContent.verification_results[0].tool, 'fake-agent-runtime-server');
+assert.equal(JSON.parse(agentRuntimeRun.result?.structuredContent.verification_results[0].summary.match(/env=(.*)$/)?.[1] ?? '{}').NARADA_WORKER_MCP_CONFIG.includes('mailbox_messages_list'), true);
 const agentRuntimePrompt = readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8');
 assert.match(agentRuntimePrompt, /NARS worker completion guard/);
 assert.match(agentRuntimePrompt, /Do not call lifecycle, pause, sleep, wait, delegation, or worker_\* tools/);
@@ -638,6 +694,7 @@ const agentRuntimeModelRun = await rpc({ jsonrpc: '2.0', id: 50201, method: 'too
 assert.equal(agentRuntimeModelRun.result?.structuredContent.status, 'completed');
 assert.equal(agentRuntimeModelRun.result?.structuredContent.resolved_worker_config.model, 'gpt-5.5');
 assert.equal(agentRuntimeModelRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'medium');
+assert.equal(agentRuntimeModelRun.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), false);
 assert.match(agentRuntimeModelRun.result?.structuredContent.verification_results[0].summary, /NARADA_AI_MODEL":"gpt-5\.5/);
 assert.match(agentRuntimeModelRun.result?.structuredContent.verification_results[0].summary, /NARADA_AI_THINKING":"medium/);
 assert.match(agentRuntimeModelRun.result?.structuredContent.verification_results[0].summary, /CODEX_MODEL":"gpt-5\.5/);
@@ -689,6 +746,22 @@ assert.equal(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_dia
 assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.diagnostic_tail, /pre-assistant diagnostic detail/);
 assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.stdout_tail, /turn-no-assistant/);
 assert.match(agentRuntimeNoAssistantStatus.result?.structuredContent.runtime_diagnostics.remediation.join(' '), /stdout_tail/);
+const agentRuntimeTerminalNoAssistant = await rpc({ jsonrpc: '2.0', id: 50233, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime terminal no assistant output', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeTerminalNoAssistant.error?.data.code, 'worker_runtime_failed');
+assert.match(agentRuntimeTerminalNoAssistant.error?.data.details.error, /agent_runtime_completed_without_assistant_output/);
+const agentRuntimeTerminalNoAssistantRunId = String(agentRuntimeTerminalNoAssistant.error?.data.details.run_id);
+const agentRuntimeTerminalNoAssistantStatus = await rpc({ jsonrpc: '2.0', id: 50234, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: agentRuntimeTerminalNoAssistantRunId } } }, agentRuntimeState);
+assert.equal(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.runtime_diagnostics.phase, 'completed_without_assistant_output');
+assert.deepEqual(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.session_event_evidence.terminal_events, ['turn_complete', 'session_closed']);
+assert.equal(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.runtime_diagnostics.assistant_extraction.assistant_message_seen, false);
+assert.equal(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.runtime_diagnostics.assistant_extraction.assistant_message_extracted, false);
+assert.deepEqual(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.runtime_diagnostics.assistant_extraction.terminal_events, ['turn_complete', 'session_closed']);
+assert.match(agentRuntimeTerminalNoAssistantStatus.result?.structuredContent.runtime_diagnostics.remediation.join(' '), /assistant_extraction/);
+const agentRuntimeMessageField = await rpc({ jsonrpc: '2.0', id: 50235, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime assistant message field', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeMessageField.result?.structuredContent.status, 'completed');
+assert.equal(agentRuntimeMessageField.result?.structuredContent.summary, 'agent runtime message-field output ok');
+assert.equal(agentRuntimeMessageField.result?.structuredContent.session_event_evidence.assistant_message_seen, true);
+assert.equal(agentRuntimeMessageField.result?.structuredContent.worker_authored_output_present, true);
 const agentRuntimeLoose = await rpc({ jsonrpc: '2.0', id: 5024, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('server runtime loose output', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeLoose.result?.structuredContent.status, 'completed');
 assert.equal(agentRuntimeLoose.result?.structuredContent.summary, 'loose agent runtime worker ok');
@@ -1382,23 +1455,6 @@ assert.equal(resumeConfig.ephemeral, false);
 assert.equal(resumeConfig.argv.includes('resume'), true);
 assert.equal(resumeConfig.argv.includes('thread-existing'), true);
 
-const invalidMessagePath = join(root, 'invalid-last-message.json');
-writeFileSync(invalidMessagePath, JSON.stringify({ summary: 'bad', deliverables: [{ path: 'x' }], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [] }), 'utf8');
-const invalidMessage = parseLastMessage(invalidMessagePath);
-assert.equal(invalidMessage.ok, false);
-assert.equal(invalidMessage.ok ? '' : invalidMessage.reason, 'invalid_shape');
-const nullableVerificationMessagePath = join(root, 'nullable-verification-last-message.json');
-writeFileSync(nullableVerificationMessagePath, JSON.stringify({ summary: 'ok', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: null, command: null, status: 'passed', summary: 'nullable accepted' }] }), 'utf8');
-const nullableVerificationMessage = parseLastMessage(nullableVerificationMessagePath);
-assert.equal(nullableVerificationMessage.ok, true);
-if (nullableVerificationMessage.ok) assert.deepEqual(nullableVerificationMessage.data.verification[0], { tool: null, command: null, status: 'passed', summary: 'nullable accepted' });
-if (nullableVerificationMessage.ok) assert.equal(nullableVerificationMessage.data.exit_interview, null);
-const missingVerificationCommandPath = join(root, 'missing-verification-command-last-message.json');
-writeFileSync(missingVerificationCommandPath, JSON.stringify({ summary: 'bad', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: 'test', status: 'passed', summary: 'missing command rejected' }] }), 'utf8');
-const missingVerificationCommand = parseLastMessage(missingVerificationCommandPath);
-assert.equal(missingVerificationCommand.ok, false);
-assert.match(missingVerificationCommand.ok ? '' : missingVerificationCommand.message, /nullable string tool and command/);
-
 const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), defaultRuntime: 'codex', codexCommand: join(root, 'missing-codex.exe') });
 const spawnFailure = await rpc({
   jsonrpc: '2.0',
@@ -1485,7 +1541,7 @@ assert.match(preflightRun.result?.structuredContent.output_contract.tool_capabil
 assert.match(preflightRun.result?.structuredContent.output_contract.focused_readback.behavior, /ordinary target source files directly/);
 assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /effective_authority=read/);
 assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /Do not ask the delegating caller to provide output_refs/);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('not_verified_by_delegation') && check.message.includes('structured-command.structured_command_execute')), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('runtime_inventory_not_preflighted') && check.message.includes('structured-command.structured_command_execute')), true);
 
 const recursiveRequiredToolPreflight = await rpc({
   jsonrpc: '2.0',

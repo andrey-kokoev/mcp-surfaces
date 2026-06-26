@@ -1,17 +1,24 @@
-import { constants, accessSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, statSync } from 'node:fs';
+import { constants, accessSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
 import { diagnosticError } from './errors.js';
-import { buildCodexArgv, buildInvocation as codexBuildInvocation, parseLastMessage, resultStatus, runCodexInvocation, type Invocation, type ResolvedWorkerConfig, type WorkerOutput, type WorkerOutputParseResult } from './codex-adapter.js';
+import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partialFailurePosture, readDiagnosticTail, readRunProgress, readTextTail, runtimeFailureRemediation, workerBudgetStatus } from './diagnostics.js';
+import { buildCodexArgv, buildInvocation as codexBuildInvocation, runCodexInvocation, type Invocation, type ResolvedWorkerConfig } from './codex-adapter.js';
+import { outputContractForMode, outputContractForRequest, parseLastMessage, resultStatus, workerOutputState, type WorkerOutput } from './output-contract.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
 import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationIdentity } from './policy.js';
+import { buildWorkerPrompt } from './prompt.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
+import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, runArtifacts } from './run-store.js';
+import { reapEvidence } from './recovery.js';
+import { extractSessionEventEvidence } from './runtime-events.js';
+import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from './tool-handlers/batch.js';
+import { dashboardApiEndpoints, dashboardMode, dashboardPendingJoinGates, dashboardRun } from './tool-handlers/dashboard.js';
+import { workerEditRunArgs } from './tool-handlers/edit.js';
+import { includeRunByStatus, isTerminalRunStatus, modeWithInference, runListItem, runSortKey, runWaitPayload } from './tool-handlers/status.js';
 import type { WorkerMcpState } from './state.js';
 import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
-import type { WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerEditToolInput, WorkerExecutorRequest, WorkerIntent, WorkerPreflightCheck, WorkerPreflightPath, WorkerProgressPreview, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
+import type { SupportedRuntime, WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerExecutorRequest, WorkerPreflightCheck, WorkerPreflightPath, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
 import type { RunRecordPaths } from './run-record.js';
-
-const RUN_STATUS_GRACE_MS = 60_000;
 
 export type WorkerRequestContext = {
   abortSignal?: AbortSignal;
@@ -21,7 +28,7 @@ export async function callWorkerTool(name: string, args: Record<string, unknown>
   if (name === 'worker_policy_inspect') return publicWorkerPolicy(state.policy);
   if (name === 'worker_config_resolve') return workerConfigResolve(args, state);
   if (name === 'worker_run') return workerRun(args, state, null, context, 'worker_run');
-  if (name === 'worker_edit') return workerRun(workerEditRunArgs(args, state), state, null, context, 'worker_edit');
+  if (name === 'worker_edit') return workerRun(workerEditRunArgs(args), state, null, context, 'worker_edit');
   if (name === 'worker_resume') return workerRun(args, state, requiredNonEmptyString(args.worker_session_id, 'worker_runtime_resume_not_supported'), context, 'worker_resume');
   if (name === 'worker_run_status') return workerRunStatus(args, state);
   if (name === 'worker_run_reap') return workerRunReap(args, state);
@@ -38,95 +45,6 @@ function optionalBoolean(value: unknown, field: string): boolean {
   if (value === undefined || value === null) return false;
   if (typeof value === 'boolean') return value;
   throw diagnosticError('worker_invalid_tool_input', 'worker_boolean_required', { field, value_type: Array.isArray(value) ? 'array' : typeof value });
-}
-
-function partialFailurePosture(run: Record<string, unknown>): Record<string, unknown> {
-  const changes = Array.isArray(run.changes) ? run.changes : [];
-  const deliverables = Array.isArray(run.deliverables) ? run.deliverables : [];
-  const progress = asRecord(run.progress);
-  const status = String(run.status ?? 'unknown');
-  const errorClassification = typeof run.error_classification === 'string' ? run.error_classification : classifyRuntimeError(String(run.error ?? ''));
-  const productive = changes.length > 0 || deliverables.length > 0 || Number(progress.event_count ?? 0) > 0;
-  return {
-    status: status === 'failed' || status === 'completed_with_errors' || status === 'cancelled' ? (productive ? 'productive_partial_failure' : 'unproductive_failure') : 'not_failed',
-    error_classification: errorClassification,
-    changed_file_count: changes.length,
-    deliverable_count: deliverables.length,
-    progress_event_count: typeof progress.event_count === 'number' ? progress.event_count : 0,
-    provider_quota_limited: errorClassification === 'provider_rate_limited',
-  };
-}
-
-function extractSessionEventEvidence(eventsPath: string): Record<string, unknown> {
-  const empty = {
-    readable: false,
-    event_count: 0,
-    prompt_admission: 'unknown',
-    assistant_message_seen: false,
-    terminal_events: [] as string[],
-    mutation_admission: { carrier_mutation_admitted: null, delegated_mutation_admitted: null },
-    safe_events: [] as Record<string, unknown>[],
-  };
-  if (!existsSync(eventsPath)) return { ...empty, reason: 'events_path_missing' };
-  try {
-    const text = readFileSync(eventsPath, 'utf8').trim();
-    if (!text) return { ...empty, readable: true, reason: 'events_empty' };
-    const safeEvents: Record<string, unknown>[] = [];
-    const terminalEvents = new Set<string>();
-    let eventCount = 0;
-    let promptSent = false;
-    let turnStarted = false;
-    let assistantSeen = false;
-    let carrierMutationAdmitted: boolean | null = null;
-    let delegatedMutationAdmitted: boolean | null = null;
-    for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(-200)) {
-      let parsed: unknown;
-      try { parsed = JSON.parse(line) as unknown; } catch { continue; }
-      const record = asRecord(parsed);
-      eventCount += 1;
-      const type = eventType(record) ?? (typeof record.method === 'string' && record.method.trim() ? record.method.trim() : 'unknown');
-      if (record.method === 'conversation.send') promptSent = true;
-      if (type === 'turn_started') turnStarted = true;
-      if (type === 'assistant_message') assistantSeen = true;
-      if (type === 'turn_complete' || type === 'turn_failed' || type === 'session_closed') terminalEvents.add(type);
-      const admission = extractMutationAdmission(record);
-      if (typeof admission.carrier_mutation_admitted === 'boolean') carrierMutationAdmitted = admission.carrier_mutation_admitted;
-      if (typeof admission.delegated_mutation_admitted === 'boolean') delegatedMutationAdmitted = admission.delegated_mutation_admitted;
-      safeEvents.push({
-        type,
-        request_id: typeof record.request_id === 'string' ? record.request_id : null,
-        turn_id: typeof record.turn_id === 'string' ? record.turn_id : null,
-        terminal_state: typeof record.terminal_state === 'string' ? record.terminal_state : null,
-        reason: previewString(record.reason ?? record.error ?? record.message, 160),
-      });
-    }
-    return {
-      readable: true,
-      event_count: eventCount,
-      prompt_admission: promptSent ? 'conversation_send_frame_seen' : turnStarted ? 'turn_started_without_visible_send_frame' : 'no_prompt_or_turn_event_seen',
-      assistant_message_seen: assistantSeen,
-      terminal_events: [...terminalEvents],
-      mutation_admission: { carrier_mutation_admitted: carrierMutationAdmitted, delegated_mutation_admitted: delegatedMutationAdmitted },
-      safe_events: safeEvents.slice(-12),
-    };
-  } catch (error) {
-    return { ...empty, reason: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function extractMutationAdmission(value: unknown): { carrier_mutation_admitted?: boolean; delegated_mutation_admitted?: boolean } {
-  const record = asRecord(value);
-  const result: { carrier_mutation_admitted?: boolean; delegated_mutation_admitted?: boolean } = {};
-  if (typeof record.carrier_mutation_admitted === 'boolean') result.carrier_mutation_admitted = record.carrier_mutation_admitted;
-  if (typeof record.delegated_mutation_admitted === 'boolean') result.delegated_mutation_admitted = record.delegated_mutation_admitted;
-  for (const item of Object.values(record)) {
-    if (item && typeof item === 'object' && !Array.isArray(item)) {
-      const nested = extractMutationAdmission(item);
-      if (result.carrier_mutation_admitted === undefined && nested.carrier_mutation_admitted !== undefined) result.carrier_mutation_admitted = nested.carrier_mutation_admitted;
-      if (result.delegated_mutation_admitted === undefined && nested.delegated_mutation_admitted !== undefined) result.delegated_mutation_admitted = nested.delegated_mutation_admitted;
-    }
-  }
-  return result;
 }
 
 function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
@@ -181,6 +99,8 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
     projectNaradaAgentRuntimeModelEnvironment(environment, resolvedConfigInput, providerResolution.provider);
+    const workerMcpProjection = buildWorkerMcpProjection(request.constraints.required_mcp_tools ?? []);
+    if (workerMcpProjection) environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
     const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId: resumeSessionId ?? undefined });
     resolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
@@ -199,6 +119,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       provider: providerResolution.provider,
       provider_source: providerResolution.source,
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
+      ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -268,7 +189,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     invocation: invocationArtifact(invocation, resolvedWorkerConfig),
     preflight,
     requested_mcp_tools: request.constraints.required_mcp_tools ?? [],
-    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? []),
+    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? [], runtime),
     output_contract: outputContract,
     runtime_availability: runtimeAvailability.available
       ? { available: true, command: runtimeAvailability.command ?? resolvedWorkerConfig.command }
@@ -306,15 +227,6 @@ function invocationArtifact(invocation: Invocation, resolvedWorkerConfig: Resolv
   };
 }
 
-function modeWithInference(run: Record<string, unknown>): { requestedMode: WorkerDelegationMode | null; inferred: boolean } {
-  const direct = run.requested_mode ?? asRecord(run.executor_request).requested_mode ?? asRecord(asRecord(run.executor_request).intent).mode;
-  if (direct === 'audit_only' || direct === 'plan_only' || direct === 'implement' || direct === 'implement_and_verify') return { requestedMode: direct, inferred: false };
-  const authority = asRecord(run.resolved_worker_config).authority;
-  if (authority === 'write' || authority === 'command') return { requestedMode: 'implement', inferred: true };
-  if (authority === 'read') return { requestedMode: 'audit_only', inferred: true };
-  return { requestedMode: null, inferred: false };
-}
-
 function normalizeStringList(value: unknown, code: string): string[] {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw diagnosticError(code, code);
@@ -348,356 +260,6 @@ export async function workerRun(args: Record<string, unknown>, state: WorkerMcpS
   } finally {
     if (releaseOnReturn) releaseWorkerRunSlot(state);
   }
-}
-
-function recoverOrphanedRunningRun(run: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
-  if (run.status !== 'running') return run;
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  if (!runDir) return run;
-  const timing = asRecord(run.timing);
-  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
-  if (!Number.isFinite(startedAtMs)) return run;
-  const resolvedConfig = asRecord(run.resolved_worker_config);
-  const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
-  if (Date.now() - startedAtMs <= maxRunMsValue + RUN_STATUS_GRACE_MS) return run;
-  const parsed = parseLastMessage(resolve(runDir, 'last_message.json'));
-  if (!parsed.ok) return run;
-  const output = parsed.data;
-  const finishedAt = new Date(startedAtMs + maxRunMsValue);
-  const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
-  const warning = 'worker_run_orphaned_final_output: valid last_message.json exists, but result.json was not finalized before max_run_ms elapsed';
-  const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
-  const recoveredRun = {
-    ...run,
-    status: 'completed_with_errors',
-    edits_performed: output.edits_performed,
-    target_state_changed: output.target_state_changed,
-    confidence: 'partial',
-    runtime_warnings: runtimeWarnings,
-    warning_count: runtimeWarnings.length,
-    summary: output.summary,
-    deliverables: output.deliverables,
-    open_questions: output.open_questions,
-    next_actions: output.next_actions,
-    changes: output.changes,
-    verification_results: output.verification,
-    exit_interview: output.exit_interview ?? null,
-    timing: {
-      ...timing,
-      finished_at: finishedAt.toISOString(),
-      duration_ms: maxRunMsValue,
-    },
-    error: warning,
-  };
-  return recoveredRun;
-}
-
-function recoverExpiredRunningRun(run: Record<string, unknown>, state: WorkerMcpState, resultPath?: string): Record<string, unknown> {
-  if (run.status !== 'running') return run;
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  if (!runDir) return run;
-  const timing = asRecord(run.timing);
-  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
-  if (!Number.isFinite(startedAtMs)) return run;
-  const resolvedConfig = asRecord(run.resolved_worker_config);
-  const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
-  const expiredAtMs = startedAtMs + maxRunMsValue + RUN_STATUS_GRACE_MS;
-  if (Date.now() <= expiredAtMs) return run;
-  const parsed = parseLastMessage(resolve(runDir, 'last_message.json'));
-  if (parsed.ok) return run;
-  const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
-  const warning = 'worker_run_expired_without_terminal_output: run stayed running past max_run_ms plus grace without a usable last_message.json';
-  const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
-  const diagnosticTail = readDiagnosticTail(resolve(runDir, 'diagnostic.log'));
-  const recoveredRun = {
-    ...run,
-    status: 'failed',
-    confidence: 'partial',
-    completion_state: 'partial',
-    runtime_warnings: runtimeWarnings,
-    warning_count: runtimeWarnings.length,
-    timing: {
-      ...timing,
-      finished_at: new Date(expiredAtMs).toISOString(),
-      duration_ms: maxRunMsValue + RUN_STATUS_GRACE_MS,
-    },
-    error: warning,
-    error_classification: 'worker_run_expired_without_terminal_output',
-    ...(diagnosticTail ? { diagnostic_tail: diagnosticTail } : {}),
-  };
-  if (resultPath) writeJson(resultPath, recoveredRun);
-  return recoveredRun;
-}
-
-function recoverCompletedRunFromEvents(run: Record<string, unknown>, resultPath: string): Record<string, unknown> {
-  if (run.status !== 'running') return run;
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  if (!runDir) return run;
-  const lastMessagePath = resolve(runDir, 'last_message.json');
-  if (existsSync(lastMessagePath)) return run;
-  const recovered = recoverWorkerOutputFromEvents(resolve(runDir, 'events.jsonl'));
-  if (!recovered) return run;
-
-  writeJson(lastMessagePath, recovered.output);
-  const timing = asRecord(run.timing);
-  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
-  const finishedAtMs = recovered.finishedAt.getTime();
-  const existingWarnings = Array.isArray(run.runtime_warnings) ? run.runtime_warnings.map(String) : [];
-  const warning = 'worker_run_recovered_from_events: turn.completed observed with final agent_message, but last_message.json was missing';
-  const runtimeWarnings = existingWarnings.includes(warning) ? existingWarnings : [...existingWarnings, warning];
-  const output = recovered.output;
-  const recoveredRun = {
-    ...run,
-    status: 'completed_with_errors',
-    edits_performed: output.edits_performed,
-    target_state_changed: output.target_state_changed,
-    confidence: 'partial',
-    runtime_warnings: runtimeWarnings,
-    warning_count: runtimeWarnings.length,
-    summary: output.summary,
-    deliverables: output.deliverables,
-    open_questions: output.open_questions,
-    next_actions: output.next_actions,
-    changes: output.changes,
-    verification_results: output.verification,
-    exit_interview: output.exit_interview ?? null,
-    artifacts: Array.isArray(run.artifacts) ? run.artifacts : runArtifacts({
-      runId: String(run.run_id ?? ''),
-      runDir,
-      requestPath: resolve(runDir, 'request.json'),
-      executorRequestPath: resolve(runDir, 'executor_request.json'),
-      resolvedConfigPath: resolve(runDir, 'resolved_worker_config.json'),
-      promptPath: resolve(runDir, 'worker_prompt.txt'),
-      invocationPath: resolve(runDir, 'worker_invocation.json'),
-      eventsPath: resolve(runDir, 'events.jsonl'),
-      diagnosticPath: resolve(runDir, 'diagnostic.log'),
-      lastMessagePath,
-      resultPath,
-      schemaPath: resolve(runDir, 'worker_output.schema.json'),
-    }),
-    timing: {
-      ...timing,
-      finished_at: recovered.finishedAt.toISOString(),
-      duration_ms: Number.isFinite(startedAtMs) ? Math.max(0, finishedAtMs - startedAtMs) : null,
-    },
-    error: warning,
-  };
-  writeJson(resultPath, recoveredRun);
-  return recoveredRun;
-}
-
-function recoverWorkerOutputFromEvents(eventsPath: string): { output: WorkerOutput; finishedAt: Date } | null {
-  if (!existsSync(eventsPath)) return null;
-  let terminalSeen = false;
-  let finalAgentMessage: string | null = null;
-  let finishedAt: Date | null = null;
-  try {
-    const lines = readFileSync(eventsPath, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    for (const line of lines) {
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const type = eventType(event);
-      if (type === 'agent_message') {
-        finalAgentMessage = eventText(event) ?? finalAgentMessage;
-      }
-      if (type === 'turn.completed') {
-        terminalSeen = true;
-        finishedAt = eventTimestamp(event) ?? finishedAt;
-      }
-    }
-  } catch {
-    return null;
-  }
-  if (!terminalSeen || !finalAgentMessage) return null;
-  return { output: workerOutputFromAgentMessage(finalAgentMessage), finishedAt: finishedAt ?? new Date() };
-}
-
-function workerOutputFromAgentMessage(message: string): WorkerOutput {
-  const parsed = parseWorkerOutputJson(message);
-  if (parsed) return parsed;
-  return {
-    summary: message,
-    deliverables: [],
-    open_questions: [],
-    next_actions: [],
-    edits_performed: false,
-    target_state_changed: false,
-    changes: [],
-    verification: [{ tool: 'codex-events', command: null, status: 'passed', summary: 'Recovered final agent_message after turn.completed', command_classification: 'not_applicable' }],
-    verification_budget_respected: null,
-    broad_unrelated_failures: [],
-    exit_interview: null,
-  };
-}
-
-function parseWorkerOutputJson(message: string): WorkerOutput | null {
-  try {
-    const parsed = JSON.parse(message) as Record<string, unknown>;
-    if (typeof parsed.summary !== 'string') return null;
-    if (!Array.isArray(parsed.deliverables) || !Array.isArray(parsed.open_questions) || !Array.isArray(parsed.next_actions) || !Array.isArray(parsed.changes) || !Array.isArray(parsed.verification)) return null;
-    if (typeof parsed.edits_performed !== 'boolean' || typeof parsed.target_state_changed !== 'boolean') return null;
-    return parsed as WorkerOutput;
-  } catch {
-    return null;
-  }
-}
-
-function eventText(value: unknown): string | null {
-  const record = asRecord(value);
-  for (const key of ['message', 'text', 'summary']) {
-    const item = record[key];
-    if (typeof item === 'string' && item.trim()) return item.trim();
-  }
-  const content = record.content;
-  if (typeof content === 'string' && content.trim()) return content.trim();
-  if (Array.isArray(content)) {
-    const parts = content.map((item) => eventText(item)).filter((item): item is string => Boolean(item));
-    if (parts.length > 0) return parts.join('\n').trim();
-  }
-  const nested = asRecord(record.message);
-  for (const key of ['content', 'text']) {
-    const item = nested[key];
-    if (typeof item === 'string' && item.trim()) return item.trim();
-  }
-  return null;
-}
-
-function eventTimestamp(value: unknown): Date | null {
-  const record = asRecord(value);
-  for (const key of ['timestamp', 'created_at', 'time']) {
-    const item = record[key];
-    if (typeof item === 'string') {
-      const ms = Date.parse(item);
-      if (Number.isFinite(ms)) return new Date(ms);
-    }
-  }
-  return null;
-}
-
-function withFreshProgress(run: Record<string, unknown>): Record<string, unknown> {
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  if (!runDir) return run;
-  return { ...run, progress: readRunProgress(resolve(runDir, 'events.jsonl')) };
-}
-
-function withRunningLiveness(run: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
-  if (run.status !== 'running') return run;
-  const timing = asRecord(run.timing);
-  const startedAtMs = Date.parse(String(timing.started_at ?? ''));
-  if (!Number.isFinite(startedAtMs)) return run;
-  const progress = asRecord(run.progress);
-  const latestEventAtMs = Date.parse(String(progress.latest_event_at ?? ''));
-  const lastActivityMs = Number.isFinite(latestEventAtMs) ? latestEventAtMs : startedAtMs;
-  const resolvedConfig = asRecord(run.resolved_worker_config);
-  const maxRunMsValue = typeof resolvedConfig.max_run_ms === 'number' ? resolvedConfig.max_run_ms : state.policy.maxRunMs;
-  const staleAfterMs = Math.min(300_000, Math.max(60_000, Math.trunc(maxRunMsValue / 10)));
-  const now = Date.now();
-  const staleForMs = Math.max(0, now - lastActivityMs - staleAfterMs);
-  const elapsedMs = Math.max(0, now - startedAtMs);
-  const livenessState = staleForMs > 0 ? 'stale' : 'active';
-  return {
-    ...run,
-    completion_state: livenessState === 'stale' ? 'partial' : run.completion_state,
-    status_liveness: {
-      state: livenessState,
-      process_liveness: 'unknown',
-      started_at: new Date(startedAtMs).toISOString(),
-      last_event_at: Number.isFinite(latestEventAtMs) ? new Date(latestEventAtMs).toISOString() : null,
-      last_activity_at: new Date(lastActivityMs).toISOString(),
-      stale_after_ms: staleAfterMs,
-      stale_for_ms: staleForMs,
-      elapsed_ms: elapsedMs,
-      max_run_ms: maxRunMsValue,
-    },
-  };
-}
-
-function withProgressObservability(run: Record<string, unknown>): Record<string, unknown> {
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  const recentActivity = runDir ? compactEventStream(resolve(runDir, 'events.jsonl'), 8) : [];
-  const budgetStatus = workerBudgetStatus(run);
-  const progressState = workerProgressState(run, recentActivity, budgetStatus);
-  return { ...run, progress_state: progressState, budget_status: budgetStatus, recent_activity: recentActivity };
-}
-
-function reapEvidence(run: Record<string, unknown>, reason: string, force: boolean): Record<string, unknown> {
-  const liveness = asRecord(run.status_liveness);
-  return {
-    reason,
-    force,
-    previous_status: run.status ?? null,
-    status_liveness: liveness,
-    process_liveness: liveness.process_liveness ?? 'unknown',
-    process_verification: 'not_available:no_run_pid_recorded',
-    stale_confirmed: liveness.state === 'stale',
-    reaped_at: new Date().toISOString(),
-  };
-}
-
-function workerBudgetStatus(run: Record<string, unknown>): Record<string, unknown> {
-  const timing = asRecord(run.timing);
-  const liveness = asRecord(run.status_liveness);
-  const progress = asRecord(run.progress);
-  const config = asRecord(run.resolved_worker_config);
-  const startedAt = typeof liveness.started_at === 'string' ? liveness.started_at : typeof timing.started_at === 'string' ? timing.started_at : null;
-  const startedAtMs = startedAt ? Date.parse(startedAt) : NaN;
-  const elapsedMs = typeof liveness.elapsed_ms === 'number' ? liveness.elapsed_ms : Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : null;
-  const maxRunMs = typeof liveness.max_run_ms === 'number' ? liveness.max_run_ms : typeof config.max_run_ms === 'number' ? config.max_run_ms : null;
-  const remainingMs = elapsedMs !== null && maxRunMs !== null ? Math.max(0, maxRunMs - elapsedMs) : null;
-  return {
-    started_at: startedAt,
-    elapsed_ms: elapsedMs,
-    max_run_ms: maxRunMs,
-    remaining_ms: remainingMs,
-    percent_used: elapsedMs !== null && maxRunMs ? Math.min(1, elapsedMs / maxRunMs) : null,
-    stale_for_ms: typeof liveness.stale_for_ms === 'number' ? liveness.stale_for_ms : null,
-    event_count: typeof progress.event_count === 'number' ? progress.event_count : 0,
-  };
-}
-
-function workerProgressState(run: Record<string, unknown>, recentActivity: Record<string, unknown>[], budgetStatus: Record<string, unknown>): Record<string, unknown> {
-  const status = String(run.status ?? 'unknown');
-  const liveness = asRecord(run.status_liveness);
-  const progress = asRecord(run.progress);
-  const latest = recentActivity.at(-1) ?? null;
-  const terminal = isTerminalRunStatus(status);
-  const stale = liveness.state === 'stale';
-  const eventCount = typeof progress.event_count === 'number' ? progress.event_count : 0;
-  const state = terminal ? status : stale ? 'idle_stale' : eventCount === 0 ? 'starting' : classifyProgressState(String(progress.latest_event_type ?? ''), String(progress.latest_event_preview ?? ''));
-  return {
-    state,
-    current_action: latest ? latest.summary ?? latest.preview ?? null : progress.latest_event_preview ?? null,
-    current_target: null,
-    current_command: null,
-    since: typeof liveness.last_activity_at === 'string' ? liveness.last_activity_at : typeof progress.latest_event_at === 'string' ? progress.latest_event_at : asRecord(run.timing).started_at ?? null,
-    last_event_at: progress.latest_event_at ?? null,
-    stale_for_ms: typeof liveness.stale_for_ms === 'number' ? liveness.stale_for_ms : null,
-    confidence: eventCount > 0 ? 'observed' : 'unknown',
-    liveness: liveness.state ?? null,
-    recommended_action: recommendedProgressAction(status, liveness, budgetStatus),
-  };
-}
-
-function classifyProgressState(eventTypeValue: string, preview: string): string {
-  const text = `${eventTypeValue} ${preview}`.toLowerCase();
-  if (/command|exec|shell|structured_command/.test(text)) return 'running_command';
-  if (/apply_patch|edit|write|modified|file_change/.test(text)) return 'editing';
-  if (/read|grep|glob|search/.test(text)) return 'reading';
-  if (/tool|call/.test(text)) return 'waiting_tool';
-  if (/result|last_message|final/.test(text)) return 'writing_result';
-  return 'thinking';
-}
-
-function recommendedProgressAction(status: string, liveness: Record<string, unknown>, budgetStatus: Record<string, unknown>): string {
-  if (isTerminalRunStatus(status)) return 'inspect_result';
-  if (liveness.state !== 'stale') return 'wait';
-  const remainingMs = typeof budgetStatus.remaining_ms === 'number' ? budgetStatus.remaining_ms : null;
-  if (remainingMs === 0) return 'recover_or_fail';
-  return 'inspect_artifacts';
 }
 
 async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpState, resumeSessionId: string | null, context: WorkerRequestContext, auditTool: string, slot: { releaseSlot: () => void; deferRelease: () => void }): Promise<Record<string, unknown>> {
@@ -761,6 +323,8 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     const providerResolution = resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy);
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
     projectNaradaAgentRuntimeModelEnvironment(environment, resolvedConfigInput, providerResolution.provider);
+    const workerMcpProjection = buildWorkerMcpProjection(request.constraints.required_mcp_tools ?? []);
+    if (workerMcpProjection) environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
     const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
@@ -779,6 +343,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       provider: providerResolution.provider,
       provider_source: providerResolution.source,
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
+      ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -840,7 +405,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     requested_mode: requestedMode,
     preflight,
     requested_mcp_tools: request.constraints.required_mcp_tools ?? [],
-    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? []),
+    mcp_tool_verification: mcpToolVerification(request.constraints.required_mcp_tools ?? [], runtime),
     output_contract: outputContract,
     resolved_execution_policy: resolvedWorkerConfig,
   };
@@ -1017,73 +582,6 @@ async function completeWorkerRun(options: {
   }
 }
 
-function buildRuntimeDiagnostics(options: {
-  runtime: string;
-  codexResult: { exit_code: number | null; signal: string | null; cancelled: boolean; error: string | null; event_error?: string | null; runtime_error?: string | null };
-  parsed: WorkerOutputParseResult;
-  outcomeError: string | null;
-  eventsPath: string;
-  diagnosticPath: string;
-}): Record<string, unknown> | undefined {
-  if (!options.outcomeError && options.parsed.ok) return undefined;
-  const phase = runtimeFailurePhase(options.codexResult, options.parsed, options.outcomeError);
-  const diagnosticTail = readDiagnosticTail(options.diagnosticPath);
-  const stdoutTail = readTextTail(options.eventsPath, 1200);
-  const resultExtraction = runtimeResultExtraction(options.parsed);
-  const sessionEventEvidence = extractSessionEventEvidence(options.eventsPath);
-  return {
-    schema: 'narada.worker.runtime_diagnostics.v1',
-    phase,
-    runtime: options.runtime,
-    exit_code: options.codexResult.exit_code,
-    signal: options.codexResult.signal,
-    cancelled: options.codexResult.cancelled,
-    error: options.outcomeError,
-    runtime_error: options.codexResult.runtime_error ?? null,
-    event_error: options.codexResult.event_error ?? null,
-    session_event_evidence: sessionEventEvidence,
-    result_extraction: resultExtraction,
-    diagnostic_tail: diagnosticTail,
-    stdout_tail: stdoutTail,
-    tail_status: {
-      diagnostic_tail_available: Boolean(diagnosticTail),
-      stdout_tail_available: Boolean(stdoutTail),
-      diagnostic_tail_limit_chars: 800,
-      stdout_tail_limit_chars: 1200,
-    },
-    remediation: runtimeFailureRemediation(phase),
-  };
-}
-
-function runtimeResultExtraction(parsed: WorkerOutputParseResult): Record<string, unknown> {
-  if (parsed.ok === true) return { status: 'ok' };
-  return { status: 'failed', reason: parsed.reason, message: parsed.message };
-}
-
-function runtimeFailurePhase(
-  result: { exit_code: number | null; error: string | null; event_error?: string | null; runtime_error?: string | null },
-  parsed: WorkerOutputParseResult,
-  outcomeError: string | null,
-): string {
-  const error = String(outcomeError ?? result.error ?? result.event_error ?? result.runtime_error ?? '').toLowerCase();
-  if (parsed.ok === false && parsed.reason === 'missing_file' && !result.error && !result.event_error && !result.runtime_error) return 'pre_first_assistant_failure';
-  if (error.includes('without assistant_message') || error.includes('did_not_produce_last_message')) return 'pre_first_assistant_failure';
-  if (parsed.ok === false && !result.error && !result.event_error && !result.runtime_error) return 'result_extraction_failure';
-  if (result.exit_code === null && result.error) return 'startup_failure';
-  if (result.event_error) return 'event_stream_failure';
-  if (result.runtime_error) return 'runtime_reported_failure';
-  return 'runtime_process_failure';
-}
-
-function runtimeFailureRemediation(phase: string): string[] {
-  if (phase === 'startup_failure') return ['Check runtime command availability and argv.', 'Inspect diagnostic_tail for process launch errors.'];
-  if (phase === 'pre_first_assistant_failure') return ['Inspect stdout_tail for startup/session events and diagnostic_tail for stderr.', 'Retry with the same run_id only if the runtime supports resume; otherwise route to runtime repair.'];
-  if (phase === 'result_extraction_failure') return ['Inspect result_extraction.message and last_message.json artifact.', 'Repair worker output JSON shape or parser normalization.'];
-  if (phase === 'event_stream_failure') return ['Inspect stdout_tail for malformed JSONL or protocol drift.', 'Verify the runtime is emitting raw JSONL events.'];
-  if (phase === 'worker_delegation_exception') return ['Inspect worker-delegation exception and bounded tails.', 'Route to worker-delegation surface repair if the runtime process reached a normal terminal state.'];
-  return ['Inspect runtime_diagnostics exit_code, signal, stdout_tail, and diagnostic_tail.', 'Use worker_run_status or worker_run_wait with the run_id for current persisted state.'];
-}
-
 function buildWorkerRunPayload(options: {
   status: 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
   runRecord: RunRecordPaths;
@@ -1159,26 +657,6 @@ function buildWorkerRunPayload(options: {
   };
 }
 
-function workerOutputState(parsed: WorkerOutputParseResult): 'absent' | 'invalid_json' | 'invalid_shape' {
-  if (parsed.ok === true) return 'invalid_shape';
-  if (parsed.reason === 'missing_file') return 'absent';
-  return parsed.reason;
-}
-
-function runArtifacts(runRecord: RunRecordPaths) {
-  return [
-    { name: 'request.json', path: runRecord.requestPath },
-    { name: 'executor_request.json', path: runRecord.executorRequestPath },
-    { name: 'resolved_worker_config.json', path: runRecord.resolvedConfigPath },
-    { name: 'worker_prompt.txt', path: runRecord.promptPath },
-    { name: 'worker_invocation.json', path: runRecord.invocationPath },
-    { name: 'events.jsonl', path: runRecord.eventsPath },
-    { name: 'diagnostic.log', path: runRecord.diagnosticPath },
-    { name: 'last_message.json', path: runRecord.lastMessagePath },
-    { name: 'result.json', path: runRecord.resultPath },
-    { name: 'worker_output.schema.json', path: runRecord.schemaPath },
-  ];
-}
 
 function workerRunStatus(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
@@ -1192,6 +670,7 @@ function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Re
   const located = locateRunResult(state, runId);
   if (!located) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
   const current = readRunResult(state, runId);
+  if (!current) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
   if (isTerminalRunStatus(String(current.status ?? ''))) {
     return { schema: 'narada.worker.run_reap.v1', status: 'already_terminal', run_id: runId, reaped: false, evidence: reapEvidence(current, reason, force), run: current };
   }
@@ -1234,6 +713,7 @@ function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): R
   const includeRunning = args.include_running === undefined ? true : Boolean(args.include_running);
   const verbose = Boolean(args.verbose);
   const includeSummary = Boolean(args.include_summary) || verbose;
+
   const runs = listRunIds(state)
     .map((runId) => readRunResult(state, runId, false))
     .filter((run): run is Record<string, unknown> => Boolean(run))
@@ -1368,12 +848,7 @@ function workerDashboardDescribe(args: Record<string, unknown>, state: WorkerMcp
     .sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)))
     .slice(0, limit);
   const compactRuns = runs.map((run) => dashboardRun(run));
-  const pendingJoinGates = compactRuns.filter((run) => !isTerminalRunStatus(String(run.status ?? ''))).map((run) => ({
-    gate_id: `join:${run.run_id}`,
-    run_id: run.run_id,
-    status: 'pending',
-    waiting_for: [run.run_id],
-  }));
+  const pendingJoinGates = dashboardPendingJoinGates(compactRuns);
   return {
     schema: 'narada.worker.dashboard.v1',
     status: 'ok',
@@ -1413,120 +888,6 @@ function workerDashboardDescribe(args: Record<string, unknown>, state: WorkerMcp
   };
 }
 
-function normalizeBatchRequests(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_batch_requests_required', 'worker_run_batch_requests_required');
-  if (value.length > 50) throw diagnosticError('worker_run_batch_too_large', 'worker_run_batch_too_large', { max_requests: 50 });
-  return value.map((item) => asRecord(item));
-}
-
-function normalizeRunIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0) throw diagnosticError('worker_run_ids_required', 'worker_run_ids_required');
-  return uniqueStrings(value.map((item) => requiredNonEmptyString(item, 'worker_run_id_required')));
-}
-
-function normalizeOptionalRunIds(value: unknown): string[] {
-  if (value === undefined || value === null) return [];
-  return normalizeRunIds(value);
-}
-
-function dashboardMode(value: unknown, runId: unknown): 'all_active' | 'single_run' {
-  if (value === undefined || value === null || value === '') return typeof runId === 'string' && runId.trim() ? 'single_run' : 'all_active';
-  const mode = String(value).trim();
-  if (mode === 'all_active' || mode === 'single_run') return mode;
-  throw diagnosticError('worker_invalid_dashboard_mode', 'worker_invalid_dashboard_mode', { mode });
-}
-
-function isTerminalRunStatus(status: string): boolean {
-  return status === 'completed' || status === 'completed_with_errors' || status === 'failed' || status === 'cancelled';
-}
-
-function dashboardRun(run: Record<string, unknown>): Record<string, unknown> {
-  const timing = asRecord(run.timing);
-  const config = asRecord(run.resolved_worker_config);
-  const progress = asRecord(run.progress);
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  return {
-    run_id: run.run_id,
-    status: run.status,
-    completion_state: run.completion_state ?? run.confidence ?? null,
-    requested_mode: modeWithInference(run).requestedMode,
-    runtime: run.runtime ?? config.runtime ?? null,
-    authority: config.authority ?? null,
-    worker_session_id: run.worker_session_id ?? null,
-    started_at: timing.started_at ?? null,
-    finished_at: timing.finished_at ?? null,
-    duration_ms: timing.duration_ms ?? null,
-    retry: { attempt: 1, max_attempts: 1, source: 'not_recorded' },
-    failure: {
-      error_preview: previewString(compactRunError(run), 180),
-      error_classification: run.error_classification ?? null,
-      warning_count: run.warning_count ?? 0,
-    },
-    result_refs: dashboardResultRefs(run),
-    progress: {
-      event_count: progress.event_count ?? 0,
-      latest_event_type: progress.latest_event_type ?? null,
-      latest_event_preview: progress.latest_event_preview ?? null,
-      latest_event_at: progress.latest_event_at ?? null,
-      readable: progress.readable ?? false,
-    },
-    events: runDir ? compactEventStream(resolve(runDir, 'events.jsonl'), 8) : [],
-    status_liveness: run.status_liveness ?? null,
-    progress_state: run.progress_state ?? null,
-    budget_status: run.budget_status ?? null,
-    recent_activity: Array.isArray(run.recent_activity) ? run.recent_activity : [],
-  };
-}
-
-function dashboardResultRefs(run: Record<string, unknown>): Record<string, unknown>[] {
-  const refs = [];
-  const artifactReadback = asRecord(run.artifact_readback);
-  if (typeof run.run_dir === 'string') refs.push({ name: 'run_dir', kind: 'local_path', ref: run.run_dir });
-  if (typeof artifactReadback.events_tail === 'string') refs.push({ name: 'events_tail', kind: 'inline_preview', ref: 'artifact_readback.events_tail' });
-  if (Array.isArray(run.artifacts)) {
-    for (const artifact of run.artifacts.map(asRecord)) {
-      if (typeof artifact.name === 'string' && typeof artifact.path === 'string') refs.push({ name: artifact.name, kind: 'local_path', ref: artifact.path });
-    }
-  }
-  return refs;
-}
-
-function compactEventStream(eventsPath: string, limit: number): Record<string, unknown>[] {
-  if (!existsSync(eventsPath)) return [];
-  try {
-    const text = readFileSync(eventsPath, 'utf8').trim();
-    if (!text) return [];
-    return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-limit).map((line) => {
-      try {
-        const parsed = JSON.parse(line) as unknown;
-        const type = eventType(parsed);
-        const preview = previewString(latestEventText(parsed), 180);
-        return {
-          type,
-          kind: normalizeActivityKind(type, preview),
-          timestamp: eventTimestamp(parsed)?.toISOString() ?? null,
-          preview,
-          summary: preview,
-        };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { type: 'parse_error', timestamp: null, preview: previewString(message, 180) };
-      }
-    });
-  } catch {
-    return [];
-  }
-}
-
-function dashboardApiEndpoints(): Record<string, unknown>[] {
-  return [
-    { path: 'mcp://tools/worker_dashboard_describe', method: 'tools/call', description: 'Read-only compact dashboard payload for one run or all active runs.', arguments: { mode: 'all_active|single_run', run_id: 'optional run id', include_terminal: 'boolean', limit: '1..200' } },
-    { path: 'mcp://tools/worker_runs_list', method: 'tools/call', description: 'Recent run index with compact status fields.', arguments: { include_running: true, include_completed: true, verbose: false } },
-    { path: 'mcp://tools/worker_run_status', method: 'tools/call', description: 'Full status for one run, including artifact readback and progress.', arguments: { run_id: 'run-*' } },
-    { path: 'mcp://resources/worker-artifact', method: 'resources/read', description: 'Read run artifacts such as events.jsonl and result.json for primary run-root records.' },
-  ];
-}
-
 function synthesizeRuns(runs: Record<string, unknown>[]): Record<string, unknown> {
   return {
     count: runs.length,
@@ -1553,293 +914,7 @@ function synthesizeRuns(runs: Record<string, unknown>[]): Record<string, unknown
   };
 }
 
-function readRunResult(state: WorkerMcpState, runId: string, required = true): Record<string, unknown> | null {
-  if (!/^run-[A-Za-z0-9TZ-]+$/.test(runId)) throw diagnosticError('worker_run_id_invalid', 'worker_run_id_invalid', { run_id: runId });
-  const located = locateRunResult(state, runId);
-  if (!located) {
-    if (!required) return null;
-    throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
-  }
-  try {
-    const run = JSON.parse(readFileSync(located.resultPath, 'utf8')) as Record<string, unknown>;
-    return withArtifactReadback(enrichFailedRunDiagnostics(withProgressObservability(withRunningLiveness(withFreshProgress(recoverExpiredRunningRun(recoverOrphanedRunningRun(recoverCompletedRunFromEvents(run, located.resultPath), state), state, located.resultPath)), state))), state, located);
-  } catch (error) {
-    if (!required) return null;
-    const message = error instanceof Error ? error.message : String(error);
-    throw diagnosticError('worker_run_result_unreadable', 'worker_run_result_unreadable', { run_id: runId, error: message });
-  }
-}
-
-function listRunIds(state: WorkerMcpState): string[] {
-  return uniqueStrings(candidateRunRoots(state).flatMap((root) => {
-    if (!existsSync(root)) return [];
-    try {
-      return readdirSync(root).filter((entry) => entry.startsWith('run-') && statSync(resolve(root, entry)).isDirectory());
-    } catch { return []; }
-  }));
-}
-
-function locateRunResult(state: WorkerMcpState, runId: string): { runRoot: string; runDir: string; resultPath: string; primary: boolean } | null {
-  const primaryRoot = resolve(state.policy.runRoot);
-  for (const runRoot of candidateRunRoots(state)) {
-    const runDir = resolve(runRoot, runId);
-    const resultPath = resolve(runDir, 'result.json');
-    if (existsSync(resultPath)) return { runRoot, runDir, resultPath, primary: runRoot === primaryRoot };
-  }
-  return null;
-}
-
-function candidateRunRoots(state: WorkerMcpState): string[] {
-  const roots = [resolve(state.policy.runRoot)];
-  const userHome = process.env.USERPROFILE || process.env.HOME;
-  const codeHome = process.env.CODEX_HOME;
-  if (process.env.NARADA_SITE_ROOT) roots.push(resolve(process.env.NARADA_SITE_ROOT, '.narada', 'runtime', 'worker-delegation'));
-  if (userHome) {
-    roots.push(resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation'));
-    roots.push(resolve(userHome, 'worker-delegation', 'runs'));
-  }
-  if (codeHome) roots.push(resolve(codeHome, 'worker-delegation', 'runs'));
-  return uniqueStrings(roots);
-}
-
-function withArtifactReadback(run: Record<string, unknown>, state: WorkerMcpState, located: { runRoot: string; runDir: string; primary: boolean }): Record<string, unknown> {
-  const artifactReadback = {
-    readable_via_worker_delegation: true,
-    local_filesystem_access_required: false,
-    run_root: located.runRoot,
-    run_root_source: located.primary ? 'policy.runRoot' : 'rediscovered_run_root',
-    rediscovered: !located.primary,
-    resources_available: located.primary,
-    diagnostic_tail: readDiagnosticTail(resolve(located.runDir, 'diagnostic.log')),
-    events_tail: readTextTail(resolve(located.runDir, 'events.jsonl'), 1200),
-    worker_invocation_preview: readJsonPreview(resolve(located.runDir, 'worker_invocation.json')),
-    resolved_worker_config_preview: readJsonPreview(resolve(located.runDir, 'resolved_worker_config.json')),
-  };
-  return { ...run, artifact_readback: artifactReadback };
-}
-
-function includeRunByStatus(status: string, options: { includeCompleted: boolean; includeRunning: boolean }): boolean {
-  if (status === 'running') return options.includeRunning;
-  if (status === 'completed' || status === 'completed_with_errors' || status === 'failed' || status === 'cancelled') return options.includeCompleted;
-  return true;
-}
-
-function runSortKey(run: Record<string, unknown>): string {
-  const timing = asRecord(run.timing);
-  return String(timing.finished_at ?? timing.started_at ?? run.run_id ?? '');
-}
-
-function runListItem(run: Record<string, unknown>, options: { verbose: boolean; includeSummary: boolean }): Record<string, unknown> {
-  const timing = asRecord(run.timing);
-  const mode = modeWithInference(run);
-  const progress = asRecord(run.progress);
-  const item: Record<string, unknown> = {
-    run_id: run.run_id,
-    status: run.status,
-    completion_state: run.completion_state ?? run.confidence ?? null,
-    requested_mode: mode.requestedMode,
-    requested_mode_inferred: mode.inferred,
-    authority: asRecord(run.resolved_worker_config).authority ?? null,
-    started_at: timing.started_at ?? null,
-    finished_at: timing.finished_at ?? null,
-    duration_ms: timing.duration_ms ?? null,
-    summary_preview: previewString(run.summary, 180),
-    error_preview: previewString(compactRunError(run), 180),
-    error_classification: run.error_classification ?? null,
-    warning_count: run.warning_count ?? 0,
-    progress_preview: progress.latest_event_preview ?? null,
-    latest_event_type: progress.latest_event_type ?? null,
-    progress: run.progress ?? null,
-  };
-  if (run.status_liveness !== undefined) item.status_liveness = run.status_liveness;
-  if (options.includeSummary) item.summary = String(run.summary ?? '');
-  if (options.verbose) {
-    item.run_dir = run.run_dir;
-    item.worker_session_id = run.worker_session_id;
-    item.timing = run.timing;
-    item.error = run.error;
-    item.diagnostic_tail = run.diagnostic_tail ?? null;
-    item.error_classification = run.error_classification ?? null;
-  }
-  return item;
-}
-
-function compactRunError(run: Record<string, unknown>): string | null {
-  const error = previewString(run.error, 120);
-  const diagnosticTail = previewString(run.diagnostic_tail, 220);
-  if (error && diagnosticTail) return `${error}: ${diagnosticTail}`;
-  return error ?? diagnosticTail;
-}
-
-function enrichFailedRunDiagnostics(run: Record<string, unknown>): Record<string, unknown> {
-  if (run.status !== 'failed') return run;
-  const progress = asRecord(run.progress);
-  if (progress.event_count !== 0 || run.worker_session_id) return run;
-  const runDir = typeof run.run_dir === 'string' ? run.run_dir : null;
-  if (!runDir) return run;
-  const diagnosticTail = readDiagnosticTail(resolve(runDir, 'diagnostic.log'));
-  if (!diagnosticTail) return run;
-  return {
-    ...run,
-    diagnostic_tail: diagnosticTail,
-    error_classification: classifyDiagnosticTail(diagnosticTail),
-  };
-}
-
-function readDiagnosticTail(path: string): string | null {
-  return readTextTail(path, 800);
-}
-
-function readTextTail(path: string, limit: number): string | null {
-  if (!existsSync(path)) return null;
-  try {
-    const text = readFileSync(path, 'utf8').trim();
-    if (!text) return null;
-    const normalized = text.replace(/\s+/g, ' ').trim();
-    return normalized.length <= limit ? normalized : normalized.slice(-limit);
-  } catch {
-    return null;
-  }
-}
-
-function readJsonPreview(path: string): Record<string, unknown> | null {
-  if (!existsSync(path)) return null;
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-    return redactLargeRecord(parsed, 20);
-  } catch { return null; }
-}
-
-function redactLargeRecord(record: Record<string, unknown>, maxKeys: number): Record<string, unknown> {
-  const entries = Object.entries(record).slice(0, maxKeys).map(([key, value]) => [key, previewJsonValue(value)]);
-  return Object.fromEntries(entries);
-}
-
-function previewJsonValue(value: unknown): unknown {
-  if (typeof value === 'string') return previewString(value, 240) ?? '';
-  if (Array.isArray(value)) return value.slice(0, 20).map(previewJsonValue);
-  if (value && typeof value === 'object') return redactLargeRecord(value as Record<string, unknown>, 20);
-  return value;
-}
-
 function uniqueStrings(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
-
-function classifyDiagnosticTail(text: string): string {
-  return classifyRuntimeError(text) ?? 'runtime_prestart_diagnostic';
-}
-
-function classifyRuntimeError(text: string): string | null {
-  const lower = text.toLowerCase();
-  if (lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('429')) return 'provider_rate_limited';
-  if (lower.includes('unauthorized') || lower.includes('authentication') || lower.includes('api key') || lower.includes('401') || lower.includes('403')) return 'provider_auth';
-  if (lower.includes('invalid_request') || lower.includes('invalid request') || lower.includes('function name is invalid') || lower.includes('400')) return 'provider_invalid_request';
-  if (lower.includes('not inside a trusted directory') || lower.includes('--skip-git-repo-check')) return 'codex_untrusted_directory';
-  if (lower.includes('permission denied') || lower.includes('access is denied')) return 'permission_denied';
-  if (lower.includes('command not found') || lower.includes('not recognized as')) return 'runtime_command_unavailable';
-  return null;
-}
-
-function runWaitPayload(run: Record<string, unknown>, options: { status: 'finished' | 'timed_out'; timeoutMs: number; elapsedMs: number; verbose: boolean; summaryOnly: boolean }): Record<string, unknown> {
-  const compact = runListItem(run, { verbose: options.verbose, includeSummary: options.summaryOnly || options.verbose });
-  const payload: Record<string, unknown> = {
-    schema: 'narada.worker.run_wait.v1',
-    status: 'ok',
-    wait: { status: options.status, timeout_ms: options.timeoutMs, elapsed_ms: options.elapsedMs },
-    run: options.summaryOnly ? summaryOnlyRun(compact) : compact,
-  };
-  if (options.verbose) payload.full_run = run;
-  return payload;
-}
-
-function summaryOnlyRun(run: Record<string, unknown>): Record<string, unknown> {
-  return {
-    run_id: run.run_id,
-    status: run.status,
-    summary: run.summary ?? run.summary_preview ?? '',
-    error_preview: run.error_preview ?? null,
-    progress: run.progress ?? null,
-  };
-}
-
-function readRunProgress(eventsPath: string): WorkerProgressPreview {
-  const empty: WorkerProgressPreview = { event_count: 0, latest_event_type: null, latest_event_preview: null, latest_event_at: null, readable: true, tail_truncated: false };
-  if (!existsSync(eventsPath)) return empty;
-  try {
-    const stat = statSync(eventsPath);
-    if (stat.size === 0) return empty;
-    const limit = 64 * 1024;
-    const start = Math.max(0, stat.size - limit);
-    const length = stat.size - start;
-    const buffer = Buffer.alloc(length);
-    const fd = openSync(eventsPath, 'r');
-    try {
-      readSync(fd, buffer, 0, length, start);
-    } finally {
-      closeSync(fd);
-    }
-    const text = buffer.toString('utf8');
-    const rawLines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const lines = start === 0 ? rawLines : rawLines.slice(1);
-    let latest: unknown = null;
-    let eventCount = 0;
-    let parseError: string | null = null;
-    for (const line of lines) {
-      try {
-        latest = JSON.parse(line) as unknown;
-        eventCount += 1;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        parseError ||= message;
-      }
-    }
-    return {
-      event_count: eventCount,
-      latest_event_type: eventType(latest),
-      latest_event_preview: previewString(latestEventText(latest), 240),
-      latest_event_at: eventTimestamp(latest)?.toISOString() ?? (eventCount > 0 ? stat.mtime.toISOString() : null),
-      readable: parseError === null,
-      tail_truncated: start > 0,
-      ...(parseError ? { error_preview: previewString(parseError, 180) ?? undefined } : {}),
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ...empty, readable: false, error_preview: previewString(message, 180) ?? undefined };
-  }
-}
-
-function eventType(value: unknown): string | null {
-  const record = asRecord(value);
-  if (typeof record.type === 'string' && record.type.trim()) return record.type.trim();
-  return typeof record.event === 'string' && record.event.trim() ? record.event.trim() : null;
-}
-
-function latestEventText(value: unknown): string | null {
-  const record = asRecord(value);
-  for (const key of ['message', 'msg', 'summary', 'text']) {
-    const item = record[key];
-    if (typeof item === 'string' && item.trim()) return item.trim();
-  }
-  const type = eventType(value);
-  if (type) return type;
-  if (value === null) return null;
-  return JSON.stringify(value);
-}
-
-function normalizeActivityKind(type: string | null, preview: string | null): string {
-  const text = `${type ?? ''} ${preview ?? ''}`.toLowerCase();
-  if (/command|exec|shell|structured_command/.test(text)) return 'command';
-  if (/apply_patch|edit|write|modified|file_change/.test(text)) return 'file_edit';
-  if (/read|grep|glob|search/.test(text)) return 'file_read';
-  if (/tool|call/.test(text)) return 'tool';
-  if (/error|failed/.test(text)) return 'error';
-  return 'model_turn';
-}
-
-function previewString(value: unknown, limit: number): string | null {
-  if (value === undefined || value === null || value === '') return null;
-  const text = String(value).replace(/\s+/g, ' ').trim();
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 3))}...`;
-}
 
 function stringArrayFromUnknown(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
@@ -1941,47 +1016,6 @@ function inheritSessionConstraints(request: WorkerRunToolInput, inherited: Resol
   if (Object.keys(overrides).length > 0) request.constraints.overrides = overrides;
 }
 
-function workerEditRunArgs(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
-  const editInput = normalizeWorkerEditToolInput(args);
-  return {
-    intent: { instruction: editInput.instruction, mode: 'implement' },
-    constraints: {
-      cwd: editInput.cwd,
-      ...(editInput.site_root !== undefined ? { site_root: editInput.site_root } : {}),
-      ...(editInput.provider !== undefined ? { provider: editInput.provider } : {}),
-      authority: 'write',
-      cognition: 'low',
-      ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
-      ...(editInput.wait_for_completion !== undefined ? { wait_for_completion: editInput.wait_for_completion } : {}),
-      ...(editInput.exit_interview !== undefined ? { exit_interview: editInput.exit_interview } : {}),
-      ...(editInput.overrides && Object.keys(editInput.overrides).length > 0 ? { overrides: editInput.overrides } : {}),
-    },
-  };
-}
-
-function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEditToolInput {
-  const overridesInput = asRecord(args.overrides);
-  const editInput: WorkerEditToolInput = {
-    cwd: requiredNonEmptyString(args.cwd, 'worker_cwd_required'),
-    instruction: requiredNonEmptyString(args.instruction, 'worker_prompt_too_large'),
-  };
-  if (args.site_root !== undefined && args.site_root !== null && String(args.site_root).trim()) editInput.site_root = String(args.site_root).trim();
-  if (args.provider !== undefined && args.provider !== null && String(args.provider).trim()) editInput.provider = String(args.provider).trim();
-  if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);
-  if (args.wait_for_completion !== undefined) editInput.wait_for_completion = Boolean(args.wait_for_completion);
-  if (args.exit_interview !== undefined) editInput.exit_interview = Boolean(args.exit_interview);
-  const overrides: NonNullable<WorkerEditToolInput['overrides']> = {};
-  copyString(overrides, 'runtime', overridesInput.runtime);
-  copyString(overrides, 'sandbox', overridesInput.sandbox);
-  copyString(overrides, 'model', overridesInput.model);
-  copyString(overrides, 'reasoning_effort', overridesInput.reasoning_effort);
-  const config = primitiveConfigRecord(overridesInput.config);
-  if (Object.keys(config).length > 0) overrides.config = config;
-  if (overridesInput.skip_git_repo_check !== undefined) overrides.skip_git_repo_check = optionalBoolean(overridesInput.skip_git_repo_check, 'skip_git_repo_check');
-  if (Object.keys(overrides).length > 0) editInput.overrides = overrides;
-  return editInput;
-}
-
 function defaultModeForAuthority(authority: ResolvedWorkerConfig['authority']): WorkerDelegationMode {
   return authority === 'write' || authority === 'command' ? 'implement' : 'audit_only';
 }
@@ -2014,7 +1048,7 @@ function buildPreflight(options: { cwd: string; authority: string; mode: WorkerD
   if (options.isResume) checks.push({ name: 'resume', status: 'ok', message: 'continuing an existing worker session' });
   for (const item of options.preflightPaths) checks.push(preflightPathCheck(item, options.allowedRoots));
   if (options.requiredMcpTools.length > 0) {
-    checks.push({ name: 'required_mcp_tools', status: 'warning', message: `not_verified_by_delegation; worker must verify requested MCP tools before work: ${options.requiredMcpTools.join(', ')}` });
+    checks.push({ name: 'required_mcp_tools', status: 'warning', message: `runtime_inventory_not_preflighted; narada-agent-runtime-server projects requested tools through NARADA_WORKER_MCP_CONFIG, other runtimes must verify before work: ${options.requiredMcpTools.join(', ')}` });
     const recursiveTools = options.requiredMcpTools.filter(isWorkerDelegationToolName);
     if (recursiveTools.length > 0) {
       checks.push({
@@ -2129,124 +1163,28 @@ function finalChecklist(mode: WorkerDelegationMode): string[] {
   return ['list files changed', 'list tests or checks run', 'include git/worktree status if available', 'list remaining blockers'];
 }
 
-function mcpToolVerification(requestedTools: string[]): Record<string, unknown> {
+function mcpToolVerification(requestedTools: string[], runtime: SupportedRuntime | null = null): Record<string, unknown> {
+  const projectedByRuntime = requestedTools.length > 0 && runtime === 'narada-agent-runtime-server';
   return {
     requested_mcp_tools: requestedTools,
-    verification_state: requestedTools.length > 0 ? 'delegated_to_worker' : 'not_requested',
-    enforced_by_delegation: false,
+    verification_state: requestedTools.length > 0 ? (projectedByRuntime ? 'projected_to_worker_runtime' : 'delegated_to_worker') : 'not_requested',
+    enforced_by_delegation: projectedByRuntime,
+    enforcement_surface: projectedByRuntime ? 'NARADA_WORKER_MCP_CONFIG' : null,
     evidence_field: 'verification',
-    fallback_reason_required: requestedTools.length > 0,
+    fallback_reason_required: requestedTools.length > 0 && !projectedByRuntime,
   };
 }
 
-function outputContractForRequest(request: WorkerRunToolInput, mode: WorkerDelegationMode): Record<string, unknown> {
-  const base = outputContractForMode(mode);
-  const targetPaths = request.constraints.preflight_paths?.map((item) => resolve(item.path)) ?? [];
-  const authority = request.constraints.authority ?? 'read';
+function buildWorkerMcpProjection(requiredMcpTools: string[]): Record<string, unknown> | null {
+  if (requiredMcpTools.length === 0) return null;
   return {
-    ...base,
-    effective_authority: authority,
-    tool_capability_note: authority === 'read' ? 'If a raw MCP surface advertises write-capable roots or mutation tools, treat them as unavailable for this delegation unless the requested authority is escalated by the caller.' : null,
-    target_paths: targetPaths,
-    forbidden_adjacent_paths: targetPaths.length > 0 ? ['Paths outside target_paths and allowed roots unless explicitly required by the task.'] : [],
-    verification_budget: request.constraints.verification_budget ?? null,
-    test_budget: request.constraints.test_budget ?? null,
+    schema: 'narada.worker.mcp_projection.v1',
+    native_mcp_mode: 'scoped',
+    mcp_tool_allowlist: requiredMcpTools,
+    include_startup_tools: true,
+    include_output_readback_tools: false,
+    full_site_mcp_requires_explicit_mode: true,
   };
-}
-
-function outputContractForMode(mode: WorkerDelegationMode): Record<string, unknown> {
-  const auditLike = mode === 'audit_only' || mode === 'plan_only';
-  return {
-    schema: 'narada.worker.output_contract.v1',
-    requested_mode: mode,
-    confidence_level: { type: 'number', minimum: 0, maximum: 1, meaning: '0 means unsupported, 1 means fully evidenced' },
-    evidence_basis: { type: 'array', items: 'short evidence references such as file:line, command output, or MCP tool result' },
-    findings: auditLike ? {
-      required_for_audit_only: true,
-      item_shape: { severity: 'info|low|medium|high|critical', path: 'string|null', recommendation: 'string', confidence_level: 'number 0..1', evidence_refs: 'string[]' },
-    } : null,
-    shell_fallback_reason: 'When verification or discovery uses shell because an MCP tool was unavailable or insufficient, explain that reason in verification.summary.',
-    verification_command_classification: {
-      required: true,
-      allowed_values: ['focused', 'broad', 'not_applicable'],
-      meaning: 'focused commands directly validate the touched package/task; broad commands scan larger or unrelated surfaces and must be justified.',
-    },
-    verification_budget_respected: { type: ['boolean', 'null'], required: true, meaning: 'true if verification/test budget and stop discipline were respected, false if exceeded, null if no budget was supplied and no verification was run' },
-    broad_unrelated_failures: { type: 'array', required: true, meaning: 'Failures from broad commands that appear unrelated to the delegated target; do not mix them with focused verification failures.' },
-    stop_discipline: 'Run focused checks first. Stop after the requested tests or first blocking focused failure when stop_on_first_failure is true. Do not run broad suites unless requested, needed, or allowed by budget.',
-    focused_readback: auditLike ? {
-      required: true,
-      behavior: 'Inspect ordinary target source files directly with filesystem read/search MCP tools available to the worker; do not require the delegating caller to pre-materialize output_refs for normal source files.',
-      bounds: 'Keep large/generated/secret outputs bounded and summarize them instead of pasting full content.',
-    } : null,
-  };
-}
-
-function buildWorkerPrompt(options: { intent: WorkerIntent; cwd: string; mode: WorkerDelegationMode; runtime: string; preflight: WorkerPreflightCheck[]; outputContract: Record<string, unknown>; exitInterview: boolean }): string {
-  return [
-    'Intent',
-    options.intent.instruction,
-    '',
-    'Requested mode',
-    options.mode,
-    '',
-    'Working directory',
-    options.cwd,
-    '',
-    'Preflight evidence',
-    ...options.preflight.map((check) => `- ${check.status} ${check.name}: ${check.message}`),
-    '',
-    'Mode contract',
-    options.mode === 'audit_only' ? 'Audit only: inspect and report. Do not edit files or change target state.' : options.mode === 'plan_only' ? 'Plan only: produce an implementation plan. Do not edit files or change target state.' : options.mode === 'implement_and_verify' ? 'Implement and verify: make the requested changes, run appropriate checks, and report files changed plus verification.' : 'Implement: make the requested changes and report files changed plus remaining verification needs.',
-    '',
-    'Recursion guard',
-    'Do not call any worker_* MCP tools.',
-    '',
-    'Tool use discipline',
-    'Prefer available MCP filesystem, git, and structured-command tools for inspection and verification.',
-    'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
-    'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
-    'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
-    ...(options.mode === 'audit_only' || options.mode === 'plan_only' ? [
-      'For focused source inspection, read target files directly through available filesystem MCP tools such as fs_read_file_range and fs_grep_search. Do not ask the delegating caller to provide output_refs for ordinary source files.',
-      'If a file is large, generated, or secret-bearing, keep reads bounded and cite the file/path plus relevant line window rather than copying full content.',
-    ] : []),
-    '',
-    'Verification budget discipline',
-    'Classify every verification command as focused, broad, or not_applicable in verification[].command_classification.',
-    'Focused commands directly validate the requested package or touched files. Broad commands cover unrelated packages, whole-repo suites, or wide scans.',
-    'Respect verification_budget and test_budget from the structured output contract. If stop_on_first_failure is true, stop after the first blocking focused failure.',
-    'Report verification_budget_respected as true, false, or null, and list broad unrelated failures only in broad_unrelated_failures.',
-    ...(options.runtime === 'narada-agent-runtime-server' ? [
-      '',
-      'NARS worker completion guard',
-      'You are running under narada-agent-runtime-server as an automated worker. Complete this turn by returning the required JSON object; do not wait for operator input.',
-      'Do not call lifecycle, pause, sleep, wait, delegation, or worker_* tools from inside this worker turn.',
-      'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as narada-andrey-filesystem when they are not explicitly available.',
-      'If a tool call returns admission_required, surface_registry_tool_not_declared, mcp_runtime_fault, or any unavailable-tool error, stop using that tool family and return the required JSON with the issue in residual_risks or observed_incoherencies.',
-      'For tasks answerable from the delegated intent, preflight evidence, or current prompt, do not probe filesystem tools just to gather extra context.',
-    ] : []),
-    '',
-    'Structured output contract',
-    JSON.stringify(options.outputContract),
-    ...(options.mode === 'audit_only' ? [
-      'For audit_only, include concise findings in deliverables as machine-readable JSON strings when possible, using severity, path, recommendation, confidence_level, and evidence_refs.',
-    ] : []),
-    '',
-    'Output requirements',
-    'Return one JSON object matching worker_output.schema.json.',
-    'For audit_only or plan_only, explicitly state that edits_performed=false in the summary if no files were changed.',
-    'Always include explicit edits_performed, target_state_changed, changes, and verification fields.',
-    'Always include explicit verification_budget_respected and broad_unrelated_failures fields.',
-    'For implement or implement_and_verify, list changed files in changes and checks run in verification.',
-    ...(options.exitInterview ? [
-      '',
-      'Exit interview',
-      'Include exit_interview in the output JSON with ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements.',
-      'Focus on concrete tool/interface friction encountered during this delegated run, including anything that made progress harder, ambiguous, slower, or less observable.',
-    ] : []),
-    '',
-  ].join('\n');
 }
 
 function normalizeWorkerRunToolInput(args: Record<string, unknown>, isResume: boolean): WorkerRunToolInput {

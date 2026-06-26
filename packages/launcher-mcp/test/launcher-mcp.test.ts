@@ -29,6 +29,8 @@ try {
   const doctor = view(await call('launcher_doctor', {}));
   assert.equal(doctor.registry_exists, true);
   assert.equal(doctor.execution_posture, 'read_only_no_launch_no_shell');
+  assert.deepEqual(doctor.mcp_injection_scope_doctrine.scopes, ['host', 'user_site', 'local_site']);
+  assert.equal(doctor.mcp_injection_scope_doctrine.canonical_host_example, 'speech');
 
   const options = view(await call('launcher_options_list', {}));
   assert.ok((options.declared_options as string[]).includes('IntelligenceProvider'));

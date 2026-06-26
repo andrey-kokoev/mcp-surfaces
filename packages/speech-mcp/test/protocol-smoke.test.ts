@@ -29,7 +29,7 @@ try {
   assert.equal((init.result as Record<string, any>).serverInfo.name, 'speech-mcp');
 
   const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
-  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
 
   const speakTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'speech_speak');
   assert.equal(speakTool.annotations.readOnlyHint, false);
@@ -40,6 +40,17 @@ try {
   assert.ok(speakTool.inputSchema.properties.model);
   assert.ok(speakTool.inputSchema.properties.speed);
   assert.ok(speakTool.inputSchema.properties.api_key);
+
+  const captureTool = tools.find((t: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => t.name === 'speech_capture_transcribe');
+  assert.equal(captureTool.annotations.readOnlyHint, false);
+  assert.deepEqual(captureTool.inputSchema.properties.provider.enum, ['remote_transcription']);
+  assert.deepEqual(captureTool.inputSchema.properties.model.enum, ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1']);
+
+  const promptCaptureTool = tools.find((t: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => t.name === 'speech_prompt_capture_response');
+  assert.equal(promptCaptureTool.annotations.readOnlyHint, false);
+  assert.deepEqual(promptCaptureTool.inputSchema.required, ['text']);
+  assert.deepEqual(promptCaptureTool.inputSchema.properties.tts_model.enum, ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd']);
+  assert.deepEqual(promptCaptureTool.inputSchema.properties.model.enum, ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1']);
 
   const listenStartTool = tools.find((t: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => t.name === 'speech_listen_start');
   assert.equal(listenStartTool.annotations.readOnlyHint, false);

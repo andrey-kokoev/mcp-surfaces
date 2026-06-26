@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "type": "module",
-  "description": "Text-to-speech MCP surface with SAPI provider and provider abstraction for future OpenAI TTS expansion.",
+  "description": "Policy-gated speech MCP surface with SAPI/OpenAI TTS and bounded microphone capture transcription.",
   "bin": {
     "speech-mcp": "./dist/src/main.js"
   },

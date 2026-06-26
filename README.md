@@ -22,6 +22,7 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution. See `packages/scheduler-mcp/README.md`.
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers. See `packages/mcp-registrar/README.md`.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing. See `packages/surface-feedback-mcp/README.md`.
+- `@narada2/speech-mcp`: host-level speech surface for TTS, bounded capture, and transcription. See `packages/speech-mcp/README.md`.
 
 ## Verify
 
@@ -34,6 +35,9 @@ pnpm test
 
 See `docs/mcp-surfaces-target-shape.md` for the implementation-driving target
 shape for MCP surfaces as Narada's governed crossing layer.
+
+See `docs/mcp-injection-scopes.md` for the doctrine that separates host,
+user-site, and local-site MCP injection from session aliases.
 
 See `docs/mcp-output-refusal-conventions.md` for common output reference,
 payload reference, and refusal conventions shared across surfaces.

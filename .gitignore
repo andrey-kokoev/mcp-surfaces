@@ -6,4 +6,5 @@ node_modules/
 packages/*/dist/
 .feedback/
 .tmp/
+packages/*/.tmp-tests/
 packages/*/sessions/

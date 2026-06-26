@@ -634,9 +634,9 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
         const packet = JSON.parse(readFileSync(path, 'utf8'));
         const controlFlagIndex = Array.isArray(packet.runtime_args) ? packet.runtime_args.indexOf('--control-jsonl') : -1;
         const controlPath = (controlFlagIndex >= 0 ? packet.runtime_args[controlFlagIndex + 1] : null)
-          ?? packet.agent_cli_launch?.control_path
-          ?? packet.agent_runtime_server_launch?.control_path
           ?? packet.nars_launch?.control_path
+          ?? packet.agent_runtime_server_launch?.control_path
+          ?? packet.agent_cli_launch?.control_path
           ?? packet.control_path
           ?? null;
         const carrierSessionId = packet.carrier_session?.carrier_session_id
