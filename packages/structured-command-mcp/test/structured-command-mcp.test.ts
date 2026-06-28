@@ -367,10 +367,10 @@ assert.equal(okLongInlineArg.stdout, 'long-inline-ok');
 await assert.rejects(
   () => exec({
     command: 'node',
-    args: ['x'.repeat(8193)],
+    args: ['x'.repeat(20001)],
     working_directory: root,
   }, state),
-  /structured_command_input_too_long:arguments\.args\[0\]:8193>8192/,
+  /structured_command_input_too_long:arguments\.args\[0\]:20001>20000/,
 );
 
 const policy = await rpc({

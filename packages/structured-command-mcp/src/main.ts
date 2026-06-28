@@ -15,7 +15,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const TOOL_RESULT_CHAR_LIMIT = 4000;
 const STREAM_PREVIEW_CHAR_LIMIT = 1000;
 const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
-const TOOL_INPUT_CHAR_LIMIT = 8192;
+const TOOL_INPUT_CHAR_LIMIT = 20000;
 const REF_PATTERN = /^structured_command_(input|execution):([A-Za-z0-9_-]{8,80})$/;
 const ROOTS_LIST_REQUEST_PREFIX = 'structured_command_roots_';
 
