@@ -147,7 +147,12 @@ function parseCapabilities(capabilitiesJson: unknown): string[] {
   if (!capabilitiesJson) return [];
   try {
     const parsed = JSON.parse(String(capabilitiesJson));
-    return Array.isArray(parsed) ? parsed.filter((c) => typeof c === 'string') : [];
+    if (Array.isArray(parsed)) return parsed.filter((c) => typeof c === 'string');
+    if (parsed && typeof parsed === 'object') {
+      const capabilities = (parsed as Record<string, unknown>).capabilities;
+      return Array.isArray(capabilities) ? capabilities.filter((c) => typeof c === 'string') : [];
+    }
+    return [];
   } catch {
     return [];
   }

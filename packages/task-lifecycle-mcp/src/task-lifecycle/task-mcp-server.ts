@@ -10,6 +10,14 @@ import { inspectTaskEvidence, findTaskFile, readTaskFile, writeTaskProjection, a
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { buildWorkboard } from './workboard.js';
 import { buildNextWorkContract, buildUnifiedWorkboard, deriveNextRecommendation } from './unified-workboard.js';
+import {
+  buildConciseNextActionView as buildConciseNextActionViewCore,
+  buildCorrectiveDebtReadiness as buildCorrectiveDebtReadinessCore,
+  buildPostCloseoutContinuation as buildPostCloseoutContinuationCore,
+  buildWorkboardSnapshotPacket as buildWorkboardSnapshotPacketCore,
+  computeStateFreshness as computeStateFreshnessCore,
+  setTaskLifecycleReadModelContext,
+} from './task-lifecycle-read-models.js';
 import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
 import { randomUUID } from 'crypto';
 import { relative, resolve, join, sep } from 'path';
@@ -66,6 +74,36 @@ import { createTaskLifecycleInspectionHandlers } from './task-lifecycle-inspecti
 import { createTaskLifecycleEvidenceReviewHandlers } from './task-lifecycle-evidence-review-handlers.js';
 import { createTaskLifecycleOperationsHandlers } from './task-lifecycle-operations-handlers.js';
 import { createTaskLifecycleCreateRecurringHandlers } from './task-lifecycle-create-recurring-handlers.js';
+import {
+  buildBlockedTaskReportPosture,
+  buildConciseNextActionView,
+  buildCorrectiveDebtReadiness,
+  setTaskLifecycleReadModelContext,
+} from './task-lifecycle-read-models.js';
+import {
+  buildStateAwareFinishBlockerRemediation as buildStateAwareFinishBlockerRemediationCore,
+  buildTaskEvidencePreflight as buildTaskEvidencePreflightCore,
+  buildTaskFileResolutionFailure as buildTaskFileResolutionFailureCore,
+  detectGitChangedFiles as detectGitChangedFilesCore,
+  scopeChangedFiles as scopeChangedFilesCore,
+  taskLifecycleDispositionCloseout as taskLifecycleDispositionCloseoutCore,
+  validateCapaDispositionCorrectiveCoverage as validateCapaDispositionCorrectiveCoverageCore,
+} from './task-lifecycle-closeout.js';
+import {
+  admitRosterIdentity as admitRosterIdentityCore,
+  buildRoutingAssignmentDivergence as buildRoutingAssignmentDivergenceCore,
+  ensureStaticRosterAgentInSql as ensureStaticRosterAgentInSqlCore,
+  normalizeClaimAuthorityBasis as normalizeClaimAuthorityBasisCore,
+  normalizeRosterAuthorityBasis as normalizeRosterAuthorityBasisCore,
+  recordClaimIntent as recordClaimIntentCore,
+  readTaskRouting as readTaskRoutingCore,
+  sanitizeSqlRosterCapabilities as sanitizeSqlRosterCapabilitiesCore,
+  sanitizeRosterCapabilitiesJson as sanitizeRosterCapabilitiesJsonCore,
+  validatePreferredAgentMismatchAuthority as validatePreferredAgentMismatchAuthorityCore,
+  validateRosterIdentifier as validateRosterIdentifierCore,
+  withAuthoredRosterJsonPreserved as withAuthoredRosterJsonPreservedCore,
+  normalizeCapabilitiesJson as normalizeCapabilitiesJsonCore,
+} from './task-lifecycle-routing-roster.js';
 
 const PROTOCOL_VERSION = '2026-04-18';
 const SERVER_NAME = 'narada-task-lifecycle-mcp';
@@ -204,147 +242,6 @@ function taskLifecycleTools() {
   ];
 }
 
-function changedFileEvidenceSupersedesBlockedPosture(changedFileEvidence) {
-  return Boolean(changedFileEvidence)
-    && (changedFileEvidence.changedFiles.length > 0 || changedFileEvidence.noFilesChangedDeclarations.length > 0);
-}
-
-function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence = null }) {
-  const records = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
-  const sqliteReports = store.listReports ? store.listReports(lifecycle.task_id) : [];
-  const parsedReports = records.map((record) => {
-    try {
-      const parsed = JSON.parse(record.report_json ?? '{}');
-      return { record, parsed };
-    } catch {
-      return null;
-    }
-  }).filter(Boolean);
-  for (const report of sqliteReports) {
-    parsedReports.push({ record: report, parsed: normalizeSqliteTaskReportForBlockedPosture(report) });
-  }
-  const completionReports = parsedReports
-    .filter(({ parsed }) => reportSupersedesBlockedPosture(parsed))
-    .sort((a, b) => reportTimestamp(b).localeCompare(reportTimestamp(a)));
-  const blockedReports = parsedReports
-    .filter(({ parsed }) => parsed?.blocked === true || parsed?.report_status === 'blocked')
-    .sort((a, b) => String(b.parsed.reported_at ?? b.record.reported_at ?? '').localeCompare(String(a.parsed.reported_at ?? a.record.reported_at ?? '')));
-  const latest = blockedReports[0] ?? null;
-  if (!latest) {
-    return {
-      state: 'no_blocked_report',
-      lifecycle_status: lifecycle.status,
-      report_id: null,
-      blocker_count: 0,
-      blockers: [],
-    };
-  }
-  const blockers = Array.isArray(latest.parsed.known_residuals) ? latest.parsed.known_residuals : [];
-  const supersedingReport = completionReports.find((candidate) => reportTimestamp(candidate) > reportTimestamp(latest)) ?? null;
-  if (supersedingReport) {
-    return {
-      state: 'stale_blocked_report_superseded',
-      lifecycle_status: lifecycle.status,
-      report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
-      agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
-      reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
-      reason: latest.parsed.summary ?? null,
-      next_action: latest.parsed.next_action ?? null,
-      blocker_count: blockers.length,
-      blockers,
-      superseded_by: {
-        report_id: supersedingReport.parsed.report_id ?? supersedingReport.record.report_id ?? null,
-        agent_id: supersedingReport.parsed.agent_id ?? supersedingReport.record.agent_id ?? null,
-        reported_at: supersedingReport.parsed.reported_at ?? supersedingReport.record.reported_at ?? null,
-        evidence: summarizeBlockedReportSupersessionEvidence(supersedingReport.parsed),
-      },
-    };
-  }
-  if (changedFileEvidenceSupersedesBlockedPosture(changedFileEvidence)) {
-    return {
-      state: 'stale_blocked_report_superseded',
-      lifecycle_status: lifecycle.status,
-      report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
-      agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
-      reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
-      reason: latest.parsed.summary ?? null,
-      next_action: latest.parsed.next_action ?? null,
-      blocker_count: blockers.length,
-      blockers,
-      superseded_by: {
-        evidence: {
-          changed_files_count: changedFileEvidence.changedFiles.length,
-          no_files_changed_declaration_count: changedFileEvidence.noFilesChangedDeclarations.length,
-        },
-      },
-    };
-  }
-  return {
-    state: 'blocked_reported',
-    lifecycle_status: lifecycle.status,
-    report_id: latest.parsed.report_id ?? latest.record.report_id ?? null,
-    agent_id: latest.parsed.agent_id ?? latest.record.agent_id ?? null,
-    reported_at: latest.parsed.reported_at ?? latest.record.reported_at ?? null,
-    reason: latest.parsed.summary ?? null,
-    next_action: latest.parsed.next_action ?? null,
-    blocker_count: blockers.length,
-    blockers,
-  };
-}
-
-function reportTimestamp(entry) {
-  return String(entry?.parsed?.reported_at ?? entry?.record?.reported_at ?? '');
-}
-
-function normalizeSqliteTaskReportForBlockedPosture(report) {
-  let changedFiles = [];
-  let verification = [];
-  try {
-    const parsed = JSON.parse(report.changed_files_json ?? '[]');
-    if (Array.isArray(parsed)) changedFiles = parsed;
-  } catch {
-    changedFiles = [];
-  }
-  try {
-    const parsed = JSON.parse(report.verification_json ?? '[]');
-    if (Array.isArray(parsed)) verification = parsed;
-  } catch {
-    verification = [];
-  }
-  return {
-    report_id: report.report_id ?? null,
-    task_id: report.task_id ?? null,
-    agent_id: report.agent_id ?? null,
-    reported_at: report.submitted_at ?? null,
-    summary: report.summary ?? null,
-    changed_files: changedFiles,
-    no_files_changed: changedFiles.includes(NO_FILES_CHANGED_MARKER),
-    verification,
-    report_status: 'submitted',
-    ready_for_review: true,
-  };
-}
-
-function reportSupersedesBlockedPosture(parsed) {
-  if (!parsed || parsed.blocked === true || parsed.report_status === 'blocked') return false;
-  const changedFiles = Array.isArray(parsed.changed_files) ? parsed.changed_files.filter((file) => typeof file === 'string' && file.trim().length > 0) : [];
-  if (changedFiles.length > 0) return true;
-  if (parsed.no_files_changed === true) return true;
-  if (Array.isArray(parsed.verification) && parsed.verification.length > 0 && parsed.ready_for_review === true) return true;
-  return false;
-}
-
-function summarizeBlockedReportSupersessionEvidence(parsed) {
-  const changedFiles = Array.isArray(parsed.changed_files) ? parsed.changed_files.filter((file) => typeof file === 'string' && file.trim().length > 0) : [];
-  return {
-    changed_files_count: changedFiles.length,
-    no_files_changed: parsed.no_files_changed === true || changedFiles.includes(NO_FILES_CHANGED_MARKER),
-    verification_count: Array.isArray(parsed.verification) ? parsed.verification.length : 0,
-    ready_for_review: parsed.ready_for_review === true,
-    report_status: parsed.report_status ?? null,
-  };
-}
-
 function recordBlockedTaskReport({ store, report }) {
   const reportJson = JSON.stringify(report);
   if (store.upsertReportRecord) {
@@ -388,6 +285,39 @@ function gitVisiblePathSubset(cwd, files) {
     const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     return untracked.status === 0 && untracked.stdout.trim().length > 0;
   });
+}
+
+function buildPostCloseoutContinuation({ agentId, result }) {
+  refreshStore();
+  const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+  const agentRole = roleResolution.role;
+  const all = store.getAllLifecycle();
+  const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit: 8 });
+  const recommendation = deriveNextRecommendation(board, agentId);
+  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
+  const correctiveDebtReadiness = buildCorrectiveDebtReadiness({ allTasks: all });
+  const workboard = {
+    status: 'ok',
+    agent_id: agentId,
+    agent_role: agentRole,
+    role_binding: roleResolution.role_binding,
+    role_resolution: roleResolution,
+    generated_at: new Date().toISOString(),
+    workboard_generated_at: board.generated_at ?? null,
+    recommendation: recommendation ?? null,
+    next_work_contract: nextWorkContract,
+    no_work_assertion_guardrail: nextWorkContract.no_work_assertion_guardrail,
+    executable_work_available: nextWorkContract.executable_work_available,
+    agent_actionable_recommendation: Boolean(recommendation),
+    environment_pressure: { status: 'clear', executable_by_agent: false, pressure: null },
+    corrective_debt_readiness: correctiveDebtReadiness,
+    counts: {
+      ...board.counts,
+      all_in_review: board.counts.pending_reviews,
+    },
+    downstream_role_followups: (board.downstream_role_followups || []).slice(0, 8),
+  };
+  return classifyPostCloseoutContinuation({ result, workboard });
 }
 
 function patchLocalToolDefinition(toolDef) {
@@ -434,6 +364,7 @@ export function configureTaskLifecycleMcpRuntime({
   runtimeConfigured = true;
   taskLifecycleToolCaller = null;
   taskLifecycleHandlerRegistry = null;
+  setTaskLifecycleReadModelContext({ siteRoot, store });
   recordTaskLifecycleRuntimeObservation();
   return { status: 'configured', siteRoot };
 }
@@ -473,416 +404,6 @@ function recordTaskLifecycleRuntimeObservation() {
   } catch (error) {
     runtimeStderr.write(`Failed to record task-lifecycle MCP runtime observation: ${error.message}\n`);
   }
-}
-
-function buildCorrectiveDebtReadiness({ allTasks = [] } = {}) {
-  const inboxCapas = readActiveInboxCapaItems();
-  const capabilityCapas = readPendingCapabilityCapaItems();
-  const activeItems = [...inboxCapas.active, ...capabilityCapas.active]
-    .map((item) => ({
-      ...item,
-      corrective_task_coverage: detectCorrectiveTaskCoverage({ item, allTasks }),
-    }))
-    .sort((a, b) => b.severity - a.severity || String(a.capa_id).localeCompare(String(b.capa_id)));
-
-  const terminalCoverageItems = activeItems.filter((item) => item.corrective_task_coverage.status === 'closed_corrective_implementation_coverage');
-  const highSeverityItems = activeItems.filter((item) => item.severity >= 75);
-  const correctiveCoveragePressureStatuses = new Set(['missing_corrective_task_coverage', 'historical_only_no_open_corrective_task']);
-  const missingCoverageItems = highSeverityItems.filter((item) => correctiveCoveragePressureStatuses.has(item.corrective_task_coverage.status));
-  const state = activeItems.length === 0
-    ? 'terminal_corrected'
-    : terminalCoverageItems.length === activeItems.length
-      ? 'corrective_complete_pending_review'
-      : missingCoverageItems.length > 0
-      ? 'inventory_complete_corrective_open'
-      : 'corrective_in_progress';
-
-  return {
-    schema: 'narada.task.corrective_debt_readiness.v0',
-    authority: 'read_model_from_inbox_admission_log_capas_and_capability_announcements',
-    read_only: true,
-    state,
-    state_vocabulary: [
-      'inventory_in_progress',
-      'inventory_complete_corrective_open',
-      'corrective_in_progress',
-      'corrective_complete_pending_review',
-      'terminal_corrected',
-      'terminal_blocked',
-    ],
-    high_severity_threshold: 75,
-    counts: {
-      active_total: activeItems.length,
-      active_inbox_capas: inboxCapas.active.length,
-      active_capability_reviews: capabilityCapas.active.length,
-      high_severity: highSeverityItems.length,
-      missing_corrective_task_coverage: missingCoverageItems.length,
-      linked_or_covered: activeItems.filter((item) => ['covered_by_open_task', 'closed_corrective_implementation_coverage'].includes(item.corrective_task_coverage.status)).length,
-      terminal_or_suppressed_sources: terminalCoverageItems.length + inboxCapas.suppressed_count + capabilityCapas.suppressed_count,
-    },
-    active_items: activeItems.slice(0, 25),
-    missing_corrective_task_coverage: missingCoverageItems.slice(0, 25).map((item) => ({
-      capa_id: item.capa_id,
-      capa_type: item.capa_type,
-      severity: item.severity,
-      concept_name: item.concept_name,
-      corrective_task_coverage: item.corrective_task_coverage,
-    })),
-    residual_surfaces: [
-      'Coverage detection is a read model over task text/spec linkage; it does not mutate CAPA state or prove semantic correction.',
-      'Startup hydration and post-closeout terminal guards must explicitly consume this evidence before it can block terminal readiness claims.',
-      'Closed disposition and audit tasks may appear as historical links but do not count as terminal corrective implementation coverage.',
-    ],
-    sources: {
-      inbox_admission_log: '.ai/state/inbox-admission.log',
-      capability_announcements: 'operator-surfaces/capability-announcements.json',
-      task_lifecycle_sqlite: 'task_specs + task_lifecycle read model',
-    },
-  };
-}
-
-function readActiveInboxCapaItems() {
-  let events = [];
-  try {
-    events = readAdmissionLog(siteRoot);
-  } catch {
-    return { active: [], suppressed_count: 0 };
-  }
-  const byEnvelope = new Map();
-  const latestPromotion = new Map();
-  for (const event of events) {
-    if (!event.envelope_id) continue;
-    const list = byEnvelope.get(event.envelope_id) ?? [];
-    list.push(event);
-    byEnvelope.set(event.envelope_id, list);
-    if (event.event_kind === 'envelope_promoted') {
-      const current = latestPromotion.get(event.envelope_id);
-      if (!current || (event.event_sequence ?? 0) > (current.event_sequence ?? 0)) {
-        latestPromotion.set(event.envelope_id, event);
-      }
-    }
-  }
-
-  const active = [];
-  let suppressedCount = 0;
-  for (const [envelopeId, promotionEvent] of latestPromotion.entries()) {
-    const history = byEnvelope.get(envelopeId) ?? [];
-    const effectiveStatus = resolveEnvelopeStatus(history);
-    if (['acknowledged', 'dismissed'].includes(effectiveStatus)) {
-      suppressedCount += 1;
-      continue;
-    }
-    const promotion = promotionEvent.event_payload?.promotion ?? {};
-    const severity = finiteNumber(promotion.severity, 60);
-    const correctiveAction = stringOrNull(promotion.corrective_action);
-    active.push({
-      capa_id: envelopeId,
-      capa_type: 'inbox_capa',
-      source_kind: 'promoted_admission_log_envelope',
-      status: effectiveStatus,
-      severity,
-      concept_name: stringOrNull(promotion.concept_name) ?? envelopeId,
-      corrective_action_present: Boolean(correctiveAction),
-      corrective_action_summary: correctiveAction,
-      preventive_action_present: Boolean(stringOrNull(promotion.preventive_action)),
-      responsible_agent_id: stringOrNull(promotion.promoted_by) ?? '',
-      admitted_at: promotionEvent.timestamp ?? '',
-    });
-  }
-  return { active, suppressed_count: suppressedCount };
-}
-
-function readPendingCapabilityCapaItems() {
-  const capPath = join(siteRoot, 'operator-surfaces', 'capability-announcements.json');
-  if (!existsSync(capPath)) return { active: [], suppressed_count: 0 };
-  let capabilities = [];
-  try {
-    const doc = JSON.parse(readFileSync(capPath, 'utf8'));
-    capabilities = Array.isArray(doc.capabilities) ? doc.capabilities : [];
-  } catch {
-    return { active: [], suppressed_count: 0 };
-  }
-
-  const now = Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-  const active = [];
-  let suppressedCount = 0;
-  for (const cap of capabilities) {
-    const reviewStatus = cap.review_status ?? 'pending';
-    if (reviewStatus === 'completed') {
-      suppressedCount += 1;
-      continue;
-    }
-    const reviewDueMs = cap.review_due ? new Date(cap.review_due).getTime() : NaN;
-    const daysUntilDue = Number.isFinite(reviewDueMs) ? Math.floor((reviewDueMs - now) / dayMs) : null;
-    const severity = Number.isFinite(cap.severity)
-      ? cap.severity
-      : daysUntilDue === null
-        ? 0
-        : daysUntilDue < 0
-          ? 85
-          : daysUntilDue <= 14
-            ? 60
-            : daysUntilDue <= 30
-              ? 40
-              : 0;
-    if (severity <= 0) continue;
-    active.push({
-      capa_id: cap.capability_id,
-      capa_type: 'capability_announcement',
-      source_kind: 'capability_review_obligation',
-      status: cap.status ?? reviewStatus,
-      review_status: reviewStatus,
-      severity,
-      concept_name: cap.concept_name ?? cap.capability_id,
-      corrective_action_present: false,
-      corrective_action_summary: null,
-      preventive_action_present: false,
-      responsible_agent_id: cap.responsible_agent_id ?? '',
-      review_due: cap.review_due ?? '',
-      days_until_due: daysUntilDue,
-      admitted_at: cap.admitted_at ?? '',
-    });
-  }
-  return { active, suppressed_count: suppressedCount };
-}
-
-function detectCorrectiveTaskCoverage({ item, allTasks }) {
-  const matches = [];
-  const normalizedConcept = normalizeLinkText(item.concept_name);
-  for (const row of allTasks ?? []) {
-    const spec = row.task_number ? store.getTaskSpecByNumber(row.task_number) : null;
-    const projectedTaskBody = readProjectedTaskBody(row.task_id);
-    const text = normalizeLinkText([
-      spec?.title,
-      spec?.goal_markdown,
-      spec?.context_markdown,
-      spec?.required_work_markdown,
-      spec?.non_goals_markdown,
-      projectedTaskBody,
-      row.task_id,
-    ].filter(Boolean).join(' '));
-    const reasons = [];
-    if (item.capa_id && text.includes(normalizeLinkText(item.capa_id))) reasons.push('capa_id_link');
-    if (normalizedConcept.length >= 16 && text.includes(normalizedConcept)) reasons.push('concept_name_link');
-    if (reasons.length === 0) continue;
-    matches.push({
-      task_number: row.task_number,
-      task_id: row.task_id,
-      status: row.status,
-      title: spec?.title ?? row.title ?? '',
-      reasons,
-      closed_corrective_implementation: isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody }),
-    });
-  }
-  const openStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review']);
-  const openMatches = matches.filter((match) => openStatuses.has(match.status));
-  if (openMatches.length > 0) {
-    return {
-      status: 'covered_by_open_task',
-      reason: 'open linked task can carry the CAPA corrective implementation to terminal evidence',
-      open_task_count: openMatches.length,
-      historical_task_count: matches.length - openMatches.length,
-      tasks: openMatches.slice(0, 5),
-      actionable_next_states: correctiveCoverageNextStates(),
-      remediation: 'Continue or finish the linked implementation task, then verify it contains completed acceptance criteria, execution notes, and verification evidence.',
-    };
-  }
-  const terminalMatches = matches.filter((match) => match.closed_corrective_implementation === true);
-  if (terminalMatches.length > 0) {
-    return {
-      status: 'closed_corrective_implementation_coverage',
-      reason: 'closed linked task has completed acceptance criteria, execution notes, and verification and is not disposition/audit-only',
-      open_task_count: 0,
-      historical_task_count: matches.length,
-      terminal_task_count: terminalMatches.length,
-      tasks: terminalMatches.slice(0, 5),
-      actionable_next_states: [],
-      remediation: null,
-    };
-  }
-  if (matches.length > 0) {
-    return {
-      status: 'historical_only_no_open_corrective_task',
-      reason: 'linked tasks exist, but they are historical disposition, intake, triage, audit, cluster, inventory, or review work rather than corrective implementation coverage',
-      open_task_count: 0,
-      historical_task_count: matches.length,
-      tasks: matches.slice(0, 5),
-      actionable_next_states: correctiveCoverageNextStates(),
-      remediation: 'Create or link an implementation task, record an explicit defer/blocker state, or admit a no-action rationale; closed disposition or audit history alone is not terminal corrective coverage.',
-    };
-  }
-  if (item.corrective_action_present || item.severity >= 75) {
-    return {
-      status: 'missing_corrective_task_coverage',
-      reason: 'high-severity or corrective-action CAPA has no linked corrective implementation task coverage',
-      open_task_count: 0,
-      historical_task_count: 0,
-      tasks: [],
-      actionable_next_states: correctiveCoverageNextStates(),
-      remediation: 'Create or link an implementation task, record an explicit defer/blocker state, or admit a no-action rationale before reporting CAPA terminality.',
-    };
-  }
-  return { status: 'coverage_not_required_by_read_model', reason: 'no corrective action or high-severity pressure detected', open_task_count: 0, historical_task_count: 0, tasks: [], actionable_next_states: [], remediation: null };
-}
-
-function correctiveCoverageNextStates() {
-  return [
-    'linked_corrective_implementation_task',
-    'explicit_defer_or_blocker_state',
-    'admitted_no_action_rationale',
-  ];
-}
-
-function isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody = null }) {
-  if (!['closed', 'confirmed'].includes(row.status)) return false;
-  const title = String(spec?.title ?? row.title ?? '');
-  const taskText = [
-    title,
-    spec?.goal_markdown,
-    spec?.context_markdown,
-    spec?.required_work_markdown,
-    spec?.non_goals_markdown,
-    projectedTaskBody ?? readProjectedTaskBody(row.task_id),
-  ].filter(Boolean).join('\n');
-  const normalized = normalizeLinkText(taskText);
-  if (/\b(disposition|intake|triage|audit|cluster|inventory|review)\b/i.test(title)) return false;
-  if (!/(implement|implemented|fix|fixed|guard|guarded|prevent|prevented|refuse|refused|enforce|enforced|validate|validated|test|coverage)/i.test(taskText)) return false;
-  if (item.capa_id && !normalized.includes(normalizeLinkText(item.capa_id))) return false;
-  const evidence = classifyProjectedTaskEvidence(taskText);
-  return evidence.acceptance_complete && evidence.execution_notes_present && evidence.verification_present;
-}
-
-function readProjectedTaskBody(taskId) {
-  if (!taskId) return '';
-  const path = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`);
-  if (!existsSync(path)) return '';
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return '';
-  }
-}
-
-function classifyProjectedTaskEvidence(body) {
-  const acceptanceMatches = [...String(body).matchAll(/^\s*-\s+\[(x|X| )\]\s+\S.*$/gm)];
-  const checkedCount = acceptanceMatches.filter((match) => match[1].toLowerCase() === 'x').length;
-  return {
-    acceptance_complete: acceptanceMatches.length > 0 && checkedCount === acceptanceMatches.length,
-    execution_notes_present: sectionHasSubstantiveContent(body, 'Execution Notes'),
-    verification_present: sectionHasSubstantiveContent(body, 'Verification'),
-  };
-}
-
-function sectionHasSubstantiveContent(body, heading) {
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = String(body).match(new RegExp(`(?:^|\\n)## ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i'));
-  if (!match) return false;
-  const normalized = match[1]
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/^\s*[-*]\s*/gm, '')
-    .trim();
-  return normalized.length >= 20;
-}
-
-function normalizeLinkText(value) {
-  return String(value ?? '').toLowerCase().replace(/[^a-z0-9_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-function finiteNumber(value, fallback) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function stringOrNull(value) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-function buildPostCloseoutContinuation({ agentId, result }) {
-  refreshStore();
-  const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
-  const agentRole = roleResolution.role;
-  const all = store.getAllLifecycle();
-  const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit: 8 });
-  const recommendation = deriveNextRecommendation(board, agentId);
-  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
-  const correctiveDebtReadiness = buildCorrectiveDebtReadiness({ allTasks: all });
-  const workboard = {
-    status: 'ok',
-    agent_id: agentId,
-    agent_role: agentRole,
-    role_binding: roleResolution.role_binding,
-    role_resolution: roleResolution,
-    generated_at: new Date().toISOString(),
-    workboard_generated_at: board.generated_at ?? null,
-    recommendation: recommendation ?? null,
-    next_work_contract: nextWorkContract,
-    no_work_assertion_guardrail: nextWorkContract.no_work_assertion_guardrail,
-    executable_work_available: nextWorkContract.executable_work_available,
-    agent_actionable_recommendation: Boolean(recommendation),
-    environment_pressure: { status: 'clear', executable_by_agent: false, pressure: null },
-    corrective_debt_readiness: correctiveDebtReadiness,
-    counts: {
-      ...board.counts,
-      all_in_review: board.counts.pending_reviews,
-    },
-    downstream_role_followups: (board.downstream_role_followups || []).slice(0, 8),
-  };
-  return classifyPostCloseoutContinuation({ result, workboard });
-}
-
-function compactNextActionTask(task) {
-  if (!task) return null;
-  return {
-    task_number: task.task_number ?? null,
-    title: task.title ?? null,
-    status: task.status ?? null,
-    target_role: task.target_role ?? null,
-    assigned_agent: task.assigned_agent ?? null,
-    claim_authority: task.claim_authority ?? null,
-  };
-}
-
-function buildConciseNextActionView(result) {
-  const recommendation = result.recommendation ?? null;
-  return {
-    schema: 'narada.task.mcp.next.concise.v0',
-    status: result.status,
-    generated_at: result.generated_at,
-    agent_id: result.agent_id,
-    agent_role: result.agent_role,
-    executable_work_available: result.executable_work_available,
-    recommendation: recommendation ? {
-      action: recommendation.action ?? null,
-      reason: recommendation.reason ?? null,
-      task: compactNextActionTask(recommendation.task ?? null),
-      next_command: result.next_work_contract?.recommended_claim_command ?? null,
-    } : null,
-    counts: {
-      in_progress: result.counts?.in_progress ?? 0,
-      needs_continuation: result.counts?.needs_continuation ?? 0,
-      review_obligations: result.my_review_obligations?.length ?? 0,
-      local_followups: result.counts?.local_followups ?? 0,
-      role_wide_followups: result.counts?.role_wide_followups ?? 0,
-      actionable_deferred: result.counts?.actionable_deferred ?? 0,
-      inbox_backlog: result.counts?.inbox_total ?? 0,
-    },
-    actionable_samples: {
-      in_progress: (result.in_progress ?? []).slice(0, 3).map(compactNextActionTask),
-      needs_continuation: (result.needs_continuation ?? []).slice(0, 3).map(compactNextActionTask),
-      local_followups: (result.local_followups ?? []).slice(0, 3).map(compactNextActionTask),
-      role_wide_followups: (result.role_wide_followups ?? []).slice(0, 3).map(compactNextActionTask),
-      actionable_deferred: (result.actionable_deferred ?? []).slice(0, 3).map(compactNextActionTask),
-    },
-    external_pressure: result.environment_pressure?.status === 'active'
-      ? {
-        status: 'active',
-        agent_executable: result.environment_pressure.executable_by_agent === true,
-        reason: result.environment_pressure.pressure?.reason ?? null,
-      }
-      : { status: 'clear' },
-    guardrail: result.no_work_assertion_guardrail ?? null,
-  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -1093,12 +614,12 @@ function getTaskLifecycleHandlerRegistry() {
           enforceSessionIdentity,
           verifySessionIdentity,
           checkTaskRoleEligibilityLocal,
-          validatePreferredAgentMismatchAuthority,
-          recordClaimIntent,
+          validatePreferredAgentMismatchAuthority: validatePreferredAgentMismatchAuthorityCore,
+          recordClaimIntent: recordClaimIntentCore,
           claimLifecycleTask,
           continueTaskService,
           unclaimLifecycleTask,
-          withAuthoredRosterJsonPreserved,
+          withAuthoredRosterJsonPreserved: (root, fn) => withAuthoredRosterJsonPreservedCore(root, fn, store),
         }),
         ...createTaskLifecycleNavigationHandlers({
           store,
@@ -1134,10 +655,10 @@ function getTaskLifecycleHandlerRegistry() {
           deriveClosureAuthority,
           getTaskRouting,
           inspectTaskEvidence,
-          readTaskRouting,
-          buildTaskEvidencePreflight,
+          readTaskRouting: readTaskRoutingCore,
+          buildTaskEvidencePreflight: buildTaskEvidencePreflightCore,
           buildBlockedTaskReportPosture,
-          buildRoutingAssignmentDivergence,
+          buildRoutingAssignmentDivergence: buildRoutingAssignmentDivergenceCore,
           searchTasksService,
           findRelatedTasks,
         }),
@@ -1159,25 +680,26 @@ function getTaskLifecycleHandlerRegistry() {
           validateRecoveryTruthfulnessBody,
           admitTaskEvidence,
           proveTaskCriteria,
-          taskLifecycleDispositionCloseout,
+          taskLifecycleDispositionCloseout: taskLifecycleDispositionCloseoutCore,
           finishTaskService,
           closeTaskService,
           transitionLifecycleTask,
           unDeferLifecycleTask,
           reviewTaskService,
-          withAuthoredRosterJsonPreserved,
+          withAuthoredRosterJsonPreserved: withAuthoredRosterJsonPreservedCore,
           openTaskLifecycleStore,
           detectSameOperatorReview,
           detectSelfReview,
           findReviewerCapableAgents,
           isReviewerCapable,
           validateTaskFinishRecoveryTruthfulness,
+          normalizeRosterCapabilitiesForSharedServices: () => sanitizeSqlRosterCapabilitiesCore(store),
           finishGateExamples,
-          buildStateAwareFinishBlockerRemediation,
-          buildTaskFileResolutionFailure,
-          detectGitChangedFiles,
-          scopeChangedFiles,
-          buildTaskEvidencePreflight,
+          buildStateAwareFinishBlockerRemediation: buildStateAwareFinishBlockerRemediationCore,
+          buildTaskFileResolutionFailure: buildTaskFileResolutionFailureCore,
+          detectGitChangedFiles: detectGitChangedFilesCore,
+          scopeChangedFiles: scopeChangedFilesCore,
+          buildTaskEvidencePreflight: buildTaskEvidencePreflightCore,
           buildBlockedTaskReportPosture,
           recordBlockedTaskReport,
           buildPostCloseoutContinuation,
@@ -1187,7 +709,7 @@ function getTaskLifecycleHandlerRegistry() {
           readTaskFile,
           testResultArtifactGate,
           validateFollowUpLedger,
-          ensureStaticRosterAgentInSql,
+          ensureStaticRosterAgentInSql: ensureStaticRosterAgentInSqlCore,
         }),
         ...createTaskLifecycleOperationsHandlers({
           store,
@@ -1220,7 +742,7 @@ function getTaskLifecycleHandlerRegistry() {
           numberField,
           booleanField,
           arrayOfStrings,
-          admitRosterIdentity,
+          admitRosterIdentity: (args) => admitRosterIdentityCore(args, { store, enforceSessionIdentity }),
           enforceSessionIdentity,
           allocateTaskNumbers,
           slugify,
@@ -1463,7 +985,7 @@ async function taskLifecycleSubmitWork(args) {
   }
 
   const taskFile = await findTaskFile(siteRoot, String(taskNumber));
-  if (!taskFile) return jsonToolResult(buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
+  if (!taskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
   const original = readFileSync(taskFile.path, 'utf8');
   const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
   const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
@@ -1584,9 +1106,6 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
   const closedComplete = lifecycle.status === 'closed' && evidence.verdict === 'complete';
   const followUpValidation = validateFollowUpLedger(body);
   const recoveryTruthfulnessValidation = validateRecoveryTruthfulnessBody({ body, summary: '', context: `task:${taskNumber}` });
-  const recoveryTruthfulnessTriggered = recoveryTruthfulnessValidation.evaluation?.triggered === true;
-  const hasCanonicalFollowUpLedger = /^##\s+Follow-Up Ledger\s*$/mi.test(body);
-  const mentionsFollowUpLedger = /Follow-Up Ledger/i.test(body);
   const requirements = [];
 
   addRequirement(requirements, {
@@ -1603,14 +1122,13 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     label: 'Verification',
     satisfied: evidence.has_verification === true,
     observed: {
-      has_markdown_verification: hasMaterialTaskSection(body, 'Verification'),
       passed_verification_runs: verificationRuns.filter((run) => run.status === 'passed').map((run) => run.run_id),
       report_verification_count: countReportVerificationEntries(reports, sqliteReports),
       observation_artifact_count: observations.length,
     },
     remediation: observations.length > 0
-      ? 'Structured observation artifacts are recorded context but do not satisfy the verification gate. Add substantive ## Verification notes, submit a task report with verification_json, or attach a governed passed verification run.'
-      : 'Add substantive ## Verification notes, submit a task report with verification_json, or attach a governed passed verification run.',
+      ? 'Structured observation artifacts are recorded context but do not satisfy the verification gate. Add substantive ## Verification notes, finish with a summary plus changed_files/no_files_changed, or attach a governed passed verification run.'
+      : 'Add substantive ## Verification notes, finish with a summary plus changed_files/no_files_changed, or attach a governed passed verification run.',
   });
   addRequirement(requirements, {
     id: 'acceptance_criteria',
@@ -1627,36 +1145,16 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     satisfied: followUpValidation.ok === true,
     observed: {
       required: followUpValidation.required,
-      has_canonical_section: hasCanonicalFollowUpLedger,
-      misplaced_or_nested_ledger_hint: mentionsFollowUpLedger && !hasCanonicalFollowUpLedger,
-      errors: followUpValidation.errors,
+      has_canonical_section: /^##\s+Follow-Up Ledger\s*$/mi.test(body),
+      recovery_truthfulness_triggered: recoveryTruthfulnessValidation.evaluation?.triggered === true,
     },
-    remediation: followUpValidation.ok
-      ? 'No Follow-Up Ledger remediation is required.'
-      : 'Add a canonical top-level ## Follow-Up Ledger section. Each preserved follow-up must say created #N, covered by #N, envelope env_<id>, CAPA <capa_id>, deferred: <reason>, or no follow-up needed: <rationale>. A mention inside another section does not satisfy this gate.',
-    examples: finishGateExamples('follow_up_ledger'),
-  });
-  addRequirement(requirements, {
-    id: 'recovery_truthfulness',
-    label: 'Recovery Truthfulness',
-    required_for_finish: recoveryTruthfulnessTriggered,
-    satisfied: recoveryTruthfulnessValidation.ok === true,
-    observed: {
-      triggered: recoveryTruthfulnessTriggered,
-      triggers: recoveryTruthfulnessValidation.evaluation?.triggers ?? [],
-      required_fields: recoveryTruthfulnessValidation.evaluation?.required_fields ?? [],
-      recovery_section_present: recoveryTruthfulnessValidation.recovery_section_present ?? false,
-      recovery_state_vocabulary: recoveryTruthfulnessValidation.evaluation?.state_vocabulary ?? [],
-      errors: recoveryTruthfulnessValidation.errors ?? [],
-    },
-    remediation: recoveryTruthfulnessTriggered
-      ? 'Add or repair a top-level ## Recovery Truthfulness section naming Known facts, Inferences, Uncertainty, Changed, Not changed, Remaining work, Evidence limits, CAPA open status, and State. For terminal_corrected, also name repository durability / commit-push state and prove no related task/CAPA/review remains open.'
-      : 'Recovery Truthfulness is not required unless the task asserts serious-failure recovery, CAPA correction, operator-trust recovery, authority/locus repair, or terminal completion for corrective work.',
-    examples: finishGateExamples('recovery_truthfulness'),
+    remediation: followUpValidation.ok === false
+      ? 'Add a top-level ## Follow-Up Ledger section or provide the canonical no-follow-up rationale.'
+      : 'Follow-Up Ledger is present and satisfies the current gate.',
   });
   addRequirement(requirements, {
     id: 'changed_files',
-    label: 'Changed-file Evidence',
+    label: 'Changed Files',
     satisfied: closedComplete || changedFileEvidence.changedFiles.length > 0 || changedFileEvidence.noFilesChangedDeclarations.length > 0,
     observed: {
       changed_files: changedFileEvidence.changedFiles,
@@ -1674,25 +1172,13 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     examples: finishGateExamples('changed_files'),
   });
 
-  const blockers = requirements.filter((item) => item.required_for_finish && item.satisfied !== true).map((item) => ({
-    id: item.id,
-    label: item.label,
-    remediation: item.remediation,
-    examples: item.examples,
-  }));
+  const blockers = requirements.filter((item) => item.satisfied !== true);
   const remediationSummary = blockers.map((item) => `${item.id}: ${item.remediation}`);
   return {
     status: blockers.length === 0 ? 'ready' : 'blocked',
     schema: 'narada.task.mcp.evidence_preflight.v0',
     task_number: taskNumber,
     task_id: lifecycle.task_id,
-    lifecycle_status: lifecycle.status,
-    verdict: evidence.verdict,
-    finish_ready: blockers.length === 0,
-    remediation_summary: remediationSummary,
-    next_action: blockedWorkPosture.state === 'blocked_reported'
-      ? 'Blocked report is recorded. Resolve blockers, then continue or finish with completion evidence.'
-      : blockers.length === 0 ? 'Submit finish/report evidence.' : 'Resolve each remediation_summary item before finish/report closeout.',
     blocked_work_posture: blockedWorkPosture,
     blockers,
     requirements,
@@ -1702,7 +1188,6 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
       explanation: 'Evidence admission counts authored task sections, task reports, and governed verification runs. Observation artifacts remain context unless promoted into those recognized evidence shapes.',
     },
   };
-}
 
 function addRequirement(requirements, item) {
   requirements.push({
@@ -2481,131 +1966,6 @@ function summarizeWorkboardTask(task) {
   };
 }
 
-function buildStateAwareFinishBlockerRemediation({ taskNumber, agentId, lifecycle, payload }) {
-  const closeBlockers = Array.isArray(payload.close_blockers) ? payload.close_blockers : [];
-  const blockerText = closeBlockers.join('\n');
-  const currentStatus = lifecycle?.status ?? payload.current_status ?? null;
-  if (/no-continuation-needed|no continuation needed|continuation task evidence/i.test(blockerText)) {
-    return {
-      next_action: {
-        tool: 'task_lifecycle_close',
-        arguments: {
-          task_number: taskNumber,
-          agent_id: agentId,
-          mode: 'agent_finish',
-          no_continuation_needed: '<one-line rationale>',
-        },
-        lifecycle_status: currentStatus,
-      },
-      next_command: `task_lifecycle_close({ "task_number": ${taskNumber}, "agent_id": "${agentId}", "mode": "agent_finish", "no_continuation_needed": "<one-line rationale>" })`,
-      remediation: 'Close scope-complete facade/prototype/spike/design-only work with task_lifecycle_close and no_continuation_needed, or add a concrete continuation task before retrying finish.',
-    };
-  }
-  if (/Latest Evidence Admission result is not eligible for lifecycle close/i.test(blockerText)) {
-    if (currentStatus === 'in_review') {
-      return {
-        next_action: {
-          tool: 'task_lifecycle_review',
-          arguments: {
-            task_number: taskNumber,
-            agent_id: '<eligible_reviewer_agent_id>',
-            verdict: 'accepted',
-          },
-          lifecycle_status: currentStatus,
-        },
-        next_command: `task_lifecycle_show({ "task_number": ${taskNumber} }) to see eligible_reviewers, then task_lifecycle_review({ "task_number": ${taskNumber}, "agent_id": "<eligible_reviewer>", "verdict": "accepted" })`,
-        remediation: 'Task is in_review awaiting review. Use task_lifecycle_show or task_lifecycle_inspect to discover eligible reviewers, then call task_lifecycle_review with an admitted reviewer agent id. Do not call finish/close until review is accepted.',
-      };
-    }
-    return {
-      next_action: {
-        tool: 'task_lifecycle_evidence_preflight',
-        arguments: { task_number: taskNumber },
-        lifecycle_status: currentStatus,
-      },
-      next_command: `task_lifecycle_evidence_preflight({ "task_number": ${taskNumber} })`,
-      remediation: 'Evidence admission is not eligible for close. Inspect preflight blockers and repair evidence before retrying finish/close.',
-    };
-  }
-  if (/Latest Evidence Admission result is rejected|evidence repair/i.test(blockerText)) {
-    const continueAllowed = currentStatus === 'needs_continuation' || currentStatus === 'in_review';
-    return {
-      next_action: {
-        tool: continueAllowed ? 'task_lifecycle_continue' : 'task_lifecycle_evidence_preflight',
-        arguments: continueAllowed
-          ? { task_number: taskNumber, agent_id: agentId, reason: 'evidence_repair' }
-          : { task_number: taskNumber },
-        lifecycle_status: currentStatus,
-      },
-      next_command: continueAllowed
-        ? `task_lifecycle_continue({ "task_number": ${taskNumber}, "agent_id": "${agentId}", "reason": "evidence_repair" })`
-        : `task_lifecycle_evidence_preflight({ "task_number": ${taskNumber} })`,
-      remediation: continueAllowed
-        ? 'Repair rejected evidence through task_lifecycle_continue with reason evidence_repair, then rerun evidence admission and finish.'
-        : 'Current lifecycle status does not admit evidence-repair continuation; inspect preflight before choosing a lifecycle mutation.',
-    };
-  }
-  if (/lacks an Evidence Admission result/i.test(blockerText)) {
-    return {
-      next_action: {
-        tool: 'task_lifecycle_evidence_preflight',
-        arguments: { task_number: taskNumber },
-        lifecycle_status: currentStatus,
-      },
-      next_command: `task_lifecycle_evidence_preflight({ "task_number": ${taskNumber} })`,
-      remediation: 'Inspect finish evidence requirements before retrying finish.',
-    };
-  }
-  return {
-    next_action: {
-      tool: 'task_lifecycle_evidence_preflight',
-      arguments: { task_number: taskNumber },
-      lifecycle_status: currentStatus,
-    },
-    next_command: `task_lifecycle_evidence_preflight({ "task_number": ${taskNumber} })`,
-    remediation: 'Inspect finish evidence requirements before choosing the next lifecycle action.',
-  };
-}
-
-function readTaskRouting(store, taskId, spec = null) {
-  let rolePref = null;
-  try {
-    rolePref = store.db.prepare(
-      'SELECT target_role, preferred_role, preferred_agent_id FROM narada_andrey_task_role_preferences WHERE task_id = ?'
-    ).get(taskId);
-  } catch {
-    rolePref = null;
-  }
-  return {
-    policy: 'preferred_agent_id_is_soft_affinity_target_role_is_role_gate',
-    target_role: rolePref?.target_role || rolePref?.preferred_role || spec?.target_role || spec?.preferred_role || null,
-    preferred_agent_id: rolePref?.preferred_agent_id || spec?.preferred_agent_id || null,
-    override_authority_required_when_claiming_nonpreferred: true,
-    allowed_override_authority_kinds: ['operator_direct_instruction', 'directed_obligation', 'task_owner_handoff'],
-  };
-}
-
-function buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, reports }) {
-  const preferredAgentId = routing?.preferred_agent_id ?? null;
-  const activeAgentId = assignment?.agent_id ?? null;
-  const reportAgentIds = [...new Set((reports || []).map((report) => report.agent_id).filter(Boolean))];
-  const finishedBy = lifecycle.closed_by ?? (reportAgentIds.length === 1 ? reportAgentIds[0] : null);
-  const activeMismatch = Boolean(preferredAgentId && activeAgentId && preferredAgentId !== activeAgentId);
-  const finishedMismatch = Boolean(preferredAgentId && finishedBy && preferredAgentId !== finishedBy);
-  return {
-    policy: 'preferred_agent_id_is_not_assignment',
-    preferred_agent_id: preferredAgentId,
-    active_assignment_agent_id: activeAgentId,
-    finished_by: finishedBy,
-    report_agent_ids: reportAgentIds,
-    active_assignment_diverges_from_preferred: activeMismatch,
-    finished_assignment_diverges_from_preferred: finishedMismatch,
-    explanation: activeMismatch || finishedMismatch
-      ? 'Preferred routing diverges from active or finished assignment; this is allowed only when claim intent evidence records override authority.'
-      : 'No preferred-agent divergence observed.',
-  };
-}
-
 function jsonToolResult(value, isError = false, toolName = null) {
   void toolName;
   const text = JSON.stringify(value, null, 2);
@@ -2620,178 +1980,6 @@ function jsonToolResult(value, isError = false, toolName = null) {
       full_output_char_length: text.length,
     },
     ...(isError ? { isError: true } : {}),
-  };
-}
-
-function validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId }) {
-  if (!eligibility.warning || !eligibility.preferredAgentId || eligibility.preferredAgentId === agentId) {
-    return { status: 'not_required', authority_basis: null, preferred_agent_warning: null };
-  }
-  const preferredAgentWarning = {
-    kind: 'preferred_agent_mismatch',
-    severity: 'requires_authority',
-    warning: 'preferred_agent_mismatch',
-    task_number: taskNumber,
-    preferred_agent_id: eligibility.preferredAgentId,
-    claiming_agent: agentId,
-    message: eligibility.warning,
-  };
-  const authorityBasis = normalizeClaimAuthorityBasis(args.authority_basis);
-  if (!authorityBasis) {
-    return {
-      status: 'blocked',
-      authority_basis: null,
-      preferred_agent_warning: preferredAgentWarning,
-    };
-  }
-  return {
-    status: 'ok',
-    authority_basis: {
-      ...authorityBasis,
-      task_id: lifecycle.task_id,
-      task_number: taskNumber,
-      preferred_agent_id: eligibility.preferredAgentId,
-      claiming_agent: agentId,
-    },
-    preferred_agent_warning: preferredAgentWarning,
-  };
-}
-
-function normalizeClaimAuthorityBasis(value) {
-  const record = asRecord(value);
-  const kind = stringField(record, 'kind');
-  const summary = stringField(record, 'summary');
-  const allowedKinds = new Set(['operator_direct_instruction', 'directed_obligation', 'task_owner_handoff']);
-  if (!kind || !allowedKinds.has(kind) || !summary) return null;
-  return { kind, summary };
-}
-
-function recordClaimIntent({ store, lifecycle, taskNumber, agentId, status, assignmentId = null, rejectionReason = null, authorityBasis = null, preferredAgentWarning = null }) {
-  if (!store.upsertAssignmentIntent) return;
-  const now = new Date().toISOString();
-  store.upsertAssignmentIntent({
-    request_id: `claim-${randomUUID()}`,
-    kind: 'claim',
-    task_id: lifecycle.task_id,
-    task_number: taskNumber,
-    agent_id: agentId,
-    requested_by: agentId,
-    requested_at: now,
-    reason: authorityBasis?.summary ?? preferredAgentWarning?.message ?? null,
-    no_claim: status === 'claimed' ? 0 : 1,
-    status,
-    rejection_reason: rejectionReason,
-    assignment_id: assignmentId,
-    previous_agent_id: null,
-    lifecycle_status_before: lifecycle.status,
-    lifecycle_status_after: status === 'claimed' ? 'claimed' : lifecycle.status,
-    roster_status_after: status === 'claimed' ? 'busy' : null,
-    confirmation_json: JSON.stringify({
-      authority_basis: authorityBasis,
-      preferred_agent_mismatch_acknowledged: Boolean(authorityBasis && preferredAgentWarning),
-    }),
-    warnings_json: JSON.stringify(preferredAgentWarning ? [preferredAgentWarning] : []),
-    updated_at: now,
-  });
-}
-
-function validateTaskFinishRecoveryTruthfulness({ taskNumber, summary, changedFiles, noFilesChanged, recoveryTruthfulness }) {
-  const packet = {
-    ...(recoveryTruthfulness ?? {}),
-    task_number: taskNumber,
-    surface: 'task_lifecycle_finish',
-  };
-  if (!packet.summary && summary) packet.summary = summary;
-  if (!packet.closeout_text && summary) packet.closeout_text = summary;
-  if (!packet.changed && changedFiles) packet.changed = changedFiles;
-  if (!packet.not_changed && noFilesChanged) packet.not_changed = ['No files changed in this finish/report.'];
-  return validateRecoveryTruthfulnessPacket(packet);
-}
-
-function asRecord(value) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function booleanField(record, key) {
-  const value = record[key];
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'string') {
-    const lower = value.toLowerCase();
-    if (lower === 'true') return true;
-    if (lower === 'false') return false;
-  }
-  return undefined;
-}
-
-function nullableStringField(record, key) {
-  if (!(key in record)) return undefined;
-  if (record[key] === null) return null;
-  return stringField(record, key) ?? null;
-}
-
-function stringField(record, key) {
-  const value = record[key];
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function objectField(record, key) {
-  const value = record?.[key];
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  return undefined;
-}
-
-function stringArrayField(record, key) {
-  const value = record?.[key];
-  if (!Array.isArray(value)) return undefined;
-  const strings = value.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter((entry) => entry.length > 0);
-  return strings.length > 0 && strings.length === value.length ? strings : undefined;
-}
-
-function detectGitChangedFiles(cwd, basePath = cwd) {
-  const result = spawnSync('git', ['diff', '--name-only', 'HEAD'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-  if (result.status !== 0 || !result.stdout) return [];
-  const base = resolve(basePath);
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => resolve(cwd, line))
-    .filter((absolute) => absolute.startsWith(base + sep) || absolute === base)
-    .map((absolute) => relative(base, absolute).replace(/\\/g, '/'));
-}
-
-const SCOPED_CHANGED_FILE_EXCLUDE_PATTERNS = [
-  /^\.ai\/tmp\b/i,
-  /^\.ai\/tmp-/i,
-  /^\.ai\/mcp\/carriers\//i,
-  /^\.ai\/inbox-envelopes\//i,
-  /^vendor\//i,
-  /^node_modules\//i,
-  /^\.git\//i,
-];
-
-const SCOPED_CHANGED_FILE_INCLUDE_PATTERNS = [
-  /^(packages|tools|docs|kb|config|operator-surfaces|templates)\//i,
-  /^AGENTS\.md$/i,
-  /^README\.md$/i,
-  /^\.ai\/do-not-open\/tasks\//i,
-];
-
-const CHANGED_FILES_SUMMARY_LIMIT = 100;
-
-export function scopeChangedFiles(siteRoot, files, { includeUnrelated = false, taskFilePath = null } = {}) {
-  if (includeUnrelated) {
-    return { files, scoped: false, truncated: false };
-  }
-  let scoped = files.filter((file) => !SCOPED_CHANGED_FILE_EXCLUDE_PATTERNS.some((pattern) => pattern.test(file)));
-  if (scoped.length > CHANGED_FILES_SUMMARY_LIMIT) {
-    scoped = scoped.slice(0, CHANGED_FILES_SUMMARY_LIMIT);
-  }
-  return {
-    files: scoped,
-    scoped: true,
-    truncated: scoped.length < files.length,
-    full_count: files.length,
   };
 }
 
@@ -2821,522 +2009,20 @@ function todayYmd() {
   return `${y}${m}${day}`;
 }
 
-async function taskLifecycleDispositionCloseout({ siteRoot, store, taskNumber, agentId, envelopeId, disposition, summary, dryRun, proveCriteria, finish, changedFiles: finishChangedFiles, noFilesChanged, includeUnrelatedChangedFiles = false }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
-  if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const taskFile = await findTaskFile(siteRoot, taskNumber);
-  if (!taskFile) return buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_disposition_closeout' });
-  const original = readFileSync(taskFile.path, 'utf8');
-  const resolvedEnvelopeId = envelopeId ?? extractEnvelopeId(original);
-  const envelope = resolvedEnvelopeId ? readIndexedEnvelope(siteRoot, resolvedEnvelopeId) : null;
-  const envelopeStatus = envelope?.status ?? null;
-  const inferredDisposition = disposition ?? inferDisposition(envelopeStatus);
-  const changedFiles = [relativeSitePath(siteRoot, taskFile.path)];
-  const gitVisibleChangedFiles = gitVisiblePathSubset(siteRoot, changedFiles);
-  const now = new Date().toISOString();
-  const executionNotes = [
-    `- Close-out workflow: \`task_lifecycle_disposition_closeout\` invoked by \`${agentId}\` at ${now}.`,
-    resolvedEnvelopeId ? `- Envelope: \`${resolvedEnvelopeId}\` (${envelopeStatus ?? 'not_found'}).` : '- Envelope: none detected in task body.',
-    envelope?.title ? `- Envelope title: ${envelope.title}` : null,
-    `- Disposition: ${inferredDisposition}.`,
-    summary ? `- Summary: ${summary}` : null,
-  ].filter(Boolean).join('\n');
-  const verificationNotes = [
-    `- Inbox index refreshed through \`refreshInboxIndex\`; envelope status resolved as \`${envelopeStatus ?? 'not_found'}\`.`,
-    '- Scoped changed-file list returned by the workflow for commit planning.',
-    proveCriteria ? '- Acceptance criteria proof requested after note materialization.' : '- Acceptance criteria proof not requested by this invocation.',
-    finish ? '- Finish requested after note materialization.' : '- Finish not requested by this invocation.',
-  ].join('\n');
-  const plannedContent = replaceTaskSection(replaceTaskSection(original, 'Execution Notes', executionNotes), 'Verification', verificationNotes);
-  const capaCoverageValidation = validateCapaDispositionCorrectiveCoverage({ envelope, body: plannedContent, store });
-  if (!capaCoverageValidation.ok) {
-    return {
-      status: dryRun ? 'dry_run_blocked' : 'blocked',
-      error: 'capa_corrective_action_coverage_required',
-      schema: 'narada.task.mcp.disposition_closeout.capa_corrective_coverage_gate.v0',
-      task_number: taskNumber,
-      task_id: lifecycle.task_id,
-      envelope: resolvedEnvelopeId ? {
-        envelope_id: resolvedEnvelopeId,
-        status: envelopeStatus ?? 'not_found',
-        title: envelope?.title ?? null,
-        kind: envelope?.kind ?? null,
-        received_at: envelope?.received_at ?? null,
-      } : null,
-      close_blocked: true,
-      close_blockers: capaCoverageValidation.errors,
-      capa_corrective_action_coverage: capaCoverageValidation,
-      remediation: 'Add a top-level ## Follow-Up Ledger entry that links the CAPA corrective action to an active implementation task (`created #N` or `covered by #N`), records `deferred:` / blocker rationale, or records `no follow-up needed:` with admitted no-action rationale. Closed audit/disposition tasks alone do not count as corrective-action coverage.',
-    };
-  }
-  let criteriaResult = null;
-  let finishResult = null;
-  if (!dryRun) {
-    writeFileSync(taskFile.path, plannedContent, 'utf8');
-    if (proveCriteria) {
-      const afterNotes = readFileSync(taskFile.path, 'utf8');
-      const proved = afterNotes.replace(/^(\s*)- \[ \](.*)$/gm, '$1- [x]$2');
-      if (proved !== afterNotes) writeFileSync(taskFile.path, proved, 'utf8');
-      const evidenceMethods: NonNullable<Parameters<typeof admitTaskEvidence>[0]['methods']> = ['criteria_proof'];
-      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: evidenceMethods });
-      criteriaResult = {
-        status: admission.blockers.length === 0 ? 'proved' : 'proved_with_blockers',
-        admission_id: admission.result.admission_id,
-        blockers: admission.blockers,
-        verdict: admission.result.verdict,
-      };
-    }
-    if (finish) {
-      if (finishChangedFiles && noFilesChanged) {
-        throw new Error('changed_files_conflicts_with_no_files_changed');
-      }
-      const rawAutoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
-      const scopedChangedFiles = scopeChangedFiles(siteRoot, rawAutoDetectedChangedFiles, { includeUnrelated: includeUnrelatedChangedFiles });
-      const autoDetectedChangedFiles = scopedChangedFiles.files;
-      const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
-      if (proveCriteria) finishOptions.proveCriteria = true;
-      if (finishChangedFiles) finishOptions.changedFiles = JSON.stringify(finishChangedFiles);
-      if (!finishChangedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);
-      if (noFilesChanged) finishOptions.changedFiles = JSON.stringify([NO_FILES_CHANGED_MARKER]);
-      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => finishTaskService(finishOptions));
-      finishResult = result.result || result;
-      finishResult.follow_up_policy = evaluatePostTransitionFollowups({
-        event: { transition_kind: finishResult.close_action ?? 'close', task_number: taskNumber, task_id: lifecycle.task_id, agent_id: agentId },
-        source_task: { task_number: taskNumber, task_id: lifecycle.task_id },
-        actor: { agent_id: agentId },
-        result: finishResult,
-        signals: { evidence_blocked: finishResult.close_action === 'blocked' },
-      });
-      if (finishResult.close_action !== 'blocked') {
-        finishResult.post_closeout_continuation = buildPostCloseoutContinuation({ agentId, result: finishResult });
-      }
-      if (!finishChangedFiles && !noFilesChanged) {
-        finishResult.changed_files_scoping = scopedChangedFiles;
-      }
-    }
-  }
-  return {
-    status: dryRun ? 'dry_run' : 'prepared',
-    schema: 'narada.task.mcp.disposition_closeout.v0',
-    task_number: taskNumber,
-    task_id: lifecycle.task_id,
-    envelope: resolvedEnvelopeId ? {
-      envelope_id: resolvedEnvelopeId,
-      status: envelopeStatus ?? 'not_found',
-      title: envelope?.title ?? null,
-      kind: envelope?.kind ?? null,
-      received_at: envelope?.received_at ?? null,
-    } : null,
-    disposition: inferredDisposition,
-    capa_corrective_action_coverage: capaCoverageValidation,
-    changed_files: changedFiles,
-    lifecycle_store_paths: changedFiles,
-    committable_path_set: {
-      schema: 'narada.task.disposition_closeout.committable_path_set.v0',
-      task_owned_paths: gitVisibleChangedFiles,
-      ordinary_task_closeout_paths: gitVisibleChangedFiles,
-      lifecycle_store_paths: changedFiles,
-      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
-      ignored_envelope_projection_paths: [],
-      envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
-      guidance: 'Stage ordinary_task_closeout_paths only. lifecycle_store_paths are durable closeout records and may be outside Git or ignored by repository policy.',
-    },
-    notes_written: !dryRun,
-    criteria_result: criteriaResult,
-    finish_result: finishResult,
-    commit_ready: {
-      stage_paths: gitVisibleChangedFiles,
-      ordinary_task_closeout_paths: gitVisibleChangedFiles,
-      lifecycle_store_paths: changedFiles,
-      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
-      ignored_envelope_projection_paths: [],
-      envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
-      exclude_unrelated_dirty_files: true,
-    },
-  };
+function normalizeRecurringAuthorityBasis(value) {
+  const record = asRecord(value);
+  const kind = stringField(record, 'kind');
+  const summary = stringField(record, 'summary');
+  const allowedKinds = new Set(['operator_direct_instruction', 'architect_review', 'task_acceptance', 'manual_trigger', 'scheduled_trigger']);
+  if (!kind || !allowedKinds.has(kind) || !summary) return null;
+  return { kind, summary };
 }
 
-function buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface }) {
-  const expectedPath = resolve(siteRoot, '.ai', 'do-not-open', 'tasks', `${lifecycle.task_id}.md`);
-  const spec = store.getTaskSpec(lifecycle.task_id) ?? store.getTaskSpecByNumber?.(taskNumber) ?? null;
-  const assignment = store.getActiveAssignment?.(lifecycle.task_id) ?? null;
-  return {
-    status: 'error',
-    error: 'task_file_resolution_failed',
-    schema: 'narada.task.mcp.task_file_resolution_failed.v1',
-    surface,
-    task_number: taskNumber,
-    task_id: lifecycle.task_id,
-    lifecycle_task_id: lifecycle.task_id,
-    lifecycle_status: lifecycle.status,
-    lifecycle_row_exists: true,
-    task_spec_exists: Boolean(spec),
-    active_assignment_agent_id: assignment?.agent_id ?? null,
-    expected_path: expectedPath,
-    task_file_exists: false,
-    resolution_source: 'sqlite_lifecycle_without_markdown_projection',
-    recommended_next_tool: 'task_lifecycle_show',
-    repair_options: [
-      {
-        tool: 'task_lifecycle_show',
-        reason: 'Inspect the SQLite-backed task state and task_id before choosing a repair path.',
-        arguments: { task_number: taskNumber },
-      },
-      {
-        tool: 'task_lifecycle_record_observation',
-        reason: 'Record evidence without mutating the missing task markdown projection.',
-        arguments: { task_number: taskNumber },
-      },
-      {
-        tool: 'task_lifecycle_reopen',
-        reason: 'Use only if the lifecycle state itself needs a governed transition before regenerating or replacing the task projection.',
-        arguments: { task_number: taskNumber },
-      },
-    ],
-    remediation: 'The task exists in SQLite lifecycle state but its markdown task projection could not be resolved. Do not retry closeout/report blindly. Inspect the task, restore/regenerate the expected markdown projection if needed, or use DB-backed observation/transition tools that do not require the markdown file.',
-  };
-}
-
-function validateCapaDispositionCorrectiveCoverage({ envelope, body, store }) {
-  const payload = envelope?.envelope?.payload ?? envelope?.envelope ?? envelope?.payload ?? {};
-  const envelopeId = envelope?.envelope_id ?? envelope?.envelope?.envelope_id ?? null;
-  const classification = String(payload.classification ?? envelope?.kind ?? '').toLowerCase();
-  const correctiveAction = typeof payload.corrective_action === 'string' ? payload.corrective_action.trim() : '';
-  const capaLike = Boolean(correctiveAction)
-    || classification.includes('capa')
-    || Array.isArray(payload.related_capas)
-    || Array.isArray(payload.acceptance_evidence);
-  if (!capaLike || !correctiveAction) {
-    return { ok: true, required: false, status: 'not_required', errors: [] };
-  }
-
-  const ledger = extractTaskSection(body, 'Follow-Up Ledger');
-  if (!ledger) {
-    return {
-      ok: false,
-      required: true,
-      status: 'missing_corrective_action_coverage',
-      envelope_id: envelopeId,
-      corrective_action_present: true,
-      corrective_action_summary: correctiveAction,
-      errors: [`CAPA ${envelopeId ?? 'unknown'} has corrective_action but no Follow-Up Ledger entry proving implementation coverage, deferral/blocker state, or no-action rationale.`],
-    };
-  }
-
-  const lines = ledger.split(/\r?\n/).map((line) => line.trim().replace(/^[-*]\s+/, '')).filter(Boolean);
-  const activeStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review']);
-  const taskLinks = [];
-  for (const line of lines) {
-    const taskMatches = [...line.matchAll(/\b(?:created|covered by)\s+#(\d+)\b/gi)];
-    for (const match of taskMatches) {
-      const taskNumber = Number(match[1]);
-      const lifecycle = Number.isFinite(taskNumber) ? store.getLifecycleByNumber(taskNumber) : null;
-      taskLinks.push({
-        task_number: taskNumber,
-        status: lifecycle?.status ?? 'not_found',
-        active_implementation_coverage: lifecycle ? activeStatuses.has(lifecycle.status) : false,
-        line,
-      });
-    }
-  }
-  const activeTaskLinks = taskLinks.filter((link) => link.active_implementation_coverage);
-  const deferredOrBlocked = lines.find((line) => /\b(?:deferred|blocked|blocker)\s*:/i.test(line));
-  const noAction = lines.find((line) => /\bno follow-?up needed\s*:/i.test(line) || /\bno[- ]action rationale\s*:/i.test(line));
-  if (activeTaskLinks.length > 0 || deferredOrBlocked || noAction) {
-    return {
-      ok: true,
-      required: true,
-      status: activeTaskLinks.length > 0 ? 'covered_by_active_implementation_task' : deferredOrBlocked ? 'explicit_defer_or_blocker_state' : 'admitted_no_action_rationale',
-      envelope_id: envelopeId,
-      corrective_action_present: true,
-      corrective_action_summary: correctiveAction,
-      task_links: taskLinks,
-      accepted_line: deferredOrBlocked ?? noAction ?? null,
-      errors: [],
-    };
-  }
-
-  return {
-    ok: false,
-    required: true,
-    status: 'missing_corrective_action_coverage',
-    envelope_id: envelopeId,
-    corrective_action_present: true,
-    corrective_action_summary: correctiveAction,
-    task_links: taskLinks,
-    errors: [`CAPA ${envelopeId ?? 'unknown'} corrective action lacks active implementation coverage. Link an active task with created #N / covered by #N, record deferred/blocker state, or record no follow-up needed with no-action rationale. Closed historical/disposition tasks do not count.`],
-  };
-}
-
-function extractEnvelopeId(text) {
-  const match = text.match(/env_[A-Za-z0-9_-]+/);
-  return match ? match[0] : null;
-}
-
-function readIndexedEnvelope(siteRoot, envelopeId): Record<string, unknown> | null {
-  const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
-  try {
-    const row = index.db.prepare('SELECT * FROM inbox_envelopes WHERE envelope_id = ?').get(envelopeId) as Record<string, unknown>;
-    if (!row) return null;
-    return { ...row, envelope: JSON.parse(String(row.payload_json)) };
-  } finally {
-    index.db.close();
-  }
-}
-
-function inferDisposition(envelopeStatus) {
-  if (envelopeStatus === 'promoted') return 'already_promoted';
-  if (envelopeStatus === 'acknowledged') return 'already_acknowledged';
-  if (envelopeStatus === 'dismissed') return 'already_dismissed';
-  if (envelopeStatus === 'received') return 'received_pending_disposition';
-  return 'no_envelope_or_unknown_status';
-}
-
-function replaceTaskSection(markdown, heading, replacement) {
-  const pattern = new RegExp(`(## ${heading}\\r?\\n\\r?\\n)[\\s\\S]*?(?=\\r?\\n## )`);
-  if (!pattern.test(markdown)) return `${markdown.trimEnd()}\n\n## ${heading}\n\n${replacement}\n`;
-  return markdown.replace(pattern, `$1${replacement}\n`);
-}
-
-function relativeSitePath(siteRoot, filePath) {
-  return relative(resolve(siteRoot), resolve(filePath)).replace(/\\/g, '/');
-}
-
-function ensureRecurringTaskTables(taskStore) {
-  taskStore.db.exec(`
-    CREATE TABLE IF NOT EXISTS recurring_task_definitions (
-      recurrence_id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      status TEXT NOT NULL,
-      trigger_mode TEXT NOT NULL,
-      trigger_description TEXT,
-      target_role TEXT,
-      preferred_role TEXT,
-      goal_markdown TEXT,
-      context_markdown TEXT,
-      required_work_markdown TEXT,
-      non_goals_markdown TEXT,
-      acceptance_criteria_json TEXT NOT NULL,
-      evidence_requirements_json TEXT NOT NULL,
-      created_by TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      suspended_at TEXT,
-      retired_at TEXT,
-      schedule_kind TEXT,
-      schedule_interval INTEGER,
-      schedule_timezone TEXT,
-      last_due_key TEXT,
-      last_auto_triggered_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_recurring_task_definitions_status
-      ON recurring_task_definitions(status, updated_at);
-
-    CREATE TABLE IF NOT EXISTS recurring_task_runs (
-      run_id TEXT PRIMARY KEY,
-      recurrence_id TEXT NOT NULL,
-      task_id TEXT NOT NULL,
-      task_number INTEGER NOT NULL,
-      trigger_mode TEXT NOT NULL,
-      run_reason TEXT NOT NULL,
-      actor_agent_id TEXT NOT NULL,
-      authority_basis_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (recurrence_id) REFERENCES recurring_task_definitions(recurrence_id),
-      FOREIGN KEY (task_id) REFERENCES task_lifecycle(task_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_recurring_task_runs_recurrence
-      ON recurring_task_runs(recurrence_id, created_at);
-
-    CREATE TABLE IF NOT EXISTS recurring_task_events (
-      event_id TEXT PRIMARY KEY,
-      recurrence_id TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      state_after TEXT NOT NULL,
-      actor_agent_id TEXT NOT NULL,
-      authority_basis_json TEXT NOT NULL,
-      event_json TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (recurrence_id) REFERENCES recurring_task_definitions(recurrence_id)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_recurring_task_events_recurrence
-      ON recurring_task_events(recurrence_id, created_at);
-  `);
-  ensureRecurringColumn(taskStore, 'schedule_kind', 'TEXT');
-  ensureRecurringColumn(taskStore, 'schedule_interval', 'INTEGER');
-  ensureRecurringColumn(taskStore, 'schedule_timezone', 'TEXT');
-  ensureRecurringColumn(taskStore, 'last_due_key', 'TEXT');
-  ensureRecurringColumn(taskStore, 'last_auto_triggered_at', 'TEXT');
-}
-
-function ensureRecurringColumn(taskStore, columnName, columnType) {
-  const columns = taskStore.db.prepare('PRAGMA table_info(recurring_task_definitions)').all();
-  if (columns.some((column) => column.name === columnName)) return;
-  taskStore.db.exec(`ALTER TABLE recurring_task_definitions ADD COLUMN ${columnName} ${columnType}`);
-}
-
-function insertRecurringDefinition(taskStore, definition) {
-  ensureRecurringTaskTables(taskStore);
-  taskStore.db.prepare(`
-    INSERT INTO recurring_task_definitions (
-      recurrence_id, title, status, trigger_mode, trigger_description,
-      target_role, preferred_role, goal_markdown, context_markdown,
-      required_work_markdown, non_goals_markdown, acceptance_criteria_json,
-      evidence_requirements_json, created_by, created_at, updated_at,
-      suspended_at, retired_at, schedule_kind, schedule_interval,
-      schedule_timezone, last_due_key, last_auto_triggered_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    definition.recurrence_id,
-    definition.title,
-    definition.status,
-    definition.trigger_mode,
-    definition.trigger_description,
-    definition.target_role,
-    definition.preferred_role,
-    definition.goal_markdown,
-    definition.context_markdown,
-    definition.required_work_markdown,
-    definition.non_goals_markdown,
-    definition.acceptance_criteria_json,
-    definition.evidence_requirements_json,
-    definition.created_by,
-    definition.created_at,
-    definition.updated_at,
-    definition.suspended_at,
-    definition.retired_at,
-    definition.schedule_kind ?? null,
-    definition.schedule_interval ?? null,
-    definition.schedule_timezone ?? null,
-    definition.last_due_key ?? null,
-    definition.last_auto_triggered_at ?? null,
-  );
-}
-
-function insertRecurringEvent(taskStore, { recurrenceId, eventType, stateAfter, actorAgentId, authorityBasis, event, now }) {
-  ensureRecurringTaskTables(taskStore);
-  taskStore.db.prepare(`
-    INSERT INTO recurring_task_events (
-      event_id, recurrence_id, event_type, state_after, actor_agent_id,
-      authority_basis_json, event_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    `rtevt_${randomUUID()}`,
-    recurrenceId,
-    eventType,
-    stateAfter,
-    actorAgentId,
-    JSON.stringify(authorityBasis),
-    JSON.stringify(event ?? {}),
-    now,
-  );
-}
-
-function insertRecurringRun(taskStore, run) {
-  ensureRecurringTaskTables(taskStore);
-  taskStore.db.prepare(`
-    INSERT INTO recurring_task_runs (
-      run_id, recurrence_id, task_id, task_number, trigger_mode,
-      run_reason, actor_agent_id, authority_basis_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    run.run_id,
-    run.recurrence_id,
-    run.task_id,
-    run.task_number,
-    run.trigger_mode,
-    run.run_reason,
-    run.actor_agent_id,
-    run.authority_basis_json,
-    run.created_at,
-  );
-}
-
-function getRecurringDefinition(taskStore, recurrenceId) {
-  ensureRecurringTaskTables(taskStore);
-  const row = taskStore.db.prepare('SELECT * FROM recurring_task_definitions WHERE recurrence_id = ?').get(recurrenceId);
-  return row ? hydrateRecurringDefinition(row) : null;
-}
-
-function listRecurringDefinitions(taskStore, { status = null, limit = 50 } = {}) {
-  ensureRecurringTaskTables(taskStore);
-  const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
-  const rows = status
-    ? taskStore.db.prepare('SELECT * FROM recurring_task_definitions WHERE status = ? ORDER BY updated_at DESC LIMIT ?').all(status, boundedLimit)
-    : taskStore.db.prepare('SELECT * FROM recurring_task_definitions ORDER BY updated_at DESC LIMIT ?').all(boundedLimit);
-  return rows.map(hydrateRecurringDefinition);
-}
-
-function listDueRecurringDefinitions(taskStore, { now, limit = 20 }: Record<string, unknown> = {}) {
-  ensureRecurringTaskTables(taskStore);
-  const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 100));
-  const rows = taskStore.db.prepare(`
-    SELECT * FROM recurring_task_definitions
-    WHERE status = 'active'
-      AND trigger_mode = 'schedule'
-      AND schedule_kind = 'daily'
-    ORDER BY updated_at ASC
-    LIMIT ?
-  `).all(boundedLimit * 2);
-  return rows.map(hydrateRecurringDefinition).filter((definition) => {
-    const dueKey = recurringDueKey(definition, now);
-    return Boolean(dueKey && definition.last_due_key !== dueKey);
-  }).slice(0, boundedLimit);
-}
-
-function listRecurringRuns(taskStore, recurrenceId, limit = 20) {
-  ensureRecurringTaskTables(taskStore);
-  const boundedLimit = Math.max(1, Math.min(Number(limit) || 20, 200));
-  return taskStore.db.prepare(`
-    SELECT r.*, s.title
-    FROM recurring_task_runs r
-    LEFT JOIN task_specs s ON r.task_id = s.task_id
-    WHERE r.recurrence_id = ?
-    ORDER BY r.created_at DESC
-    LIMIT ?
-  `).all(recurrenceId, boundedLimit).map((row) => ({
-    run_id: row.run_id,
-    recurrence_id: row.recurrence_id,
-    task_id: row.task_id,
-    task_number: row.task_number,
-    title: row.title ?? null,
-    trigger_mode: row.trigger_mode,
-    run_reason: row.run_reason,
-    actor_agent_id: row.actor_agent_id,
-    authority_basis: parseJsonOrNull(row.authority_basis_json),
-    created_at: row.created_at,
-  }));
-}
-
-function hydrateRecurringDefinition(row) {
-  return {
-    recurrence_id: row.recurrence_id,
-    title: row.title,
-    status: row.status,
-    trigger_mode: row.trigger_mode,
-    trigger_description: row.trigger_description ?? null,
-    target_role: row.target_role ?? null,
-    preferred_role: row.preferred_role ?? null,
-    goal_markdown: row.goal_markdown ?? null,
-    context_markdown: row.context_markdown ?? null,
-    required_work_markdown: row.required_work_markdown ?? null,
-    non_goals_markdown: row.non_goals_markdown ?? null,
-    acceptance_criteria: parseJsonArray(row.acceptance_criteria_json),
-    evidence_requirements: parseJsonArray(row.evidence_requirements_json),
-    created_by: row.created_by,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    suspended_at: row.suspended_at ?? null,
-    retired_at: row.retired_at ?? null,
-    schedule_kind: row.schedule_kind ?? null,
-    schedule_interval: row.schedule_interval ?? null,
-    schedule_timezone: row.schedule_timezone ?? null,
-    last_due_key: row.last_due_key ?? null,
-    last_auto_triggered_at: row.last_auto_triggered_at ?? null,
-  };
+function parseIsoOrNow(value) {
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) throw new Error('invalid_current_time');
+  return parsed;
 }
 
 async function createRecurringTaskInstance({ store, siteRoot, definition, actorAgentId, actorRole, authorityBasis, triggerMode, runReason, eventType, now, dueKey = null }) {
@@ -3530,27 +2216,12 @@ function requireRecurringAuthorityActor({ store, siteRoot, actorAgentId }) {
   return String(actorRole);
 }
 
-function normalizeRecurringAuthorityBasis(value) {
-  const record = asRecord(value);
-  const kind = stringField(record, 'kind');
-  const summary = stringField(record, 'summary');
-  const allowedKinds = new Set(['operator_direct_instruction', 'architect_review', 'task_acceptance', 'manual_trigger', 'scheduled_trigger']);
-  if (!kind || !allowedKinds.has(kind) || !summary) return null;
-  return { kind, summary };
-}
-
-function parseIsoOrNow(value) {
-  if (!value) return new Date();
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) throw new Error('invalid_current_time');
-  return parsed;
-}
-
 function recurringDueKey(definition, now) {
   if (definition.trigger_mode !== 'schedule') return null;
   if (definition.schedule_kind !== 'daily') return null;
   return now.toISOString().slice(0, 10);
 }
+
 
 function arrayOfStrings(value, fallback = []) {
   if (!Array.isArray(value)) return fallback;
@@ -3828,7 +2499,7 @@ function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
   taskStore.upsertRosterEntry({
     agent_id: staticAgent.agent_id,
     role: staticAgent.role,
-    capabilities_json: JSON.stringify(staticAgent.capabilities ?? []),
+    capabilities_json: normalizeCapabilitiesJson(JSON.stringify(staticAgent.capabilities ?? [])),
     first_seen_at: staticAgent.first_seen_at ?? now,
     last_active_at: staticAgent.last_active_at ?? now,
     status: staticAgent.status ?? 'idle',
@@ -3839,14 +2510,17 @@ function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
   });
 }
 
-async function withAuthoredRosterJsonPreserved(root, fn) {
+async function withAuthoredRosterJsonPreserved(root, fn, store = null) {
   const rosterPath = join(root, '.ai', 'agents', 'roster.json');
   let before = null;
   try {
     before = readFileSync(rosterPath, 'utf8');
+    const sanitized = sanitizeRosterCapabilitiesJson(before);
+    if (sanitized && sanitized !== before) writeFileSync(rosterPath, sanitized, 'utf8');
   } catch {
     before = null;
   }
+  if (store) sanitizeSqlRosterCapabilities(store);
   const result = await fn();
   if (before !== null) {
     try {
@@ -3859,6 +2533,51 @@ async function withAuthoredRosterJsonPreserved(root, fn) {
     }
   }
   return result;
+}
+
+function sanitizeSqlRosterCapabilities(store) {
+  try {
+    const rows = store.db.prepare('SELECT agent_id, capabilities_json FROM agent_roster').all();
+    const update = store.db.prepare('UPDATE agent_roster SET capabilities_json = ? WHERE agent_id = ?');
+    for (const row of rows) {
+      const normalized = normalizeCapabilitiesJson(row.capabilities_json);
+      if (normalized !== row.capabilities_json) update.run(normalized, row.agent_id);
+    }
+  } catch {
+    // Best-effort compatibility normalization before shared governance services run.
+  }
+}
+
+function sanitizeRosterCapabilitiesJson(text) {
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed?.agents)) return text;
+    let changed = false;
+    const agents = parsed.agents.map((agent) => {
+      if (!agent || typeof agent !== 'object' || Array.isArray(agent)) return agent;
+      const capabilities = agent.capabilities;
+      if (Array.isArray(capabilities)) return agent;
+      const nested = capabilities && typeof capabilities === 'object' && Array.isArray(capabilities.capabilities)
+        ? capabilities.capabilities.filter((item) => typeof item === 'string')
+        : [];
+      changed = true;
+      return { ...agent, capabilities: nested };
+    });
+    return changed ? JSON.stringify({ ...parsed, agents }, null, 2) : text;
+  } catch {
+    return text;
+  }
+}
+
+function normalizeCapabilitiesJson(value) {
+  try {
+    const parsed = JSON.parse(String(value ?? '[]'));
+    if (Array.isArray(parsed)) return JSON.stringify(parsed.filter((item) => typeof item === 'string'));
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.capabilities)) return JSON.stringify(parsed.capabilities.filter((item) => typeof item === 'string'));
+    return JSON.stringify([]);
+  } catch {
+    return JSON.stringify([]);
+  }
 }
 
 /**

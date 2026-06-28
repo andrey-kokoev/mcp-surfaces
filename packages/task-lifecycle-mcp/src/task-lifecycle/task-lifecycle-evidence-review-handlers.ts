@@ -161,6 +161,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     isReviewerCapable,
     findReviewerCapableAgents,
     validateTaskFinishRecoveryTruthfulness,
+    normalizeRosterCapabilitiesForSharedServices,
     finishGateExamples,
     buildStateAwareFinishBlockerRemediation,
     buildTaskFileResolutionFailure,
@@ -427,6 +428,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           return jsonToolResult(payload, true);
         }
       }
+      normalizeRosterCapabilitiesForSharedServices?.();
       ensureStaticRosterAgentInSql(store, siteRoot, agentId);
       const includeUnrelatedChangedFiles = booleanField(args, 'include_unrelated_changed_files') === true;
       const rawAutoDetectedChangedFiles = !changedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];

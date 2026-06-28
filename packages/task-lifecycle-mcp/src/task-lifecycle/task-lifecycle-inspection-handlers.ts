@@ -308,11 +308,15 @@ export function createTaskLifecycleInspectionHandlers({
       if (!query) throw new Error('query_required');
       const result = await searchTasksService({ cwd: siteRoot, query, maxSnippets: 3 });
       const output = result.result || result;
-      if (statusFilter && output.results) {
-        output.results = output.results.filter((item) => item.status === statusFilter);
-        output.count = output.results.length;
+      if (Array.isArray(output.results)) {
+        const authoritativeResults = output.results
+          .map((item) => annotateSearchResultAuthority(store, item))
+          .filter((item) => statusFilter ? item.authority?.status === 'authoritative' && item.status === statusFilter : true);
+        output.results = authoritativeResults.slice(0, limit);
+        output.count = authoritativeResults.length;
+        output.authoritative_result_count = authoritativeResults.filter((item) => item.authority?.status === 'authoritative').length;
+        output.stale_result_count = authoritativeResults.filter((item) => item.authority?.status === 'stale_projection').length;
       }
-      output.results = output.results?.slice(0, limit);
       return jsonToolResult(output, result.exitCode !== 0);
     },
 
@@ -323,6 +327,29 @@ export function createTaskLifecycleInspectionHandlers({
       const result = findRelatedTasks({ tasksDir: join(siteRoot, '.ai', 'do-not-open', 'tasks'), targetTaskNumber: taskNumber, limit });
       return jsonToolResult(result);
     },
+  };
+}
+
+function annotateSearchResultAuthority(store, item) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+  const taskNumber = Number(item.task_number ?? item.taskNumber ?? item.number);
+  const lifecycle = Number.isInteger(taskNumber) && taskNumber > 0 ? store.getLifecycleByNumber(taskNumber) : null;
+  if (!lifecycle) {
+    return {
+      ...item,
+      authority: {
+        status: 'stale_projection',
+        resolvable: false,
+        remediation: 'This search hit is not present in the authoritative task lifecycle projection; use show/inspect only for authoritative results.',
+      },
+    };
+  }
+  return {
+    ...item,
+    task_id: item.task_id ?? lifecycle.task_id,
+    task_number: lifecycle.task_number,
+    status: lifecycle.status,
+    authority: { status: 'authoritative', resolvable: true },
   };
 }
 

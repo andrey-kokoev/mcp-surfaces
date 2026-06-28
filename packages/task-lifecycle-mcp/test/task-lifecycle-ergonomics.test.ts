@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
@@ -105,6 +106,8 @@ try {
   writeTask(9207, genericEngineerTaskId, 'opened', 'target_role: engineer');
   const submitWorkTaskId = '20260604-9208-submit-work-helper';
   writeTask(9208, submitWorkTaskId, 'opened');
+  const staleSearchTaskId = '20260604-9210-stale-search-only-projection';
+  writeTask(9210, staleSearchTaskId, 'in_review');
 
   const store = openTaskLifecycleStore(siteRoot);
   try {
@@ -362,6 +365,23 @@ try {
   assert.equal(showPayload.status, 'ok');
   assert.ok(Array.isArray(showPayload.eligible_reviewers));
   assert.ok(showPayload.eligible_reviewers.some((r) => r.agent_id === 'smart-scheduling.architect'));
+
+  const staleSearchResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 20001,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_search', arguments: { query: 'stale-search-only-projection', limit: 5 } },
+  }, builderRuntime);
+  const staleSearchPayload = await responsePayload(staleSearchResponse, builderRuntime, 20002);
+  assert.ok(staleSearchPayload.results.some((item: Record<string, any>) => item.task_number === 9210 && item.authority?.status === 'stale_projection'));
+  const staleStatusSearchResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 20003,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_search', arguments: { query: 'stale-search-only-projection', status: 'in_review', limit: 5 } },
+  }, builderRuntime);
+  const staleStatusSearchPayload = await responsePayload(staleStatusSearchResponse, builderRuntime, 20004);
+  assert.equal(staleStatusSearchPayload.count, 0);
 
   // 2. Review by a non-reviewer surfaces eligible reviewers.
   const unauthorizedReviewResponse = await handleTaskLifecycleMcpRequest({
@@ -963,6 +983,13 @@ try {
       updated_at: '2026-06-04T00:00:00Z',
       agents: [
         {
+          agent_id: '_site',
+          role: 'site_metadata',
+          capabilities: { default_reviewer_role: 'reviewer' },
+          first_seen_at: '2026-06-04T00:00:00Z',
+          last_active_at: '2026-06-04T00:00:00Z',
+        },
+        {
           agent_id: 'scoped.builder',
           role: 'builder',
           capabilities: ['implementation_work'],
@@ -983,7 +1010,9 @@ try {
   const fullTaskId = '20260604-9302-full-changed-files';
   const payloadRefTaskId = '20260604-9303-payload-ref-finish';
   const followUpTaskId = '20260604-9304-follow-up-ledger';
-  for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303]] as const) {
+  const payloadRefCompanionTaskId = '20260604-9305-payload-ref-companion-only-finish';
+  const freshServerTaskId = '20260604-9306-fresh-server-finish-roster-capabilities';
+  for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303], [payloadRefCompanionTaskId, 9305], [freshServerTaskId, 9306]] as const) {
     writeFileSync(
       join(scopedSiteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`),
       `---\ntask_id: ${taskId}\ntask_number: ${taskNumber}\nstatus: claimed\ngoverned_by: builder\n---\n\n# Task ${taskNumber}\n\n## Goal\n\nTest changed-file scoping.\n\n## Execution Notes\n\nDone.\n\n## Verification\n\nChecked.\n\n## Acceptance Criteria\n\n- [x] Criterion.\n`,
@@ -995,6 +1024,17 @@ try {
   );
   const scopedStore = openTaskLifecycleStore(scopedSiteRoot);
   try {
+    scopedStore.upsertRosterEntry({
+      agent_id: '_site',
+      role: 'site_metadata',
+      capabilities_json: JSON.stringify({ default_reviewer_role: 'reviewer' }),
+      first_seen_at: '2026-06-04T00:00:00Z',
+      last_active_at: '2026-06-04T00:00:00Z',
+      status: 'active',
+      task_number: null,
+      last_done: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
     scopedStore.upsertRosterEntry({
       agent_id: 'scoped.builder',
       role: 'builder',
@@ -1017,7 +1057,7 @@ try {
       last_done: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
-    for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303], [followUpTaskId, 9304]] as const) {
+    for (const [taskId, taskNumber] of [[scopedTaskId, 9301], [fullTaskId, 9302], [payloadRefTaskId, 9303], [followUpTaskId, 9304], [payloadRefCompanionTaskId, 9305], [freshServerTaskId, 9306]] as const) {
       scopedStore.upsertLifecycle({
         task_id: taskId,
         task_number: taskNumber,
@@ -1178,6 +1218,52 @@ try {
   }, scopedRuntime);
   const payloadRefFinishPayload = await responsePayload(payloadRefFinishResponse, scopedRuntime, 22);
   assert.equal(payloadRefFinishPayload.status, 'success');
+
+  const companionPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 221,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          summary: 'Payload summary without identity fields should merge with authoritative top-level task_number and agent_id.',
+          no_files_changed: true,
+        },
+      },
+    },
+  }, scopedRuntime);
+  const companionPayload = await responsePayload(companionPayloadCreateResponse, scopedRuntime, 222);
+  const companionPayloadFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 223,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_finish', arguments: { payload_ref: companionPayload.ref, task_number: 9305, agent_id: 'scoped.builder' } },
+  }, scopedRuntime);
+  const companionPayloadFinish = await responsePayload(companionPayloadFinishResponse, scopedRuntime, 224);
+  assert.equal(companionPayloadFinish.status, 'success');
+
+  const freshServerPath = fileURLToPath(new URL('../src/task-lifecycle/task-mcp-server.js', import.meta.url));
+  const freshInit = JSON.stringify({ jsonrpc: '2.0', id: 301, method: 'initialize', params: { protocolVersion: '2026-04-18', capabilities: {} } });
+  const freshFinish = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 302,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_finish', arguments: { task_number: 9306, agent_id: 'scoped.builder', summary: 'Fresh server finish.' } },
+  });
+  const freshServerFinish = spawnSync(process.execPath, [freshServerPath, '--site-root', scopedSiteRoot], {
+    cwd: scopedSiteRoot,
+    input: `${freshInit}\n${freshFinish}\n`,
+    encoding: 'utf8',
+    env: { ...process.env, NARADA_AGENT_ID: 'scoped.builder' },
+    timeout: 10_000,
+  });
+  assert.equal(freshServerFinish.status, 0, freshServerFinish.stderr);
+  const freshFrames = freshServerFinish.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('{')).map((line) => JSON.parse(line));
+  const freshFinishResponse = freshFrames.find((frame) => frame.id === 302);
+  assert.ifError(freshFinishResponse.error);
+  const freshFinishPayload = JSON.parse(freshFinishResponse.result.content[0].text);
+  assert.equal(freshFinishPayload.status, 'success');
 
   const createPayloadResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
