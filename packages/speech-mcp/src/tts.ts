@@ -48,8 +48,8 @@ async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: s
   if (provider === 'openai_api') {
     const apiKey = resolveOpenAiApiKey(args, state);
     if (!apiKey) throw diagnosticError('speech_openai_no_key', 'speech_openai_no_key: provide api_key or set OPENAI_API_KEY');
-    const voice = optionalString(args.voice) ?? 'alloy';
-    const model = optionalString(args.model) ?? 'gpt-4o-mini-tts';
+    const voice = optionalString(args.voice) ?? 'nova';
+    const model = optionalString(args.model) ?? 'tts-1';
     const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0;
     return { ...await openaiSpeak(apiKey, text, voice, model, speed), speaker_announcement_audio: speakerAnnouncementAudio };
   }
@@ -71,8 +71,8 @@ async function playSpeakerAnnouncement(args: JsonRecord, state: SpeechState, pro
   if (provider === 'openai_api') {
     const apiKey = resolveOpenAiApiKey(args, state);
     if (!apiKey) throw diagnosticError('speech_openai_no_key', 'speech_openai_no_key: provide api_key or set OPENAI_API_KEY');
-    const voice = optionalString(args.voice) ?? 'alloy';
-    const model = optionalString(args.model) ?? 'gpt-4o-mini-tts';
+    const voice = optionalString(args.voice) ?? 'nova';
+    const model = optionalString(args.model) ?? 'tts-1';
     const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0;
     const cache = announcementCachePath(state, { provider, voice, model, speed, prefix_text: prefixText });
     const cacheHit = existsSync(cache.path);
@@ -190,7 +190,7 @@ function playWavFile(wavPath: string): Promise<void> {
 }
 
 export function speechVoices(args: JsonRecord, _state: SpeechState): JsonRecord {
-  const provider = optionalString(args.provider) ?? 'sapi';
+  const provider = optionalString(args.provider) ?? 'openai_api';
   if (provider === 'openai_api') {
     return { status: 'ok', provider: 'openai_api', voices: OPENAI_VOICES.slice(), count: OPENAI_VOICES.length };
   }

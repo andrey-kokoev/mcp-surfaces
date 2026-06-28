@@ -9,11 +9,11 @@ export function listTools() {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'Text to speak. Max 1000 characters.' },
-          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to sapi.' },
+          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to openai_api.' },
           voice: { type: 'string', description: 'Optional voice name for SAPI, e.g. Microsoft Zira.' },
           rate: { type: 'integer', minimum: -10, maximum: 10, description: 'Speech rate for SAPI. -10 slow to 10 fast. Default 0.' },
           api_key: { type: 'string', description: 'OpenAI API key. Falls back to OPENAI_API_KEY env var.' },
-          model: { type: 'string', enum: OPENAI_MODELS, description: 'OpenAI TTS model. Defaults to gpt-4o-mini-tts.' },
+          model: { type: 'string', enum: OPENAI_MODELS, description: 'OpenAI TTS model. Defaults to tts-1.' },
           speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'OpenAI speech speed. 0.25 to 4.0. Default 1.0.' },
           speaker_agent_id: { type: 'string', description: 'Agent identity to announce before the spoken text. Defaults to NARADA_AGENT_ID when speaker announcements are enabled.' },
           announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this call. Defaults to true at the server level.' },
@@ -30,7 +30,7 @@ export function listTools() {
       inputSchema: {
         type: 'object',
         properties: {
-          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to sapi.' },
+          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to openai_api.' },
         },
         additionalProperties: false,
       },
@@ -74,7 +74,7 @@ export function listTools() {
           text: { type: 'string', description: 'Prompt to speak to the operator. Max 1000 characters.' },
           tts_provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider for the prompt. Defaults to openai_api.' },
           tts_model: { type: 'string', enum: OPENAI_MODELS, description: 'OpenAI TTS model. Defaults to tts-1.' },
-          voice: { type: 'string', description: 'TTS voice. Defaults to shimmer for OpenAI TTS.' },
+          voice: { type: 'string', description: 'TTS voice. Defaults to nova for OpenAI TTS.' },
           rate: { type: 'integer', minimum: -10, maximum: 10, description: 'Speech rate for SAPI. -10 slow to 10 fast. Default 0.' },
           speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'OpenAI speech speed. 0.25 to 4.0. Default 1.0.' },
           duration_seconds: { type: 'integer', minimum: 1, maximum: MAX_LISTEN_DURATION_SECONDS, description: 'Maximum response capture duration. Defaults to 30 seconds.' },

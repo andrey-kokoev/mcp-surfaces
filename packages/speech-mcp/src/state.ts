@@ -49,7 +49,7 @@ export function createServerState(options: JsonRecord = {}): SpeechState {
     maxTextLength: Number(options.maxTextLength ?? MAX_TEXT_LENGTH),
     openAiTranscriptionModel: optionalString(options.openAiTranscriptionModel) ?? optionalString(process.env.NARADA_SPEECH_OPENAI_TRANSCRIPTION_MODEL) ?? 'gpt-4o-transcribe',
     options,
-    provider: String(options.provider ?? 'sapi'),
+    provider: String(options.provider ?? 'openai_api'),
   };
 }
 

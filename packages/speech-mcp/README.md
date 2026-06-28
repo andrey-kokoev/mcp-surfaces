@@ -14,7 +14,7 @@ Host-level speech MCP surface for text-to-speech, bounded microphone capture, tr
 
 ## Provider Contract
 
-TTS providers are `sapi` and `openai_api`.
+TTS providers are `sapi` and `openai_api`. The default TTS provider is `openai_api`, with OpenAI model `tts-1` and voice `nova`.
 
 Listen-session providers are `local_sapi` and `remote_transcription`. `local_sapi` is for local voice-intent monitoring through the host adapter. It is not a transcript-returning capture provider.
 

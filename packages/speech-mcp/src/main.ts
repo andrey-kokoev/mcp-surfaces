@@ -174,7 +174,7 @@ async function speechPromptCaptureResponse(args: JsonRecord, state: SpeechState)
     text,
     provider: optionalString(args.tts_provider) ?? 'openai_api',
     model: optionalString(args.tts_model) ?? 'tts-1',
-    voice: optionalString(args.voice) ?? 'shimmer',
+    voice: optionalString(args.voice) ?? 'nova',
     rate: args.rate,
     speed: args.speed,
     api_key: args.api_key,
