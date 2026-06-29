@@ -282,6 +282,14 @@ const SURFACES: SurfaceDef[] = [
     env_vars: ['OPENAI_API_KEY'],
   },
   {
+    id: 'operator-routing', package: 'operator-routing-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/operator-routing-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: ['--site-root', 'C:/Users/Andrey/Narada'],
+    tools: ['operator_route_doctor', 'operator_route_request'],
+    injection_scope: 'user_site',
+  },
+  {
     id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`,
     kind: 'mcp_surface',

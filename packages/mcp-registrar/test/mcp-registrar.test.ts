@@ -32,6 +32,10 @@ try {
   assert.equal((speech.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.equal(speech.default_injection, 'all_carrier_sessions');
   assert.deepEqual(speech.tools, ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
+  const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
+  assert.ok(operatorRouting);
+  assert.equal(operatorRouting.injection_scope, 'user_site');
+  assert.deepEqual(operatorRouting.tools, ['operator_route_doctor', 'operator_route_request']);
   assert.ok(sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] }).includes('speech'));
   assert.equal(sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] }).filter((surfaceId) => surfaceId === 'speech').length, 1);
   const registrar = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');

@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/operator-routing-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "User Site operator routing MCP surface for transcript-to-target routing decisions and inbox fallback packaging.",
+  "bin": {
+    "operator-routing-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/operator-routing-mcp.test.js"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

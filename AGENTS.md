@@ -32,6 +32,7 @@ Current packages:
 - `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
 - `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
 - `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
+- `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
 
 ## Surface Feedback
 
