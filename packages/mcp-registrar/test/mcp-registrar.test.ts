@@ -35,9 +35,12 @@ try {
   const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
   assert.equal(operatorRouting.injection_scope, 'user_site');
+  assert.equal(operatorRouting.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(operatorRouting.tools, ['operator_route_doctor', 'operator_route_request']);
-  assert.ok(sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] }).includes('speech'));
-  assert.equal(sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] }).filter((surfaceId) => surfaceId === 'speech').length, 1);
+  const sharedSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] });
+  assert.ok(sharedSurfaceIds.includes('speech'));
+  assert.ok(sharedSurfaceIds.includes('operator-routing'));
+  assert.equal(sharedSurfaceIds.filter((surfaceId) => surfaceId === 'speech').length, 1);
   const registrar = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
   assert.ok(registrar);
   assert.equal(registrar.injection_scope, 'user_site');

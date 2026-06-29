@@ -288,6 +288,7 @@ const SURFACES: SurfaceDef[] = [
     args: ['--site-root', 'C:/Users/Andrey/Narada'],
     tools: ['operator_route_doctor', 'operator_route_request'],
     injection_scope: 'user_site',
+    default_injection: 'all_site_bound_sessions',
   },
   {
     id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
