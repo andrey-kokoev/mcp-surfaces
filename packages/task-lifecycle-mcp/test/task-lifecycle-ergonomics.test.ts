@@ -910,6 +910,28 @@ try {
   assert.deepEqual(Object.keys(guidancePayload.sections), ['ordinary_task']);
   assert.match(guidancePayload.sections.ordinary_task.intent, /explicit lifecycle records/);
   assert.match(guidancePayload.tool_specific_note.caveat, /in_review/);
+  assert.equal(guidancePayload.first_use_decision_tree[0].sequence[0], 'task_lifecycle_show');
+  assert.match(guidancePayload.state_truth_table.in_review, /do not report this as closed/);
+  assert.equal(guidancePayload.tool_preference_table.some((entry: any) => entry.tool === 'task_lifecycle_submit_work'), true);
+  assert.equal(guidancePayload.happy_path_examples.ordinary_submit_work_inline.arguments.changed_files[0], 'packages/example/src/main.ts');
+  assert.equal(guidancePayload.anti_patterns.some((entry: any) => /payload/.test(entry.mistake)), true);
+  assert.equal(guidancePayload.recovery_guidance.some((entry: any) => /payload_schema/.test(entry.action)), true);
+
+  const payloadGuidanceResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1020,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_guidance',
+      arguments: { workflow: 'payloads' },
+    },
+  }, builderRuntime);
+  const payloadGuidance = await responsePayload(payloadGuidanceResponse, builderRuntime, 1021);
+  assert.equal(payloadGuidance.status, 'ok');
+  assert.deepEqual(payloadGuidance.sections.payloads.top_level_authority_fields, ['task_number', 'agent_id', 'authority_basis when required']);
+  assert.equal(payloadGuidance.sections.payloads.examples[0].create_payload.payload.execution_notes, '<long execution notes>');
+  assert.equal(payloadGuidance.sections.payloads.examples[0].consume_payload_ref.arguments.task_number, 123);
+  assert.equal(Object.hasOwn(payloadGuidance.sections.payloads.examples[0].create_payload.payload, 'task_number'), false);
 
   const toolsListResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
