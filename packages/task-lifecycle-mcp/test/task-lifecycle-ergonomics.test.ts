@@ -895,12 +895,31 @@ try {
   assert.deepEqual(Object.keys(admitSchemaPayload.schemas.task_lifecycle_admit_evidence.payload_ref_shape), ['self_certification']);
   assert.match(admitSchemaPayload.schemas.task_lifecycle_admit_evidence.note, /lifecycle store/);
 
+  const guidanceResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 1018,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_guidance',
+      arguments: { workflow: 'ordinary_task', tool: 'task_lifecycle_submit_work' },
+    },
+  }, builderRuntime);
+  const guidancePayload = await responsePayload(guidanceResponse, builderRuntime, 1019);
+  assert.equal(guidancePayload.status, 'ok');
+  assert.equal(guidancePayload.schema, 'narada.task_lifecycle.guidance.v0');
+  assert.deepEqual(Object.keys(guidancePayload.sections), ['ordinary_task']);
+  assert.match(guidancePayload.sections.ordinary_task.intent, /explicit lifecycle records/);
+  assert.match(guidancePayload.tool_specific_note.caveat, /in_review/);
+
   const toolsListResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 1011,
     method: 'tools/list',
     params: {},
   }, builderRuntime);
+  const guidanceTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_guidance');
+  assert.equal(guidanceTool.annotations.readOnlyHint, true);
+  assert.equal(guidanceTool.inputSchema.properties.workflow.type, 'string');
   const reviewTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_review');
   assert.equal(reviewTool.inputSchema.properties.findings.type, 'array');
   assert.equal(reviewTool.inputSchema.properties.findings.items.type, 'object');

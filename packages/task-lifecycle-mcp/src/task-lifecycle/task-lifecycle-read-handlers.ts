@@ -1,6 +1,7 @@
 export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
   'task_lifecycle_list',
   'task_lifecycle_roster',
+  'task_lifecycle_guidance',
   'task_lifecycle_payload_schema',
 ]);
 
@@ -40,6 +41,11 @@ export function createTaskLifecycleReadHandlers({
       const roster = store.getRoster();
       return jsonToolResult({ status: 'ok', roster: roster ?? [] });
     },
+    task_lifecycle_guidance: (args) => {
+      const workflow = stringField(args, 'workflow') ?? 'all';
+      const tool = stringField(args, 'tool');
+      return jsonToolResult(taskLifecycleGuidance({ workflow, tool }));
+    },
     task_lifecycle_payload_schema: (args) => {
       const tool = stringField(args, 'tool');
       const schemas = taskLifecyclePayloadSchemas();
@@ -51,6 +57,100 @@ export function createTaskLifecycleReadHandlers({
         remediation: 'Use mcp_payload_create with one of these payload shapes, then retry the lifecycle tool with payload_ref plus required top-level identity/routing fields.',
       });
     },
+  };
+}
+
+function taskLifecycleGuidance({ workflow, tool }) {
+  const sections = taskLifecycleGuidanceSections();
+  const normalizedWorkflow = sections[workflow] ? workflow : 'all';
+  const selectedSections = normalizedWorkflow === 'all'
+    ? sections
+    : { [normalizedWorkflow]: sections[normalizedWorkflow] };
+  return {
+    status: 'ok',
+    schema: 'narada.task_lifecycle.guidance.v0',
+    workflow: normalizedWorkflow,
+    tool: tool ?? null,
+    sections: selectedSections,
+    recommended_first_call: tool ? null : 'task_lifecycle_guidance({ workflow: "ordinary_task" })',
+    tool_specific_note: tool ? taskLifecycleToolGuidance(tool) : null,
+  };
+}
+
+function taskLifecycleGuidanceSections() {
+  return {
+    ordinary_task: {
+      intent: 'Do task work through explicit lifecycle records instead of conversational claims.',
+      canonical_sequence: [
+        'task_lifecycle_show or task_lifecycle_next',
+        'task_lifecycle_claim when unclaimed',
+        'do the implementation or investigation work',
+        'task_lifecycle_submit_work for normal completion',
+        'read the returned lifecycle status before reporting done',
+      ],
+      required_evidence: ['execution_notes', 'verification', 'changed_files or no_files_changed', 'acceptance criteria proof'],
+      state_semantics: {
+        submitted: 'A report/evidence packet was recorded.',
+        in_review: 'Work is submitted but closure is gated by review or dependency policy.',
+        closed: 'Closure authority has been recorded.',
+      },
+    },
+    blocked_task: {
+      intent: 'Record exact blockers without pretending the task is complete.',
+      canonical_sequence: ['task_lifecycle_report_blocked', 'include blocker facts and next_action', 'do not use finish for unresolved blockers'],
+      required_evidence: ['reason', 'blockers when specific facts exist', 'next_action when an external action is required'],
+    },
+    payloads: {
+      intent: 'Use immutable payload refs for long companion fields while keeping task_number and agent_id top-level.',
+      canonical_sequence: ['mcp_payload_create', 'call lifecycle tool with payload_ref plus required top-level identity/routing fields'],
+      inline_limit_guidance: 'Inline companion strings over 200 characters should move to payload_ref when the target tool supports it.',
+      top_level_authority_fields: ['task_number', 'agent_id', 'authority_basis when required'],
+      companion_fields: ['summary', 'execution_notes', 'verification', 'changed_files', 'findings', 'recovery_truthfulness', 'self_certification'],
+    },
+    review_and_dependencies: {
+      intent: 'Review is dependency/outcome work, not a magic final state.',
+      canonical_sequence: ['submit_work with reviewer when ordinary work needs review', 'reviewer claims dependency task', 'reviewer finishes with accepted/accepted_with_notes/rejected outcome'],
+      state_semantics: {
+        completed_outcome: 'An outcome was admitted for the task.',
+        dependency_satisfied: 'Parent gating dependency has an admitted satisfying outcome.',
+        rejected_outcome: 'Blocks parent closure until disposition is recorded.',
+      },
+    },
+    closeout_truthfulness: {
+      intent: 'Report the strongest true lifecycle state, not the desired state.',
+      required_checks: ['latest tool result status', 'final_lifecycle_status or task show status', 'closure evidence', 'review/dependency obligations', 'working tree and verification evidence'],
+      common_mistakes: [
+        'Calling submitted or in_review closed.',
+        'Omitting changed_files or no_files_changed.',
+        'Using finish when blocked facts remain unresolved.',
+        'Treating generated reports as self-authorizing closure.',
+      ],
+    },
+  };
+}
+
+function taskLifecycleToolGuidance(tool) {
+  const guidance = {
+    task_lifecycle_submit_work: {
+      preferred_for: 'Ordinary task completion with execution notes, verification, evidence admission, and finish/report in one call.',
+      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed.',
+    },
+    task_lifecycle_finish: {
+      preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
+      caveat: 'Use payload_ref for long summary/findings and include changed_files or no_files_changed for implementation work.',
+    },
+    task_lifecycle_report_blocked: {
+      preferred_for: 'Recording unresolved blockers with exact next action.',
+      caveat: 'Do not use completion tools when the blocker prevents truthful finish.',
+    },
+    task_lifecycle_claim: {
+      preferred_for: 'Taking responsibility for unassigned work.',
+      caveat: 'Use authority_basis when crossing role, preferred-agent, or operator gates.',
+    },
+  };
+  return guidance[tool] ?? {
+    preferred_for: null,
+    caveat: 'No tool-specific guidance is registered; use the workflow sections and tool schema together.',
   };
 }
 

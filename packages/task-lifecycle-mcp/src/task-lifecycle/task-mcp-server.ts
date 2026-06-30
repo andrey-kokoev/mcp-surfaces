@@ -142,6 +142,16 @@ function taskLifecycleTools() {
   return [
     ...taskLifecycleDomainTools().map(patchLocalToolDefinition),
     {
+      name: 'task_lifecycle_guidance',
+      description: 'Show canonical operating guidance for task lifecycle workflows: ordinary work, blocked work, payloads, review/dependency state, and truthful closeout reporting.',
+      inputSchema: objectSchema({
+        workflow: stringSchema('Optional guidance section: ordinary_task, blocked_task, payloads, review_and_dependencies, closeout_truthfulness, or all.'),
+        tool: stringSchema('Optional lifecycle tool name for tool-specific guidance, such as task_lifecycle_submit_work or task_lifecycle_report_blocked.'),
+      }),
+      annotations: { title: 'task_lifecycle_guidance', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'task_lifecycle_payload_schema',
       description: 'Show accepted payload_ref shapes, inline length thresholds, and examples for lifecycle create, finish, closeout, blocked-report, review, and evidence payloads.',
       inputSchema: objectSchema({
@@ -1976,6 +1986,14 @@ function legacyTaskLifecycleToolsSnapshot() {
       name: 'task_lifecycle_roster',
       description: 'List the agent roster.',
       inputSchema: objectSchema({}),
+    },
+    {
+      name: 'task_lifecycle_guidance',
+      description: 'Show canonical operating guidance for task lifecycle workflows: ordinary work, blocked work, payloads, review/dependency state, and truthful closeout reporting.',
+      inputSchema: objectSchema({
+        workflow: stringSchema('Optional guidance section: ordinary_task, blocked_task, payloads, review_and_dependencies, closeout_truthfulness, or all.'),
+        tool: stringSchema('Optional lifecycle tool name for tool-specific guidance, such as task_lifecycle_submit_work or task_lifecycle_report_blocked.'),
+      }),
     },
     {
       name: 'task_lifecycle_payload_schema',
