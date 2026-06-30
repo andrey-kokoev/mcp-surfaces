@@ -34,6 +34,14 @@ Current packages:
 - `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
 - `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
 
+## MCP Guidance Commands
+
+Most MCP surface packages should expose a read-only `_guidance` command using the surface's normal tool prefix, for example `task_lifecycle_guidance`, `git_guidance`, `fs_guidance`, or `graph_mail_guidance`.
+
+These commands are for model-facing operating guidance. They should explain the surface's purpose, first-use workflow, preferred tool sequence, state semantics, examples, anti-patterns, recovery steps, payload/output-ref conventions when relevant, and boundary notes. They must not mutate state, weaken policy, or replace authoritative tool schemas and policy checks.
+
+When a model is unfamiliar with a surface, uncertain about the correct workflow, or recovering from a refusal/error, prefer calling that surface's `_guidance` command before guessing. If the guidance is missing, unclear, stale, or contradicted by live behavior, submit feedback through `@narada2/surface-feedback-mcp`.
+
 ## Surface Feedback
 
 Agents can submit feedback about any MCP surface via `@narada2/surface-feedback-mcp`:
