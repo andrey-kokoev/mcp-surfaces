@@ -53,9 +53,9 @@ const proc = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning
 
 const lines = proc.stdout.trim().split('\n');
 const response = JSON.parse(lines[1] ?? lines[0]);
-assert.equal(response.result.tools.length, 2);
+assert.equal(response.result.tools.length, 3);
 const names = response.result.tools.map((t: Record<string, unknown>) => t.name);
-assert.deepEqual(names, ['site_coherence_check', 'site_coherence_doctor']);
+assert.deepEqual(names, ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor']);
 
 const checkTool = response.result.tools.find((t: Record<string, unknown>) => t.name === 'site_coherence_check');
 assert.equal(checkTool.annotations.readOnlyHint, true);

@@ -1,7 +1,9 @@
+import { guidanceToolDefinition } from './guidance.js';
 import { CAPTURE_TRANSCRIPTION_PROVIDERS, LISTEN_PROVIDERS, MAX_LISTEN_DURATION_SECONDS, OPENAI_MODELS, OPENAI_TRANSCRIPTION_MODELS, PROVIDERS } from './constants.js';
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'speech_speak',
       description: 'Speak text through the configured TTS provider (SAPI or OpenAI TTS).',

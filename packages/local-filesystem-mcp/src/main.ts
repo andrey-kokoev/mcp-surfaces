@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir as mkdirAsync, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -283,6 +285,7 @@ function completeArgument(params, state) {
 
 export function listTools(mode) {
   const readTools = [
+    guidanceToolDefinition(),
     {
       name: 'fs_read_file',
       description: 'Read a text file under an allowed root with line offset and limit.',
@@ -459,6 +462,7 @@ function callTool(params, state) {
   if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
   if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
   switch (name) {
+    case 'fs_guidance': return toolResult(buildGuidanceResult(args));
     case 'fs_read_file': return toolResult(readFileTool(args, state));
     case 'fs_read_file_range': return toolResult(readFileRangeTool(args, state));
     case 'fs_stat': return toolResult(statTool(args, state));

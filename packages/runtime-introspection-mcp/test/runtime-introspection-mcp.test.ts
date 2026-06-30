@@ -12,6 +12,7 @@ import {
 
 const tools = listTools();
 assert.deepEqual(tools.map((tool) => tool.name), [
+  'runtime_introspection_guidance',
   'runtime_introspection_formats',
   'runtime_introspection_top_events',
   'runtime_introspection_analyze_trace',

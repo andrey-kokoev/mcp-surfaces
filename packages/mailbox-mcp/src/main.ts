@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
 import { messageMatchesQuery, readMailboxProjection, summarizeMessage } from './mailbox-store.js';
 
@@ -111,6 +113,7 @@ function completeArgument(params: MailboxRecord) {
 
 export function listTools(): unknown[] {
   return [
+    guidanceToolDefinition(),
     tool('mailbox_doctor', 'Inspect site-local synced mailbox projection readiness.', {}),
     tool('mailbox_accounts_list', 'List synced mailbox accounts discovered in the local projection.', {}),
     tool('mailbox_messages_list', 'List synced mailbox messages with bounded filters.', {
@@ -149,6 +152,9 @@ function callTool(params: MailboxRecord, state: MailboxServerState) {
   const args = asRecord(params.arguments);
   let result: unknown;
   switch (name) {
+    case 'mailbox_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'mailbox_doctor':
       result = mailboxDoctor(state);
       break;

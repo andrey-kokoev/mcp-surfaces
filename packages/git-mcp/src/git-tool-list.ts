@@ -1,5 +1,7 @@
+import { guidanceToolDefinition } from './guidance.js';
 export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const readTools = [
+    guidanceToolDefinition(),
     {
       name: 'git_policy_inspect',
       description: 'Inspect the policy governing Git MCP operations.',
@@ -167,7 +169,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: false,
-    idempotentHint: /inspect|status|summary|diff|log|show|output_show/.test(name),
+    idempotentHint: /guidance|inspect|status|summary|diff|log|show|output_show/.test(name),
     openWorldHint: false,
   };
 }

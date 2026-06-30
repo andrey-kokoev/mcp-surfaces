@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -56,6 +58,7 @@ export function handleRequest(request: JsonRecord, state: RoutingState): any {
 
 export function listTools(): JsonRecord[] {
   return [
+    guidanceToolDefinition(),
     tool('operator_route_doctor', 'Report operator routing posture, fallback policy, and the suggested spoken acknowledgement shape.', {}),
     tool('operator_route_request', 'Compile a transcript into a routing decision and a site-inbox-compatible fallback envelope.', {
       transcript: { type: 'string', description: 'Transcript text to route.' },
@@ -81,7 +84,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: RoutingState)
 function callTool(params: JsonRecord, state: RoutingState): any {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  const result = name === 'operator_route_doctor' ? operatorRouteDoctor(state) : name === 'operator_route_request' ? operatorRouteRequest(args, state) : (() => { throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name }); })();
+  const result = name === 'operator_routing_guidance' ? buildGuidanceResult(args) : name === 'operator_route_doctor' ? operatorRouteDoctor(state) : name === 'operator_route_request' ? operatorRouteRequest(args, state) : (() => { throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name }); })();
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
 }
 

@@ -203,6 +203,7 @@ const state = createServerState({
 
 const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state);
 assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
+  'worker_guidance',
   'worker_policy_inspect',
   'worker_config_resolve',
   'worker_run',

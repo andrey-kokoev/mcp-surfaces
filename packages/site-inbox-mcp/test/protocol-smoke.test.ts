@@ -32,6 +32,7 @@ try {
   const toolRows = tools.result.tools;
   const names = toolRows.map((tool) => tool.name);
   assert.deepEqual(names, [
+    'inbox_guidance',
     'inbox_doctor',
     'inbox_list',
     'inbox_show',

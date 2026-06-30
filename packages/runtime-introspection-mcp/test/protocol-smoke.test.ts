@@ -47,6 +47,7 @@ try {
   assert.equal(responses.find((message) => message.id === 1)?.result.serverInfo.name, 'runtime-introspection-mcp');
   const listedTools = responses.find((message) => message.id === 2)?.result.tools;
   assert.deepEqual(listedTools.map((tool) => tool.name), [
+    'runtime_introspection_guidance',
     'runtime_introspection_formats',
     'runtime_introspection_top_events',
     'runtime_introspection_analyze_trace',

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -72,6 +74,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: LauncherState
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'launcher_doctor',
       description: 'Inspect launcher MCP posture, default root, registry path, and source script presence.',
@@ -151,6 +154,7 @@ function callTool(params: JsonRecord, state: LauncherState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'launcher_guidance': result = buildGuidanceResult(args); break;
     case 'launcher_doctor': result = launcherDoctor(state); break;
     case 'launcher_options_list': result = launcherOptionsList(); break;
     case 'launcher_registry_list': result = launcherRegistryList(args, state); break;

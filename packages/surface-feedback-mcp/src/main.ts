@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -97,6 +99,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: FeedbackState
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'surface_feedback_doctor',
       description: 'Inspect surface feedback MCP storage posture and backing store path.',
@@ -247,6 +250,9 @@ function callTool(params: JsonRecord, state: FeedbackState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'surface_feedback_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
     case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;

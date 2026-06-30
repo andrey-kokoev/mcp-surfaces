@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // @ts-nocheck
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 /**
  * Sonar-local agent-context MCP server.
  *
@@ -64,6 +66,7 @@ process.on('unhandledRejection', (error) => {
 traceStartup('process_start');
 
 const TOOLS = [
+  guidanceToolDefinition(),
   {
     name: 'agent_context_doctor',
     description: 'Check Sonar-local agent-context DB readiness and schema presence.',
@@ -373,6 +376,8 @@ function assistantTextContent(text: string) {
 
 function callTool(name, toolArgs) {
   switch (name) {
+    case 'agent_context_guidance':
+      return buildGuidanceResult(toolArgs);
     case 'agent_context_doctor':
       return doctor();
     case 'agent_context_whoami':

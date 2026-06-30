@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -218,6 +220,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: ServerS
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     tool('site_lifecycle_doctor', 'Inspect site lifecycle MCP posture, Narada root, CLI module availability, and command coverage.', {}, [], true),
     tool('site_lifecycle_command_map', 'List MCP tools and their aligned narada sites CLI commands.', {}, [], true),
     ...COMMANDS.map((spec) => tool(spec.tool, spec.description, spec.properties, spec.required ?? [], spec.readOnly)),
@@ -228,7 +231,8 @@ async function callTool(params: JsonRecord, state: ServerState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   let result: JsonRecord;
-  if (name === 'site_lifecycle_doctor') result = siteLifecycleDoctor(state);
+  if (name === 'site_lifecycle_guidance') result = buildGuidanceResult(args);
+  else   if (name === 'site_lifecycle_doctor') result = siteLifecycleDoctor(state);
   else if (name === 'site_lifecycle_command_map') result = siteLifecycleCommandMap();
   else {
     const spec = COMMANDS.find((item) => item.tool === name);

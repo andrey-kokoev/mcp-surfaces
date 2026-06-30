@@ -29,7 +29,7 @@ try {
   assert.equal((init.result as Record<string, any>).serverInfo.name, 'speech-mcp');
 
   const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
-  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
 
   const speakTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'speech_speak');
   assert.equal(speakTool.annotations.readOnlyHint, false);

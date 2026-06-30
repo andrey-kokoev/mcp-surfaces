@@ -31,6 +31,7 @@ try {
   assert.equal(tools.error, undefined);
   const toolRows = tools.result.tools;
   assert.deepEqual(toolRows.map((tool) => tool.name), [
+    'mailbox_guidance',
     'mailbox_doctor',
     'mailbox_accounts_list',
     'mailbox_messages_list',

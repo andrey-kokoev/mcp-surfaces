@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { unlinkSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -69,6 +70,7 @@ async function callTool(params: JsonRecord, state: SpeechState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'speech_guidance': result = buildGuidanceResult(args); break;
     case 'speech_speak': result = await speechSpeak(args, state); break;
     case 'speech_voices': result = speechVoices(args, state); break;
     case 'speech_listen_status': result = speechListenStatus(state); break;

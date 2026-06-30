@@ -1,3 +1,4 @@
+import { guidanceToolDefinition } from './guidance.js';
 type WorkerToolDefinition = {
   name: string;
   description: string;
@@ -8,6 +9,7 @@ type WorkerToolDefinition = {
 
 export function listTools(): WorkerToolDefinition[] {
   return decorateTools([
+    guidanceToolDefinition(),
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
     { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker, including narada-agent-runtime-server Site binding status.', inputSchema: objectSchema({
       worker_session_id: { type: 'string', description: 'Optional existing worker session whose constraints should be inherited like worker_resume.' },
@@ -212,7 +214,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !startsWorker && !mutatesRunRecord,
     destructiveHint: mutatesRunRecord,
-    idempotentHint: /inspect|config_resolve|run_status|runs_list|run_wait|synthesize|dashboard_describe/.test(name),
+    idempotentHint: /guidance|inspect|config_resolve|run_status|runs_list|run_wait|synthesize|dashboard_describe/.test(name),
     openWorldHint: true,
   };
 }

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -300,6 +302,7 @@ export function listTools() {
 async function callTool(params: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}) {
   const name = params?.name;
   const args = asRecord(params.arguments);
+  if (name === 'structured_command_guidance') return toolResult(buildGuidanceResult(args), state);
   enforceInputCharLimit(args);
   if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
   if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state, context), state);
@@ -805,6 +808,7 @@ function renderToolResultText(payload) {
     const reasons = payload.refusal_reasons ?? payload.decision?.reasons ?? [];
     const hints = payload.remediation_hints ?? payload.decision?.remediation_hints ?? [];
     return [
+    guidanceToolDefinition(),
       `structured_command_execute: ${payload.status}`,
       `command: ${payload.command ?? ''}`,
       `working_directory: ${payload.working_directory ?? ''}`,

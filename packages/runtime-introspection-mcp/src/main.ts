@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -112,6 +114,7 @@ function dispatchMethod(method: string, params: JsonRecord) {
 export function listTools() {
   const inputSchema = runtimeInputSchema();
   return [
+    guidanceToolDefinition(),
     {
       name: 'runtime_introspection_formats',
       description: 'List the read-only inline input formats accepted by the runtime introspection surface.',
@@ -262,6 +265,9 @@ function callTool(params: JsonRecord) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'runtime_introspection_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'runtime_introspection_formats':
       result = runtimeIntrospectionFormats();
       break;

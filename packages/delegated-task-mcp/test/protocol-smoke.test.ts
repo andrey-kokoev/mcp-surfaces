@@ -38,6 +38,7 @@ try {
 
   const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), [
+    'delegated_task_guidance',
     'delegated_task_policy_inspect',
     'delegated_task_template_catalog',
     'delegated_task_validate',

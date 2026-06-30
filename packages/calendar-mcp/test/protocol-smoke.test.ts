@@ -30,6 +30,7 @@ try {
   assert.equal(tools.error, undefined);
   const toolRows = tools.result.tools;
   assert.deepEqual(toolRows.map((tool) => tool.name), [
+    'calendar_guidance',
     'calendar_doctor',
     'calendar_list',
     'calendar_event_query',

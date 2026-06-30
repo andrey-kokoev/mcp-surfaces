@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -37,6 +39,7 @@ const TESTS = {
 };
 
 const TOOLS = [
+  guidanceToolDefinition(),
   tool('site_ops_doctor', 'Inspect Sonar-local site ops MCP readiness.', {}),
   tool('site_docs_list', 'List Sonar-local read-only documentation paths exposed to agents.', {}),
   tool('site_docs_show', 'Show an allowlisted Sonar-local documentation file.', {
@@ -257,6 +260,8 @@ function assistantTextContent(text: string) {
 
 async function callTool(name, args, context: SiteOpsRequestContext = {}) {
   switch (name) {
+    case 'sonar_site_ops_guidance':
+      return buildGuidanceResult(args);
     case 'site_ops_doctor':
       return {
         status: 'ok',

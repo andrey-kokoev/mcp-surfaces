@@ -1,3 +1,4 @@
+import { buildGuidanceResult } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -171,6 +172,7 @@ function completeArgument(params: Record<string, unknown>, state: GitMcpState) {
 async function callTool(params: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
+  if (name === 'git_guidance') return toolResult(buildGuidanceResult(args), state, name);
   if (name === 'git_output_show') return toolResult(gitOutputShow(args, state), state, name);
   const result = await callGitTool(name, args, state, context);
   return toolResult(result, state, name);

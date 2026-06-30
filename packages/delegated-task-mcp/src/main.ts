@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -143,6 +145,7 @@ export function createServerState(options: JsonRecord = {}): State {
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     tool('delegated_task_policy_inspect', 'Inspect delegated task orchestration policy and defaults.', {}, [], true, false, true),
     tool('delegated_task_template_catalog', 'List built-in delegated workflow templates, milestones, and worker delegation contracts.', { template_id: { type: 'string' } }, [], true, false, true),
     tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema() }, [], true, false, true),
@@ -397,7 +400,8 @@ async function dispatch(method: string, params: JsonRecord, state: State) {
   if (method !== 'tools/call') throw diag('unsupported_mcp_method', `unsupported_mcp_method:${method}`);
   const name = String(params.name ?? '');
   const args = rec(params.arguments);
-  const result = name === 'delegated_task_policy_inspect' ? delegatedTaskPolicyInspect(state)
+  const result = name === 'delegated_task_guidance' ? buildGuidanceResult(args)
+    : name === 'delegated_task_policy_inspect' ? delegatedTaskPolicyInspect(state)
     : name === 'delegated_task_template_catalog' ? delegatedTaskTemplateCatalog(args)
     : name === 'delegated_task_validate' ? delegatedTaskValidate(args, state)
     : name === 'delegated_task_run' ? await delegatedTaskRun(args, state)

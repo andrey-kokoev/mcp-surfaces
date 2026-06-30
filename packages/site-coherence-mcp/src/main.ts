@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -80,6 +82,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: SiteCoherence
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'site_coherence_check',
       description: 'Check site-level continuity coherence: read local health snapshot, query Cloudflare site.read for the given site, compare postures, and report mismatches. The primary tool for detecting gaps between local and Cloudflare embodiments.',
@@ -114,6 +117,9 @@ async function callTool(params: JsonRecord, state: SiteCoherenceState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'site_coherence_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'site_coherence_check': result = await siteCoherenceCheck(args, state); break;
     case 'site_coherence_doctor': result = siteCoherenceDoctor(state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });

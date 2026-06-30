@@ -12,6 +12,7 @@ assert.equal(init.result.serverInfo.name, 'launcher-mcp');
 const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
 assert.equal(tools.error, undefined);
 assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
+  'launcher_guidance',
   'launcher_doctor',
   'launcher_options_list',
   'launcher_registry_list',

@@ -45,7 +45,7 @@ try {
   const responses = parseFrames(stdout);
   assert.equal(responses.find((message) => message.id === 1)?.result.serverInfo.name, 'completion-audit-mcp');
   const tools = responses.find((message) => message.id === 2)?.result.tools.map((tool) => tool.name);
-  assert.deepEqual(tools, ['completion_audit_record']);
+  assert.deepEqual(tools, ['completion_audit_guidance', 'completion_audit_record']);
   const audit = responses.find((message) => message.id === 3)?.result.structuredContent;
   assert.equal(audit.audit_id, 'protocol-audit');
   assert.equal(audit.completion_proved, true);

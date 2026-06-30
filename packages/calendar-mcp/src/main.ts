@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildGraphUrl, graphCalendarPath, graphRequest, graphTop, requiredString } from './graph-client.js';
@@ -132,6 +134,7 @@ function completeArgument(params: CalendarRecord) {
 
 export function listTools(): unknown[] {
   return [
+    guidanceToolDefinition(),
     tool('calendar_doctor', 'Inspect Microsoft Graph calendar MCP readiness and policy.', {}),
     tool('calendar_list', 'List calendars for an allowed mailbox.', {
       mailbox_id: mailboxProperty(),
@@ -196,6 +199,8 @@ async function callTool(params: CalendarRecord, state: CalendarServerState) {
 
 async function callNamedTool(name: string, args: CalendarRecord, state: CalendarServerState): Promise<unknown> {
   switch (name) {
+    case 'calendar_guidance':
+      return buildGuidanceResult(args);
     case 'calendar_doctor':
       return calendarDoctor(state);
     case 'calendar_list':

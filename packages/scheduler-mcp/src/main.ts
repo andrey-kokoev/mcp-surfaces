@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -70,6 +72,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: Schedul
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'scheduler_task_list',
       description: 'List scheduled tasks, optionally filtered by folder path.',
@@ -216,6 +219,7 @@ async function callTool(params: JsonRecord, state: SchedulerState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'scheduler_guidance': result = buildGuidanceResult(args); break;
     case 'scheduler_task_list': result = await schedulerTaskList(args, state); break;
     case 'scheduler_task_show': result = await schedulerTaskShow(args, state); break;
     case 'scheduler_task_create': result = await schedulerTaskCreate(args, state); break;

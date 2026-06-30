@@ -50,9 +50,9 @@ const proc = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning
 
 const lines = proc.stdout.trim().split('\n');
 const response = JSON.parse(lines[1] ?? lines[0]);
-assert.equal(response.result.tools.length, 4);
+assert.equal(response.result.tools.length, 5);
 const names = response.result.tools.map((t: Record<string, unknown>) => t.name);
-assert.deepEqual(names, ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor']);
+assert.deepEqual(names, ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor']);
 
 const readTool = response.result.tools.find((t: Record<string, unknown>) => t.name === 'cloudflare_product_read');
 assert.equal(readTool.annotations.readOnlyHint, true);

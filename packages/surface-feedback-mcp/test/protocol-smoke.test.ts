@@ -29,7 +29,7 @@ try {
   assert.equal((init.result as Record<string, any>).serverInfo.name, 'surface-feedback-mcp');
 
   const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
-  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats']);
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats']);
 
   const subTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_submit');
   assert.equal(subTool.annotations.readOnlyHint, false);

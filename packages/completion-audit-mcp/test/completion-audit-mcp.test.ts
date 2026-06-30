@@ -10,7 +10,7 @@ assert.deepEqual(state.allowedRoots, [root]);
 assert.throws(() => createServerState({ auditRoot: join(root, 'audit'), allowedRoot: join(root, 'other') }), /completion_audit_root_outside_allowed_roots/);
 
 const tools = listTools();
-assert.deepEqual(tools.map((tool) => tool.name), ['completion_audit_record']);
+assert.deepEqual(tools.map((tool) => tool.name), ['completion_audit_guidance', 'completion_audit_record']);
 
 const record = completionAuditRecord({
   audit_id: 'audit-test',

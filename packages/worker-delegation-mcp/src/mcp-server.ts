@@ -1,3 +1,4 @@
+import { buildGuidanceResult } from './guidance.js';
 import { createWorkerPolicy } from './policy.js';
 import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
@@ -149,6 +150,7 @@ function completeArgument(params: Record<string, unknown>, state: WorkerMcpState
 async function callTool(params: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext = {}) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
+  if (name === 'worker_guidance') return toolResult(buildGuidanceResult(args), state, name);
   const result = await callWorkerTool(name, args, state, context);
   return toolResult(result, state, name);
 }

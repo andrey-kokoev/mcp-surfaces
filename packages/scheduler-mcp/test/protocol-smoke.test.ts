@@ -38,6 +38,7 @@ try {
 
   const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
   const expectedTools = [
+    'scheduler_guidance',
     'scheduler_task_list',
     'scheduler_task_show',
     'scheduler_task_create',

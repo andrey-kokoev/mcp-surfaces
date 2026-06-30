@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
 import { admitEnvelope, emitEnvelopeAcknowledged, emitEnvelopeDismissed, emitEnvelopePromoted, readAdmissionLog } from './admission-log.js';
 import { INBOX_ENVELOPE_KINDS, assertKnownInboxEnvelopeKind } from './envelope-kinds.js';
@@ -137,6 +139,7 @@ function completeArgument(params: InboxRecord) {
 
 export function listTools(): unknown[] {
   return [
+    guidanceToolDefinition(),
     tool('inbox_doctor', 'Inspect site-local inbox MCP readiness.', {}),
     tool('inbox_list', 'List site-local inbox envelopes ordered by actionability.', {
       status: { type: 'string', enum: INBOX_STATUSES, default: 'received', description: 'Optional status filter. Defaults to received.' },
@@ -191,6 +194,9 @@ function callTool(params: InboxRecord, state: InboxServerState) {
   const args = asRecord(params.arguments);
   let result: unknown;
   switch (name) {
+    case 'inbox_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'inbox_doctor':
       result = inboxDoctor(state);
       break;

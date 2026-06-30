@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -232,6 +234,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: SopStat
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'sop_doctor',
       description: 'Inspect SOP MCP server posture, build/schema metadata, database path, and available recovery tools.',
@@ -527,6 +530,9 @@ async function callTool(params: JsonRecord, state: SopState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'sop_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'sop_doctor': result = sopDoctor(state); break;
     case 'sop_template_create': result = sopTemplateCreate(args, state); break;
     case 'sop_template_show': result = sopTemplateShow(args, state); break;

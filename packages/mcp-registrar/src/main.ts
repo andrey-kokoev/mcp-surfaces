@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -583,6 +585,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: Registr
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'registrar_surface_list',
       description: 'List all known MCP surfaces with their packages, tools, and entrypoints.',
@@ -794,6 +797,9 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'registrar_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'registrar_surface_list': result = registrarSurfaceList(args); break;
     case 'registrar_site_list': result = registrarSiteList(args); break;
     case 'registrar_site_surfaces': result = registrarSiteSurfaces(args); break;

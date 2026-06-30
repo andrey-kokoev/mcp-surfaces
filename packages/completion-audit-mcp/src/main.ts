@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
@@ -78,6 +80,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: CompletionAud
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'completion_audit_record',
       description: 'Record a requirement/evidence/verdict completion audit as durable JSONL.',
@@ -121,6 +124,10 @@ export function listTools() {
 function callTool(params: JsonRecord, state: CompletionAuditState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
+  if (name === 'completion_audit_guidance') {
+    const result = buildGuidanceResult(args);
+    return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+  }
   if (name !== 'completion_audit_record') throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   const result = completionAuditRecord(args, state);
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };

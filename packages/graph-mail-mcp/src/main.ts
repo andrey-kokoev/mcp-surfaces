@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
@@ -143,6 +145,7 @@ function completeArgument(params: GraphMailRecord) {
 
 export function listTools(): unknown[] {
   return [
+    guidanceToolDefinition(),
     tool('graph_mail_doctor', 'Inspect Microsoft Graph mail MCP readiness and policy.', {}),
     tool('graph_mail_query', 'Query live Microsoft Graph messages for an allowed mailbox.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
@@ -439,6 +442,9 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
   const args = asRecord(params.arguments);
   let result: unknown;
   switch (name) {
+    case 'graph_mail_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'graph_mail_doctor':
       result = await graphMailDoctor(state);
       break;

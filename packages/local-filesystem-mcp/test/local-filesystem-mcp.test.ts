@@ -149,6 +149,7 @@ trust_level = "untrusted"
   );
 
   const readToolNames = listTools('read').map((tool) => tool.name);
+  assert.ok(readToolNames.includes('fs_guidance'));
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
@@ -161,6 +162,7 @@ trust_level = "untrusted"
   assert.equal(readToolNames.includes('fs_write_file'), false);
 
   const writeToolNames = listTools('write').map((tool) => tool.name);
+  assert.ok(writeToolNames.includes('fs_guidance'));
   assert.ok(writeToolNames.includes('fs_read_file'));
   assert.equal(writeToolNames.includes('mcp_output_show'), false);
   assert.ok(writeToolNames.includes('fs_write_file'));

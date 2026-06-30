@@ -74,6 +74,7 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_changed_summary',
   'git_commit',
   'git_diff',
+  'git_guidance',
   'git_log',
   'git_output_show',
   'git_policy_inspect',

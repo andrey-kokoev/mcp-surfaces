@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildGuidanceResult } from './guidance.js';
+import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -77,6 +79,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: CloudflareCar
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     {
       name: 'cloudflare_product_read',
       description: 'Read the Cloudflare carrier product surface (site.list, site.read, operation.list, operation.read). Bakes in repo root, worker URL, and operator session file.',
@@ -140,6 +143,9 @@ async function callTool(params: JsonRecord, state: CloudflareCarrierState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
+    case 'cloudflare_carrier_guidance':
+      result = buildGuidanceResult(args);
+      break;
     case 'cloudflare_product_read': result = await cloudflareProductRead(args, state); break;
     case 'cloudflare_session_status': result = cloudflareSessionStatus(args, state); break;
     case 'cloudflare_health': result = cloudflareHealth(args, state); break;

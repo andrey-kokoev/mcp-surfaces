@@ -31,6 +31,7 @@ try {
   assert.equal(tools.error, undefined);
   const toolRows = tools.result.tools;
   assert.deepEqual(toolRows.map((tool) => tool.name), [
+    'graph_mail_guidance',
     'graph_mail_doctor',
     'graph_mail_query',
     'graph_mail_message_show',
