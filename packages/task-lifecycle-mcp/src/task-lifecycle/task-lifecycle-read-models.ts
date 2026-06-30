@@ -49,6 +49,9 @@ export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, 
   const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
   const localFollowups = board.local_followups.slice(0, limit);
   const roleWideFollowups = (board.role_wide_followups || []).slice(0, limit);
+  const dependencyWaitingParents = (board.dependency_waiting_parents || []).slice(0, limit);
+  const dependencyObligations = (board.dependency_obligations || []).slice(0, limit);
+  const dependencyTasks = (board.dependency_tasks || []).slice(0, limit);
   const nonActionableParentFollowups = (board.non_actionable_parent_followups || []).slice(0, limit);
   const closureAuthorityConflicts = (board.closure_authority_conflicts || []).slice(0, limit);
   const recommendationTask = recommendation?.task ?? null;
@@ -108,10 +111,12 @@ export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, 
     counts: responseCounts,
     active_state: {
       my_in_progress: myInProgress.map(summarizeWorkboardTask),
-      my_needs_continuation: myNeedsContinuation.map(summarizeWorkboardTask),
-      my_pending_reviews: pendingReviews.map(summarizeWorkboardTask),
+      dependency_obligations: dependencyObligations,
+      dependency_tasks: dependencyTasks.map(summarizeWorkboardTask),
+      dependency_waiting_parents: dependencyWaitingParents.map(summarizeWorkboardTask),
+      legacy_pending_reviews: pendingReviews.map(summarizeWorkboardTask),
+      my_pending_reviews_compat: pendingReviews.map(summarizeWorkboardTask),
       local_followups_sample: localFollowups.map(summarizeWorkboardTask),
-      role_wide_followups_sample: roleWideFollowups.map(summarizeWorkboardTask),
       non_actionable_parent_followups_sample: nonActionableParentFollowups.map(summarizeWorkboardTask),
       closure_authority_conflicts_sample: closureAuthorityConflicts.map(summarizeWorkboardTask),
       recently_materialized_sample: (board.recently_materialized || []).slice(0, limit).map(summarizeWorkboardTask),
@@ -119,6 +124,29 @@ export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, 
     preferred_agent_mismatch: preferredAgentMismatch,
     observed_drift: drift,
     evidence_refs: [`task_lifecycle_next:${board.generated_at ?? generatedAt}`, `workboard_snapshot:${generatedAt}`, `agent:${agentId}`],
+  };
+}
+
+function summarizeWorkboardTask(task) {
+  if (!task) return null;
+  return {
+    task_number: task.task_number,
+    task_id: task.task_id,
+    status: task.status,
+    title: task.title,
+    assigned_agent: task.assigned_agent ?? null,
+    target_role: task.target_role ?? null,
+    preferred_agent_id: task.preferred_agent_id ?? null,
+    preferred_agent_relation: task.preferred_agent_relation ?? null,
+    claim_authority: task.claim_authority ?? null,
+    visibility: task.visibility ?? null,
+    reason: task.reason ?? null,
+    child_task_numbers: task.child_task_numbers ?? null,
+    active_child_task_numbers: task.active_child_task_numbers ?? null,
+    closure_authority: task.closure_authority ?? null,
+    pre_claim_warnings: task.pre_claim_warnings ?? [],
+    relative_priority: task.relative_priority ?? null,
+    updated_at: task.updated_at ?? null,
   };
 }
 
@@ -183,8 +211,8 @@ export function buildPostCloseoutContinuation({ agentId, result }) {
     executable_work_available: nextWorkContract.executable_work_available,
     agent_actionable_recommendation: Boolean(recommendation),
     environment_pressure: { status: 'clear', executable_by_agent: false, pressure: null },
-    corrective_debt_readiness,
-    counts: { ...board.counts, all_in_review: board.counts.pending_reviews },
+    corrective_debt_readiness: correctiveDebtReadiness,
+    counts: { ...board.counts },
     downstream_role_followups: (board.downstream_role_followups || []).slice(0, 8),
   };
   return classifyPostCloseoutContinuation({ result, workboard });
@@ -203,9 +231,9 @@ export function buildConciseNextActionView(result) {
     counts: {
       in_progress: result.counts?.in_progress ?? 0,
       needs_continuation: result.counts?.needs_continuation ?? 0,
-      review_obligations: result.my_review_obligations?.length ?? 0,
+      dependency_obligations: result.dependency_obligations?.length ?? result.counts?.dependency_obligations ?? 0,
+      review_obligations_compat: result.my_review_obligations?.length ?? 0,
       local_followups: result.counts?.local_followups ?? 0,
-      role_wide_followups: result.counts?.role_wide_followups ?? 0,
       actionable_deferred: result.counts?.actionable_deferred ?? 0,
       inbox_backlog: result.counts?.inbox_total ?? 0,
     },
@@ -329,7 +357,7 @@ function detectCorrectiveTaskCoverage({ item, allTasks }) {
     if (reasons.length === 0) continue;
     matches.push({ task_number: row.task_number, task_id: row.task_id, status: row.status, title: spec?.title ?? row.title ?? '', reasons, closed_corrective_implementation: isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody }) });
   }
-  const openStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review']);
+  const openStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies']);
   const openMatches = matches.filter((match) => openStatuses.has(match.status));
   if (openMatches.length > 0) {
     return { status: 'covered_by_open_task', reason: 'open linked task can carry the CAPA corrective implementation to terminal evidence', open_task_count: openMatches.length, historical_task_count: matches.length - openMatches.length, tasks: openMatches.slice(0, 5), actionable_next_states: correctiveCoverageNextStates(), remediation: 'Continue or finish the linked implementation task, then verify it contains completed acceptance criteria, execution notes, and verification evidence.' };

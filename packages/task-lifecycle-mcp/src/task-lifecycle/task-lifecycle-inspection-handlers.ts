@@ -1,6 +1,6 @@
 import { join } from 'path';
 import { existsSync, readFileSync } from 'node:fs';
-import { findReviewerCapableAgents } from './operator-identity.js';
+import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
 
 export const TASK_LIFECYCLE_INSPECTION_TOOL_NAMES = Object.freeze([
   'task_lifecycle_show',
@@ -50,8 +50,12 @@ export function createTaskLifecycleInspectionHandlers({
         verdict: review.verdict,
         reviewed_at: review.reviewed_at,
         single_operator_meta: getSingleOperatorReviewMeta(review),
+        authority_role: 'legacy_compatibility_projection',
+        primary_authority: false,
+        migration_target: 'task_dependencies.task_outcomes',
       }));
-      const eligibleReviewers = lifecycle.status === 'in_review' ? findReviewerCapableAgents(store) : [];
+      const dependencyReadback = buildTaskDependencyReadback({ store, lifecycle });
+      const reviewAuthority = buildReviewAuthorityReadback({ legacyReviewRows: reviews, dependencyReadback });
       let body = null;
       try {
         const taskFile = await findTaskFile(siteRoot, String(taskNumber));
@@ -73,9 +77,14 @@ export function createTaskLifecycleInspectionHandlers({
         active_assignment: assignment ?? null,
         assignment_intents: assignmentIntents,
         observations: observations ?? [],
-        reviews: reviews ?? [],
+        legacy_review_rows: reviews ?? [],
+        review_authority: reviewAuthority,
+        dependencies_blocking_this_task: dependencyReadback.dependencies_blocking_this_task,
+        dependency_satisfaction: dependencyReadback.dependency_satisfaction,
+        dependency_context: dependencyReadback.dependency_context,
+        outcome_contract: dependencyReadback.outcome_contract,
+        latest_task_outcome: dependencyReadback.latest_task_outcome,
         body,
-        eligible_reviewers: eligibleReviewers,
       });
     },
 
@@ -101,8 +110,12 @@ export function createTaskLifecycleInspectionHandlers({
         verdict: review.verdict,
         reviewed_at: review.reviewed_at,
         single_operator_meta: getSingleOperatorReviewMeta(review),
+        authority_role: 'legacy_compatibility_projection',
+        primary_authority: false,
+        migration_target: 'task_dependencies.task_outcomes',
       }));
-      const eligibleReviewers = lifecycle.status === 'in_review' ? findReviewerCapableAgents(store) : [];
+      const dependencyReadback = buildTaskDependencyReadback({ store, lifecycle });
+      const reviewAuthority = buildReviewAuthorityReadback({ legacyReviewRows: reviews, dependencyReadback });
       return jsonToolResult({
         status: 'ok',
         task_number: taskNumber,
@@ -133,9 +146,14 @@ export function createTaskLifecycleInspectionHandlers({
         reports: reports || [],
         observations: observations || [],
         observation_artifact_count: observations.length,
-        reviews: reviews || [],
-        obligations: obligations.map((obligation) => ({ obligation_id: obligation.obligation_id, kind: obligation.kind, status: obligation.status })),
-        eligible_reviewers: eligibleReviewers,
+        legacy_review_rows: reviews || [],
+        review_authority: reviewAuthority,
+        dependencies_blocking_this_task: dependencyReadback.dependencies_blocking_this_task,
+        dependency_satisfaction: dependencyReadback.dependency_satisfaction,
+        dependency_context: dependencyReadback.dependency_context,
+        outcome_contract: dependencyReadback.outcome_contract,
+        latest_task_outcome: dependencyReadback.latest_task_outcome,
+        obligations: obligations.map((obligation) => summarizeObligationForInspection({ obligation, lifecycle })),
         schema: 'narada.task.mcp.inspect.v0',
       });
     },
@@ -272,7 +290,12 @@ export function createTaskLifecycleInspectionHandlers({
         JOIN task_lifecycle tl ON tl.task_id = tr.task_id
         WHERE tr.submitted_at >= ? AND tr.submitted_at <= ?
         UNION ALL
-        SELECT 'review', CAST(tl.task_number AS TEXT), rv.reviewer_agent_id, rv.reviewed_at, rv.verdict, rv.review_id
+        SELECT 'task_outcome', CAST(tl.task_number AS TEXT), tout.agent_id, tout.admitted_at, tout.outcome, tout.outcome_id
+        FROM task_outcomes tout
+        JOIN task_lifecycle tl ON tl.task_id = tout.task_id
+        WHERE tout.admitted_at >= ? AND tout.admitted_at <= ?
+        UNION ALL
+        SELECT 'legacy_review', CAST(tl.task_number AS TEXT), rv.reviewer_agent_id, rv.reviewed_at, rv.verdict, rv.review_id
         FROM task_reviews rv
         JOIN task_lifecycle tl ON tl.task_id = rv.task_id
         WHERE rv.reviewed_at >= ? AND rv.reviewed_at <= ?
@@ -290,14 +313,22 @@ export function createTaskLifecycleInspectionHandlers({
         WHERE closed_at IS NOT NULL AND closed_at >= ? AND closed_at <= ?
         ORDER BY occurred_at DESC
       `;
-      const rows = store.db.prepare(sql).all(sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal);
+      const rows = store.db.prepare(sql).all(sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal);
+      const events = rows.map((row) => row.event_type === 'legacy_review'
+        ? {
+            ...row,
+            authority_role: 'legacy_compatibility_projection',
+            primary_authority: false,
+            migration_target: 'task_dependencies.task_outcomes',
+          }
+        : row);
       return jsonToolResult({
         status: 'ok',
         schema: 'narada.task.mcp.audit.v0',
         since: sinceVal,
         until: untilVal,
-        count: rows.length,
-        events: rows,
+        count: events.length,
+        events,
       });
     },
 
@@ -350,6 +381,143 @@ function annotateSearchResultAuthority(store, item) {
     task_number: lifecycle.task_number,
     status: lifecycle.status,
     authority: { status: 'authoritative', resolvable: true },
+  };
+}
+
+function buildTaskDependencyReadback({ store, lifecycle }) {
+  const parentDependencies = store.listTaskDependenciesForParent?.(lifecycle.task_id) ?? [];
+  const dependencySatisfaction = evaluateTaskDependencySatisfaction(store, lifecycle.task_id);
+  const requiredByDependencies = store.listTaskDependenciesForRequired?.(lifecycle.task_id) ?? [];
+  const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
+  const latestTaskOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
+  return {
+    dependencies_blocking_this_task: parentDependencies.map((dependency) => summarizeDependencyEdge({ store, dependency })),
+    dependency_satisfaction: dependencySatisfaction,
+    dependency_context: requiredByDependencies.map((dependency) => summarizeRequiredDependencyContext({
+      store,
+      dependency,
+      lifecycle,
+      outcomeContract,
+      latestTaskOutcome,
+    })),
+    outcome_contract: outcomeContract ? summarizeOutcomeContract(outcomeContract) : null,
+    latest_task_outcome: latestTaskOutcome ?? null,
+  };
+}
+
+function buildReviewAuthorityReadback({ legacyReviewRows, dependencyReadback }) {
+  const dependencyReviewCount = (dependencyReadback.dependencies_blocking_this_task ?? [])
+    .filter((dependency) => dependency.dependency_kind === 'review').length;
+  const requiredReviewContextCount = (dependencyReadback.dependency_context ?? [])
+    .filter((dependency) => dependency.dependency_kind === 'review').length;
+  return {
+    primary_authority: 'task_dependencies.task_outcomes',
+    legacy_review_rows_authority: 'compatibility_projection_only',
+    legacy_review_row_count: legacyReviewRows.length,
+    dependency_review_count: dependencyReviewCount + requiredReviewContextCount,
+    compatibility_note: legacyReviewRows.length > 0
+      ? 'Legacy review rows are retained for historical readback only. Parent closure and review dependency satisfaction must use task dependency outcomes.'
+      : 'No legacy review rows are present; review authority, if any, is dependency/outcome native.',
+  };
+}
+
+function summarizeDependencyEdge({ store, dependency }) {
+  const requiredLifecycle = store.getLifecycle?.(dependency.required_task_id);
+  const contract = store.getLatestTaskOutcomeContract?.(dependency.required_task_id) ?? null;
+  const latestOutcome = store.getLatestTaskOutcome?.(dependency.required_task_id) ?? null;
+  return {
+    dependency_id: dependency.dependency_id,
+    dependency_kind: dependency.kind,
+    required_task_id: dependency.required_task_id,
+    required_task_number: requiredLifecycle?.task_number ?? null,
+    required_task_status: requiredLifecycle?.status ?? null,
+    required_outcome_id: latestOutcome?.outcome_id ?? null,
+    latest_outcome: latestOutcome?.outcome ?? null,
+    outcome_contract: contract ? summarizeOutcomeContract(contract) : null,
+    created_by: dependency.created_by,
+    created_at: dependency.created_at,
+  };
+}
+
+function summarizeRequiredDependencyContext({ store, dependency, lifecycle, outcomeContract, latestTaskOutcome }) {
+  const parentLifecycle = store.getLifecycle?.(dependency.parent_task_id);
+  const parentTaskNumber = parentLifecycle?.task_number ?? lookupTaskNumber(store, dependency.parent_task_id);
+  const contract = outcomeContract ? summarizeOutcomeContract(outcomeContract) : null;
+  const allowedOutcomes = contract?.allowed_outcomes ?? [];
+  const satisfyingOutcomes = contract?.satisfying_outcomes ?? [];
+  const nextTool = lifecycle.status === 'claimed' ? 'task_lifecycle_finish' : 'task_lifecycle_claim';
+  return {
+    dependency_id: dependency.dependency_id,
+    dependency_kind: dependency.kind,
+    gates_task_id: dependency.parent_task_id,
+    gates_task_number: parentTaskNumber,
+    gates_task_status: parentLifecycle?.status ?? null,
+    outcome_type: contract?.outcome_type ?? null,
+    allowed_outcomes: allowedOutcomes,
+    satisfying_outcomes: satisfyingOutcomes,
+    blocking_outcomes: contract?.blocking_outcomes ?? [],
+    latest_outcome: latestTaskOutcome?.outcome ?? null,
+    latest_outcome_id: latestTaskOutcome?.outcome_id ?? null,
+    dependency_satisfaction: evaluateTaskDependencySatisfaction(store, dependency.parent_task_id),
+    next_tool: nextTool,
+    example_args: nextTool === 'task_lifecycle_finish'
+      ? {
+          task_number: lifecycle.task_number,
+          agent_id: '<current-agent-id>',
+          outcome: satisfyingOutcomes[0] ?? allowedOutcomes[0] ?? '<allowed-outcome>',
+          summary: '<outcome summary>',
+          findings: [],
+        }
+      : {
+          task_number: lifecycle.task_number,
+          agent_id: '<current-agent-id>',
+        },
+  };
+}
+
+function lookupTaskNumber(store, taskId) {
+  if (!taskId) return null;
+  try {
+    const row = store.db.prepare('select task_number from task_lifecycle where task_id = ?').get(taskId);
+    return typeof row?.task_number === 'number' ? row.task_number : null;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeOutcomeContract(contract) {
+  return {
+    contract_id: contract.contract_id,
+    task_id: contract.task_id,
+    outcome_type: contract.outcome_type,
+    allowed_outcomes: parseJsonStringArray(contract.allowed_outcomes_json),
+    satisfying_outcomes: parseJsonStringArray(contract.satisfying_outcomes_json),
+    blocking_outcomes: parseJsonStringArray(contract.blocking_outcomes_json),
+    required_fields: parseJsonStringArray(contract.required_fields_json),
+    capability_requirement: contract.capability_requirement,
+    created_by: contract.created_by,
+    created_at: contract.created_at,
+  };
+}
+
+function parseJsonStringArray(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function summarizeObligationForInspection({ obligation, lifecycle }) {
+  const active = lifecycle.status !== 'closed' && lifecycle.status !== 'confirmed' && obligation.status === 'open';
+  return {
+    obligation_id: obligation.obligation_id,
+    kind: obligation.kind,
+    status: active ? obligation.status : obligation.status === 'open' ? 'historical_open_superseded_by_task_closure' : obligation.status,
+    active,
+    historical: !active,
   };
 }
 

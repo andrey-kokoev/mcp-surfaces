@@ -39,6 +39,11 @@ export async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber, 
   const verificationRuns = store.listVerificationRunsForTask ? store.listVerificationRunsForTask(lifecycle.task_id) : [];
   const observations = store.db.prepare('SELECT artifact_uri, created_at FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
   const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence });
+  const blockedWorkNextAction = blockedWorkPosture.state === 'blocked_reported'
+    ? 'Blocked report is recorded. Do not finish as complete until blockers are resolved; continue or defer the task instead.'
+    : blockedWorkPosture.state === 'stale_blocked_report_superseded'
+    ? 'Prior blocked report is superseded by newer completion evidence; continue normal finish/review checks.'
+    : 'No blocked-work report currently blocks finish.';
   return {
     status: 'ok',
     schema: 'narada.task.mcp.evidence_preflight.v0',
@@ -48,6 +53,8 @@ export async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber, 
     task_file_exists: Boolean(taskFile),
     evidence,
     blocked_work_posture: blockedWorkPosture,
+    next_action: blockedWorkNextAction,
+    remediation: blockedWorkNextAction,
     report_count: reports.length + sqliteReports.length,
     verification_run_count: verificationRuns.length,
     observation_artifact_count: observations.length,
@@ -289,7 +296,7 @@ export function validateCapaDispositionCorrectiveCoverage({ envelope, body, stor
   }
 
   const lines = ledger.split(/\r?\n/).map((line) => line.trim().replace(/^[-*]\s+/, '')).filter(Boolean);
-  const activeStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review']);
+  const activeStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies']);
   const taskLinks = [];
   for (const line of lines) {
     const taskMatches = [...line.matchAll(/\b(?:created|covered by)\s+#(\d+)\b/gi)];
@@ -354,9 +361,12 @@ function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
       noFilesChangedDeclarations.push(parsed.report_id ?? parsed.task_id ?? 'unknown');
     }
   }
+  const uniqueChangedFiles = [...changedFiles];
   return {
-    changedFiles: [...changedFiles],
+    changedFiles: uniqueChangedFiles,
+    changed_files_count: uniqueChangedFiles.length,
     noFilesChangedDeclarations,
+    no_files_changed_declaration_count: noFilesChangedDeclarations.length,
   };
 }
 
@@ -379,7 +389,13 @@ export function detectGitChangedFiles(cwd, basePath = cwd) {
 export function scopeChangedFiles(siteRoot, files, { includeUnrelated = false, taskFilePath = null } = {}) {
   const normalized = [...new Set(files.filter((file) => typeof file === 'string' && file.trim().length > 0 && file !== NO_FILES_CHANGED_MARKER))] as string[];
   if (includeUnrelated) return { files: normalized, included_count: normalized.length, excluded_count: 0 };
-  const scoped = normalized.filter((file: string) => file.startsWith(siteRoot) || (taskFilePath ? file === taskFilePath : false));
+  const scoped = normalized.filter((file: string) => {
+    if (taskFilePath && file === taskFilePath) return true;
+    if (!file.startsWith(siteRoot)) return false;
+    const relativePath = relative(siteRoot, file).split('\\').join('/');
+    if (relativePath === '.ai' || relativePath.startsWith('.ai/')) return false;
+    return true;
+  });
   return { files: scoped, included_count: scoped.length, excluded_count: normalized.length - scoped.length };
 }
 

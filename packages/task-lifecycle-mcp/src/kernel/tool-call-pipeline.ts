@@ -43,6 +43,9 @@ export function createTaskLifecycleToolCaller({
     const surfaceMismatch = detectReviewSurfaceMismatch(canonicalName, effectiveArgs);
     if (surfaceMismatch) return jsonToolResult(surfaceMismatch, true);
 
+    const finishVerdictMismatch = detectFinishVerdictMismatch(canonicalName, effectiveArgs);
+    if (finishVerdictMismatch) return jsonToolResult(finishVerdictMismatch, true);
+
     const toolDef = tools.find((tool) => tool.name === canonicalName);
     if (toolDef?.inputSchema) {
       const validationErrors = validateArgs(canonicalName, effectiveArgs, toolDef.inputSchema);
@@ -74,23 +77,39 @@ export function isStoreError(error) {
   const msg = error instanceof Error ? error.message : String(error);
   return /database|sqlite|SQLITE|disk I\/O|malformed|not a database/i.test(msg);
 }
+function detectReviewSurfaceMismatch(_canonicalName, _args) {
+  return null;
+}
 
-function detectReviewSurfaceMismatch(canonicalName, args) {
+function detectFinishVerdictMismatch(canonicalName, args) {
   if (canonicalName !== 'task_lifecycle_finish') return null;
   const verdict = stringField(args, 'verdict');
-  if (!['accepted', 'accepted_with_notes', 'rejected'].includes(verdict)) return null;
-  const hasFindings = Object.prototype.hasOwnProperty.call(asRecord(args), 'findings');
-  const changedFiles = Array.isArray(args.changed_files) && args.changed_files.length > 0;
-  const noFilesChanged = booleanField(args, 'no_files_changed') === true;
-  const hasFinishEvidence = Boolean(stringField(args, 'summary')) && (changedFiles || noFilesChanged);
-  if (!hasFindings && hasFinishEvidence) return null;
+  if (!verdict) return null;
+  const taskNumber = asRecord(args).task_number;
+  const agentId = stringField(args, 'agent_id');
+  const summary = stringField(args, 'summary');
+  const findings = Array.isArray(asRecord(args).findings) ? asRecord(args).findings : [];
   return {
-    status: 'error',
-    error: 'wrong_task_lifecycle_surface_for_review',
-    schema: 'narada.task.mcp.surface_mismatch.v0',
-    attempted_tool: 'task_lifecycle_finish',
-    correct_tool: 'task_lifecycle_review',
-    remediation: 'Call task_lifecycle_review with task_number, agent_id, verdict, and optional findings. Use task_lifecycle_finish or task_lifecycle_submit_report only for finish/report evidence.',
+    status: 'blocked',
+    error: 'finish_verdict_disallowed',
+    schema: 'narada.task.mcp.finish.review_compatibility_gate.v0',
+    task_number: taskNumber,
+    completion_mode: 'blocked',
+    invalid_field: 'verdict',
+    remediation: 'task_lifecycle_finish is generic task completion. For outcome-contract tasks, use outcome. For legacy review compatibility, call task_lifecycle_review so the MCP can migrate the review into dependency/outcome authority.',
+    example_outcome_args: {
+      task_number: taskNumber,
+      agent_id: agentId,
+      outcome: verdict,
+      summary: summary ?? '<review outcome summary>',
+      findings,
+    },
+    compatibility_tool: 'task_lifecycle_review',
+    example_compatibility_args: {
+      task_number: taskNumber,
+      agent_id: agentId,
+      verdict,
+    },
   };
 }
 

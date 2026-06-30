@@ -87,28 +87,31 @@ export function normalizeClaimAuthorityBasis(value) {
 export function recordClaimIntent({ store, lifecycle, taskNumber, agentId, status, assignmentId = null, rejectionReason = null, authorityBasis = null, preferredAgentWarning = null }) {
   if (!store.upsertAssignmentIntent) return;
   const now = new Date().toISOString();
-  store.upsertAssignmentIntent({
+  const record = {
     request_id: `claim-${randomUUID()}`,
     kind: 'claim',
-    task_id: lifecycle.task_id,
-    task_number: taskNumber,
-    agent_id: agentId,
-    requested_by: agentId,
+    task_id: sqliteText(lifecycle.task_id),
+    task_number: sqliteInteger(taskNumber),
+    agent_id: sqliteText(agentId),
+    requested_by: sqliteText(agentId),
     requested_at: now,
-    reason: authorityBasis?.summary ?? preferredAgentWarning?.message ?? null,
+    reason: sqliteText(authorityBasis?.summary ?? preferredAgentWarning?.message),
     no_claim: status === 'claimed' ? 0 : 1,
-    status,
-    rejection_reason: rejectionReason,
-    assignment_id: assignmentId,
+    status: sqliteText(status),
+    rejection_reason: sqliteText(rejectionReason),
+    assignment_id: sqliteText(assignmentId),
     previous_agent_id: null,
-    lifecycle_status_before: lifecycle.status,
-    lifecycle_status_after: status === 'claimed' ? 'claimed' : lifecycle.status,
+    lifecycle_status_before: sqliteText(lifecycle.status),
+    lifecycle_status_after: sqliteText(status === 'claimed' ? 'claimed' : lifecycle.status),
     roster_status_after: status === 'claimed' ? 'busy' : null,
     confirmation_json: JSON.stringify({
       authority_basis: authorityBasis ?? null,
       preferred_agent_warning: preferredAgentWarning ?? null,
     }),
-  });
+    warnings_json: preferredAgentWarning ? JSON.stringify([preferredAgentWarning]) : null,
+    updated_at: now,
+  };
+  store.upsertAssignmentIntent(record);
 }
 
 export function normalizeRosterAuthorityBasis(value) {
@@ -380,6 +383,18 @@ function stringField(record, key) {
 
 function stringArrayField(record, key) {
   return Array.isArray(record[key]) ? record[key].filter((value) => typeof value === 'string' && value.trim().length > 0) : null;
+}
+
+function sqliteText(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  return JSON.stringify(value);
+}
+
+function sqliteInteger(value) {
+  const number = Number(value);
+  return Number.isInteger(number) ? number : null;
 }
 
 function ensureAgentRosterEventsTable(store) {

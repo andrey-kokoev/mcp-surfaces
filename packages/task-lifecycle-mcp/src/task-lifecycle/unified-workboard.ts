@@ -10,7 +10,8 @@ export function buildNextWorkContract(board, recommendation = null) {
   const executableCounts = {
     in_progress: board.in_progress?.length ?? 0,
     needs_continuation: board.needs_continuation?.length ?? 0,
-    review_obligations: board.my_review_obligations?.length ?? 0,
+    dependency_obligations: board.dependency_obligations?.length ?? 0,
+    review_obligations_compat: board.my_review_obligations?.length ?? 0,
     local_followups: board.local_followups?.length ?? 0,
     role_wide_followups: board.role_wide_followups?.length ?? 0,
     actionable_deferred: board.actionable_deferred?.length ?? 0,
@@ -23,7 +24,7 @@ export function buildNextWorkContract(board, recommendation = null) {
     schema: 'narada.task.next_work_contract.v0',
     observation_surface: 'task_lifecycle_next and workboard_snapshot are read-model evidence unless a separate claim/un_defer/review surface is called.',
     executable_work_rule: 'Role-wide claimable tasks and actionable deferred tasks count as executable next work.',
-    no_work_rule: 'Do not report no executable work unless local/preferred, role-wide, review, inbox, actionable deferred, continuation, and blocker buckets are empty or explicitly blocked.',
+    no_work_rule: 'Do not report no executable work unless local/preferred, role-wide, dependency, inbox, actionable deferred, continuation, and blocker buckets are empty or explicitly blocked.',
     recommendation_rule: 'If recommendation.action is claim, claim_with_authority, continue, review, bridge_poll, or un_defer, the agent must take that action or record a concrete blocker.',
     executable_counts: executableCounts,
     executable_work_available: Boolean(recommendation) || executableTotal > 0,
@@ -34,6 +35,53 @@ export function buildNextWorkContract(board, recommendation = null) {
     recommended_claim_command: recommendation?.task?.task_number
       ? `task-claim ${recommendation.task.task_number}`
       : null,
+  };
+}
+
+function findTaskBoardItemByTaskId(taskBoard, taskId) {
+  if (!taskId) return null;
+  const buckets = [
+    taskBoard.in_progress,
+    taskBoard.needs_continuation,
+    taskBoard.local_followups,
+    taskBoard.role_wide_followups,
+    taskBoard.actionable_deferred,
+  ];
+  for (const bucket of buckets) {
+    const match = (bucket || []).find((item) => item.task_id === taskId);
+    if (match) return match;
+  }
+  return null;
+}
+
+function isDependencyDirectedObligation(obligation) {
+  return obligation?.kind === 'review_request' || obligation?.kind === 'dependency_request';
+}
+
+function normalizeDependencyObligation(obligation) {
+  if (!isDependencyDirectedObligation(obligation)) return null;
+  return {
+    ...obligation,
+    kind: 'dependency_request',
+    legacy_kind: obligation.kind,
+    dependency_kind: obligation.dependency_kind ?? 'review',
+  };
+}
+
+function dependencyRecommendationFields(item) {
+  if (!item?.dependency_id) return {};
+  return {
+    dependency_id: item.dependency_id,
+    dependency_kind: item.dependency_kind,
+    gates_task_number: item.gates_task_number,
+    gates_task_id: item.gates_task_id,
+    outcome_type: item.outcome_type,
+    allowed_outcomes: item.allowed_outcomes || [],
+    satisfying_outcomes: item.satisfying_outcomes || [],
+    blocking_outcomes: item.blocking_outcomes || [],
+    conflict_of_interest_risk: item.conflict_of_interest_risk ?? null,
+    next_tool: item.next_tool,
+    example_args: item.example_args,
   };
 }
 
@@ -63,11 +111,11 @@ export function deriveNextRecommendation(board, agentId) {
       task: myInProgress[0],
     };
   }
-  if (board.my_review_obligations.length > 0) {
+  if ((board.dependency_obligations || []).length > 0) {
     return {
-      action: 'review',
-      reason: 'You have pending review obligations.',
-      obligation: board.my_review_obligations[0],
+      action: 'dependency_work',
+      reason: 'You have pending dependency-directed work.',
+      obligation: board.dependency_obligations[0],
     };
   }
   if (board.local_followups.length > 0) {
@@ -75,7 +123,7 @@ export function deriveNextRecommendation(board, agentId) {
     if (claimable.length > 0) {
       return {
         action: 'claim',
-        reason: 'No active work and no reviews. Claim the next available task.',
+        reason: 'No active work and no dependency-directed work. Claim the next available task.',
         task: claimable[0],
       };
     }
@@ -128,11 +176,11 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
 
   // Generate next recommendation with priority:
   // 1. High-severity inbox items (severity >= 70)
-  // 2. Review obligations
-  // 3. Pending reviews (in_review tasks)
-  // 4. Needs continuation
+  // 2. Directed dependency obligations
+  // 3. Dependency-waiting parent context
+  // 5. Needs continuation
   // 5. In-progress work
-  // 6. Local followups (opened tasks)
+  // 7. Local followups (opened tasks)
   // 7. Lower-severity inbox items
   const recommendations = [];
 
@@ -150,24 +198,45 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     });
   }
 
-  // 2. Review obligations
-  for (const item of obligations.filter((o) => o.kind === 'review_request')) {
+  const dependencyObligations = obligations.map(normalizeDependencyObligation).filter(Boolean);
+
+  // 2. Directed dependency obligations
+  for (const item of dependencyObligations) {
+    const dependencyTask = findTaskBoardItemByTaskId(taskBoard, item.task_id);
     recommendations.push({
-      type: 'review_obligation',
+      type: 'dependency_obligation',
       priority: 2,
+      dependency_kind: item.dependency_kind,
       obligation_id: item.obligation_id,
+      obligation_kind: item.kind,
+      legacy_kind: item.legacy_kind,
       task_number: item.task_number,
       task_id: item.task_id,
       title: item.title,
       routed_by: item.routed_by,
+      ...dependencyRecommendationFields(dependencyTask),
     });
   }
 
-  // 3. Pending reviews
-  for (const item of taskBoard.all_in_review) {
+  // 3. Dependency-waiting parents are context, not directly claimable work.
+  for (const item of taskBoard.dependency_waiting_parents || []) {
     recommendations.push({
-      type: 'pending_review',
+      type: 'dependency_waiting_parent',
       priority: 3,
+      task_number: item.task_number,
+      task_id: item.task_id,
+      title: item.title,
+      blocked_by: 'dependencies',
+      agent_actionable: false,
+      reason: item.reason,
+    });
+  }
+
+  // 4. Legacy pending review projections
+  for (const item of taskBoard.legacy_review_tasks ?? []) {
+    recommendations.push({
+      type: 'legacy_pending_review',
+      priority: 10,
       task_number: item.task_number,
       task_id: item.task_id,
       title: item.title,
@@ -186,10 +255,11 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       task_id: item.task_id,
       title: item.title,
       assigned_agent: item.assigned_agent,
+      ...dependencyRecommendationFields(item),
     });
   }
 
-  // 5. In progress
+  // 6. In progress
   for (const item of taskBoard.in_progress) {
     recommendations.push({
       type: 'in_progress',
@@ -198,6 +268,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       task_id: item.task_id,
       title: item.title,
       assigned_agent: item.assigned_agent,
+      ...dependencyRecommendationFields(item),
     });
   }
 
@@ -214,10 +285,11 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       claim_authority: item.claim_authority,
       preferred_agent_relation: item.preferred_agent_relation,
       pre_claim_warnings: item.pre_claim_warnings || [],
+      ...dependencyRecommendationFields(item),
     });
   }
 
-  // 7. Role-wide followups (opened tasks for this role but not preferred-local)
+  // 8. Role-wide followups (opened tasks for this role but not preferred-local)
   for (const item of taskBoard.role_wide_followups || []) {
     recommendations.push({
       type: 'role_wide_followup',
@@ -230,6 +302,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       claim_authority: item.claim_authority,
       preferred_agent_relation: item.preferred_agent_relation,
       pre_claim_warnings: item.pre_claim_warnings || [],
+      ...dependencyRecommendationFields(item),
     });
   }
 
@@ -268,7 +341,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     });
   }
 
-  // 8. Lower-severity inbox
+  // 9. Lower-severity inbox
   for (const item of inboxBoard.backlog.filter((e) => e.severity < 70)) {
     recommendations.push({
       type: 'inbox_backlog',
@@ -281,7 +354,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     });
   }
 
-  // 8. Actionable deferred tasks. Blocked deferred tasks stay visible in
+  // 10. Actionable deferred tasks. Blocked deferred tasks stay visible in
   // taskBoard.deferred but do not consume the executable recommendation channel.
   for (const item of taskBoard.actionable_deferred) {
     recommendations.push({
@@ -293,6 +366,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       assigned_agent: item.assigned_agent,
       target_role: item.target_role,
       preferred_agent_id: item.preferred_agent_id,
+      ...dependencyRecommendationFields(item),
     });
   }
 
@@ -303,8 +377,12 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     ...(taskBoard.role_wide_followups || []),
   ].filter((t) => t.updated_at && t.updated_at > oneHourAgo);
 
+  const dependencyTasks = recommendations.filter((item) => item.dependency_id);
   return {
-    pending_reviews: taskBoard.all_in_review.slice(0, limit),
+    dependency_waiting_parents: (taskBoard.dependency_waiting_parents || []).slice(0, limit),
+    dependency_tasks: dependencyTasks.slice(0, limit),
+    legacy_pending_reviews: (taskBoard.legacy_review_tasks ?? []).slice(0, limit),
+    pending_reviews_compat: (taskBoard.legacy_review_tasks ?? []).slice(0, limit),
     in_progress: taskBoard.in_progress.slice(0, limit),
     needs_continuation: taskBoard.needs_continuation.slice(0, limit),
     local_followups: taskBoard.local_followups.slice(0, limit),
@@ -314,6 +392,8 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     downstream_role_followups: (taskBoard.downstream_role_followups || []).slice(0, limit),
     deferred: taskBoard.deferred.slice(0, limit),
     actionable_deferred: taskBoard.actionable_deferred.slice(0, limit),
+    dependency_obligations: dependencyObligations.slice(0, limit),
+    dependency_obligations_compat_review: obligations.filter((o) => o.kind === 'review_request').slice(0, limit),
     my_review_obligations: obligations.filter((o) => o.kind === 'review_request').slice(0, limit),
     inbox_backlog: inboxBoard.backlog.slice(0, limit),
     inbox_linked_task_suppressed: inboxBoard.linked_task_suppressed.slice(0, limit),
@@ -323,7 +403,10 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     new_tasks_available: recentlyMaterialized.length > 0,
     recently_materialized: recentlyMaterialized.slice(0, limit),
     counts: {
-      pending_reviews: taskBoard.all_in_review.length,
+      dependency_waiting_parents: (taskBoard.dependency_waiting_parents || []).length,
+      dependency_tasks: dependencyTasks.length,
+      legacy_pending_reviews: (taskBoard.legacy_review_tasks ?? []).length,
+      pending_reviews_compat: (taskBoard.legacy_review_tasks ?? []).length,
       in_progress: taskBoard.in_progress.length,
       needs_continuation: taskBoard.needs_continuation.length,
       local_followups: taskBoard.local_followups.length,
@@ -333,6 +416,8 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       downstream_role_followups: (taskBoard.downstream_role_followups || []).length,
       deferred: taskBoard.deferred.length,
       actionable_deferred: taskBoard.actionable_deferred.length,
+      dependency_obligations: dependencyObligations.length,
+      dependency_obligations_compat_review: obligations.filter((o) => o.kind === 'review_request').length,
       my_review_obligations: obligations.filter((o) => o.kind === 'review_request').length,
       inbox_total: inboxBoard.counts.total,
       inbox_high_severity: inboxBoard.counts.high_severity,

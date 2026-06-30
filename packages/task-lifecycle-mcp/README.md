@@ -58,8 +58,11 @@ Evidence and closeout:
 - `task_lifecycle_disposition_closeout`
 - `task_lifecycle_finish`
 - `task_lifecycle_close`
-- `task_lifecycle_review`
 - `task_lifecycle_submit_observation`
+
+Compatibility migration:
+
+- `task_lifecycle_review` legacy review-call migration over dependency/outcome authority
 
 Lifecycle mutation:
 
@@ -87,7 +90,7 @@ Some tools accept `payload_ref` for large structured companion payloads. `task_l
 
 ## Agent Guidance
 
-Agents should call `task_lifecycle_next` for work selection, claim before doing task work when required, and use `task_lifecycle_finish` to submit work reports. Review verdicts belong on `task_lifecycle_review`, not ordinary finish reports. Closeout and closure can be blocked by evidence or review-gate requirements; do not treat a successful tool call as authority to skip those gates.
+Agents should call `task_lifecycle_next` for work selection, claim before doing task work when required, and use `task_lifecycle_finish` to submit work reports or complete outcome-contract tasks. Review work is represented as ordinary dependency work with a review outcome contract, so new review outcomes should be admitted with `task_lifecycle_finish` using `outcome`, `summary`, and `findings`. `task_lifecycle_review` remains compatibility migration for legacy callers. Closeout and closure can be blocked by evidence, unsatisfied dependencies, conflict-policy gates, or undisposed blocking outcomes; do not treat a successful tool call as authority to skip those gates.
 
 ## Verification
 

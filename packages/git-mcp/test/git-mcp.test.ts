@@ -155,6 +155,9 @@ assert.deepEqual((changedSummary.untracked_groups as any[]).map((group) => ({ to
 ]);
 assert.equal((changedSummary.untracked_groups as any[]).find((group) => group.top_level === 'runtime')?.advisory_classification.by_classification.runtime_artifact, 1);
 assert.deepEqual(changedSummary.relevant_changed_paths, ['README.md', 'notes/task.md']);
+assert.deepEqual(changedSummary.task_relevant_dirty_paths, ['README.md', 'notes/task.md']);
+assert.deepEqual(changedSummary.task_unrelated_dirty_paths, ['runtime/tmp/artifact.log']);
+assert.equal((changedSummary.task_scoped_dirty_classification as any).status, 'has_unrelated_dirty_paths');
 const untrackedDiff = await gitDiff({ working_directory: repo, scope: 'working', pathspec: 'README.md', include_untracked: true }, state);
 assert.deepEqual(untrackedDiff.untracked_paths, ['README.md']);
 assert.match(untrackedDiff.diff, /\+hello/);
@@ -164,6 +167,10 @@ assert.deepEqual((addResult.post_status as any).staged, ['README.md']);
 const postAddSummary = await gitChangedSummary({ working_directory: repo, pathspec: 'README.md' }, state);
 assert.deepEqual(postAddSummary.tracked_changed_paths, ['README.md']);
 assert.deepEqual(postAddSummary.relevant_changed_paths, ['README.md']);
+assert.equal(postAddSummary.path_scope_applied, true);
+assert.deepEqual(postAddSummary.path_scope_filters, ['README.md']);
+assert.equal(postAddSummary.untracked_count, 0);
+assert.equal(postAddSummary.whole_repository_untracked_count, 2);
 
 const stagedDiff = await gitDiff({ working_directory: repo, scope: 'staged' }, state);
 assert.match(stagedDiff.diff, /README\.md/);

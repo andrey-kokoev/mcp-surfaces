@@ -168,16 +168,19 @@ function buildMcpFallbacks(argv, reasons, cwd) {
   if (command === 'rg' || command === 'grep' || command === 'findstr') {
     const searchPattern = firstSearchPatternArg(args);
     const filesMode = command === 'rg' && args.some((arg) => String(arg).toLowerCase() === '--files');
+    const scopedPaths = searchPathArgs(args, cwd);
+    const ignore = globArgs(args);
     if (!filesMode) {
-      fallbacks.push({
+      for (const path of scopedPaths) fallbacks.push({
         surface_id: 'local-filesystem',
         tool_name: 'fs_grep_search',
         canonical_name: 'fs_grep_search',
         purpose: 'content_search',
         arguments: {
           pattern: searchPattern ?? '<search pattern>',
-          path: cwd,
+          path,
           output_mode: 'content',
+          ...(ignore.length > 0 ? { ignore } : {}),
         },
       });
     }
@@ -188,7 +191,8 @@ function buildMcpFallbacks(argv, reasons, cwd) {
       purpose: filesMode ? 'file_listing' : 'file_pattern_search',
       arguments: {
         pattern: firstGlobArg(args) ?? '*',
-        directory: cwd,
+        directory: scopedPaths[0] ?? cwd,
+        ...(ignore.length > 0 ? { ignore } : {}),
       },
     });
   }
@@ -231,6 +235,41 @@ function firstGlobArg(args) {
     if (arg === '-g' || arg === '--glob') return args[index + 1] ? String(args[index + 1]) : null;
   }
   return null;
+}
+
+function globArgs(args) {
+  const values = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = String(args[index] ?? '');
+    if ((arg === '-g' || arg === '--glob') && args[index + 1]) {
+      const value = String(args[index + 1]);
+      if (value.startsWith('!')) values.push(value.slice(1));
+      index += 1;
+    }
+  }
+  return values;
+}
+
+function searchPathArgs(args, cwd) {
+  const paths = [];
+  const optionsWithValues = new Set(['-g', '--glob', '-t', '--type', '-T', '--type-not', '-e', '--regexp', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context']);
+  let patternConsumed = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = String(args[index] ?? '');
+    if (!arg) continue;
+    if (optionsWithValues.has(arg)) {
+      if ((arg === '-e' || arg === '--regexp') && !patternConsumed) patternConsumed = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    if (!patternConsumed) {
+      patternConsumed = true;
+      continue;
+    }
+    paths.push(resolve(cwd, arg));
+  }
+  return paths.length > 0 ? [...new Set(paths)] : [cwd];
 }
 
 export function publicExecutionPolicy(policy) {

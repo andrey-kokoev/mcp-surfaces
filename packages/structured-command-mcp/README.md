@@ -51,6 +51,10 @@ Policy is configured at server launch. Common flags include:
 
 By default, selected deployment tools such as `railway` and `wrangler` may be admitted by policy. PowerShell Core script execution is admitted as `pwsh -File ...`, `pwsh -NoProfile -File ...`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File ...`; `pwsh -Command` and Windows PowerShell remain disallowed unless site policy changes. All commands are still executed as argv arrays under the same root, timeout, and output controls.
 
+`structured_command_execute` accepts optional `test_scope` (`focused`, `broad`, `known_slow`, `unknown`) and `expected_cost` (`low`, `medium`, `high`, `unknown`) metadata. When omitted, simple test commands are classified conservatively in the result envelope so verification posture is explicit without expanding command admission.
+
+Use `structured_command_powershell_parse_check` to parse-check one `.ps1` file under an allowed root. The tool invokes the PowerShell parser internally and does not admit arbitrary `pwsh -Command` text from callers.
+
 ## Output Refs
 
 Large stdout/stderr payloads are paged by `structured_command_execute`. Re-call `structured_command_execute` with the returned `execution_ref` plus `stdout_offset`/`stdout_limit` or `stderr_offset`/`stderr_limit` to read later pages.

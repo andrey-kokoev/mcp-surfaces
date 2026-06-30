@@ -74,7 +74,7 @@ export function createTaskLifecycleAssignmentHandlers({
       }
       const mismatchAuthority = validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId });
       if (mismatchAuthority.status === 'blocked') {
-        recordClaimIntent({
+        const intentWarning = safeRecordClaimIntent(recordClaimIntent, {
           store,
           lifecycle,
           taskNumber,
@@ -93,6 +93,7 @@ export function createTaskLifecycleAssignmentHandlers({
           remediation: 'Retry the claim with authority_basis: { kind: "operator_direct_instruction" | "directed_obligation" | "task_owner_handoff", summary: "..." }.',
           preferred_agent_warning: mismatchAuthority.preferred_agent_warning,
           schema: 'narada.task.claim.preferred_agent_authority.v0',
+          ...(intentWarning ? { intent_recording_warning: intentWarning } : {}),
         }, true);
       }
 
@@ -129,7 +130,7 @@ export function createTaskLifecycleAssignmentHandlers({
         result.pre_claim_warnings = [...(Array.isArray(result.pre_claim_warnings) ? result.pre_claim_warnings : []), result.preferred_agent_warning];
         result.preferred_agent_mismatch_authority = mismatchAuthority.authority_basis;
       }
-      recordClaimIntent({
+      const intentWarning = safeRecordClaimIntent(recordClaimIntent, {
         store,
         lifecycle,
         taskNumber,
@@ -139,6 +140,7 @@ export function createTaskLifecycleAssignmentHandlers({
         authorityBasis: genericEngineerAuthority.authority_basis ?? mismatchAuthority.authority_basis,
         preferredAgentWarning: result.preferred_agent_warning ?? null,
       });
+      if (intentWarning) result.intent_recording_warning = intentWarning;
       if (identityWarning) result.identity_warning = identityWarning;
       return jsonToolResult(result);
     },
@@ -185,6 +187,19 @@ export function createTaskLifecycleAssignmentHandlers({
       return jsonToolResult(serviceResult, ['not_claimed', 'claimed_by_other', 'closure_authority_blocks_unclaim'].includes(serviceResult.status));
     },
   };
+}
+
+function safeRecordClaimIntent(recordClaimIntent, input) {
+  try {
+    recordClaimIntent(input);
+    return null;
+  } catch (error) {
+    return {
+      status: 'failed',
+      warning: 'claim_intent_recording_failed_after_primary_decision',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function validateGenericEngineerClaimAuthority({ args, eligibility, lifecycle, taskNumber, agentId }: GenericEngineerClaimAuthorityArgs) {

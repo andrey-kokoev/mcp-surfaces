@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdir as mkdirAsync, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -352,6 +353,7 @@ export function listTools(mode) {
         overwrite: { type: 'boolean', default: true },
         create_only: { type: 'boolean', default: false },
         create_parent_directories: { type: 'boolean', default: true, description: 'Create missing parent directories before writing.' },
+        timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
         expected_sha256: { type: 'string', description: 'Optional expected current file sha256 before overwriting.' },
       }),
     },
@@ -537,6 +539,7 @@ function capReadFileResult(value) {
 function readFileRange({ path, root, offset, limit }) {
   const window = readTextLineWindow({ path, root, offset, limit });
   const content = window.selected.join('\n');
+  const fullFileSha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
   return {
     schema: 'local.filesystem.read.v1',
     path,
@@ -551,7 +554,8 @@ function readFileRange({ path, root, offset, limit }) {
     returned_lines: window.selected.length,
     next_offset: window.nextOffset,
     content,
-    content_sha256: sha256(content),
+    content_sha256: fullFileSha256,
+    content_window_sha256: sha256(content),
   };
 }
 
@@ -707,6 +711,9 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     requested_snapshot_id: page.requested_snapshot_id ?? stringField(args, 'snapshot_id'),
     snapshot_complete: page.snapshot_complete === true,
     cache_memory_bytes: page.cache_memory_bytes ?? null,
+    page_match_bytes: page.page_match_bytes ?? null,
+    page_match_bytes_limit: page.page_match_bytes_limit ?? null,
+    page_matches_truncated: page.page_matches_truncated ?? 0,
     timeout_ms: page.timeout_ms ?? null,
     freshness,
     has_more: page.has_more,
@@ -715,7 +722,7 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     matches: kind === 'grep' ? matches.map((match) => renderGrepMatch(match, grepMode)) : matches,
     ...(kind === 'grep' ? { match_objects_authoritative: true, match_objects: matches.map((match) => buildGrepMatchObject(match, grepMode)) } : {}),
   };
-  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, scanned_unit: value.scanned_unit, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });
+  return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, scanned_unit: value.scanned_unit, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, page_match_bytes: value.page_match_bytes, page_match_bytes_limit: value.page_match_bytes_limit, page_matches_truncated: value.page_matches_truncated, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
 function cappedToolValue({ state, value, summary = {} }) {
@@ -740,6 +747,58 @@ function writeFileTool(args, state) {
   writeFileSync(path, content, 'utf8');
   appendAudit(state, 'fs_write_file', path, root, { size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) });
   return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) };
+}
+
+async function writeFileToolAsync(args, state, context) {
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
+  const content = stringField(args, 'content') ?? '';
+  const overwrite = booleanField(args, 'overwrite') ?? true;
+  const createOnly = booleanField(args, 'create_only') ?? false;
+  const createParentDirectories = booleanField(args, 'create_parent_directories') ?? true;
+  const timeoutMs = filesystemOperationTimeoutMs(args);
+  const checkTimeout = createOperationTimeoutChecker('fs_write_file', timeoutMs);
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), timeoutMs);
+  const abortHandler = () => abortController.abort();
+  context.abortSignal?.addEventListener('abort', abortHandler, { once: true });
+  try {
+    checkTimeout('read_existing_start');
+    const before = existsSync(path) ? await readFileAsync(path, 'utf8') : null;
+    checkTimeout('read_existing_complete');
+    if (before !== null && createOnly) throw diagnosticError('write_file_destination_exists', `write_file_destination_exists: ${path}`, pathMetadata(path, root));
+    if (before !== null && !overwrite) throw diagnosticError('write_file_overwrite_refused', `write_file_overwrite_refused: ${path}`, pathMetadata(path, root));
+    assertExpectedSha256(args, before, { operation: 'fs_write_file', path, root });
+    const parent = dirname(path);
+    if (!existsSync(parent) && !createParentDirectories) throw diagnosticError('write_file_parent_not_found', `write_file_parent_not_found: ${parent}`, { requested_path: path, parent: pathMetadata(parent, root) });
+    if (!existsSync(parent)) await mkdirAsync(parent, { recursive: true });
+    const testDelayMs = Math.max(0, Number(state.env?.NARADA_LOCAL_FILESYSTEM_WRITE_DELAY_MS ?? 0));
+    if (testDelayMs > 0) await delayWithSignal(testDelayMs, abortController.signal);
+    checkTimeout('write_file_start');
+    await writeFileAsync(path, content, { encoding: 'utf8', signal: abortController.signal });
+    checkTimeout('write_file_complete');
+    appendAudit(state, 'fs_write_file', path, root, { size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) });
+    return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content), timeout_ms: timeoutMs };
+  } catch (error) {
+    if (abortController.signal.aborted && !(error instanceof McpToolError)) {
+      throw diagnosticError('fs_write_file_timed_out', 'fs_write_file_timed_out', {
+        timeout_kind: 'filesystem_operation_timeout',
+        operation: 'fs_write_file',
+        path,
+        root,
+        timeout_ms: timeoutMs,
+        cancelled: context.abortSignal?.aborted === true,
+        remediation: [
+          'Use payload_ref or payload_path for large writes so payload transfer is explicit and auditable.',
+          'Split large writes into smaller files where possible.',
+          'Retry only after fs_doctor confirms the surface is responsive.',
+        ],
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    context.abortSignal?.removeEventListener('abort', abortHandler);
+  }
 }
 
 function strReplaceTool(args, state) {
@@ -1063,6 +1122,10 @@ async function callToolAsync(params, state, context) {
   switch (name) {
     case 'fs_glob_search': return toolResult(await globSearchToolAsync(args, state, context));
     case 'fs_grep_search': return toolResult(await grepSearchToolAsync(args, state, context), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
+    case 'fs_write_file': {
+      const payload = resolveFilesystemPayloadArgs(name, args, state);
+      return toolResult(attachPayloadSource(await writeFileToolAsync(payload.args, state, context), payload.payloadSource));
+    }
     default: return callTool(params, state);
   }
 }
@@ -1097,6 +1160,24 @@ function createOperationTimeoutChecker(operation, timeoutMs) {
       ],
     });
   };
+}
+
+function delayWithSignal(ms, signal) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (signal.aborted) {
+      rejectPromise(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      return;
+    }
+    const timeout = setTimeout(() => {
+      signal.removeEventListener('abort', abortHandler);
+      resolvePromise(undefined);
+    }, ms);
+    const abortHandler = () => {
+      clearTimeout(timeout);
+      rejectPromise(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    };
+    signal.addEventListener('abort', abortHandler, { once: true });
+  });
 }
 
 function searchCachePolicy(args) {
@@ -1208,7 +1289,10 @@ function loadSiteExtraAllowedRoots(siteRoot) {
     const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
     if (!existsSync(configPath)) return [];
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
-    if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r) => typeof r === 'string' && r.trim());
+    return [
+      ...stringList(data.extra_allowed_roots),
+      ...stringList(data.temp_allowed_roots),
+    ];
   } catch {
     // Best-effort.
   }

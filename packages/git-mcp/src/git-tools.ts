@@ -76,17 +76,28 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
   const entries = Array.isArray(status.status_entries) ? status.status_entries.map(asStatusEntry) : [];
   const trackedEntries = entries.filter((entry) => !entry.untracked);
   const untrackedEntries = entries.filter((entry) => entry.untracked);
-  const relevanceFilters: string[] = [...stringArray(args.pathspecs), ...stringArray(args.expected_paths)];
+  const pathspecFilters: string[] = [...stringArray(args.pathspecs)];
   const singlePathspec = optionalNonEmptyString(args.pathspec);
-  if (singlePathspec) relevanceFilters.unshift(singlePathspec);
+  if (singlePathspec) pathspecFilters.unshift(singlePathspec);
+  const expectedFilters: string[] = stringArray(args.expected_paths);
+  const relevanceFilters: string[] = [...pathspecFilters, ...expectedFilters];
+  const scopeFilters = pathspecFilters.length > 0 ? pathspecFilters : [];
   const untrackedSampleLimit = clampInteger(args.untracked_sample_limit, 0, 200, 20);
-  const trackedChangedPaths = trackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
-  const untrackedPaths = untrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const wholeTrackedChangedPaths = trackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const wholeUntrackedPaths = untrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const scopedEntries = scopeFilters.length > 0
+    ? entries.filter((entry) => scopeFilters.some((filter) => pathMatchesFilter(String(entry.display_path ?? entry.path ?? ''), filter)))
+    : entries;
+  const scopedTrackedEntries = scopedEntries.filter((entry) => !entry.untracked);
+  const scopedUntrackedEntries = scopedEntries.filter((entry) => entry.untracked);
+  const trackedChangedPaths = scopedTrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
+  const untrackedPaths = scopedUntrackedEntries.map((entry) => String(entry.display_path ?? '')).filter(Boolean);
   const untrackedGroups = groupUntrackedPaths(untrackedPaths, untrackedSampleLimit);
   const untrackedClassifications = untrackedPaths.map(classifyAdvisoryPath);
   const relevantEntries = relevanceFilters.length > 0
     ? entries.filter((entry) => relevanceFilters.some((filter) => pathMatchesFilter(String(entry.display_path ?? entry.path ?? ''), filter)))
     : [];
+  const taskScopedClassification = classifyTaskScopedDirtyPaths(entries, relevanceFilters);
   return {
     schema: 'narada.git.changed_summary.v1',
     status: 'ok',
@@ -94,6 +105,11 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
     repository_root: status.repository_root,
     branch: status.branch,
     clean: status.clean,
+    path_scope_applied: scopeFilters.length > 0,
+    path_scope_filters: scopeFilters,
+    whole_repository_tracked_changed_count: wholeTrackedChangedPaths.length,
+    whole_repository_untracked_count: wholeUntrackedPaths.length,
+    whole_repository_tracked_changed_paths: scopeFilters.length > 0 ? wholeTrackedChangedPaths : undefined,
     tracked_changed_count: trackedChangedPaths.length,
     staged_count: Array.isArray(status.staged) ? status.staged.length : 0,
     unstaged_count: Array.isArray(status.unstaged) ? status.unstaged.length : 0,
@@ -107,6 +123,10 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
     conflict_paths: status.conflicts,
     untracked_groups: untrackedGroups,
     relevance_filters: relevanceFilters,
+    task_scoped_dirty_classification: taskScopedClassification,
+    task_relevant_dirty_paths: taskScopedClassification.relevant,
+    task_unrelated_dirty_paths: taskScopedClassification.unrelated,
+    task_unknown_dirty_paths: taskScopedClassification.unknown,
     relevant_changed_count: relevantEntries.length,
     relevant_changed_paths: relevantEntries.map((entry) => entry.display_path).filter(Boolean),
     relevant_entries: relevantEntries,
@@ -650,6 +670,38 @@ function summarizeAdvisoryClassifications(classifications: Record<string, unknow
     byClassification[key] = (byClassification[key] ?? 0) + 1;
   }
   return { advisory_only: true, classified_count: classifications.filter((item) => item.classification !== 'unknown').length, by_classification: byClassification };
+}
+
+function classifyTaskScopedDirtyPaths(entries: Record<string, unknown>[], filters: string[]): Record<string, unknown> {
+  const dirtyPaths = entries.map((entry) => String(entry.display_path ?? entry.path ?? '')).filter(Boolean);
+  if (filters.length === 0) {
+    return {
+      status: 'no_expected_pathset',
+      filters,
+      relevant: [],
+      unrelated: [],
+      unknown: dirtyPaths,
+      relevant_count: 0,
+      unrelated_count: 0,
+      unknown_count: dirtyPaths.length,
+    };
+  }
+  const relevant = [];
+  const unrelated = [];
+  for (const path of dirtyPaths) {
+    if (filters.some((filter) => pathMatchesFilter(path, filter))) relevant.push(path);
+    else unrelated.push(path);
+  }
+  return {
+    status: unrelated.length > 0 ? 'has_unrelated_dirty_paths' : 'all_dirty_paths_match_expected_pathset',
+    filters,
+    relevant,
+    unrelated,
+    unknown: [],
+    relevant_count: relevant.length,
+    unrelated_count: unrelated.length,
+    unknown_count: 0,
+  };
 }
 
 function pathMatchesFilter(path: string, filter: string): boolean {

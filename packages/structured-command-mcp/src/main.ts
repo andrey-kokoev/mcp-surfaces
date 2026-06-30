@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   buildAllowedRoots,
@@ -252,11 +252,22 @@ export function listTools() {
         args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
         working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
         timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
+        test_scope: { type: 'string', enum: ['focused', 'broad', 'known_slow', 'unknown'], description: 'Optional caller-declared verification scope/cost posture for test commands.' },
+        expected_cost: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'], description: 'Optional caller-declared expected cost for this command.' },
         stdout_offset: { type: 'integer', description: 'Character offset for stdout page. Defaults 0.' },
         stderr_offset: { type: 'integer', description: 'Character offset for stderr page. Defaults 0.' },
         stdout_limit: { type: 'integer', description: `Stdout page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
         stderr_limit: { type: 'integer', description: `Stderr page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
       }),
+    },
+    {
+      name: 'structured_command_powershell_parse_check',
+      description: 'Parse-check one allowed-root PowerShell script without admitting arbitrary pwsh command execution.',
+      inputSchema: objectSchema({
+        path: { type: 'string', description: 'PowerShell script path under an allowed root.' },
+        working_directory: { type: 'string', description: 'Optional working directory under an allowed root. Defaults to the script directory.' },
+        timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
+      }, ['path']),
     },
     {
       name: 'structured_command_input_create',
@@ -267,6 +278,8 @@ export function listTools() {
         args: { type: 'array', items: { type: 'string' } },
         working_directory: { type: 'string' },
         timeout_ms: { type: 'integer' },
+        test_scope: { type: 'string', enum: ['focused', 'broad', 'known_slow', 'unknown'] },
+        expected_cost: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
       }, ['command']),
     },
     {
@@ -290,6 +303,7 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
   enforceInputCharLimit(args);
   if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
   if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state, context), state);
+  if (name === 'structured_command_powershell_parse_check') return toolResult(await powershellParseCheck(args, state, context), state);
   if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
   if (name === 'structured_command_elevated_window_execute') return toolResult(await executeStructuredCommandElevatedWindow(args, state), state);
   throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
@@ -305,6 +319,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
   const effectiveArgs = argsRecord.input_ref ? asRecord(readStructuredCommandInput(String(argsRecord.input_ref), state).input) : argsRecord;
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
   const workingDirectory = effectiveArgs.working_directory ? resolve(String(effectiveArgs.working_directory)) : state.policy.allowedRoots[0];
+  const executionPosture = structuredCommandExecutionPosture(effectiveArgs);
   const decision = decideStructuredCommandExecution({
     command: effectiveArgs.command,
     args: Array.isArray(effectiveArgs.args) ? effectiveArgs.args : [],
@@ -320,8 +335,11 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
       mcp_fallbacks: decision.mcp_fallbacks,
       command: decision.command,
       args: decision.args,
-      working_directory: decision.working_directory,
-      executed: false,
+    working_directory: decision.working_directory,
+    execution_posture: executionPosture,
+    test_scope: executionPosture.test_scope,
+    expected_cost: executionPosture.expected_cost,
+    executed: false,
     };
   }
 
@@ -345,6 +363,9 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     started_at: startedAt,
     finished_at: finishedAt,
     timeout_ms: timeoutMs,
+    execution_posture: executionPosture,
+    test_scope: executionPosture.test_scope,
+    expected_cost: executionPosture.expected_cost,
     exit_code: result.exit_code,
     stdout: result.stdout,
     stderr: result.stderr,
@@ -366,6 +387,7 @@ export function createStructuredCommandInput(args, state) {
     args: Array.isArray(args.args) ? args.args.map(String) : [],
     ...(args.working_directory ? { working_directory: String(args.working_directory) } : {}),
     ...(args.timeout_ms ? { timeout_ms: Number(args.timeout_ms) } : {}),
+    ...structuredCommandInputPosture(args),
   };
   const record = {
     schema: 'narada.structured_command.input.v0',
@@ -381,6 +403,57 @@ export function createStructuredCommandInput(args, state) {
     input_ref: record.ref,
     sha256: record.sha256,
   };
+}
+
+async function powershellParseCheck(args: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {
+  const scriptPath = resolve(String(args.path ?? ''));
+  if (!scriptPath || !scriptPath.toLowerCase().endsWith('.ps1')) {
+    throw diagnosticError('structured_command_powershell_parse_check_requires_ps1', 'structured_command_powershell_parse_check_requires_ps1', { path: String(args.path ?? '') });
+  }
+  if (!isInsideAnyRoot(scriptPath, state.policy.allowedRoots)) {
+    throw diagnosticError('structured_command_powershell_parse_check_path_outside_allowed_roots', 'structured_command_powershell_parse_check_path_outside_allowed_roots', { path: scriptPath, allowed_roots: state.policy.allowedRoots });
+  }
+  if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) {
+    throw diagnosticError('structured_command_powershell_parse_check_file_not_found', 'structured_command_powershell_parse_check_file_not_found', { path: scriptPath });
+  }
+  const workingDirectory = args.working_directory ? resolve(String(args.working_directory)) : dirname(scriptPath);
+  if (!isInsideAnyRoot(workingDirectory, state.policy.allowedRoots)) {
+    throw diagnosticError('structured_command_powershell_parse_check_cwd_outside_allowed_roots', 'structured_command_powershell_parse_check_cwd_outside_allowed_roots', { working_directory: workingDirectory, allowed_roots: state.policy.allowedRoots });
+  }
+  const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(args.timeout_ms ?? 30_000)));
+  const parseScript = [
+    '$ErrorActionPreference = "Stop"',
+    '$tokens = $null',
+    '$errors = $null',
+    `[System.Management.Automation.Language.Parser]::ParseFile(${psSingleQuote(scriptPath)}, [ref]$tokens, [ref]$errors) > $null`,
+    'if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error ($_.ToString()) }; exit 1 }',
+    'Write-Output "parse_ok"',
+  ].join('; ');
+  const result = await spawnStructured('pwsh', ['-NoProfile', '-Command', parseScript], {
+    cwd: workingDirectory,
+    timeoutMs,
+    maxOutputBytes: state.policy.maxOutputBytes,
+    env: state.env,
+    abortSignal: context.abortSignal,
+  });
+  const payload = {
+    schema: 'narada.structured_command.powershell_parse_check.v0',
+    status: result.cancelled ? 'cancelled' : result.timed_out ? 'timed_out' : result.exit_code === 0 ? 'ok' : 'failed',
+    path: scriptPath,
+    working_directory: workingDirectory,
+    timeout_ms: timeoutMs,
+    exit_code: result.exit_code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    stdout_truncated: result.stdout_truncated,
+    stderr_truncated: result.stderr_truncated,
+    timed_out: result.timed_out,
+    cancelled: result.cancelled,
+    arbitrary_command_execution_admitted: false,
+    parser_api: 'System.Management.Automation.Language.Parser.ParseFile',
+  };
+  audit(state, payload);
+  return payload;
 }
 
 function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, env, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
@@ -647,6 +720,14 @@ function buildStructuredContent(payload, { truncated, renderedTextLength, fullTe
       full_output_char_length: fullTextLength,
     };
   }
+  if (payload?.schema === 'narada.structured_command.powershell_parse_check.v0') {
+    return {
+      ...payload,
+      truncated,
+      rendered_text_char_length: renderedTextLength,
+      full_output_char_length: fullTextLength,
+    };
+  }
   return {
     schema: payload?.schema,
     status: payload?.status,
@@ -667,6 +748,9 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
       command: payload.command,
       args: payload.args,
       working_directory: payload.working_directory,
+      execution_posture: payload.execution_posture ?? null,
+      test_scope: payload.test_scope ?? null,
+      expected_cost: payload.expected_cost ?? null,
       refusal_reasons: payload.refusal_reasons ?? payload.decision?.reasons ?? [],
       remediation_hints: payload.remediation_hints ?? payload.decision?.remediation_hints ?? [],
       mcp_fallbacks: payload.mcp_fallbacks ?? payload.decision?.mcp_fallbacks ?? [],
@@ -687,6 +771,9 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
     args: payload.args,
     working_directory: payload.working_directory,
     timeout_ms: payload.timeout_ms,
+    execution_posture: payload.execution_posture ?? null,
+    test_scope: payload.test_scope ?? null,
+    expected_cost: payload.expected_cost ?? null,
     exit_code: payload.exit_code,
     timed_out: payload.timed_out,
     cancelled: payload.cancelled,
@@ -747,6 +834,15 @@ function renderToolResultText(payload) {
       payload.note ? `note: ${payload.note}` : null,
     ].filter(Boolean).join('\n');
   }
+  if (payload?.schema === 'narada.structured_command.powershell_parse_check.v0') {
+    return [
+      `structured_command_powershell_parse_check: ${payload.status}`,
+      `path: ${payload.path ?? ''}`,
+      `exit_code: ${payload.exit_code ?? ''}`,
+      payload.stderr ? `stderr:\n${payload.stderr}` : null,
+      payload.stdout ? `stdout:\n${payload.stdout}` : null,
+    ].filter(Boolean).join('\n');
+  }
   return JSON.stringify(payload, null, 2);
 }
 
@@ -785,6 +881,45 @@ function enforceInputCharLimit(value, path = 'arguments') {
       enforceInputCharLimit(child, `${path}.${key}`);
     }
   }
+}
+
+function structuredCommandExecutionPosture(args: Record<string, unknown>): Record<string, unknown> {
+  const testScope = stringEnumValue(args.test_scope, ['focused', 'broad', 'known_slow', 'unknown'], inferTestScope(args));
+  const expectedCost = stringEnumValue(args.expected_cost, ['low', 'medium', 'high', 'unknown'], inferExpectedCost(args, testScope));
+  return {
+    schema: 'narada.structured_command.execution_posture.v0',
+    test_scope: testScope,
+    expected_cost: expectedCost,
+    source: args.test_scope || args.expected_cost ? 'caller_declared' : 'derived',
+  };
+}
+
+function structuredCommandInputPosture(args: Record<string, unknown>): Record<string, unknown> {
+  const posture = structuredCommandExecutionPosture(args);
+  return {
+    test_scope: posture.test_scope,
+    expected_cost: posture.expected_cost,
+  };
+}
+
+function inferTestScope(args: Record<string, unknown>): string {
+  const command = String(args.command ?? '').toLowerCase();
+  const argv = Array.isArray(args.args) ? args.args.map((item) => String(item).toLowerCase()) : [];
+  if (command === 'pnpm' && argv.includes('test')) return argv.includes('--filter') ? 'focused' : 'broad';
+  if (command === 'npm' && argv.includes('test')) return 'broad';
+  return 'unknown';
+}
+
+function inferExpectedCost(_args: Record<string, unknown>, testScope: string): string {
+  if (testScope === 'focused') return 'low';
+  if (testScope === 'broad' || testScope === 'known_slow') return 'high';
+  return 'unknown';
+}
+
+function stringEnumValue(value: unknown, allowed: string[], fallback: string): string {
+  const text = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  if (!allowed.includes(text)) throw diagnosticError('structured_command_invalid_enum', 'structured_command_invalid_enum', { value: text, allowed });
+  return text;
 }
 
 function audit(state, payload) {
@@ -1037,6 +1172,13 @@ function clientRootCompletionValues(state: StructuredCommandState): string[] {
     }
     return uri;
   }).filter(Boolean).slice(0, 100);
+}
+
+function isInsideAnyRoot(path: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    const rel = relative(root, path);
+    return rel === '' || (!rel.startsWith('..') && !/^[a-zA-Z]:/.test(rel));
+  });
 }
 
 function isMainModule() {

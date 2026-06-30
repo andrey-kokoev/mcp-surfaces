@@ -131,6 +131,14 @@ const defaultPnpmFilteredDeploy = decideStructuredCommandExecution({ command: 'p
 assert.equal(defaultPnpmFilteredDeploy.status, 'refused');
 assert.ok(defaultPnpmFilteredDeploy.reasons.some((reason) => String(reason).startsWith('command_not_allowed:')));
 
+const focusedTestPosture = await exec({
+  command: 'pnpm',
+  args: ['--filter', '@narada2/structured-command-mcp', 'test'],
+  working_directory: root,
+}, stateWithDefaultCommands);
+assert.equal(focusedTestPosture.test_scope, 'focused');
+assert.equal(focusedTestPosture.expected_cost, 'low');
+
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 
@@ -141,6 +149,7 @@ assert.deepEqual(toolNames, [
   'structured_command_execute',
   'structured_command_execution_policy_inspect',
   'structured_command_input_create',
+  'structured_command_powershell_parse_check',
 ]);
 const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
 assert.equal(executeTool.canonical_name, 'structured_command_execute');
@@ -148,6 +157,8 @@ assert.equal(executeTool.annotations.canonicalName, 'structured_command_execute'
 assert.ok(executeTool.inputSchema.properties.execution_ref);
 assert.ok(executeTool.inputSchema.properties.stdout_offset);
 assert.ok(executeTool.inputSchema.properties.stdout_limit);
+assert.ok(executeTool.inputSchema.properties.test_scope);
+assert.ok(executeTool.inputSchema.properties.expected_cost);
 
 const broker = buildElevatedWindowBrokerCommand({
   command: 'pwsh.exe',
@@ -199,10 +210,15 @@ const ok = await exec({
   command: 'node',
   args: ['--version'],
   working_directory: root,
+  test_scope: 'focused',
+  expected_cost: 'low',
 }, state);
 assert.equal(ok.status, 'ok');
 assert.equal(ok.executed, true);
 assert.match(ok.stdout, /^v\d+/);
+assert.equal(ok.test_scope, 'focused');
+assert.equal(ok.expected_cost, 'low');
+assert.equal((ok.execution_posture as Record<string, unknown>).source, 'caller_declared');
 const okWithLongerTimeout = await exec({
   command: 'node',
   args: ['--version'],
@@ -345,6 +361,19 @@ assert.equal(refusedSearch.result.structuredContent.mcp_fallbacks[1].tool_name, 
 assert.equal(refusedSearch.result.structuredContent.decision.mcp_fallbacks[0].tool_name, 'fs_grep_search');
 assert.match(refusedSearch.result.content[0].text, /remediation_hints: Use local-filesystem fs_grep_search/);
 
+const refusedScopedRg = await exec({
+  command: 'rg',
+  args: ['needle', 'packages/one', 'packages/two', '-g', '!dist/**'],
+  working_directory: root,
+}, state);
+assert.equal(refusedScopedRg.status, 'refused');
+const refusedScopedRgFallbacks = refusedScopedRg.mcp_fallbacks as Array<Record<string, any>>;
+assert.deepEqual(refusedScopedRgFallbacks.filter((fallback) => fallback.tool_name === 'fs_grep_search').map((fallback) => fallback.arguments.path), [
+  join(root, 'packages/one'),
+  join(root, 'packages/two'),
+]);
+assert.deepEqual(refusedScopedRgFallbacks[0].arguments.ignore, ['dist/**']);
+
 const refusedRgFiles = await exec({
   command: 'rg',
   args: ['--files', '-g', '*.ts'],
@@ -353,6 +382,24 @@ const refusedRgFiles = await exec({
 assert.equal(refusedRgFiles.status, 'refused');
 assert.equal(refusedRgFiles.mcp_fallbacks[0].tool_name, 'fs_glob_search');
 assert.deepEqual(refusedRgFiles.mcp_fallbacks[0].arguments, { pattern: '*.ts', directory: root });
+
+const ps1Path = join(root, 'parse-ok.ps1');
+writeFileSync(ps1Path, 'Write-Output "ok"\n', 'utf8');
+const parseCheck = await rpc({
+  jsonrpc: '2.0',
+  id: 34,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_powershell_parse_check',
+    arguments: { path: ps1Path, working_directory: root },
+  },
+}, state);
+if (parseCheck.error?.data?.message && String(parseCheck.error.data.message).includes('spawn pwsh ENOENT')) {
+  assert.match(String(parseCheck.error.data.message), /spawn pwsh ENOENT/);
+} else {
+  assert.equal(parseCheck.result.structuredContent.status, 'ok');
+  assert.equal(parseCheck.result.structuredContent.arbitrary_command_execution_admitted, false);
+}
 
 const longInlineScript = `${' '.repeat(318)}process.stdout.write('long-inline-ok')`;
 const okLongInlineArg = await exec({

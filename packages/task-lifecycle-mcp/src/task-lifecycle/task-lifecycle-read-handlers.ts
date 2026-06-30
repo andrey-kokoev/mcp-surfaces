@@ -57,13 +57,16 @@ export function createTaskLifecycleReadHandlers({
 function taskLifecyclePayloadSchemas() {
   return {
     task_lifecycle_review: {
+      compatibility_only: true,
+      authority_model: 'Migrates legacy review calls into review-contract dependency work and task_outcomes authority. New review work should finish the dependency task with task_lifecycle_finish.',
       payload_ref_shape: { findings: [{ severity: 'note|blocking', description: '<finding text>', location: '<optional location>' }] },
       top_level_fields_remain_required: ['task_number', 'agent_id', 'verdict'],
       invalid_shapes: ['{ findings: { "0": {...} } }', '{ findings: ["text"] }'],
+      preferred_tool_for_new_review_work: 'task_lifecycle_finish',
     },
     task_lifecycle_finish: {
-      payload_ref_shape: { summary: '<finish summary>', changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
-      inline_payload_limit: { threshold_chars: 200, remediation: 'Put long summary or guard packets in mcp_payload_create, then call task_lifecycle_finish with payload_ref plus top-level task_number and agent_id.' },
+      payload_ref_shape: { summary: '<finish summary>', outcome: '<contract outcome when applicable>', findings: [], changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
+      inline_payload_limit: { threshold_chars: 200, remediation: 'Put long summary, findings, outcome evidence, or guard packets in mcp_payload_create, then call task_lifecycle_finish with payload_ref plus top-level task_number and agent_id.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
     task_lifecycle_disposition_closeout: {

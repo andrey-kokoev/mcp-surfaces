@@ -40,6 +40,23 @@ function parseFirstJsonRpcFrame(output) {
   return JSON.parse(body);
 }
 
+function parseJsonRpcFrames(output) {
+  const frames = [];
+  let remaining = output;
+  while (remaining.length > 0) {
+    const headerEnd = remaining.indexOf('\r\n\r\n');
+    if (headerEnd < 0) break;
+    const header = remaining.slice(0, headerEnd);
+    const match = /Content-Length:\s*(\d+)/i.exec(header);
+    assert.ok(match, 'expected Content-Length response header');
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + Number(match[1]);
+    frames.push(JSON.parse(remaining.slice(bodyStart, bodyEnd)));
+    remaining = remaining.slice(bodyEnd);
+  }
+  return frames;
+}
+
 function sha256(value) {
   return createHash('sha256').update(String(value)).digest('hex');
 }
@@ -187,10 +204,21 @@ trust_level = "untrusted"
   const siteRoot = join(tempRoot, 'site-root');
   mkdirSync(join(siteRoot, '.narada'), { recursive: true });
   writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { LOCAL_FILESYSTEM_TEST_SECRET: 'from-site-secret' } }), 'utf8');
+  const handoffRoot = join(tempRoot, 'handoff-root');
+  const nonAdmittedTempRoot = join(tempRoot, 'non-admitted-temp');
+  mkdirSync(handoffRoot, { recursive: true });
+  mkdirSync(nonAdmittedTempRoot, { recursive: true });
+  writeFileSync(join(handoffRoot, 'narada-worker-runtime-handoff.md'), 'handoff\n', 'utf8');
+  writeFileSync(join(nonAdmittedTempRoot, 'handoff.md'), 'blocked\n', 'utf8');
+  writeFileSync(join(siteRoot, '.narada', 'allowed-roots.json'), JSON.stringify({ temp_allowed_roots: [handoffRoot] }), 'utf8');
   const originalFilesystemSecret = process.env.LOCAL_FILESYSTEM_TEST_SECRET;
   delete process.env.LOCAL_FILESYSTEM_TEST_SECRET;
   const secretState = createServerState({ mode: 'read', siteRoot, allowedRoots: [trusted], outputRoot: tempRoot });
   assert.equal((secretState.env as NodeJS.ProcessEnv).LOCAL_FILESYSTEM_TEST_SECRET, 'from-site-secret');
+  const handoffRead = call(secretState, 213, 'fs_read_file', { path: join(handoffRoot, 'narada-worker-runtime-handoff.md') });
+  assert.equal(handoffRead.result.structuredContent.content, 'handoff');
+  const blockedTempRead = call(secretState, 214, 'fs_read_file', { path: join(nonAdmittedTempRoot, 'handoff.md') });
+  assert.equal(blockedTempRead.error.data.code, 'path_outside_allowed_roots');
   assert.equal(process.env.LOCAL_FILESYSTEM_TEST_SECRET, undefined);
   if (originalFilesystemSecret === undefined) delete process.env.LOCAL_FILESYSTEM_TEST_SECRET;
   else process.env.LOCAL_FILESYSTEM_TEST_SECRET = originalFilesystemSecret;
@@ -211,7 +239,8 @@ trust_level = "untrusted"
 
   const readResponse = call(readState, 1, 'fs_read_file', { path: join(trusted, 'a.txt'), limit: 1 });
   assert.equal(readResponse.result.structuredContent.content, 'alpha');
-  assert.equal(readResponse.result.structuredContent.content_sha256, sha256('alpha'));
+  assert.equal(readResponse.result.structuredContent.content_sha256, sha256('alpha\nbeta\n'));
+  assert.equal(readResponse.result.structuredContent.content_window_sha256, sha256('alpha'));
   assert.equal(readResponse.result.structuredContent.next_offset, 2);
   assert.equal(readResponse.result.structuredContent.total_lines, null);
   assert.equal(readResponse.result.structuredContent.total_lines_exact, false);
@@ -432,6 +461,15 @@ trust_level = "untrusted"
   assert.equal(largeGrepSecondPage.result.structuredContent.count_exact, false);
   assert.equal(largeGrepSecondPage.result.structuredContent.has_more, true);
   assert.equal(largeGrepSecondPage.result.structuredContent.next_offset, 10);
+  const hugeGrepRoot = join(trusted, 'huge-grep-output');
+  mkdirSync(hugeGrepRoot, { recursive: true });
+  writeFileSync(join(hugeGrepRoot, 'huge.txt'), `needle ${'x'.repeat(2 * 1024 * 1024)}\n`, 'utf8');
+  const hugeGrep = call(readState, 224, 'fs_grep_search', { path: hugeGrepRoot, pattern: 'needle', output_mode: 'content', limit: 80, cache_policy: 'bypass' });
+  assert.ifError(hugeGrep.error);
+  assert.equal(hugeGrep.result.structuredContent.returned, 1);
+  assert.equal(hugeGrep.result.structuredContent.page_matches_truncated, 1);
+  assert.ok(hugeGrep.result.structuredContent.page_match_bytes <= hugeGrep.result.structuredContent.page_match_bytes_limit);
+  assert.match(hugeGrep.result.structuredContent.matches[0], /\[truncated\]/);
   const badGrepMode = call(readState, 23, 'fs_grep_search', { path: trusted, pattern: 'needle', output_mode: 'bad_mode' });
   assert.match(badGrepMode.error.message, /grep_output_mode_unsupported/);
   const badGrepPattern = call(readState, 231, 'fs_grep_search', { path: trusted, pattern: '[' });
@@ -468,6 +506,12 @@ trust_level = "untrusted"
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
+  const guardedReadThenReplace = call(writeState, 3001, 'fs_str_replace_file', { path: join(trusted, 'b.txt'), old: 'created', new: 'created-via-guard', expected_sha256: verifyWriteRead.result.structuredContent.content_sha256 });
+  assert.equal(guardedReadThenReplace.result.structuredContent.status, 'replaced');
+  const changedAfterRead = call(writeState, 3002, 'fs_str_replace_file', { path: join(trusted, 'b.txt'), old: 'created-via-guard', new: 'blocked', expected_sha256: verifyWriteRead.result.structuredContent.content_sha256 });
+  assert.equal(changedAfterRead.error.data.code, 'fs_str_replace_file_expected_sha256_mismatch');
+  assert.equal(changedAfterRead.error.data.details.expected_sha256, verifyWriteRead.result.structuredContent.content_sha256);
+  assert.equal(changedAfterRead.error.data.details.actual_sha256, sha256('created-via-guard'));
   const payloadDir = join(tempRoot, '.ai', 'tmp', 'mcp-payloads', 'workspace');
   mkdirSync(payloadDir, { recursive: true });
   const payloadPath = join(payloadDir, 'large-write.json');
@@ -520,6 +564,40 @@ trust_level = "untrusted"
   assert.equal(framedResponse.id, 300);
   assert.equal(framedResponse.result.structuredContent.status, 'written');
   assert.equal(readFileSync(stdioWritePath, 'utf8'), 'framed\n');
+
+  const delayedWriteBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 301,
+    method: 'tools/call',
+    params: {
+      name: 'fs_write_file',
+      arguments: { path: join(trusted, 'delayed-write.txt'), content: 'delayed\n', timeout_ms: 1 },
+    },
+  });
+  const doctorBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 302,
+    method: 'tools/call',
+    params: { name: 'fs_doctor', arguments: {} },
+  });
+  const delayedWrite = spawnSync(process.execPath, [
+    serverPath,
+    '--mode', 'write',
+    '--allowed-root', trusted,
+    '--output-root', tempRoot,
+    '--audit-log-dir', auditDir,
+  ], {
+    input: `Content-Length: ${Buffer.byteLength(delayedWriteBody, 'utf8')}\r\n\r\n${delayedWriteBody}Content-Length: ${Buffer.byteLength(doctorBody, 'utf8')}\r\n\r\n${doctorBody}`,
+    encoding: 'utf8',
+    timeout: 5000,
+    env: { ...process.env, NARADA_LOCAL_FILESYSTEM_WRITE_DELAY_MS: '50' },
+  });
+  assert.equal(delayedWrite.status, 0, delayedWrite.stderr);
+  const delayedFrames = parseJsonRpcFrames(delayedWrite.stdout);
+  const delayedWriteResponse = delayedFrames.find((frame) => frame.id === 301);
+  const delayedDoctorResponse = delayedFrames.find((frame) => frame.id === 302);
+  assert.equal(delayedWriteResponse.error.data.code, 'fs_write_file_timed_out');
+  assert.equal(delayedDoctorResponse.result.structuredContent.status, 'ok');
 
   const replaceRangeResponse = call(writeState, 31, 'fs_replace_range', { path: join(trusted, 'b.txt'), start_line: 1, end_line: 1, replacement: 'range-edited' });
   assert.equal(replaceRangeResponse.result.structuredContent.schema, 'local.filesystem.replace_range.v1');

@@ -10,11 +10,12 @@ import { deriveClosureAuthority } from './closure-authority.js';
 type TaskLifecyclePayload = Record<string, unknown>;
 
 export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, allTasks }) {
-  const all_in_review: TaskLifecyclePayload[] = [];
+  const legacy_review_tasks: TaskLifecyclePayload[] = [];
   const in_progress: TaskLifecyclePayload[] = [];
   const needs_continuation: TaskLifecyclePayload[] = [];
   const local_followups: TaskLifecyclePayload[] = [];
   const role_wide_followups: TaskLifecyclePayload[] = [];
+  const dependency_waiting_parents: TaskLifecyclePayload[] = [];
   const non_actionable_parent_followups: TaskLifecyclePayload[] = [];
   const closure_authority_conflicts: TaskLifecyclePayload[] = [];
   const downstream_role_followups: TaskLifecyclePayload[] = [];
@@ -68,6 +69,8 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       updated_at: task.updated_at,
       relative_priority: task.relative_priority ?? 0,
     };
+    const dependencyContext = buildDependencyTaskContext({ store, task, agentId });
+    if (dependencyContext) Object.assign(item, dependencyContext);
     item.preferred_agent_relation = preferredAgentRelation(preferredAgentId, agentId);
     item.routing_policy = 'preferred_agent_id_is_soft_affinity_target_role_is_role_gate';
     item.parent_coordinator_actionability = deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber });
@@ -95,7 +98,15 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       continue;
     }
 
-    if (task.status === 'in_review') {
+    if (task.status === 'awaiting_dependencies') {
+      dependency_waiting_parents.push({
+        ...item,
+        visibility: 'dependency_waiting_parent',
+        blocked_by: 'dependencies',
+        claim_authority: 'not_claimable_waiting_on_dependencies',
+        reason: 'Parent task is waiting for one or more dependency tasks to admit satisfying outcomes.',
+      });
+    } else if (task.status === 'in_review') {
       // Detect if the requesting agent would face a single-operator review
       if (agentId) {
         let structuralInfo: TaskLifecyclePayload = detectSameOperatorReview(store, agentId, task.task_number);
@@ -108,7 +119,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
           item.single_operator_review_hint = structuralInfo.warning;
         }
       }
-      all_in_review.push(item);
+      legacy_review_tasks.push(item);
     } else if (task.status === 'claimed') {
       if (agentId && assignment?.agent_id !== agentId) continue;
       in_progress.push(item);
@@ -170,7 +181,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
     return aPref - bPref;
   };
 
-  all_in_review.sort(sortByPriorityThenPreferred);
+  legacy_review_tasks.sort(sortByPriorityThenPreferred);
   in_progress.sort(sortByPriorityThenPreferred);
   needs_continuation.sort(sortByPriorityThenPreferred);
   local_followups.sort(sortByPriorityThenPreferred);
@@ -182,11 +193,12 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
   actionable_deferred.sort(sortByPriorityThenPreferred);
 
   return {
-    all_in_review,
+    legacy_review_tasks,
     in_progress,
     needs_continuation,
     local_followups,
     role_wide_followups,
+    dependency_waiting_parents,
     non_actionable_parent_followups,
     closure_authority_conflicts,
     downstream_role_followups,
@@ -195,7 +207,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
   };
 }
 
-const ACTIVE_CHILD_STATUSES = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'deferred']);
+const ACTIVE_CHILD_STATUSES = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies', 'deferred']);
 
 function deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber }) {
   if (task.status !== 'opened') {
@@ -275,6 +287,92 @@ function preferredAgentRelation(preferredAgentId, agentId) {
   if (!preferredAgentId) return 'none';
   if (agentId && preferredAgentId === agentId) return 'self';
   return 'other';
+}
+
+function buildDependencyTaskContext({ store, task, agentId }) {
+  const dependencies = store.listTaskDependenciesForRequired?.(task.task_id) ?? [];
+  const dependency = dependencies[0];
+  if (!dependency) return null;
+  const parentLifecycle = store.getLifecycle?.(dependency.parent_task_id);
+  const contract = store.getLatestTaskOutcomeContract?.(task.task_id);
+  const allowedOutcomes = parseJsonStringArray(contract?.allowed_outcomes_json);
+  const satisfyingOutcomes = parseJsonStringArray(contract?.satisfying_outcomes_json);
+  const blockingOutcomes = parseJsonStringArray(contract?.blocking_outcomes_json);
+  const nextTool = task.status === 'claimed' ? 'task_lifecycle_finish' : 'task_lifecycle_claim';
+  const exampleArgs = task.status === 'claimed'
+    ? {
+        task_number: task.task_number,
+        agent_id: '<current-agent-id>',
+        outcome: satisfyingOutcomes[0] ?? allowedOutcomes[0] ?? '<allowed-outcome>',
+        summary: '<outcome summary>',
+        findings: [],
+      }
+    : {
+        task_number: task.task_number,
+        agent_id: '<current-agent-id>',
+      };
+  return {
+    dependency_id: dependency.dependency_id,
+    dependency_kind: dependency.kind,
+    gates_task_id: dependency.parent_task_id,
+    gates_task_number: parentLifecycle?.task_number ?? null,
+    outcome_type: contract?.outcome_type ?? null,
+    allowed_outcomes: allowedOutcomes,
+    satisfying_outcomes: satisfyingOutcomes,
+    blocking_outcomes: blockingOutcomes,
+    conflict_of_interest_risk: buildDependencyConflictRisk({ store, dependency, agentId }),
+    next_tool: nextTool,
+    example_args: exampleArgs,
+  };
+}
+
+function buildDependencyConflictRisk({ store, dependency, agentId }) {
+  const effectiveOperatorIdentity = agentId ? readOperatorIdentity(store, agentId) : null;
+  const gatedWorkAgentId = readLatestReportAgentId(store, dependency.parent_task_id);
+  const gatedWorkOperatorIdentity = gatedWorkAgentId ? readOperatorIdentity(store, gatedWorkAgentId) : null;
+  const conflictDetected = Boolean(
+    effectiveOperatorIdentity
+    && gatedWorkOperatorIdentity
+    && effectiveOperatorIdentity === gatedWorkOperatorIdentity,
+  );
+  return {
+    conflict_detected: conflictDetected,
+    dependency_id: dependency.dependency_id,
+    agent_id: agentId ?? null,
+    effective_operator_identity: effectiveOperatorIdentity,
+    gated_work_agent_id: gatedWorkAgentId,
+    gated_work_operator_identity: gatedWorkOperatorIdentity,
+    policy_mode: conflictDetected ? 'operator_override_allowed' : 'not_applicable',
+    authorization_required: conflictDetected,
+  };
+}
+
+function readLatestReportAgentId(store, taskId) {
+  try {
+    const row = store.db.prepare('select agent_id from task_reports where task_id = ? order by submitted_at desc, rowid desc limit 1').get(taskId);
+    return typeof row?.agent_id === 'string' ? row.agent_id : null;
+  } catch {
+    return null;
+  }
+}
+
+function readOperatorIdentity(store, agentId) {
+  try {
+    const row = store.db.prepare('select operator_identity from agent_roster where agent_id = ?').get(agentId);
+    return typeof row?.operator_identity === 'string' ? row.operator_identity : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonStringArray(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function deriveDeferredActionability({ siteRoot, task, spec, observationText = '', lifecycleByNumber = new Map() }) {

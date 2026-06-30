@@ -2,6 +2,8 @@
 import { spawn } from 'node:child_process';
 
 const STDERR_LIMIT = 64 * 1024;
+const PAGE_MATCH_BYTES_LIMIT = 512 * 1024;
+const SINGLE_MATCH_BYTES_LIMIT = 16 * 1024;
 
 run().catch((error) => {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -38,6 +40,8 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
     let stoppedEarly = false;
     let completeMemoryExceeded = false;
     let matchBytes = 0;
+    let pageMatchBytes = 0;
+    let pageMatchesTruncated = 0;
     let childError = null;
     let timedOut = false;
 
@@ -77,7 +81,7 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
       if (pending.trim() && !stoppedEarly) consumeLine(pending);
       const countExact = !stoppedEarly && !completeMemoryExceeded;
       const outputMatches = complete && !completeMemoryExceeded ? matches : pageMatches.slice(0, limit);
-      const hasMore = pageMatches.length > limit || (completeMemoryExceeded && stoppedEarly);
+      const hasMore = pageMatches.length > limit || (stoppedEarly && seen >= offset) || (completeMemoryExceeded && stoppedEarly);
       resolvePromise({
         status,
         signal,
@@ -85,6 +89,9 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
         error: timedOut ? 'ETIMEDOUT' : childError ? childError.message : null,
         timed_out: timedOut,
         stopped_early: stoppedEarly,
+        page_match_bytes: pageMatchBytes,
+        page_match_bytes_limit: PAGE_MATCH_BYTES_LIMIT,
+        page_matches_truncated: pageMatchesTruncated,
         count: countExact ? seen : null,
         count_exact: countExact,
         scanned: seen,
@@ -96,7 +103,18 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
 
     function consumeLine(line: string) {
       if (!line.trim()) return;
-      if (seen >= offset && pageMatches.length <= limit) pageMatches.push(line);
+      if (seen >= offset && pageMatches.length <= limit) {
+        const boundedLine = truncateUtf8(line, SINGLE_MATCH_BYTES_LIMIT);
+        if (boundedLine !== line) pageMatchesTruncated += 1;
+        const boundedLineBytes = Buffer.byteLength(boundedLine, 'utf8');
+        if (pageMatchBytes + boundedLineBytes > PAGE_MATCH_BYTES_LIMIT) {
+          stoppedEarly = true;
+          child.kill();
+        } else {
+          pageMatchBytes += boundedLineBytes;
+          pageMatches.push(boundedLine);
+        }
+      }
       if (complete && !completeMemoryExceeded) {
         matchBytes += Buffer.byteLength(line, 'utf8');
         if (matchBytes > maxMatchBytes) {
@@ -131,4 +149,11 @@ function delay(ms: number) {
 
 function truncate(value: string, maxLength: number) {
   return value.length > maxLength ? value.slice(0, maxLength) : value;
+}
+
+function truncateUtf8(value: string, maxBytes: number) {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  let end = Math.min(value.length, maxBytes);
+  while (end > 0 && Buffer.byteLength(value.slice(0, end), 'utf8') > maxBytes) end -= 1;
+  return `${value.slice(0, end)}...[truncated]`;
 }

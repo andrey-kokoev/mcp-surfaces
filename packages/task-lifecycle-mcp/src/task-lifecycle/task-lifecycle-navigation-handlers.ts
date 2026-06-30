@@ -54,11 +54,15 @@ export function createTaskLifecycleNavigationHandlers({
       const nextWorkContract = buildNextWorkContract(board, finalRecommendation);
       const myInProgress = board.in_progress.filter((task) => task.assigned_agent === agentId);
       const myNeedsContinuation = board.needs_continuation.filter((task) => task.assigned_agent === agentId);
-      const obligatedTaskIds = new Set(board.my_review_obligations.map((obligation) => obligation.task_id));
-      const pendingReviews = board.pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
+      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation) => obligation.task_id));
+      const dependencyObligationTasks = board.legacy_pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
       const responseCounts = {
         ...board.counts,
-        all_in_review: board.counts.pending_reviews,
+        dependency_waiting_parents: board.counts.dependency_waiting_parents,
+        dependency_obligations: board.counts.dependency_obligations,
+        dependency_tasks: board.counts.dependency_tasks ?? board.counts.legacy_pending_reviews,
+        legacy_all_in_review: board.counts.legacy_pending_reviews,
+        all_in_review_compat: board.counts.legacy_pending_reviews,
         corrective_debt_active: correctiveDebtReadiness.counts.active_total,
         corrective_debt_high_severity: correctiveDebtReadiness.counts.high_severity,
         corrective_debt_missing_coverage: correctiveDebtReadiness.counts.missing_corrective_task_coverage,
@@ -87,13 +91,19 @@ export function createTaskLifecycleNavigationHandlers({
         recommendation_quality: staleLiveNavigation.field_quality.recommendation,
         in_progress: myInProgress.slice(0, limit),
         needs_continuation: myNeedsContinuation.slice(0, limit),
-        pending_reviews: pendingReviews.slice(0, limit),
-        all_in_review: board.pending_reviews.slice(0, limit),
+        dependency_obligation_tasks: dependencyObligationTasks.slice(0, limit),
+        dependency_tasks: board.dependency_tasks?.slice(0, limit) ?? board.legacy_pending_reviews.slice(0, limit),
+        dependency_waiting_parents: (board.dependency_waiting_parents || []).slice(0, limit),
+        dependency_obligations: (board.dependency_obligations || []).slice(0, limit),
+        legacy_pending_reviews: board.legacy_pending_reviews.slice(0, limit),
+        pending_reviews_compat: dependencyObligationTasks.slice(0, limit),
+        all_in_review_compat: board.legacy_pending_reviews.slice(0, limit),
         local_followups: board.local_followups.slice(0, limit),
         role_wide_followups: (board.role_wide_followups || []).slice(0, limit),
         non_actionable_parent_followups: (board.non_actionable_parent_followups || []).slice(0, limit),
         closure_authority_conflicts: (board.closure_authority_conflicts || []).slice(0, limit),
         downstream_role_followups: (board.downstream_role_followups || []).slice(0, limit),
+        dependency_obligations_compat_review: board.dependency_obligations_compat_review?.slice(0, limit) ?? board.my_review_obligations.slice(0, limit),
         my_review_obligations: board.my_review_obligations.slice(0, limit),
         deferred: board.deferred.slice(0, limit),
         actionable_deferred: board.actionable_deferred.slice(0, limit),
@@ -141,9 +151,16 @@ export function createTaskLifecycleNavigationHandlers({
       const recommendation = deriveNextRecommendation(board, agentId);
       const myInProgress = board.in_progress.filter((task) => task.assigned_agent === agentId);
       const myNeedsContinuation = board.needs_continuation.filter((task) => task.assigned_agent === agentId);
-      const obligatedTaskIds = new Set(board.my_review_obligations.map((obligation) => obligation.task_id));
-      const pendingReviews = board.pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
-      const responseCounts = { ...board.counts, all_in_review: board.counts.pending_reviews };
+      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation) => obligation.task_id));
+      const pendingReviews = board.legacy_pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
+      const responseCounts = {
+        ...board.counts,
+        dependency_waiting_parents: board.counts.dependency_waiting_parents,
+        dependency_obligations: board.counts.dependency_obligations,
+        dependency_tasks: board.counts.dependency_tasks ?? board.dependency_tasks?.length ?? 0,
+        legacy_all_in_review: board.counts.legacy_pending_reviews,
+        all_in_review_compat: board.counts.legacy_pending_reviews,
+      };
       const snapshot = buildWorkboardSnapshotPacket({
         agentId,
         agentRole,
@@ -165,15 +182,21 @@ export function createTaskLifecycleNavigationHandlers({
     task_lifecycle_obligations: (args) => {
       const agentId = stringField(args, 'agent_id');
       const status = stringField(args, 'status') || 'open';
+      const limit = numberField(args, 'limit') ?? 50;
       if (!agentId) throw new Error('agent_id_required');
       const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
       const agentRole = roleResolution.role;
+      const all = store.getAllLifecycle();
+      const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit });
       const obligations = store.listDirectedObligationsForTarget(agentId, agentRole, status)
         .map((obligation) => {
           const spec = obligation.task_number ? store.getTaskSpecByNumber(obligation.task_number) : null;
+          const dependencyObligation = normalizeDependencyObligation(obligation);
           return {
             obligation_id: obligation.obligation_id,
-            kind: obligation.kind,
+            kind: dependencyObligation?.kind ?? obligation.kind,
+            legacy_kind: dependencyObligation?.legacy_kind ?? null,
+            dependency_kind: dependencyObligation?.dependency_kind ?? null,
             status: obligation.status,
             task_number: obligation.task_number,
             task_id: obligation.task_id,
@@ -185,6 +208,36 @@ export function createTaskLifecycleNavigationHandlers({
             updated_at: obligation.updated_at,
           };
         });
+      const dependencyWork = [
+        ...board.in_progress,
+        ...board.needs_continuation,
+        ...board.local_followups,
+        ...(board.role_wide_followups || []),
+        ...(board.actionable_deferred || []),
+      ]
+        .filter((item) => item?.dependency_id)
+        .map((item) => ({
+          type: 'dependency_work',
+          task_number: item.task_number,
+          task_id: item.task_id,
+          title: item.title,
+          status: item.status,
+          assigned_agent: item.assigned_agent,
+          target_role: item.target_role,
+          preferred_agent_id: item.preferred_agent_id,
+          dependency_id: item.dependency_id,
+          dependency_kind: item.dependency_kind,
+          gates_task_id: item.gates_task_id,
+          gates_task_number: item.gates_task_number,
+          outcome_type: item.outcome_type,
+          allowed_outcomes: item.allowed_outcomes || [],
+          satisfying_outcomes: item.satisfying_outcomes || [],
+          blocking_outcomes: item.blocking_outcomes || [],
+          conflict_of_interest_risk: item.conflict_of_interest_risk ?? null,
+          next_tool: item.next_tool,
+          example_args: item.example_args,
+        }))
+        .slice(0, limit);
       return jsonToolResult({
         status: 'ok',
         agent_id: agentId,
@@ -194,8 +247,33 @@ export function createTaskLifecycleNavigationHandlers({
         status_filter: status,
         count: obligations.length,
         obligations,
-        schema: 'narada.task.mcp.obligations.v0',
+        dependency_work_count: dependencyWork.length,
+        dependency_work: dependencyWork,
+        schema: 'narada.task.mcp.obligations.v1',
       });
     },
   };
+}
+
+function normalizeDependencyObligation(obligation) {
+  if (!obligation || (obligation.kind !== 'review_request' && obligation.kind !== 'dependency_request')) return null;
+  const evidence = parseJsonObject(obligation.evidence_json);
+  const evidenceDependencyKind = typeof evidence.dependency_kind === 'string' && evidence.dependency_kind.trim().length > 0
+    ? evidence.dependency_kind.trim()
+    : null;
+  return {
+    kind: 'dependency_request',
+    legacy_kind: obligation.kind,
+    dependency_kind: evidenceDependencyKind ?? (obligation.kind === 'review_request' ? 'review' : null),
+  };
+}
+
+function parseJsonObject(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }

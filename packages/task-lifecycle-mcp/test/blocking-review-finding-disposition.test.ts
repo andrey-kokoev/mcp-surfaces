@@ -139,8 +139,11 @@ try {
   assert.equal(invalidResponse.error, undefined);
   const invalidPayload = await responsePayload(invalidResponse, 2);
   assert.equal(invalidPayload.status, 'blocked');
-  assert.equal(invalidPayload.error, 'blocking_review_finding_disposition_required');
+  assert.equal(invalidPayload.error, 'blocking_outcome_disposition_required');
+  assert.equal(invalidPayload.compatibility_error, 'blocking_review_finding_disposition_required');
   assert.match(invalidPayload.close_blockers[0], /no executable or explicitly deferred disposition/);
+  assert.equal(invalidPayload.next_tool, 'task_lifecycle_dependency_disposition_record');
+  assert.equal(invalidPayload.example_args.kind, 'remediation_task');
 
   const validResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -168,7 +171,7 @@ try {
   }, runtimeOptions);
   assert.equal(validResponse.error, undefined);
   const validPayload = await responsePayload(validResponse, 4);
-  assert.notEqual(validPayload.error, 'blocking_review_finding_disposition_required');
+  assert.notEqual(validPayload.error, 'blocking_outcome_disposition_required');
 } finally {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

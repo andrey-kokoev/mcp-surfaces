@@ -34,6 +34,7 @@ Read tools:
 - `git_diff`: paged working, staged, or commit diff. Pass `offset`, `limit`, and the returned `next_offset` to continue reading. Pass `include_untracked: true` with `scope: "working"` to append bounded untracked-file patches.
 - `git_log`: recent commits, optionally scoped by pathspec.
 - `git_show`: one commit with metadata and optional patch.
+- `git_changed_summary`: compact dirty-tree summary. `pathspec`/`pathspecs` scope primary changed-path counts and arrays while preserving whole-repository counts separately; `expected_paths` classify dirty paths as task-relevant, unrelated, or unknown for commit planning.
 - `git_repositories_summary`: multi-repository status and push-readiness summary for handoffs.
 - `git_workflow_record`: durable record for completed multi-repository stage/commit/push workflows.
 

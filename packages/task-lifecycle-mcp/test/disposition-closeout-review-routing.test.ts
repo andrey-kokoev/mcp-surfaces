@@ -213,7 +213,10 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.ok(payload.finish_result, JSON.stringify(payload, null, 2));
   assert.equal(payload.finish_result.status, 'success');
   assert.equal(payload.finish_result.close_action, 'skipped');
-  assert.equal(payload.finish_result.new_status, 'in_review');
+  assert.equal(payload.finish_result.new_status, 'awaiting_dependencies');
+  assert.equal(payload.finish_result.review_action, 'dependency_requested');
+  assert.equal(payload.finish_result.blocked_by, 'dependencies');
+  assert.equal(payload.finish_result.review_dependency.dependency_kind, 'review');
   assert.deepEqual(payload.lifecycle_store_paths, ['.ai/do-not-open/tasks/20260604-9001-review-routing-closeout.md']);
   assert.deepEqual(payload.commit_ready.stage_paths, []);
   assert.deepEqual(payload.commit_ready.non_committable_lifecycle_store_paths, ['.ai/do-not-open/tasks/20260604-9001-review-routing-closeout.md']);
@@ -238,8 +241,11 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   }, runtimeOptions);
   assert.equal(showResponse.error, undefined);
   const showPayload = showResponse.result.structuredContent;
-  assert.ok(Array.isArray(showPayload.eligible_reviewers));
-  assert.ok(showPayload.eligible_reviewers.some((r) => r.agent_id === 'smart-scheduling.architect'));
+  assert.equal(Object.hasOwn(showPayload, 'eligible_reviewers'), false);
+  assert.ok(Array.isArray(showPayload.dependencies_blocking_this_task));
+  assert.ok(Array.isArray(showPayload.dependency_context));
+  assert.equal(showPayload.dependency_satisfaction.all_satisfied, false);
+  assert.equal(showPayload.dependency_satisfaction.unsatisfied_count, 1);
 
   const reviewResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -258,11 +264,21 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(reviewResponse.error, undefined);
   const reviewPayload = reviewResponse.result.structuredContent;
   assert.equal(reviewPayload.status, 'success');
-  assert.equal(reviewPayload.lifecycle_status, 'closed');
+  assert.equal(reviewPayload.completion_mode, 'review_compatibility_dependency_outcome');
+  assert.equal(reviewPayload.close_action, 'skipped');
+  const reviewCompatibilityOutcome = reviewPayload.review_compatibility_dependency_outcome;
+  assert.equal(reviewCompatibilityOutcome.outcome_contract.outcome_type, 'review');
+  assert.equal(reviewCompatibilityOutcome.task_outcome.outcome, 'accepted');
+  assert.equal(reviewCompatibilityOutcome.dependency_satisfaction.all_satisfied, true);
 
   const verifyStore = openTaskLifecycleStore(siteRoot);
   try {
-    assert.equal(verifyStore.getLifecycle(taskId)?.status, 'closed');
+    assert.notEqual(verifyStore.getLifecycle(taskId)?.status, 'closed');
+    const dependencies = verifyStore.listTaskDependenciesForParent(taskId);
+    assert.equal(dependencies.length, 1);
+    assert.equal(dependencies[0].kind, 'review');
+    const latestReviewOutcome = verifyStore.getLatestTaskOutcome(dependencies[0].required_task_id);
+    assert.equal(latestReviewOutcome?.outcome, 'accepted');
     assert.equal(verifyStore.listDirectedObligationsForTask(taskId).length, 0);
   } finally {
     verifyStore.db.close();
