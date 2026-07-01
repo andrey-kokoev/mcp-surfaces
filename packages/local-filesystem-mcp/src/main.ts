@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import {
   attachPayloadSource,
   listOutputResources,
@@ -95,9 +96,11 @@ async function callReadToolWithRequestDeadline(name, args, state, context) {
     await delayWithDeadline(artificialDelayMs, context.abortSignal, timeoutMs, deadline.timeoutError);
   }
   deadline.check();
-  const result = callTool({ name, arguments: args }, state);
+  const value = name === 'fs_read_file'
+    ? await readFileToolAsync(args, state)
+    : await readFileRangeToolAsync(args, state);
   deadline.check();
-  return result;
+  return toolResult(value);
 }
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
@@ -602,6 +605,26 @@ function readFileRangeTool(args, state) {
   return capReadFileResult(value);
 }
 
+async function readFileToolAsync(args, state) {
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
+  const offset = Math.max(1, integerField(args, 'offset') ?? 1);
+  const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
+  const timeoutMs = readOperationTimeoutMs(args);
+  const value = await readFileRangeAsync({ path, root, offset, limit, timeoutMs, operation: 'fs_read_file' }, state);
+  return capReadFileResult(value);
+}
+
+async function readFileRangeToolAsync(args, state) {
+  const startLine = integerField(args, 'start_line');
+  const endLine = integerField(args, 'end_line');
+  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
+  const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
+  const timeoutMs = readOperationTimeoutMs(args);
+  const value = await readFileRangeAsync({ path, root, offset: startLine, limit: endLine - startLine + 1, timeoutMs, operation: 'fs_read_file_range' }, state);
+  return capReadFileResult(value);
+}
+
 function capReadFileResult(value) {
   const rendered = renderFilesystemToolResultText(value);
   if (rendered.length <= READ_RESULT_INLINE_CHAR_LIMIT) return value;
@@ -662,6 +685,173 @@ function readFileRange({ path, root, offset, limit, timeoutMs, operation }) {
     timeout_ms: timeoutMs,
   };
 }
+
+async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operation }, state) {
+  const startedAt = Date.now();
+  const worker = new Worker(READ_LINE_WINDOW_WORKER_SOURCE, {
+    eval: true,
+    workerData: {
+      path,
+      root,
+      offset,
+      limit,
+      operation,
+      blockMs: readWorkerBlockMs(state),
+    },
+  });
+  let settled = false;
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      void worker.terminate();
+      rejectPromise(readTimeoutError(operation, timeoutMs, {
+        path,
+        root,
+        offset,
+        limit,
+        elapsedMs: Math.max(Date.now() - startedAt, timeoutMs + 1),
+      }));
+    }, timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker.removeAllListeners();
+    };
+    worker.on('message', (message) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      const record = asRecord(message);
+      if (record.ok === true) {
+        const window = asRecord(record.window);
+        const content = Array.isArray(window.selected) ? window.selected.join('\n') : '';
+        resolvePromise({
+          schema: 'local.filesystem.read.v1',
+          path,
+          root,
+          relative_path: relative(root, path).replace(/\\/g, '/'),
+          total_lines: window.totalLines ?? null,
+          total_lines_exact: window.totalLinesExact === true,
+          total_lines_status: window.totalLinesExact === true ? 'exact' : 'unknown_after_window',
+          line_window_complete: window.totalLinesExact === true,
+          offset,
+          limit,
+          returned_lines: Array.isArray(window.selected) ? window.selected.length : 0,
+          next_offset: window.nextOffset ?? null,
+          content,
+          content_sha256: String(window.contentSha256 ?? ''),
+          content_window_sha256: sha256(content),
+          timeout_ms: timeoutMs,
+        });
+        return;
+      }
+      const error = asRecord(record.error);
+      rejectPromise(diagnosticError(
+        stringField(error, 'codeName') ?? `${operation}_failed`,
+        stringField(error, 'message') ?? `${operation}_failed`,
+        error.details ?? {},
+      ));
+    });
+    worker.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectPromise(error);
+    });
+    worker.on('exit', (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      rejectPromise(diagnosticError(`${operation}_worker_exited`, `${operation}_worker_exited`, { code, ...pathMetadata(path, root) }));
+    });
+  });
+}
+
+function readWorkerBlockMs(state) {
+  const value = Number(asRecord(state.env).NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS ?? 0);
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
+}
+
+const READ_LINE_WINDOW_WORKER_SOURCE = String.raw`
+const { parentPort, workerData } = require('node:worker_threads');
+const { openSync, readSync, closeSync } = require('node:fs');
+const { createHash } = require('node:crypto');
+const { StringDecoder } = require('node:string_decoder');
+
+const READ_BUFFER_BYTES = ${READ_BUFFER_BYTES};
+
+function pathMetadata(path, root) {
+  const relative = require('node:path').relative(root, path).replace(/\\/g, '/');
+  return { path, root, relative_path: relative };
+}
+
+function fail(codeName, message, details = {}) {
+  const error = new Error(message);
+  error.codeName = codeName;
+  error.details = details;
+  throw error;
+}
+
+function readTextLineWindow({ path, root, offset, limit }) {
+  const fd = openSync(path, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  const selected = [];
+  const hash = createHash('sha256');
+  let pending = '';
+  let lineNumber = 0;
+  let reachedEof = false;
+  let nextOffset = null;
+  try {
+    while (true) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        reachedEof = true;
+        break;
+      }
+      const chunk = buffer.subarray(0, bytesRead);
+      if (chunk.includes(0)) fail('binary_file_not_supported', 'binary_file_not_supported: ' + path, pathMetadata(path, root));
+      hash.update(chunk);
+      pending += decoder.write(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        lineNumber += 1;
+        if (lineNumber >= offset && selected.length < limit) selected.push(line);
+        else if (lineNumber >= offset + limit) {
+          nextOffset = lineNumber;
+          return { selected, nextOffset, totalLines: null, totalLinesExact: false, contentSha256: hash.digest('hex') };
+        }
+      }
+    }
+    pending += decoder.end();
+    if (pending.length > 0) {
+      lineNumber += 1;
+      if (lineNumber >= offset && selected.length < limit) selected.push(pending);
+      else if (lineNumber >= offset + limit) nextOffset = lineNumber;
+    }
+    return { selected, nextOffset, totalLines: reachedEof ? lineNumber : null, totalLinesExact: reachedEof, contentSha256: hash.digest('hex') };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+(async () => {
+  try {
+    if (workerData.blockMs > 0) await new Promise((resolve) => setTimeout(resolve, workerData.blockMs));
+    parentPort.postMessage({ ok: true, window: readTextLineWindow(workerData) });
+  } catch (error) {
+    parentPort.postMessage({
+      ok: false,
+      error: {
+        codeName: error && error.codeName ? error.codeName : 'read_worker_failed',
+        message: error && error.message ? error.message : String(error),
+        details: error && error.details ? error.details : {},
+      },
+    });
+  }
+})();
+`;
 
 function statTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_stat' });
@@ -1271,27 +1461,31 @@ function createReadTimeoutChecker(operation, timeoutMs, { path, root, offset, li
   return () => {
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs <= timeoutMs) return;
-    throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
-      timeout_kind: 'read_timeout',
-      timeout_ms: timeoutMs,
-      elapsed_ms: elapsedMs,
-      ...pathMetadata(path, root),
-      offset,
-      limit,
-      recommended_tool: 'fs_read_file_range',
-      recommended_args: {
-        path,
-        start_line: offset,
-        end_line: Math.max(offset, offset + Math.min(limit, 100) - 1),
-        timeout_ms: Math.min(60_000, Math.max(timeoutMs * 2, DEFAULT_READ_OPERATION_TIMEOUT_MS)),
-      },
-      remediation: [
-        'Retry with fs_read_file_range and a narrower line window.',
-        'Use fs_grep_search or fs_stat first when the file may be on a slow or virtualized filesystem.',
-        'Increase timeout_ms only after narrowing the requested line window.',
-      ],
-    });
+    throw readTimeoutError(operation, timeoutMs, { path, root, offset, limit, elapsedMs });
   };
+}
+
+function readTimeoutError(operation, timeoutMs, { path, root, offset, limit, elapsedMs }) {
+  return diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
+    timeout_kind: 'read_timeout',
+    timeout_ms: timeoutMs,
+    elapsed_ms: elapsedMs,
+    ...pathMetadata(path, root),
+    offset,
+    limit,
+    recommended_tool: 'fs_read_file_range',
+    recommended_args: {
+      path,
+      start_line: offset,
+      end_line: Math.max(offset, offset + Math.min(limit, 100) - 1),
+      timeout_ms: Math.min(60_000, Math.max(timeoutMs * 2, DEFAULT_READ_OPERATION_TIMEOUT_MS)),
+    },
+    remediation: [
+      'Retry with fs_read_file_range and a narrower line window.',
+      'Use fs_grep_search or fs_stat first when the file may be on a slow or virtualized filesystem.',
+      'Increase timeout_ms only after narrowing the requested line window.',
+    ],
+  });
 }
 
 function createOperationTimeoutChecker(operation, timeoutMs) {

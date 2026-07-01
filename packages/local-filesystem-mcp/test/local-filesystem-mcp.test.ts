@@ -283,18 +283,21 @@ trust_level = "untrusted"
   assert.equal(timeoutReadResponse.error.data.details.recommended_args.start_line, 200000);
   assert.match(oversizedReadResponse.result.content[0].text, /read_window_too_large/);
 
-  (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS = '25';
+  (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS = '60000';
+  const blockedReadStartedAt = Date.now();
   const requestPathTimeout = await handleRequestAsync({
     jsonrpc: '2.0',
     id: 1014,
     method: 'tools/call',
-    params: { name: 'fs_read_file_range', arguments: { path: join(trusted, 'a.txt'), start_line: 1, end_line: 1, timeout_ms: 1 } },
+    params: { name: 'fs_read_file_range', arguments: { path: join(trusted, 'a.txt'), start_line: 1, end_line: 1, timeout_ms: 5 } },
   }, readState) as unknown as JsonRpcTestResponse;
-  delete (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS;
+  const blockedReadElapsedMs = Date.now() - blockedReadStartedAt;
+  delete (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS;
   assert.equal(requestPathTimeout.error.data.code, 'fs_read_file_range_timed_out');
-  assert.equal(requestPathTimeout.error.data.details.timeout_kind, 'read_request_timeout');
-  assert.equal(requestPathTimeout.error.data.details.timeout_ms, 1);
+  assert.equal(requestPathTimeout.error.data.details.timeout_kind, 'read_timeout');
+  assert.equal(requestPathTimeout.error.data.details.timeout_ms, 5);
   assert.equal(typeof requestPathTimeout.error.data.details.elapsed_ms, 'number');
+  assert.equal(blockedReadElapsedMs < 1000, true);
   assert.equal(requestPathTimeout.error.data.details.path, join(trusted, 'a.txt'));
   assert.equal(requestPathTimeout.error.data.details.recommended_tool, 'fs_read_file_range');
   assert.equal(requestPathTimeout.error.data.details.recommended_args.start_line, 1);
