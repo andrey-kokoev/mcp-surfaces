@@ -492,6 +492,24 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'sop_run_coverage_since',
+      description: 'List latest SOP run coverage for templates and classify active templates not run since a supplied timestamp.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          since: { type: 'string', description: 'ISO 8601 timestamp used as the freshness threshold.' },
+          template_status: { type: 'string', enum: TEMPLATE_STATUSES, default: 'active' },
+          status: { type: 'string', enum: RUN_STATUSES, description: 'Optional latest-run status filter.' },
+          include_terminal: { type: 'boolean', default: true },
+          limit: { type: 'number', default: 200 },
+        },
+        required: ['since'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_run_coverage_since', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'sop_run_cancel',
       description: 'Cancel a pending or running SOP run.',
       inputSchema: {
@@ -547,6 +565,7 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_run_refresh': result = await sopRunRefresh(args, state); break;
     case 'sop_run_advance': result = await sopRunAdvance(args, state); break;
     case 'sop_run_list': result = sopRunList(args, state); break;
+    case 'sop_run_coverage_since': result = sopRunCoverageSince(args, state); break;
     case 'sop_run_cancel': result = sopRunCancel(args, state); break;
     case 'sop_run_events': result = sopRunEvents(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
@@ -892,6 +911,63 @@ function sopRunList(args: JsonRecord, state: SopState) {
   params.push(limit);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
   return { items: rows.map(hydrateRun), count: rows.length };
+}
+
+function sopRunCoverageSince(args: JsonRecord, state: SopState) {
+  const since = requiredString(args.since, 'sop_requires_since');
+  const sinceTime = Date.parse(since);
+  if (!Number.isFinite(sinceTime)) throw diagnosticError('sop_since_must_be_iso_timestamp', `sop_since_must_be_iso_timestamp:${since}`, { since });
+  const limit = clamp(integer(args.limit, 200, 1, 500), 1, 500);
+  const templateStatus = optionalString(args.template_status) ?? 'active';
+  if (!TEMPLATE_STATUSES.includes(templateStatus as typeof TEMPLATE_STATUSES[number])) throw diagnosticError('sop_template_status_unsupported', `sop_template_status_unsupported:${templateStatus}`, { template_status: templateStatus, allowed: TEMPLATE_STATUSES });
+  const runStatus = optionalString(args.status);
+  if (runStatus && !RUN_STATUSES.includes(runStatus as typeof RUN_STATUSES[number])) throw diagnosticError('sop_run_status_unsupported', `sop_run_status_unsupported:${runStatus}`, { status: runStatus, allowed: RUN_STATUSES });
+  const includeTerminal = args.include_terminal === undefined ? true : Boolean(args.include_terminal);
+  const templates = state.db.prepare(
+    `SELECT t.* FROM sop_templates t JOIN (SELECT sop_id, MAX(version) as mv FROM sop_templates GROUP BY sop_id) latest ON t.sop_id = latest.sop_id AND t.version = latest.mv WHERE t.status = ? ORDER BY t.updated_at DESC LIMIT ?`
+  ).all(templateStatus, limit) as JsonRecord[];
+  const runStatement = state.db.prepare('SELECT * FROM sop_runs WHERE sop_id = ? AND sop_version = ? ORDER BY created_at DESC LIMIT 1');
+  const items = templates.map((template) => {
+    const latestRun = runStatement.get(String(template.sop_id), Number(template.version)) as JsonRecord | undefined;
+    const hydratedRun = latestRun ? hydrateRun(latestRun) : null;
+    const latestRunAt = latestRun ? String(latestRun.created_at ?? latestRun.updated_at ?? '') : null;
+    const latestRunTime = latestRunAt ? Date.parse(latestRunAt) : NaN;
+    const classification = !latestRun
+      ? 'not_run'
+      : Number.isFinite(latestRunTime) && latestRunTime >= sinceTime
+        ? 'recent'
+        : 'stale';
+    return {
+      sop_id: String(template.sop_id),
+      version: Number(template.version),
+      title: String(template.title ?? ''),
+      template_status: String(template.status ?? ''),
+      classification,
+      stale: classification !== 'recent',
+      latest_run_id: hydratedRun?.run_id ?? null,
+      latest_run_at: latestRunAt,
+      latest_run_status: hydratedRun?.status ?? null,
+      latest_run: hydratedRun,
+    };
+  }).filter((item) => {
+    if (!includeTerminal && item.latest_run_status && RUN_TERMINAL.has(String(item.latest_run_status))) return false;
+    if (runStatus && item.latest_run_status !== runStatus) return false;
+    return item.classification !== 'recent';
+  });
+  return {
+    schema: 'narada.sop.run_coverage_since.v1',
+    status: 'ok',
+    since,
+    template_status: templateStatus,
+    run_status: runStatus ?? null,
+    include_terminal: includeTerminal,
+    items,
+    count: items.length,
+    classification_counts: items.reduce((acc: Record<string, number>, item) => {
+      acc[item.classification] = (acc[item.classification] ?? 0) + 1;
+      return acc;
+    }, {}),
+  };
 }
 
 function sopRunCancel(args: JsonRecord, state: SopState) {

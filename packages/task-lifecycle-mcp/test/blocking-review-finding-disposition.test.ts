@@ -172,6 +172,14 @@ try {
   assert.equal(validResponse.error, undefined);
   const validPayload = await responsePayload(validResponse, 4);
   assert.notEqual(validPayload.error, 'blocking_outcome_disposition_required');
+  const nextCommand = validPayload.blocking_outcome_remediation.next_command;
+  assert.equal(validPayload.blocking_outcome_remediation.directly_executable, true);
+  assert.equal(nextCommand.tool, 'task_lifecycle_dependency_disposition_record');
+  assert.equal(nextCommand.args.agent_id, 'smart-scheduling.architect');
+  assert.equal(nextCommand.args.kind, 'remediation_task');
+  assert.equal(nextCommand.args.target_task_id, remediationTaskId);
+  assert.equal(typeof nextCommand.args.dependency_id, 'string');
+  assert.match(nextCommand.args.summary, /remediation task #9102/);
 } finally {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

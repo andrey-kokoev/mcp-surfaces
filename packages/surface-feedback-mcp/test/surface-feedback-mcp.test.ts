@@ -31,6 +31,20 @@ try {
   assert.equal(view(doctor).canonical_feedback_root, root);
   assert.match(view(doctor).db_path, /surface-feedback\.db$/);
 
+  const liveProofTemplate = await call('surface_feedback_live_proof_template', {
+    surface_id: 'cloudflare-carrier',
+    workflow: 'projection-live-proof',
+  });
+  const liveProofData = view(liveProofTemplate);
+  assert.equal(liveProofData.schema, 'narada.surface_feedback.live_proof_template.v1');
+  assert.equal(liveProofData.surface_id, 'cloudflare-carrier');
+  assert.equal(liveProofData.workflow, 'projection-live-proof');
+  assert.ok(liveProofData.live_proof_contract.authority_location.deployed);
+  assert.ok(liveProofData.live_proof_contract.transport.replay_vs_live_delivery);
+  assert.ok(liveProofData.live_proof_contract.exclusions.no_mock);
+  assert.ok(liveProofData.live_proof_contract.negative_controls.revocation_or_refusal_proof);
+  assert.ok(liveProofData.live_proof_contract.test_alignment.unit_tests_specify_deployed_transport);
+
   const noncanonicalState = createServerState({ feedbackRoot: join(root, 'site-local'), canonicalFeedbackRoot: root });
   const noncanonicalDoctor = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'surface_feedback_doctor', arguments: {} } }, noncanonicalState) as Record<string, any>;
   assert.equal(view(noncanonicalDoctor).status, 'warning');

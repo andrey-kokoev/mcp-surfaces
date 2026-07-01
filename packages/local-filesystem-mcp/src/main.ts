@@ -22,6 +22,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const INLINE_RESULT_CHAR_LIMIT = 6000;
 const READ_RESULT_INLINE_CHAR_LIMIT = 20_000;
 const READ_BUFFER_BYTES = 64 * 1024;
+const DEFAULT_READ_OPERATION_TIMEOUT_MS = 5_000;
 const DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS = 10_000;
 const ROOTS_LIST_REQUEST_PREFIX = 'local_filesystem_roots_';
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
@@ -293,6 +294,7 @@ export function listTools(mode) {
         path: { type: 'string' },
         offset: { type: 'integer', default: 1 },
         limit: { type: 'integer', default: 400 },
+        timeout_ms: { type: 'integer', description: 'Optional read timeout in milliseconds. Defaults to 5000.' },
       }, ['path']),
     },
     {
@@ -302,6 +304,7 @@ export function listTools(mode) {
         path: { type: 'string' },
         start_line: { type: 'integer' },
         end_line: { type: 'integer' },
+        timeout_ms: { type: 'integer', description: 'Optional read timeout in milliseconds. Defaults to 5000.' },
       }, ['path', 'start_line', 'end_line']),
     },
     {
@@ -488,7 +491,8 @@ function readFileTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
-  const value = readFileRange({ path, root, offset, limit });
+  const timeoutMs = readOperationTimeoutMs(args);
+  const value = readFileRange({ path, root, offset, limit, timeoutMs, operation: 'fs_read_file' });
   return capReadFileResult(value);
 }
 
@@ -498,7 +502,8 @@ function readFileRangeTool(args, state) {
   if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
   if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
-  const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1 });
+  const timeoutMs = readOperationTimeoutMs(args);
+  const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1, timeoutMs, operation: 'fs_read_file_range' });
   return capReadFileResult(value);
 }
 
@@ -540,10 +545,9 @@ function capReadFileResult(value) {
   };
 }
 
-function readFileRange({ path, root, offset, limit }) {
-  const window = readTextLineWindow({ path, root, offset, limit });
+function readFileRange({ path, root, offset, limit, timeoutMs, operation }) {
+  const window = readTextLineWindow({ path, root, offset, limit, timeoutMs, operation });
   const content = window.selected.join('\n');
-  const fullFileSha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
   return {
     schema: 'local.filesystem.read.v1',
     path,
@@ -558,8 +562,9 @@ function readFileRange({ path, root, offset, limit }) {
     returned_lines: window.selected.length,
     next_offset: window.nextOffset,
     content,
-    content_sha256: fullFileSha256,
+    content_sha256: window.contentSha256,
     content_window_sha256: sha256(content),
+    timeout_ms: timeoutMs,
   };
 }
 
@@ -1064,24 +1069,29 @@ function pathMetadata(path, root) {
   };
 }
 
-function readTextLineWindow({ path, root, offset, limit }) {
+function readTextLineWindow({ path, root, offset, limit, timeoutMs, operation }) {
   const fd = openSync(path, 'r');
   const decoder = new StringDecoder('utf8');
   const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
   const selected = [];
+  const hash = createHash('sha256');
   let pending = '';
   let lineNumber = 0;
   let reachedEof = false;
   let nextOffset = null;
+  const checkTimeout = createReadTimeoutChecker(operation, timeoutMs, { path, root, offset, limit });
   try {
     while (true) {
+      checkTimeout();
       const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      checkTimeout();
       if (bytesRead === 0) {
         reachedEof = true;
         break;
       }
       const chunk = buffer.subarray(0, bytesRead);
       if (chunk.includes(0)) throw diagnosticError('binary_file_not_supported', `binary_file_not_supported: ${path}`, pathMetadata(path, root));
+      hash.update(chunk);
       pending += decoder.write(chunk);
       const lines = pending.split(/\r?\n/);
       pending = lines.pop() ?? '';
@@ -1095,6 +1105,7 @@ function readTextLineWindow({ path, root, offset, limit }) {
             nextOffset,
             totalLines: null,
             totalLinesExact: false,
+            contentSha256: hash.digest('hex'),
           };
         }
       }
@@ -1110,6 +1121,7 @@ function readTextLineWindow({ path, root, offset, limit }) {
       nextOffset,
       totalLines: reachedEof ? lineNumber : null,
       totalLinesExact: reachedEof,
+      contentSha256: hash.digest('hex'),
     };
   } finally {
     closeSync(fd);
@@ -1140,10 +1152,44 @@ function searchTimeoutMs(args) {
   return Math.min(300_000, Math.max(1, value));
 }
 
+function readOperationTimeoutMs(args) {
+  const value = integerField(args, 'timeout_ms');
+  if (value === null) return DEFAULT_READ_OPERATION_TIMEOUT_MS;
+  return Math.min(60_000, Math.max(1, value));
+}
+
 function filesystemOperationTimeoutMs(args) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS;
   return Math.min(300_000, Math.max(1, value));
+}
+
+function createReadTimeoutChecker(operation, timeoutMs, { path, root, offset, limit }) {
+  const startedAt = Date.now();
+  return () => {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs <= timeoutMs) return;
+    throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
+      timeout_kind: 'read_timeout',
+      timeout_ms: timeoutMs,
+      elapsed_ms: elapsedMs,
+      ...pathMetadata(path, root),
+      offset,
+      limit,
+      recommended_tool: 'fs_read_file_range',
+      recommended_args: {
+        path,
+        start_line: offset,
+        end_line: Math.max(offset, offset + Math.min(limit, 100) - 1),
+        timeout_ms: Math.min(60_000, Math.max(timeoutMs * 2, DEFAULT_READ_OPERATION_TIMEOUT_MS)),
+      },
+      remediation: [
+        'Retry with fs_read_file_range and a narrower line window.',
+        'Use fs_grep_search or fs_stat first when the file may be on a slow or virtualized filesystem.',
+        'Increase timeout_ms only after narrowing the requested line window.',
+      ],
+    });
+  };
 }
 
 function createOperationTimeoutChecker(operation, timeoutMs) {

@@ -352,6 +352,59 @@ function validateBlockingFindingDispositions(findings: unknown, store): { ok: tr
   };
 }
 
+function dependencyDispositionCommandFromFindings(findings: unknown, store, dependencyId: string, agentId: string): Record<string, unknown> | null {
+  if (!Array.isArray(findings)) return null;
+  for (const finding of findings) {
+    const record = asRecord(finding);
+    if (!record || record.severity !== 'blocking') continue;
+    const remediationTaskNumber = taskNumberFromDisposition(record.remediation_task);
+    if (remediationTaskNumber) {
+      const lifecycle = store.getLifecycleByNumber(remediationTaskNumber);
+      if (!lifecycle?.task_id) return null;
+      return {
+        tool: 'task_lifecycle_dependency_disposition_record',
+        args: {
+          dependency_id: dependencyId,
+          agent_id: agentId,
+          kind: 'remediation_task',
+          target_task_id: lifecycle.task_id,
+          summary: dispositionString(record.remediation_task) ?? `Blocking review finding routed to remediation task #${remediationTaskNumber}.`,
+        },
+      };
+    }
+    const coveredTaskNumber = taskNumberFromDisposition(record.covered_by_existing_task);
+    if (coveredTaskNumber) {
+      const lifecycle = store.getLifecycleByNumber(coveredTaskNumber);
+      if (!lifecycle?.task_id) return null;
+      return {
+        tool: 'task_lifecycle_dependency_disposition_record',
+        args: {
+          dependency_id: dependencyId,
+          agent_id: agentId,
+          kind: 'covered_by_existing_task',
+          target_task_id: lifecycle.task_id,
+          summary: dispositionString(record.covered_by_existing_task) ?? `Blocking review finding covered by existing task #${coveredTaskNumber}.`,
+        },
+      };
+    }
+    const routedObligationId = nonEmptyString(record.routed_obligation_id)
+      ?? nonEmptyString(asRecord(record.routed_obligation)?.obligation_id);
+    if (routedObligationId) {
+      return {
+        tool: 'task_lifecycle_dependency_disposition_record',
+        args: {
+          dependency_id: dependencyId,
+          agent_id: agentId,
+          kind: 'routed_obligation',
+          routed_obligation_id: routedObligationId,
+          summary: dispositionString(record.routed_obligation) ?? `Blocking review finding routed to obligation ${routedObligationId}.`,
+        },
+      };
+    }
+  }
+  return null;
+}
+
 export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_self_certification_preflight",
   "task_lifecycle_admit_evidence",
@@ -1495,9 +1548,10 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         close_reason: 'task_lifecycle_review is compatibility migration only; parent closure is governed by dependency satisfaction.',
       };
       const dependencySatisfaction = asRecord(migrationOutcome)?.dependency_satisfaction;
-      if (asRecord(dependencySatisfaction)?.disposition_required === true) {
-        const dependencyRecord = asRecord(asRecord(migrationOutcome)?.dependency);
-        const dependencyId = typeof dependencyRecord?.dependency_id === 'string' ? dependencyRecord.dependency_id : '<dependency_id>';
+      const dependencyRecord = asRecord(asRecord(migrationOutcome)?.dependency);
+      const dependencyId = typeof dependencyRecord?.dependency_id === 'string' ? dependencyRecord.dependency_id : '<dependency_id>';
+      const nextCommand = dependencyDispositionCommandFromFindings(parsedFindings, store, dependencyId, agentId);
+      if (asRecord(dependencySatisfaction)?.disposition_required === true || nextCommand) {
         payload.blocking_outcome_remediation = {
           next_tool: 'task_lifecycle_dependency_disposition_record',
           example_args: {
@@ -1506,6 +1560,8 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
             kind: 'remediation_task',
             summary: 'Record how this blocking dependency outcome will be resolved.',
           },
+          next_command: nextCommand,
+          directly_executable: nextCommand !== null,
           allowed_kinds: ['remediation_task', 'covered_by_existing_task', 'routed_obligation', 'operator_decision_required', 'operator_deferred', 'out_of_scope_or_rejected'],
         };
       }

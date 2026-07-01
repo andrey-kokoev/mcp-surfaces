@@ -260,6 +260,44 @@ steps:
   assert.equal((view(runList).items as Array<unknown>).length >= 1, true);
 
   await call('sop_template_create', {
+    sop_id: 'coverage-never-run',
+    title: 'Coverage Never Run',
+    steps: [{ id: 'first', ...eng, title: 'First', instructions: 'First step.' }],
+  });
+  await call('sop_template_update', { sop_id: 'coverage-never-run', status: 'active' });
+  await call('sop_template_create', {
+    sop_id: 'coverage-stale',
+    title: 'Coverage Stale',
+    steps: [{ id: 'first', ...eng, title: 'First', instructions: 'First step.' }],
+  });
+  await call('sop_template_update', { sop_id: 'coverage-stale', status: 'active' });
+  const staleRun = await call('sop_run_start', { sop_id: 'coverage-stale', triggered_by: 'test' });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const recentThreshold = new Date().toISOString();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await call('sop_template_create', {
+    sop_id: 'coverage-recent',
+    title: 'Coverage Recent',
+    steps: [{ id: 'first', ...eng, title: 'First', instructions: 'First step.' }],
+  });
+  await call('sop_template_update', { sop_id: 'coverage-recent', status: 'active' });
+  await call('sop_run_start', { sop_id: 'coverage-recent', triggered_by: 'test' });
+  await call('sop_template_create', {
+    sop_id: 'coverage-inactive',
+    title: 'Coverage Inactive',
+    steps: [{ id: 'first', ...eng, title: 'First', instructions: 'First step.' }],
+  });
+  await call('sop_template_update', { sop_id: 'coverage-inactive', status: 'draft' });
+  const coverage = view(await call('sop_run_coverage_since', { since: recentThreshold }));
+  const coverageItems = coverage.items as Array<Record<string, any>>;
+  const byId = Object.fromEntries(coverageItems.map((item) => [item.sop_id, item]));
+  assert.equal(byId['coverage-never-run'].classification, 'not_run');
+  assert.equal(byId['coverage-stale'].classification, 'stale');
+  assert.equal(byId['coverage-stale'].latest_run_id, view(staleRun).run_id);
+  assert.equal(byId['coverage-recent'], undefined);
+  assert.equal(byId['coverage-inactive'], undefined);
+
+  await call('sop_template_create', {
     sop_id: 'cancellable', title: 'Cancellable',
     steps: [
       { id: 'first', ...op, title: 'First', instructions: 'Do first.', depends_on: [] },

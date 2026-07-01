@@ -53,6 +53,7 @@ try {
     'sop_run_refresh',
     'sop_run_advance',
     'sop_run_list',
+    'sop_run_coverage_since',
     'sop_run_cancel',
     'sop_run_events',
   ];

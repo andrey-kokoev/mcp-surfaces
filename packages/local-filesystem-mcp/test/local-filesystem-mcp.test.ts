@@ -258,6 +258,7 @@ trust_level = "untrusted"
   assert.equal(boundedReadResponse.result.structuredContent.schema, 'local.filesystem.read.v1');
   assert.equal(boundedReadResponse.result.structuredContent.returned_lines, 100);
   assert.equal(boundedReadResponse.result.structuredContent.next_offset, 101);
+  assert.equal(boundedReadResponse.result.structuredContent.timeout_ms, 5000);
   assert.match(boundedReadResponse.result.structuredContent.content, /line-100/);
 
   const oversizedReadResponse = call(readState, 1012, 'fs_read_file', { path: join(trusted, 'bounded-read.txt'), limit: 500 });
@@ -273,6 +274,13 @@ trust_level = "untrusted"
     end_line: 100,
   });
   assert.equal(String(oversizedReadResponse.result.content[0].text).includes('line-500'), false);
+
+  writeFileSync(join(trusted, 'read-timeout.txt'), `${Array.from({ length: 250000 }, (_, index) => `line-${index}`).join('\n')}\n`, 'utf8');
+  const timeoutReadResponse = call(readState, 1013, 'fs_read_file', { path: join(trusted, 'read-timeout.txt'), offset: 200000, limit: 1000, timeout_ms: 1 });
+  assert.equal(timeoutReadResponse.error.data.code, 'fs_read_file_timed_out');
+  assert.equal(timeoutReadResponse.error.data.details.timeout_kind, 'read_timeout');
+  assert.equal(timeoutReadResponse.error.data.details.recommended_tool, 'fs_read_file_range');
+  assert.equal(timeoutReadResponse.error.data.details.recommended_args.start_line, 200000);
   assert.match(oversizedReadResponse.result.content[0].text, /read_window_too_large/);
 
   const rangeResponse = call(readState, 11, 'fs_read_file_range', { path: join(trusted, 'a.txt'), start_line: 2, end_line: 2 });

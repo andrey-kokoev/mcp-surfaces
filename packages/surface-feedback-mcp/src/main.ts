@@ -127,6 +127,20 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'surface_feedback_live_proof_template',
+      description: 'Return a reusable structured template for live no-mock proof feedback and task handoff packets.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          workflow: { type: 'string', description: 'Optional workflow label to echo into the template.' },
+          surface_id: { type: 'string', description: 'Optional surface identifier the proof contract will concern.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_live_proof_template', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'surface_feedback_update_status',
       description: 'Update one feedback entry status with a concise resolution or routing note.',
       inputSchema: {
@@ -255,6 +269,7 @@ function callTool(params: JsonRecord, state: FeedbackState) {
       break;
     case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
+    case 'surface_feedback_live_proof_template': result = feedbackLiveProofTemplate(args); break;
     case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;
     case 'surface_feedback_update_status_batch': result = feedbackUpdateStatusBatch(args, state); break;
     case 'surface_feedback_import': result = feedbackImport(args, state); break;
@@ -264,6 +279,52 @@ function callTool(params: JsonRecord, state: FeedbackState) {
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+}
+
+function feedbackLiveProofTemplate(args: JsonRecord): JsonRecord {
+  const workflow = optionalString(args.workflow);
+  const surfaceId = optionalString(args.surface_id);
+  return {
+    schema: 'narada.surface_feedback.live_proof_template.v1',
+    status: 'ok',
+    workflow: workflow ?? null,
+    surface_id: surfaceId ?? null,
+    purpose: 'Capture evidence expectations for live, no-mock, no-fallback E2E authority/projection behavior.',
+    recommended_feedback: {
+      kind: 'observation',
+      details_format: 'json_or_markdown_with_live_proof_contract',
+    },
+    live_proof_contract: {
+      authority_location: {
+        deployed: '<where the deployed authority or projection state lives>',
+        local: '<where local source/test authority lives>',
+      },
+      transport: {
+        live_transport_assumption: '<named live transport path and why it is expected>',
+        replay_vs_live_delivery: '<how replay evidence is distinguished from live delivery>',
+      },
+      success: {
+        semantic_success_point: '<observable state/event that proves live success>',
+        saved_evidence_file: '<required artifact path or null when not applicable>',
+      },
+      exclusions: {
+        no_mock: '<evidence that mocks were not used>',
+        no_fallback: '<evidence that fallback path was not used>',
+        no_shim: '<evidence that compatibility shim did not carry the behavior>',
+      },
+      negative_controls: {
+        revocation_or_refusal_proof: '<how revoked/unauthorized paths fail>',
+      },
+      test_alignment: {
+        unit_tests_specify_deployed_transport: '<yes/no/unknown plus file references>',
+      },
+    },
+    usage: [
+      'Use this template in feedback details when reporting live-proof gaps or observations.',
+      'Use it in task context when converting feedback into implementation work.',
+      'Do not treat a completed template as proof by itself; proof requires cited artifacts and live readback.',
+    ],
+  };
 }
 
 function feedbackDoctor(state: FeedbackState): JsonRecord {
