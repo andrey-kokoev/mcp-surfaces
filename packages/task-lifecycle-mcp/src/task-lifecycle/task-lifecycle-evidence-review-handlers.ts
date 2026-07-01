@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { isAbsolute, relative } from 'node:path';
 
 type TaskLifecyclePayload = Record<string, unknown>;
@@ -26,6 +27,38 @@ function siteRelativePath(siteRoot: string, filePath: string): string {
 
 function siteRelativeChangedFiles(siteRoot: string, files: string[]): string[] {
   return files.map((file) => siteRelativePath(siteRoot, file)).filter((file) => file && !file.startsWith('..'));
+}
+
+async function backfillReviewOutcomeEvidence({ siteRoot, store, taskNumber, agentId, outcome, summary, findings, outcomeContract, findTaskFile, replaceTaskSection, proveTaskCriteria }) {
+  if (outcomeContract?.outcome_type !== 'review') return null;
+  const taskFile = await findTaskFile(siteRoot, taskNumber);
+  if (!taskFile) return { status: 'skipped', reason: 'task_file_not_found' };
+  const findingsText = Array.isArray(findings) && findings.length > 0
+    ? findings.map((finding, index) => `${index + 1}. ${typeof finding === 'string' ? finding : JSON.stringify(finding)}`).join('\n')
+    : 'No findings recorded.';
+  const executionNotes = [
+    `Outcome-contract review completed by ${agentId}.`,
+    `Outcome: ${outcome}.`,
+    `Summary: ${summary ?? 'No summary provided.'}`,
+    '',
+    'This section was backfilled by task_lifecycle_finish for review dependency evidence coherence. The authoritative review decision remains the task_outcomes outcome contract record.',
+  ].join('\n');
+  const verificationNotes = [
+    'Verified by admitting the review outcome through the task outcome contract.',
+    `Contract: ${outcomeContract.contract_id}.`,
+    `Findings: ${findingsText}`,
+  ].join('\n');
+  const before = readFileSync(taskFile.path, 'utf8');
+  const withExecution = replaceTaskSection(before, 'Execution Notes', executionNotes);
+  const withVerification = replaceTaskSection(withExecution, 'Verification', verificationNotes);
+  if (withVerification !== before) writeFileSync(taskFile.path, withVerification, 'utf8');
+  const criteriaProof = await proveTaskCriteria({ siteRoot, store, taskNumber, agentId });
+  return {
+    status: 'backfilled',
+    path: siteRelativePath(siteRoot, taskFile.path),
+    sections: ['Execution Notes', 'Verification'],
+    criteria_proof: criteriaProof,
+  };
 }
 
 function parseStringArrayJson(value: string | null | undefined): string[] {
@@ -463,6 +496,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     evaluatePostTransitionFollowups,
     findTaskFile,
     readTaskFile,
+    replaceTaskSection,
     testResultArtifactGate,
     validateFollowUpLedger,
     ensureStaticRosterAgentInSql,
@@ -937,6 +971,19 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         for (const evaluation of conflictPolicy.evaluations) {
           store.upsertTaskConflictPolicyEvidence(evaluation.evidence);
         }
+        const reviewEvidenceBackfill = await backfillReviewOutcomeEvidence({
+          siteRoot,
+          store,
+          taskNumber,
+          agentId,
+          outcome,
+          summary,
+          findings,
+          outcomeContract,
+          findTaskFile,
+          replaceTaskSection,
+          proveTaskCriteria,
+        });
         const transition = await transitionLifecycleTask({
           siteRoot,
           store,
@@ -972,6 +1019,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           outcome_capability_policy: outcomeCapabilityPolicy,
           conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation) => evaluation.evidence),
         };
+        if (reviewEvidenceBackfill) payload.review_evidence_backfill = reviewEvidenceBackfill;
         if (identityWarning) payload.identity_warning = identityWarning;
         return jsonToolResult(payload);
       }

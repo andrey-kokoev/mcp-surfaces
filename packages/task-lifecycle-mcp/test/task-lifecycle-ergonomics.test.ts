@@ -1873,6 +1873,22 @@ try {
   const finishReviewDependencyPayload = await responsePayload(finishReviewDependencyResponse, architectRuntime, 10566);
   assert.equal(finishReviewDependencyPayload.status, 'success', JSON.stringify(finishReviewDependencyPayload));
   assert.equal(finishReviewDependencyPayload.task_outcome.outcome, 'accepted');
+  assert.equal(finishReviewDependencyPayload.review_evidence_backfill.status, 'backfilled');
+  assert.equal(finishReviewDependencyPayload.review_evidence_backfill.criteria_proof.status, 'proved');
+  const finishedReviewDependencyInspectResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 105661,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect', arguments: { task_number: reviewTaskNumber } },
+  }, architectRuntime);
+  const finishedReviewDependencyInspect = await responsePayload(finishedReviewDependencyInspectResponse, architectRuntime, 105662);
+  assert.equal(finishedReviewDependencyInspect.evidence.verdict, 'complete');
+  assert.equal(finishedReviewDependencyInspect.evidence.has_execution_notes, true);
+  assert.equal(finishedReviewDependencyInspect.evidence.has_verification, true);
+  assert.equal(finishedReviewDependencyInspect.evidence.all_criteria_checked, true);
+  assert.equal(finishedReviewDependencyInspect.evidence.violations.includes('terminal_without_execution_notes'), false);
+  assert.equal(finishedReviewDependencyInspect.evidence.violations.includes('terminal_with_unchecked_criteria'), false);
+  assert.equal(finishedReviewDependencyInspect.evidence.violations.includes('terminal_without_verification'), false);
   const satisfiedDependencyPreflightResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 10567,

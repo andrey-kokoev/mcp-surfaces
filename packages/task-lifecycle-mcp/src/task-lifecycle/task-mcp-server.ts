@@ -913,6 +913,7 @@ function getTaskLifecycleHandlerRegistry() {
           evaluatePostTransitionFollowups,
           findTaskFile,
           readTaskFile,
+          replaceTaskSection,
           testResultArtifactGate,
           validateFollowUpLedger,
           ensureStaticRosterAgentInSql: ensureStaticRosterAgentInSqlCore,
