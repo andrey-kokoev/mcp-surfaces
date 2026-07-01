@@ -61,6 +61,45 @@ class McpToolError extends Error {
   }
 }
 
+function delayWithDeadline(ms, signal, timeoutMs, timeoutError) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (signal?.aborted) {
+      rejectPromise(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(delayTimer);
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener('abort', abortHandler);
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+    const delayTimer = setTimeout(() => finish(resolvePromise, undefined), ms);
+    const deadlineTimer = setTimeout(() => finish(rejectPromise, timeoutError()), timeoutMs);
+    const abortHandler = () => finish(rejectPromise, Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    signal?.addEventListener('abort', abortHandler, { once: true });
+  });
+}
+
+async function callReadToolWithRequestDeadline(name, args, state, context) {
+  const timeoutMs = readOperationTimeoutMs(args);
+  const deadline = createReadRequestTimeoutChecker(name, timeoutMs, args, state);
+  deadline.check();
+  const artificialDelayMs = readHandlerDelayMs(state);
+  if (artificialDelayMs > 0) {
+    await delayWithDeadline(artificialDelayMs, context.abortSignal, timeoutMs, deadline.timeoutError);
+  }
+  deadline.check();
+  const result = callTool({ name, arguments: args }, state);
+  deadline.check();
+  return result;
+}
+
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
   runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -160,6 +199,62 @@ export function createServerState(options: Record<string, unknown>): Record<stri
   };
 }
 
+function createReadRequestTimeoutChecker(operation, timeoutMs, args, state) {
+  const startedAt = Date.now();
+  const metadata = readRequestPathMetadata(operation, args, state);
+  const details = (elapsedMs) => ({
+    timeout_kind: 'read_request_timeout',
+    operation,
+    timeout_ms: timeoutMs,
+    elapsed_ms: elapsedMs,
+    ...metadata,
+    recommended_tool: 'fs_read_file_range',
+    recommended_args: readRequestRecommendedArgs(operation, args, timeoutMs),
+    remediation: [
+      'Retry with fs_read_file_range and a narrower line window.',
+      'Use fs_stat or fs_grep_search first when the file may be slow, remote, or virtualized.',
+      'Increase timeout_ms only after narrowing the requested line window.',
+    ],
+  });
+  const timeoutError = () => {
+    const elapsedMs = Math.max(Date.now() - startedAt, timeoutMs + 1);
+    return diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, details(elapsedMs));
+  };
+  return {
+    check: () => {
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs <= timeoutMs) return;
+      throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, details(elapsedMs));
+    },
+    timeoutError,
+  };
+}
+
+function readRequestPathMetadata(operation, args, state) {
+  try {
+    const resolved = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation });
+    return pathMetadata(resolved.path, resolved.root);
+  } catch {
+    return { path: stringField(args, 'path') ?? null, root: null, relative_path: null };
+  }
+}
+
+function readRequestRecommendedArgs(operation, args, timeoutMs) {
+  const path = stringField(args, 'path') ?? '<path>';
+  const startLine = operation === 'fs_read_file_range'
+    ? integerField(args, 'start_line') ?? 1
+    : Math.max(1, integerField(args, 'offset') ?? 1);
+  const requestedLimit = operation === 'fs_read_file_range'
+    ? Math.max(1, (integerField(args, 'end_line') ?? startLine) - startLine + 1)
+    : Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
+  return {
+    path,
+    start_line: startLine,
+    end_line: Math.max(startLine, startLine + Math.min(requestedLimit, 100) - 1),
+    timeout_ms: Math.min(60_000, Math.max(timeoutMs * 2, DEFAULT_READ_OPERATION_TIMEOUT_MS)),
+  };
+}
+
 export function handleRequest(request: Record<string, unknown>, state: Record<string, unknown>) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
@@ -236,7 +331,7 @@ async function processStdioRequest(request: Record<string, unknown>, state: Reco
   });
 }
 
-async function handleRequestAsync(request: Record<string, unknown>, state: Record<string, unknown>, context: { abortSignal?: AbortSignal } = {}) {
+export async function handleRequestAsync(request: Record<string, unknown>, state: Record<string, unknown>, context: { abortSignal?: AbortSignal } = {}) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
     const result = await dispatchMethodAsync(request.method, request.params ?? {}, state, context);
@@ -1136,6 +1231,8 @@ async function callToolAsync(params, state, context) {
   if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
   if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
   switch (name) {
+    case 'fs_read_file': return await callReadToolWithRequestDeadline(name, args, state, context);
+    case 'fs_read_file_range': return await callReadToolWithRequestDeadline(name, args, state, context);
     case 'fs_glob_search': return toolResult(await globSearchToolAsync(args, state, context));
     case 'fs_grep_search': return toolResult(await grepSearchToolAsync(args, state, context), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_write_file': {
@@ -1156,6 +1253,11 @@ function readOperationTimeoutMs(args) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return DEFAULT_READ_OPERATION_TIMEOUT_MS;
   return Math.min(60_000, Math.max(1, value));
+}
+
+function readHandlerDelayMs(state) {
+  const value = Number(asRecord(state.env).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS ?? 0);
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
 function filesystemOperationTimeoutMs(args) {

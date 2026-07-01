@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildAllowedRoots, normalizeAllowedRoots, parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath, resolveAnchoredAllowedRoot, rootEntriesToRoots } from '../src/policy.js';
-import { createServerState, handleRequest, listTools } from '../src/main.js';
+import { createServerState, handleRequest, handleRequestAsync, listTools } from '../src/main.js';
 import { parsePatch } from '../src/patch-apply.js';
 import { RIPGREP_FIELD_SEPARATOR, grepMatchObject, runRipgrepPageAsync } from '../src/search.js';
 
@@ -282,6 +282,23 @@ trust_level = "untrusted"
   assert.equal(timeoutReadResponse.error.data.details.recommended_tool, 'fs_read_file_range');
   assert.equal(timeoutReadResponse.error.data.details.recommended_args.start_line, 200000);
   assert.match(oversizedReadResponse.result.content[0].text, /read_window_too_large/);
+
+  (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS = '25';
+  const requestPathTimeout = await handleRequestAsync({
+    jsonrpc: '2.0',
+    id: 1014,
+    method: 'tools/call',
+    params: { name: 'fs_read_file_range', arguments: { path: join(trusted, 'a.txt'), start_line: 1, end_line: 1, timeout_ms: 1 } },
+  }, readState) as unknown as JsonRpcTestResponse;
+  delete (readState.env as NodeJS.ProcessEnv).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS;
+  assert.equal(requestPathTimeout.error.data.code, 'fs_read_file_range_timed_out');
+  assert.equal(requestPathTimeout.error.data.details.timeout_kind, 'read_request_timeout');
+  assert.equal(requestPathTimeout.error.data.details.timeout_ms, 1);
+  assert.equal(typeof requestPathTimeout.error.data.details.elapsed_ms, 'number');
+  assert.equal(requestPathTimeout.error.data.details.path, join(trusted, 'a.txt'));
+  assert.equal(requestPathTimeout.error.data.details.recommended_tool, 'fs_read_file_range');
+  assert.equal(requestPathTimeout.error.data.details.recommended_args.start_line, 1);
+  assert.equal(requestPathTimeout.error.data.details.recommended_args.end_line, 1);
 
   const rangeResponse = call(readState, 11, 'fs_read_file_range', { path: join(trusted, 'a.txt'), start_line: 2, end_line: 2 });
   assert.equal(rangeResponse.result.structuredContent.content, 'beta');

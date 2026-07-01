@@ -124,6 +124,8 @@ try {
   writeTask(9208, submitWorkTaskId, 'opened');
   const payloadSubmitWorkTaskId = '20260604-9219-submit-work-payload-helper';
   writeTask(9219, payloadSubmitWorkTaskId, 'opened');
+  const autoPayloadSubmitWorkTaskId = '20260604-9220-submit-work-auto-payload-helper';
+  writeTask(9220, autoPayloadSubmitWorkTaskId, 'opened');
   const outcomeContractTaskId = '20260604-9209-outcome-contract-finish';
   writeTask(9209, outcomeContractTaskId, 'claimed');
   const staleSearchTaskId = '20260604-9210-stale-search-only-projection';
@@ -398,6 +400,19 @@ try {
     store.upsertLifecycle({
       task_id: payloadSubmitWorkTaskId,
       task_number: 9219,
+      status: 'opened',
+      governed_by: null,
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertLifecycle({
+      task_id: autoPayloadSubmitWorkTaskId,
+      task_number: 9220,
       status: 'opened',
       governed_by: null,
       closed_at: null,
@@ -1411,6 +1426,26 @@ try {
 
   const submitWorkSchemaTool = submitWorkToolList.result.tools.find((tool: any) => tool.name === 'task_lifecycle_submit_work');
   assert.match(submitWorkSchemaTool.inputSchema.properties.payload_ref.description, /long execution_notes/);
+  assert.equal(submitWorkSchemaTool.inputSchema.properties.auto_materialize_payload.type, 'boolean');
+  assert.deepEqual(submitWorkSchemaTool.inputSchema.required, ['task_number', 'agent_id']);
+  const longExecutionNotes = `Implemented a deliberately long submit_work execution note that exceeds the inline transport threshold while remaining ordinary closeout prose. ${'This sentence exists only to cross the inline threshold without adding semantic requirements. '.repeat(3)}`;
+  const longInlineSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 105805,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9220,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Submitted long inline helper work without fallback.',
+        execution_notes: longExecutionNotes,
+        verification: 'Verified default long inline submit_work refusal remains active.',
+        changed_files: [`.ai/do-not-open/tasks/${autoPayloadSubmitWorkTaskId}.md`],
+      },
+    },
+  }, builderRuntime);
+  assert.match(longInlineSubmitWorkResponse.error?.message ?? '', /inline_payload_too_long/);
   const submitWorkPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 10581,
@@ -1448,6 +1483,29 @@ try {
   assert.equal(payloadSubmitWork.long_field_transport, 'payload_ref');
   assert.equal(payloadSubmitWork.final_lifecycle_status, 'claimed');
   assert.equal(payloadSubmitWork.closure_status, 'submitted_not_closed');
+  const autoPayloadSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10585,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9220,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Submitted one-call auto-materialized helper work through governed payload fallback.',
+        execution_notes: longExecutionNotes,
+        verification: 'Verified auto-materialized submit_work by exercising the one-call fallback path in the ergonomics regression suite.',
+        changed_files: [`.ai/do-not-open/tasks/${autoPayloadSubmitWorkTaskId}.md`],
+        auto_materialize_payload: true,
+      },
+    },
+  }, builderRuntime);
+  const autoPayloadSubmitWork = await responsePayload(autoPayloadSubmitWorkResponse, builderRuntime, 10586);
+  assert.equal(autoPayloadSubmitWork.status, 'submitted', JSON.stringify(autoPayloadSubmitWork));
+  assert.equal(autoPayloadSubmitWork.long_field_transport, 'auto_materialized_payload');
+  assert.equal(autoPayloadSubmitWork.payload_source.kind, 'auto_materialized_payload');
+  assert.match(autoPayloadSubmitWork.payload_source.ref, /^mcp_payload:submit-work-9220-/);
+  assert.match(autoPayloadSubmitWork.payload_source.sha256, /^[0-9a-f]{64}$/);
   const submitWorkReviewStore = openTaskLifecycleStore(siteRoot);
   try {
     const dependencies = submitWorkReviewStore.listTaskDependenciesForParent(submitWorkTaskId);

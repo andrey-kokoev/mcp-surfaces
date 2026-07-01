@@ -51,7 +51,8 @@ export function createTaskLifecycleToolCaller({
       const validationErrors = validateArgs(canonicalName, effectiveArgs, toolDef.inputSchema);
       if (validationErrors) return jsonToolResult(validationErrorResult(validationErrors), true);
     }
-    if (!payloadResolution.payloadSource) {
+    const autoMaterializeSubmitWork = canonicalName === 'task_lifecycle_submit_work' && booleanField(effectiveArgs, 'auto_materialize_payload') === true;
+    if (!payloadResolution.payloadSource && !autoMaterializeSubmitWork) {
       enforceInlinePayloadLimit({ toolName: canonicalName, args: effectiveArgs, allowPayloadCreation: true });
     }
     const locusGuard = guardLifecycleTargetLocus({ canonicalName, args: effectiveArgs, siteRoot, env, locusGuardedMutationTools });

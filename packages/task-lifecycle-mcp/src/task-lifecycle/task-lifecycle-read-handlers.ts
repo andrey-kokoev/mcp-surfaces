@@ -176,6 +176,20 @@ function taskLifecycleHappyPathExamples() {
         changed_files: ['packages/example/src/main.ts'],
       },
     },
+    ordinary_submit_work_auto_materialized: {
+      tool: 'task_lifecycle_submit_work',
+      use_when: 'execution_notes, verification, summary, or changed_files are too long for inline transport and you want one governed call instead of a separate mcp_payload_create call',
+      arguments: {
+        task_number: 123,
+        agent_id: '<agent id>',
+        summary: '<long summary>',
+        execution_notes: '<long execution notes>',
+        verification: '<long verification notes>',
+        changed_files: ['packages/example/src/main.ts'],
+        auto_materialize_payload: true,
+      },
+      result_contract: 'payload_source.kind=auto_materialized_payload and long_field_transport=auto_materialized_payload',
+    },
     no_files_changed_finish: {
       tool: 'task_lifecycle_finish',
       arguments: {
@@ -338,7 +352,7 @@ function taskLifecycleToolGuidance(tool) {
   const guidance = {
     task_lifecycle_submit_work: {
       preferred_for: 'Ordinary task completion with execution notes, verification, evidence admission, and finish/report in one call.',
-      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed.',
+      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Long inline fields are refused by default; use payload_ref or opt in with auto_materialize_payload:true to create an immutable payload artifact in one call.',
     },
     task_lifecycle_finish: {
       preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
@@ -361,6 +375,12 @@ function taskLifecycleToolGuidance(tool) {
 
 function taskLifecyclePayloadSchemas() {
   return {
+    task_lifecycle_submit_work: {
+      payload_ref_shape: { summary: '<finish summary>', execution_notes: '<Execution Notes replacement>', verification: '<Verification replacement>', changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
+      inline_payload_limit: { threshold_chars: 200, long_fields: ['summary', 'execution_notes', 'verification', 'changed_files'], remediation: 'Default behavior refuses long inline fields and recommends mcp_payload_create plus payload_ref. For one governed call, pass auto_materialize_payload:true; the result must include payload_source.kind=auto_materialized_payload.' },
+      one_call_fallback: { field: 'auto_materialize_payload', value: true, audit_contract: 'Creates an immutable transient payload artifact and reports it in payload_source.' },
+      top_level_fields_remain_required: ['task_number', 'agent_id'],
+    },
     task_lifecycle_review: {
       compatibility_only: true,
       authority_model: 'Migrates legacy review calls into review-contract dependency work and task_outcomes authority. New review work should finish the dependency task with task_lifecycle_finish.',

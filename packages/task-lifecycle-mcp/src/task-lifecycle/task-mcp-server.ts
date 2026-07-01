@@ -238,10 +238,11 @@ function taskLifecycleTools() {
         admit_evidence: { type: 'boolean', description: 'When true, call task_lifecycle_admit_evidence before finish. Defaults true.' },
         finish: { type: 'boolean', description: 'When true, call task_lifecycle_finish after evidence admission. Defaults true.' },
         payload_ref: stringSchema('Optional immutable payload ref for long execution_notes, verification, summary, changed_files, or guard packets. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
+        auto_materialize_payload: { type: 'boolean', description: 'Opt-in fallback for one-call long-field submit_work. When true and payload_ref is absent, the surface creates an immutable payload artifact from companion fields before executing; default false preserves inline length refusal.' },
         authority_basis: authorityBasisSchema('Required by underlying claim when crossing role/preferred-agent gates.'),
         recovery_truthfulness: { type: 'object', additionalProperties: true, description: 'Passed through to task_lifecycle_finish when recovery truthfulness is triggered.' },
         self_certification: { type: 'object', additionalProperties: true, description: 'Passed through to evidence admission/finish when self-certification gates are triggered.' },
-      }, ['task_number', 'agent_id', 'summary', 'execution_notes', 'verification']),
+      }, ['task_number', 'agent_id']),
       annotations: { title: 'task_lifecycle_submit_work', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
@@ -1172,6 +1173,8 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   const reviewer = stringField(args, 'reviewer');
   const changedFiles = stringArrayField(args, 'changed_files');
   const noFilesChanged = booleanField(args, 'no_files_changed') === true;
+  const autoMaterializePayload = booleanField(args, 'auto_materialize_payload') === true;
+  let payloadSource = dispatchContext.payloadSource;
   if (!taskNumber) throw new Error('task_number_required');
   if (!agentId) throw new Error('agent_id_required');
   if (!summary) throw new Error('summary_required');
@@ -1179,6 +1182,9 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   assertSubstantiveSubmitWorkText(verification, 'verification');
   if (changedFiles && noFilesChanged) throw new Error('changed_files_conflicts_with_no_files_changed');
   enforceSessionIdentity(agentId);
+  if (autoMaterializePayload && !payloadSource) {
+    payloadSource = autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args });
+  }
 
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
@@ -1190,7 +1196,7 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if (authorityBasis) claimArgs.authority_basis = authorityBasis;
     const claimResult = await dispatchTool('task_lifecycle_claim', claimArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_claim', result: claimResult.structuredContent ?? null, is_error: claimResult.isError === true });
-    if (claimResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_claim', payloadSource: dispatchContext.payloadSource }, true);
+    if (claimResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_claim', payloadSource }, true);
   }
 
   const taskFile = await findTaskFile(siteRoot, String(taskNumber));
@@ -1208,7 +1214,7 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   if (args.prove_criteria !== false) {
     const proveResult = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_prove_criteria', result: proveResult.structuredContent ?? null, is_error: proveResult.isError === true });
-    if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria', payloadSource: dispatchContext.payloadSource }, true);
+    if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria', payloadSource }, true);
   }
 
   if (args.admit_evidence !== false) {
@@ -1217,7 +1223,7 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if (selfCertification) admitArgs.self_certification = selfCertification;
     const admitResult = await dispatchTool('task_lifecycle_admit_evidence', admitArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_admit_evidence', result: admitResult.structuredContent ?? null, is_error: admitResult.isError === true });
-    if (admitResult.isError || admitResult.structuredContent?.status === 'rejected') return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_admit_evidence', payloadSource: dispatchContext.payloadSource }, true);
+    if (admitResult.isError || admitResult.structuredContent?.status === 'rejected') return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_admit_evidence', payloadSource }, true);
   }
 
   if (args.finish !== false) {
@@ -1231,7 +1237,7 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if (selfCertification) finishArgs.self_certification = selfCertification;
     const finishResult = await dispatchTool('task_lifecycle_finish', finishArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_finish', result: finishResult.structuredContent ?? null, is_error: finishResult.isError === true });
-    if (finishResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_finish', payloadSource: dispatchContext.payloadSource }, true);
+    if (finishResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_finish', payloadSource }, true);
     if (reviewer) {
       const finishPayload = finishResult.structuredContent && typeof finishResult.structuredContent === 'object' && !Array.isArray(finishResult.structuredContent) ? finishResult.structuredContent as Record<string, unknown> : null;
       const reviewDependency = finishPayload?.review_dependency ?? await ensureReviewContractDependencyForSubmitWork({
@@ -1244,7 +1250,34 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     }
   }
 
-  return submitWorkResult({ status: 'submitted', taskNumber, agentId, primitiveResults, blockedAt: null, payloadSource: dispatchContext.payloadSource }, false);
+  return submitWorkResult({ status: 'submitted', taskNumber, agentId, primitiveResults, blockedAt: null, payloadSource }, false);
+}
+
+function autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args }) {
+  const payload: Record<string, unknown> = {};
+  for (const field of ['summary', 'execution_notes', 'verification', 'changed_files', 'no_files_changed', 'recovery_truthfulness', 'self_certification']) {
+    if (Object.prototype.hasOwnProperty.call(args, field)) payload[field] = args[field];
+  }
+  const created = payloadCreate({
+    siteRoot,
+    args: {
+      payload,
+      payload_id: `submit-work-${taskNumber}-${randomUUID()}`,
+      created_by: agentId,
+    },
+  });
+  return {
+    kind: 'auto_materialized_payload',
+    ref: created.ref,
+    payload_id: created.payload_id,
+    revision: created.revision,
+    byte_size: created.byte_size,
+    sha256: created.sha256,
+    created_at: created.created_at,
+    created_by: created.created_by,
+    transient_not_authority: true,
+    immutable_revision: true,
+  };
 }
 
 async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, parentTaskNumber, reviewer, createdBy }) {
@@ -1594,7 +1627,7 @@ function submitWorkResult({ status, taskNumber, agentId, primitiveResults, block
     closure_status: closureStatus,
     submitted_for_review_not_closed: closureStatus === 'submitted_for_review_not_closed',
     payload_source: payloadSource ?? null,
-    long_field_transport: payloadSource ? 'payload_ref' : 'inline',
+    long_field_transport: payloadSource?.kind === 'auto_materialized_payload' ? 'auto_materialized_payload' : payloadSource ? 'payload_ref' : 'inline',
     primitive_record_count: primitiveResults.length,
     primitive_results: primitiveResults,
     review_obligation_preserved: true,
