@@ -261,7 +261,7 @@ function taskLifecycleGuidanceSections() {
     payloads: {
       intent: 'Use immutable payload refs for long companion fields while keeping task_number and agent_id top-level.',
       canonical_sequence: ['mcp_payload_create', 'call lifecycle tool with payload_ref plus required top-level identity/routing fields'],
-      inline_limit_guidance: 'Inline companion strings over 200 characters should move to payload_ref when the target tool supports it.',
+      inline_limit_guidance: `Inline companion strings over ${DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT} characters should move to payload_ref when the target tool supports it.`,
       top_level_authority_fields: ['task_number', 'agent_id', 'authority_basis when required'],
       companion_fields: ['summary', 'execution_notes', 'verification', 'changed_files', 'findings', 'recovery_truthfulness', 'self_certification'],
       examples: [

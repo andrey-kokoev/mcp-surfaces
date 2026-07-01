@@ -1014,7 +1014,7 @@ try {
   const blockedReportTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_report_blocked');
   assert.equal(blockedReportTool.inputSchema.required.includes('reason'), true);
   assert.match(blockedReportTool.description, /without implying finish/);
-  assert.match(blockedReportTool.inputSchema.properties.next_action.description, /200 chars/);
+  assert.match(blockedReportTool.inputSchema.properties.next_action.description, /governed inline threshold/);
   assert.match(blockedReportTool.inputSchema.properties.payload_ref.description, /long reason/);
 
   const finishWithVerdictResponse = await handleTaskLifecycleMcpRequest({
