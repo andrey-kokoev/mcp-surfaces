@@ -36,7 +36,7 @@ export function createTaskLifecycleToolCaller({
       toolName: canonicalName,
       args,
       allowedTools: registeredToolNames,
-      payloadRefMode: 'merge_args',
+      payloadRefMode: canonicalName === 'task_lifecycle_submit_work' ? 'merge_args_prefer_payload_placeholders' : 'merge_args',
     });
     const effectiveArgs = payloadResolution.args;
 

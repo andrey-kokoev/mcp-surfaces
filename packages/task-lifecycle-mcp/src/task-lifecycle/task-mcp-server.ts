@@ -1189,6 +1189,20 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   const primitiveResults = [];
+  const agentRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+  if (!agentRoleResolution.role) {
+    const rosterResult = {
+      status: 'blocked',
+      schema: 'narada.task.submit_work.roster_preflight.v1',
+      error: 'submit_work_agent_not_in_roster',
+      task_number: taskNumber,
+      agent_id: agentId,
+      role_resolution: agentRoleResolution,
+      remediation: 'Admit the agent into the task lifecycle roster before submit_work, or correct agent_id to a rostered session identity. submit_work refuses before claim so it cannot leave an unfinishable assignment behind.',
+    };
+    primitiveResults.push({ tool: 'task_lifecycle_submit_work.roster_preflight', result: rosterResult, is_error: true });
+    return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_submit_work.roster_preflight', payloadSource }, true);
+  }
   const claim = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
   if (claim) {
     const claimArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };

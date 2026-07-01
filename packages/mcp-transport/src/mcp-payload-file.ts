@@ -7,7 +7,7 @@ const DEFAULT_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_PAYLOAD_DIR = '.ai/tmp/mcp-payloads';
 const DEFAULT_OUTPUT_DIR = '.ai/tmp/mcp-outputs';
 const DEFAULT_WORKSPACE_DIR = 'workspace';
-export const DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT = 200;
+export const DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT = 20_000;
 export const DEFAULT_INLINE_OUTPUT_CHAR_LIMIT = 200;
 export const DEFAULT_OUTPUT_SHOW_CHAR_LIMIT = 10_000;
 const REF_PATTERN = /^mcp_payload:([A-Za-z0-9][A-Za-z0-9_-]{2,63})@v([1-9][0-9]*)$/;
@@ -122,8 +122,26 @@ export function resolveToolPayloadArgs({
 
 function resolvePayloadRefArgs({ input, payload, payloadRefMode }) {
   if (payloadRefMode === 'merge_args') return { ...asRecord(payload), ...withoutPayloadTransport(input) };
+  if (payloadRefMode === 'merge_args_prefer_payload_placeholders') return mergeArgsPreferPayloadPlaceholders({ input, payload });
   if (payloadRefMode === 'payload_field' && hasPayloadRefCompanionArgs(input)) return { ...withoutPayloadTransport(input), payload };
   return payload;
+}
+
+function mergeArgsPreferPayloadPlaceholders({ input, payload }) {
+  const resolved = { ...asRecord(payload) };
+  for (const [key, value] of Object.entries(withoutPayloadTransport(input))) {
+    if (Object.prototype.hasOwnProperty.call(resolved, key) && isPlaceholderString(value)) continue;
+    resolved[key] = value;
+  }
+  return resolved;
+}
+
+function isPlaceholderString(value) {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return /^<!--[\s\S]*-->$/.test(trimmed)
+    || /^<[^>]+>$/.test(trimmed)
+    || /^<move original\b/i.test(trimmed);
 }
 
 function hasPayloadRefCompanionArgs(input) {

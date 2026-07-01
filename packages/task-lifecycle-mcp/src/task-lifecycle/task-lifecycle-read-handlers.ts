@@ -1,3 +1,5 @@
+import { DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT } from '../mcp-payload-file.js';
+
 export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
   'task_lifecycle_list',
   'task_lifecycle_roster',
@@ -352,11 +354,11 @@ function taskLifecycleToolGuidance(tool) {
   const guidance = {
     task_lifecycle_submit_work: {
       preferred_for: 'Ordinary task completion with execution notes, verification, evidence admission, and finish/report in one call.',
-      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Long inline fields are refused by default; use payload_ref or opt in with auto_materialize_payload:true to create an immutable payload artifact in one call.',
+      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Inline companion fields are accepted up to the governed threshold; use payload_ref or opt in with auto_materialize_payload:true for larger artifacts.',
     },
     task_lifecycle_finish: {
       preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
-      caveat: 'Use payload_ref for long summary/findings and include changed_files or no_files_changed for implementation work.',
+      caveat: 'Use inline recovery_truthfulness for ordinary recovery packets under the governed threshold; use payload_ref for larger summary/findings/guard packets and include changed_files or no_files_changed for implementation work.',
     },
     task_lifecycle_report_blocked: {
       preferred_for: 'Recording unresolved blockers with exact next action.',
@@ -377,7 +379,7 @@ function taskLifecyclePayloadSchemas() {
   return {
     task_lifecycle_submit_work: {
       payload_ref_shape: { summary: '<finish summary>', execution_notes: '<Execution Notes replacement>', verification: '<Verification replacement>', changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
-      inline_payload_limit: { threshold_chars: 200, long_fields: ['summary', 'execution_notes', 'verification', 'changed_files'], remediation: 'Default behavior refuses long inline fields and recommends mcp_payload_create plus payload_ref. For one governed call, pass auto_materialize_payload:true; the result must include payload_source.kind=auto_materialized_payload.' },
+      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['summary', 'execution_notes', 'verification', 'changed_files'], remediation: 'Inline fields are accepted up to the governed threshold. Larger inline fields are refused with mcp_payload_create plus payload_ref remediation. For one governed submit_work call, pass auto_materialize_payload:true; the result must include payload_source.kind=auto_materialized_payload.' },
       one_call_fallback: { field: 'auto_materialize_payload', value: true, audit_contract: 'Creates an immutable transient payload artifact and reports it in payload_source.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
@@ -391,17 +393,17 @@ function taskLifecyclePayloadSchemas() {
     },
     task_lifecycle_finish: {
       payload_ref_shape: { summary: '<finish summary>', outcome: '<contract outcome when applicable>', findings: [], changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
-      inline_payload_limit: { threshold_chars: 200, remediation: 'Put long summary, findings, outcome evidence, or guard packets in mcp_payload_create, then call task_lifecycle_finish with payload_ref plus top-level task_number and agent_id.' },
+      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, remediation: 'Inline recovery_truthfulness and other companion fields are accepted up to the governed threshold. Put larger summary, findings, outcome evidence, or guard packets in mcp_payload_create, then call task_lifecycle_finish with payload_ref plus top-level task_number and agent_id.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
     task_lifecycle_disposition_closeout: {
       payload_ref_shape: { summary: '<closeout summary>', changed_files: ['path/to/file'], no_files_changed: false },
-      inline_payload_limit: { threshold_chars: 200, long_fields: ['summary'], remediation: 'Put long closeout summary and optional changed_files/no_files_changed in mcp_payload_create, then call task_lifecycle_closeout with payload_ref plus top-level task_number and agent_id.' },
+      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['summary'], remediation: 'Put closeout summaries above the governed inline threshold and optional changed_files/no_files_changed in mcp_payload_create, then call task_lifecycle_closeout with payload_ref plus top-level task_number and agent_id.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
     task_lifecycle_report_blocked: {
       payload_ref_shape: { reason: '<concise blocker summary>', blockers: [{ kind: '<blocker kind>', detail: '<details>' }], next_action: '<long concrete unblock action>', defer: true },
-      inline_payload_limit: { threshold_chars: 200, long_fields: ['next_action', 'blockers'], remediation: 'Put long next_action and blocker details in mcp_payload_create, then call task_lifecycle_report_blocked with payload_ref plus top-level task_number and agent_id. Keep reason concise inline or in the payload.' },
+      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['next_action', 'blockers'], remediation: 'Put next_action and blocker details above the governed inline threshold in mcp_payload_create, then call task_lifecycle_report_blocked with payload_ref plus top-level task_number and agent_id. Keep reason concise inline or in the payload.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
     task_lifecycle_create: {

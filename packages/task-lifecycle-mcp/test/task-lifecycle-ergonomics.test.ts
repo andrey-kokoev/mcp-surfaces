@@ -126,6 +126,14 @@ try {
   writeTask(9219, payloadSubmitWorkTaskId, 'opened');
   const autoPayloadSubmitWorkTaskId = '20260604-9220-submit-work-auto-payload-helper';
   writeTask(9220, autoPayloadSubmitWorkTaskId, 'opened');
+  const inlineSubmitWorkTaskId = '20260604-9225-submit-work-inline-threshold-helper';
+  writeTask(9225, inlineSubmitWorkTaskId, 'opened');
+  const nonRosterSubmitWorkTaskId = '20260604-9226-submit-work-non-roster-helper';
+  writeTask(9226, nonRosterSubmitWorkTaskId, 'opened');
+  const placeholderPayloadSubmitWorkTaskId = '20260604-9227-submit-work-placeholder-payload-helper';
+  writeTask(9227, placeholderPayloadSubmitWorkTaskId, 'opened');
+  const recoveryTruthfulnessFinishTaskId = '20260604-9228-recovery-truthfulness-inline-helper';
+  writeTask(9228, recoveryTruthfulnessFinishTaskId, 'claimed');
   const outcomeContractTaskId = '20260604-9209-outcome-contract-finish';
   writeTask(9209, outcomeContractTaskId, 'claimed');
   const staleSearchTaskId = '20260604-9210-stale-search-only-projection';
@@ -423,6 +431,35 @@ try {
       continuation_packet_json: null,
       updated_at: '2026-06-04T00:00:00Z',
     });
+    for (const [taskId, taskNumber, status, governedBy] of [
+      [inlineSubmitWorkTaskId, 9225, 'opened', null],
+      [nonRosterSubmitWorkTaskId, 9226, 'opened', null],
+      [placeholderPayloadSubmitWorkTaskId, 9227, 'opened', null],
+      [recoveryTruthfulnessFinishTaskId, 9228, 'claimed', 'builder'],
+    ] as const) {
+      store.upsertLifecycle({
+        task_id: taskId,
+        task_number: taskNumber,
+        status,
+        governed_by: governedBy,
+        closed_at: null,
+        closed_by: null,
+        closure_mode: null,
+        reopened_at: null,
+        reopened_by: null,
+        continuation_packet_json: null,
+        updated_at: '2026-06-04T00:00:00Z',
+      });
+    }
+    store.insertAssignment({
+      assignment_id: 'assign-recovery-truthfulness-finish',
+      task_id: recoveryTruthfulnessFinishTaskId,
+      agent_id: 'smart-scheduling.builder',
+      claimed_at: '2026-06-04T00:01:00Z',
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
     store.upsertRosterEntry({
       agent_id: 'mcp-surfaces.codex',
       role: 'mcp-surfaces-engineer',
@@ -643,6 +680,14 @@ try {
     argv: ['--site-root', siteRoot],
     cwd: siteRoot,
     env: { ...process.env, NARADA_AGENT_ID: 'mcp-surfaces.codex' },
+    stdout: { write: () => true },
+    stderr: { write: () => true },
+  };
+
+  const nonRosterRuntime = {
+    argv: ['--site-root', siteRoot],
+    cwd: siteRoot,
+    env: { ...process.env, NARADA_AGENT_ID: 'narada-launcher.agent' },
     stdout: { write: () => true },
     stderr: { write: () => true },
   };
@@ -1428,7 +1473,30 @@ try {
   assert.match(submitWorkSchemaTool.inputSchema.properties.payload_ref.description, /long execution_notes/);
   assert.equal(submitWorkSchemaTool.inputSchema.properties.auto_materialize_payload.type, 'boolean');
   assert.deepEqual(submitWorkSchemaTool.inputSchema.required, ['task_number', 'agent_id']);
-  const longExecutionNotes = `Implemented a deliberately long submit_work execution note that exceeds the inline transport threshold while remaining ordinary closeout prose. ${'This sentence exists only to cross the inline threshold without adding semantic requirements. '.repeat(3)}`;
+  const ordinaryInlineExecutionNotes = `Implemented a detailed submit_work note that is comfortably larger than the old tiny threshold while remaining ordinary inline closeout prose. ${'This sentence adds realistic operational detail without requiring payload transport. '.repeat(12)}`;
+  const ordinaryInlineSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 105801,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9225,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Submitted ordinary inline helper work under the governed threshold.',
+        execution_notes: ordinaryInlineExecutionNotes,
+        verification: 'Verified ordinary inline submit_work prose no longer requires payload ceremony.',
+        changed_files: [`.ai/do-not-open/tasks/${inlineSubmitWorkTaskId}.md`],
+      },
+    },
+  }, builderRuntime);
+  const ordinaryInlineSubmitWork = await responsePayload(ordinaryInlineSubmitWorkResponse, builderRuntime, 105802);
+  assert.equal(ordinaryInlineSubmitWork.status, 'submitted', JSON.stringify(ordinaryInlineSubmitWork));
+  assert.equal(ordinaryInlineSubmitWork.long_field_transport, 'inline');
+  assert.equal(ordinaryInlineSubmitWork.payload_source, null);
+
+  const longExecutionNotes = `Implemented a deliberately long submit_work execution note that exceeds the governed inline transport threshold while remaining ordinary closeout prose. ${'This sentence exists only to cross the inline threshold without adding semantic requirements. '.repeat(260)}`;
+  assert.equal(longExecutionNotes.length > 20_000, true);
   const longInlineSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 105805,
@@ -1446,6 +1514,7 @@ try {
     },
   }, builderRuntime);
   assert.match(longInlineSubmitWorkResponse.error?.message ?? '', /inline_payload_too_long/);
+  assert.match(longInlineSubmitWorkResponse.error?.data?.message ?? longInlineSubmitWorkResponse.error?.message ?? '', /20000/);
   const submitWorkPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 10581,
@@ -1506,6 +1575,123 @@ try {
   assert.equal(autoPayloadSubmitWork.payload_source.kind, 'auto_materialized_payload');
   assert.match(autoPayloadSubmitWork.payload_source.ref, /^mcp_payload:submit-work-9220-/);
   assert.match(autoPayloadSubmitWork.payload_source.sha256, /^[0-9a-f]{64}$/);
+
+  const placeholderPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10587,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload: {
+          summary: 'Submitted payload-backed helper work while top-level placeholder fields remained in the call.',
+          execution_notes: 'Real execution notes came from payload_ref and must not be overwritten by top-level placeholder text.',
+          verification: 'Real verification came from payload_ref and must not be overwritten by top-level placeholder text.',
+          changed_files: [`.ai/do-not-open/tasks/${placeholderPayloadSubmitWorkTaskId}.md`],
+        },
+      },
+    },
+  }, builderRuntime);
+  const placeholderPayloadRef = await responsePayload(placeholderPayloadCreateResponse, builderRuntime, 10588);
+  const placeholderPayloadSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10589,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        payload_ref: placeholderPayloadRef.ref,
+        task_number: 9227,
+        agent_id: 'smart-scheduling.builder',
+        execution_notes: '<!-- placeholder execution notes -->',
+        verification: '<move original verification here>',
+      },
+    },
+  }, builderRuntime);
+  const placeholderPayloadSubmitWork = await responsePayload(placeholderPayloadSubmitWorkResponse, builderRuntime, 10590);
+  assert.equal(placeholderPayloadSubmitWork.status, 'submitted', JSON.stringify(placeholderPayloadSubmitWork));
+  assert.equal(placeholderPayloadSubmitWork.payload_source.ref, placeholderPayloadRef.ref);
+  assert.equal(placeholderPayloadSubmitWork.long_field_transport, 'payload_ref');
+
+  const nonRosterSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10591,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9226,
+        agent_id: 'narada-launcher.agent',
+        summary: 'Attempted submit_work from an agent that is not in the task lifecycle roster.',
+        execution_notes: 'This must fail before claim so it cannot leave a task assigned to an unfinishable identity.',
+        verification: 'Verified submit_work roster preflight blocks before mutation.',
+        changed_files: [`.ai/do-not-open/tasks/${nonRosterSubmitWorkTaskId}.md`],
+      },
+    },
+  }, nonRosterRuntime);
+  const nonRosterSubmitWork = await responsePayload(nonRosterSubmitWorkResponse, nonRosterRuntime, 10592);
+  assert.equal(nonRosterSubmitWork.status, 'blocked', JSON.stringify(nonRosterSubmitWork));
+  assert.equal(nonRosterSubmitWork.blocked_at, 'task_lifecycle_submit_work.roster_preflight');
+  assert.equal(nonRosterSubmitWork.primitive_results[0].result.error, 'submit_work_agent_not_in_roster');
+  const nonRosterStore = openTaskLifecycleStore(siteRoot);
+  try {
+    const nonRosterLifecycle = nonRosterStore.getLifecycle(nonRosterSubmitWorkTaskId);
+    assert.equal(nonRosterLifecycle?.status, 'opened');
+    assert.equal(nonRosterLifecycle?.governed_by, null);
+    assert.equal(nonRosterStore.getActiveAssignment(nonRosterSubmitWorkTaskId), undefined);
+  } finally {
+    nonRosterStore.db.close();
+  }
+
+  const recoveryTruthfulnessBlockedResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10593,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9228,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Recovery task supplied an incomplete recovery truthfulness packet.',
+        changed_files: [`.ai/do-not-open/tasks/${recoveryTruthfulnessFinishTaskId}.md`],
+        recovery_truthfulness: { known_facts: 'The fixture intentionally omits the rest of the required packet.', state: 'corrective_in_progress' },
+      },
+    },
+  }, builderRuntime);
+  const recoveryTruthfulnessBlocked = await responsePayload(recoveryTruthfulnessBlockedResponse, builderRuntime, 10594);
+  assert.equal(recoveryTruthfulnessBlocked.status, 'blocked', JSON.stringify(recoveryTruthfulnessBlocked));
+  assert.equal(recoveryTruthfulnessBlocked.error, 'recovery_truthfulness_guard_failed');
+  assert.match(recoveryTruthfulnessBlocked.remediation, /governed inline threshold/);
+
+  const recoveryTruthfulnessFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10595,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9228,
+        agent_id: 'smart-scheduling.builder',
+        summary: 'Recovery task supplied the required truthfulness packet inline.',
+        changed_files: [`.ai/do-not-open/tasks/${recoveryTruthfulnessFinishTaskId}.md`],
+        reviewer: 'smart-scheduling.architect',
+        recovery_truthfulness: {
+          known_facts: 'The guard required a structured recovery packet for serious failure closeout.',
+          inferences: 'Inline packets below the governed threshold should be accepted without payload_ref ceremony.',
+          uncertainty: 'No independent review has been performed in this fixture.',
+          changed: 'The fixture supplied the required recovery truthfulness fields.',
+          not_changed: 'No external repository state was changed by this fixture.',
+          remaining_work: 'Review remains pending outside this helper assertion.',
+          evidence_limits: 'The evidence is limited to this regression fixture.',
+          capa_open_status: 'corrective work remains open in review',
+          state: 'corrective_in_progress',
+        },
+      },
+    },
+  }, builderRuntime);
+  const recoveryTruthfulnessFinish = await responsePayload(recoveryTruthfulnessFinishResponse, builderRuntime, 10596);
+  assert.equal(recoveryTruthfulnessFinish.status, 'success', JSON.stringify(recoveryTruthfulnessFinish));
+  assert.equal(recoveryTruthfulnessFinish.new_status, 'awaiting_dependencies');
   const submitWorkReviewStore = openTaskLifecycleStore(siteRoot);
   try {
     const dependencies = submitWorkReviewStore.listTaskDependenciesForParent(submitWorkTaskId);

@@ -645,6 +645,16 @@ trust_level = "untrusted"
   assert.equal(ambiguousReplace.error.data.details.occurrences, 2);
   assert.equal(ambiguousReplace.error.data.details.matches[0].line, 1);
 
+  writeFileSync(join(trusted, 'crlf-visible.txt'), 'first\r\nvisible line\r\nthird\r\n', 'utf8');
+  const newlineMismatchReplace = call(writeState, 314, 'fs_str_replace_file', { path: join(trusted, 'crlf-visible.txt'), old: 'visible line\nthird', new: 'replacement' });
+  assert.equal(newlineMismatchReplace.error.data.code, 'str_replace_not_found');
+  assert.equal(newlineMismatchReplace.error.data.details.likely_newline_or_context_mismatch, true);
+  assert.equal(newlineMismatchReplace.error.data.details.mismatch_reason, 'normalized_newline_match_only');
+  assert.equal(newlineMismatchReplace.error.data.details.recommended_tool, 'fs_replace_range');
+  assert.deepEqual(newlineMismatchReplace.error.data.details.candidate_line_ranges[0], { start_line: 2, end_line: 3, preview: 'visible line\nthird' });
+  assert.equal(newlineMismatchReplace.error.data.details.recommended_args.start_line, 2);
+  assert.equal(newlineMismatchReplace.error.data.details.recommended_args.end_line, 3);
+
   writeFileSync(join(trusted, 'patch.txt'), 'one\ntwo\n', 'utf8');
   const patchDryRun = call(writeState, 321, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, dry_run: true, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
   assert.equal(patchDryRun.result.structuredContent.status, 'checked');

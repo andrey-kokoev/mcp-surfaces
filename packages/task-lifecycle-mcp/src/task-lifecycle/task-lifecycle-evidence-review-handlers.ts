@@ -788,7 +788,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           evaluation: truthfulnessGate.evaluation,
           recovery_state_vocabulary: truthfulnessGate.evaluation.state_vocabulary,
           required_fields: truthfulnessGate.evaluation.required_fields,
-          remediation: 'For serious-failure recovery finish/report claims, provide recovery_truthfulness with known_facts, inferences, uncertainty, changed, not_changed, remaining_work, evidence_limits, capa_open_status, and state. Use terminal_corrected only when corrective implementation is complete, no related CAPA/task/review remains open, and repository_durability names committed/pushed state; task creation alone is not correction.',
+          remediation: 'For serious-failure recovery finish/report claims, retry with recovery_truthfulness containing known_facts, inferences, uncertainty, changed, not_changed, remaining_work, evidence_limits, capa_open_status, and state. Ordinary recovery packets fit inline under the governed inline threshold; use mcp_payload_create plus payload_ref only for larger packets. Use terminal_corrected only when corrective implementation is complete, no related CAPA/task/review remains open, and repository_durability names committed/pushed state; task creation alone is not correction.',
           examples: finishGateExamples('recovery_truthfulness'),
         };
         if (identityWarning) {
@@ -1075,7 +1075,8 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
             close_blockers: recoveryTruthfulnessValidation.errors,
             task_number: taskNumber,
             trigger_evaluation: recoveryTruthfulnessValidation.evaluation,
-            next_command: `Update task ${taskNumber} with a ## Recovery Truthfulness section naming known facts, inferences, uncertainty, changed, not changed, remaining work, evidence limits, CAPA-open status, and state. For terminal_corrected, also name repository durability / commit-push state.`,
+            remediation: 'For serious-failure recovery finish/report claims, retry with inline recovery_truthfulness containing known_facts, inferences, uncertainty, changed, not_changed, remaining_work, evidence_limits, capa_open_status, and state when the packet is below the governed inline threshold. Use mcp_payload_create plus payload_ref only for larger packets, or update the task body with a canonical ## Recovery Truthfulness section when closing from authored markdown evidence.',
+            next_command: `Retry task_lifecycle_finish with recovery_truthfulness containing known_facts, inferences, uncertainty, changed, not_changed, remaining_work, evidence_limits, capa_open_status, and state, or update task ${taskNumber} with a ## Recovery Truthfulness section carrying the same fields. For terminal_corrected, also name repository durability / commit-push state.`,
             schema: 'narada.task.mcp.finish.recovery_truthfulness_gate.v0',
             examples: finishGateExamples('recovery_truthfulness'),
           };

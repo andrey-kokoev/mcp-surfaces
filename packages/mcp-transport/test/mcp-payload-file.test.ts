@@ -15,33 +15,33 @@ import {
   resolveToolPayloadArgs,
 } from '../src/mcp-payload-file.js';
 
-const exactly200 = 'x'.repeat(200);
-const over200 = 'x'.repeat(201);
+const exactly20000 = 'x'.repeat(20_000);
+const over20000 = 'x'.repeat(20_001);
 
 assert.doesNotThrow(() => enforceInlinePayloadLimit({
   toolName: 'representative_tool',
-  args: { summary: exactly200 },
+  args: { summary: exactly20000 },
 }));
 
 assert.throws(
   () => enforceInlinePayloadLimit({
     toolName: 'representative_tool',
-    args: { summary: over200 },
+    args: { summary: over20000 },
   }),
-  /inline_payload_too_long: field=summary length=201 threshold=200 remediation=call mcp_payload_create then retry_with_payload_ref.*mcp_payload_create_args=.*"summary":"<move original summary here>".*retry_args=.*"payload_ref":"mcp_payload:<id>@v1"/
+  /inline_payload_too_long: field=summary length=20001 threshold=20000 remediation=call mcp_payload_create then retry_with_payload_ref.*mcp_payload_create_args=.*"summary":"<move original summary here>".*retry_args=.*"payload_ref":"mcp_payload:<id>@v1"/
 );
 
 assert.throws(
   () => enforceInlinePayloadLimit({
     toolName: 'task_lifecycle_review',
-    args: { findings: [{ severity: 'note', description: over200 }] },
+    args: { findings: [{ severity: 'note', description: over20000 }] },
   }),
   /mcp_payload_create_args=.*"findings":\[\{"description":"<move original findings\.0\.description here>"\}\]/
 );
 
 assert.doesNotThrow(() => enforceInlinePayloadLimit({
   toolName: 'mcp_payload_create',
-  args: { payload: { summary: over200 } },
+  args: { payload: { summary: over20000 } },
   allowPayloadCreation: true,
 }));
 
@@ -148,6 +148,16 @@ try {
     payloadRefMode: 'merge_args',
   });
   assert.deepEqual(merged.args, { task_number: 2, agent_id: 'top.agent', summary: 'from payload' });
+
+  const placeholderMergePayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { task_number: 1, agent_id: 'payload.agent', execution_notes: 'real notes', verification: 'real verification' } } });
+  const placeholderMerged = resolveToolPayloadArgs({
+    siteRoot: tempRoot,
+    toolName: 'representative_tool',
+    args: { payload_ref: placeholderMergePayload.ref, task_number: 2, agent_id: 'top.agent', execution_notes: '<!-- placeholder notes -->', verification: '<move original verification here>' },
+    allowedTools: ['representative_tool'],
+    payloadRefMode: 'merge_args_prefer_payload_placeholders',
+  });
+  assert.deepEqual(placeholderMerged.args, { task_number: 2, agent_id: 'top.agent', execution_notes: 'real notes', verification: 'real verification' });
 
   const outputId = 'o_alias_test';
   const outputRef = `mcp_output:${outputId}`;

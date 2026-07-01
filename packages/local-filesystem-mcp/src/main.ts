@@ -1103,7 +1103,7 @@ function strReplaceTool(args, state) {
   const before = readFileSync(path, 'utf8');
   assertExpectedSha256(args, before, { operation: 'fs_str_replace_file', path, root });
   const count = before.split(oldText).length - 1;
-  if (count === 0) throw diagnosticError('str_replace_not_found', 'str_replace_not_found', pathMetadata(path, root));
+  if (count === 0) throw diagnosticError('str_replace_not_found', 'str_replace_not_found', buildStrReplaceNotFoundDetails({ path, root, before, oldText }));
   if (count > 1) {
     throw diagnosticError('str_replace_ambiguous', `str_replace_ambiguous: ${count}`, {
       ...pathMetadata(path, root),
@@ -1122,6 +1122,57 @@ function strReplaceTool(args, state) {
     before_sha256: sha256(before),
     after_sha256: sha256(after),
   };
+}
+
+function buildStrReplaceNotFoundDetails({ path, root, before, oldText }) {
+  const normalizedBefore = normalizeNewlines(before);
+  const normalizedOld = normalizeNewlines(oldText);
+  const lineCandidates = findLineRangeCandidates(before, oldText).slice(0, 10);
+  const likelyNewlineMismatch = normalizedOld.length > 0 && normalizedBefore.includes(normalizedOld);
+  const likelyVisibleLineMismatch = !likelyNewlineMismatch && lineCandidates.length > 0;
+  return {
+    ...pathMetadata(path, root),
+    old_length: oldText.length,
+    old_sha256: sha256(oldText),
+    likely_newline_or_context_mismatch: likelyNewlineMismatch || likelyVisibleLineMismatch,
+    mismatch_reason: likelyNewlineMismatch
+      ? 'normalized_newline_match_only'
+      : likelyVisibleLineMismatch
+        ? 'visible_line_match_without_exact_surrounding_context'
+        : 'exact_text_not_found',
+    candidate_line_ranges: lineCandidates,
+    recommended_tool: 'fs_replace_range',
+    recommended_args: lineCandidates.length === 1 ? {
+      path,
+      start_line: lineCandidates[0].start_line,
+      end_line: lineCandidates[0].end_line,
+      replacement: '<replacement text>',
+    } : null,
+    remediation: [
+      'fs_str_replace_file is exact and preserves single-occurrence safety; it does not normalize line endings or guess missing surrounding context.',
+      'Use fs_read_file_range to confirm the intended line window, then use fs_replace_range with start_line/end_line when the visible line is correct but exact string replacement fails.',
+      'Include expected_sha256 on the write retry when acting from prior readback.',
+    ],
+  };
+}
+
+function normalizeNewlines(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function findLineRangeCandidates(content, oldText) {
+  const normalizedNeedle = normalizeNewlines(oldText).trim();
+  if (!normalizedNeedle) return [];
+  const needleLines = normalizedNeedle.split('\n');
+  const lines = normalizeNewlines(content).split('\n');
+  const candidates = [];
+  for (let index = 0; index <= lines.length - needleLines.length; index += 1) {
+    const window = lines.slice(index, index + needleLines.length).join('\n').trim();
+    if (window === normalizedNeedle || window.includes(normalizedNeedle)) {
+      candidates.push({ start_line: index + 1, end_line: index + needleLines.length, preview: window.slice(0, 200) });
+    }
+  }
+  return candidates;
 }
 
 function replaceRangeTool(args, state) {
