@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
@@ -34,7 +34,13 @@ try {
 
   const options = view(await call('launcher_options_list', {}));
   assert.ok((options.declared_options as string[]).includes('IntelligenceProvider'));
+  assert.ok((options.declared_options as string[]).includes('OperatorSurface'));
+  assert.ok((options.declared_options as string[]).includes('McpScope'));
   assert.ok((options.declared_options as string[]).includes('Profile'));
+
+  const toolList = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state) as Record<string, any>;
+  const launcherPlanTool = toolList.result.tools.find((tool: Record<string, any>) => tool.name === 'launcher_plan');
+  assert.deepEqual(launcherPlanTool.inputSchema.properties.mcp_scope.enum, ['all', 'host', 'user-site', 'local-site', 'none']);
 
   const registry = view(await call('launcher_registry_list', { site: ['test'] }));
   assert.equal(registry.total_count, 2);
@@ -57,6 +63,9 @@ try {
   assert.ok((plan.wt_args as string[]).includes('implementation-fast'));
   assert.ok((plan.wt_args as string[]).includes('codex-subscription'));
   assert.ok((plan.wt_args as string[]).includes('-WaitForEnterBeforeExec'));
+  assert.deepEqual(plan.mcp_scope_plan.admitted_scopes, ['all', 'host', 'user-site', 'local-site', 'none']);
+  assert.equal(plan.mcp_scope_plan.agents[0].requested, 'all');
+  assert.deepEqual(plan.mcp_scope_plan.agents[0].requested_loci, ['host', 'user-site', 'local-site']);
   assert.equal(plan.startup_profile_plan.execution_posture, 'planned_not_started_by_mcp');
   assert.deepEqual(plan.startup_profile_plan.profiles, ['implementation-fast']);
   assert.equal(plan.startup_profile_plan.entries[0].registry_profile, 'implementation');
@@ -66,6 +75,12 @@ try {
   assert.equal(noWait.count, 1);
   assert.equal((noWait.wt_args as string[]).includes('-WaitForEnterBeforeExec'), false);
   assert.equal(noWait.startup_profile_plan.entries[0].start_after_seconds, 0);
+
+  const localSitePlan = view(await call('launcher_plan', { agent: ['narada-test.architect'], mcp_scope: 'local-site' }));
+  assert.equal(localSitePlan.mcp_scope_plan.agents[0].requested, 'local-site');
+  assert.deepEqual(localSitePlan.mcp_scope_plan.agents[0].requested_loci, ['local-site']);
+  assert.ok((localSitePlan.wt_args as string[]).includes('-McpScope'));
+  assert.ok((localSitePlan.wt_args as string[]).includes('local-site'));
 
   const staggered = view(await call('launcher_plan', { all: true, startup_stagger_seconds: 7 }));
   assert.deepEqual(staggered.startup_profile_plan.entries.map((entry: Record<string, any>) => entry.start_after_seconds), [0, 7]);
@@ -81,6 +96,25 @@ try {
   assert.equal(coherence.status, 'valid_with_warnings');
   assert.equal(coherence.errors, 0);
   assert.ok(coherence.warnings >= 1);
+
+  mkdirSync(join(root, '.ai'), { recursive: true });
+  writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({
+    enabled: true,
+    level: 'all',
+    surfaces: {
+      launcher: { enabled: true, level: 'all' },
+    },
+  }, null, 2), 'utf8');
+
+  const telemetryPlan = view(await call('launcher_plan', { agent: ['narada-test.architect'], runtime: 'agent-cli' }));
+  const telemetryPath = join(root, '.ai', 'telemetry', 'launcher.jsonl');
+  const telemetryLines = readFileSync(telemetryPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.ok(telemetryLines.length >= 1);
+  const telemetryEvent = JSON.parse(telemetryLines[telemetryLines.length - 1]);
+  assert.equal(telemetryEvent.surface_id, 'launcher');
+  assert.equal(telemetryEvent.tool_name, 'launcher_plan');
+  assert.equal(JSON.stringify(telemetryEvent).includes('new-tab'), false);
+  assert.equal(telemetryPlan.count, 1);
 
   console.log('launcher-mcp behavior ok');
 } finally {

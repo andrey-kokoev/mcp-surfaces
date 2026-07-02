@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createServerState, handleRequest } from '../src/main.js';
@@ -9,6 +9,7 @@ import { createServerState, handleRequest } from '../src/main.js';
 
 const root = join(tmpdir(), `site-coherence-mcp-${randomUUID()}`);
 mkdirSync(root, { recursive: true });
+mkdirSync(join(root, '.ai'), { recursive: true });
 mkdirSync(join(root, '.narada', 'site-continuity', 'health'), { recursive: true });
 mkdirSync(join(root, '.narada', 'auth'), { recursive: true });
 
@@ -90,6 +91,18 @@ assert.equal(checkLocalContent.cloudflare, null);
 assert.equal(checkLocalContent.coherence.state, 'local_only');
 assert.equal(checkLocalContent.coherence.posture_agrees, null);
 
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, code: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
+const checkUnauthorized = await handleRequest({
+  jsonrpc: '2.0', id: 21, method: 'tools/call',
+  params: { name: 'site_coherence_check', arguments: { site_id: 'site_live_smoke', fetch_cloudflare: true } },
+}, state);
+globalThis.fetch = originalFetch;
+const unauthorizedContent = (checkUnauthorized.result as any).structuredContent;
+assert.equal(unauthorizedContent.coherence.state, 'degraded');
+assert.equal(unauthorizedContent.coherence.operator_action, 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human');
+assert.ok(unauthorizedContent.coherence.attention.includes('cloudflare_error:site_read_failed:401:unauthorized'));
+
 const checkMissing = await handleRequest({
   jsonrpc: '2.0', id: 3, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'nonexistent_site', fetch_cloudflare: false } },
@@ -108,6 +121,27 @@ const noHealthContent = (checkNoHealth.result as any).structuredContent;
 assert.equal(noHealthContent.status, 'missing_local');
 assert.equal(noHealthContent.local, null);
 assert.equal(noHealthContent.coherence.state, 'unknown');
+
+writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({
+  enabled: true,
+  level: 'all',
+  surfaces: {
+    'site-coherence': { enabled: true, level: 'all' },
+  },
+}, null, 2), 'utf8');
+
+const telemetryCheck = await handleRequest({
+  jsonrpc: '2.0', id: 5, method: 'tools/call',
+  params: { name: 'site_coherence_check', arguments: { site_id: 'site_live_smoke', fetch_cloudflare: false } },
+}, state);
+assert.equal(telemetryCheck.error, undefined);
+const telemetryPath = join(root, '.ai', 'telemetry', 'site-coherence.jsonl');
+const telemetryLines = readFileSync(telemetryPath, 'utf8').trim().split('\n').filter(Boolean);
+assert.ok(telemetryLines.length >= 1);
+const telemetryEvent = JSON.parse(telemetryLines[telemetryLines.length - 1]);
+assert.equal(telemetryEvent.surface_id, 'site-coherence');
+assert.equal(telemetryEvent.tool_name, 'site_coherence_check');
+assert.equal(JSON.stringify(telemetryEvent).includes('monitor_sites'), false);
 
 rmSync(root, { recursive: true, force: true });
 process.stderr.write('site-coherence-mcp behavior ok\n');

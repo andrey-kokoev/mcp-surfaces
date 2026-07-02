@@ -619,4 +619,35 @@ assert.equal(stdoutFinalPage.result.structuredContent.stdout_char_length, 6500);
 const audit = readFileSync(join(auditLogDir, 'structured-command.jsonl'), 'utf8');
 assert.match(audit, /structured_command\.execution_result/);
 
+mkdirSync(join(root, '.ai'), { recursive: true });
+writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({
+  enabled: true,
+  level: 'all',
+  surfaces: {
+    'structured-command': { enabled: true, level: 'all' },
+  },
+}, null, 2), 'utf8');
+
+const telemetryExec = await rpc({
+  jsonrpc: '2.0',
+  id: 63,
+  method: 'tools/call',
+  params: {
+    name: 'structured_command_execute',
+    arguments: {
+      command: 'node',
+      args: ['--version'],
+      working_directory: root,
+    },
+  },
+}, state);
+assert.equal(telemetryExec.result.structuredContent.status, 'ok');
+const telemetryPath = join(root, '.ai', 'telemetry', 'structured-command.jsonl');
+const telemetryLines = readFileSync(telemetryPath, 'utf8').trim().split('\n').filter(Boolean);
+assert.ok(telemetryLines.length >= 1);
+const telemetryEvent = JSON.parse(telemetryLines[telemetryLines.length - 1]);
+assert.equal(telemetryEvent.surface_id, 'structured-command');
+assert.equal(telemetryEvent.tool_name, 'structured_command_execute');
+assert.equal(JSON.stringify(telemetryEvent).includes('--version'), false);
+
 console.log('structured command MCP tests passed');

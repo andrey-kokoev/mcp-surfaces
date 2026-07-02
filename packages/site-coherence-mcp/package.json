@@ -19,8 +19,11 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/site-coherence-mcp.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/mcp-telemetry": "workspace:*"
+  },
   "files": [
-    "dist/"
+    "dist/",
+    "README.md"
   ]
 }

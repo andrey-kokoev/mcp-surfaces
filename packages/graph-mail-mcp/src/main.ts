@@ -6,12 +6,34 @@ import { createHash } from 'node:crypto';
 import { basename, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
 import { decideDraftSend, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
+import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 
 const SERVER_NAME = 'narada-graph-mail-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const ATTACHMENT_UPLOAD_CHUNK_GRANULARITY = 320 * 1024;
 const DEFAULT_ATTACHMENT_UPLOAD_CHUNK_SIZE = 10 * ATTACHMENT_UPLOAD_CHUNK_GRANULARITY;
+const SURFACE_ID = 'graph-mail';
+const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
+  'graph_mail_doctor',
+  'graph_mail_query',
+  'graph_mail_message_show',
+  'graph_mail_attachment_list',
+  'graph_mail_attachment_get',
+  'graph_mail_attachment_add',
+  'graph_mail_attachment_upload_session_create',
+  'graph_mail_attachment_upload_chunk',
+  'graph_mail_attachment_upload_file',
+  'graph_mail_attachment_delete',
+  'graph_mail_draft_create',
+  'graph_mail_reply_draft_create',
+  'graph_mail_reply_all_draft_create',
+  'graph_mail_forward_draft_create',
+  'graph_mail_reply_all_to_last_in_thread_draft_create',
+  'graph_mail_draft_update',
+  'graph_mail_draft_discard',
+  'graph_mail_draft_send',
+]);
 
 type GraphMailRecord = Record<string, unknown>;
 type GraphMailServerState = GraphMailRecord & {
@@ -440,73 +462,122 @@ async function uploadAttachmentBytes(uploadUrl: string, bytes: Buffer, rangeStar
 async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  let result: unknown;
-  switch (name) {
-    case 'graph_mail_guidance':
-      result = buildGuidanceResult(args);
-      break;
-    case 'graph_mail_doctor':
-      result = await graphMailDoctor(state);
-      break;
-    case 'graph_mail_query':
-      result = await graphMailQuery(args, state);
-      break;
-    case 'graph_mail_message_show':
-      result = await graphMailMessageShow(args, state);
-      break;
-    case 'graph_mail_attachment_list':
-      result = await graphMailAttachmentList(args, state);
-      break;
-    case 'graph_mail_attachment_get':
-      result = await graphMailAttachmentGet(args, state);
-      break;
-    case 'graph_mail_attachment_add':
-      result = await graphMailAttachmentAdd(args, state);
-      break;
-    case 'graph_mail_attachment_upload_session_create':
-      result = await graphMailAttachmentUploadSessionCreate(args, state);
-      break;
-    case 'graph_mail_attachment_upload_chunk':
-      result = await graphMailAttachmentUploadChunk(args, state);
-      break;
-    case 'graph_mail_attachment_upload_file':
-      result = await graphMailAttachmentUploadFile(args, state);
-      break;
-    case 'graph_mail_attachment_delete':
-      result = await graphMailAttachmentDelete(args, state);
-      break;
-    case 'graph_mail_draft_create':
-      result = await graphMailDraftCreate(args, state);
-      break;
-    case 'graph_mail_reply_draft_create':
-      result = await graphMailDerivedDraftCreate(args, state, 'createReply');
-      break;
-    case 'graph_mail_reply_all_draft_create':
-      result = await graphMailDerivedDraftCreate(args, state, 'createReplyAll');
-      break;
-    case 'graph_mail_forward_draft_create':
-      result = await graphMailDerivedDraftCreate(args, state, 'createForward');
-      break;
-    case 'graph_mail_reply_all_to_last_in_thread_draft_create':
-      result = await graphMailReplyAllToLastInThreadDraftCreate(args, state);
-      break;
-    case 'graph_mail_draft_update':
-      result = await graphMailDraftUpdate(args, state);
-      break;
-    case 'graph_mail_draft_discard':
-      result = await graphMailDraftDiscard(args, state);
-      break;
-    case 'graph_mail_draft_send':
-      result = await graphMailDraftSend(args, state);
-      break;
-    default:
-      throw new Error(`unknown_tool: ${name}`);
+  const startedAt = Date.now();
+  try {
+    let result: unknown;
+    switch (name) {
+      case 'graph_mail_guidance':
+        result = buildGuidanceResult(args);
+        break;
+      case 'graph_mail_doctor':
+        result = await graphMailDoctor(state);
+        break;
+      case 'graph_mail_query':
+        result = await graphMailQuery(args, state);
+        break;
+      case 'graph_mail_message_show':
+        result = await graphMailMessageShow(args, state);
+        break;
+      case 'graph_mail_attachment_list':
+        result = await graphMailAttachmentList(args, state);
+        break;
+      case 'graph_mail_attachment_get':
+        result = await graphMailAttachmentGet(args, state);
+        break;
+      case 'graph_mail_attachment_add':
+        result = await graphMailAttachmentAdd(args, state);
+        break;
+      case 'graph_mail_attachment_upload_session_create':
+        result = await graphMailAttachmentUploadSessionCreate(args, state);
+        break;
+      case 'graph_mail_attachment_upload_chunk':
+        result = await graphMailAttachmentUploadChunk(args, state);
+        break;
+      case 'graph_mail_attachment_upload_file':
+        result = await graphMailAttachmentUploadFile(args, state);
+        break;
+      case 'graph_mail_attachment_delete':
+        result = await graphMailAttachmentDelete(args, state);
+        break;
+      case 'graph_mail_draft_create':
+        result = await graphMailDraftCreate(args, state);
+        break;
+      case 'graph_mail_reply_draft_create':
+        result = await graphMailDerivedDraftCreate(args, state, 'createReply');
+        break;
+      case 'graph_mail_reply_all_draft_create':
+        result = await graphMailDerivedDraftCreate(args, state, 'createReplyAll');
+        break;
+      case 'graph_mail_forward_draft_create':
+        result = await graphMailDerivedDraftCreate(args, state, 'createForward');
+        break;
+      case 'graph_mail_reply_all_to_last_in_thread_draft_create':
+        result = await graphMailReplyAllToLastInThreadDraftCreate(args, state);
+        break;
+      case 'graph_mail_draft_update':
+        result = await graphMailDraftUpdate(args, state);
+        break;
+      case 'graph_mail_draft_discard':
+        result = await graphMailDraftDiscard(args, state);
+        break;
+      case 'graph_mail_draft_send':
+        result = await graphMailDraftSend(args, state);
+        break;
+      default:
+        throw new Error(`unknown_tool: ${name}`);
+    }
+    emitGraphMailTelemetry(name, asRecord(result), state, startedAt);
+    return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
+  } catch (error) {
+    emitGraphMailTelemetry(name, {}, state, startedAt, error);
+    throw error;
   }
-  return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
 }
 
 function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
+}
+
+function emitGraphMailTelemetry(toolName: string, result: GraphMailRecord, state: GraphMailServerState, startedAt: number, error?: unknown): void {
+  if (!GRAPH_MAIL_TELEMETRY_TOOL_NAMES.has(toolName)) return;
+  const declaration = graphMailTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  const status = error ? 'error' : String(result.status ?? 'ok');
+  const eventKind: TelemetryEventKind = error ? 'tool_failed' : status === 'refused' ? 'tool_refused' : 'tool_completed';
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot: state.siteRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        refusalCode: telemetryRefusalCodeFromResult(result),
+        errorCode: error ? telemetryErrorCodeFromUnknown(error) : null,
+        policyDecision: asRecord(result.decision ?? null),
+      },
+    });
+  } catch (telemetryError) {
+    process.stderr.write(`graph_mail_telemetry_error:${telemetryError instanceof Error ? telemetryError.message : String(telemetryError)}\n`);
+  }
+}
+
+function graphMailTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!GRAPH_MAIL_TELEMETRY_TOOL_NAMES.has(toolName)) return null;
+  const highSensitivity = /attachment|draft|message_show|query/.test(toolName);
+  const lowSensitivity = /doctor/.test(toolName);
+  return buildGraphMailTelemetryDeclaration({
+    sensitivity: lowSensitivity ? 'low' : highSensitivity ? 'high' : 'medium',
+    policyDecision: /draft_send/.test(toolName),
+  });
 }
 
 async function graphMailDoctor(state: GraphMailServerState): Promise<GraphMailRecord> {

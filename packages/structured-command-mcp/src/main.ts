@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 import {
   buildAllowedRoots,
   createExecutionPolicy,
@@ -20,8 +21,17 @@ const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 20000;
 const REF_PATTERN = /^structured_command_(input|execution):([A-Za-z0-9_-]{8,80})$/;
 const ROOTS_LIST_REQUEST_PREFIX = 'structured_command_roots_';
+const SURFACE_ID = 'structured-command';
+const STRUCTURED_COMMAND_TELEMETRY_TOOL_NAMES = new Set([
+  'structured_command_execution_policy_inspect',
+  'structured_command_execute',
+  'structured_command_powershell_parse_check',
+  'structured_command_input_create',
+  'structured_command_elevated_window_execute',
+]);
 
 type StructuredCommandState = Record<string, unknown> & {
+  siteRoot: string;
   policy: ReturnType<typeof createExecutionPolicy>;
   auditLogDir: string | null;
   storageRoot: string;
@@ -135,6 +145,7 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   });
   if (allowedRoots.length === 0) throw new Error('structured_command_requires_allowed_root');
   return {
+    siteRoot,
     policy: createExecutionPolicy({
       allowedRoots,
       allowedCommands: optionList(options.allowCommand ?? options.allowedCommands),
@@ -302,14 +313,66 @@ export function listTools() {
 async function callTool(params: Record<string, unknown>, state: StructuredCommandState, context: RequestContext = {}) {
   const name = params?.name;
   const args = asRecord(params.arguments);
-  if (name === 'structured_command_guidance') return toolResult(buildGuidanceResult(args), state);
-  enforceInputCharLimit(args);
-  if (name === 'structured_command_execution_policy_inspect') return toolResult(publicExecutionPolicy(state.policy), state);
-  if (name === 'structured_command_execute') return toolResult(await executeStructuredCommand(args, state, context), state);
-  if (name === 'structured_command_powershell_parse_check') return toolResult(await powershellParseCheck(args, state, context), state);
-  if (name === 'structured_command_input_create') return toolResult(createStructuredCommandInput(args, state), state);
-  if (name === 'structured_command_elevated_window_execute') return toolResult(await executeStructuredCommandElevatedWindow(args, state), state);
-  throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
+  const startedAt = Date.now();
+  try {
+    let result: unknown;
+    if (name === 'structured_command_guidance') result = buildGuidanceResult(args);
+    else {
+      enforceInputCharLimit(args);
+      if (name === 'structured_command_execution_policy_inspect') result = publicExecutionPolicy(state.policy);
+      else if (name === 'structured_command_execute') result = await executeStructuredCommand(args, state, context);
+      else if (name === 'structured_command_powershell_parse_check') result = await powershellParseCheck(args, state, context);
+      else if (name === 'structured_command_input_create') result = createStructuredCommandInput(args, state);
+      else if (name === 'structured_command_elevated_window_execute') result = await executeStructuredCommandElevatedWindow(args, state);
+      else throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
+    }
+    emitStructuredCommandTelemetry(String(name ?? ''), asRecord(result), state, startedAt);
+    return toolResult(result, state);
+  } catch (error) {
+    emitStructuredCommandTelemetry(String(name ?? ''), {}, state, startedAt, error);
+    throw error;
+  }
+}
+
+function emitStructuredCommandTelemetry(toolName: string, result: Record<string, unknown>, state: StructuredCommandState, startedAt: number, error?: unknown): void {
+  if (!STRUCTURED_COMMAND_TELEMETRY_TOOL_NAMES.has(toolName)) return;
+  const declaration = structuredCommandTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  const status = error ? 'error' : String(result.status ?? 'ok');
+  const eventKind: TelemetryEventKind = error ? 'tool_failed' : status === 'refused' ? 'tool_refused' : 'tool_completed';
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot: state.siteRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        refusalCode: telemetryRefusalCodeFromResult(result),
+        errorCode: error ? telemetryErrorCodeFromUnknown(error) : null,
+        policyDecision: asRecord(result.decision ?? null),
+      },
+    });
+  } catch (telemetryError) {
+    process.stderr.write(`structured_command_telemetry_error:${telemetryError instanceof Error ? telemetryError.message : String(telemetryError)}\n`);
+  }
+}
+
+function structuredCommandTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!STRUCTURED_COMMAND_TELEMETRY_TOOL_NAMES.has(toolName)) return null;
+  const highSensitivity = /execute|elevated_window|input_create/.test(toolName);
+  return buildCommandMetadataTelemetryDeclaration({
+    sensitivity: highSensitivity ? 'high' : 'medium',
+    policyDecision: /execute|elevated_window/.test(toolName),
+  });
 }
 
 export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {

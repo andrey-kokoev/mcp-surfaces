@@ -4,12 +4,31 @@ import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 
 const SERVER_NAME = 'launcher-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_NARADA_ROOT = 'C:/Users/Andrey/Narada';
-const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'Profile', 'ConfigPath', 'RegistryPath', 'Runtime', 'IntelligenceProvider', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
+const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'Profile', 'ConfigPath', 'RegistryPath', 'OperatorSurface', 'Runtime', 'IntelligenceProvider', 'McpScope', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
+const ADMITTED_MCP_SCOPES = ['all', 'host', 'user-site', 'local-site', 'none'];
+const SURFACE_ID = 'launcher';
+const LAUNCHER_TELEMETRY_TOOL_NAMES = new Set([
+  'launcher_doctor',
+  'launcher_options_list',
+  'launcher_registry_list',
+  'launcher_plan',
+  'launcher_option_matrix',
+  'launcher_coherence_check',
+]);
+
+function mcpScopeLoci(scope: string): string[] {
+  if (scope === 'none') return [];
+  if (scope === 'host') return ['host'];
+  if (scope === 'user-site') return ['user-site'];
+  if (scope === 'local-site') return ['local-site'];
+  return ['host', 'user-site', 'local-site'];
+}
 const COVERED_OPTIONS = [...DECLARED_OPTIONS];
 
 type JsonRecord = Record<string, unknown>;
@@ -25,6 +44,7 @@ type AgentRecord = {
   launcher_path: string;
   runtime: string;
   profile: string;
+  mcp_scope: string;
   enable_native_shell: boolean;
   config_path: string;
 };
@@ -121,6 +141,7 @@ export function listTools() {
           site: { type: 'array', items: { type: 'string' } },
           profile: { type: 'array', items: { type: 'string' } },
           runtime: { type: 'string' },
+          mcp_scope: { type: 'string', enum: ADMITTED_MCP_SCOPES, description: 'MCP injection scope override for selected agents.' },
           launch_profile: { type: 'string', description: 'Override the agent profile passed to Start-NaradaAgent.ps1.' },
           startup_stagger_seconds: { type: 'integer', minimum: 0, maximum: 300, description: 'Plan-only stagger interval between selected profile-aware startup entries.' },
           intelligence_provider: { type: 'string' },
@@ -152,18 +173,60 @@ export function listTools() {
 function callTool(params: JsonRecord, state: LauncherState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  let result: JsonRecord;
-  switch (name) {
-    case 'launcher_guidance': result = buildGuidanceResult(args); break;
-    case 'launcher_doctor': result = launcherDoctor(state); break;
-    case 'launcher_options_list': result = launcherOptionsList(); break;
-    case 'launcher_registry_list': result = launcherRegistryList(args, state); break;
-    case 'launcher_plan': result = launcherPlan(args, state); break;
-    case 'launcher_option_matrix': result = launcherOptionMatrix(args, state); break;
-    case 'launcher_coherence_check': result = launcherCoherenceCheck(args, state); break;
-    default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+  const startedAt = Date.now();
+  try {
+    let result: JsonRecord;
+    switch (name) {
+      case 'launcher_guidance': result = buildGuidanceResult(args); break;
+      case 'launcher_doctor': result = launcherDoctor(state); break;
+      case 'launcher_options_list': result = launcherOptionsList(); break;
+      case 'launcher_registry_list': result = launcherRegistryList(args, state); break;
+      case 'launcher_plan': result = launcherPlan(args, state); break;
+      case 'launcher_option_matrix': result = launcherOptionMatrix(args, state); break;
+      case 'launcher_coherence_check': result = launcherCoherenceCheck(args, state); break;
+      default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+    }
+    emitLauncherTelemetry(name, result, state, startedAt);
+    return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+  } catch (error) {
+    emitLauncherTelemetry(name, {}, state, startedAt, error);
+    throw error;
   }
-  return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+}
+
+function emitLauncherTelemetry(toolName: string, result: JsonRecord, state: LauncherState, startedAt: number, error?: unknown): void {
+  if (!LAUNCHER_TELEMETRY_TOOL_NAMES.has(toolName)) return;
+  const declaration = launcherTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  const status = error ? 'error' : String(result.status ?? 'ok');
+  const eventKind: TelemetryEventKind = error ? 'tool_failed' : status === 'refused' ? 'tool_refused' : 'tool_completed';
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot: state.naradaRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        errorCode: error ? telemetryErrorCodeFromUnknown(error) : null,
+      },
+    });
+  } catch (telemetryError) {
+    process.stderr.write(`launcher_telemetry_error:${telemetryError instanceof Error ? telemetryError.message : String(telemetryError)}\n`);
+  }
+}
+
+function launcherTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!LAUNCHER_TELEMETRY_TOOL_NAMES.has(toolName)) return null;
+  return buildPathMetadataTelemetryDeclaration({ sensitivity: /coherence|registry/.test(toolName) ? 'medium' : 'low' });
 }
 
 function launcherDoctor(state: LauncherState): JsonRecord {
@@ -218,10 +281,14 @@ function launcherRegistryList(args: JsonRecord, state: LauncherState): JsonRecor
 function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
   const selected = selectRecords(args, state, { requireSelection: true });
   const wtArgs: string[] = [];
+  const mcpScopePlan = [];
   const staggerSeconds = clampNumber(args.startup_stagger_seconds, 0, 0, 300);
   for (const record of selected.records) {
     const launchRuntime = optionalString(args.runtime) ?? record.runtime;
     const launchProfile = optionalString(args.launch_profile) ?? record.profile;
+    const mcpScope = optionalString(args.mcp_scope) || record.mcp_scope;
+    if (mcpScope && !ADMITTED_MCP_SCOPES.includes(mcpScope)) throw new Error(`mcp_scope_not_admitted: ${mcpScope}. Admitted scopes: ${ADMITTED_MCP_SCOPES.join(', ')}`);
+    mcpScopePlan.push({ agent: record.agent, requested: mcpScope, requested_loci: mcpScopeLoci(mcpScope), registry_default: record.mcp_scope });
     if (wtArgs.length > 0) wtArgs.push(';');
     wtArgs.push('new-tab', '--title', record.title, '-d', record.narada_root, 'pwsh', '-NoExit', '-File', join(selected.naradaRoot, 'Start-NaradaAgent.ps1'), '-NaradaRoot', record.narada_root, '-SiteRoot', record.site_root, '-Agent', record.agent, '-Runtime', launchRuntime, '-LauncherPath', record.launcher_path);
     if (launchProfile) wtArgs.push('-Profile', launchProfile);
@@ -229,6 +296,7 @@ function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
     if (args.enable_native_shell === true || record.enable_native_shell) wtArgs.push('-EnableNativeShell');
     const provider = optionalString(args.intelligence_provider);
     if (provider) wtArgs.push('-IntelligenceProvider', provider);
+    if (mcpScope) wtArgs.push('-McpScope', mcpScope);
     if (args.no_wait_for_enter_before_exec !== true) wtArgs.push('-WaitForEnterBeforeExec');
   }
   return {
@@ -238,6 +306,10 @@ function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
     windows_terminal_invoked: false,
     registry_paths: selected.registryPaths,
     wt_args: wtArgs,
+    mcp_scope_plan: {
+      admitted_scopes: ADMITTED_MCP_SCOPES,
+      agents: mcpScopePlan,
+    },
     records: selected.records,
     startup_profile_plan: startupProfilePlan(selected.records, optionalString(args.launch_profile), staggerSeconds),
   };
@@ -370,6 +442,8 @@ function toAgentRecord(agent: JsonRecord, config: JsonRecord, configPath: string
   const launcherPath = text(agent.LauncherPath ?? config.LauncherPath) || (launcher ? join(naradaRoot, launcher) : join(naradaRoot, 'narada-andrey.ps1'));
   const runtime = text(agent.Runtime ?? config.Runtime) || 'codex';
   const profile = text(agent.Profile ?? config.Profile);
+  const mcpScope = text(agent.McpScope ?? config.McpScope) || 'all';
+  if (!ADMITTED_MCP_SCOPES.includes(mcpScope)) throw diagnosticError('mcp_scope_not_admitted', `mcp_scope_not_admitted:${mcpScope}`, { admitted_scopes: ADMITTED_MCP_SCOPES });
   return {
     agent: agentId,
     title: text(agent.Title) || agentId.split('.').at(-1) || agentId,
@@ -381,6 +455,7 @@ function toAgentRecord(agent: JsonRecord, config: JsonRecord, configPath: string
     launcher_path: normalizePath(launcherPath),
     runtime,
     profile,
+    mcp_scope: mcpScope,
     enable_native_shell: Boolean(agent.EnableNativeShell),
     config_path: normalizePath(configPath),
   };

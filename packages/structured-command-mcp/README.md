@@ -55,6 +55,10 @@ By default, selected deployment tools such as `railway` and `wrangler` may be ad
 
 Use `structured_command_powershell_parse_check` to parse-check one `.ps1` file under an allowed root. The tool invokes the PowerShell parser internally and does not admit arbitrary `pwsh -Command` text from callers.
 
+## Telemetry
+
+Telemetry is optional and off by default. When enabled, this surface emits metadata-only tool status events. It does not persist raw argv arrays, command output, shell text, or execution results beyond the minimal status metadata needed for observability.
+
 ## Output Refs
 
 Large stdout/stderr payloads are paged by `structured_command_execute`. Re-call `structured_command_execute` with the returned `execution_ref` plus `stdout_offset`/`stdout_limit` or `stderr_offset`/`stderr_limit` to read later pages.

@@ -537,6 +537,89 @@ try {
   assert.equal(policyCalls[0].init.method, 'POST');
   assert.equal(policyCalls[0].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/draft-1/send');
 
+  writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({
+    enabled: true,
+    level: 'all',
+    surfaces: {
+      'graph-mail': { enabled: true, level: 'all' },
+    },
+  }, null, 2), 'utf8');
+
+  const telemetryCalls: CapturedRequest[] = [];
+  const telemetryState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(telemetryCalls, [
+      { body: { id: 'draft-telemetry-1', subject: 'Telemetry subject sentinel' } },
+      { status: 202, text: '' },
+      { body: { id: 'attachment-telemetry-1' } },
+    ]),
+  });
+  const telemetryDraft = await rpc({
+    jsonrpc: '2.0',
+    id: 23,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_draft_create',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        subject: 'Telemetry subject sentinel',
+        body_text: 'Telemetry body sentinel',
+      },
+    },
+  }, telemetryState);
+  assert.equal(telemetryDraft.error, undefined);
+
+  const telemetryUploadChunk = await rpc({
+    jsonrpc: '2.0',
+    id: 24,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_upload_chunk',
+      arguments: {
+        upload_url: 'https://outlook.office.com/upload/telemetry-upload-sentinel',
+        content_base64: Buffer.from('telemetry').toString('base64'),
+        range_start: 0,
+        range_end: 8,
+        total_size: 9,
+      },
+    },
+  }, telemetryState);
+  assert.equal(telemetryUploadChunk.error, undefined);
+
+  const telemetryAttachmentAdd = await rpc({
+    jsonrpc: '2.0',
+    id: 25,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_attachment_add',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        draft_id: 'draft-telemetry-1',
+        name: 'telemetry.txt',
+        content_type: 'text/plain',
+        content_base64: Buffer.from('Telemetry attachment add sentinel').toString('base64'),
+      },
+    },
+  }, telemetryState);
+  assert.equal(telemetryAttachmentAdd.error, undefined);
+
+  const telemetryPath = join(root, '.ai', 'telemetry', 'graph-mail.jsonl');
+  const telemetryLines = readFileSync(telemetryPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.ok(telemetryLines.length >= 1);
+  const telemetryEvents = telemetryLines.map((line) => JSON.parse(line));
+  assert.equal(telemetryEvents.some((event: DynamicTestValue) => event.tool_name === 'graph_mail_draft_create'), true);
+  assert.equal(telemetryEvents.some((event: DynamicTestValue) => event.tool_name === 'graph_mail_attachment_upload_chunk'), true);
+  assert.equal(telemetryEvents.some((event: DynamicTestValue) => event.tool_name === 'graph_mail_attachment_add'), true);
+  for (const telemetryEvent of telemetryEvents as DynamicTestValue[]) {
+    assert.equal(telemetryEvent.surface_id, 'graph-mail');
+    assert.equal(JSON.stringify(telemetryEvent).includes('Telemetry subject sentinel'), false);
+    assert.equal(JSON.stringify(telemetryEvent).includes('Telemetry body sentinel'), false);
+    assert.equal(JSON.stringify(telemetryEvent).includes('telemetry-upload-sentinel'), false);
+    assert.equal(JSON.stringify(telemetryEvent).includes('Telemetry attachment base64 sentinel'), false);
+    assert.equal(JSON.stringify(telemetryEvent).includes('Telemetry attachment add sentinel'), false);
+  }
+
   console.log('graph-mail-mcp behavior ok');
 } finally {
   rmSync(root, { recursive: true, force: true });

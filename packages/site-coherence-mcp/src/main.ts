@@ -4,6 +4,7 @@ import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 
 const SERVER_NAME = 'site-coherence-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -15,6 +16,8 @@ const DEFAULT_HEALTH_FILE = '.narada/site-continuity/health/cloudflare-continuit
 const DEFAULT_BINDINGS_FILE = '.narada/site-continuity/bindings.json';
 const DEFAULT_SESSION_FILE = '.narada/auth/cloudflare-operator-session.json';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';
+const SURFACE_ID = 'site-coherence';
+const SITE_COHERENCE_TELEMETRY_TOOL_NAMES = new Set(['site_coherence_check', 'site_coherence_doctor']);
 
 type JsonRecord = Record<string, unknown>;
 
@@ -115,16 +118,58 @@ export function listTools() {
 async function callTool(params: JsonRecord, state: SiteCoherenceState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  let result: JsonRecord;
-  switch (name) {
-    case 'site_coherence_guidance':
-      result = buildGuidanceResult(args);
-      break;
-    case 'site_coherence_check': result = await siteCoherenceCheck(args, state); break;
-    case 'site_coherence_doctor': result = siteCoherenceDoctor(state); break;
-    default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+  const startedAt = Date.now();
+  try {
+    let result: JsonRecord;
+    switch (name) {
+      case 'site_coherence_guidance':
+        result = buildGuidanceResult(args);
+        break;
+      case 'site_coherence_check': result = await siteCoherenceCheck(args, state); break;
+      case 'site_coherence_doctor': result = siteCoherenceDoctor(state); break;
+      default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+    }
+    emitSiteCoherenceTelemetry(name, result, state, startedAt);
+    return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+  } catch (error) {
+    emitSiteCoherenceTelemetry(name, {}, state, startedAt, error);
+    throw error;
   }
-  return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+}
+
+function emitSiteCoherenceTelemetry(toolName: string, result: JsonRecord, state: SiteCoherenceState, startedAt: number, error?: unknown): void {
+  if (!SITE_COHERENCE_TELEMETRY_TOOL_NAMES.has(toolName)) return;
+  const declaration = siteCoherenceTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  const status = error ? 'error' : String(result.status ?? 'ok');
+  const eventKind: TelemetryEventKind = error ? 'tool_failed' : status === 'refused' ? 'tool_refused' : 'tool_completed';
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot: state.repoRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        errorCode: error ? telemetryErrorCodeFromUnknown(error) : null,
+      },
+    });
+  } catch (telemetryError) {
+    process.stderr.write(`site_coherence_telemetry_error:${telemetryError instanceof Error ? telemetryError.message : String(telemetryError)}\n`);
+  }
+}
+
+function siteCoherenceTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!SITE_COHERENCE_TELEMETRY_TOOL_NAMES.has(toolName)) return null;
+  return buildPathMetadataTelemetryDeclaration({ sensitivity: toolName === 'site_coherence_check' ? 'medium' : 'low' });
 }
 
 async function siteCoherenceCheck(args: JsonRecord, state: SiteCoherenceState): Promise<JsonRecord> {
@@ -155,7 +200,8 @@ async function siteCoherenceCheck(args: JsonRecord, state: SiteCoherenceState): 
     try {
       cloudflareSiteRead = await fetchCloudflareSiteRead(state, siteId);
     } catch (error) {
-      cloudflareError = { message: error instanceof Error ? error.message : String(error) };
+      const details = error && typeof error === 'object' && 'details' in error ? (error as { details?: unknown }).details : null;
+      cloudflareError = { message: error instanceof Error ? error.message : String(error), details: asRecord(details) };
     }
   }
 
@@ -250,7 +296,15 @@ async function fetchCloudflareSiteRead(state: SiteCoherenceState, siteId: string
   const bodyParsed = parseJsonText(text);
 
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(`site_read_failed:${response.status}:${bodyParsed?.code ?? 'unknown'}`);
+    const error = new Error(`site_read_failed:${response.status}:${bodyParsed?.code ?? 'unknown'}`) as Error & { details?: JsonRecord };
+    error.details = {
+      status: response.status,
+      code: bodyParsed?.code ?? 'unknown',
+      operator_action: response.status === 401
+        ? 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human'
+        : 'inspect_cloudflare_site_coherence_and_operator_membership',
+    };
+    throw error;
   }
 
   return bodyParsed;
@@ -303,6 +357,9 @@ function computeCoherence(local: JsonRecord | null, cloudflare: JsonRecord | nul
       cloudflare_next_action: null,
       posture_agrees: false,
       diagnosis: 'cloudflare_site_read_unavailable_cannot_compare',
+      operator_action: cloudflareError?.details && typeof cloudflareError.details === 'object'
+        ? (cloudflareError.details as JsonRecord).operator_action ?? null
+        : null,
     };
   }
 
