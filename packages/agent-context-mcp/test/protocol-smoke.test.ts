@@ -14,7 +14,7 @@ writeFileSync(join(siteRoot, '.ai', 'agents', 'roster.json'), JSON.stringify({
 }, null, 2), 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot], {
+const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot, '--site-id', 'narada-test'], {
   cwd: siteRoot,
   env: {
     ...process.env,
@@ -65,7 +65,7 @@ try {
   writeMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   const init = await waitFor(1);
   assert.equal(init.error, undefined);
-  assert.equal(init.result.serverInfo.name, 'narada-sonar-agent-context-mcp');
+  assert.equal(init.result.serverInfo.name, 'narada.test-agent-context-mcp');
 
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);

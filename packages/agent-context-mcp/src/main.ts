@@ -3,7 +3,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 /**
- * Sonar-local agent-context MCP server.
+ * Site-local agent-context MCP server.
  *
  * This is the minimum checkpoint/hydration slice admitted from the
  * agent-context checkpointing lift package. It intentionally avoids importing
@@ -12,7 +12,7 @@ import { guidanceToolDefinition } from './guidance.js';
 
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import {
   listAgentStartSessions,
   materializeAgentSessionStart,
@@ -20,13 +20,14 @@ import {
   validateIdentityAgainstRoster,
 } from './session-start.js';
 
-const SERVER_NAME = 'narada-sonar-agent-context-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
 const activeRequests = new Map();
 
 const args = parseArgs(process.argv.slice(2));
 const siteRoot = resolve(args['site-root'] ?? process.cwd());
+const siteId = normalizeSiteId(args['site-id'] ?? process.env.NARADA_SITE_ID ?? deriveSiteId(siteRoot));
+const SERVER_NAME = `${siteId.replace(/[^a-z0-9_.-]/gi, '-')}-agent-context-mcp`;
 const dbPath = resolve(process.env.NARADA_AGENT_CONTEXT_DB || join(siteRoot, '.ai', 'state', 'agent-context.sqlite'));
 const startupTracePath = join(siteRoot, '.ai', 'tmp', 'agent-context-mcp-startup.log');
 const startupTraceEnabled = process.env.NARADA_AGENT_CONTEXT_MCP_TRACE === '1';
@@ -69,12 +70,12 @@ const TOOLS = [
   guidanceToolDefinition(),
   {
     name: 'agent_context_doctor',
-    description: 'Check Sonar-local agent-context DB readiness and schema presence.',
+    description: 'Check site-local agent-context DB readiness and schema presence.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'agent_context_whoami',
-    description: 'Resolve current Sonar session identity from NARADA_AGENT_ID, latest checkpoint, or latest start event.',
+    description: 'Resolve current site session identity from NARADA_AGENT_ID, latest checkpoint, or latest start event.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,7 +85,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_start_session',
-    description: 'Validate a Sonar roster identity and materialize a Sonar-local agent start event.',
+    description: 'Validate a site roster identity and materialize a site-local agent start event.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -98,7 +99,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_checkpoint',
-    description: 'Write a durable Sonar-local agent checkpoint.',
+    description: 'Write a durable site-local agent checkpoint.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,7 +122,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_rehydrate',
-    description: 'Retrieve the latest Sonar-local checkpoint or checkpoint history for an agent.',
+    description: 'Retrieve the latest site-local checkpoint or checkpoint history for an agent.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -134,7 +135,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_hydrate_current',
-    description: 'Hydrate the current Sonar-bound session from local identity, checkpoint, and session evidence.',
+    description: 'Hydrate the current site-bound session from local identity, checkpoint, and session evidence.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -156,7 +157,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_list_sessions',
-    description: 'List Sonar-local agent start sessions.',
+    description: 'List site-local agent start sessions.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -217,10 +218,45 @@ function parseArgs(argv) {
 }
 
 function assertSiteRoot() {
-const agPath = join(siteRoot, 'AGENTS.md');
+  const envSiteRoot = process.env.NARADA_SITE_ROOT;
+  if (envSiteRoot && !samePath(envSiteRoot, siteRoot)) {
+    throw new Error(`agent_context_site_root_mismatch: env NARADA_SITE_ROOT=${envSiteRoot}; bound_site_root=${siteRoot}`);
+  }
+  if (!pathWithin(siteRoot, dbPath)) {
+    throw new Error(`agent_context_db_path_outside_site_root: db_path=${dbPath}; bound_site_root=${siteRoot}`);
+  }
+  const agPath = join(siteRoot, 'AGENTS.md');
   if (!existsSync(agPath)) {
     throw new Error(`agent_context_missing_agents_md: ${agPath}`);
   }
+}
+
+function deriveSiteId(root: string): string {
+  const normalized = root.replace(/\\/g, '/').replace(/\/+$/g, '');
+  const parts = normalized.split('/').filter(Boolean);
+  const last = parts[parts.length - 1] ?? 'unknown-site';
+  if (last === '.narada' && parts.length > 1) return parts[parts.length - 2];
+  return last;
+}
+
+function normalizeSiteId(value: unknown): string {
+  const text = String(value ?? '').trim();
+  if (!text) return 'unknown-site';
+  return text.replace(/^narada[.-]/, 'narada.');
+}
+
+function samePath(left: string, right: string): boolean {
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath === '' || (
+    relativePath !== '..'
+    && !relativePath.startsWith('..\\')
+    && !relativePath.startsWith('../')
+    && !relativePath.includes(':')
+  );
 }
 
 function processInputBuffer() {
@@ -459,7 +495,7 @@ function doctor() {
     }));
     return {
       status: tables.every((table) => table.exists) ? 'ok' : 'degraded',
-      site_id: 'narada.sonar',
+      site_id: siteId,
       server_name: SERVER_NAME,
       site_root: siteRoot,
       db_path: dbPath,
@@ -571,7 +607,7 @@ function rehydrate(toolArgs) {
 
     const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
     if (!row) {
-      return { status: 'no_checkpoint', agent_id: agentId, message: 'No Sonar-local checkpoint found.' };
+      return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
     }
     return { status: 'ok', ...rowToCheckpoint(row) };
   });
@@ -620,7 +656,7 @@ function whoami(toolArgs = {}) {
       };
     }
 
-    return { status: 'unknown', message: 'No Sonar-local session identity evidence found.' };
+    return { status: 'unknown', message: 'No site-local session identity evidence found.' };
   });
 }
 
@@ -638,12 +674,12 @@ function hydrateCurrent(toolArgs = {}) {
         kind: 'startup_hydration',
         summary: `Startup hydration checkpoint recorded at ${hydratedAt}.`,
       },
-      tactical_resume_notes: [`Hydrated from Sonar-local checkpoint state at ${hydratedAt}.`],
+      tactical_resume_notes: [`Hydrated from site-local checkpoint state at ${hydratedAt}.`],
     });
   }
   return {
     status: 'ok',
-    site_id: 'narada.sonar',
+    site_id: siteId,
     site_root: siteRoot,
     hydrated_at: hydratedAt,
     whoami: resolved,
@@ -665,8 +701,8 @@ function listSessions(toolArgs = {}) {
 
 function checkpointPayload(toolArgs, agentId, checkpointAt) {
   return {
-    schema: 'narada.sonar.agent_context.checkpoint.v1',
-    site_id: 'narada.sonar',
+    schema: 'narada.agent_context.checkpoint.v1',
+    site_id: siteId,
     site_root: siteRoot,
     agent_id: agentId,
     checkpoint_at: checkpointAt,

@@ -41,7 +41,7 @@ db.exec(`
 db.close();
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot], {
+const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot, '--site-id', 'narada-revolution'], {
   cwd: siteRoot,
   env: {
     ...process.env,
@@ -123,12 +123,73 @@ try {
   const identity = JSON.parse(whoami.result.content[0].text);
   assert.equal(identity.identity, 'narada-revolution.resident');
   assert.equal(identity.role, 'resident');
+  writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', key_decisions: ['site-local checkpoint regression'] } } });
+  const checkpoint = await waitFor(6);
+  assert.equal(checkpoint.error, undefined);
+  const checkpointBody = JSON.parse(checkpoint.result.content[0].text);
+  assert.equal(checkpointBody.status, 'checkpointed');
+  assert.equal(checkpointBody.site_root, siteRoot);
+  writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const rehydrate = await waitFor(7);
+  assert.equal(rehydrate.error, undefined);
+  const rehydrateBody = JSON.parse(rehydrate.result.content[0].text);
+  assert.equal(rehydrateBody.payload.site_id, 'narada.revolution');
   console.log('agent context MCP tests passed');
 } finally {
   proc.stdin?.destroy();
   proc.stdout?.destroy();
   proc.stderr?.destroy();
   proc.kill();
+}
+
+const boundSiteRoot = mkdtempSync(join(tmpdir(), 'agent-context-bound-'));
+const foreignSiteRoot = mkdtempSync(join(tmpdir(), 'agent-context-foreign-'));
+for (const root of [boundSiteRoot, foreignSiteRoot]) {
+  writeFileSync(join(root, 'AGENTS.md'), '# Fixture Site\n', 'utf8');
+  mkdirSync(join(root, '.ai', 'agents'), { recursive: true });
+  writeFileSync(join(root, '.ai', 'agents', 'roster.json'), JSON.stringify({
+    agents: [{ agent_id: 'narada-revolution.resident', role: 'resident', capabilities: [] }],
+  }, null, 2), 'utf8');
+}
+
+const mismatchProc = spawn(process.execPath, [serverPath, '--site-root', boundSiteRoot, '--site-id', 'narada-bound'], {
+  cwd: foreignSiteRoot,
+  env: {
+    ...process.env,
+    NARADA_AGENT_ID: 'narada-revolution.resident',
+    NARADA_SITE_ROOT: foreignSiteRoot,
+    NARADA_AGENT_CONTEXT_DB: join(boundSiteRoot, '.ai', 'state', 'agent-context.sqlite'),
+  },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let mismatchStderr = '';
+mismatchProc.stderr.setEncoding('utf8');
+mismatchProc.stderr.on('data', (chunk) => { mismatchStderr += chunk; });
+const mismatchExit = await waitForExit(mismatchProc);
+assert.notEqual(mismatchExit.code, 0);
+assert.match(mismatchStderr, /agent_context_site_root_mismatch/);
+
+const foreignDbProc = spawn(process.execPath, [serverPath, '--site-root', boundSiteRoot, '--site-id', 'narada-bound'], {
+  cwd: boundSiteRoot,
+  env: {
+    ...process.env,
+    NARADA_AGENT_ID: 'narada-revolution.resident',
+    NARADA_SITE_ROOT: boundSiteRoot,
+    NARADA_AGENT_CONTEXT_DB: join(foreignSiteRoot, '.ai', 'state', 'agent-context.sqlite'),
+  },
+  stdio: ['pipe', 'pipe', 'pipe'],
+});
+let foreignDbStderr = '';
+foreignDbProc.stderr.setEncoding('utf8');
+foreignDbProc.stderr.on('data', (chunk) => { foreignDbStderr += chunk; });
+const foreignDbExit = await waitForExit(foreignDbProc);
+assert.notEqual(foreignDbExit.code, 0);
+assert.match(foreignDbStderr, /agent_context_db_path_outside_site_root/);
+
+function waitForExit(child) {
+  return new Promise((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
 }
 
 

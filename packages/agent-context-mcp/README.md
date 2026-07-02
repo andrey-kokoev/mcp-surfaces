@@ -2,7 +2,7 @@
 
 Agent-context MCP surface for site-local startup hydration and checkpoints.
 
-Use this package to identify a Sonar-bound agent session, start durable session evidence, write checkpoints, and rehydrate prior context before resuming work.
+Use this package to identify a site-bound agent session, start durable session evidence, write checkpoints, and rehydrate prior context before resuming work.
 
 ## Boundary
 
@@ -24,7 +24,7 @@ It expects site-local evidence such as `AGENTS.md` and `.ai/agents/roster.json` 
 
 ```powershell
 pnpm --filter @narada2/agent-context-mcp build
-node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site
+node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site --site-id narada.example
 ```
 
 ## Tools
