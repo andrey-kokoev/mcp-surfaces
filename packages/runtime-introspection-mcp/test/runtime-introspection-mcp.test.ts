@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   handleRequest,
   listTools,
@@ -123,6 +126,52 @@ const rpc = handleRequest({
 }) as any;
 assert.equal(rpc.result.structuredContent.schema, 'narada.runtime_introspection.show.v1');
 assert.equal(rpc.result.structuredContent.data.event_count, 3);
+
+const previousSiteRoot = process.env.NARADA_SITE_ROOT;
+const previousSiteId = process.env.NARADA_SITE_ID;
+const telemetrySite = mkdtempSync(join(tmpdir(), 'runtime-introspection-telemetry-'));
+try {
+  process.env.NARADA_SITE_ROOT = telemetrySite;
+  process.env.NARADA_SITE_ID = 'test-site';
+  const telemetryPath = join(telemetrySite, '.ai', 'telemetry', 'runtime-introspection.jsonl');
+  handleRequest({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'tools/call',
+    params: {
+      name: 'runtime_introspection_formats',
+      arguments: {},
+    },
+  });
+  assert.equal(existsSync(telemetryPath), false);
+
+  mkdirSync(join(telemetrySite, '.ai'), { recursive: true });
+  writeFileSync(join(telemetrySite, '.ai', 'mcp-telemetry.json'), JSON.stringify({ enabled: true, level: 'all' }), 'utf8');
+  handleRequest({
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: {
+      name: 'runtime_introspection_formats',
+      arguments: {},
+    },
+  });
+  const event = JSON.parse(readFileSync(telemetryPath, 'utf8').trim());
+  assert.equal(event.schema, 'narada.mcp_telemetry.event.v1');
+  assert.equal(event.site_id, 'test-site');
+  assert.equal(event.surface_id, 'runtime-introspection');
+  assert.equal(event.tool_name, 'runtime_introspection_formats');
+  assert.equal(event.event_kind, 'tool_completed');
+  assert.equal(event.status, 'ok');
+  assert.equal('args' in event, false);
+  assert.equal('result' in event, false);
+} finally {
+  if (previousSiteRoot === undefined) delete process.env.NARADA_SITE_ROOT;
+  else process.env.NARADA_SITE_ROOT = previousSiteRoot;
+  if (previousSiteId === undefined) delete process.env.NARADA_SITE_ID;
+  else process.env.NARADA_SITE_ID = previousSiteId;
+  rmSync(telemetrySite, { recursive: true, force: true });
+}
 
 const badFormat = handleRequest({
   jsonrpc: '2.0',

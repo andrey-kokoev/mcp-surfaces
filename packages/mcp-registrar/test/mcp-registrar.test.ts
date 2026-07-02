@@ -37,16 +37,22 @@ try {
   assert.equal(operatorRouting.injection_scope, 'user_site');
   assert.equal(operatorRouting.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(operatorRouting.tools, ['operator_route_doctor', 'operator_route_request']);
+  const artifacts = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'artifacts');
+  assert.ok(artifacts);
+  assert.equal(artifacts.injection_scope, 'local_site');
+  assert.equal(artifacts.default_injection, 'all_site_bound_sessions');
+  assert.deepEqual(artifacts.env_vars, ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL']);
+  assert.ok(artifacts.tools.includes('artifact_register_file'));
   const sharedSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] });
   assert.ok(sharedSurfaceIds.includes('speech'));
   assert.ok(sharedSurfaceIds.includes('operator-routing'));
+  assert.ok(sharedSurfaceIds.includes('artifacts'));
   assert.equal(sharedSurfaceIds.filter((surfaceId) => surfaceId === 'speech').length, 1);
   const registrar = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
   assert.ok(registrar);
   assert.equal(registrar.injection_scope, 'user_site');
   assert.deepEqual(registrar.authority_locus, { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' });
   assert.ok(registrar.tools.includes('registrar_surface_tool_inventory_check'));
-
   const bySurface = new Map((surfaceData.items as Array<Record<string, any>>).map((surface) => [surface.id, surface]));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_changed_summary'));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_unstage'));
@@ -132,6 +138,7 @@ try {
   assert.ok((bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler']);
   assert.ok(!(bindConfig.config.mcpServers as Record<string, any>)['sonar-scheduler']);
   const schedServer = (bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler'];
+  assert.equal(schedServer.surface_id, 'scheduler');
   assert.equal(schedServer.injection_scope, 'local_site');
   assert.deepEqual(schedServer.authority_locus, { kind: 'local_site', site_root: root });
   assert.equal(schedServer.narada_scope.scope_source, 'registrar_surface_catalog');
@@ -171,6 +178,7 @@ try {
     },
   );
   const workerServer = (workerBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-worker-delegation'];
+  assert.equal(workerServer.surface_id, 'worker-delegation');
   assert.ok(workerServer.args.includes('--site-root'));
   assert.equal(workerServer.args[workerServer.args.indexOf('--site-root') + 1], root);
   assert.ok(workerServer.env_vars.includes('DEEPSEEK_API_KEY'));
@@ -223,6 +231,12 @@ try {
         command: 'node',
         args: ['D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js', '--mode', 'write', '--allowed-root', scopeReadbackRoot, '--output-root', scopeReadbackRoot],
       },
+      'narada-staccato-artifacts': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/artifacts-mcp/dist/src/main.js'],
+        surface_id: 'artifacts',
+      },
     },
   }, null, 2), 'utf8');
   const scopeReadback = validateSiteMcpFabric({ site_id: 'narada-staccato', root: scopeReadbackRoot, config_path: join(scopeReadbackRoot, 'site.json'), surfaces: [] }, true);
@@ -243,6 +257,24 @@ try {
   assert.equal(filesystemScopeFinding.scope_source, 'registrar_surface_catalog');
   assert.equal(filesystemScopeFinding.injection_scope, 'local_site');
   assert.equal((filesystemScopeFinding.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
+
+  const missingDefaultRoot = join(root, 'missing-default-site');
+  mkdirSync(join(missingDefaultRoot, '.ai', 'mcp'), { recursive: true });
+  writeFileSync(join(missingDefaultRoot, 'site.json'), JSON.stringify({ site_id: 'narada-sonar' }), 'utf8');
+  writeFileSync(join(missingDefaultRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-agent-context': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/agent-context-mcp/dist/src/main.js'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const missingDefault = validateSiteMcpFabric({ site_id: 'narada-sonar', root: missingDefaultRoot, config_path: join(missingDefaultRoot, 'site.json'), surfaces: [] }, false);
+  const missingDefaultFinding = (missingDefault.findings as Array<Record<string, any>>).find((finding) => finding.code === 'registrar_site_fabric_missing_default_surface' && finding.surface_id === 'artifacts');
+  assert.ok(missingDefaultFinding);
+  assert.equal(missingDefault.status, 'invalid');
 
   for (const carrierId of ['opencode-andrey', 'opencode-sonar', 'kimi-andrey', 'codex-andrey']) {
     const outputPath = join(root, `${carrierId}.generated`);
@@ -277,6 +309,19 @@ try {
     sched as any,
   );
   assert.equal(aggregateBindConfig.serverKey, 'narada-sonar-scheduler');
+  const artifactsBindConfig = buildSiteBindConfig(
+    { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
+    artifacts as any,
+  );
+  const artifactsServer = (artifactsBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-artifacts'];
+  assert.equal(artifactsServer.surface_id, 'artifacts');
+  assert.ok((artifactsServer.env_vars as string[]).includes('NARADA_SESSION_ID'));
+  assert.equal((artifactsServer.env_vars as string[]).length, new Set(artifactsServer.env_vars as string[]).size);
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', artifactsBindConfig.fileName), JSON.stringify(artifactsBindConfig.config, null, 2), 'utf8');
+  const aggregateWithArtifacts = validateSiteMcpFabric({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] }, true);
+  const aggregateArtifactFinding = (aggregateWithArtifacts.findings as Array<Record<string, any>>).find((finding) => finding.server_key === 'narada-sonar-artifacts' && finding.code === 'registrar_site_fabric_server_key_ok');
+  assert.ok(aggregateArtifactFinding);
+  assert.equal(aggregateArtifactFinding.surface_id, 'artifacts');
   const sidecarRefusal = siteBindSidecarRefusal(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     'scheduler',

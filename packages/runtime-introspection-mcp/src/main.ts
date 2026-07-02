@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
+import { emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -10,6 +11,7 @@ const PROTOCOL_VERSION = '2024-11-05';
 const FORMATS = ['generic-events', 'codex-jsonl', 'codex-transcript'] as const;
 const TOP_DIMENSIONS = ['surface', 'tool', 'status', 'kind', 'adapter'] as const;
 const SHOW_VIEWS = ['summary', 'timeline', 'surfaces', 'tools', 'errors', 'adapters'] as const;
+const SURFACE_ID = 'runtime-introspection';
 
 type JsonRecord = Record<string, unknown>;
 type RuntimeFormat = typeof FORMATS[number];
@@ -263,34 +265,84 @@ function readOnlyAnnotations(title: string) {
 function callTool(params: JsonRecord) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  let result: JsonRecord;
-  switch (name) {
-    case 'runtime_introspection_guidance':
-      result = buildGuidanceResult(args);
-      break;
-    case 'runtime_introspection_formats':
-      result = runtimeIntrospectionFormats();
-      break;
-    case 'runtime_introspection_analyze':
-    case 'runtime_introspection_analyze_trace':
-      result = runtimeIntrospectionAnalyze(args);
-      break;
-    case 'runtime_introspection_top':
-      result = runtimeIntrospectionTop(args);
-      break;
-    case 'runtime_introspection_show':
-      result = runtimeIntrospectionShow(args);
-      break;
-    case 'runtime_introspection_top_events':
-      result = runtimeIntrospectionTopEvents(args);
-      break;
-    case 'runtime_introspection_show_event':
-      result = runtimeIntrospectionShowEvent(args);
-      break;
-    default:
-      throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+  const startedAt = Date.now();
+  try {
+    let result: JsonRecord;
+    switch (name) {
+      case 'runtime_introspection_guidance':
+        result = buildGuidanceResult(args);
+        break;
+      case 'runtime_introspection_formats':
+        result = runtimeIntrospectionFormats();
+        break;
+      case 'runtime_introspection_analyze':
+      case 'runtime_introspection_analyze_trace':
+        result = runtimeIntrospectionAnalyze(args);
+        break;
+      case 'runtime_introspection_top':
+        result = runtimeIntrospectionTop(args);
+        break;
+      case 'runtime_introspection_show':
+        result = runtimeIntrospectionShow(args);
+        break;
+      case 'runtime_introspection_top_events':
+        result = runtimeIntrospectionTopEvents(args);
+        break;
+      case 'runtime_introspection_show_event':
+        result = runtimeIntrospectionShowEvent(args);
+        break;
+      default:
+        throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
+    }
+    emitRuntimeTelemetry(name, 'tool_completed', 'ok', startedAt);
+    return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    const eventKind = diagnostic.code === 'unknown_tool' ? 'tool_refused' : 'tool_failed';
+    emitRuntimeTelemetry(name, eventKind, eventKind === 'tool_refused' ? 'refused' : 'error', startedAt, diagnostic.code);
+    throw error;
   }
-  return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
+}
+
+function emitRuntimeTelemetry(toolName: string, eventKind: TelemetryEventKind, status: string, startedAt: number, code?: string): void {
+  const siteRoot = process.env.NARADA_SITE_ROOT;
+  if (!siteRoot) return;
+  const declaration = runtimeTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        errorCode: eventKind === 'tool_failed' ? code ?? null : null,
+        refusalCode: eventKind === 'tool_refused' ? code ?? null : null,
+      },
+    });
+  } catch (error) {
+    process.stderr.write(`runtime_introspection_telemetry_error:${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
+function runtimeTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!listTools().some((tool) => tool.name === toolName)) return null;
+  return {
+    events: ['tool_completed', 'tool_refused', 'tool_failed'],
+    sensitivity: 'low',
+    args: 'none',
+    result: 'none',
+    timing: true,
+  };
 }
 
 export function runtimeIntrospectionFormats() {

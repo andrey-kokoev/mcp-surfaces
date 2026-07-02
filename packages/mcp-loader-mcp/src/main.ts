@@ -516,6 +516,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'cloudflare-carrier': { entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-coherence': { entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`, args: ['--narada-root', 'D:/code/narada'] },
+  'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
 };
 
 function readSiteFabric(siteRoot: string): JsonRecord {
