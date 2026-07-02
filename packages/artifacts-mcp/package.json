@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/artifacts-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "NARS session artifact MCP surface for registering and projecting renderable session artifacts.",
+  "bin": {
+    "artifacts-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/artifacts-mcp.test.js"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}
