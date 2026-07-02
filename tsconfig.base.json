@@ -8,8 +8,10 @@
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
-      "@narada2/mcp-transport": ["packages/mcp-transport/src/mcp-payload-file.ts"],
-      "@narada2/mcp-transport/*": ["packages/mcp-transport/src/*.ts"]
+      "@narada2/mcp-transport": ["packages/shared/mcp-transport/src/mcp-payload-file.ts"],
+      "@narada2/mcp-transport/*": ["packages/shared/mcp-transport/src/*.ts"],
+      "@narada2/mcp-telemetry": ["packages/shared/mcp-telemetry/src/main.ts"],
+      "@narada2/mcp-telemetry/*": ["packages/shared/mcp-telemetry/src/*.ts"]
     },
     "strict": false,
     "forceConsistentCasingInFileNames": true,

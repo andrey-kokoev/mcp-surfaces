@@ -8,6 +8,6 @@
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "references": [
-    { "path": "../mcp-transport" }
+    { "path": "../shared/mcp-transport" }
   ]
 }
