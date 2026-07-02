@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildCodexArgv, createServerState, handleRequest, parseArgs } from '../src/main.js';
-import { commandRequiresWindowsShell } from '../src/codex-adapter.js';
+import { commandRequiresWindowsShell, runCodexInvocation, type Invocation } from '../src/codex-adapter.js';
+import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation } from '../src/ai-process-invocation.js';
 import { resolveWorkingDirectory } from '../src/policy.js';
 
 type RpcResponse = {
@@ -263,6 +264,30 @@ assert.equal(commandRequiresWindowsShell('codex.bat', 'win32'), true);
 assert.equal(commandRequiresWindowsShell('codex.ps1', 'win32'), true);
 assert.equal(commandRequiresWindowsShell(process.execPath, 'win32'), false);
 assert.equal(commandRequiresWindowsShell('codex.cmd', 'linux'), false);
+
+const duplicateInvocation: Invocation = {
+  command: process.execPath,
+  argv: [fakeCodexScript, 'exec', '-o', join(root, 'duplicate-should-not-run.json'), '-'],
+  cwd: root,
+  environment: { PATH: process.env.PATH ?? '', NARADA_SITE_ROOT: root },
+};
+const duplicateAdmission = admitWorkerAiProcessInvocation(duplicateInvocation, { projection: 'worker-delegation', purpose: 'codex_worker_runtime' });
+try {
+  const duplicateResult = await runCodexInvocation({
+    invocation: duplicateInvocation,
+    prompt: 'duplicate refusal should happen before spawn',
+    eventsPath: join(root, 'duplicate-events.jsonl'),
+    diagnosticPath: join(root, 'duplicate-diagnostic.log'),
+    lastMessagePath: join(root, 'duplicate-last-message.json'),
+    maxRunMs: 1000,
+  });
+  assert.equal(duplicateResult.exit_code, null);
+  assert.equal(duplicateResult.worker_session_id, null);
+  assert.match(String(duplicateResult.error), /ai_process_invocation_refused: duplicate_live_invocation/);
+  assert.equal(existsSync(join(root, 'duplicate-should-not-run.json')), false);
+} finally {
+  releaseWorkerAiProcessInvocation(duplicateAdmission);
+}
 
 const initialize = await rpc({ jsonrpc: '2.0', id: 11, method: 'initialize', params: {} }, state);
 assert.deepEqual(Object.keys(initialize.result?.capabilities ?? {}).sort(), ['completions', 'logging', 'prompts', 'resources', 'tools']);

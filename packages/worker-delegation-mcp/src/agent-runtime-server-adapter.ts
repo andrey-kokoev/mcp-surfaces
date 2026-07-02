@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, extname, resolve } from 'node:path';
 import { parseLastMessage, resultStatus, type Invocation, type ResolvedWorkerConfig, type WorkerOutputParseResult, type WorkerRunTerminalStatus } from './codex-adapter.js';
+import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation, workerAiProcessRefusalError } from './ai-process-invocation.js';
 import { workerOutputFromAgentMessage } from './output-contract.js';
 import { AgentRuntimeEventTracker, emptyAssistantExtraction, missingAssistantMessageError } from './runtime-events.js';
 
@@ -98,6 +99,12 @@ export async function runAgentRuntimeServerInvocation(options: {
       return;
     }
 
+    const admission = admitWorkerAiProcessInvocation(options.invocation, { projection: 'worker-delegation', purpose: 'agent_runtime_server_worker_runtime' });
+    if (!admission.admitted) {
+      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: null, error: workerAiProcessRefusalError(admission), event_error: null, runtime_error: null, assistant_extraction: emptyAssistantExtraction() });
+      return;
+    }
+
     const child = spawn(options.invocation.command, options.invocation.argv, {
       cwd: options.invocation.cwd,
       env: options.invocation.environment,
@@ -111,6 +118,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     let stdoutBuffer = '';
     const runtimeEvents = new AgentRuntimeEventTracker();
     let settled = false;
+    let released = false;
     let cancelled = false;
     let eventError: string | null = null;
     let closeFrameSent = false;
@@ -118,6 +126,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     const finish = (result: { exit_code: number | null; signal: string | null; cancelled: boolean; error: string | null }) => {
       if (settled) return;
       settled = true;
+      if (!released) { released = true; releaseWorkerAiProcessInvocation(admission, { exitCode: result.exit_code, signal: result.signal }); }
       clearTimeout(timer);
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
       if (runtimeEvents.finalAssistantMessage !== null) {

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { extname } from 'node:path';
+import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation, workerAiProcessRefusalError } from './ai-process-invocation.js';
 import type { WorkerResolvedExecutionPolicy } from './worker-types.js';
 export { parseLastMessage, parseResult, resultStatus } from './output-contract.js';
 export type { WorkerBroadUnrelatedFailure, WorkerChange, WorkerExitInterview, WorkerOutput, WorkerOutputParseResult, WorkerRunTerminalStatus, WorkerVerification, WorkerVerificationCommandClassification } from './output-contract.js';
@@ -79,6 +80,11 @@ export async function runCodexInvocation(options: {
       resolvePromise({ exit_code: null, signal: null, cancelled: true, worker_session_id: null, error: null, event_error: null, runtime_error: null });
       return;
     }
+    const admission = admitWorkerAiProcessInvocation(options.invocation, { projection: 'worker-delegation', purpose: 'codex_worker_runtime' });
+    if (!admission.admitted) {
+      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: null, error: workerAiProcessRefusalError(admission), event_error: null, runtime_error: null });
+      return;
+    }
     const spawnSpec = spawnCommandForInvocation(options.invocation);
     const child = spawn(spawnSpec.command, spawnSpec.argv, {
       cwd: options.invocation.cwd,
@@ -92,6 +98,7 @@ export async function runCodexInvocation(options: {
     let stdoutBuffer = '';
     let workerSessionId: string | null = null;
     let settled = false;
+    let released = false;
     let cancelled = false;
     let eventError: string | null = null;
     let runtimeError: string | null = null;
@@ -133,6 +140,7 @@ export async function runCodexInvocation(options: {
     child.on('error', (error) => {
       if (settled) return;
       settled = true;
+      if (!released) { released = true; releaseWorkerAiProcessInvocation(admission, { exitCode: null, signal: null }); }
       clearTimeout(timer);
       events.end();
       diagnostics.end();
@@ -142,6 +150,7 @@ export async function runCodexInvocation(options: {
     child.on('close', (code, signal) => {
       if (settled) return;
       settled = true;
+      if (!released) { released = true; releaseWorkerAiProcessInvocation(admission, { exitCode: code, signal }); }
       clearTimeout(timer);
       events.end();
       diagnostics.end();
