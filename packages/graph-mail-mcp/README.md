@@ -81,6 +81,10 @@ This includes draft create/update/discard requests, draft-send refusals, and dra
 
 Attachment uploads are not sent through `graph_request`; upload tools validate the opaque `uploadUrl`, require `https`, and only allow the exact Graph-owned hosts `outlook.office.com`, `outlook.office365.com`, and `graph.microsoft.com`.
 
+## Telemetry
+
+Telemetry is optional and off by default. When a site enables `.ai/mcp-telemetry.json`, this surface emits metadata-only events for tool completion, refusal, and failure. It does not persist raw mail bodies, attachment bytes, recipient lists, access tokens, approval tokens, upload URLs, or Graph response bodies.
+
 ## Tools
 
 - `graph_mail_doctor`: reports Graph auth availability, auth mode, and active policy.
