@@ -10,6 +10,7 @@
     "test": "pnpm -r test",
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
+    "test:mcp-telemetry": "pnpm --filter @narada2/mcp-telemetry test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
     "test:git": "pnpm --filter @narada2/git-mcp test",
     "test:completion-audit": "pnpm --filter @narada2/completion-audit-mcp test",
@@ -32,7 +33,8 @@
     "test:runtime-introspection": "pnpm --filter @narada2/runtime-introspection-mcp test",
     "test:speech": "pnpm --filter @narada2/speech-mcp test",
     "test:cloudflare-carrier": "pnpm --filter @narada2/cloudflare-carrier-mcp test",
-    "test:site-coherence": "pnpm --filter @narada2/site-coherence-mcp test"
+    "test:site-coherence": "pnpm --filter @narada2/site-coherence-mcp test",
+    "test:artifacts": "pnpm --filter @narada2/artifacts-mcp test"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -8,7 +8,8 @@ Guidance for agents working in this repository.
 
 Current packages:
 
-- `@narada2/mcp-transport`: MCP payload/output-ref helpers.
+- `@narada2/mcp-transport`: shared MCP payload/output-ref helpers.
+- `@narada2/mcp-telemetry`: shared optional MCP telemetry helpers.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
@@ -27,12 +28,14 @@ Current packages:
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing MCP surface.
 - `@narada2/launcher-mcp`: read-only launcher registry, option matrix, plan, and coherence MCP surface.
+- `@narada2/mcp-loader-mcp`: policy-gated runtime MCP surface loader and proxy.
 - `@narada2/runtime-introspection-mcp`: Narada-owned runtime trace and session composition analysis MCP surface.
 - `@narada2/speech-mcp`: host-level speech MCP surface for TTS, bounded capture, transcription, prompt-response, and listen sessions.
 - `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
 - `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
 - `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
 - `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
+- `@narada2/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
 
 ## MCP Guidance Commands
 
@@ -70,12 +73,13 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 
 ## Development Rules
 
-- Use TypeScript sources under `packages/*/src` and tests under `packages/*/test`.
+- Use TypeScript sources under `packages/*/src` or `packages/shared/*/src` and tests under the matching package `test` directory.
 - Do not add new `.mjs` source files; this repo has migrated MCP package code to `.ts`.
 - Preserve ESM/NodeNext package behavior.
 - Prefer package-local tests for narrow changes, then root tests when shared behavior changes.
 - Keep MCP tool schemas explicit and conservative: no broad shell strings, wildcard filesystem access, or implicit mutation paths.
 - Keep transport helpers generic. Do not add Narada task-domain behavior to `@narada2/mcp-transport`.
+- Shared libraries such as `@narada2/mcp-transport` live under `packages/shared/*`; runnable MCP surfaces remain top-level packages until the broader `packages/surfaces/*` migration is executed.
 
 ## Common Commands
 
@@ -84,6 +88,7 @@ pnpm build
 pnpm typecheck
 pnpm test
 pnpm test:mcp-transport
+pnpm test:mcp-telemetry
 pnpm test:local-filesystem
 pnpm test:structured-command
 pnpm test:git
@@ -103,6 +108,7 @@ pnpm test:registrar
 pnpm test:launcher
 pnpm test:cloudflare-carrier
 pnpm test:site-coherence
+pnpm test:artifacts
 ```
 
 ## Verification Expectations
@@ -123,7 +129,9 @@ Before handing off changes:
 - `sop-mcp` owns versioned SOP templates and durable run execution; it orchestrates procedural steps but does not own tasks, workers, filesystem access, or shell execution directly — it delegates those to their respective MCP surfaces.
 - `scheduler-mcp` owns Windows Task Scheduler registration, inspection, and execution; it must not become a general shell or process orchestration surface — scheduling policy is defined at the caller level.
 - `mcp-registrar` owns the surface-to-site-to-carrier weave; it edits config files (JSON/TOML) but does not start or stop servers or mutate the surfaces themselves.
+- `mcp-loader-mcp` owns runtime attachment/proxying for allowed MCP surfaces; it does not own the surfaces it attaches to and must not become a general orchestration layer.
 - `mcp-transport` owns reusable payload/output reference mechanics.
+- `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.
 - `calendar-mcp` owns policy-gated Microsoft Graph calendar access and event lifecycle tools; event writes must stay disallowed unless explicit site policy enables them.

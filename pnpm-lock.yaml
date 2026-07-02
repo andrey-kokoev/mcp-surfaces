@@ -29,6 +29,14 @@ importers:
 
   packages/agent-context-mcp: {}
 
+  packages/artifacts-mcp: {}
+
+  packages/calendar-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
+
   packages/cloudflare-carrier-mcp: {}
 
   packages/completion-audit-mcp: {}
@@ -43,33 +51,61 @@ importers:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
-        version: link:../mcp-transport
+        version: link:../shared/mcp-transport
 
-  packages/graph-mail-mcp: {}
+  packages/graph-mail-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
+
+  packages/launcher-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
 
   packages/local-filesystem-mcp:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
-        version: link:../mcp-transport
+        version: link:../shared/mcp-transport
 
   packages/mailbox-mcp: {}
 
+  packages/mcp-loader-mcp: {}
+
   packages/mcp-registrar: {}
 
-  packages/mcp-transport: {}
+  packages/operator-routing-mcp: {}
+
+  packages/runtime-introspection-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
 
   packages/scheduler-mcp: {}
 
-  packages/site-coherence-mcp: {}
+  packages/shared/mcp-telemetry: {}
+
+  packages/shared/mcp-transport: {}
+
+  packages/site-coherence-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
 
   packages/site-inbox-mcp: {}
+
+  packages/site-lifecycle-mcp: {}
 
   packages/sonar-site-ops-mcp:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
-        version: link:../mcp-transport
+        version: link:../shared/mcp-transport
       '@narada2/task-governance-core':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core
@@ -92,7 +128,11 @@ importers:
 
   packages/speech-mcp: {}
 
-  packages/structured-command-mcp: {}
+  packages/structured-command-mcp:
+    dependencies:
+      '@narada2/mcp-telemetry':
+        specifier: workspace:*
+        version: link:../shared/mcp-telemetry
 
   packages/surface-feedback-mcp: {}
 
@@ -100,7 +140,7 @@ importers:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
-        version: link:../mcp-transport
+        version: link:../shared/mcp-transport
       '@narada2/task-governance-core':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core

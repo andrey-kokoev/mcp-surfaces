@@ -4,7 +4,8 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 
 ## Packages
 
-- `@narada2/mcp-transport`: MCP payload/output-ref helpers. See `packages/mcp-transport/README.md`.
+- `@narada2/mcp-transport`: MCP payload/output-ref helpers. See `packages/shared/mcp-transport/README.md`.
+- `@narada2/mcp-telemetry`: optional MCP telemetry helpers. See `packages/shared/mcp-telemetry/README.md`.
 - `@narada2/local-filesystem-mcp`: canonical local filesystem MCP surface exposing `fs_*` tools. See `packages/local-filesystem-mcp/README.md`.
 - `@narada2/structured-command-mcp`: policy-gated command execution surface using structured argv schemas. See `packages/structured-command-mcp/README.md`.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface. See `packages/git-mcp/README.md`.
@@ -41,6 +42,9 @@ user-site, and local-site MCP injection from session aliases.
 
 See `docs/mcp-output-refusal-conventions.md` for common output reference,
 payload reference, and refusal conventions shared across surfaces.
+
+See `docs/mcp-telemetry-target-shape.md` for the optional telemetry target
+shape, persistence contract, and shared package factorization.
 
 See `docs/agent-ergonomics-surfaces.md` for the boundary between mechanical MCP
 evidence, multi-repository Git summaries, and agent completion audits.

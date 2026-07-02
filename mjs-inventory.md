@@ -21,8 +21,8 @@ These `.mjs` paths are still tracked by Git but are currently marked deleted in 
 | Deleted | `packages/local-filesystem-mcp/src/main.mjs` |
 | Deleted | `packages/local-filesystem-mcp/src/policy.mjs` |
 | Deleted | `packages/local-filesystem-mcp/test/local-filesystem-mcp.test.mjs` |
-| Deleted | `packages/mcp-transport/src/mcp-payload-file.mjs` |
-| Deleted | `packages/mcp-transport/test/mcp-payload-file.test.mjs` |
+| Deleted | `packages/shared/mcp-transport/src/mcp-payload-file.mjs` |
+| Deleted | `packages/shared/mcp-transport/test/mcp-payload-file.test.mjs` |
 | Deleted | `packages/structured-command-mcp/src/main.mjs` |
 | Deleted | `packages/structured-command-mcp/src/policy.mjs` |
 | Deleted | `packages/structured-command-mcp/test/structured-command-mcp.test.mjs` |
