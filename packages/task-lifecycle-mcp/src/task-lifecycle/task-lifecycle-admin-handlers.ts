@@ -8,6 +8,7 @@ export function createTaskLifecycleAdminHandlers({
   getRegisteredTools,
   getSiteRoot,
   getToolAliases,
+  getSitePolicy,
   buildTaskLifecycleFreshness,
   buildLifecycleTargetLocusStatus,
   taskLifecycleRestart,
@@ -23,6 +24,7 @@ export function createTaskLifecycleAdminHandlers({
         canonical_tools: registeredTools,
         deprecated_aliases: getToolAliases(),
         allowed_tools: registeredTools,
+        site_policy: getSitePolicy(),
         mcp_freshness: buildTaskLifecycleFreshness({ registeredTools }),
         target_locus_guard: buildLifecycleTargetLocusStatus(),
         conceptual_role: {

@@ -11,6 +11,7 @@ import { allocateTaskNumbers } from '@narada2/task-governance-core/task-governan
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { readAdmissionLog, getLatestEventsByEnvelope, appendAdmissionEvent, acknowledgeEnvelope, dismissEnvelope } from '../inbox/admission-log.js';
+import { readTaskLifecycleSitePolicy } from './task-lifecycle-site-policy.js';
 import {
   evaluateEnvelopeSeverity,
   findDuplicateTaskRows,
@@ -363,8 +364,9 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
   const requiredWork = Array.isArray(specRecord.requiredWork) ? specRecord.requiredWork.map(String) : [];
   const nonGoals = Array.isArray(specRecord.nonGoals) ? specRecord.nonGoals.map(String) : [];
   const acceptanceCriteria = Array.isArray(specRecord.acceptanceCriteria) ? specRecord.acceptanceCriteria.map(String) : [];
-  const preferredRole = typeof specRecord.preferredRole === 'string' ? specRecord.preferredRole : null;
-  const targetRole = typeof specRecord.targetRole === 'string' ? specRecord.targetRole : null;
+  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(cwd).policy.roster.roles_are_obligation_targets;
+  const preferredRole = rolesAreObligationTargets && typeof specRecord.preferredRole === 'string' ? specRecord.preferredRole : null;
+  const targetRole = rolesAreObligationTargets && typeof specRecord.targetRole === 'string' ? specRecord.targetRole : null;
   const preferredAgentId = typeof specRecord.preferredAgentId === 'string' ? specRecord.preferredAgentId : null;
   const relativePriority = typeof specRecord.relativePriority === 'number' ? specRecord.relativePriority : 0;
   const priorityReason = typeof specRecord.priorityReason === 'string' ? specRecord.priorityReason : null;

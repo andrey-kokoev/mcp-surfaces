@@ -30,6 +30,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
     findTaskFile,
     readTaskFile,
     writeTaskProjection,
+    getSitePolicy,
     testMcpTool,
     testTargetsForSelector,
     randomUUID,
@@ -92,6 +93,20 @@ export function createTaskLifecycleOperationsHandlers(context) {
         throw new Error('routing_change_required');
       }
       enforceSessionIdentity(actorAgentId);
+
+      if (targetRole !== undefined && targetRole !== null && !getSitePolicy().policy.roster.roles_are_obligation_targets) {
+        return jsonToolResult({
+          status: 'blocked',
+          reason: 'roles_are_obligation_targets_false',
+          target_role: targetRole,
+          message: 'Role-targeted routing is disabled by site task-lifecycle policy. Clearing target_role remains allowed.',
+          site_policy: {
+            roster: {
+              roles_are_obligation_targets: false,
+            },
+          },
+        }, true);
+      }
 
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);

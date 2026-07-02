@@ -12,6 +12,7 @@ export function createTaskLifecycleReadHandlers({
   jsonToolResult,
   stringField,
   numberField,
+  getSitePolicy,
 }) {
   return {
     task_lifecycle_list: (args) => {
@@ -46,7 +47,7 @@ export function createTaskLifecycleReadHandlers({
     task_lifecycle_guidance: (args) => {
       const workflow = stringField(args, 'workflow') ?? 'all';
       const tool = stringField(args, 'tool');
-      return jsonToolResult(taskLifecycleGuidance({ workflow, tool }));
+      return jsonToolResult(taskLifecycleGuidance({ workflow, tool, sitePolicy: getSitePolicy() }));
     },
     task_lifecycle_payload_schema: (args) => {
       const tool = stringField(args, 'tool');
@@ -62,7 +63,7 @@ export function createTaskLifecycleReadHandlers({
   };
 }
 
-function taskLifecycleGuidance({ workflow, tool }) {
+function taskLifecycleGuidance({ workflow, tool, sitePolicy }) {
   const sections = taskLifecycleGuidanceSections();
   const normalizedWorkflow = sections[workflow] ? workflow : 'all';
   const selectedSections = normalizedWorkflow === 'all'
@@ -93,6 +94,13 @@ function taskLifecycleGuidance({ workflow, tool }) {
     anti_patterns: taskLifecycleAntiPatterns(),
     recovery_guidance: taskLifecycleRecoveryGuidance(),
     recovery: taskLifecycleRecoveryGuidance(),
+    site_policy: sitePolicy,
+    role_obligation_targeting: {
+      default: false,
+      config_file: '<site-root>/.narada/task-lifecycle.toml',
+      config_key: 'roster.roles_are_obligation_targets',
+      guidance: 'Roster roles are descriptive unless roles_are_obligation_targets is true; diagnostics may mention affected roles without creating role-targeted obligations.',
+    },
     feedback: {
       surface_id: 'task-lifecycle',
       tool: 'surface_feedback_submit',

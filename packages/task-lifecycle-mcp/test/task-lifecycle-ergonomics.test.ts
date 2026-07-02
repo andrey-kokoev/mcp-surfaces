@@ -104,6 +104,8 @@ async function responsePayload(response: any, runtimeOptions: any, id: number) {
 try {
   mkdirSync(join(siteRoot, '.ai', 'agents'), { recursive: true });
   mkdirSync(join(siteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
+  mkdirSync(join(siteRoot, '.narada'), { recursive: true });
+  writeFileSync(join(siteRoot, '.narada', 'task-lifecycle.toml'), '[roster]\nroles_are_obligation_targets = true\n', 'utf8');
   seedRoster();
 
   const inReviewTaskId = '20260604-9201-ergonomics-in-review';
@@ -675,6 +677,96 @@ try {
     stdout: { write: () => true },
     stderr: { write: () => true },
   };
+
+  const policyDoctorResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4200,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_doctor', arguments: {} },
+  }, builderRuntime);
+  const policyDoctorPayload = await responsePayload(policyDoctorResponse, builderRuntime, 4201);
+  assert.equal(policyDoctorPayload.site_policy.source, 'site_config');
+  assert.equal(policyDoctorPayload.site_policy.roster.roles_are_obligation_targets, true);
+
+  const defaultPolicyRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-role-policy-default-'));
+  mkdirSync(join(defaultPolicyRoot, '.ai', 'agents'), { recursive: true });
+  mkdirSync(join(defaultPolicyRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
+  writeFileSync(join(defaultPolicyRoot, '.ai', 'agents', 'roster.json'), JSON.stringify({
+    version: 1,
+    agents: [
+      { agent_id: 'policy.builder', role: 'builder', capabilities: ['implementation_work'] },
+      { agent_id: 'policy.architect', role: 'architect', capabilities: ['review'] },
+    ],
+  }), 'utf8');
+  const defaultPolicyRuntime = {
+    argv: ['--site-root', defaultPolicyRoot],
+    cwd: defaultPolicyRoot,
+    env: { ...process.env, NARADA_AGENT_ID: 'policy.architect' },
+    stdout: { write: () => true },
+    stderr: { write: () => true },
+  };
+  const defaultPolicyDoctorResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4202,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_doctor', arguments: {} },
+  }, defaultPolicyRuntime);
+  const defaultPolicyDoctorPayload = await responsePayload(defaultPolicyDoctorResponse, defaultPolicyRuntime, 4203);
+  assert.equal(defaultPolicyDoctorPayload.site_policy.source, 'default');
+  assert.equal(defaultPolicyDoctorPayload.site_policy.roster.roles_are_obligation_targets, false);
+
+  const blockedCreatePayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4204,
+    method: 'tools/call',
+    params: { name: 'mcp_payload_create', arguments: { payload: { title: 'Blocked role target', required_work: 'Inspect policy.', acceptance_criteria: ['Blocked.'], target_role: 'builder' } } },
+  }, defaultPolicyRuntime);
+  const blockedCreatePayload = await responsePayload(blockedCreatePayloadResponse, defaultPolicyRuntime, 4205);
+  const blockedCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4206,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_create', arguments: { payload_ref: blockedCreatePayload.ref } },
+  }, defaultPolicyRuntime);
+  const blockedCreate = await responsePayload(blockedCreateResponse, defaultPolicyRuntime, 4207);
+  assert.equal(blockedCreate.status, 'blocked');
+  assert.equal(blockedCreate.reason, 'roles_are_obligation_targets_false');
+
+  const unroleCreatePayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4208,
+    method: 'tools/call',
+    params: { name: 'mcp_payload_create', arguments: { payload: { title: 'Unrole routed task', required_work: 'Inspect policy.', acceptance_criteria: ['Created.'] } } },
+  }, defaultPolicyRuntime);
+  const unroleCreatePayload = await responsePayload(unroleCreatePayloadResponse, defaultPolicyRuntime, 4209);
+  const unroleCreateResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4210,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_create', arguments: { payload_ref: unroleCreatePayload.ref } },
+  }, defaultPolicyRuntime);
+  const unroleCreate = await responsePayload(unroleCreateResponse, defaultPolicyRuntime, 4211);
+  assert.equal(unroleCreate.status, 'created');
+
+  const blockedRoutingResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4212,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_set_routing', arguments: { task_number: unroleCreate.task_number, actor_agent_id: 'policy.architect', target_role: 'builder', reason: 'default policy blocks role targeting' } },
+  }, defaultPolicyRuntime);
+  const blockedRouting = await responsePayload(blockedRoutingResponse, defaultPolicyRuntime, 4213);
+  assert.equal(blockedRouting.status, 'blocked');
+  assert.equal(blockedRouting.reason, 'roles_are_obligation_targets_false');
+
+  const clearRoutingResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4214,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_set_routing', arguments: { task_number: unroleCreate.task_number, actor_agent_id: 'policy.architect', target_role: null, relative_priority: 5, reason: 'clearing role targeting is allowed' } },
+  }, defaultPolicyRuntime);
+  const clearRouting = await responsePayload(clearRoutingResponse, defaultPolicyRuntime, 4215);
+  assert.equal(clearRouting.status, 'routed');
+  assert.equal(clearRouting.routing.target_role, null);
 
   const driftSiteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-roster-drift-'));
   mkdirSync(join(driftSiteRoot, '.ai', 'agents'), { recursive: true });
@@ -2462,8 +2554,10 @@ const scopedSiteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-scoped-changed
 try {
   mkdirSync(join(scopedSiteRoot, '.ai', 'agents'), { recursive: true });
   mkdirSync(join(scopedSiteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
+  mkdirSync(join(scopedSiteRoot, '.narada'), { recursive: true });
   mkdirSync(join(scopedSiteRoot, 'packages', 'example', 'src'), { recursive: true });
   mkdirSync(join(scopedSiteRoot, '.ai', 'tmp'), { recursive: true });
+  writeFileSync(join(scopedSiteRoot, '.narada', 'task-lifecycle.toml'), '[roster]\nroles_are_obligation_targets = true\n', 'utf8');
   writeFileSync(
     join(scopedSiteRoot, '.ai', 'agents', 'roster.json'),
     JSON.stringify({

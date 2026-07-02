@@ -74,6 +74,7 @@ import { createTaskLifecycleInspectionHandlers } from './task-lifecycle-inspecti
 import { createTaskLifecycleEvidenceReviewHandlers } from './task-lifecycle-evidence-review-handlers.js';
 import { createTaskLifecycleOperationsHandlers } from './task-lifecycle-operations-handlers.js';
 import { createTaskLifecycleCreateRecurringHandlers } from './task-lifecycle-create-recurring-handlers.js';
+import { readTaskLifecycleSitePolicy } from './task-lifecycle-site-policy.js';
 import {
   buildStateAwareFinishBlockerRemediation as buildStateAwareFinishBlockerRemediationCore,
   buildTaskEvidencePreflight as buildTaskEvidencePreflightCore,
@@ -768,6 +769,19 @@ function buildLifecycleTargetLocusStatus() {
   return buildPipelineLifecycleTargetLocusStatus({ siteRoot, env: process.env });
 }
 
+function getTaskLifecycleSitePolicy() {
+  return readTaskLifecycleSitePolicy(siteRoot);
+}
+
+function getTaskLifecycleSitePolicySummary() {
+  const sitePolicy = getTaskLifecycleSitePolicy();
+  return {
+    roster: sitePolicy.policy.roster,
+    source: sitePolicy.source,
+    path: sitePolicy.path,
+  };
+}
+
 function getTaskLifecycleHandlerRegistry() {
   if (!taskLifecycleHandlerRegistry) {
     taskLifecycleHandlerRegistry = createTaskLifecycleHandlerRegistry({
@@ -781,6 +795,7 @@ function getTaskLifecycleHandlerRegistry() {
           getRegisteredTools: () => taskLifecycleTools().map((tool) => tool.name),
           getSiteRoot: () => siteRoot,
           getToolAliases: () => TOOL_ALIASES,
+          getSitePolicy: getTaskLifecycleSitePolicySummary,
           buildTaskLifecycleFreshness,
           buildLifecycleTargetLocusStatus,
           taskLifecycleRestart,
@@ -790,6 +805,7 @@ function getTaskLifecycleHandlerRegistry() {
           jsonToolResult,
           stringField,
           numberField,
+          getSitePolicy: getTaskLifecycleSitePolicySummary,
         }),
         ...createTaskLifecycleAssignmentHandlers({
           store,
@@ -939,6 +955,7 @@ function getTaskLifecycleHandlerRegistry() {
           findTaskFile,
           readTaskFile,
           writeTaskProjection,
+          getSitePolicy: getTaskLifecycleSitePolicy,
           testMcpTool,
           testTargetsForSelector,
           randomUUID,
@@ -978,6 +995,7 @@ function getTaskLifecycleHandlerRegistry() {
           recurringDueKey,
           createRecurringTaskInstance,
           insertRecurringRun,
+          getSitePolicy: getTaskLifecycleSitePolicy,
         }),
         mcp_payload_create: (args) => jsonToolResult(taskLifecyclePayloadCreate(args)),
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
@@ -1322,7 +1340,9 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
   const dependencyId = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
   const contractId = `contract-review-${reviewTaskId}`;
   const reviewerRosterEntry = store.getRosterEntry(reviewer);
-  const targetRole = reviewerRosterEntry?.role ?? reviewer;
+  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
+  const observedTargetRole = reviewerRosterEntry?.role ?? reviewer;
+  const targetRole = rolesAreObligationTargets ? observedTargetRole : null;
   const preferredAgentId = reviewerRosterEntry ? reviewer : null;
   const taskFilePath = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${reviewTaskId}.md`);
   mkdirSync(join(siteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
@@ -1348,8 +1368,9 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
     task_id: reviewTaskId,
     task_number: reviewTaskNumber,
     status: 'opened',
-    target_role: targetRole,
     preferred_agent_id: preferredAgentId,
+    ...(targetRole ? { target_role: targetRole } : {}),
+    ...(!targetRole && observedTargetRole ? { observed_role: observedTargetRole } : {}),
     gates_task_id: parentLifecycle.task_id,
     gates_task_number: parentTaskNumber,
     dependency_id: dependencyId,
@@ -1371,15 +1392,17 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
     updated_at: now,
   });
   ensureTaskRoutingTables(store);
-  store.db.prepare(`
-    INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(task_id) DO UPDATE SET
-      preferred_role = excluded.preferred_role,
-      target_role = excluded.target_role,
-      preferred_agent_id = excluded.preferred_agent_id,
-      updated_at = excluded.updated_at
-  `).run(reviewTaskId, targetRole, targetRole, preferredAgentId, now);
+  if (targetRole || preferredAgentId) {
+    store.db.prepare(`
+      INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        preferred_role = excluded.preferred_role,
+        target_role = excluded.target_role,
+        preferred_agent_id = excluded.preferred_agent_id,
+        updated_at = excluded.updated_at
+    `).run(reviewTaskId, targetRole, targetRole, preferredAgentId, now);
+  }
   store.upsertTaskDependency({
     dependency_id: dependencyId,
     parent_task_id: parentLifecycle.task_id,
@@ -2787,6 +2810,7 @@ function parseIsoOrNow(value) {
 
 async function createRecurringTaskInstance({ store, siteRoot, definition, actorAgentId, actorRole, authorityBasis, triggerMode, runReason, eventType, now, dueKey = null }) {
   const nowIso = now instanceof Date ? now.toISOString() : new Date().toISOString();
+  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
   const taskNumber = (await allocateTaskNumbers(siteRoot, 1))[0];
   const taskTitle = `${definition.title} (${nowIso.slice(0, 10)})`;
   const taskId = `${todayYmd()}-${taskNumber}-${slugify(taskTitle)}`;
@@ -2818,14 +2842,14 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
   const frontMatterLines = [
     '---',
     `number: ${taskNumber}`,
-    `governed_by: ${definition.preferred_role || definition.target_role || 'unknown'}`,
+    `governed_by: ${rolesAreObligationTargets ? (definition.preferred_role || definition.target_role || 'unknown') : 'unknown'}`,
     'status: opened',
     `recurring_task_id: ${definition.recurrence_id}`,
     `recurring_trigger_mode: ${triggerMode}`,
   ];
   if (dueKey) frontMatterLines.push(`recurring_due_key: ${dueKey}`);
-  if (definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
-  if (definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
+  if (rolesAreObligationTargets && definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
+  if (rolesAreObligationTargets && definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
   frontMatterLines.push('---');
   const runId = `rtrun_${randomUUID()}`;
   store.db.exec('BEGIN');
@@ -2846,7 +2870,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
       task_id: taskId,
       task_number: taskNumber,
       status: 'opened',
-      governed_by: definition.preferred_role || definition.target_role || null,
+      governed_by: rolesAreObligationTargets ? (definition.preferred_role || definition.target_role || null) : null,
       closed_at: null,
       closed_by: null,
       reopened_at: null,
@@ -2868,7 +2892,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
       updated_at: nowIso,
     });
     ensureTaskRoutingTables(store);
-    if (definition.preferred_role || definition.target_role) {
+    if (rolesAreObligationTargets && (definition.preferred_role || definition.target_role)) {
       store.db.prepare(`
         INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
         VALUES (?, ?, ?, ?, ?)

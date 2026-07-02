@@ -53,6 +53,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
     recurringDueKey,
     createRecurringTaskInstance,
     insertRecurringRun,
+    getSitePolicy,
   } = context;
 
   async function dispatchCreateRecurringTool(canonicalName, args, dispatchContext: TaskLifecyclePayload = {}) {
@@ -87,6 +88,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const nonGoals = stringField(args, 'non_goals') || null;
       const preferredRole = stringField(args, 'preferred_role') || null;
       const targetRole = stringField(args, 'target_role') || null;
+      if ((preferredRole || targetRole) && !rolesAreObligationTargets()) {
+        return jsonToolResult(roleObligationTargetsDisabledResult({ preferredRole, targetRole }), true);
+      }
       const acceptanceCriteria = Array.isArray(args.acceptance_criteria) && args.acceptance_criteria.length > 0
         ? args.acceptance_criteria
         : ['TBD'];
@@ -199,6 +203,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (!['draft', 'active'].includes(initialStatus)) throw new Error('invalid_initial_status');
       const targetRole = stringField(args, 'target_role') || null;
       const preferredRole = stringField(args, 'preferred_role') || targetRole;
+      if ((targetRole || preferredRole) && !rolesAreObligationTargets()) {
+        return jsonToolResult(roleObligationTargetsDisabledResult({ preferredRole, targetRole }), true);
+      }
       if (targetRole && !roleExistsInRoster(store, siteRoot, targetRole)) {
         return jsonToolResult({ status: 'blocked', reason: 'target_role_not_in_roster', target_role: targetRole }, true);
       }
@@ -365,12 +372,12 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const frontMatterLines = [
         '---',
         `number: ${taskNumber}`,
-        `governed_by: ${definition.preferred_role || definition.target_role || 'unknown'}`,
+        `governed_by: ${rolesAreObligationTargets() ? (definition.preferred_role || definition.target_role || 'unknown') : 'unknown'}`,
         'status: opened',
         `recurring_task_id: ${recurrenceId}`,
       ];
-      if (definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
-      if (definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
+      if (rolesAreObligationTargets() && definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
+      if (rolesAreObligationTargets() && definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
       frontMatterLines.push('---');
       const runId = `rtrun_${randomUUID()}`;
       store.db.exec('BEGIN');
@@ -380,7 +387,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           task_id: taskId,
           task_number: taskNumber,
           status: 'opened',
-          governed_by: definition.preferred_role || definition.target_role || null,
+          governed_by: rolesAreObligationTargets() ? (definition.preferred_role || definition.target_role || null) : null,
           closed_at: null,
           closed_by: null,
           reopened_at: null,
@@ -402,7 +409,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           updated_at: now,
         });
         ensureTaskRoutingTables(store);
-        if (definition.preferred_role || definition.target_role) {
+        if (rolesAreObligationTargets() && (definition.preferred_role || definition.target_role)) {
           store.db.prepare(`
             INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
             VALUES (?, ?, ?, ?, ?)
@@ -512,5 +519,24 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
     }
   }
 
+  function rolesAreObligationTargets() {
+    return getSitePolicy().policy.roster.roles_are_obligation_targets;
+  }
+
   return Object.fromEntries(TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES.map((name) => [name, (args, dispatchContext) => dispatchCreateRecurringTool(name, args, dispatchContext)]));
+}
+
+function roleObligationTargetsDisabledResult({ preferredRole, targetRole }) {
+  return {
+    status: 'blocked',
+    reason: 'roles_are_obligation_targets_false',
+    preferred_role: preferredRole ?? null,
+    target_role: targetRole ?? null,
+    message: 'Role-targeted task creation is disabled by site task-lifecycle policy. Set [roster].roles_are_obligation_targets = true in <site-root>/.narada/task-lifecycle.toml to permit role obligation targets.',
+    site_policy: {
+      roster: {
+        roles_are_obligation_targets: false,
+      },
+    },
+  };
 }
