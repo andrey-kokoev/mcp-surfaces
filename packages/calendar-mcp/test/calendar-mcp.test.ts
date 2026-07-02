@@ -103,6 +103,37 @@ try {
   assert.equal(refused.result.structuredContent.reason, 'event_writes_disallowed_by_policy');
   assert.equal(calls.length, 3);
   assert.equal(existsSync(join(root, '.ai', 'audit', 'calendar-mcp.jsonl')), true);
+  assert.equal(existsSync(join(root, '.ai', 'telemetry', 'calendar.jsonl')), false);
+
+  writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({ enabled: true, level: 'all' }));
+  const telemetryRefused = await rpc({
+    jsonrpc: '2.0',
+    id: 51,
+    method: 'tools/call',
+    params: {
+      name: 'calendar_event_create',
+      arguments: {
+        subject: 'Telemetry blocked write',
+        body_text: 'must not be persisted in telemetry',
+        start_datetime: '2026-06-25T12:00:00',
+        end_datetime: '2026-06-25T13:00:00',
+        time_zone: 'UTC',
+        confirm_write: true,
+      },
+    },
+  }, state);
+  assert.equal(telemetryRefused.error, undefined);
+  assert.equal(telemetryRefused.result.structuredContent.status, 'refused');
+  const telemetryEvent = JSON.parse(readFileSync(join(root, '.ai', 'telemetry', 'calendar.jsonl'), 'utf8').trim());
+  assert.equal(telemetryEvent.schema, 'narada.mcp_telemetry.event.v1');
+  assert.equal(telemetryEvent.surface_id, 'calendar');
+  assert.equal(telemetryEvent.tool_name, 'calendar_event_create');
+  assert.equal(telemetryEvent.event_kind, 'tool_refused');
+  assert.equal(telemetryEvent.status, 'refused');
+  assert.deepEqual(telemetryEvent.policy_decision, { status: 'refused', code: 'event_writes_disallowed_by_policy' });
+  assert.equal('args' in telemetryEvent, false);
+  assert.equal('result' in telemetryEvent, false);
+  assert.equal(JSON.stringify(telemetryEvent).includes('must not be persisted'), false);
 
   writeFileSync(join(root, '.ai', 'calendar-mcp.json'), JSON.stringify({
     graph_base_url: 'https://graph.example.test/v1.0',

@@ -5,10 +5,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildGraphUrl, graphCalendarPath, graphRequest, graphTop, requiredString } from './graph-client.js';
 import { decideEventWrite, loadCalendarPolicy, recordCalendarAudit } from './policy.js';
+import { buildCalendarTelemetryDeclaration, emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 
 const SERVER_NAME = 'narada-calendar-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
+const SURFACE_ID = 'calendar';
 
 type CalendarRecord = Record<string, unknown>;
 type CalendarServerState = CalendarRecord & {
@@ -193,8 +195,66 @@ function eventWriteProperties() {
 async function callTool(params: CalendarRecord, state: CalendarServerState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
-  const result = await callNamedTool(name, args, state);
-  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2), annotations: { audience: ['assistant'] } }], structuredContent: result };
+  const startedAt = Date.now();
+  try {
+    const result = await callNamedTool(name, args, state);
+    const resultRecord = asRecord(result);
+    const status = String(resultRecord.status ?? 'ok');
+    const eventKind = status === 'refused' ? 'tool_refused' : 'tool_completed';
+    emitCalendarTelemetry(name, eventKind, status, startedAt, state, resultRecord);
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2), annotations: { audience: ['assistant'] } }], structuredContent: result };
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    emitCalendarTelemetry(name, 'tool_failed', 'error', startedAt, state, { message: diagnostic.message });
+    throw error;
+  }
+}
+
+function emitCalendarTelemetry(toolName: string, eventKind: TelemetryEventKind, status: string, startedAt: number, state: CalendarServerState, result: CalendarRecord): void {
+  const declaration = calendarTelemetryDeclaration(toolName);
+  if (!declaration) return;
+  try {
+    emitTelemetryEvent({
+      context: {
+        siteRoot: state.siteRoot,
+        siteId: process.env.NARADA_SITE_ID ?? null,
+        surfaceId: SURFACE_ID,
+        agentId: process.env.NARADA_AGENT_ID ?? null,
+        carrierSessionId: process.env.NARADA_CARRIER_SESSION_ID ?? null,
+      },
+      declaration,
+      event: {
+        toolName,
+        eventKind,
+        status,
+        startedAt,
+        completedAt: Date.now(),
+        policyDecision: policyDecisionFromResult(result),
+        errorCode: eventKind === 'tool_failed' ? errorCodeFromMessage(String(result.message ?? 'calendar_tool_failed')) : null,
+        refusalCode: eventKind === 'tool_refused' ? String(result.reason ?? 'calendar_tool_refused') : null,
+      },
+    });
+  } catch (error) {
+    process.stderr.write(`calendar_telemetry_error:${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
+function calendarTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
+  if (!listTools().map((toolDef) => String(asRecord(toolDef).name ?? '')).includes(toolName)) return null;
+  const writes = /event_create|event_update|event_delete/.test(toolName);
+  return buildCalendarTelemetryDeclaration({
+    sensitivity: writes ? 'high' : 'medium',
+    policyDecision: writes,
+  });
+}
+
+function policyDecisionFromResult(result: CalendarRecord): CalendarRecord | null {
+  if (result.status !== 'refused') return null;
+  return { status: 'refused', code: typeof result.reason === 'string' ? result.reason : 'calendar_write_refused' };
+}
+
+function errorCodeFromMessage(message: string): string {
+  return message.split(':')[0]?.trim() || 'calendar_tool_failed';
 }
 
 async function callNamedTool(name: string, args: CalendarRecord, state: CalendarServerState): Promise<unknown> {

@@ -28,3 +28,7 @@ Authentication follows the Graph mail surface: `GRAPH_ACCESS_TOKEN`, `MS_GRAPH_A
 - `calendar_event_delete` - delete an event only when policy enables writes and `confirm_write=true`.
 
 Writes are refused by default and audited when attempted.
+
+## Telemetry
+
+Calendar telemetry is optional and disabled unless the site enables `.ai/mcp-telemetry.json`. Audit records under `.ai/audit/calendar-mcp.jsonl` remain the authoritative evidence for write attempts and are not replaced by telemetry. When telemetry is enabled, this surface emits metadata-only tool status events; it does not persist event bodies, attendees, tokens, approval tokens, raw arguments, raw Graph responses, or other result payloads.
