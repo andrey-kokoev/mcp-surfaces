@@ -36,6 +36,13 @@ export function createServerState(options: JsonRecord = {}): CloudflareCarrierSt
   };
 }
 
+function cloudflareDoctorOperatorAction(sessionStatus: JsonRecord): string | null {
+  if (sessionStatus.status === 'missing') return 'run_pnpm_cloudflare_operator_login';
+  if (sessionStatus.status === 'present' && sessionStatus.is_fresh === false) return 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human';
+  if (sessionStatus.has_cookie === false) return 'run_pnpm_cloudflare_operator_login_to_capture_cookie';
+  return null;
+}
+
 export async function handleRequest(request: JsonRecord, state: CloudflareCarrierState) {
   if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
@@ -320,6 +327,7 @@ function cloudflareDoctor(state: CloudflareCarrierState): JsonRecord {
     session_file: state.sessionFile,
     session_status: sessionStatus.status,
     session_fresh: sessionStatus.is_fresh,
+    operator_action: cloudflareDoctorOperatorAction(sessionStatus),
     health_file: state.healthFile,
     health_file_exists: healthFileExists,
     health_status: healthStatus ?? 'missing',

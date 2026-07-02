@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createServerState, handleRequest } from '../src/main.js';
@@ -71,6 +71,7 @@ assert.equal(doctorContent.repo_root, root.replace(/\\/g, '/'));
 assert.equal(doctorContent.worker_url, 'https://cloudflare.example.test');
 assert.equal(doctorContent.health_file_exists, true);
 assert.equal(doctorContent.health_status, 'ok');
+assert.equal(doctorContent.operator_action, null);
 
 const sessionStatus = await handleRequest({
   jsonrpc: '2.0', id: 2, method: 'tools/call',
@@ -88,6 +89,21 @@ const missingSession = await handleRequest({
   params: { name: 'cloudflare_session_status', arguments: { session_file: join(root, 'nonexistent.json') } },
 }, state);
 assert.equal((missingSession.result as any).structuredContent.status, 'missing');
+
+const sessionFile = join(root, '.narada', 'auth', 'cloudflare-operator-session.json');
+writeFileSync(sessionFile, JSON.stringify({
+  cookie: 'narada_operator_session=old_cookie_value',
+  captured_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+  worker_url: 'https://cloudflare.example.test',
+}));
+const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+utimesSync(sessionFile, staleMtime, staleMtime);
+const staleDoctor = await handleRequest({
+  jsonrpc: '2.0', id: 31, method: 'tools/call',
+  params: { name: 'cloudflare_doctor', arguments: {} },
+}, state);
+assert.equal((staleDoctor.result as any).structuredContent.session_fresh, false);
+assert.equal((staleDoctor.result as any).structuredContent.operator_action, 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human');
 
 const health = await handleRequest({
   jsonrpc: '2.0', id: 4, method: 'tools/call',
