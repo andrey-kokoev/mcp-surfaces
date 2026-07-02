@@ -28,6 +28,12 @@ try {
   const eng = { executor: 'engine', blocking: false };
   const ag = { executor: 'agent', blocking: true };
 
+  const guidance = await call('sop_guidance', {});
+  assert.equal(view(guidance).surface_id, 'sop');
+  assert.equal((view(guidance).tool_inventory.runs as string[]).includes('sop_run_advance'), true);
+  assert.equal((view(guidance).tool_inventory.runs as string[]).includes('sop_run_coverage_since'), true);
+  assert.ok((view(guidance).workflows.durable_run_execution as string[]).some((step) => step.includes('sop_run_events')));
+
   const steps = [
     { id: 'verify', ...op, title: 'Verify access', instructions: 'Check that the site root is reachable.', depends_on: [] },
     { id: 'setup', ...eng, title: 'Record setup', instructions: 'Document initial state.', depends_on: ['verify'] },

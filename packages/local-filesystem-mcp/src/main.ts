@@ -987,6 +987,15 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
   const matches = page.matches;
   const nextOffset = page.has_more ? offset + matches.length : null;
   const grepMode = stringField(args, 'output_mode') ?? 'files_with_matches';
+  const noMatchDiagnostics = matches.length === 0 && page.count === 0 ? {
+    status: 'no_matches_observed',
+    cache_hit: page.cache_hit === true,
+    cache_policy: page.cache_policy ?? cachePolicy,
+    snapshot_complete: page.snapshot_complete === true,
+    freshness,
+    stale_cache_evidence: false,
+    remediation: 'No matches were returned for the current path freshness fingerprint. If files are known to exist, retry with cache_policy="refresh" or cache_policy="bypass" and verify the directory/pattern pair.',
+  } : null;
   const value = {
     schema: `local.filesystem.${kind}.v1`,
     status: 'ok',
@@ -1014,6 +1023,7 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     next_offset: nextOffset,
     matches_format: kind === 'grep' ? 'human' : 'path',
     matches: kind === 'grep' ? matches.map((match) => renderGrepMatch(match, grepMode)) : matches,
+    ...(noMatchDiagnostics ? { no_match_diagnostics: noMatchDiagnostics } : {}),
     ...(kind === 'grep' ? { match_objects_authoritative: true, match_objects: matches.map((match) => buildGrepMatchObject(match, grepMode)) } : {}),
   };
   return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, scanned_unit: value.scanned_unit, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, page_match_bytes: value.page_match_bytes, page_match_bytes_limit: value.page_match_bytes_limit, page_matches_truncated: value.page_matches_truncated, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });

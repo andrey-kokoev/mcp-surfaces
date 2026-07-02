@@ -93,6 +93,26 @@ assert.equal(readToolNames.includes('git_add'), true);
 const readAddTool = readTools.result?.tools.find((tool) => tool.name === 'git_add');
 assert.match(readAddTool.description, /mode=write/);
 
+const guidance = await rpc({
+  jsonrpc: '2.0',
+  id: 20,
+  method: 'tools/call',
+  params: { name: 'git_guidance', arguments: {} },
+}, state);
+let guidanceContent = guidance.result?.structuredContent as Record<string, any>;
+if (guidanceContent.schema === 'narada.producer_output_page.v1') {
+  const shownGuidance = await rpc({
+    jsonrpc: '2.0',
+    id: 26,
+    method: 'tools/call',
+    params: { name: 'git_output_show', arguments: { ref: guidanceContent.output_ref, limit: 30000 } },
+  }, state);
+  guidanceContent = JSON.parse(shownGuidance.result?.structuredContent.output_text);
+}
+assert.equal(guidanceContent.surface_id, 'git');
+assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('git_workflow_record')));
+assert.deepEqual(guidanceContent.tool_inventory.write, ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_workflow_record']);
+
 const policy = await rpc({
   jsonrpc: '2.0',
   id: 22,

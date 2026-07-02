@@ -3205,18 +3205,21 @@ function admitRosterIdentity(args) {
       `).run(role, projectedCapabilitiesJson, now, agentId);
     }
   } else {
-    store.upsertRosterEntry({
-      agent_id: agentId,
-      role,
-      capabilities_json: JSON.stringify(capabilities),
-      first_seen_at: now,
-      last_active_at: now,
-      status: 'idle',
-      task_number: null,
-      last_done: null,
-      updated_at: now,
-      ...(operatorIdentityCol ? { operator_identity: operatorIdentity } : {}),
-    });
+    if (operatorIdentityCol) {
+      store.db.prepare(`
+        INSERT INTO agent_roster (
+          agent_id, role, capabilities_json, first_seen_at, last_active_at,
+          status, task_number, last_done, operator_identity, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(agentId, role, JSON.stringify(capabilities), now, now, 'idle', null, null, operatorIdentity, now);
+    } else {
+      store.db.prepare(`
+        INSERT INTO agent_roster (
+          agent_id, role, capabilities_json, first_seen_at, last_active_at,
+          status, task_number, last_done, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(agentId, role, JSON.stringify(capabilities), now, now, 'idle', null, null, now);
+    }
   }
 
   return {

@@ -28,8 +28,30 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
+    workflows: {
+      normal_publication: [
+        'git_status for branch/upstream/dirty posture.',
+        'git_changed_summary and git_diff for scoped review.',
+        'git_add with explicit paths only.',
+        'git_status or staged git_diff to verify staged content.',
+        'git_commit with concise message and verification body.',
+        'git_push only after target is resolved.',
+        'git_workflow_record for SHA, push status, staged paths, and unrelated dirty paths.'
+      ],
+      read_only_review: [
+        'git_status for posture.',
+        'git_log or git_show for commit detail.',
+        'git_diff with pathspecs for bounded inspection.'
+      ]
+    },
+    tool_inventory: {
+      read: ['git_policy_inspect', 'git_status', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show', 'git_output_show'],
+      write: ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_workflow_record'],
+      write_mode_note: 'Mutations require git-mcp mode=write and policy approval.'
+    },
     examples: [
       { intent: 'First use', call: 'git_guidance({})' },
+      { intent: 'Normal commit workflow', call: 'git_status -> git_changed_summary/git_diff -> git_add -> staged git_diff -> git_commit -> git_push -> git_workflow_record' },
       { intent: 'Tool-specific help', call: "git_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "git_guidance({ workflow: \"<workflow_name>\" })" }
     ],

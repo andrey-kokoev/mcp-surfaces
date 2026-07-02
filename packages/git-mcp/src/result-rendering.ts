@@ -16,6 +16,7 @@ export function renderToolResultText(value: unknown): string {
       record.full_output_char_length !== undefined ? `full_output_char_length: ${record.full_output_char_length}` : null,
     ]);
   }
+  if (record.schema === 'narada.mcp_surface.guidance.v0') return renderGuidance(record);
   if (record.schema === 'narada.git.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.git.status.v1') return renderStatus(record);
   if (record.schema === 'narada.git.changed_summary.v1') return renderChangedSummary(record);
@@ -28,6 +29,20 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.git.log.v1') return renderLog(record);
   if (record.schema === 'narada.git.show.v1') return renderPatchResult('git_show', record, 'patch');
   throw diagnosticError('git_unrenderable_result_schema', 'git_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderGuidance(record: Record<string, unknown>): string {
+  const workflows = asRecord(record.workflows);
+  const workflowNames = Object.keys(workflows);
+  const inventory = asRecord(record.tool_inventory);
+  return compactLines([
+    `${record.guidance_tool ?? 'git_guidance'}: ${record.status ?? 'ok'}`,
+    `surface_id: ${record.surface_id ?? 'git'}`,
+    `purpose: ${record.purpose ?? ''}`,
+    workflowNames.length ? `workflows: ${workflowNames.join(', ')}` : null,
+    Array.isArray(inventory.read) ? `read_tools: ${inventory.read.length}` : null,
+    Array.isArray(inventory.write) ? `write_tools: ${inventory.write.length}` : null,
+  ]);
 }
 
 function renderChangedSummary(record: Record<string, unknown>): string {

@@ -676,6 +676,52 @@ try {
     stderr: { write: () => true },
   };
 
+  const driftSiteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-roster-drift-'));
+  mkdirSync(join(driftSiteRoot, '.ai', 'agents'), { recursive: true });
+  mkdirSync(join(driftSiteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
+  const driftStore = openTaskLifecycleStore(driftSiteRoot);
+  try {
+    driftStore.db.prepare('ALTER TABLE agent_roster DROP COLUMN operator_identity').run();
+  } finally {
+    driftStore.db.close();
+  }
+  const driftRuntime = {
+    argv: ['--site-root', driftSiteRoot],
+    cwd: driftSiteRoot,
+    env: { ...process.env, NARADA_AGENT_ID: 'legacy-site.builder' },
+    stdout: { write: () => true },
+    stderr: { write: () => true },
+  };
+  const driftRosterAdmitResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 650,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_roster_admit',
+      arguments: {
+        agent_id: 'legacy-site.builder',
+        role: 'builder',
+        actor_agent_id: 'legacy-site.builder',
+        capabilities: ['implementation_work'],
+        operator_identity: 'same-operator',
+        authority_basis: { kind: 'operator_direct_instruction', summary: 'Verify old roster schema admission remains compatible.' },
+      },
+    },
+  }, driftRuntime);
+  const driftRosterAdmitPayload = await responsePayload(driftRosterAdmitResponse, driftRuntime, 651);
+  assert.equal(driftRosterAdmitPayload.status, 'admitted');
+  assert.equal(driftRosterAdmitPayload.agent_id, 'legacy-site.builder');
+  const driftVerifyStore = openTaskLifecycleStore(driftSiteRoot);
+  try {
+    const driftColumns = driftVerifyStore.db.prepare('PRAGMA table_info(agent_roster)').all().map((column: any) => column.name);
+    const driftRow = driftVerifyStore.db.prepare('SELECT agent_id, role, capabilities_json FROM agent_roster WHERE agent_id = ?').get('legacy-site.builder') as any;
+    assert.equal(driftColumns.includes('operator_identity'), false);
+    assert.equal(driftRow.role, 'builder');
+    assert.deepEqual(JSON.parse(driftRow.capabilities_json), ['implementation_work']);
+  } finally {
+    driftVerifyStore.db.close();
+  }
+
   const surfaceEngineerRuntime = {
     argv: ['--site-root', siteRoot],
     cwd: siteRoot,

@@ -426,6 +426,9 @@ trust_level = "untrusted"
   assert.equal(emptyGlob.result.structuredContent.count, 0);
   assert.equal(emptyGlob.result.structuredContent.returned, 0);
   assert.deepEqual(emptyGlob.result.structuredContent.matches, []);
+  assert.equal(emptyGlob.result.structuredContent.no_match_diagnostics.status, 'no_matches_observed');
+  assert.equal(emptyGlob.result.structuredContent.no_match_diagnostics.stale_cache_evidence, false);
+  assert.match(emptyGlob.result.structuredContent.no_match_diagnostics.remediation, /cache_policy="refresh"/);
   if (danglingSymlinkCreated) {
     const danglingState = createServerState({ mode: 'read', allowedRoots: [danglingRoot], outputRoot: tempRoot });
     const danglingGlob = call(danglingState, 181, 'fs_glob_search', { directory: danglingRoot, pattern: '**/*.does-not-exist', limit: 5 });

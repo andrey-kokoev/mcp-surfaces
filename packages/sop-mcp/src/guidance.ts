@@ -28,8 +28,29 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
+    workflows: {
+      template_authoring: [
+        'sop_template_create or sop_template_import_yaml to define a versioned SOP.',
+        'sop_template_show/export/list/search to inspect templates before execution.',
+        'sop_template_update or sop_template_deprecate for governed template changes.'
+      ],
+      durable_run_execution: [
+        'sop_run_start creates a durable run from an active template.',
+        'sop_run_status shows run and step state.',
+        'sop_run_advance records step results/evidence and moves the run forward.',
+        'sop_run_refresh synchronizes parent runs with child SOP terminal status.',
+        'sop_run_events reads the durable evidence/event ledger.',
+        'sop_run_list and sop_run_coverage_since support run discovery and coverage readback.',
+        'sop_run_cancel terminates a non-terminal run when execution is intentionally stopped.'
+      ]
+    },
+    tool_inventory: {
+      templates: ['sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml'],
+      runs: ['sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_coverage_since', 'sop_run_cancel', 'sop_run_events']
+    },
     examples: [
       { intent: 'First use', call: 'sop_guidance({})' },
+      { intent: 'Execute SOP run', call: 'sop_template_show -> sop_run_start -> sop_run_status -> sop_run_advance -> sop_run_events' },
       { intent: 'Tool-specific help', call: "sop_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "sop_guidance({ workflow: \"<workflow_name>\" })" }
     ],
