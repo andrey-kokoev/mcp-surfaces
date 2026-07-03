@@ -1671,7 +1671,11 @@ function registrarSiteSurfaces(args: JsonRecord): JsonRecord {
 }
 
 export function siteSurfaceServerKey(siteId: string, surfaceId: string): string {
-  return `${siteId}-${surfaceId}`;
+  return `${siteSurfacePrefix(siteId)}-${surfaceId}`;
+}
+
+function siteSurfacePrefix(siteId: string): string {
+  return siteId.startsWith('narada-') ? siteId : `narada-${siteId}`;
 }
 
 function legacySiteSurfaceServerKey(siteId: string, surfaceId: string): string {
@@ -1682,7 +1686,7 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
   const siteId = site.site_id;
   const surfaceId = surface.id;
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
-  const fileName = `${siteId}-${surfaceId}-mcp.json`;
+  const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
   const resolvedArgs = interpolateArgs(surface.args, siteId, site.root);
   const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
   const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root);
@@ -1915,7 +1919,7 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
 }
 
 function fabricSurfaceId(serverKey: string, site: SiteDef): string {
-  const canonicalPrefix = site.site_id;
+  const canonicalPrefix = siteSurfacePrefix(site.site_id);
   if (serverKey.startsWith(`${canonicalPrefix}-`)) {
     const rest = serverKey.slice(canonicalPrefix.length + 1);
     const known = SURFACES.find((s) => s.id === rest);

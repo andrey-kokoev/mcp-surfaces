@@ -141,6 +141,7 @@ try {
   writeFileSync(join(root, 'site.json'), JSON.stringify({ site_id: 'test-site' }), 'utf8');
 
   assert.equal(siteSurfaceServerKey('narada-sonar', 'scheduler'), 'narada-sonar-scheduler');
+  assert.equal(siteSurfaceServerKey('smart-scheduling', 'scheduler'), 'narada-smart-scheduling-scheduler');
   const bindConfig = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
     { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: [], tools: ['scheduler_task_list'] },
@@ -156,6 +157,15 @@ try {
   assert.deepEqual(schedServer.authority_locus, { kind: 'local_site', site_root: root });
   assert.equal(schedServer.narada_scope.scope_source, 'registrar_surface_catalog');
   assert.equal(schedServer.narada_scope.bound_into_site, 'narada-sonar');
+
+  const smartSchedulingBindConfig = buildSiteBindConfig(
+    { site_id: 'smart-scheduling', root, config_path: join(root, 'site.json'), surfaces: [] },
+    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: [], tools: ['scheduler_task_list'] },
+  );
+  assert.equal(smartSchedulingBindConfig.fileName, 'narada-smart-scheduling-scheduler-mcp.json');
+  assert.equal(smartSchedulingBindConfig.serverKey, 'narada-smart-scheduling-scheduler');
+  assert.ok((smartSchedulingBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-scheduler']);
+  assert.ok(!(smartSchedulingBindConfig.config.mcpServers as Record<string, any>)['smart-scheduling-scheduler']);
 
   const speechBindConfig = buildSiteBindConfig(
     { site_id: 'narada-staccato', root, config_path: join(root, 'site.json'), surfaces: [] },
