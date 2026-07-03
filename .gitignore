@@ -4,6 +4,7 @@ node_modules/
 *.log
 .ai/
 packages/*/dist/
+packages/shared/*/dist/
 .feedback/
 .tmp/
 packages/*/.tmp-tests/
