@@ -11,6 +11,8 @@ const externalRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-external-'));
 const externalAgentContextEntrypoint = join(externalRoot, 'packages', 'agent-context-tools', 'src', 'agent-context-mcp-server.mjs');
 mkdirSync(dirname(externalAgentContextEntrypoint), { recursive: true });
 writeFileSync(externalAgentContextEntrypoint, 'export {};\n', 'utf8');
+const failingEntrypoint = join(root, 'failing-child.mjs');
+writeFileSync(failingEntrypoint, "process.stderr.write('loader child import failed\\n'); process.exit(42);\n", 'utf8');
 writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
   mcpServers: {
     'test-echo': {
@@ -29,7 +31,7 @@ writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
 }), 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';
@@ -76,6 +78,9 @@ try {
 
   const badAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'unknown-surface' } }, 6);
   assert.equal(badAttach?.schema, undefined);
+  const failingAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'test-echo', entrypoint: failingEntrypoint } }, 9);
+  assert.equal(failingAttach?.data?.code, 'child_exited');
+  assert.match(failingAttach?.data?.details?.stderr_tail ?? '', /loader child import failed/);
 
   const feedbackAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'surface-feedback' } }, 7);
   assert.equal(feedbackAttach?.code, undefined, JSON.stringify(feedbackAttach));

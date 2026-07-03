@@ -15,6 +15,13 @@ try {
   function view(res: Record<string, any>): Record<string, any> {
     return res.result.structuredContent as Record<string, any>;
   }
+  function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string): void {
+    const args = server.args as string[];
+    assert.equal(server.command, 'node');
+    assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
+    assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
+    assert.ok(args.includes('--'));
+  }
 
   const surfaces = await call('registrar_surface_list', {});
   const surfaceData = view(surfaces);
@@ -106,6 +113,11 @@ try {
   const materializedSpeech = ((matData.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).find((server) => server.surface_id === 'speech');
   assert.ok(materializedSpeech);
   assert.equal((materializedSpeech.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
+  const materializedPath = join(root, 'kimi-generated.json');
+  view(await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey', output_path: materializedPath }));
+  const materializedConfig = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
+  const materializedFilesystem = materializedConfig.mcpServers['narada-andrey-local-filesystem'];
+  assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
 
   const carrierValidate = view(await call('registrar_carrier_validate', { carrier_id: 'kimi-andrey', include_ok: true }));
   const validateFindings = carrierValidate.findings as Array<Record<string, any>>;
@@ -139,6 +151,7 @@ try {
   assert.ok(!(bindConfig.config.mcpServers as Record<string, any>)['sonar-scheduler']);
   const schedServer = (bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler'];
   assert.equal(schedServer.surface_id, 'scheduler');
+  assertRuntimeProxy(schedServer, 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js');
   assert.equal(schedServer.injection_scope, 'local_site');
   assert.deepEqual(schedServer.authority_locus, { kind: 'local_site', site_root: root });
   assert.equal(schedServer.narada_scope.scope_source, 'registrar_surface_catalog');
@@ -157,6 +170,7 @@ try {
   );
   const speechServer = (speechBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-speech'];
   assert.equal(speechServer.injection_scope, 'host');
+  assertRuntimeProxy(speechServer, 'D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js');
   assert.equal(speechServer.authority_posture, 'host_injected_mcp_surface');
   assert.deepEqual(speechServer.authority_locus, { kind: 'host' });
   assert.equal(speechServer.bound_into_site, 'narada-staccato');
@@ -179,6 +193,7 @@ try {
   );
   const workerServer = (workerBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-worker-delegation'];
   assert.equal(workerServer.surface_id, 'worker-delegation');
+  assertRuntimeProxy(workerServer, 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js');
   assert.ok(workerServer.args.includes('--site-root'));
   assert.equal(workerServer.args[workerServer.args.indexOf('--site-root') + 1], root);
   assert.ok(workerServer.env_vars.includes('DEEPSEEK_API_KEY'));
@@ -197,6 +212,7 @@ try {
     },
   );
   const surfaceFeedbackServer = (surfaceFeedbackBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-surface-feedback'];
+  assertRuntimeProxy(surfaceFeedbackServer, 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
 
   const scopeReadbackRoot = join(root, 'scope-readback-site');

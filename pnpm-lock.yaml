@@ -75,7 +75,11 @@ importers:
 
   packages/mcp-loader-mcp: {}
 
-  packages/mcp-registrar: {}
+  packages/mcp-registrar:
+    dependencies:
+      '@narada2/mcp-runtime-proxy':
+        specifier: workspace:*
+        version: link:../shared/mcp-runtime-proxy
 
   packages/operator-routing-mcp: {}
 
@@ -86,6 +90,8 @@ importers:
         version: link:../shared/mcp-telemetry
 
   packages/scheduler-mcp: {}
+
+  packages/shared/mcp-runtime-proxy: {}
 
   packages/shared/mcp-telemetry: {}
 

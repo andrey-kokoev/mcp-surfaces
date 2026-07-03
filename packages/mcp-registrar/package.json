@@ -17,9 +17,11 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js"
+    "test": "pnpm --filter @narada2/mcp-runtime-proxy build && pnpm build && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/mcp-runtime-proxy": "workspace:*"
+  },
   "files": [
     "dist/",
     "sops/"

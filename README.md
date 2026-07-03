@@ -6,6 +6,7 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 
 - `@narada2/mcp-transport`: MCP payload/output-ref helpers. See `packages/shared/mcp-transport/README.md`.
 - `@narada2/mcp-telemetry`: optional MCP telemetry helpers. See `packages/shared/mcp-telemetry/README.md`.
+- `@narada2/mcp-runtime-proxy`: carrier stdio proxy for MCP startup diagnostics. See `packages/shared/mcp-runtime-proxy/README.md`.
 - `@narada2/local-filesystem-mcp`: canonical local filesystem MCP surface exposing `fs_*` tools. See `packages/local-filesystem-mcp/README.md`.
 - `@narada2/structured-command-mcp`: policy-gated command execution surface using structured argv schemas. See `packages/structured-command-mcp/README.md`.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface. See `packages/git-mcp/README.md`.

@@ -15,6 +15,7 @@ const DEFAULT_MAX_CONNECTIONS = 8;
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 120000;
+const STDERR_TAIL_LIMIT = 8000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
 
 const DEFAULT_ALLOWED_ENTRYPOINT_PREFIXES = [
@@ -62,6 +63,7 @@ type ChildConnection = {
   serverInfo: JsonRecord;
   toolSnapshot: JsonRecord[] | null;
   detached: boolean;
+  stderrTail: string;
 };
 
 type LoaderState = {
@@ -317,6 +319,7 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
     serverInfo: {},
     toolSnapshot: null,
     detached: false,
+    stderrTail: '',
   };
 
   state.connections.set(connectionId, connection);
@@ -324,7 +327,7 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
   child.stdout?.setEncoding('utf8');
   child.stdout?.on('data', (chunk) => handleChildStdout(chunk as string, connection));
   child.stderr?.on('data', (chunk) => {
-    void chunk;
+    connection.stderrTail = tail(`${connection.stderrTail}${String(chunk)}`, STDERR_TAIL_LIMIT);
   });
   child.on('error', (error) => childError(connection, error));
   child.on('exit', () => cleanupConnection(connection));
@@ -585,7 +588,7 @@ async function sendChildRequest(connection: ChildConnection, method: string, par
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       connection.pending.delete(id);
-      reject(diagnosticError('child_timeout', `child_timeout:${method}:${timeoutMs}ms`));
+      reject(diagnosticError('child_timeout', `child_timeout:${method}:${timeoutMs}ms`, childRuntimeDiagnostic(connection, { method, timeout_ms: timeoutMs })));
     }, timeoutMs);
     connection.pending.set(id, { resolve, reject, timeout });
     writeToChild(connection, message);
@@ -627,7 +630,7 @@ function handleChildStdout(chunk: string, connection: ChildConnection) {
 function childError(connection: ChildConnection, error: Error) {
   for (const [_, pending] of connection.pending) {
     clearTimeout(pending.timeout);
-    pending.reject(error);
+    pending.reject(diagnosticError('child_error', error.message, childRuntimeDiagnostic(connection)));
   }
   connection.pending.clear();
 }
@@ -636,7 +639,7 @@ function cleanupConnection(connection: ChildConnection) {
   connection.detached = true;
   for (const [_, pending] of connection.pending) {
     clearTimeout(pending.timeout);
-    pending.reject(diagnosticError('child_exited', 'child_exited'));
+    pending.reject(diagnosticError('child_exited', 'child_exited', childRuntimeDiagnostic(connection)));
   }
   connection.pending.clear();
 }
@@ -660,6 +663,23 @@ function enforceRequestSize(args: JsonRecord, maxBytes: number) {
 function enforceResponseSize(result: JsonRecord, maxBytes: number) {
   const size = Buffer.byteLength(JSON.stringify(result), 'utf8');
   if (size > maxBytes) throw diagnosticError('response_too_large', `response_too_large:${size}:${maxBytes}`);
+}
+
+function childRuntimeDiagnostic(connection: ChildConnection, extra: JsonRecord = {}): JsonRecord {
+  return {
+    connection_id: connection.connectionId,
+    surface_id: connection.surfaceId,
+    entrypoint: connection.entrypoint,
+    args: connection.args,
+    exit_code: connection.process.exitCode,
+    signal_code: connection.process.signalCode,
+    stderr_tail: connection.stderrTail,
+    ...extra,
+  };
+}
+
+function tail(text: string, limit: number): string {
+  return text.length <= limit ? text : text.slice(text.length - limit);
 }
 
 function tool(name: string, description: string, properties: JsonRecord, required: string[]) {

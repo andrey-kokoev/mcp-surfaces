@@ -115,6 +115,7 @@ type CarrierDef = {
 };
 
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
+const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 
 const GIT_TOOLS = ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
@@ -1165,25 +1166,153 @@ function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, 
   };
 }
 
+type CarrierLaunchCommand = {
+  command: string;
+  args: string[];
+  uses_runtime_proxy: boolean;
+  runtime_proxy_entrypoint?: string;
+  child_entrypoint: string;
+  child_args: string[];
+};
+
+function carrierLaunchCommand(server: MaterializedServer, surfaceId: string): CarrierLaunchCommand {
+  const childEntrypoint = server.entrypoint;
+  const childArgs = server.args;
+  if (server.kind === 'local') {
+    return {
+      command: server.command ?? 'node',
+      args: [childEntrypoint, ...childArgs],
+      uses_runtime_proxy: false,
+      child_entrypoint: childEntrypoint,
+      child_args: childArgs,
+    };
+  }
+  return {
+    command: 'node',
+    args: [
+      MCP_RUNTIME_PROXY_ENTRYPOINT,
+      '--surface-id',
+      surfaceId,
+      '--entrypoint',
+      childEntrypoint,
+      '--',
+      ...childArgs,
+    ],
+    uses_runtime_proxy: true,
+    runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    child_entrypoint: childEntrypoint,
+    child_args: childArgs,
+  };
+}
+
+type RuntimeDependencyCheck = {
+  dependency: string;
+  package_root: string;
+  export_path: string;
+  exists: boolean;
+};
+
+function sharedRuntimeDependencyChecks(surface: SurfaceDef): RuntimeDependencyCheck[] {
+  const packageRoot = `${MCP_SURFACES_ROOT}/${surface.package}`;
+  const packagePath = `${packageRoot}/package.json`;
+  if (!existsSync(packagePath)) return [];
+  let packageJson: JsonRecord;
+  try {
+    packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as JsonRecord;
+  } catch {
+    return [];
+  }
+  const dependencies = asRecord(packageJson.dependencies);
+  const checks: RuntimeDependencyCheck[] = [];
+  for (const dependency of Object.keys(dependencies).filter((name) => name.startsWith('@narada2/mcp-'))) {
+    const sharedName = dependency.replace('@narada2/', '');
+    const dependencyRoot = `${MCP_SURFACES_ROOT}/shared/${sharedName}`;
+    const dependencyPackagePath = `${dependencyRoot}/package.json`;
+    if (!existsSync(dependencyPackagePath)) {
+      checks.push({ dependency, package_root: dependencyRoot, export_path: dependencyPackagePath, exists: false });
+      continue;
+    }
+    let dependencyPackageJson: JsonRecord;
+    try {
+      dependencyPackageJson = JSON.parse(readFileSync(dependencyPackagePath, 'utf8')) as JsonRecord;
+    } catch {
+      checks.push({ dependency, package_root: dependencyRoot, export_path: dependencyPackagePath, exists: false });
+      continue;
+    }
+    for (const exportTarget of packageExportRuntimeTargets(dependencyPackageJson)) {
+      const exportPath = `${dependencyRoot}/${exportTarget.replace(/^\.\//, '')}`;
+      checks.push({ dependency, package_root: dependencyRoot, export_path: exportPath, exists: existsSync(exportPath) });
+    }
+  }
+  return checks;
+}
+
+function packageExportRuntimeTargets(packageJson: JsonRecord): string[] {
+  const exportsValue = packageJson.exports;
+  if (typeof exportsValue === 'string') return [exportsValue];
+  const exportsRecord = asRecord(exportsValue);
+  const targets: string[] = [];
+  for (const value of Object.values(exportsRecord)) {
+    if (typeof value === 'string') targets.push(value);
+    else {
+      const record = asRecord(value);
+      if (typeof record.default === 'string') targets.push(record.default);
+    }
+  }
+  return Array.from(new Set(targets));
+}
+
+function addRuntimePreflightFindings(
+  add: (severity: ValidationFinding['severity'], code: string, message: string, detail?: JsonRecord) => void,
+  includeOk: boolean,
+  detail: JsonRecord,
+  surface: SurfaceDef | null,
+  usesRuntimeProxy: boolean,
+): void {
+  if (usesRuntimeProxy) {
+    if (!existsSync(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
+      add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, {
+        ...detail,
+        runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+        remediation: 'Run pnpm --filter @narada2/mcp-runtime-proxy build before launching carrier MCPs.',
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_runtime_proxy_exists', `Runtime proxy exists: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, { ...detail, runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT });
+    }
+  }
+  if (!surface) return;
+  for (const check of sharedRuntimeDependencyChecks(surface)) {
+    if (!check.exists) {
+      add('error', 'registrar_runtime_dependency_missing', `Runtime dependency export for '${check.dependency}' does not exist: ${check.export_path}`, {
+        ...detail,
+        dependency: check.dependency,
+        package_root: check.package_root,
+        export_path: check.export_path,
+        remediation: `Run pnpm --filter ${check.dependency} build before launching carrier MCPs.`,
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_runtime_dependency_exists', `Runtime dependency export for '${check.dependency}' exists: ${check.export_path}`, {
+        ...detail,
+        dependency: check.dependency,
+        package_root: check.package_root,
+        export_path: check.export_path,
+      });
+    }
+  }
+}
+
 function emitOpencodeConfig(carrier: CarrierDef): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const mcp: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    if (overridden.kind === 'local') {
-      mcp[key] = {
-        type: 'local',
-        command: [overridden.command, overridden.entrypoint, ...overridden.args],
-        enabled: overridden.enabled ?? true,
-      };
-    } else {
-      mcp[key] = {
-        type: 'local',
-        command: ['node', overridden.entrypoint, ...overridden.args],
-        enabled: overridden.enabled ?? true,
-      };
-    }
+    const launch = carrierLaunchCommand(overridden, surfaceId);
+    mcp[key] = {
+      type: 'local',
+      command: [launch.command, ...launch.args],
+      enabled: overridden.enabled ?? true,
+    };
   }
   const structured = { $schema: 'https://opencode.ai/config.json', mcp };
   const header = '// Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.\n';
@@ -1197,10 +1326,11 @@ function emitKimiConfig(carrier: CarrierDef): { content: string; structured: Jso
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
+    const launch = carrierLaunchCommand(overridden, surfaceId);
     const base: JsonRecord = {
       transport: 'stdio',
-      command: overridden.kind === 'local' ? overridden.command : 'node',
-      args: overridden.kind === 'local' ? [overridden.entrypoint, ...overridden.args] : [overridden.entrypoint, ...overridden.args],
+      command: launch.command,
+      args: launch.args,
     };
     if (approval) base.approval_mode = approval;
     if (overridden.env_vars) base.env_vars = overridden.env_vars;
@@ -1226,10 +1356,10 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const args = overridden.kind === 'local' ? [overridden.entrypoint, ...overridden.args] : [overridden.entrypoint, ...overridden.args];
+    const launch = carrierLaunchCommand(overridden, surfaceId);
     lines.push(`[mcp_servers.${key}]`);
-    lines.push(`command = "${overridden.kind === 'local' ? overridden.command : 'node'}"`);
-    lines.push(`args = ${JSON.stringify(args)}`);
+    lines.push(`command = "${launch.command}"`);
+    lines.push(`args = ${JSON.stringify(launch.args)}`);
     if (carrier.surface_overrides?.[surfaceId]?.approval_mode) {
       lines.push(`approval_mode = "${carrier.surface_overrides[surfaceId].approval_mode}"`);
     }
@@ -1237,7 +1367,14 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
       lines.push(`env_vars = ${JSON.stringify(overridden.env_vars)}`);
     }
     lines.push('');
-    mcpServers[key] = { command: overridden.kind === 'local' ? overridden.command : 'node', args };
+    mcpServers[key] = {
+      command: launch.command,
+      args: launch.args,
+      uses_runtime_proxy: launch.uses_runtime_proxy,
+      runtime_proxy_entrypoint: launch.runtime_proxy_entrypoint,
+      child_entrypoint: launch.child_entrypoint,
+      child_args: launch.child_args,
+    };
   }
   const structured = { trust_projects: trustProjects, mcpServers };
   return { content: lines.join('\n') + '\n', structured };
@@ -1314,11 +1451,13 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const scopeDetail = scopeFindingDetail(server.narada_scope);
+    const launch = carrierLaunchCommand(overridden, surfaceId);
     if (!existsSync(overridden.entrypoint)) {
       add('error', 'registrar_missing_entrypoint', `Entrypoint for '${key}' does not exist: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     } else if (includeOk) {
       add('info', 'registrar_entrypoint_exists', `Entrypoint for '${key}' exists: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     }
+    addRuntimePreflightFindings(add, includeOk, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail }, server.kind === 'shared' ? server.surface as SurfaceDef : null, launch.uses_runtime_proxy);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -1545,9 +1684,18 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteId}-${surfaceId}-mcp.json`;
   const resolvedArgs = interpolateArgs(surface.args, siteId, site.root);
+  const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
   const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root);
   const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
+  const launch = carrierLaunchCommand({
+    kind: 'shared',
+    entrypoint: resolvedEntrypoint,
+    args: resolvedArgs,
+    surface,
+    ...scopeMetadata,
+    narada_scope: naradaScope,
+  }, surfaceId);
 
   return {
     fileName,
@@ -1559,8 +1707,8 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
       mcpServers: {
         [serverKey]: {
           transport: 'stdio',
-          command: 'node',
-          args: [surface.entrypoint, ...resolvedArgs],
+          command: launch.command,
+          args: launch.args,
           tools: surface.tools,
           env_vars: uniqueStrings(['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT', ...(surface.env_vars ?? [])]),
           surface_id: surfaceId,
@@ -1676,10 +1824,28 @@ type SiteMcpFabricServer = {
   command: string;
   args: string[];
   entrypoint: string;
+  launch_entrypoint: string;
+  uses_runtime_proxy: boolean;
   surface_id?: string;
   narada_scope: NaradaScopeMetadata;
   source_file: string;
 };
+
+function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string } {
+  const launchEntrypoint = entrypoint;
+  if (portablePath(entrypoint) !== portablePath(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
+    return { entrypoint, args, usesRuntimeProxy: false, launchEntrypoint };
+  }
+  const entrypointIndex = args.indexOf('--entrypoint');
+  const separatorIndex = args.indexOf('--');
+  const childEntrypoint = entrypointIndex >= 0 ? args[entrypointIndex + 1] : '';
+  const childArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
+  return { entrypoint: childEntrypoint, args: childArgs, usesRuntimeProxy: true, launchEntrypoint };
+}
+
+function portablePath(path: string): string {
+  return resolve(path).replace(/\\/g, '/');
+}
 
 function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
   const configDir = join(site.root, '.ai', 'mcp');
@@ -1731,11 +1897,14 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
       // Resolve {site_root} placeholders
       entrypoint = entrypoint.replace(/\{site_root\}/g, site.root);
       const resolvedArgs = args.map((a) => a.replace(/\{site_root\}/g, site.root));
+      const unwrapped = unwrapRuntimeProxyLaunch(entrypoint, resolvedArgs);
       servers.push({
         server_key: serverKey,
         command: Array.isArray(command) ? String(command[0] ?? 'node') : String(command),
-        args: resolvedArgs,
-        entrypoint,
+        args: unwrapped.args,
+        entrypoint: unwrapped.entrypoint,
+        launch_entrypoint: unwrapped.launchEntrypoint,
+        uses_runtime_proxy: unwrapped.usesRuntimeProxy,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
         narada_scope: readNaradaScope(server, surfaceId, site.root, site.site_id),
         source_file: file,
@@ -1795,6 +1964,14 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     } else if (includeOk) {
       add('info', 'registrar_site_fabric_entrypoint_exists', `Entrypoint for '${server.server_key}' exists: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail });
     }
+    addRuntimePreflightFindings(add, includeOk, {
+      site_id: siteId,
+      server_key: server.server_key,
+      entrypoint: resolvedEntrypoint,
+      source_file: server.source_file,
+      surface_id: surfaceId,
+      ...scopeDetail,
+    }, SURFACES.find((surface) => surface.id === surfaceId) ?? null, server.uses_runtime_proxy);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -1944,9 +2121,11 @@ function opencodeBind(configPath: string, surfaceId: string, entrypoint: string,
   const mcp = asRecord(cfg.mcp);
   const serverKey = `narada-sonar-${surfaceId}`;
   if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
+  const surface = lookupSurface(surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-sonar'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-sonar') }, surfaceId);
   mcp[serverKey] = {
     type: 'local',
-    command: ['node', entrypoint, ...resolvedArgs],
+    command: [launch.command, ...launch.args],
     enabled: true,
   };
   writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
@@ -1972,10 +2151,12 @@ function kimiBind(configPath: string, surfaceId: string, entrypoint: string, res
   const mcp = asRecord(cfg.mcpServers);
   const serverKey = `narada-andrey-${surfaceId}`;
   if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
+  const surface = lookupSurface(surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey') }, surfaceId);
   mcp[serverKey] = {
     transport: 'stdio',
-    command: 'node',
-    args: [entrypoint, ...resolvedArgs],
+    command: launch.command,
+    args: launch.args,
   };
   writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
   return { status: 'bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
@@ -1998,7 +2179,9 @@ function codexBind(configPath: string, surfaceId: string, entrypoint: string, re
   let content = readFileSync(configPath, 'utf8');
   const sectionKey = `[mcp_servers.${surfaceId}]`;
   if (content.includes(sectionKey)) return { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
-  content += `\n${sectionKey}\ncommand = "node"\nargs = ${JSON.stringify([entrypoint, ...resolvedArgs])}\n`;
+  const surface = lookupSurface(surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey') }, surfaceId);
+  content += `\n${sectionKey}\ncommand = "${launch.command}"\nargs = ${JSON.stringify(launch.args)}\n`;
   writeFileSync(configPath, content, 'utf8');
   return { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
 }
