@@ -1,6 +1,6 @@
 # @narada2/site-loop-mcp
 
-Config-governed site-ops MCP runtime and site loop tools.
+Config-governed Site Loop MCP runtime and site operating-loop tools.
 
 Site Loop behavior is generic. Site-specific identity, resident target, refs, command strings, policy defaults, docs, and approved test selectors belong in config, not hardcoded adapter code.
 
@@ -43,7 +43,7 @@ Minimal valid config:
 
 ## Boundary
 
-- Allowed: inspect configured site-ops readiness and allowlisted docs/tests.
+- Allowed: inspect configured Site Loop readiness and allowlisted docs/tests.
 - Allowed: run approved local test selectors.
 - Allowed: inspect and control the configured Site Operating Loop.
 - Allowed: run one bounded site-loop pass.
@@ -53,15 +53,20 @@ Minimal valid config:
 
 ## Tools
 
-General site ops:
+General Site Loop:
 
-- `site_ops_guidance`
-- `site_ops_doctor`
+- `site_loop_guidance`
+- `site_loop_doctor`
 - `site_loop_config_validate`
 - `site_docs_list`
 - `site_docs_show`
 - `site_test_list`
 - `site_test_run`
+
+Compatibility aliases retained for existing callers:
+
+- `site_ops_guidance`
+- `site_ops_doctor`
 
 Configured site loop:
 
@@ -108,7 +113,10 @@ site-loop-mcp --site-root D:/code/site
 
 ## Agent Guidance
 
-Agents should use the docs and test selector tools instead of shelling out. Loop control mutations should include a reason and principal. Use `site_loop_run_once` for bounded operation, not as a general-purpose automation shell. When behavior looks site-specific, inspect `site_ops_doctor.site_loop_config` and the site config file before assuming the package owns that behavior.
+Agents should use the docs and test selector tools instead of shelling out. Loop control mutations should include a reason and principal. Use `site_loop_run_once` for bounded operation, not as a general-purpose automation shell. When behavior looks site-specific, inspect `site_loop_doctor.site_loop_config` and the site config file before assuming the package owns that behavior.
+
+See `docs/site-loop-doctrine.md` at the repository root for the doctrine and
+surface-boundary contract.
 
 ## Verification
 

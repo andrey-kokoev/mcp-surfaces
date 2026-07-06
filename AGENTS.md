@@ -38,6 +38,8 @@ Current packages:
 - `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
 - `@narada2/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
 
+Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
+
 ## MCP Guidance Commands
 
 Most MCP surface packages should expose a read-only `_guidance` command using the surface's normal tool prefix, for example `task_lifecycle_guidance`, `git_guidance`, `fs_guidance`, or `graph_mail_guidance`.

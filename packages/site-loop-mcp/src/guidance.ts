@@ -2,7 +2,7 @@ export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & { name: string; description: string; inputSchema: GuidanceRecord; annotations: GuidanceRecord; outputSchema: GuidanceRecord };
 
 const SURFACE_ID = "site-loop";
-const GUIDANCE_TOOL = "site_ops_guidance";
+const GUIDANCE_TOOL = "site_loop_guidance";
 const PURPOSE = "Configured site-loop operations inspection and governed workflows.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
@@ -29,9 +29,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
     examples: [
-      { intent: 'First use', call: 'site_ops_guidance({})' },
-      { intent: 'Tool-specific help', call: "site_ops_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "site_ops_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'First use', call: 'site_loop_guidance({})' },
+      { intent: 'Tool-specific help', call: "site_loop_guidance({ tool: \"<tool_name>\" })" },
+      { intent: 'Workflow-specific help', call: "site_loop_guidance({ workflow: \"<workflow_name>\" })" }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',

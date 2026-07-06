@@ -6,12 +6,18 @@ import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SI
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 import { listSiteLoopRuns, siteLoopStatus } from '../src/site-loop/site-loop.js';
+import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-'));
 const packageRoot = new URL('..', import.meta.url);
 const publishedSchema = JSON.parse(readFileSync(new URL('../schemas/site-loop-config.schema.json', packageRoot), 'utf8'));
 
 assert.deepEqual(publishedSchema, siteLoopConfigJsonSchema());
+
+const boundaries = siteLoopDependencyBoundaries();
+assert.equal(boundaries.some((item) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
+assert.equal(boundaries.some((item) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
+assert.equal(boundaries.some((item) => item.surface === 'site-ops naming' && item.kind === 'compatibility'), true);
 
 function writeSiteLoopConfig(root, config) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });

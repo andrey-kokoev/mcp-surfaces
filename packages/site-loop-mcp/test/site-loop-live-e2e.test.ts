@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-mcp-live-e2e-'));
-const serverPath = fileURLToPath(new URL('../src/site-ops-mcp-server.js', import.meta.url));
+const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));
 
 mkdirSync(join(siteRoot, '.narada', 'capabilities'), { recursive: true });
 mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
@@ -106,6 +106,7 @@ try {
   const tools = await waitFor(2);
   assert.equal(tools.error, undefined);
   const names = tools.result.tools.map((tool) => tool.name);
+  assert.equal(names.includes('site_loop_doctor'), true);
   assert.equal(names.includes('site_ops_doctor'), true);
   assert.equal(names.includes('site_docs_list'), true);
   assert.equal(names.includes('site_docs_show'), true);
@@ -119,7 +120,7 @@ try {
   assert.equal(configValidation.loop_id, 'live.e2e.loop');
   assert.equal(configValidation.site_id, 'narada-live-e2e');
 
-  const doctor = contentText('site_ops_doctor', await callTool(4, 'site_ops_doctor'));
+  const doctor = contentText('site_loop_doctor', await callTool(4, 'site_loop_doctor'));
   assert.equal(doctor.status, 'ok');
   assert.equal(doctor.site_loop_config.status, 'ok');
   assert.equal(doctor.site_loop_config.loop_id, 'live.e2e.loop');
