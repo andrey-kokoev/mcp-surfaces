@@ -193,11 +193,11 @@ const SURFACES: SurfaceDef[] = [
     tools: TASK_LIFECYCLE_TOOLS,
   },
   {
-    id: 'site-ops', package: 'site-ops-mcp',
-    entrypoint: '{site_root}/tools/site-ops/site-ops-mcp-server.mjs',
-    kind: 'site_tool',
+    id: 'site-loop', package: 'site-loop-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`,
+    kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['site_ops_doctor', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
+    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
   },
   {
     id: 'site-lifecycle', package: 'site-lifecycle-mcp',
@@ -374,7 +374,7 @@ const CARRIERS: CarrierDef[] = [
         'agent-context',
         'task-lifecycle',
         'site-inbox',
-        'site-ops',
+        'site-loop',
         'mailbox',
         'graph-mail',
         'git',
@@ -2018,7 +2018,7 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     }
 
     // Site-root requirement for site-aware surfaces
-    if (['agent-context', 'task-lifecycle', 'site-inbox', 'site-ops', 'mailbox', 'graph-mail', 'surface-feedback', 'delegated-task'].includes(surfaceId)) {
+    if (['agent-context', 'task-lifecycle', 'site-inbox', 'site-loop', 'mailbox', 'graph-mail', 'surface-feedback', 'delegated-task'].includes(surfaceId)) {
       const hasSiteRoot = server.args.some((a) => a === '--site-root');
       if (!hasSiteRoot) {
         add('warning', 'registrar_site_fabric_missing_site_root', `Surface '${surfaceId}' on '${server.server_key}' is missing --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });

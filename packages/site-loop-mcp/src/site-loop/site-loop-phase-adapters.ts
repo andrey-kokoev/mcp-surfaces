@@ -79,6 +79,31 @@ function dispatchRunner(context, deps: SiteLoopPhaseDeps) {
     : deps.dispatchPendingDirectives;
 }
 
+function testAuthorityMode(context): boolean {
+  return context.options.testAuthority === true || context.options.test_authority === true;
+}
+
+function fixtureResident(context): SiteLoopPayload {
+  return {
+    status: 'fixture',
+    authority_mode: 'test',
+    agent_id: context.state.residentAgentId,
+    carrier: { status: 'fixture', preference: 'fixture' },
+  };
+}
+
+function fixtureDirectiveDispatch(context): SiteLoopPayload {
+  return {
+    schema: schemaName(context.siteLoopConfig, 'directive_dispatch'),
+    status: 'ok',
+    authority_mode: 'test',
+    dispatched: [],
+    skipped: [],
+    receipt_reconciliation: { status: 'skipped', reason: 'test_authority_fixture' },
+    lease_recovery: { status: 'skipped', reason: 'test_authority_fixture' },
+  };
+}
+
 export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPhaseAdapter<SiteLoopPhaseState>[] {
   return [
     {
@@ -166,9 +191,12 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       inputRefs: (context) => bridgeDirectiveIds(context, deps).map((ref) => ({ kind: 'directive', ref })),
       execute: (context) => {
         const directiveIds = bridgeDirectiveIds(context, deps);
-        const resident = context.dryRun ? { status: 'skipped', reason: 'dry_run' } : deps.getResidentStatus(context.siteRoot);
+        const resident = context.dryRun
+          ? { status: 'skipped', reason: 'dry_run' }
+          : testAuthorityMode(context) ? fixtureResident(context) : deps.getResidentStatus(context.siteRoot);
         const outcome = context.dryRun
           ? skippedOutcome(context, 'dry_run')
+          : testAuthorityMode(context) ? skippedOutcome(context, 'test_authority_fixture')
           : deps.runAgentOutcomeReconciliation(context.siteRoot, {
               nowIso: context.options.nowIso,
               actionStaleMinutes: context.options.actionStaleMinutes,
@@ -262,6 +290,11 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
             ...deps.residentBacklogRecoveryDirectiveRefs(context.state.backlogRecovery),
           ],
       execute: async (context) => {
+        if (testAuthorityMode(context)) {
+          const result = fixtureDirectiveDispatch(context);
+          context.state.dispatch = result;
+          return result;
+        }
         const runner = dispatchRunner(context, deps);
         const result = await runner({
           cwd: context.siteRoot,
@@ -293,9 +326,12 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       inputRefs: (context) => bridgeDirectiveIds(context, deps).map((ref) => ({ kind: 'directive', ref })),
       execute: (context) => {
         const directiveIds = bridgeDirectiveIds(context, deps);
-        const resident = context.dryRun ? { status: 'skipped', reason: 'dry_run' } : deps.getResidentStatus(context.siteRoot);
+        const resident = context.dryRun
+          ? { status: 'skipped', reason: 'dry_run' }
+          : testAuthorityMode(context) ? fixtureResident(context) : deps.getResidentStatus(context.siteRoot);
         const outcome = context.dryRun
           ? skippedOutcome(context, 'dry_run')
+          : testAuthorityMode(context) ? skippedOutcome(context, 'test_authority_fixture')
           : deps.runAgentOutcomeReconciliation(context.siteRoot, {
               nowIso: context.options.nowIso,
               actionStaleMinutes: context.options.actionStaleMinutes,
@@ -328,7 +364,9 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       id: 'operating_alert_reconciliation',
       synthetic: true,
       inputRefs: () => [],
-      execute: (context) => context.store && !context.dryRun
+      execute: (context) => testAuthorityMode(context)
+        ? { status: 'skipped', reason: 'test_authority_fixture', created: [] }
+        : context.store && !context.dryRun
         ? deps.persistOperatingLayerAlerts(context.siteRoot, context.store, {
             runId: context.runId,
             nowIso: context.options.nowIso,

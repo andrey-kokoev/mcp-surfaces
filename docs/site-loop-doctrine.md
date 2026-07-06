@@ -62,6 +62,83 @@ When a new site needs different behavior, first express it in
 primitive or delegate to an existing MCP/tool command. Add site-specific adapter
 code only when the behavior is genuinely local to that site.
 
+## Test Authority Target Shape
+
+Full Site Loop e2e tests should not rely on `dry_run` as their main safety
+mechanism. Dry-run proves transport and planning, but it intentionally skips
+important mutating phases. A full e2e needs the loop to execute mutating phases
+against non-production authority.
+
+The target primitive is a site-declared `test_authority` binding. When enabled
+for a run, every external authority edge must be rebound from production state
+to declared test state, or the run must refuse before mutation.
+
+The external authority edges are:
+
+- source sync command execution
+- inbox projection and bridge input
+- task lifecycle DB and task projection files
+- Site Loop run store
+- resident status, carrier/session state, and outcome evidence
+- resident launch/supervisor behavior
+- directive dispatch
+- operator attention and escalation output
+- scheduler or platform recovery evidence
+- configured direct-spawn commands
+
+Target config shape:
+
+```json
+{
+  "test_authority": {
+    "enabled": true,
+    "state_root": ".ai/test-authority/site-loop",
+    "allow_live_mailbox": false,
+    "allow_live_resident": false,
+    "allow_live_scheduler": false,
+    "allow_configured_commands": false,
+    "task_lifecycle_db": ".ai/test-authority/site-loop/.ai/task-lifecycle.db",
+    "task_projection_root": ".ai/test-authority/site-loop/.ai/tasks",
+    "inbox_projection": ".ai/test-authority/site-loop/.ai/inbox-envelopes",
+    "site_loop_store": ".ai/test-authority/site-loop/.ai/task-lifecycle.db",
+    "resident_adapter": "fixture",
+    "dispatch_adapter": "fixture",
+    "operator_attention_root": ".ai/test-authority/site-loop/operator-attention"
+  }
+}
+```
+
+Target run shape:
+
+```json
+{
+  "dry_run": false,
+  "test_authority": true,
+  "limit": 1,
+  "source_sync": false,
+  "ensureResident": false,
+  "requireLiveCarrier": false
+}
+```
+
+Required behavior:
+
+- `test_authority` runs are opt-in per call and allowed only when declared by
+  site config.
+- Relative paths resolve under `test_authority.state_root`; absolute paths must
+  be rejected unless explicitly allowlisted by the test-authority policy.
+- Live mailbox, live resident, live scheduler, production task DB, production
+  operator attention, and configured command execution are refused unless the
+  matching `allow_live_*` or command allowance is explicit.
+- The result packet must include `authority_mode: "test"`, the resolved
+  authority roots, and a refusal reason for any edge that could not be rebound.
+- Production readiness/coherence tools must not treat test-authority evidence as
+  production proof.
+
+The intended e2e is a non-dry `site_loop_run_once` that mutates only the
+declared test authority roots, verifies run records and expected fixture
+processing, and proves no production state changed.
+
 ## Naming
 
 New callers should use `site_loop_*` names. The older `site_ops_*` tool and

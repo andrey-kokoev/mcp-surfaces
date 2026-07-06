@@ -96,9 +96,12 @@ const TOOLS = [
   }, ['reason']),
   tool('site_loop_run_once', 'Run one bounded configured site loop pass.', {
     dry_run: { type: 'boolean', description: 'Plan/read without mutation.' },
+    test_authority: { type: 'boolean', description: 'Run non-dry work against the configured test authority root instead of production state.' },
     limit: { type: 'number', description: 'Processing limit.' },
     drain: { type: 'boolean', description: 'Drain eligible intake when supported.' },
     source_sync: { type: 'boolean', description: 'Request source sync before loop processing.' },
+    ensureResident: { type: 'boolean', description: 'Ensure the configured resident carrier before dispatch when allowed.' },
+    requireLiveCarrier: { type: 'boolean', description: 'Require a live resident carrier for dispatch. Set false for fixture/test-authority runs.' },
   }),
 ].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
 
@@ -599,6 +602,13 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
     dryRun: args.dry_run === true || args.dryRun === true,
     drain: args.drain === true,
     sourceSync: args.source_sync === true || args.sourceSync === true,
+    testAuthority: args.test_authority === true || args.testAuthority === true,
+    ensureResident: args.ensure_resident === true || args.ensureResident === true,
+    requireLiveCarrier: typeof args.require_live_carrier === 'boolean'
+      ? args.require_live_carrier
+      : typeof args.requireLiveCarrier === 'boolean'
+        ? args.requireLiveCarrier
+        : undefined,
     requireProduction: args.require_production === true || args.requireProduction === true,
     requireMailboxChain: args.require_mailbox_chain === true || args.requireMailboxChain === true,
   };

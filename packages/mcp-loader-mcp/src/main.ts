@@ -507,7 +507,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'graph-mail': { entrypoint: `${MCP_SURFACES_ROOT}/graph-mail-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'calendar': { entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'task-lifecycle': { entrypoint: '{site_root}/tools/task-lifecycle/task-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
-  'site-ops': { entrypoint: '{site_root}/tools/site-ops/site-ops-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
+  'site-loop': { entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`, args: ['--site-root', '{site_root}'] },
   'agent-context': { entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'worker-delegation': { entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--run-root', '{site_root}/.narada/runtime/worker-delegation'] },
   'delegated-task': { entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`, args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'] },

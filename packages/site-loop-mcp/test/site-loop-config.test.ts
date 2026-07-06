@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
@@ -71,6 +71,58 @@ assert.deepEqual(phasePlanRun.steps.map((step) => step.step_id), [
   'stale_escalation_reconciliation',
   'operating_alert_reconciliation',
 ]);
+
+const testAuthorityRoot = mkdtempSync(join(tmpdir(), 'site-loop-test-authority-'));
+writeSiteLoopConfig(testAuthorityRoot, {
+  schema: SITE_LOOP_CONFIG_SCHEMA,
+  loop_id: 'test.authority.loop',
+  site_id: 'narada-test-authority',
+  display_name: 'Test authority loop',
+  resident: { agent_id: 'test.authority.resident', role: 'resident' },
+  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'test-authority' } },
+  test_authority: {
+    enabled: true,
+    state_root: '.ai/test-authority/site-loop',
+    allow_live_mailbox: false,
+    allow_live_resident: false,
+    allow_live_scheduler: false,
+    allow_configured_commands: false,
+    task_lifecycle_db: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    task_projection_root: '.ai/test-authority/site-loop/.ai/tasks',
+    inbox_projection: '.ai/test-authority/site-loop/.ai/inbox-envelopes',
+    site_loop_store: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    resident_adapter: 'fixture',
+    dispatch_adapter: 'fixture',
+    operator_attention_root: '.ai/test-authority/site-loop/.ai/operator-attention',
+  },
+});
+const testAuthorityRun = await runSiteLoop(testAuthorityRoot, {
+  test_authority: true,
+  dry_run: false,
+  source_sync: false,
+  ensureResident: false,
+  requireLiveCarrier: false,
+  limit: 1,
+  runId: 'test-authority-runtime-test',
+});
+assert.equal(testAuthorityRun.status, 'ok');
+assert.equal(testAuthorityRun.dry_run, false);
+assert.equal(testAuthorityRun.authority_mode, 'test');
+assert.equal(testAuthorityRun.test_authority.production_site_root, testAuthorityRoot);
+assert.match(testAuthorityRun.test_authority.execution_site_root, /site-loop-test-authority-/);
+assert.equal(existsSync(join(testAuthorityRoot, '.ai', 'task-lifecycle.db')), false);
+assert.equal(existsSync(join(testAuthorityRoot, '.ai', 'test-authority', 'site-loop', '.ai', 'task-lifecycle.db')), true);
+const testAuthorityRefusal = await runSiteLoop(testAuthorityRoot, {
+  test_authority: true,
+  dry_run: false,
+  source_sync: true,
+  requireLiveCarrier: false,
+  runId: 'test-authority-refusal-test',
+});
+assert.equal(testAuthorityRefusal.status, 'refused');
+assert.equal(testAuthorityRefusal.authority_mode, 'test');
+assert.equal(testAuthorityRefusal.test_authority.reason, 'test_authority_binding_refused');
+assert.equal(testAuthorityRefusal.test_authority.refused_edges.includes('test_authority_configured_commands_not_allowed'), true);
 
 const defaultLoad = loadSiteLoopConfig(siteRoot);
 assert.equal(defaultLoad.status, 'missing');

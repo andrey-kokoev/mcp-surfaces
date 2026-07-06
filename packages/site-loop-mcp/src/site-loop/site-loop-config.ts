@@ -92,6 +92,21 @@ export type SiteLoopConfig = {
     status_schema: string;
     freshness_ms: number;
   };
+  test_authority: {
+    enabled: boolean;
+    state_root: string;
+    allow_live_mailbox: boolean;
+    allow_live_resident: boolean;
+    allow_live_scheduler: boolean;
+    allow_configured_commands: boolean;
+    task_lifecycle_db: string;
+    task_projection_root: string;
+    inbox_projection: string;
+    site_loop_store: string;
+    resident_adapter: 'fixture';
+    dispatch_adapter: 'fixture';
+    operator_attention_root: string;
+  };
   docs: { path: string; description: string }[];
   tests: Record<string, { command: string; args: string[] }>;
   notes: string[];
@@ -302,6 +317,21 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     status_schema: 'narada.site_loop.resident_mailbox_proof_status.v1',
     freshness_ms: 24 * 60 * 60_000,
   },
+  test_authority: {
+    enabled: false,
+    state_root: '.ai/test-authority/site-loop',
+    allow_live_mailbox: false,
+    allow_live_resident: false,
+    allow_live_scheduler: false,
+    allow_configured_commands: false,
+    task_lifecycle_db: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    task_projection_root: '.ai/test-authority/site-loop/.ai/tasks',
+    inbox_projection: '.ai/test-authority/site-loop/.ai/inbox-envelopes',
+    site_loop_store: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    resident_adapter: 'fixture',
+    dispatch_adapter: 'fixture',
+    operator_attention_root: '.ai/test-authority/site-loop/operator-attention',
+  },
   docs: [
     { path: 'AGENTS.md', description: 'Site-local agent instructions.' },
     { path: '.narada/site.json', description: 'Site identity and authority locus.' },
@@ -420,10 +450,26 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   requireNonEmptyString(errors, config.mailbox_proof?.schema, 'mailbox_proof.schema');
   requireNonEmptyString(errors, config.mailbox_proof?.status_schema, 'mailbox_proof.status_schema');
   if (!Number.isFinite(config.mailbox_proof?.freshness_ms) || config.mailbox_proof.freshness_ms <= 0) errors.push('mailbox_proof.freshness_ms_positive_number_required');
+  validateTestAuthority(errors, config.test_authority);
   validateDocs(errors, config.docs);
   validateTests(errors, config.tests);
   requireStringArray(errors, config.notes, 'notes');
   return errors;
+}
+
+function validateTestAuthority(errors: string[], testAuthority: SiteLoopConfig['test_authority']) {
+  if (!testAuthority || typeof testAuthority !== 'object') {
+    errors.push('test_authority_object_required');
+    return;
+  }
+  for (const key of ['enabled', 'allow_live_mailbox', 'allow_live_resident', 'allow_live_scheduler', 'allow_configured_commands'] as const) {
+    if (typeof testAuthority[key] !== 'boolean') errors.push(`test_authority.${key}_boolean_required`);
+  }
+  for (const key of ['state_root', 'task_lifecycle_db', 'task_projection_root', 'inbox_projection', 'site_loop_store', 'operator_attention_root'] as const) {
+    requireSafeRelativePath(errors, testAuthority[key], `test_authority.${key}`);
+  }
+  if (testAuthority.resident_adapter !== 'fixture') errors.push('test_authority.resident_adapter_fixture_required');
+  if (testAuthority.dispatch_adapter !== 'fixture') errors.push('test_authority.dispatch_adapter_fixture_required');
 }
 
 function validateResidentLaunch(errors: string[], launch: SiteLoopConfig['resident_launch']) {

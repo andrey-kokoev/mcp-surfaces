@@ -115,8 +115,9 @@ site-loop-mcp --site-root D:/code/site
 
 Agents should use the docs and test selector tools instead of shelling out. Loop control mutations should include a reason and principal. Use `site_loop_run_once` for bounded operation, not as a general-purpose automation shell. When behavior looks site-specific, inspect `site_loop_doctor.site_loop_config` and the site config file before assuming the package owns that behavior.
 
-See `docs/site-loop-doctrine.md` at the repository root for the doctrine and
-surface-boundary contract.
+See `docs/site-loop-doctrine.md` at the repository root for the doctrine,
+surface-boundary contract, and target `test_authority` shape for full non-dry
+e2e tests.
 
 ## Verification
 

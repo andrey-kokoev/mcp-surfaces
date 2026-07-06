@@ -193,20 +193,93 @@ const ALL_SITE_LOOP_PHASE_ADAPTERS = createSiteLoopPhaseAdapters({
 });
 const SITE_LOOP_PHASE_ADAPTERS = selectPhaseAdapters(ALL_SITE_LOOP_PHASE_ADAPTERS, SITE_LOOP_ADAPTER_PHASE_PLAN);
 
+function testAuthorityRequested(options: SiteLoopPayload = {}) {
+  return options.testAuthority === true || options.test_authority === true;
+}
+
+function prepareTestAuthorityBinding(productionSiteRoot: string, siteLoopConfig: SiteLoopConfig, options: SiteLoopPayload = {}) {
+  if (!testAuthorityRequested(options)) return { binding: null, refusal: null };
+  const config = siteLoopConfig.test_authority;
+  const refused: string[] = [];
+  if (config.enabled !== true) refused.push('test_authority_not_enabled_in_site_config');
+  if ((options.sourceSync === true || options.source_sync === true) && config.allow_configured_commands !== true) {
+    refused.push('test_authority_configured_commands_not_allowed');
+  }
+  if ((options.ensureResident === true || options.ensure_resident === true) && config.allow_live_resident !== true) {
+    refused.push('test_authority_live_resident_launch_not_allowed');
+  }
+  if (options.requireLiveCarrier !== false && options.require_live_carrier !== false && config.allow_live_resident !== true) {
+    refused.push('test_authority_live_resident_required_not_allowed');
+  }
+  if (refused.length > 0) {
+    return {
+      binding: null,
+      refusal: {
+        status: 'refused',
+        reason: 'test_authority_binding_refused',
+        refused_edges: refused,
+      },
+    };
+  }
+  const executionSiteRoot = resolve(productionSiteRoot, config.state_root);
+  const configDir = join(executionSiteRoot, '.narada', 'capabilities');
+  mkdirSync(configDir, { recursive: true });
+  mkdirSync(join(executionSiteRoot, '.ai'), { recursive: true });
+  writeFileSync(join(configDir, 'site-loop-config.json'), JSON.stringify(siteLoopConfig, null, 2), 'utf8');
+  return {
+    binding: {
+      authority_mode: 'test',
+      production_site_root: productionSiteRoot,
+      execution_site_root: executionSiteRoot,
+      state_root: executionSiteRoot,
+      allow_live_mailbox: config.allow_live_mailbox,
+      allow_live_resident: config.allow_live_resident,
+      allow_live_scheduler: config.allow_live_scheduler,
+      allow_configured_commands: config.allow_configured_commands,
+      task_lifecycle_db: resolve(productionSiteRoot, config.task_lifecycle_db),
+      task_projection_root: resolve(productionSiteRoot, config.task_projection_root),
+      inbox_projection: resolve(productionSiteRoot, config.inbox_projection),
+      site_loop_store: resolve(productionSiteRoot, config.site_loop_store),
+      resident_adapter: config.resident_adapter,
+      dispatch_adapter: config.dispatch_adapter,
+      operator_attention_root: resolve(productionSiteRoot, config.operator_attention_root),
+    },
+    refusal: null,
+  };
+}
+
 export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
-  const siteRoot = resolve(cwd);
-  const siteLoopConfig = configForSite(siteRoot);
+  const productionSiteRoot = resolve(cwd);
+  const productionSiteLoopConfig = configForSite(productionSiteRoot);
+  const testAuthorityDecision = prepareTestAuthorityBinding(productionSiteRoot, productionSiteLoopConfig, options);
+  const dryRun = options.dryRun === true || options.dry_run === true;
+  const runId = typeof options.runId === 'string' ? options.runId : makeRunId();
+  const startedAt = new Date().toISOString();
+  if (testAuthorityDecision.refusal) {
+    return {
+      schema: schemaName(productionSiteLoopConfig, 'site_loop_run'),
+      status: 'refused',
+      loop_id: productionSiteLoopConfig.loop_id,
+      run_id: runId,
+      dry_run: dryRun,
+      authority_mode: 'test',
+      test_authority: testAuthorityDecision.refusal,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      steps: [],
+    };
+  }
+  const testAuthority = testAuthorityDecision.binding;
+  const siteRoot = testAuthority?.execution_site_root ?? productionSiteRoot;
+  const siteLoopConfig = testAuthority ? configForSite(siteRoot) : productionSiteLoopConfig;
   const loopId = siteLoopConfig.loop_id;
   const residentAgentId = siteLoopConfig.resident.agent_id;
   const residentRole = siteLoopConfig.resident.role;
   const ticketProjectionRef = siteLoopConfig.refs.ticket_projection;
-  const dryRun = options.dryRun === true || options.dry_run === true;
   const limit = Number(options.limit ?? 25);
   const threshold = options.threshold == null ? undefined : Number(options.threshold);
   const sourceSyncRequested = options.sourceSync === true || options.source_sync === true;
   const drain = options.drain === true;
-  const runId = typeof options.runId === 'string' ? options.runId : makeRunId();
-  const startedAt = new Date().toISOString();
   const operatingPolicy = loadSiteLoopOperatingPolicy(siteRoot).policy;
   const steps: ResidentLoopStep[] = [];
   let failedStep: ResidentLoopStep | null = null;
@@ -231,6 +304,8 @@ export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
           loop_id: loopId,
           run_id: runId,
           dry_run: false,
+          authority_mode: testAuthority ? 'test' : 'production',
+          test_authority: testAuthority,
           started_at: startedAt,
           finished_at: new Date().toISOString(),
           lock,
@@ -263,6 +338,8 @@ export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
         loop_id: loopId,
         run_id: runId,
         dry_run: dryRun,
+        authority_mode: testAuthority ? 'test' : 'production',
+        test_authority: testAuthority,
         started_at: startedAt,
         finished_at: finishedAt,
         control,
@@ -327,6 +404,8 @@ export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
       loop_id: loopId,
       run_id: runId,
       dry_run: dryRun,
+      authority_mode: testAuthority ? 'test' : 'production',
+      test_authority: testAuthority,
       started_at: startedAt,
       finished_at: finishedAt,
       lock,
@@ -359,6 +438,8 @@ export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
       loop_id: loopId,
       run_id: runId,
       dry_run: dryRun,
+      authority_mode: testAuthority ? 'test' : 'production',
+      test_authority: testAuthority,
       started_at: startedAt,
       finished_at: finishedAt,
       error: errorPayload,
