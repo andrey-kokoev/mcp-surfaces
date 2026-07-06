@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
-import { listSiteLoopRuns, siteLoopStatus } from '../src/site-loop/site-loop.js';
+import { DEFAULT_SITE_LOOP_PHASE_PLAN, SITE_LOOP_ADAPTER_PHASE_PLAN, listSiteLoopRuns, runSiteLoop, siteLoopStatus } from '../src/site-loop/site-loop.js';
 import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-'));
@@ -18,11 +18,59 @@ const boundaries = siteLoopDependencyBoundaries();
 assert.equal(boundaries.some((item) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
 assert.equal(boundaries.some((item) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
 assert.equal(boundaries.some((item) => item.surface === 'site-ops naming' && item.kind === 'compatibility'), true);
+assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
+  'source_sync',
+  'inbox_bridge',
+  'task_materialization',
+  'resident_directive_emission',
+  'ticket_task_reconciliation',
+  'pre_backlog_outcome_reconciliation',
+  'reported_resident_task_state_reconciliation',
+  'resident_backlog_recovery_emission',
+  'resident_supervisor',
+  'resident_directive_dispatch',
+  'receipt_reconciliation',
+  'agent_outcome_reconciliation',
+  'stale_escalation_reconciliation',
+  'operating_alert_reconciliation',
+]);
+assert.deepEqual([...SITE_LOOP_ADAPTER_PHASE_PLAN], [...DEFAULT_SITE_LOOP_PHASE_PLAN]);
 
 function writeSiteLoopConfig(root, config) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify(config, null, 2), 'utf8');
 }
+
+const phasePlanRoot = mkdtempSync(join(tmpdir(), 'site-loop-phase-plan-'));
+writeSiteLoopConfig(phasePlanRoot, {
+  schema: SITE_LOOP_CONFIG_SCHEMA,
+  loop_id: 'phase.plan.loop',
+  site_id: 'narada-phase-plan',
+  display_name: 'Phase plan loop',
+  resident: { agent_id: 'phase.plan.resident', role: 'resident' },
+  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'phase-plan' } },
+});
+const phasePlanRun = await runSiteLoop(phasePlanRoot, {
+  dryRun: true,
+  sourceSync: true,
+  runId: 'phase-plan-runtime-test',
+  sourceSyncRunner: () => ({ status: 'ok', schema: 'narada.site_loop.source_sync.v1', cursor_path: '.ai/state/source.cursor' }),
+});
+assert.deepEqual(phasePlanRun.steps.map((step) => step.step_id), [
+  'source_sync',
+  'inbox_bridge',
+  'task_materialization',
+  'resident_directive_emission',
+  'ticket_task_reconciliation',
+  'pre_backlog_outcome_reconciliation',
+  'reported_resident_task_state_reconciliation',
+  'resident_backlog_recovery_emission',
+  'resident_directive_dispatch',
+  'receipt_reconciliation',
+  'agent_outcome_reconciliation',
+  'stale_escalation_reconciliation',
+  'operating_alert_reconciliation',
+]);
 
 const defaultLoad = loadSiteLoopConfig(siteRoot);
 assert.equal(defaultLoad.status, 'missing');

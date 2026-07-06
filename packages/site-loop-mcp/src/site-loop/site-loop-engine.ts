@@ -37,14 +37,24 @@ import {
   recordLoopEscalation,
   recordLoopHealthFailure,
   recordLoopHealthSuccess,
-  recordLoopStep,
   releaseLoopLock,
   setLoopControl,
 } from './site-loop-store.js';
+import {
+  runSiteLoopPhasePlan,
+  type SiteLoopPhaseAdapter,
+  type SiteLoopPhaseContext,
+  type SiteLoopStep,
+} from './site-loop-kernel.js';
+import {
+  createSiteLoopPhaseAdapters,
+  SITE_LOOP_ADAPTER_PHASE_PLAN,
+  type SiteLoopPhaseState,
+} from './site-loop-phase-adapters.js';
 
 type SiteLoopPayload = Record<string, unknown>;
 type SiteLoopOptions = SiteLoopPayload;
-type ResidentLoopStep = SiteLoopPayload;
+type ResidentLoopStep = SiteLoopStep;
 type ResidentCarrier = SiteLoopPayload;
 type ResidentRunResult = SiteLoopPayload;
 type SurfacePolicyNoise = SiteLoopPayload;
@@ -143,6 +153,46 @@ function escapePowerShellSingleQuotedString(value: string) {
   return value.replace(/'/g, "''");
 }
 
+function selectPhaseAdapters<TState extends SiteLoopPayload>(adapters: SiteLoopPhaseAdapter<TState>[], plan: readonly string[]) {
+  return plan.map((id) => {
+    const adapter = adapters.find((candidate) => candidate.id === id);
+    if (!adapter) throw new Error(`site_loop_phase_adapter_missing: ${id}`);
+    return adapter;
+  });
+}
+
+const ALL_SITE_LOOP_PHASE_ADAPTERS = createSiteLoopPhaseAdapters({
+  runSourceSync,
+  runInboxBridge: (siteRoot, options) => pollInboxBridge(siteRoot, options),
+  runTicketTaskReconcile,
+  getResidentStatus,
+  runAgentOutcomeReconciliation,
+  reconcileReportedResidentTaskLifecycleState,
+  emitResidentBacklogRecoveryDirectives,
+  ensureResidentCarrier,
+  dispatchPendingDirectives,
+  reconcileLoopEscalations,
+  persistOperatingLayerAlerts,
+  sourceSyncRefs,
+  bridgeOutputRefs,
+  ticketTaskRefs,
+  summarizeSourceSync,
+  summarizeBridgeResult,
+  summarizeTaskMaterialization,
+  summarizeResidentDirectiveEmission,
+  summarizeTicketTaskReconciliation,
+  summarizeResidentBacklogRecovery,
+  summarizeDirectiveDispatch,
+  summarizeReceiptReconciliation,
+  outputRefsForStep,
+  materializedTaskRefs,
+  residentDirectiveRefs,
+  residentBacklogRecoveryDirectiveRefs,
+  dispatchedDirectiveRefs,
+  receiptRefs,
+});
+const SITE_LOOP_PHASE_ADAPTERS = selectPhaseAdapters(ALL_SITE_LOOP_PHASE_ADAPTERS, SITE_LOOP_ADAPTER_PHASE_PLAN);
+
 export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
   const siteRoot = resolve(cwd);
   const siteLoopConfig = configForSite(siteRoot);
@@ -223,335 +273,40 @@ export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
       };
     }
 
-    const sourceSync = sourceSyncRequested;
-
-    if (sourceSync && !drain) {
-      const sourceSyncStep = await runStep({
-        store,
-        runId,
-        onFailedStep: (step) => {
-          failedStep = step;
-          steps.push(step);
-        },
-        stepId: 'source_sync',
-        inputRefs: [{ kind: 'site_root', ref: siteRoot }],
-        execute: () => runSourceSync(siteRoot, { dryRun, runner: options.sourceSyncRunner, commandConfig: siteLoopConfig.commands.source_sync, schema: schemaName(siteLoopConfig, 'source_sync') }),
-        outputRefs: (result) => sourceSyncRefs(result),
-        evidence: (result) => summarizeSourceSync(result, siteLoopConfig),
-      });
-      steps.push(sourceSyncStep);
-    }
-
-    let bridge = null;
-    if (!drain) {
-      bridge = await runStep({
-        store,
-        runId,
-        onFailedStep: (step) => {
-          failedStep = step;
-          steps.push(step);
-        },
-        stepId: 'inbox_bridge',
-        inputRefs: [{ kind: 'site_root', ref: siteRoot }],
-        execute: () => pollInboxBridge(siteRoot, { dryRun, limit, threshold }),
-        outputRefs: (result) => bridgeOutputRefs(result),
-        evidence: (result) => summarizeBridgeResult(result),
-      });
-      steps.push(bridge);
-
-      steps.push(recordSyntheticStep({
-        store,
-        runId,
-        stepId: 'task_materialization',
-        inputRefs: [{ kind: 'step', ref: 'inbox_bridge' }],
-        outputRefs: materializedTaskRefs(bridge.result),
-        evidence: summarizeTaskMaterialization(bridge.result),
-      }));
-
-      steps.push(recordSyntheticStep({
-        store,
-        runId,
-        stepId: 'resident_directive_emission',
-        inputRefs: materializedTaskRefs(bridge.result),
-        outputRefs: residentDirectiveRefs(bridge.result),
-        evidence: summarizeResidentDirectiveEmission(bridge.result),
-      }));
-    }
-
-    const ticketTaskReconciliation: SiteLoopPayload = dryRun || drain || !sourceSync
-      ? {
-          schema: schemaName(siteLoopConfig, 'ticket_task_reconciliation'),
-          status: 'skipped',
-          reason: dryRun ? 'dry_run' : drain ? 'drain' : 'source_sync_not_run',
-          created: 0,
-          existing: 0,
-          planned: 0,
-          results: [],
-        }
-      : await runStep({
-          store,
-          runId,
-          onFailedStep: (step) => {
-            failedStep = step;
-            steps.push(step);
-          },
-          stepId: 'ticket_task_reconciliation',
-          inputRefs: [
-            ...(Array.isArray(steps.find((step) => step.step_id === 'source_sync')?.output_refs) ? steps.find((step) => step.step_id === 'source_sync')?.output_refs as unknown[] : []),
-            ticketProjectionRef,
-          ],
-          execute: () => runTicketTaskReconcile(siteRoot, {
-            dryRun,
-            limit,
-            preferredRole: residentRole,
-            runner: options.ticketTaskReconcileRunner,
-            commandConfig: siteLoopConfig.commands.ticket_task_reconciliation,
-            schema: schemaName(siteLoopConfig, 'ticket_task_reconciliation'),
-          }),
-          outputRefs: (result) => ticketTaskRefs(result),
-          evidence: (result) => summarizeTicketTaskReconciliation(result, siteLoopConfig),
-        });
-    if (ticketTaskReconciliation?.step_id) {
-      steps.push(ticketTaskReconciliation);
-    } else {
-      steps.push(recordSyntheticStep({
-        store,
-        runId,
-        stepId: 'ticket_task_reconciliation',
-        status: ticketTaskReconciliation.status === 'skipped' ? 'skipped' : 'ok',
-        inputRefs: [ticketProjectionRef],
-        outputRefs: ticketTaskRefs(ticketTaskReconciliation),
-        evidence: summarizeTicketTaskReconciliation(ticketTaskReconciliation, siteLoopConfig),
-      }));
-    }
-
-    const preBacklogDirectiveIds = bridge ? residentDirectiveRefs(bridge.result).map((ref) => ref.ref) : [];
-    const preBacklogResident = dryRun
-      ? { status: 'skipped', reason: 'dry_run' }
-      : getResidentStatus(siteRoot);
-    const preBacklogOutcome = dryRun
-      ? {
-          schema: schemaName(siteLoopConfig, 'agent_outcome_reconciliation'),
-          status: 'skipped',
-          reason: 'dry_run',
-          output_refs: [],
-          classifications: [],
-          counts: {},
-        }
-      : runAgentOutcomeReconciliation(siteRoot, {
-          nowIso: options.nowIso,
-          actionStaleMinutes: options.actionStaleMinutes,
-          deliveryStaleMinutes: options.deliveryStaleMinutes,
-          directiveIds: preBacklogDirectiveIds,
-          includeBacklog: true,
-          resident: preBacklogResident,
-        });
-    steps.push(recordSyntheticStep({
+    const phaseContext: SiteLoopPhaseContext<SiteLoopPhaseState> = {
+      siteRoot,
+      siteLoopConfig,
       store,
       runId,
-      stepId: 'pre_backlog_outcome_reconciliation',
-      inputRefs: preBacklogDirectiveIds.map((ref) => ({ kind: 'directive', ref })),
-      outputRefs: preBacklogOutcome.output_refs ?? [],
-      evidence: preBacklogOutcome,
-    }));
+      options,
+      dryRun,
+      drain,
+      limit,
+      threshold,
+      steps,
+      state: {
+        sourceSyncRequested,
+        residentAgentId,
+        residentRole,
+        ticketProjectionRef,
+        operatingPolicy,
+      },
+    };
 
-    const reportedTaskStateReconciliation = dryRun
-      ? { schema: schemaName(siteLoopConfig, 'reported_resident_task_state_reconciliation'), status: 'skipped', reason: 'dry_run', repaired: [] }
-      : await reconcileReportedResidentTaskLifecycleState(siteRoot, { limit: 100 });
-    steps.push(recordSyntheticStep({
+    const phaseRun = await runSiteLoopPhasePlan({
+      adapters: SITE_LOOP_PHASE_ADAPTERS,
+      context: phaseContext,
       store,
       runId,
-      stepId: 'reported_resident_task_state_reconciliation',
-      inputRefs: [{ kind: 'resident_backlog', ref: residentAgentId }],
-      outputRefs: (reportedTaskStateReconciliation.repaired ?? []).map((item) => ({ kind: 'task', ref: item.task_id })),
-      evidence: reportedTaskStateReconciliation,
-    }));
-
-    const backlogRecovery = dryRun
-      ? {
-          schema: schemaName(siteLoopConfig, 'resident_backlog_recovery'),
-          status: 'skipped',
-          reason: 'dry_run',
-          emitted: [],
-          skipped: [],
-        }
-      : emitResidentBacklogRecoveryDirectives(siteRoot, {
-          nowIso: options.nowIso,
-          actionStaleMinutes: options.actionStaleMinutes,
-          limit: Math.min(limit, Number(operatingPolicy.rate_limits?.max_directives_per_cycle ?? limit)),
-        });
-    steps.push(recordSyntheticStep({
-      store,
-      runId,
-      stepId: 'resident_backlog_recovery_emission',
-      inputRefs: [{ kind: 'resident_backlog', ref: residentAgentId }],
-      outputRefs: residentBacklogRecoveryDirectiveRefs(backlogRecovery),
-      evidence: summarizeResidentBacklogRecovery(backlogRecovery, siteLoopConfig),
-    }));
-
-    const residentSupervisor: SiteLoopPayload = dryRun || !options.ensureResident
-      ? { status: 'skipped', reason: dryRun ? 'dry_run' : 'not_enabled' }
-      : await runStep({
-          store,
-          runId,
-          onFailedStep: (step) => {
-            failedStep = step;
-            steps.push(step);
-          },
-          stepId: 'resident_supervisor',
-          inputRefs: [{ kind: 'agent', ref: residentAgentId }],
-          execute: () => ensureResidentCarrier(siteRoot, {
-            runner: options.residentSupervisorRunner,
-            requireLiveCarrier: options.requireLiveCarrier !== false,
-          }),
-          outputRefs: (result) => result.launch?.event_path ? [{ kind: 'agent_start_event', ref: result.launch.event_path }] : [],
-          evidence: (result) => result,
-        });
-    if (residentSupervisor?.step_id) steps.push(residentSupervisor);
-
-    let dispatch = null;
-    if (dryRun) {
-      dispatch = {
-        schema: schemaName(siteLoopConfig, 'directive_dispatch'),
-        status: 'skipped',
-        dry_run: true,
-        reason: 'dry_run',
-        dispatched: [],
-        skipped: [],
-        receipt_reconciliation: { status: 'skipped', reason: 'dry_run' },
-        lease_recovery: { status: 'skipped', reason: 'dry_run' },
-      };
-      steps.push(recordSyntheticStep({
-        store,
-        runId,
-        onFailedStep: (step) => {
-          failedStep = step;
-          steps.push(step);
-        },
-        stepId: 'resident_directive_dispatch',
-        status: 'skipped',
-        inputRefs: bridge ? residentDirectiveRefs(bridge.result) : [],
-        outputRefs: [],
-        evidence: dispatch,
-      }));
-    } else if (!drain) {
-      const dispatchStep = await runStep({
-        store,
-        runId,
-        onFailedStep: (step) => {
-          failedStep = step;
-          steps.push(step);
-        },
-        stepId: 'resident_directive_dispatch',
-        inputRefs: [
-          ...(bridge ? residentDirectiveRefs(bridge.result) : []),
-          ...residentBacklogRecoveryDirectiveRefs(backlogRecovery),
-        ],
-        execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
-          cwd: siteRoot,
-          agentId: residentAgentId,
-          role: residentRole,
-          limit,
-          dryRun: false,
-          requireLiveCarrier: options.requireLiveCarrier !== false,
-        }),
-        outputRefs: (result) => dispatchedDirectiveRefs(result),
-        evidence: (result) => summarizeDirectiveDispatch(result),
-      });
-      dispatch = dispatchStep.result;
-      steps.push(dispatchStep);
-    } else {
-      const drainStep = await runStep({
-        store,
-        runId,
-        onFailedStep: (step) => {
-          failedStep = step;
-          steps.push(step);
-        },
-        stepId: 'resident_directive_dispatch',
-        inputRefs: [],
-        execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
-          cwd: siteRoot,
-          agentId: residentAgentId,
-          role: residentRole,
-          limit: 0,
-          dryRun: false,
-        }),
-        outputRefs: () => [],
-        evidence: (result) => ({ ...summarizeDirectiveDispatch(result), drain: true }),
-      });
-      dispatch = drainStep.result;
-      steps.push(drainStep);
-    }
-
-    steps.push(recordSyntheticStep({
-      store,
-      runId,
-      stepId: 'receipt_reconciliation',
-      inputRefs: dispatchedDirectiveRefs(dispatch),
-      outputRefs: receiptRefs(dispatch),
-      evidence: summarizeReceiptReconciliation(dispatch),
-    }));
-
-    const resident = dryRun
-      ? { status: 'skipped', reason: 'dry_run' }
-      : getResidentStatus(siteRoot);
-    const directiveIds = bridge ? residentDirectiveRefs(bridge.result).map((ref) => ref.ref) : [];
-    const outcome = dryRun
-      ? {
-          schema: schemaName(siteLoopConfig, 'agent_outcome_reconciliation'),
-          status: 'skipped',
-          reason: 'dry_run',
-          output_refs: [],
-          classifications: [],
-          counts: {},
-        }
-      : runAgentOutcomeReconciliation(siteRoot, {
-          nowIso: options.nowIso,
-          actionStaleMinutes: options.actionStaleMinutes,
-          deliveryStaleMinutes: options.deliveryStaleMinutes,
-          directiveIds,
-          includeBacklog: true,
-          resident,
-        });
-    const escalation = store && !dryRun
-      ? reconcileLoopEscalations(siteRoot, store, outcome, { runId, nowIso: options.nowIso })
-      : { status: 'skipped', reason: dryRun ? 'dry_run' : 'store_unavailable', created: [] };
-    steps.push(recordSyntheticStep({
-      store,
-      runId,
-      stepId: 'agent_outcome_reconciliation',
-      inputRefs: directiveIds.map((ref) => ({ kind: 'directive', ref })),
-      outputRefs: outcome.output_refs,
-      evidence: outcome,
-    }));
-
-    steps.push(recordSyntheticStep({
-      store,
-      runId,
-      stepId: 'stale_escalation_reconciliation',
-      inputRefs: outcome.output_refs ?? [],
-      outputRefs: (escalation.created ?? []).map((item) => ({ kind: 'operator_attention_envelope', ref: item.envelope_id, directive_id: item.directive_id })),
-      evidence: escalation,
-    }));
-
-    const operatingAlerts = store && !dryRun
-      ? persistOperatingLayerAlerts(siteRoot, store, {
-          runId,
-          nowIso: options.nowIso,
-          requireFreshProductionProof: options.requireFreshProductionProof === true || options.require_fresh_production_proof === true,
-        })
-      : { status: 'skipped', reason: dryRun ? 'dry_run' : 'store_unavailable', created: [] };
-    steps.push(recordSyntheticStep({
-      store,
-      runId,
-      stepId: 'operating_alert_reconciliation',
-      inputRefs: [],
-      outputRefs: (operatingAlerts.created ?? []).map((item) => ({ kind: 'operator_attention_envelope', ref: item.envelope_id, classification: item.classification })),
-      evidence: operatingAlerts,
-    }));
+      onFailedStep: (step) => {
+        failedStep = step;
+      },
+    });
 
     const finishedAt = new Date().toISOString();
+    const bridge = phaseRun.byId.inbox_bridge ?? null;
+    const dispatch = phaseContext.state.dispatch ?? null;
+    const outcome = phaseContext.state.outcome ?? null;
     const summary = summarizeRun({ bridge: bridge?.result ?? null, dispatch, steps, outcome });
     let health = null;
     if (store) {
@@ -3171,64 +2926,6 @@ export async function runSiteLoopSoak(cwd, options: SiteLoopPayload = {}) {
   };
 }
 
-async function runStep({ store, runId, stepId, inputRefs = [], execute, outputRefs, evidence, onFailedStep = null }) {
-  const startedAt = new Date().toISOString();
-  try {
-    const result = await execute();
-    const finishedAt = new Date().toISOString();
-    const step = {
-      step_run_id: `${runId}:${stepId}`,
-      run_id: runId,
-      step_id: stepId,
-      status: result?.status === 'error' ? 'failed' : 'ok',
-      started_at: startedAt,
-      finished_at: finishedAt,
-      input_refs: inputRefs,
-      output_refs: outputRefs(result),
-      evidence: evidence(result),
-      result,
-    };
-    if (store) recordLoopStep(store, step);
-    if (step.status === 'failed') throw new Error(result.error ?? `${stepId}_failed`);
-    return step;
-  } catch (error) {
-    const finishedAt = new Date().toISOString();
-    const step = {
-      step_run_id: `${runId}:${stepId}`,
-      run_id: runId,
-      step_id: stepId,
-      status: 'failed',
-      started_at: startedAt,
-      finished_at: finishedAt,
-      input_refs: inputRefs,
-      output_refs: [],
-      evidence: null,
-      error: errorToPayload(error),
-      result: null,
-    };
-    if (store) recordLoopStep(store, step);
-    if (typeof onFailedStep === 'function') onFailedStep(step);
-    throw error;
-  }
-}
-
-function recordSyntheticStep({ store, runId, stepId, status = 'ok', inputRefs = [], outputRefs = [], evidence = null }: SiteLoopPayload) {
-  const now = new Date().toISOString();
-  const step = {
-    step_run_id: `${runId}:${stepId}`,
-    run_id: runId,
-    step_id: stepId,
-    status,
-    started_at: now,
-    finished_at: now,
-    input_refs: inputRefs,
-    output_refs: outputRefs,
-    evidence,
-  };
-  if (store) recordLoopStep(store, step);
-  return step;
-}
-
 function summarizeBridgeResult(result) {
   return {
     schema: result?.schema ?? null,
@@ -3716,6 +3413,11 @@ function sourceSyncRefs(result) {
     ...(resultRecord.cursor_path ? [{ kind: 'sync_cursor', ref: resultRecord.cursor_path }] : []),
     ...(resultRecord.health_path ? [{ kind: 'sync_health', ref: resultRecord.health_path }] : []),
   ];
+}
+
+function outputRefsForStep(steps: ResidentLoopStep[], stepId: string): unknown[] {
+  const outputRefs = steps.find((step) => step.step_id === stepId)?.output_refs;
+  return Array.isArray(outputRefs) ? outputRefs : [];
 }
 
 export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}) {
