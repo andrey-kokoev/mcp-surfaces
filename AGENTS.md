@@ -10,6 +10,7 @@ Current packages:
 
 - `@narada2/mcp-transport`: shared MCP payload/output-ref helpers.
 - `@narada2/mcp-telemetry`: shared optional MCP telemetry helpers.
+- `@narada2/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
 - `@narada2/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
@@ -136,6 +137,7 @@ Before handing off changes:
 - `mcp-loader-mcp` owns runtime attachment/proxying for allowed MCP surfaces; it does not own the surfaces it attaches to and must not become a general orchestration layer.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
+- `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
 - `mcp-runtime-proxy` owns carrier-facing stdio proxy diagnostics for MCP startup. It must not authorize tools, mutate policy, or interpret surface domain behavior.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.

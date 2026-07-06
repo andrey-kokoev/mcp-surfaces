@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "ajv": "^8.20.0",
+    "@narada2/mcp-affordances": "workspace:*",
     "@narada2/mcp-transport": "workspace:*",
     "@narada2/task-governance-core": "workspace:*",
     "@narada2/task-lifecycle-mcp": "workspace:*"

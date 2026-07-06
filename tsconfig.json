@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared/mcp-transport" },
     { "path": "./packages/shared/mcp-telemetry" },
+    { "path": "./packages/shared/mcp-affordances" },
     { "path": "./packages/shared/mcp-runtime-proxy" },
     { "path": "./packages/local-filesystem-mcp" },
     { "path": "./packages/structured-command-mcp" },

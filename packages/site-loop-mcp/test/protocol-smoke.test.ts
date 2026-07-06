@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { validateAffordanceDocument } from '@narada2/mcp-affordances';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));
@@ -66,6 +67,7 @@ try {
   assert.equal(names.includes('site_ops_guidance'), true);
   assert.equal(names.includes('site_ops_doctor'), true);
   assert.equal(names.includes('site_loop_config_validate'), true);
+  assert.equal(names.includes('site_loop_operator_affordances'), true);
   assert.equal(names.includes('site_loop_status'), true);
 
   const configDir = join(siteRoot, '.narada', 'capabilities');
@@ -97,6 +99,16 @@ try {
   assert.equal(configValidationPayload.status, 'ok');
   assert.equal(configValidationPayload.schema_id, 'narada:site-loop-config.v1.schema.json');
   assert.equal(configValidationPayload.loop_id, 'protocol.loop');
+
+  writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'site_loop_operator_affordances', arguments: {} } });
+  const affordances = await waitFor(7);
+  assert.equal(affordances.error, undefined);
+  const affordancesPayload = JSON.parse(affordances.result.content[0].text);
+  assert.equal(validateAffordanceDocument(affordancesPayload).status, 'ok');
+  assert.equal(affordancesPayload.surface_id, 'site-loop');
+  assert.equal(affordancesPayload.source.site_id, 'narada-protocol');
+  assert.equal(affordancesPayload.actions.some((action) => action.id === 'run_once' && action.danger_level === 'high'), true);
+  assert.equal(affordancesPayload.panels.some((panel) => panel.id === 'controls' && panel.actions.includes('pause_loop')), true);
 
   writeMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'site_loop_run_once', arguments: { drain: true } } });
   const runOnce = await waitFor(4);

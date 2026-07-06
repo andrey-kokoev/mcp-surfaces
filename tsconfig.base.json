@@ -11,7 +11,9 @@
       "@narada2/mcp-transport": ["packages/shared/mcp-transport/src/mcp-payload-file.ts"],
       "@narada2/mcp-transport/*": ["packages/shared/mcp-transport/src/*.ts"],
       "@narada2/mcp-telemetry": ["packages/shared/mcp-telemetry/src/main.ts"],
-      "@narada2/mcp-telemetry/*": ["packages/shared/mcp-telemetry/src/*.ts"]
+      "@narada2/mcp-telemetry/*": ["packages/shared/mcp-telemetry/src/*.ts"],
+      "@narada2/mcp-affordances": ["packages/shared/mcp-affordances/src/main.ts"],
+      "@narada2/mcp-affordances/*": ["packages/shared/mcp-affordances/src/*.ts"]
     },
     "strict": false,
     "forceConsistentCasingInFileNames": true,

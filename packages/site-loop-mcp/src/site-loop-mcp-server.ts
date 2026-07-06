@@ -4,6 +4,13 @@ import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import {
+  affordanceToolAction,
+  createAffordanceDocument,
+  validateAffordanceDocument,
+  type AffordanceAction,
+  type AffordancePanel,
+} from '@narada2/mcp-affordances';
 import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
 import { siteLoopDependencyBoundaries } from './site-loop/site-loop-boundary.js';
 let siteLoopModulePromise = null;
@@ -43,6 +50,7 @@ const TOOLS = [
     selector: { type: 'string', description: 'Approved selector from site_test_list.' },
   }, ['selector']),
   tool('site_loop_config_validate', 'Validate the site-loop config file and report schema/semantic diagnostics without running the loop.', {}),
+  tool('site_loop_operator_affordances', 'Return UI-neutral operator affordances for rendering Site Loop status, attention, controls, and recovery actions.', {}),
   tool('site_loop_status', 'Show configured Site Operating Loop status.', {}),
   tool('site_loop_unified_status', 'Show unified configured site-loop status: scheduled launcher, supervisor PID files, logical loop control, health, and useful-work posture.', {
     task_name: { type: 'string', description: 'Scheduled task name. Defaults to the configured site-loop scheduler task.' },
@@ -313,6 +321,8 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
         active_tools_refuse: loaded.status !== 'ok',
       };
     }
+    case 'site_loop_operator_affordances':
+      return siteLoopOperatorAffordances();
     case 'site_docs_list':
       return { status: 'ok', site_root: siteRoot, docs: activeDocs() };
     case 'site_docs_show':
@@ -359,6 +369,201 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
+}
+
+function siteLoopOperatorAffordances() {
+  const config = requireActiveSiteLoopConfig();
+  const actions: AffordanceAction[] = [
+    affordanceToolAction({
+      id: 'refresh_unified_status',
+      label: 'Refresh status',
+      intent: 'refresh',
+      tool: 'site_loop_unified_status',
+      arguments: { task_name: config.scheduler.default_task_name },
+      description: 'Refresh scheduled launcher, loop control, health, and useful-work posture.',
+      audience: ['operator', 'agent'],
+      danger_level: 'none',
+      read_only: true,
+      idempotent: true,
+    }),
+    affordanceToolAction({
+      id: 'check_readiness',
+      label: 'Check readiness',
+      intent: 'inspect',
+      tool: 'site_loop_readiness',
+      arguments: { require_production: false },
+      description: 'Evaluate unattended-operation readiness gates.',
+      audience: ['operator', 'agent'],
+      danger_level: 'none',
+      read_only: true,
+      idempotent: true,
+    }),
+    affordanceToolAction({
+      id: 'check_coherence',
+      label: 'Check coherence',
+      intent: 'inspect',
+      tool: 'site_loop_coherence',
+      arguments: { require_production: false, require_mailbox_chain: false },
+      description: 'Evaluate strict Site Loop coherence blockers.',
+      audience: ['operator', 'agent'],
+      danger_level: 'none',
+      read_only: true,
+      idempotent: true,
+    }),
+    affordanceToolAction({
+      id: 'list_attention',
+      label: 'List attention',
+      intent: 'inspect',
+      tool: 'site_loop_attention_list',
+      arguments: { limit: 25 },
+      description: 'List active loop attention records.',
+      audience: ['operator', 'agent'],
+      danger_level: 'none',
+      read_only: true,
+      idempotent: true,
+    }),
+    affordanceToolAction({
+      id: 'ack_attention',
+      label: 'Acknowledge attention',
+      intent: 'acknowledge',
+      tool: 'site_loop_attention_ack',
+      description: 'Acknowledge one attention record after operator review.',
+      audience: ['operator'],
+      danger_level: 'medium',
+      read_only: false,
+      idempotent: false,
+      destructive: false,
+      confirmation: { required: true, message: 'Acknowledge the selected Site Loop attention record.' },
+      input_schema: {
+        type: 'object',
+        required: ['attention_id', 'reason'],
+        properties: {
+          attention_id: { type: 'string' },
+          reason: { type: 'string' },
+          acknowledged_by: { type: 'string' },
+        },
+      },
+    }),
+    affordanceToolAction({
+      id: 'dry_run_once',
+      label: 'Dry run once',
+      intent: 'run',
+      tool: 'site_loop_run_once',
+      arguments: { dry_run: true, limit: 25 },
+      description: 'Run one non-mutating Site Loop pass.',
+      audience: ['operator', 'agent'],
+      danger_level: 'low',
+      read_only: true,
+      idempotent: false,
+    }),
+    affordanceToolAction({
+      id: 'run_once',
+      label: 'Run once',
+      intent: 'run',
+      tool: 'site_loop_run_once',
+      arguments: { dry_run: false, limit: 25 },
+      description: 'Run one bounded mutating Site Loop pass.',
+      audience: ['operator'],
+      danger_level: 'high',
+      read_only: false,
+      idempotent: false,
+      confirmation: { required: true, message: 'Run one bounded mutating Site Loop pass.' },
+    }),
+    affordanceToolAction({
+      id: 'pause_loop',
+      label: 'Pause loop',
+      intent: 'pause',
+      tool: 'site_loop_control_set',
+      arguments: { paused: true, reason: 'operator_requested' },
+      description: 'Pause logical Site Loop execution.',
+      audience: ['operator'],
+      danger_level: 'medium',
+      read_only: false,
+      idempotent: true,
+      confirmation: { required: true, message: 'Pause logical Site Loop execution.' },
+    }),
+    affordanceToolAction({
+      id: 'resume_loop',
+      label: 'Resume loop',
+      intent: 'resume',
+      tool: 'site_loop_control_set',
+      arguments: { paused: false, reason: 'operator_requested' },
+      description: 'Resume logical Site Loop execution.',
+      audience: ['operator'],
+      danger_level: 'medium',
+      read_only: false,
+      idempotent: true,
+      confirmation: { required: true, message: 'Resume logical Site Loop execution.' },
+    }),
+    affordanceToolAction({
+      id: 'recovery_plan',
+      label: 'Recovery plan',
+      intent: 'recover',
+      tool: 'site_loop_recovery_plan',
+      arguments: { task_name: config.scheduler.default_task_name, include_commands: true },
+      description: 'Show a safe operator recovery plan without mutating loop state.',
+      audience: ['operator', 'maintainer'],
+      danger_level: 'none',
+      read_only: true,
+      idempotent: true,
+    }),
+  ];
+
+  const panels: AffordancePanel[] = [
+    {
+      id: 'status',
+      title: 'Status',
+      kind: 'status',
+      priority: 10,
+      actions: ['refresh_unified_status', 'check_readiness', 'check_coherence'],
+      metrics: [
+        { id: 'loop_id', label: 'Loop', value: config.loop_id, severity: 'info' },
+        { id: 'resident', label: 'Resident', value: config.resident.agent_id, severity: 'info' },
+      ],
+    },
+    {
+      id: 'attention',
+      title: 'Attention',
+      kind: 'attention',
+      priority: 20,
+      actions: ['list_attention', 'ack_attention'],
+      data: { attention_ack_requires_selection: true },
+    },
+    {
+      id: 'runs',
+      title: 'Runs',
+      kind: 'runs',
+      priority: 30,
+      actions: ['dry_run_once', 'run_once'],
+    },
+    {
+      id: 'controls',
+      title: 'Controls',
+      kind: 'controls',
+      priority: 40,
+      actions: ['pause_loop', 'resume_loop', 'recovery_plan'],
+    },
+  ];
+
+  const document = createAffordanceDocument({
+    surface_id: 'site-loop',
+    title: `${config.display_name} operator affordances`,
+    audience: ['operator', 'agent', 'maintainer'],
+    summary: 'UI-neutral affordances for inspecting and operating the configured Site Loop.',
+    panels,
+    actions,
+    refresh: { mode: 'poll', interval_ms: 30000, actions: ['refresh_unified_status'] },
+    source: {
+      tool: 'site_loop_operator_affordances',
+      site_id: config.site_id,
+      site_root: siteRoot,
+    },
+  });
+  const validation = validateAffordanceDocument(document);
+  if (validation.status !== 'ok') {
+    throw new Error(`site_loop_operator_affordances_invalid: ${validation.errors.join('; ')}`);
+  }
+  return document;
 }
 
 function loadSiteLoopModule() {
