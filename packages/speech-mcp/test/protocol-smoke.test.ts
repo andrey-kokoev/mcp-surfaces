@@ -40,6 +40,8 @@ try {
   assert.ok(speakTool.inputSchema.properties.model);
   assert.ok(speakTool.inputSchema.properties.speed);
   assert.ok(speakTool.inputSchema.properties.api_key);
+  assert.ok(speakTool.inputSchema.properties.output_path);
+  assert.ok(speakTool.inputSchema.properties.retain_audio);
 
   const captureTool = tools.find((t: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => t.name === 'speech_capture_transcribe');
   assert.equal(captureTool.annotations.readOnlyHint, false);

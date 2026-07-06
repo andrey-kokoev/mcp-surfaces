@@ -20,7 +20,7 @@ Current packages:
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
 - `@narada2/calendar-mcp`: policy-gated Microsoft Graph calendar MCP surface for live calendar reads and guarded event management.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface.
-- `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface.
+- `@narada2/site-loop-mcp`: config-governed site loop MCP surface.
 - `@narada2/agent-context-mcp`: agent context MCP surface.
 - `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface.
 - `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface.
@@ -101,7 +101,7 @@ pnpm test:mailbox
 pnpm test:graph-mail
 pnpm test:calendar
 pnpm test:task-lifecycle
-pnpm test:sonar-site-ops
+pnpm test:site-loop
 pnpm test:agent-context
 pnpm test:delegated-task
 pnpm test:sop

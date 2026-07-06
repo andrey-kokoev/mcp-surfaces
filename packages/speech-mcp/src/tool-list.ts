@@ -19,6 +19,8 @@ export function listTools() {
           speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'OpenAI speech speed. 0.25 to 4.0. Default 1.0.' },
           speaker_agent_id: { type: 'string', description: 'Agent identity to announce before the spoken text. Defaults to NARADA_AGENT_ID when speaker announcements are enabled.' },
           announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this call. Defaults to true at the server level.' },
+          output_path: { type: 'string', description: 'Optional local WAV path to retain the generated speech audio for NARS artifact registration.' },
+          retain_audio: { type: 'boolean', default: false, description: 'Retain generated speech audio as a WAV file. Uses output_path when provided, otherwise a temp path.' },
         },
         required: ['text'],
         additionalProperties: false,

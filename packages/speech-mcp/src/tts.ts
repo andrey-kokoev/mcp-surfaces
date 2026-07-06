@@ -2,7 +2,7 @@ import { spawn, spawnSync as nodeSpawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { withAudibleOutput } from './audible-output.js';
 import { OPENAI_TTS_URL, OPENAI_VOICES, PROVIDERS } from './constants.js';
@@ -26,6 +26,38 @@ export async function speechSpeak(args: JsonRecord, state: SpeechState): Promise
   });
 }
 
+function retainedSpeechAudioPath(args: JsonRecord): string | null {
+  const explicitPath = optionalString(args.output_path);
+  if (explicitPath) return admittedRetainedAudioPath(explicitPath);
+  if (args.retain_audio === true) return join(tmpdir(), 'speech-mcp', `speech_retained_${Date.now()}.wav`);
+  return null;
+}
+
+function admittedRetainedAudioPath(path: string): string {
+  const resolvedPath = resolve(path);
+  const admittedRoots = [tmpdir(), process.env.NARADA_SITE_ROOT, process.env.NARADA_WORKSPACE_ROOT, process.env.NARADA_SPEECH_OUTPUT_ROOT]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => resolve(value));
+  if (!pathIsWithinAnyRoot(resolvedPath, admittedRoots)) {
+    throw diagnosticError('speech_output_path_not_admitted', 'speech_output_path_not_admitted: output_path must be under temp, NARADA_SITE_ROOT, NARADA_WORKSPACE_ROOT, or NARADA_SPEECH_OUTPUT_ROOT', { admitted_roots: admittedRoots });
+  }
+  return resolvedPath;
+}
+
+function pathIsWithinAnyRoot(path: string, roots: string[]): boolean {
+  const normalizedPath = resolve(path).toLowerCase();
+  return roots.some((root) => {
+    const normalizedRoot = resolve(root).toLowerCase();
+    return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}\\`) || normalizedPath.startsWith(`${normalizedRoot}/`);
+  });
+}
+
+async function sapiSpeakWithRetainedAudio(text: string, voice: string | null, rate: number, wavPath: string): Promise<JsonRecord> {
+  sapiWriteSpeechWav(text, voice, rate, wavPath);
+  await playWavFile(wavPath);
+  return { status: 'spoken', provider: 'sapi', text_length: text.length, voice: voice || 'default', rate, retained_audio: { path: wavPath, content_type: 'audio/wav' } };
+}
+
 function resolveSpeakerAnnouncement(args: JsonRecord, state: SpeechState): JsonRecord {
   const enabled = typeof args.announce_speaker === 'boolean' ? args.announce_speaker : state.announceSpeaker;
   const agentId = firstString(args.speaker_agent_id, process.env.NARADA_AGENT_ID, process.env.NARADA_AGENT_NAME);
@@ -43,7 +75,11 @@ async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: s
   if (provider === 'sapi') {
     const voice = optionalString(args.voice);
     const rate = clamp(integer(args.rate, 0, -10, 10), -10, 10);
-    return { ...sapiSpeak(text, voice, rate), speaker_announcement_audio: speakerAnnouncementAudio };
+    const retainedAudioPath = retainedSpeechAudioPath(args);
+    const spoken = retainedAudioPath
+      ? await sapiSpeakWithRetainedAudio(text, voice, rate, retainedAudioPath)
+      : sapiSpeak(text, voice, rate);
+    return { ...spoken, speaker_announcement_audio: speakerAnnouncementAudio };
   }
   if (provider === 'openai_api') {
     const apiKey = resolveOpenAiApiKey(args, state);
@@ -51,7 +87,7 @@ async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: s
     const voice = optionalString(args.voice) ?? 'nova';
     const model = optionalString(args.model) ?? 'tts-1';
     const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0;
-    return { ...await openaiSpeak(apiKey, text, voice, model, speed), speaker_announcement_audio: speakerAnnouncementAudio };
+    return { ...await openaiSpeak(apiKey, text, voice, model, speed, retainedSpeechAudioPath(args)), speaker_announcement_audio: speakerAnnouncementAudio };
   }
   throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${provider}`);
 }
@@ -100,6 +136,7 @@ function sapiSpeak(text: string, voice: string | null, rate: number): JsonRecord
 }
 
 function sapiWriteSpeechWav(text: string, voice: string | null, rate: number, wavPath: string): void {
+  mkdirSync(dirname(wavPath), { recursive: true });
   const escapedText = powerShellSingleQuotedString(text.replace(/\n/g, ' '));
   const escapedPath = powerShellSingleQuotedString(wavPath);
   const voiceParam = voice ? `$synthesizer.SelectVoice(${powerShellSingleQuotedString(voice)})` : '';
@@ -114,21 +151,22 @@ function powerShellSingleQuotedString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function openaiSpeak(apiKey: string, text: string, voice: string, model: string, speed: number): Promise<JsonRecord> {
+function openaiSpeak(apiKey: string, text: string, voice: string, model: string, speed: number, retainedAudioPath: string | null): Promise<JsonRecord> {
   const tmpDir = join(tmpdir(), 'speech-mcp');
   mkdirSync(tmpDir, { recursive: true });
-  const wavPath = join(tmpDir, `speech_openai_${Date.now()}.wav`);
+  const wavPath = retainedAudioPath ?? join(tmpDir, `speech_openai_${Date.now()}.wav`);
   return openaiWriteSpeechWav(apiKey, text, voice, model, speed, wavPath).then(async () => {
     try {
       await playWavFile(wavPath);
-      return { status: 'spoken', provider: 'openai_api', text_length: text.length, voice, model, speed };
+      return { status: 'spoken', provider: 'openai_api', text_length: text.length, voice, model, speed, ...(retainedAudioPath ? { retained_audio: { path: retainedAudioPath, content_type: 'audio/wav' } } : {}) };
     } finally {
-      try { unlinkSync(wavPath); } catch { /* stale */ }
+      if (!retainedAudioPath) try { unlinkSync(wavPath); } catch { /* stale */ }
     }
   });
 }
 
 async function openaiWriteSpeechWav(apiKey: string, text: string, voice: string, model: string, speed: number, wavPath: string): Promise<void> {
+  mkdirSync(dirname(wavPath), { recursive: true });
   const body = JSON.stringify({ model, input: text, voice, speed, response_format: 'wav' });
   const res = await fetch(OPENAI_TTS_URL, {
     method: 'POST',

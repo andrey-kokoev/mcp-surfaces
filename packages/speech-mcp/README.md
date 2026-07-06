@@ -16,6 +16,8 @@ Host-level speech MCP surface for text-to-speech, bounded microphone capture, tr
 
 TTS providers are `sapi` and `openai_api`. The default TTS provider is `openai_api`, with OpenAI model `tts-1` and voice `nova`.
 
+`speech_speak` can also retain generated speech as a WAV file for NARS artifact projection. Pass `output_path` to choose the retained file path, or `retain_audio: true` to retain to a temporary WAV path. Explicit `output_path` values are admitted only under the OS temp directory, `NARADA_SITE_ROOT`, `NARADA_WORKSPACE_ROOT`, or `NARADA_SPEECH_OUTPUT_ROOT`. Retention is additive: the tool still performs host-side audible playback, and the returned `retained_audio.path` can be registered as a NARS `audio` artifact by the caller.
+
 Listen-session providers are `local_sapi` and `remote_transcription`. `local_sapi` is for local voice-intent monitoring through the host adapter. It is not a transcript-returning capture provider.
 
 Transcript-returning capture uses `remote_transcription`. The schema for `speech_capture_transcribe` intentionally exposes only `remote_transcription` so callers do not treat `local_sapi` as valid for first-class transcript capture.

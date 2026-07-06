@@ -88,11 +88,17 @@ try {
   assert.deepEqual(part.message_part, { type: 'artifact_ref', artifact_id: 'art_html_1', kind: 'html', title: 'HTML report', render_hint: 'inline' });
   assert.equal(part.verification_status, 'unverified');
   assert.deepEqual(part.assistant_content_parts, [part.message_part]);
-
   const discoveredState = createServerState({ siteRoot, sessionId: 'carrier_test' });
   assert.equal(artifactsDoctor(discoveredState).registration_configured, true);
   assert.equal((artifactsDoctor(discoveredState).discovery as Record<string, unknown>).source, 'session_index');
+
+  const canonicalSiteRoot = join(siteRoot, '.narada');
+  const canonicalRootState = createServerState({ siteRoot: canonicalSiteRoot, sessionId: 'carrier_test' });
+  assert.equal(artifactsDoctor(canonicalRootState).registration_configured, true);
+  assert.equal((artifactsDoctor(canonicalRootState).discovery as Record<string, unknown>).session_index_path, join(canonicalSiteRoot, 'crew', 'nars-sessions', 'carrier_test', 'session-index-record.json'));
+
   const discovered = await artifactRegisterFile({ path: 'D:/code/site/.ai/report.html', kind: 'html', title: 'Discovered report' }, discoveredState);
+  assert.equal(discovered.content_url, `http://127.0.0.1:${address.port}/sessions/carrier_test/artifacts/art_html_1/content`);
   assert.equal(discovered.content_url, `http://127.0.0.1:${address.port}/sessions/carrier_test/artifacts/art_html_1/content`);
 
   const envState = createServerState({ session_id: 'legacy', sessionId: 'canonical' });

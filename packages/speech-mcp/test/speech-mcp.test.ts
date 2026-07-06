@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildCaptureTranscribeAdapterArgs, buildListenAdapterArgs, compactMonitorResult, createServerState, handleRequest, parseArgs, resolveOpenAiApiKey, transcriptFromMonitorResult } from '../src/main.js';
@@ -31,6 +31,21 @@ assert.equal(sapiSpoken.status, 'spoken');
 assert.equal(sapiSpoken.provider, 'sapi');
 assert.equal(sapiSpoken.speaker_announcement_audio.provider, 'sapi');
 assert.match(sapiSpoken.speaker_announcement_audio.path, /\.wav$/);
+
+const retainedSpeechDir = join(tmpdir(), `speech-mcp-retained-${process.pid}-${Date.now()}`);
+const retainedSpeechPath = join(retainedSpeechDir, 'spoken.wav');
+try {
+  const retainedSapiSpoken = view(await call('speech_speak', { text: 'Retained audio test.', provider: 'sapi', announce_speaker: false, output_path: retainedSpeechPath }));
+  assert.equal(retainedSapiSpoken.status, 'spoken');
+  assert.equal(retainedSapiSpoken.retained_audio.path, retainedSpeechPath);
+  assert.equal(retainedSapiSpoken.retained_audio.content_type, 'audio/wav');
+  assert.equal(existsSync(retainedSpeechPath), true);
+} finally {
+  rmSync(retainedSpeechDir, { recursive: true, force: true });
+}
+
+const refusedRetainedPath = await call('speech_speak', { text: 'No arbitrary write.', provider: 'sapi', announce_speaker: false, output_path: 'D:/definitely/not-admitted/spoken.wav' });
+assert.equal(refusedRetainedPath.error.data.code, 'speech_output_path_not_admitted');
 
 const originalSecretStoreMode = process.env.NARADA_PROVIDER_SECRET_STORE;
 process.env.NARADA_PROVIDER_SECRET_STORE = 'disabled';

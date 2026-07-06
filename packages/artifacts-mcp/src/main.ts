@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 const SERVER_NAME = 'artifacts-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -327,7 +327,7 @@ function resolveNarsBaseUrl(state: ArtifactState): string | null { return option
 function resolveNarsEndpoint(state: ArtifactState): JsonRecord {
   if (state.narsBaseUrl) return { status: 'configured', base_url: state.narsBaseUrl, source: state.narsBaseUrlSource ?? 'unknown' };
   const discovered = discoverNarsBaseUrlFromSessionIndex(state);
-  if (discovered) return { status: 'discovered', base_url: discovered, source: 'session_index', session_index_path: sessionIndexPath(state) };
+  if (discovered) return { status: 'discovered', base_url: discovered.baseUrl, source: 'session_index', session_index_path: discovered.path };
   return {
     status: 'missing',
     base_url: null,
@@ -335,6 +335,7 @@ function resolveNarsEndpoint(state: ArtifactState): JsonRecord {
     session_id_source: state.sessionIdSource,
     site_root_source: state.siteRootSource,
     attempted_session_index_path: sessionIndexPath(state),
+    attempted_session_index_paths: sessionIndexPaths(state),
     missing: [
       ...(state.sessionId ? [] : ['session_id']),
       ...(state.siteRoot ? [] : ['site_root_or_explicit_base_url']),
@@ -342,21 +343,29 @@ function resolveNarsEndpoint(state: ArtifactState): JsonRecord {
     ]
   };
 }
-function discoverNarsBaseUrlFromSessionIndex(state: ArtifactState): string | null {
+function discoverNarsBaseUrlFromSessionIndex(state: ArtifactState): { baseUrl: string; path: string } | null {
   if (!state.siteRoot || !state.sessionId) return null;
-  const recordPath = sessionIndexPath(state);
-  if (!existsSync(recordPath)) return null;
-  try {
-    const record = asRecord(JSON.parse(readFileSync(recordPath, 'utf8')));
-    const healthEndpoint = optionalString(record.health_endpoint);
-    if (!healthEndpoint) return null;
-    const parsed = new URL(healthEndpoint);
-    return normalizeBaseUrl(parsed.origin);
-  } catch {
-    return null;
+  for (const recordPath of sessionIndexPaths(state)) {
+    if (!existsSync(recordPath)) continue;
+    try {
+      const record = asRecord(JSON.parse(readFileSync(recordPath, 'utf8')));
+      const healthEndpoint = optionalString(record.health_endpoint);
+      if (!healthEndpoint) continue;
+      const parsed = new URL(healthEndpoint);
+      return { baseUrl: normalizeBaseUrl(parsed.origin) as string, path: recordPath };
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
-function sessionIndexPath(state: ArtifactState): string | null { return state.siteRoot && state.sessionId ? resolve(state.siteRoot, '.narada', 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json') : null; }
+function sessionIndexPath(state: ArtifactState): string | null { return sessionIndexPaths(state)[0] ?? null; }
+function sessionIndexPaths(state: ArtifactState): string[] {
+  if (!state.siteRoot || !state.sessionId) return [];
+  const direct = resolve(state.siteRoot, 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json');
+  const nested = resolve(state.siteRoot, '.narada', 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json');
+  return basename(resolve(state.siteRoot)).toLowerCase() === '.narada' ? [direct, nested] : [nested, direct];
+}
 function optionalString(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function firstConfigured(entries: Array<[string, unknown]>): { value: string | null; source: string | null } { for (const [source, value] of entries) { const text = optionalString(value); if (text) return { value: text, source }; } return { value: null, source: null }; }
 function requiredString(value: unknown, code: string): string { const text = optionalString(value); if (!text) throw diagnosticError(code, code); return text; }

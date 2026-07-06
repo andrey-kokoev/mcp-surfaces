@@ -16,7 +16,7 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail surface for live reads and draft management. See `packages/graph-mail-mcp/README.md`.
 - `@narada2/calendar-mcp`: policy-gated Microsoft Graph calendar surface for live reads and guarded event management. See `packages/calendar-mcp/README.md`.
 - `@narada2/task-lifecycle-mcp`: task lifecycle MCP surface. See `packages/task-lifecycle-mcp/README.md`.
-- `@narada2/sonar-site-ops-mcp`: Sonar site operations MCP surface. See `packages/sonar-site-ops-mcp/README.md`.
+- `@narada2/site-loop-mcp`: config-governed site loop MCP surface. See `packages/site-loop-mcp/README.md`.
 - `@narada2/agent-context-mcp`: agent context MCP surface. See `packages/agent-context-mcp/README.md`.
 - `@narada2/worker-delegation-mcp`: policy-gated worker delegation MCP surface. See `packages/worker-delegation-mcp/README.md`.
 - `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface. See `packages/delegated-task-mcp/README.md`.
