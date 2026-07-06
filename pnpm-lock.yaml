@@ -107,7 +107,7 @@ importers:
 
   packages/site-lifecycle-mcp: {}
 
-  packages/sonar-site-ops-mcp:
+  packages/site-loop-mcp:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
@@ -118,6 +118,9 @@ importers:
       '@narada2/task-lifecycle-mcp':
         specifier: workspace:*
         version: link:../task-lifecycle-mcp
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   packages/sop-mcp:
     dependencies:

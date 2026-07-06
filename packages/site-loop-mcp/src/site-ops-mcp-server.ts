@@ -4,6 +4,7 @@ import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
 let siteLoopModulePromise = null;
 type SiteOpsServerArgs = Record<string, unknown>;
 type SiteLoopToolArgs = SiteOpsServerArgs;
@@ -17,64 +18,54 @@ type SiteOpsChildResult = {
   cancelled: boolean;
 };
 
-const SERVER_NAME = 'narada-sonar-site-ops-mcp';
+const SERVER_NAME = 'narada-site-loop-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
 const options = parseArgs(process.argv.slice(2));
 const siteRoot = resolve(String(options.siteRoot ?? process.cwd()));
-const DOCS = [
-  { path: 'AGENTS.md', description: 'Site-local agent instructions.' },
-  { path: '.narada/site.json', description: 'Site identity and authority locus.' },
-  { path: '.narada/capabilities/mcp-registration.json', description: 'Sonar-local MCP registry.' },
-  { path: '.narada/capabilities/capability-policy.json', description: 'Capability admission policy.' },
-  { path: '.narada/capabilities/sonar-access-policy.json', description: 'Admitted filesystem/access policy.' },
-  { path: '.narada/mcp/README.md', description: 'MCP surface readiness and reload posture.' },
-];
 
-const TESTS = {
-  check: ['pnpm', ['check']],
-  launcher_smoke: ['node', ['tools/agent-context/sonar-agent-launcher-smoke.js']],
-  agent_context_smoke: ['node', ['tools/agent-context/sonar-agent-context-smoke.js']],
-  mcp_bridge_poll: ['node', ['tools/task-lifecycle/tests/Test-McpBridgePoll.js']],
-};
+function currentSiteLoopConfigLoad() {
+  return loadSiteLoopConfig(siteRoot);
+}
 
 const TOOLS = [
   guidanceToolDefinition(),
-  tool('site_ops_doctor', 'Inspect Sonar-local site ops MCP readiness.', {}),
-  tool('site_docs_list', 'List Sonar-local read-only documentation paths exposed to agents.', {}),
-  tool('site_docs_show', 'Show an allowlisted Sonar-local documentation file.', {
+  tool('site_ops_doctor', 'Inspect configured site ops MCP readiness.', {}),
+  tool('site_docs_list', 'List configured read-only documentation paths exposed to agents.', {}),
+  tool('site_docs_show', 'Show a configured allowlisted documentation file.', {
     path: { type: 'string', description: 'Allowlisted docs path from site_docs_list.' },
   }, ['path']),
   tool('site_test_list', 'List approved local test selectors.', {}),
   tool('site_test_run', 'Run one approved local test selector; no arbitrary shell is accepted.', {
     selector: { type: 'string', description: 'Approved selector from site_test_list.' },
   }, ['selector']),
-  tool('site_loop_status', 'Show Sonar email resident Site Operating Loop status.', {}),
-  tool('site_loop_unified_status', 'Show unified Sonar site-loop status: scheduled launcher, supervisor PID files, logical loop control, health, and useful-work posture.', {
-    task_name: { type: 'string', description: 'Scheduled task name. Defaults to \\Narada-Sonar-Daemon.' },
+  tool('site_loop_config_validate', 'Validate the site-loop config file and report schema/semantic diagnostics without running the loop.', {}),
+  tool('site_loop_status', 'Show configured Site Operating Loop status.', {}),
+  tool('site_loop_unified_status', 'Show unified configured site-loop status: scheduled launcher, supervisor PID files, logical loop control, health, and useful-work posture.', {
+    task_name: { type: 'string', description: 'Scheduled task name. Defaults to the configured site-loop scheduler task.' },
   }),
-  tool('site_loop_recovery_plan', 'Return a safe operator recovery plan for the Sonar site loop without mutating state.', {
-    task_name: { type: 'string', description: 'Scheduled task name. Defaults to \\Narada-Sonar-Daemon.' },
+  tool('site_loop_recovery_plan', 'Return a safe operator recovery plan for the configured site loop without mutating state.', {
+    task_name: { type: 'string', description: 'Scheduled task name. Defaults to the configured site-loop scheduler task.' },
     include_commands: { type: 'boolean', description: 'Include concrete operator commands. Defaults true.' },
   }),
-  tool('site_loop_health', 'Show Sonar email resident Site Operating Loop health.', {}),
-  tool('site_loop_operating_status', 'Show composed operating-layer status for the Sonar email resident loop.', {
+  tool('site_loop_health', 'Show configured Site Operating Loop health.', {}),
+  tool('site_loop_operating_status', 'Show composed operating-layer status for the configured site loop.', {
     limit: { type: 'number', description: 'Pending/directive row limit.' },
   }),
-  tool('site_loop_readiness', 'Evaluate unattended-operation readiness gates for the Sonar email resident loop.', {
+  tool('site_loop_readiness', 'Evaluate unattended-operation readiness gates for the configured site loop.', {
     require_production: { type: 'boolean', description: 'Require production proof, not only transport proof.' },
   }),
-  tool('site_loop_coherence', 'Evaluate strict coherence blockers for the Sonar email resident loop.', {
+  tool('site_loop_coherence', 'Evaluate strict coherence blockers for the configured site loop.', {
     require_production: { type: 'boolean', description: 'Require production proof.' },
     require_mailbox_chain: { type: 'boolean', description: 'Require mailbox-chain proof.' },
   }),
-  tool('site_loop_runs_list', 'List recent Sonar email resident Site Operating Loop runs.', {
+  tool('site_loop_runs_list', 'List recent configured Site Operating Loop runs.', {
     limit: { type: 'number', description: 'Maximum runs to return.' },
   }),
   tool('site_loop_run_show', 'Show a Site Operating Loop run by run id.', {
     run_id: { type: 'string', description: 'Loop run id.' },
   }, ['run_id']),
-  tool('site_loop_attention_list', 'List Sonar email resident loop attention records.', {
+  tool('site_loop_attention_list', 'List configured loop attention records.', {
     status: { type: 'string', description: 'Optional attention status filter.' },
     limit: { type: 'number', description: 'Maximum attention records.' },
   }),
@@ -86,13 +77,13 @@ const TOOLS = [
     reason: { type: 'string', description: 'Acknowledgement reason.' },
     acknowledged_by: { type: 'string', description: 'Acknowledging principal.' },
   }, ['attention_id', 'reason']),
-  tool('site_loop_control_set', 'Set Sonar email resident loop control flags.', {
+  tool('site_loop_control_set', 'Set configured loop control flags.', {
     enabled: { type: 'boolean', description: 'Enable or disable loop execution.' },
     paused: { type: 'boolean', description: 'Pause or unpause loop execution.' },
     reason: { type: 'string', description: 'Reason for the control change.' },
     changed_by: { type: 'string', description: 'Principal changing loop control.' },
   }, ['reason']),
-  tool('site_loop_run_once', 'Run one bounded Sonar email resident loop pass.', {
+  tool('site_loop_run_once', 'Run one bounded configured site loop pass.', {
     dry_run: { type: 'boolean', description: 'Plan/read without mutation.' },
     limit: { type: 'number', description: 'Processing limit.' },
     drain: { type: 'boolean', description: 'Drain eligible intake when supported.' },
@@ -106,9 +97,15 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: /control_set/.test(name),
-    idempotentHint: /doctor|list|show|status|health|readiness|coherence/.test(name),
+    idempotentHint: /doctor|validate|list|show|status|health|readiness|coherence/.test(name),
     openWorldHint: true,
   };
+}
+
+function renderRecoveryTemplate(template: string, values: { siteRoot: string; taskName: string }) {
+  return template
+    .replaceAll('{site_root}', values.siteRoot)
+    .replaceAll('{task_name}', values.taskName);
 }
 
 function genericToolOutputSchema() {
@@ -259,70 +256,121 @@ function assistantTextContent(text: string) {
 }
 
 async function callTool(name, args, context: SiteOpsRequestContext = {}) {
+  if (name !== 'site_ops_guidance' && name !== 'site_ops_doctor' && name !== 'site_loop_config_validate') {
+    requireActiveSiteLoopConfig();
+  }
   switch (name) {
-    case 'sonar_site_ops_guidance':
+    case 'site_ops_guidance':
       return buildGuidanceResult(args);
-    case 'site_ops_doctor':
+    case 'site_ops_doctor': {
+      const loaded = currentSiteLoopConfigLoad();
+      const config = loaded.config;
       return {
         status: 'ok',
         site_root: siteRoot,
         server_name: SERVER_NAME,
-        read_only_docs: DOCS.length,
-        approved_tests: Object.keys(TESTS),
+        site_loop_config: {
+          status: loaded.status,
+          path: loaded.path,
+          loop_id: config.loop_id,
+          display_name: config.display_name,
+          errors: loaded.errors,
+        },
+        read_only_docs: config.docs.length,
+        approved_tests: Object.keys(config.tests),
         site_loop_tools: TOOLS.filter((item) => item.name.startsWith('site_loop_')).map((item) => item.name),
       };
+    }
+    case 'site_loop_config_validate': {
+      const loaded = currentSiteLoopConfigLoad();
+      const config = loaded.config;
+      const schema = siteLoopConfigJsonSchema();
+      return {
+        schema: 'narada.site_loop.config_validation.v1',
+        status: loaded.status,
+        site_root: siteRoot,
+        path: loaded.path,
+        schema_id: typeof schema.$id === 'string' ? schema.$id : null,
+        config_schema: config.schema,
+        loop_id: config.loop_id,
+        site_id: config.site_id,
+        display_name: config.display_name,
+        errors: loaded.errors,
+        active_tools_refuse: loaded.status !== 'ok',
+      };
+    }
     case 'site_docs_list':
-      return { status: 'ok', site_root: siteRoot, docs: DOCS };
+      return { status: 'ok', site_root: siteRoot, docs: activeDocs() };
     case 'site_docs_show':
       return showDoc(args.path);
     case 'site_test_list':
       return {
         status: 'ok',
         site_root: siteRoot,
-        tests: Object.entries(TESTS).map(([selector, [command, commandArgs]]) => ({
+        tests: Object.entries(activeTests()).map(([selector, command]) => ({
           selector,
-          command: [command, ...commandArgs].join(' '),
+          command: [command.command, ...command.args].join(' '),
         })),
       };
     case 'site_test_run':
       return runTest(args.selector, context);
     case 'site_loop_status':
-      return (await loadSiteLoopModule()).sonarEmailResidentLoopStatus(siteRoot);
+      return (await loadSiteLoopModule()).siteLoopStatus(siteRoot);
     case 'site_loop_unified_status':
       return unifiedSiteLoopStatus(args);
     case 'site_loop_recovery_plan':
       return siteLoopRecoveryPlan(args);
     case 'site_loop_health':
-      return (await loadSiteLoopModule()).sonarEmailResidentLoopHealth(siteRoot);
+      return (await loadSiteLoopModule()).siteLoopHealth(siteRoot);
     case 'site_loop_operating_status':
-      return (await loadSiteLoopModule()).sonarEmailResidentOperatingLayerStatus(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).siteLoopOperatingLayerStatus(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_readiness':
-      return (await loadSiteLoopModule()).sonarEmailResidentReadiness(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).siteLoopReadiness(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_coherence':
-      return (await loadSiteLoopModule()).sonarEmailResidentCoherence(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).siteLoopCoherence(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_runs_list':
-      return (await loadSiteLoopModule()).listSonarEmailResidentLoopRuns(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).listSiteLoopRuns(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_run_show':
-      return (await loadSiteLoopModule()).showSonarEmailResidentLoopRun(siteRoot, args.run_id);
+      return (await loadSiteLoopModule()).showSiteLoopRun(siteRoot, args.run_id);
     case 'site_loop_attention_list':
-      return (await loadSiteLoopModule()).listSonarLoopAttention(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).listSiteLoopAttention(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_attention_show':
-      return (await loadSiteLoopModule()).showSonarLoopAttention(siteRoot, args.attention_id);
+      return (await loadSiteLoopModule()).showSiteLoopAttention(siteRoot, args.attention_id);
     case 'site_loop_attention_ack':
-      return (await loadSiteLoopModule()).ackSonarLoopAttention(siteRoot, args.attention_id, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).ackSiteLoopAttention(siteRoot, args.attention_id, normalizeLoopOptions(args));
     case 'site_loop_control_set':
-      return (await loadSiteLoopModule()).setSonarEmailResidentLoopControl(siteRoot, normalizeLoopControl(args));
+      return (await loadSiteLoopModule()).setSiteLoopControl(siteRoot, normalizeLoopControl(args));
     case 'site_loop_run_once':
-      return (await loadSiteLoopModule()).runSonarEmailResidentLoop(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).runSiteLoop(siteRoot, normalizeLoopOptions(args));
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
 }
 
 function loadSiteLoopModule() {
-  siteLoopModulePromise ??= import('./site-loop/sonar-email-resident-loop.js');
+  siteLoopModulePromise ??= import('./site-loop/site-loop.js');
   return siteLoopModulePromise;
 }
+
+function requireActiveSiteLoopConfig() {
+  const loaded = currentSiteLoopConfigLoad();
+  if (loaded.status === 'missing') {
+    throw new Error(`site_loop_config_missing: ${loaded.path}`);
+  }
+  if (loaded.status !== 'ok') {
+    throw new Error(`site_loop_config_invalid: ${loaded.path}: ${loaded.errors.join('; ')}`);
+  }
+  return loaded.config;
+}
+
+function activeDocs() {
+  return requireActiveSiteLoopConfig().docs;
+}
+
+function activeTests() {
+  return requireActiveSiteLoopConfig().tests;
+}
+
 function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
   return {
     limit: optionalNumber(args.limit),
@@ -358,7 +406,7 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : undefined;
 }
 function showDoc(path) {
-  const doc = DOCS.find((item) => item.path === path);
+  const doc = activeDocs().find((item) => item.path === path);
   if (!doc) throw new Error(`doc_not_allowlisted: ${path}`);
   const absolutePath = resolve(siteRoot, doc.path);
   if (!isPathInside(absolutePath, siteRoot)) throw new Error(`doc_outside_site_root: ${path}`);
@@ -372,8 +420,9 @@ function showDoc(path) {
 }
 
 async function runTest(selector, context: SiteOpsRequestContext = {}) {
-  if (!Object.hasOwn(TESTS, selector)) throw new Error(`test_selector_not_approved: ${selector}`);
-  const [command, args] = TESTS[selector];
+  const tests = activeTests();
+  if (!Object.hasOwn(tests, selector)) throw new Error(`test_selector_not_approved: ${selector}`);
+  const { command, args } = tests[selector];
   const result = await runChildProcess(command, args, {
     cwd: siteRoot,
     timeout: 120_000,
@@ -390,13 +439,14 @@ async function runTest(selector, context: SiteOpsRequestContext = {}) {
 }
 
 async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
-  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? '\\Narada-Sonar-Daemon';
+  const config = requireActiveSiteLoopConfig();
+  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? config.scheduler.default_task_name;
   const [loopStatus, loopHealth, scheduledTask] = await Promise.all([
-    loadSiteLoopModule().then((module) => module.sonarEmailResidentLoopStatus(siteRoot)).catch((error) => statusError(error)),
-    loadSiteLoopModule().then((module) => module.sonarEmailResidentLoopHealth(siteRoot)).catch((error) => statusError(error)),
+    loadSiteLoopModule().then((module) => module.siteLoopStatus(siteRoot)).catch((error) => statusError(error)),
+    loadSiteLoopModule().then((module) => module.siteLoopHealth(siteRoot)).catch((error) => statusError(error)),
     readScheduledTaskStatus(taskName),
   ]);
-  const pidFiles = ['daemon.pid', 'recurring-runner.pid', 'site-loop-runner.pid'].map((name) => readPidFileStatus(name));
+  const pidFiles = config.scheduler.pid_files.map((name) => readPidFileStatus(name));
   const stalePidFiles = pidFiles.filter((item) => item.exists && item.pid && item.process_alive === false).map((item) => item.name);
   const livePidFiles = pidFiles.filter((item) => item.exists && item.process_alive === true).map((item) => item.name);
   const logicalLoopEnabled = loopStatus?.control?.enabled ?? loopStatus?.enabled;
@@ -437,31 +487,14 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
 }
 
 async function siteLoopRecoveryPlan(args: SiteOpsServerArgs = {}) {
-  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? '\\Narada-Sonar-Daemon';
+  const config = requireActiveSiteLoopConfig();
+  const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? config.scheduler.default_task_name;
   const includeCommands = args.include_commands !== false && args.includeCommands !== false;
   const status = await unifiedSiteLoopStatus({ ...args, task_name: taskName });
-  const steps = [
-    {
-      id: 'inspect_unified_status',
-      reason: 'Capture scheduler, PID, logical loop, and health posture before changing state.',
-      command: `site_loop_unified_status { "task_name": "${taskName}" }`,
-    },
-    {
-      id: 'restart_supervisor',
-      reason: 'Use the site-owned idempotent supervisor start path; it cleans stale PID files before launch.',
-      command: `powershell -NoProfile -ExecutionPolicy Bypass -File "${join(siteRoot, 'scripts', 'supervisor.ps1')}" start`,
-    },
-    {
-      id: 'run_scheduled_task',
-      reason: 'Ask Windows Task Scheduler to invoke the registered daemon task after supervisor scripts are healthy.',
-      command: `schtasks /run /tn "${taskName}"`,
-    },
-    {
-      id: 'verify_recovery',
-      reason: 'Re-read unified status and health; do not infer recovery from process launch alone.',
-      command: `site_loop_unified_status { "task_name": "${taskName}" }`,
-    },
-  ];
+  const steps = config.recovery_plan.steps.map((step) => ({
+    ...step,
+    command: step.command == null ? undefined : renderRecoveryTemplate(step.command, { siteRoot, taskName }),
+  }));
   return {
     status: 'ok',
     site_root: siteRoot,
@@ -471,11 +504,7 @@ async function siteLoopRecoveryPlan(args: SiteOpsServerArgs = {}) {
     current_posture: status.posture,
     current_blockers: status.blockers,
     recommended_order: includeCommands ? steps : steps.map(({ id, reason }) => ({ id, reason })),
-    guardrails: [
-      'Do not delete or overwrite loop state files manually unless the supervisor script reports stale PID cleanup failure.',
-      'Use elevated PowerShell only for scheduled-task registration or trigger changes, not for ordinary status checks.',
-      'After recovery, verify useful-work posture through site_loop_unified_status and site_loop_health.',
-    ],
+    guardrails: config.recovery_plan.guardrails,
     status_snapshot: status,
   };
 }

@@ -29,8 +29,8 @@ export const DEFAULT_SITE_OPERATING_LOOP_POLICY = {
     busy_turn_timeout_ms: 10 * 60_000,
   },
   carrier: {
-    preferred: 'interactive_agent_cli',
-    fallback: 'agent-runtime-server',
+    preferred: 'configured_preferred_carrier',
+    fallback: 'configured_fallback_carrier',
     fallback_enabled: true,
     require_policy_current: true,
   },

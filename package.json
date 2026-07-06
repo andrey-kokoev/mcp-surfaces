@@ -23,7 +23,7 @@
     "test:graph-mail": "pnpm --filter @narada2/graph-mail-mcp test",
     "test:calendar": "pnpm --filter @narada2/calendar-mcp test",
     "test:task-lifecycle": "pnpm --filter @narada2/task-lifecycle-mcp test",
-    "test:sonar-site-ops": "pnpm --filter @narada2/sonar-site-ops-mcp test",
+    "test:site-loop": "pnpm --filter @narada2/site-loop-mcp test",
     "test:agent-context": "pnpm --filter @narada2/agent-context-mcp test",
     "test:sop": "pnpm --filter @narada2/sop-mcp test",
     "test:scheduler": "pnpm --filter @narada2/scheduler-mcp test",

@@ -15,7 +15,7 @@
     { "path": "./packages/graph-mail-mcp" },
     { "path": "./packages/calendar-mcp" },
     { "path": "./packages/task-lifecycle-mcp" },
-    { "path": "./packages/sonar-site-ops-mcp" },
+    { "path": "./packages/site-loop-mcp" },
     { "path": "./packages/agent-context-mcp" },
     { "path": "./packages/launcher-mcp" },
     { "path": "./packages/runtime-introspection-mcp" },

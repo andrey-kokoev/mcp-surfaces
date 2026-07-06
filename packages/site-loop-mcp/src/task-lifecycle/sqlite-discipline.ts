@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, wr
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { requireSiteLoopConfig, schemaName } from '../site-loop/site-loop-config.js';
 
 interface TaskLifecycleSqliteOptions {
   write?: boolean;
@@ -56,6 +57,7 @@ export function openTaskLifecycleStoreWithDiscipline(cwd, options: TaskLifecycle
 }
 
 export function taskLifecycleDbHealth(cwd) {
+  const siteLoopConfig = requireSiteLoopConfig(resolve(cwd));
   let store = null;
   try {
     store = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
@@ -63,7 +65,7 @@ export function taskLifecycleDbHealth(cwd) {
     const wal = store.db.prepare('PRAGMA journal_mode').get();
     const busyTimeout = store.db.prepare('PRAGMA busy_timeout').get();
     return {
-      schema: 'narada.sonar.task_lifecycle_db_health.v1',
+      schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
       status: String(Object.values(integrity ?? {})[0] ?? '') === 'ok' ? 'ok' : 'attention_needed',
       integrity_check: Object.values(integrity ?? {})[0] ?? null,
       journal_mode: Object.values(wal ?? {})[0] ?? null,
@@ -74,7 +76,7 @@ export function taskLifecycleDbHealth(cwd) {
     };
   } catch (error) {
     return {
-      schema: 'narada.sonar.task_lifecycle_db_health.v1',
+      schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
       status: 'error',
       error: error instanceof Error ? error.message : String(error),
     };
@@ -85,9 +87,10 @@ export function taskLifecycleDbHealth(cwd) {
 
 export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOptions = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
   if (options.ackRepair !== true) {
     return {
-      schema: 'narada.sonar.task_lifecycle_db_repair.v1',
+      schema: schemaName(siteLoopConfig, 'task_lifecycle_db_repair'),
       status: 'refused',
       reason: 'ack_repair_required',
       required_flag: '--ack-repair',
@@ -120,7 +123,7 @@ export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOp
       after = String(Object.values(store.db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
     }
     return {
-      schema: 'narada.sonar.task_lifecycle_db_repair.v1',
+      schema: schemaName(siteLoopConfig, 'task_lifecycle_db_repair'),
       status: after === 'ok' ? 'repaired' : 'attention_needed',
       db_path: dbPath,
       backup_dir: backupDir,
@@ -177,6 +180,7 @@ function copyTaskLifecycleDbFiles(siteRoot, backupDir) {
 
 
 function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
+  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
   const lockDir = join(siteRoot, '.ai', 'task-lifecycle.write.lock');
   const staleMs = Number(options.staleMs ?? 10 * 60_000);
   const timeoutMs = Number(options.timeoutMs ?? 30_000);
@@ -192,7 +196,7 @@ function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
     try {
       mkdirSync(lockDir);
       writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
-        schema: 'narada.sonar.task_lifecycle_write_lock.v1',
+        schema: schemaName(siteLoopConfig, 'task_lifecycle_write_lock'),
         pid: process.pid,
         acquired_at: new Date().toISOString(),
         heartbeat_at: new Date().toISOString(),
@@ -236,11 +240,13 @@ function lockIsStale(lockDir, staleMs) {
 }
 
 function refreshWriteLock(lock) {
+  const siteRoot = resolve(lock.lockDir, '..', '..');
+  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
   const ownerPath = join(lock.lockDir, 'owner.json');
   const owner = readLockOwner(lock.lockDir) ?? {};
   writeFileSync(ownerPath, JSON.stringify({
     ...owner,
-    schema: 'narada.sonar.task_lifecycle_write_lock.v1',
+    schema: schemaName(siteLoopConfig, 'task_lifecycle_write_lock'),
     pid: process.pid,
     heartbeat_at: new Date().toISOString(),
   }, null, 2), 'utf8');

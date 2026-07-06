@@ -1,0 +1,33 @@
+{
+  "name": "@narada2/site-loop-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Config-governed site-loop MCP runtime and site operations tools.",
+  "bin": {
+    "site-loop-mcp": "./dist/src/site-ops-mcp-server.js"
+  },
+  "exports": {
+    ".": { "default": "./dist/src/site-ops-mcp-server.js" },
+    "./site-ops-mcp-server": { "default": "./dist/src/site-ops-mcp-server.js" },
+    "./site-loop/site-loop": { "default": "./dist/src/site-loop/site-loop.js" },
+    "./site-loop/site-loop-config": { "default": "./dist/src/site-loop/site-loop-config.js" },
+    "./site-loop/site-loop-engine": { "default": "./dist/src/site-loop/site-loop-engine.js" },
+    "./site-loop/site-loop-store": { "default": "./dist/src/site-loop/site-loop-store.js" },
+    "./schemas/site-loop-config.schema.json": { "default": "./schemas/site-loop-config.schema.json" },
+    "./site-operating-loop/site-loop-store": { "default": "./dist/src/site-operating-loop/site-loop-store.js" },
+    "./site-operating-loop/policy": { "default": "./dist/src/site-operating-loop/policy.js" }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-loop-config.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-live-e2e.test.js"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "@narada2/mcp-transport": "workspace:*",
+    "@narada2/task-governance-core": "workspace:*",
+    "@narada2/task-lifecycle-mcp": "workspace:*"
+  },
+  "files": ["dist/", "schemas/", "README.md"]
+}

@@ -1,9 +1,9 @@
 export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & { name: string; description: string; inputSchema: GuidanceRecord; annotations: GuidanceRecord; outputSchema: GuidanceRecord };
 
-const SURFACE_ID = "sonar-site-ops";
-const GUIDANCE_TOOL = "sonar_site_ops_guidance";
-const PURPOSE = "Sonar site operations inspection and governed workflows.";
+const SURFACE_ID = "site-loop";
+const GUIDANCE_TOOL = "site_ops_guidance";
+const PURPOSE = "Configured site-loop operations inspection and governed workflows.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -29,9 +29,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
     examples: [
-      { intent: 'First use', call: 'sonar_site_ops_guidance({})' },
-      { intent: 'Tool-specific help', call: "sonar_site_ops_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "sonar_site_ops_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'First use', call: 'site_ops_guidance({})' },
+      { intent: 'Tool-specific help', call: "site_ops_guidance({ tool: \"<tool_name>\" })" },
+      { intent: 'Workflow-specific help', call: "site_ops_guidance({ workflow: \"<workflow_name>\" })" }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',

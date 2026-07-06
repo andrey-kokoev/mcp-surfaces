@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   SqliteDirectiveRuntimeStore,
@@ -9,7 +9,8 @@ import {
   leaseId,
 } from '@narada2/task-governance-core/directive-runtime-store';
 import { openTaskLifecycleStoreWithDiscipline } from './sqlite-discipline.js';
-import { loadSonarEmailResidentOperatingPolicy } from '../site-loop/operating-loop-policy.js';
+import { loadSiteLoopOperatingPolicy } from '../site-loop/operating-loop-policy.js';
+import { requireSiteLoopConfig, schemaName, type SiteLoopConfig } from '../site-loop/site-loop-config.js';
 
 type DirectiveDispatchPayload = Record<string, unknown>;
 type ResidentControlTarget = DirectiveDispatchPayload;
@@ -28,25 +29,48 @@ function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function requireResidentCarrierSiteLoopConfig(value: unknown): SiteLoopConfig {
+  const record = asRecord(value);
+  const resident = asRecord(record.resident);
+  if (typeof record.loop_id === 'string' && typeof resident.agent_id === 'string' && typeof resident.role === 'string') {
+    return record as SiteLoopConfig;
+  }
+  throw new Error('site_loop_config_context_missing');
+}
+
+function configuredSessionRoot(cwd: string, siteLoopConfig: SiteLoopConfig = requireSiteLoopConfig(cwd)) {
+  const sessionRoot = siteLoopConfig.resident_runtime.session_root;
+  return isAbsolute(sessionRoot) ? sessionRoot : join(cwd, sessionRoot);
+}
+
+function configuredExternalSessionRoots(cwd: string, siteLoopConfig: SiteLoopConfig = requireSiteLoopConfig(cwd)) {
+  return siteLoopConfig.resident_runtime.external_session_roots.map((root) => isAbsolute(root) ? root : join(cwd, root));
+}
+
 export function dispatchPendingDirectives({
   cwd,
-  agentId = 'sonar.resident',
-  role = 'resident',
+  agentId,
+  role,
   limit = 25,
   dryRun = false,
   requireLiveCarrier = true,
   blockBusyCarrier = true,
 }) {
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const effectiveAgentId = stringValue(agentId, siteLoopConfig.resident.agent_id);
+  const effectiveRole = stringValue(role, siteLoopConfig.resident.role);
+  const loopId = siteLoopConfig.loop_id;
+  const dispatchSchema = schemaName(siteLoopConfig, 'directive_dispatch');
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
   const store = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   store.initSchema();
   const receiptReconciliation = reconcileCarrierReceipts(cwd, store);
   const leaseRecovery = recoverExpiredLeases(store);
-  const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier }) as ResidentControlTarget | null;
+  const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, effectiveAgentId, { requireLiveCarrier }) as ResidentControlTarget | null;
   const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
   const pending = dedupeDirectives([
-    ...store.listPending({ target: { kind: 'agent', id: agentId }, limit }),
-    ...store.listPending({ target: { kind: 'role', id: role }, limit }),
+    ...store.listPending({ target: { kind: 'agent', id: effectiveAgentId }, limit }),
+    ...store.listPending({ target: { kind: 'role', id: effectiveRole }, limit }),
   ]).slice(0, limit);
   const dispatched: DirectiveDispatchEntry[] = [];
   const skipped: DirectiveDispatchEntry[] = [];
@@ -54,11 +78,11 @@ export function dispatchPendingDirectives({
   if (!controlPath) {
     lifecycleStore.db.close();
     return {
-      schema: 'narada.sonar.directive_dispatch.v0',
+      schema: dispatchSchema,
       status: 'ok',
       dry_run: dryRun,
-      agent_id: agentId,
-      role,
+      agent_id: effectiveAgentId,
+      role: effectiveRole,
       control_path: null,
       carrier,
       pending_count: pending.length,
@@ -72,16 +96,16 @@ export function dispatchPendingDirectives({
   const carrierSessionId = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
   const sessionState = carrierSessionId ? inferAgentCliSessionState(cwd, carrierSessionId) : { active_turn_state: 'unknown' };
   const host = carrierSessionId ? readResidentHostEvidence(cwd, carrierSessionId) : null;
-  const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
-  const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy });
+  const policy = loadSiteLoopOperatingPolicy(cwd).policy;
+  const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
   if (blockBusyCarrier && ['busy', 'stale_busy', 'policy_stale'].includes(carrierState.state)) {
     lifecycleStore.db.close();
     return {
-      schema: 'narada.sonar.directive_dispatch.v0',
+      schema: dispatchSchema,
       status: 'ok',
       dry_run: dryRun,
-      agent_id: agentId,
-      role,
+      agent_id: effectiveAgentId,
+      role: effectiveRole,
       control_path: controlPath,
       carrier,
       carrier_state: carrierState,
@@ -95,7 +119,7 @@ export function dispatchPendingDirectives({
   }
 
   for (const directive of pending) {
-    const terminalOutcome = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id);
+    const terminalOutcome = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id, loopId);
     if (terminalOutcome) {
       failDirectiveDelivery(store, directive.directive_id, `terminal_outcome_${terminalOutcome.outcome}`);
       skipped.push({
@@ -105,7 +129,10 @@ export function dispatchPendingDirectives({
       });
       continue;
     }
-    const activeCarrierSessionId = stringValue(carrier.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath), 'agent-cli-control-jsonl');
+    const activeCarrierSessionId = stringValue(
+      carrier.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath),
+      `${siteLoopConfig.resident_runtime.preferred_runtime}-control-jsonl`,
+    );
     const lease = {
       leaseId: leaseId(directive.directive_id, activeCarrierSessionId),
       leasedUntil: leaseExpiryIso(5),
@@ -124,7 +151,7 @@ export function dispatchPendingDirectives({
         params: {
           directive_id: directive.directive_id,
           directive,
-          message: directiveDeliveryMessage(directive),
+          message: directiveDeliveryMessage(directive, { agentId: effectiveAgentId }),
           authority_ref: directive.directive_id,
         },
       });
@@ -149,11 +176,11 @@ export function dispatchPendingDirectives({
 
   lifecycleStore.db.close();
   return {
-    schema: 'narada.sonar.directive_dispatch.v0',
+    schema: dispatchSchema,
     status: 'ok',
     dry_run: dryRun,
-    agent_id: agentId,
-    role,
+    agent_id: effectiveAgentId,
+    role: effectiveRole,
     control_path: controlPath,
     carrier,
     carrier_state: carrierState,
@@ -166,7 +193,7 @@ export function dispatchPendingDirectives({
   };
 }
 
-function directiveDeliveryMessage(directive) {
+function directiveDeliveryMessage(directive, options: DirectiveDispatchPayload = {}) {
   const text = String(directive?.content?.text ?? '').trim();
   const directiveId = String(directive?.directive_id ?? '').trim();
   if (!directiveId) return text;
@@ -183,8 +210,8 @@ function directiveDeliveryMessage(directive) {
     mailboxTicketGuidance,
     [
       'Use task_lifecycle_claim first when the task is unclaimed.',
-      'Then call task_lifecycle_disposition_closeout with task_number, agent_id="sonar.resident", disposition="acknowledged", and a short summary so task-owned evidence is written.',
-      `Then call task_lifecycle_submit_report with task_number, agent_id="sonar.resident", summary under 180 characters, directive_id="${directiveId}", reviewer="reviewer-agent", and changed_files from the closeout result. If closeout reports no task file change, use no_files_changed=true.`,
+      `Then call task_lifecycle_disposition_closeout with task_number, agent_id="${stringValue(options.agentId)}", disposition="acknowledged", and a short summary so task-owned evidence is written.`,
+      `Then call task_lifecycle_submit_report with task_number, agent_id="${stringValue(options.agentId)}", summary under 180 characters, directive_id="${directiveId}", reviewer="reviewer-agent", and changed_files from the closeout result. If closeout reports no task file change, use no_files_changed=true.`,
       'Do not include reviewer_agent_id, execution_notes, verification_notes, envelope_id, or disposition in task_lifecycle_submit_report.',
       `If the tool does not expose directive_id, include this exact fallback token in the report summary: directive_id:${directiveId}`,
     ].join(' '),
@@ -217,15 +244,16 @@ function dedupeDirectives(directives) {
   return deduped;
 }
 
-function latestTerminalDirectiveOutcome(db, directiveId) {
+function latestTerminalDirectiveOutcome(db, directiveId, loopId) {
+  if (typeof loopId !== 'string' || !loopId.trim()) throw new Error('site_loop_id_required');
   try {
     const row = db.prepare(`
       SELECT outcome
       FROM directive_outcome_latest
-      WHERE loop_id = 'sonar.email-resident'
+      WHERE loop_id = ?
         AND directive_id = ?
       LIMIT 1
-    `).get(directiveId);
+    `).get(loopId, directiveId);
     return row && ['reported', 'superseded', 'refused'].includes(String(row.outcome))
       ? { outcome: String(row.outcome) }
       : null;
@@ -234,10 +262,21 @@ function latestTerminalDirectiveOutcome(db, directiveId) {
   }
 }
 
-export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLiveCarrier = true }: ResidentStatusOptions = {}) {
+function commandLinePatternExpression(patterns: string[]) {
+  return patterns
+    .map((pattern) => `$_.CommandLine -like '*${escapePowerShellSingleQuotedString(pattern)}*'`)
+    .join(' -or ');
+}
+
+function escapePowerShellSingleQuotedString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
+export function getResidentStatus(cwd, { agentId, requireLiveCarrier = true }: ResidentStatusOptions = {}) {
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
   try {
-    const agentIdString = stringValue(agentId, 'sonar.resident');
+    const agentIdString = stringValue(agentId, siteLoopConfig.resident.agent_id);
     const requireLiveCarrierBool = requireLiveCarrier !== false;
     const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentIdString, { requireLiveCarrier: requireLiveCarrierBool }) as ResidentControlTarget | null;
     const latestReceipt = latestResidentReceipt(lifecycleStore.db, agentIdString);
@@ -250,18 +289,18 @@ export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLive
     `).get(agentId) ?? null;
     const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
     const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
-    const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
-    const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy });
+    const policy = loadSiteLoopOperatingPolicy(cwd).policy;
+    const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
     const status = residentAvailabilityStatus(carrier, sessionState, carrierState);
     const proofDriver = host?.started_event?.resident_proof_driver === true;
     const activeRuntime = carrier?.status === 'available' ? carrier.runtime ?? null : null;
-    const terminalWorkInflight = detectTerminalWorkInflight(lifecycleStore.db, { sessionState, host });
+    const terminalWorkInflight = detectTerminalWorkInflight(lifecycleStore.db, { sessionState, host, siteLoopConfig });
     const runtimeCoherent = ['available_idle', 'busy'].includes(carrierState?.state)
       && terminalWorkInflight.status !== 'terminal_inflight';
     return {
-      schema: 'narada.sonar.resident_status.v1',
+      schema: schemaName(siteLoopConfig, 'resident_status'),
       status,
-      agent_id: agentId,
+      agent_id: agentIdString,
       carrier,
       carrier_state: carrierState,
       active_turn_state: sessionState.active_turn_state,
@@ -269,8 +308,11 @@ export function getResidentStatus(cwd, { agentId = 'sonar.resident', requireLive
       runtime_coherent: runtimeCoherent,
       production_ready: false,
       active_runtime: activeRuntime,
-      preferred_runtime: 'interactive_agent_cli',
-      fallback_active: carrier?.preference === 'agent_runtime_server_fallback',
+      preferred_runtime: siteLoopConfig.resident_runtime.preferred_runtime,
+      preferred_preference: siteLoopConfig.resident_runtime.preferred_preference,
+      fallback_active: carrier?.preference === siteLoopConfig.resident_runtime.fallback_preference
+        || carrier?.runtime === siteLoopConfig.resident_runtime.fallback_runtime
+        || siteLoopConfig.resident_runtime.legacy_fallback_runtimes.includes(String(carrier?.legacy_runtime ?? '')),
       proof_driver_active: proofDriver,
       stale_carrier_count: residentStaleCarrierCount(carrier),
       terminal_work_inflight: terminalWorkInflight,
@@ -313,7 +355,7 @@ function residentAvailabilityDetail(carrier) {
     return {
       state: 'stale_launch_records_only',
       preferred_interactive_reason: carrier.preferred_interactive?.reason ?? null,
-      fallback_nars_reason: carrier.fallback_nars?.reason ?? null,
+      fallback_legacy_reasons: (carrier.fallback_legacy ?? []).map((entry) => entry.carrier?.reason ?? null),
     };
   }
   return { state: carrier?.reason ?? 'unknown' };
@@ -325,8 +367,7 @@ function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState 
   if (carrier?.status === 'available') {
     return sessionState.active_turn_state === 'running' ? 'busy' : 'available';
   }
-  if (carrier?.reason === 'no_live_agent_cli_carrier'
-    || carrier?.reason === 'no_live_nars_carrier'
+  if (/^no_live_.*_carrier$/.test(String(carrier?.reason ?? ''))
     || carrier?.reason === 'no_live_resident_control_target') {
     return 'stale_launch';
   }
@@ -340,7 +381,8 @@ function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState 
   return 'blocked';
 }
 
-function detectTerminalWorkInflight(db, { sessionState = {}, host = null }: ResidentCarrierStateInput = {}) {
+function detectTerminalWorkInflight(db, { sessionState = {}, host = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
+  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
   const sessionStateRecord = asRecord(sessionState);
   const hostRecord = asRecord(host);
   if (sessionStateRecord.active_turn_state !== 'running') {
@@ -351,7 +393,7 @@ function detectTerminalWorkInflight(db, { sessionState = {}, host = null }: Resi
     ?? sameTurnDirectiveId(hostRecord.last_host_event, sessionStateRecord)
     ?? null;
   if (!directiveId) return { status: 'unknown_running_directive', directive_id: null, outcome: null };
-  const terminal = latestTerminalDirectiveOutcome(db, directiveId);
+  const terminal = latestTerminalDirectiveOutcome(db, directiveId, loopConfig.loop_id);
   return terminal
     ? { status: 'terminal_inflight', directive_id: directiveId, outcome: terminal.outcome }
     : { status: 'nonterminal_inflight', directive_id: directiveId, outcome: null };
@@ -398,26 +440,28 @@ function residentStaleCarrierCount(carrier) {
   if (!carrier) return 0;
   return Number(carrier.stale_candidate_count ?? 0)
     + Number(carrier.preferred_interactive?.stale_candidate_count ?? 0)
-    + Number(carrier.fallback_nars?.stale_candidate_count ?? 0);
+    + (carrier.fallback_legacy ?? []).reduce((sum, entry) => sum + Number(entry.carrier?.stale_candidate_count ?? 0), 0);
 }
 
-export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null }: ResidentCarrierStateInput = {}) {
+export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
+  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
+  const carrierStateSchema = schemaName(loopConfig, 'resident_carrier_state');
   const carrierRecord = asRecord(carrier);
   const sessionStateRecord = asRecord(sessionState);
   const hostRecord = asRecord(host);
   if (!carrier || carrierRecord.status !== 'available') {
     return {
-      schema: 'narada.sonar.resident_carrier_state.v1',
+      schema: carrierStateSchema,
       state: 'unavailable',
       reason: carrierRecord.reason ?? 'no_carrier',
       dispatch_skip_reason: carrierRecord.reason ?? 'no_live_resident_control_target',
     };
   }
-  const policyLoaded = asRecord(policy ?? loadSonarEmailResidentOperatingPolicy(process.cwd()).policy);
+  const policyLoaded = asRecord(policy ?? loadSiteLoopOperatingPolicy(process.cwd()).policy);
   const carrierPolicy = asRecord(policyLoaded.carrier);
   if (carrierPolicy.require_policy_current !== false && carrierPolicyStale(carrierRecord, hostRecord)) {
     return {
-      schema: 'narada.sonar.resident_carrier_state.v1',
+      schema: carrierStateSchema,
       state: 'policy_stale',
       runtime: carrierRecord.runtime ?? null,
       preference: carrierRecord.preference ?? null,
@@ -431,7 +475,7 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
     const timeoutMs = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
     const stale = ageMs != null && ageMs > timeoutMs;
     return {
-      schema: 'narada.sonar.resident_carrier_state.v1',
+      schema: carrierStateSchema,
       state: stale ? 'stale_busy' : 'busy',
       runtime: carrierRecord.runtime ?? null,
       preference: carrierRecord.preference ?? null,
@@ -442,7 +486,7 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
     };
   }
   return {
-    schema: 'narada.sonar.resident_carrier_state.v1',
+    schema: carrierStateSchema,
     state: 'available_idle',
     runtime: carrierRecord.runtime ?? null,
     preference: carrierRecord.preference ?? null,
@@ -461,6 +505,7 @@ function carrierPolicyStale(carrier, host) {
 }
 
 export function reconcileCarrierReceipts(cwd, store) {
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
   const sessionPaths = receiptSessionPaths(cwd);
   const recorded = [];
   const carrierAccepted = [];
@@ -489,7 +534,7 @@ export function reconcileCarrierReceipts(cwd, store) {
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation = validateCarrierEventForDirective(directive, event, sessionPath);
+      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -500,8 +545,8 @@ export function reconcileCarrierReceipts(cwd, store) {
       }
       const receipt = store.recordReceipt(event.directive_id, {
         received_at: event.received_at ?? event.timestamp ?? new Date().toISOString(),
-        carrier_session_id: event.carrier_session_id ?? carrierSessionIdFromSessionPath(sessionPath) ?? 'agent-cli',
-        agent_id: event.agent_id ?? 'sonar.resident',
+        carrier_session_id: event.carrier_session_id ?? carrierSessionIdFromSessionPath(sessionPath) ?? `${siteLoopConfig.resident_runtime.preferred_runtime}-session`,
+        agent_id: event.agent_id ?? siteLoopConfig.resident.agent_id,
         transport: event.transport ?? 'agent_cli_control_jsonl',
       });
       recorded.push({ directive_id: event.directive_id, receipt_id: receipt.receipt_id, session_path: sessionPath });
@@ -512,7 +557,7 @@ export function reconcileCarrierReceipts(cwd, store) {
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation = validateCarrierEventForDirective(directive, event, sessionPath);
+      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -523,7 +568,7 @@ export function reconcileCarrierReceipts(cwd, store) {
       }
       const triage = store.recordTriage(event.directive_id, {
         triaged_at: event.accepted_at ?? event.timestamp ?? new Date().toISOString(),
-        agent_id: event.agent_id ?? 'sonar.resident',
+        agent_id: event.agent_id ?? siteLoopConfig.resident.agent_id,
         status: 'carrier_accepted',
         reason: event.acceptance_semantics ?? 'carrier_started_directive_turn',
         selected_work_ref: directiveTaskRef(directive),
@@ -533,7 +578,7 @@ export function reconcileCarrierReceipts(cwd, store) {
   return { status: 'ok', scanned: sessionPaths.length, recorded, carrier_accepted: carrierAccepted, skipped };
 }
 
-function validateCarrierEventForDirective(directive, event, sessionPath) {
+function validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig: SiteLoopConfig) {
   const sessionCarrierId = carrierSessionIdFromSessionPath(sessionPath);
   const eventCarrierId = event.carrier_session_id ? String(event.carrier_session_id) : null;
   const leasedCarrierId = directive.delivery?.carrier_session_id ? String(directive.delivery.carrier_session_id) : null;
@@ -543,12 +588,12 @@ function validateCarrierEventForDirective(directive, event, sessionPath) {
   if (eventCarrierId && leasedCarrierId && eventCarrierId !== leasedCarrierId) {
     return { status: 'skipped', reason: 'carrier_session_mismatch_delivery_lease' };
   }
-  const agentId = event.agent_id ? String(event.agent_id) : 'sonar.resident';
+  const agentId = event.agent_id ? String(event.agent_id) : siteLoopConfig.resident.agent_id;
   const target = directive.target ?? {};
   if (target.kind === 'agent' && target.id && String(target.id) !== agentId) {
     return { status: 'skipped', reason: 'agent_mismatch_directive_target' };
   }
-  if (target.kind === 'role' && target.id === 'resident' && agentId !== 'sonar.resident') {
+  if (target.kind === 'role' && target.id === siteLoopConfig.resident.role && agentId !== siteLoopConfig.resident.agent_id) {
     return { status: 'skipped', reason: 'agent_mismatch_resident_role' };
   }
   const transport = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
@@ -592,9 +637,11 @@ export function recoverExpiredLeases(store, now = new Date().toISOString()) {
 }
 
 export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier = true } = {}) {
-  const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
-  const interactive = findLatestControlTargetByRuntime(cwd, agentId, 'agent-cli', { requireLiveCarrier });
-  if (interactive.status === 'available') return { ...interactive, preference: 'interactive_agent_cli' };
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const runtimeConfig = siteLoopConfig.resident_runtime;
+  const policy = loadSiteLoopOperatingPolicy(cwd).policy;
+  const interactive = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.preferred_runtime, { requireLiveCarrier });
+  if (interactive.status === 'available') return { ...interactive, preference: runtimeConfig.preferred_preference };
   if (policy?.carrier?.fallback_enabled !== true) {
     return {
       status: 'unavailable',
@@ -603,29 +650,39 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
       preferred_interactive: interactive,
     };
   }
-  const agentRuntimeServer = findLatestControlTargetByRuntime(cwd, agentId, 'agent-runtime-server', { requireLiveCarrier });
-  if (agentRuntimeServer.status === 'available') return { ...agentRuntimeServer, preference: 'agent_runtime_server_fallback', preferred_interactive: interactive };
-  const legacyNars = findLatestControlTargetByRuntime(cwd, agentId, 'nars', { requireLiveCarrier });
-  if (legacyNars.status === 'available') return { ...legacyNars, preference: 'agent_runtime_server_fallback', preferred_interactive: interactive, legacy_runtime: 'nars' };
+  const agentRuntimeServer = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.fallback_runtime, { requireLiveCarrier });
+  if (agentRuntimeServer.status === 'available') return { ...agentRuntimeServer, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive };
+  const legacyFallbacks = runtimeConfig.legacy_fallback_runtimes.map((runtime) => ({
+    runtime,
+    carrier: findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier }),
+  }));
+  const availableLegacy = legacyFallbacks.find((item) => item.carrier.status === 'available');
+  if (availableLegacy) return { ...availableLegacy.carrier, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive, legacy_runtime: availableLegacy.runtime };
+  const allFallbacksMissing = [interactive, agentRuntimeServer, ...legacyFallbacks.map((item) => item.carrier)]
+    .every((carrier) => carrier.reason === noLaunchResultReason(String(carrier.runtime ?? '')));
   return {
     status: 'unavailable',
     controlPath: null,
-    reason: interactive.reason === 'no_agent_cli_launch_result' && agentRuntimeServer.reason === 'no_agent_runtime_server_launch_result' && legacyNars.reason === 'no_nars_launch_result'
+    reason: allFallbacksMissing
       ? 'no_resident_control_target'
       : 'no_live_resident_control_target',
     preferred_interactive: interactive,
-    fallback_agent_runtime_server: agentRuntimeServer,
-    fallback_legacy_nars: legacyNars,
+    fallback_runtime: agentRuntimeServer,
+    fallback_legacy: legacyFallbacks,
   };
 }
 
+function noLaunchResultReason(runtime: string) {
+  return `no_${runtime.replace(/[^a-z0-9]+/gi, '_')}_launch_result`;
+}
+
 export function findLatestAgentCliControlTarget(cwd, agentId, { requireLiveCarrier = true } = {}) {
-  return findLatestControlTargetByRuntime(cwd, agentId, 'agent-cli', { requireLiveCarrier });
+  return findLatestControlTargetByRuntime(cwd, agentId, requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime, { requireLiveCarrier });
 }
 
 function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true }: RuntimeControlTargetOptions = {}) {
   const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
-  if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing' };
+  if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing', runtime };
   const candidates: ResidentControlTarget[] = readdirSync(resultsDir)
     .filter((name) => name.endsWith('.result.json'))
     .map((name) => {
@@ -634,6 +691,7 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
         const packet = JSON.parse(readFileSync(path, 'utf8'));
         const controlFlagIndex = Array.isArray(packet.runtime_args) ? packet.runtime_args.indexOf('--control-jsonl') : -1;
         const controlPath = (controlFlagIndex >= 0 ? packet.runtime_args[controlFlagIndex + 1] : null)
+          ?? packet.resident_launch?.control_path
           ?? packet.nars_launch?.control_path
           ?? packet.agent_runtime_server_launch?.control_path
           ?? packet.agent_cli_launch?.control_path
@@ -679,7 +737,7 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
 
 function readCarrierRetirement(cwd, carrierSessionId) {
   if (!carrierSessionId) return null;
-  const path = join(cwd, '.narada', 'crew', 'nars-sessions', carrierSessionId, 'retired.json');
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
   if (!existsSync(path)) return null;
   try {
     return { path, ...JSON.parse(readFileSync(path, 'utf8')) };
@@ -707,30 +765,31 @@ function carrierSessionIdFromSessionPath(sessionPath) {
 
 function receiptSessionPaths(cwd) {
   const paths = [];
-  const siteSessionRoot = join(cwd, '.narada', 'crew', 'nars-sessions');
+  const siteSessionRoot = configuredSessionRoot(cwd);
   if (existsSync(siteSessionRoot)) {
     for (const entry of readdirSync(siteSessionRoot, { withFileTypes: true }).filter((item) => item.isDirectory())) {
       paths.push(join(siteSessionRoot, entry.name, 'session.jsonl'));
       paths.push(join(siteSessionRoot, entry.name, 'events.jsonl'));
     }
   }
-  const pcSessionRoot = 'C:\\ProgramData\\Narada\\sites\\pc\\desktop-sunroom-2\\runtime\\agent-sessions';
-  if (existsSync(pcSessionRoot)) {
+  for (const externalSessionRoot of configuredExternalSessionRoots(cwd)) {
+    if (!existsSync(externalSessionRoot)) continue;
     for (const sessionId of agentCliCarrierSessionIds(cwd)) {
-      paths.push(join(pcSessionRoot, `${sessionId}.jsonl`));
+      paths.push(join(externalSessionRoot, `${sessionId}.jsonl`));
     }
   }
   return paths;
 }
 
 function agentCliCarrierSessionIds(cwd) {
+  const preferredRuntime = requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime;
   const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return [];
   const ids = new Set();
   for (const name of readdirSync(resultsDir).filter((entry) => entry.endsWith('.result.json'))) {
     try {
       const packet = JSON.parse(readFileSync(join(resultsDir, name), 'utf8'));
-      if (packet.runtime !== 'agent-cli') continue;
+      if (packet.runtime !== preferredRuntime) continue;
       const id = packet.carrier_session?.carrier_session_id
         ?? packet.carrier_session_id
         ?? packet.required_environment?.NARADA_CARRIER_SESSION_ID
@@ -762,6 +821,8 @@ function failDirectiveDelivery(store, directiveId, reason) {
 export function isResidentCarrierLive(carrierSessionId, cwd) {
   if (!carrierSessionId) return { status: 'unavailable', live: false, reason: 'carrier_session_id_missing' };
   if (!cwd) return { status: 'unavailable', live: false, reason: 'site_root_required_for_carrier_liveness' };
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
   const heartbeat = readCarrierHeartbeat(cwd, carrierSessionId);
   if (heartbeat.live) {
     return {
@@ -775,7 +836,7 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
     const output = execFileSync('powershell.exe', [
       '-NoProfile',
       '-Command',
-      `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $p = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -like '*agent-cli*' -or $_.CommandLine -like '*agent-runtime-server-control-host*' -or $_.CommandLine -like '*nars-control-host*') -and $_.CommandLine.Contains($needle) } | Select-Object -First 1 -ExpandProperty ProcessId; if ($p) { $p }`,
+      `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $p = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (${processPatternExpression}) -and $_.CommandLine.Contains($needle) } | Select-Object -First 1 -ExpandProperty ProcessId; if ($p) { $p }`,
     ], {
       encoding: 'utf8',
       windowsHide: true,
@@ -796,7 +857,7 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
 }
 
 function readCarrierHeartbeat(cwd, carrierSessionId, maxAgeMs = 30000) {
-  const path = join(cwd, '.narada', 'crew', 'nars-sessions', carrierSessionId, 'heartbeat.json');
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
   if (!existsSync(path)) return { status: 'missing', live: false, path };
   try {
     const record = JSON.parse(readFileSync(path, 'utf8'));
@@ -814,13 +875,12 @@ function readCarrierHeartbeat(cwd, carrierSessionId, maxAgeMs = 30000) {
 }
 
 function inferAgentCliSessionState(cwd, carrierSessionId) {
-  const sessionDir = join(cwd, '.narada', 'crew', 'nars-sessions', carrierSessionId);
-  const pcSessionRoot = 'C:\\ProgramData\\Narada\\sites\\pc\\desktop-sunroom-2\\runtime\\agent-sessions';
+  const sessionDir = join(configuredSessionRoot(cwd), carrierSessionId);
   const paths = [
     join(sessionDir, 'session.jsonl'),
     join(sessionDir, 'events.jsonl'),
     join(sessionDir, 'protocol.stdout.jsonl'),
-    join(pcSessionRoot, `${carrierSessionId}.jsonl`),
+    ...configuredExternalSessionRoots(cwd).map((root) => join(root, `${carrierSessionId}.jsonl`)),
   ];
   const readablePaths = paths.filter((path) => existsSync(path));
   if (readablePaths.length === 0) return { active_turn_state: 'unknown', reason: 'session_evidence_missing', session_dir: sessionDir };
@@ -858,13 +918,14 @@ function inferAgentCliSessionState(cwd, carrierSessionId) {
 }
 
 function readResidentHostEvidence(cwd, carrierSessionId) {
-  const sessionDir = join(cwd, '.narada', 'crew', 'nars-sessions', carrierSessionId);
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const sessionDir = join(configuredSessionRoot(cwd, siteLoopConfig), carrierSessionId);
   const hostLogPath = join(sessionDir, 'host.jsonl');
   const protocolPath = join(sessionDir, 'protocol.stdout.jsonl');
   const cursorPath = join(sessionDir, 'control.cursor.json');
   const controlPath = join(sessionDir, 'control.jsonl');
   return {
-    schema: 'narada.sonar.resident_host_evidence.v1',
+    schema: schemaName(siteLoopConfig, 'resident_host_evidence'),
     carrier_session_id: carrierSessionId,
     session_dir: sessionDir,
     control_path: controlPath,
@@ -933,8 +994,9 @@ const isEntrypoint = process.argv[1]
 if (isEntrypoint) {
   const cwd = resolve(process.argv[2] || process.cwd());
   const args = parseArgs(process.argv.slice(3));
-  const agentId = stringValue(args.agent, 'sonar.resident');
-  const role = stringValue(args.role, 'resident');
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const agentId = stringValue(args.agent, siteLoopConfig.resident.agent_id);
+  const role = stringValue(args.role, siteLoopConfig.resident.role);
   const limit = Number(args.limit ?? 25);
   const dryRun = args.dry_run === true;
   const requireLiveCarrier = args.require_live_carrier !== false;
@@ -945,7 +1007,7 @@ if (isEntrypoint) {
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     console.error(JSON.stringify({
-      schema: 'narada.sonar.directive_dispatch.v0',
+      schema: schemaName(siteLoopConfig, 'directive_dispatch'),
       status: 'error',
       error: error instanceof Error ? error.message : String(error),
     }, null, 2));

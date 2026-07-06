@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SqliteDirectiveRuntimeStore } from '@narada2/task-governance-core/directive-runtime-store';
 import { findTaskFile, readTaskFile, writeTaskProjection } from '@narada2/task-governance-core/task-governance';
@@ -10,14 +10,8 @@ import { openTaskLifecycleStoreWithDiscipline, taskLifecycleDbHealth } from '../
 import { pollInboxBridge } from '@narada2/task-lifecycle-mcp/task-lifecycle-runtime/inbox-bridge';
 import { dispatchPendingDirectives, getResidentStatus } from '../task-lifecycle/dispatch-directives.js';
 import { taskLifecycleTools } from '../task-lifecycle/task-mcp-tool-registry.js';
-import { loadSonarEmailResidentOperatingPolicy } from './operating-loop-policy.js';
-import {
-  REQUIRED_RESIDENT_MUTATING_TASK_TOOLS,
-  REQUIRED_RESIDENT_TASK_TOOLS,
-  RESIDENT_AGENT_ID,
-  RESIDENT_ROLE,
-  SONAR_EMAIL_RESIDENT_LOOP_ID,
-} from './sonar-email-resident-constants.js';
+import { loadSiteLoopOperatingPolicy } from './operating-loop-policy.js';
+import { requireSiteLoopConfig, schemaName, type SiteLoopCommandConfig, type SiteLoopConfig } from './site-loop-config.js';
 import {
   acknowledgeLoopAttention,
   acquireLoopLock,
@@ -48,8 +42,6 @@ import {
   setLoopControl,
 } from './site-loop-store.js';
 
-export { SONAR_EMAIL_RESIDENT_LOOP_ID } from './sonar-email-resident-constants.js';
-const MAILBOX_PROOF_FRESHNESS_MS = 24 * 60 * 60_000;
 type SiteLoopPayload = Record<string, unknown>;
 type SiteLoopOptions = SiteLoopPayload;
 type ResidentLoopStep = SiteLoopPayload;
@@ -72,8 +64,92 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = {}) {
+function configForSite(siteRoot: string): SiteLoopConfig {
+  return requireSiteLoopConfig(siteRoot);
+}
+
+function siteLoopConfigFromContext(candidate: unknown, siteRoot: unknown): SiteLoopConfig {
+  const record = asRecord(candidate);
+  const resident = asRecord(record.resident);
+  if (typeof record.loop_id === 'string' && typeof resident.agent_id === 'string' && typeof resident.role === 'string') {
+    return record as SiteLoopConfig;
+  }
+  const root = stringValue(siteRoot);
+  if (root) return configForSite(root);
+  throw new Error('site_loop_config_context_missing');
+}
+
+function siteLoopConfigFromOptions(options: SiteLoopPayload = {}): SiteLoopConfig {
+  return siteLoopConfigFromContext(options.siteLoopConfig, options.siteRoot);
+}
+
+function configuredSchema(siteRoot: string, key: string): string {
+  return schemaName(configForSite(siteRoot), key);
+}
+
+function configuredLoopId(siteRoot: string): string {
+  return configForSite(siteRoot).loop_id;
+}
+
+function configuredResidentAgentId(siteRoot: string): string {
+  return configForSite(siteRoot).resident.agent_id;
+}
+
+function configuredResidentRole(siteRoot: string): string {
+  return configForSite(siteRoot).resident.role;
+}
+
+function configuredTicketProjectionRef(siteRoot: string): { kind: string; ref: string } {
+  return configForSite(siteRoot).refs.ticket_projection;
+}
+
+function configuredLoopActor(siteRoot: string): string {
+  return `${configuredLoopId(siteRoot)}.loop`;
+}
+
+function configuredLoopSupervisorActor(siteRoot: string): string {
+  return `${configuredLoopActor(siteRoot)}.supervisor`;
+}
+
+function configuredFallbackRuntimeNames(siteLoopConfig: SiteLoopConfig): string[] {
+  return [
+    siteLoopConfig.resident_runtime.fallback_runtime,
+    ...siteLoopConfig.resident_runtime.legacy_fallback_runtimes,
+  ];
+}
+
+function configuredSessionRoot(siteRoot: string, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)): string {
+  const sessionRoot = siteLoopConfig.resident_runtime.session_root;
+  return isAbsolute(sessionRoot) ? sessionRoot : join(siteRoot, sessionRoot);
+}
+
+function configuredRuntimeMode(siteLoopConfig: SiteLoopConfig, carrier: SiteLoopPayload, proofDriver = false): string {
+  if (proofDriver) return 'proof_driver';
+  const runtime = String(carrier.runtime ?? '');
+  const legacyRuntime = String(carrier.legacy_runtime ?? '');
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
+  if (runtime === siteLoopConfig.resident_runtime.preferred_runtime) return 'preferred_runtime_reasoning';
+  if (fallbackRuntimes.includes(runtime) || fallbackRuntimes.includes(legacyRuntime)) return 'fallback_runtime_reasoning';
+  return 'no_live_carrier';
+}
+
+function commandLinePatternExpression(patterns: string[]) {
+  return patterns.length > 0
+    ? patterns.map((pattern) => `$_.CommandLine -like '*${escapePowerShellSingleQuotedString(pattern)}*'`).join(' -or ')
+    : '$false';
+}
+
+function escapePowerShellSingleQuotedString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
+export async function runSiteLoop(cwd, options: SiteLoopOptions = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopId = siteLoopConfig.loop_id;
+  const residentAgentId = siteLoopConfig.resident.agent_id;
+  const residentRole = siteLoopConfig.resident.role;
+  const ticketProjectionRef = siteLoopConfig.refs.ticket_projection;
   const dryRun = options.dryRun === true || options.dry_run === true;
   const limit = Number(options.limit ?? 25);
   const threshold = options.threshold == null ? undefined : Number(options.threshold);
@@ -81,7 +157,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
   const drain = options.drain === true;
   const runId = typeof options.runId === 'string' ? options.runId : makeRunId();
   const startedAt = new Date().toISOString();
-  const operatingPolicy = loadSonarEmailResidentOperatingPolicy(siteRoot).policy;
+  const operatingPolicy = loadSiteLoopOperatingPolicy(siteRoot).policy;
   const steps: ResidentLoopStep[] = [];
   let failedStep: ResidentLoopStep | null = null;
   mkdirSync(resolve(siteRoot, '.ai', 'state'), { recursive: true });
@@ -93,16 +169,16 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
     if (store) {
       const lockTtlMs = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
       lock = acquireLoopLock(store, {
-        loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loopId,
         runId,
         ttlMs: lockTtlMs,
       });
       if (lock.status === 'contended') {
-        const health = getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
+        const health = getLoopHealth(store, loopId);
         return {
-          schema: 'narada.sonar.site_loop_run.v2',
+          schema: schemaName(siteLoopConfig, 'site_loop_run'),
           status: 'locked',
-          loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+          loop_id: loopId,
           run_id: runId,
           dry_run: false,
           started_at: startedAt,
@@ -114,14 +190,14 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
       }
       beginLoopRun(store, {
         run_id: runId,
-        loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loop_id: loopId,
         status: 'running',
         dry_run: false,
         started_at: startedAt,
         summary: lock?.status === 'stale_recovered' ? { stale_lock_recovered: lock } : null,
       });
     }
-    const control = store ? getLoopControl(store, SONAR_EMAIL_RESIDENT_LOOP_ID) : null;
+    const control = store ? getLoopControl(store, loopId) : null;
     if (control?.paused && !drain) {
       const finishedAt = new Date().toISOString();
       const summary = { paused: true, step_count: 0 };
@@ -130,11 +206,11 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         finished_at: finishedAt,
         summary,
       });
-      const health = getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
+      const health = getLoopHealth(store, loopId);
       return {
-        schema: 'narada.sonar.site_loop_run.v2',
+        schema: schemaName(siteLoopConfig, 'site_loop_run'),
         status: 'paused',
-        loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loop_id: loopId,
         run_id: runId,
         dry_run: dryRun,
         started_at: startedAt,
@@ -159,9 +235,9 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         },
         stepId: 'source_sync',
         inputRefs: [{ kind: 'site_root', ref: siteRoot }],
-        execute: () => runSourceSync(siteRoot, { dryRun, runner: options.sourceSyncRunner }),
+        execute: () => runSourceSync(siteRoot, { dryRun, runner: options.sourceSyncRunner, commandConfig: siteLoopConfig.commands.source_sync, schema: schemaName(siteLoopConfig, 'source_sync') }),
         outputRefs: (result) => sourceSyncRefs(result),
-        evidence: (result) => summarizeSourceSync(result),
+        evidence: (result) => summarizeSourceSync(result, siteLoopConfig),
       });
       steps.push(sourceSyncStep);
     }
@@ -204,7 +280,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
 
     const ticketTaskReconciliation: SiteLoopPayload = dryRun || drain || !sourceSync
       ? {
-          schema: 'narada.sonar.ticket_task_reconciliation.v1',
+          schema: schemaName(siteLoopConfig, 'ticket_task_reconciliation'),
           status: 'skipped',
           reason: dryRun ? 'dry_run' : drain ? 'drain' : 'source_sync_not_run',
           created: 0,
@@ -222,16 +298,18 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
           stepId: 'ticket_task_reconciliation',
           inputRefs: [
             ...(Array.isArray(steps.find((step) => step.step_id === 'source_sync')?.output_refs) ? steps.find((step) => step.step_id === 'source_sync')?.output_refs as unknown[] : []),
-            { kind: 'mailbox_ticket_projection', ref: 'help-global-maxima' },
+            ticketProjectionRef,
           ],
           execute: () => runTicketTaskReconcile(siteRoot, {
             dryRun,
             limit,
-            preferredRole: RESIDENT_ROLE,
+            preferredRole: residentRole,
             runner: options.ticketTaskReconcileRunner,
+            commandConfig: siteLoopConfig.commands.ticket_task_reconciliation,
+            schema: schemaName(siteLoopConfig, 'ticket_task_reconciliation'),
           }),
           outputRefs: (result) => ticketTaskRefs(result),
-          evidence: (result) => summarizeTicketTaskReconciliation(result),
+          evidence: (result) => summarizeTicketTaskReconciliation(result, siteLoopConfig),
         });
     if (ticketTaskReconciliation?.step_id) {
       steps.push(ticketTaskReconciliation);
@@ -241,9 +319,9 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         runId,
         stepId: 'ticket_task_reconciliation',
         status: ticketTaskReconciliation.status === 'skipped' ? 'skipped' : 'ok',
-        inputRefs: [{ kind: 'mailbox_ticket_projection', ref: 'help-global-maxima' }],
+        inputRefs: [ticketProjectionRef],
         outputRefs: ticketTaskRefs(ticketTaskReconciliation),
-        evidence: summarizeTicketTaskReconciliation(ticketTaskReconciliation),
+        evidence: summarizeTicketTaskReconciliation(ticketTaskReconciliation, siteLoopConfig),
       }));
     }
 
@@ -253,7 +331,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
       : getResidentStatus(siteRoot);
     const preBacklogOutcome = dryRun
       ? {
-          schema: 'narada.sonar.agent_outcome_reconciliation.v1',
+          schema: schemaName(siteLoopConfig, 'agent_outcome_reconciliation'),
           status: 'skipped',
           reason: 'dry_run',
           output_refs: [],
@@ -278,20 +356,20 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
     }));
 
     const reportedTaskStateReconciliation = dryRun
-      ? { schema: 'narada.sonar.reported_resident_task_state_reconciliation.v1', status: 'skipped', reason: 'dry_run', repaired: [] }
+      ? { schema: schemaName(siteLoopConfig, 'reported_resident_task_state_reconciliation'), status: 'skipped', reason: 'dry_run', repaired: [] }
       : await reconcileReportedResidentTaskLifecycleState(siteRoot, { limit: 100 });
     steps.push(recordSyntheticStep({
       store,
       runId,
       stepId: 'reported_resident_task_state_reconciliation',
-      inputRefs: [{ kind: 'resident_backlog', ref: RESIDENT_AGENT_ID }],
+      inputRefs: [{ kind: 'resident_backlog', ref: residentAgentId }],
       outputRefs: (reportedTaskStateReconciliation.repaired ?? []).map((item) => ({ kind: 'task', ref: item.task_id })),
       evidence: reportedTaskStateReconciliation,
     }));
 
     const backlogRecovery = dryRun
       ? {
-          schema: 'narada.sonar.resident_backlog_recovery.v1',
+          schema: schemaName(siteLoopConfig, 'resident_backlog_recovery'),
           status: 'skipped',
           reason: 'dry_run',
           emitted: [],
@@ -306,9 +384,9 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
       store,
       runId,
       stepId: 'resident_backlog_recovery_emission',
-      inputRefs: [{ kind: 'resident_backlog', ref: RESIDENT_AGENT_ID }],
+      inputRefs: [{ kind: 'resident_backlog', ref: residentAgentId }],
       outputRefs: residentBacklogRecoveryDirectiveRefs(backlogRecovery),
-      evidence: summarizeResidentBacklogRecovery(backlogRecovery),
+      evidence: summarizeResidentBacklogRecovery(backlogRecovery, siteLoopConfig),
     }));
 
     const residentSupervisor: SiteLoopPayload = dryRun || !options.ensureResident
@@ -321,7 +399,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
             steps.push(step);
           },
           stepId: 'resident_supervisor',
-          inputRefs: [{ kind: 'agent', ref: RESIDENT_AGENT_ID }],
+          inputRefs: [{ kind: 'agent', ref: residentAgentId }],
           execute: () => ensureResidentCarrier(siteRoot, {
             runner: options.residentSupervisorRunner,
             requireLiveCarrier: options.requireLiveCarrier !== false,
@@ -334,7 +412,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
     let dispatch = null;
     if (dryRun) {
       dispatch = {
-        schema: 'narada.sonar.directive_dispatch.v0',
+        schema: schemaName(siteLoopConfig, 'directive_dispatch'),
         status: 'skipped',
         dry_run: true,
         reason: 'dry_run',
@@ -371,8 +449,8 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         ],
         execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
           cwd: siteRoot,
-          agentId: RESIDENT_AGENT_ID,
-          role: RESIDENT_ROLE,
+          agentId: residentAgentId,
+          role: residentRole,
           limit,
           dryRun: false,
           requireLiveCarrier: options.requireLiveCarrier !== false,
@@ -394,8 +472,8 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         inputRefs: [],
         execute: () => (typeof options.dispatchRunner === 'function' ? options.dispatchRunner : dispatchPendingDirectives)({
           cwd: siteRoot,
-          agentId: RESIDENT_AGENT_ID,
-          role: RESIDENT_ROLE,
+          agentId: residentAgentId,
+          role: residentRole,
           limit: 0,
           dryRun: false,
         }),
@@ -421,7 +499,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
     const directiveIds = bridge ? residentDirectiveRefs(bridge.result).map((ref) => ref.ref) : [];
     const outcome = dryRun
       ? {
-          schema: 'narada.sonar.agent_outcome_reconciliation.v1',
+          schema: schemaName(siteLoopConfig, 'agent_outcome_reconciliation'),
           status: 'skipped',
           reason: 'dry_run',
           output_refs: [],
@@ -483,15 +561,15 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         summary,
       });
       health = recordLoopHealthSuccess(store, {
-        loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loopId,
         runId,
         at: finishedAt,
       });
     }
     return {
-      schema: 'narada.sonar.site_loop_run.v2',
+      schema: schemaName(siteLoopConfig, 'site_loop_run'),
       status: 'ok',
-      loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loop_id: loopId,
       run_id: runId,
       dry_run: dryRun,
       started_at: startedAt,
@@ -513,7 +591,7 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
         error: errorPayload,
       });
       recordLoopHealthFailure(store, {
-        loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+        loopId,
         runId,
         failingStep: stringOrNull(failedStep?.step_id),
         error: errorPayload,
@@ -521,9 +599,9 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
       });
     }
     return {
-      schema: 'narada.sonar.site_loop_run.v2',
+      schema: schemaName(siteLoopConfig, 'site_loop_run'),
       status: 'failed',
-      loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loop_id: loopId,
       run_id: runId,
       dry_run: dryRun,
       started_at: startedAt,
@@ -534,20 +612,23 @@ export async function runSonarEmailResidentLoop(cwd, options: SiteLoopOptions = 
   } finally {
     if (store) {
       if (lock?.status === 'acquired' || lock?.status === 'stale_recovered') {
-        releaseLoopLock(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, runId });
+        releaseLoopLock(store, { loopId, runId });
       }
       store.close();
     }
   }
 }
 
-async function runSourceSync(siteRoot, { dryRun, runner }: SiteLoopPayload = {}) {
+async function runSourceSync(siteRoot, options: SiteLoopPayload = {}) {
+  const { dryRun, runner } = options;
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun });
   }
-  const args = ['cli', '--', '--json', 'sync'];
-  if (dryRun) args.push('--dry-run');
-  const result = spawnSync('pnpm', args, {
+  const commandConfig = asCommandConfig(options.commandConfig, configForSite(siteRoot).commands.source_sync);
+  assertDirectSpawnCommand(commandConfig);
+  const args = [...commandConfig.args];
+  if (dryRun && commandConfig.dry_run_arg) args.push(commandConfig.dry_run_arg);
+  const result = spawnSync(commandConfig.command, args, {
     cwd: siteRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -560,30 +641,25 @@ async function runSourceSync(siteRoot, { dryRun, runner }: SiteLoopPayload = {})
     throw error;
   }
   return parseJsonOutput(result.stdout, {
-    schema: 'narada.sonar.source_sync.v1',
+    schema: stringValue(options.schema, configuredSchema(siteRoot, 'source_sync')),
     status: 'ok',
     stdout: result.stdout,
   });
 }
 
-async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, runner }: SiteLoopPayload = {}) {
+async function runTicketTaskReconcile(siteRoot, options: SiteLoopPayload = {}) {
+  const { dryRun, limit, preferredRole, runner } = options;
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun, limit, preferredRole });
   }
-  const role = typeof preferredRole === 'string' ? preferredRole : RESIDENT_ROLE;
-  const args: string[] = [
-    'cli',
-    '--',
-    '--json',
-    'ticket',
-    'task',
-    'reconcile',
-    '--preferred-role',
-    role,
-  ];
-  if (Number.isFinite(Number(limit))) args.push('--limit', String(Number(limit)));
-  if (dryRun) args.push('--dry-run');
-  const result = spawnSync('pnpm', args, {
+  const commandConfig = asCommandConfig(options.commandConfig, configForSite(siteRoot).commands.ticket_task_reconciliation);
+  assertDirectSpawnCommand(commandConfig);
+  const role = typeof preferredRole === 'string' ? preferredRole : configuredResidentRole(siteRoot);
+  const args: string[] = [...commandConfig.args];
+  if (commandConfig.preferred_role_arg) args.push(commandConfig.preferred_role_arg, role);
+  if (Number.isFinite(Number(limit)) && commandConfig.limit_arg) args.push(commandConfig.limit_arg, String(Number(limit)));
+  if (dryRun && commandConfig.dry_run_arg) args.push(commandConfig.dry_run_arg);
+  const result = spawnSync(commandConfig.command, args, {
     cwd: siteRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -596,7 +672,7 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
     throw error;
   }
   return {
-    schema: 'narada.sonar.ticket_task_reconciliation.v1',
+    schema: stringValue(options.schema, configuredSchema(siteRoot, 'ticket_task_reconciliation')),
     ...parseJsonOutput(result.stdout, {
       status: 'success',
       stdout: result.stdout,
@@ -604,12 +680,32 @@ async function runTicketTaskReconcile(siteRoot, { dryRun, limit, preferredRole, 
   };
 }
 
-export function listSonarEmailResidentLoopRuns(cwd, options: SiteLoopPayload = {}) {
-  const store = openSiteLoopStore(resolve(cwd), { write: false });
-  const loopId = typeof options.loopId === 'string' ? options.loopId : SONAR_EMAIL_RESIDENT_LOOP_ID;
+function assertDirectSpawnCommand(commandConfig: SiteLoopCommandConfig) {
+  if (commandConfig.execution !== 'direct_spawn') {
+    throw new Error(`site_loop_command_execution_unsupported:${commandConfig.execution}`);
+  }
+}
+
+function asCommandConfig(value: unknown, fallback: SiteLoopCommandConfig): SiteLoopCommandConfig {
+  const record = asRecord(value);
+  const args = Array.isArray(record.args) ? record.args.map(String) : fallback.args;
+  return {
+    execution: record.execution === 'direct_spawn' ? 'direct_spawn' : fallback.execution,
+    command: stringValue(record.command, fallback.command),
+    args,
+    dry_run_arg: stringOrNull(record.dry_run_arg) ?? fallback.dry_run_arg,
+    limit_arg: stringOrNull(record.limit_arg) ?? fallback.limit_arg,
+    preferred_role_arg: stringOrNull(record.preferred_role_arg) ?? fallback.preferred_role_arg,
+  };
+}
+
+export function listSiteLoopRuns(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const store = openSiteLoopStore(siteRoot, { write: false });
+  const loopId = typeof options.loopId === 'string' ? options.loopId : configuredLoopId(siteRoot);
   try {
     return {
-      schema: 'narada.sonar.site_loop_runs.v1',
+      schema: configuredSchema(siteRoot, 'site_loop_runs'),
       loop_id: loopId,
       runs: listLoopRuns(store, {
         limit: Number(options.limit ?? 10),
@@ -621,12 +717,13 @@ export function listSonarEmailResidentLoopRuns(cwd, options: SiteLoopPayload = {
   }
 }
 
-export function showSonarEmailResidentLoopRun(cwd, runId) {
-  const store = openSiteLoopStore(resolve(cwd), { write: false });
+export function showSiteLoopRun(cwd, runId) {
+  const siteRoot = resolve(cwd);
+  const store = openSiteLoopStore(siteRoot, { write: false });
   try {
     const run = getLoopRun(store, runId);
     return {
-      schema: 'narada.sonar.site_loop_show.v1',
+      schema: configuredSchema(siteRoot, 'site_loop_show'),
       status: run ? 'ok' : 'not_found',
       run,
     };
@@ -635,36 +732,39 @@ export function showSonarEmailResidentLoopRun(cwd, runId) {
   }
 }
 
-export function sonarEmailResidentLoopStatus(cwd) {
-  const store = openSiteLoopStore(resolve(cwd), { write: false });
-  try {
-    return getLoopStatus(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID });
-  } finally {
-    store.close();
-  }
-}
-
-export function sonarEmailResidentLoopHealth(cwd) {
-  const store = openSiteLoopStore(resolve(cwd), { write: false });
-  try {
-    return getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
-  } finally {
-    store.close();
-  }
-}
-
-export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPayload = {}) {
+export function siteLoopStatus(cwd) {
   const siteRoot = resolve(cwd);
+  const store = openSiteLoopStore(siteRoot, { write: false });
+  try {
+    return getLoopStatus(store, { loopId: configuredLoopId(siteRoot) });
+  } finally {
+    store.close();
+  }
+}
+
+export function siteLoopHealth(cwd) {
+  const siteRoot = resolve(cwd);
+  const store = openSiteLoopStore(siteRoot, { write: false });
+  try {
+    return getLoopHealth(store, configuredLoopId(siteRoot));
+  } finally {
+    store.close();
+  }
+}
+
+export function siteLoopOperatingLayerStatus(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const nowIso = stringValue(options.now ?? options.nowIso ?? options.now_iso, new Date().toISOString());
   const nowMs = Date.parse(nowIso);
-  const loop = sonarEmailResidentLoopStatus(siteRoot);
-  const resident = sonarResidentStatus(siteRoot);
-  const pending = sonarResidentPending(siteRoot, { limit: options.limit ?? 25 });
-  const receipts = sonarResidentReceipts(siteRoot, { limit: 1 });
-  const outcomes = sonarResidentOutcomes(siteRoot, { limit: options.outcomeLimit ?? options.outcome_limit ?? 500 });
-  const proofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? MAILBOX_PROOF_FRESHNESS_MS);
-  const mailboxProofFreshnessWindowMs = Number(options.mailboxProofFreshnessMs ?? options.mailbox_proof_freshness_ms ?? MAILBOX_PROOF_FRESHNESS_MS);
-  const policy = loadSonarEmailResidentOperatingPolicy(siteRoot);
+  const loop = siteLoopStatus(siteRoot);
+  const resident = siteResidentStatus(siteRoot);
+  const pending = siteResidentPending(siteRoot, { limit: options.limit ?? 25 });
+  const receipts = siteResidentReceipts(siteRoot, { limit: 1 });
+  const outcomes = siteResidentOutcomes(siteRoot, { limit: options.outcomeLimit ?? options.outcome_limit ?? 500 });
+  const proofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const mailboxProofFreshnessWindowMs = Number(options.mailboxProofFreshnessMs ?? options.mailbox_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const policy = loadSiteLoopOperatingPolicy(siteRoot);
   const dbHealth = taskLifecycleDbHealth(siteRoot);
   const surfacePolicyNoise = recentSurfacePolicyNoise(siteRoot, {
     carrierStartedAt: resident?.host?.started_event?.timestamp ?? null,
@@ -688,13 +788,14 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
   const carrierUsable = ['available', 'busy'].includes(resident.status);
   const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
   const carrier: ResidentCarrier = asRecord(resident.carrier);
+  const runtimeConfig = siteLoopConfig.resident_runtime;
   const preferredInteractive = asRecord(carrier.preferred_interactive);
   const agentCliControlPath = stringOrNull(preferredInteractive.controlPath)
-    ?? (carrier.runtime === 'agent-cli' ? stringOrNull(carrier.controlPath) : null);
+    ?? (carrier.runtime === runtimeConfig.preferred_runtime ? stringOrNull(carrier.controlPath) : null);
   const agentCliReady = Boolean(agentCliControlPath !== null && existsSync(agentCliControlPath))
-    && (preferredInteractive.status === 'available' || carrier.runtime === 'agent-cli');
-  const primaryRuntimeReady = carrier.runtime === 'agent-cli'
-    && carrier.preference === 'interactive_agent_cli'
+    && (preferredInteractive.status === 'available' || carrier.runtime === runtimeConfig.preferred_runtime);
+  const primaryRuntimeReady = carrier.runtime === runtimeConfig.preferred_runtime
+    && carrier.preference === runtimeConfig.preferred_preference
     && proofDriver !== true;
   const latestProductionOutcome = latestProductionReportedOutcome(outcomes.outcomes ?? []);
   const latestProductionProof = Boolean(latestProductionOutcome);
@@ -727,13 +828,13 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
       ? 'production_unproven'
       : 'transport_only';
   return {
-    schema: 'narada.sonar.operating_layer_status.v1',
+    schema: schemaName(siteLoopConfig, 'operating_layer_status'),
     status: transportStatus === 'transport_ready' && productionStatus === 'production_ready'
       ? 'production_ready'
       : transportStatus,
     transport_status: transportStatus,
     production_status: productionStatus,
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loop_id: siteLoopConfig.loop_id,
     health: {
       status: health?.status ?? 'unknown',
       stored_status: health?.stored_status ?? null,
@@ -751,7 +852,7 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
       proof_driver: proofDriver,
       agent_cli_ready: agentCliReady || primaryRuntimeReady,
       agent_cli_control_path: agentCliControlPath,
-      preferred_runtime_selected: carrier.preference === 'interactive_agent_cli',
+      preferred_runtime_selected: carrier.preference === runtimeConfig.preferred_preference,
       carrier_session_id: carrier.carrierSessionId ?? null,
       active_turn_state: resident.active_turn_state ?? null,
       carrier_state: resident.carrier_state ?? null,
@@ -793,23 +894,20 @@ export function sonarEmailResidentOperatingLayerStatus(cwd, options: SiteLoopPay
     alerts: alertSignals,
     surface_policy_noise: surfacePolicyNoise,
     commands: {
-      run_once: 'pnpm cli -- loop run sonar.email-resident --once --ensure-resident',
-      supervise: 'pnpm cli -- loop supervise sonar.email-resident --ensure-resident',
-      agent_cli_resident: '.\\narada-sonar.ps1 agent-start -Agent sonar.resident -Runtime agent-cli -Exec',
-      live_fixture_proof: 'pnpm cli -- resident e2e --ack-fixture --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
-      mailbox_proof: 'pnpm cli -- resident e2e --mailbox-proof --controlled-mailbox-proof --controlled-mailbox-source <ref> --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
+      run_once: siteLoopConfig.commands.run_once,
+      supervise: siteLoopConfig.commands.supervise,
+      agent_cli_resident: siteLoopConfig.commands.agent_cli_resident,
+      live_fixture_proof: siteLoopConfig.commands.live_fixture_proof,
+      mailbox_proof: siteLoopConfig.commands.mailbox_proof,
     },
-    notes: [
-      'This status is scoped to the Sonar email resident operating layer.',
-      'transport_ready means loop plumbing is usable; production_ready additionally requires primary agent-cli runtime and non-proof-driver report evidence.',
-      'Unrelated Sonar cloud or Sentry warnings are intentionally excluded.',
-    ],
+    notes: siteLoopConfig.notes,
   };
 }
 
-export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) {
+export function siteLoopReadiness(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
-  const operating = sonarEmailResidentOperatingLayerStatus(siteRoot, options);
+  const siteLoopConfig = configForSite(siteRoot);
+  const operating = siteLoopOperatingLayerStatus(siteRoot, options);
   const requireProduction = options.requireProduction === true || options.require_production === true;
   const requireMailboxProof = options.requireMailboxProof === true || options.require_mailbox_proof === true;
   const projection = asRecord(options.projectionDriftResult ?? runReadinessJsonCommand(siteRoot, [
@@ -866,7 +964,7 @@ export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) 
       proved_at: operating.mailbox_proof?.proof?.proved_at ?? null,
       age_ms: operating.mailbox_proof?.age_ms ?? null,
       freshness_window_ms: operating.mailbox_proof?.freshness_window_ms ?? null,
-      remediation: 'Run a controlled live mailbox proof: pnpm cli -- resident e2e --mailbox-proof --controlled-mailbox-proof --controlled-mailbox-source <ref> --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
+      remediation: `Run the configured controlled live mailbox proof command: ${siteLoopConfig.commands.mailbox_proof}`,
     }),
     readinessGate('stale_pending_directives', stalePending === 0, {
       stale_pending_directives: stalePending,
@@ -883,10 +981,10 @@ export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) 
   const failed = gates.filter((gate) => gate.status !== 'ok');
   const ready = failed.length === 0;
   return {
-    schema: 'narada.sonar.operating_layer_readiness.v1',
+    schema: schemaName(siteLoopConfig, 'operating_layer_readiness'),
     status: ready ? 'ready' : 'not_ready',
     ready,
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loop_id: siteLoopConfig.loop_id,
     gates,
     failed_gates: failed.map((gate) => gate.gate),
     invariants: [
@@ -923,21 +1021,23 @@ export function sonarEmailResidentReadiness(cwd, options: SiteLoopPayload = {}) 
     ],
     operating_layer: operating,
     commands: {
-      status: 'pnpm cli -- ops loop',
+      status: siteLoopConfig.commands.status,
       readiness: requireProduction || requireMailboxProof
-        ? `pnpm cli -- ops readiness${requireProduction ? ' --require-production' : ''}${requireMailboxProof ? ' --require-mailbox-proof' : ''}`
-        : 'pnpm cli -- ops readiness',
-      projection_drift: 'pnpm cli -- task projection drift --json',
+        ? `${siteLoopConfig.commands.readiness}${requireProduction ? ' --require-production' : ''}${requireMailboxProof ? ' --require-mailbox-proof' : ''}`
+        : siteLoopConfig.commands.readiness,
+      projection_drift: siteLoopConfig.commands.projection_drift,
       run_once: operating.commands?.run_once ?? null,
       supervise: operating.commands?.supervise ?? null,
     },
   };
 }
 
-export function sonarEmailResidentCoherence(cwd, options: SiteLoopPayload = {}) {
+export function siteLoopCoherence(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const requireProduction = options.requireProduction !== false && options.require_production !== false;
   const requireMailboxProof = options.requireMailboxProof !== false && options.require_mailbox_proof !== false;
-  const readiness = sonarEmailResidentReadiness(cwd, {
+  const readiness = siteLoopReadiness(siteRoot, {
     ...options,
     requireProduction,
     requireMailboxProof,
@@ -946,10 +1046,10 @@ export function sonarEmailResidentCoherence(cwd, options: SiteLoopPayload = {}) 
     .filter((gate) => gate.status !== 'ok')
     .map((gate) => coherenceBlocker(gate, readiness));
   return {
-    schema: 'narada.sonar.operating_layer_coherence.v1',
+    schema: schemaName(siteLoopConfig, 'operating_layer_coherence'),
     status: blockers.length === 0 ? 'coherent' : 'not_coherent',
     coherent: blockers.length === 0,
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loop_id: siteLoopConfig.loop_id,
     required: {
       production_runtime: requireProduction,
       mailbox_proof: requireMailboxProof,
@@ -960,10 +1060,10 @@ export function sonarEmailResidentCoherence(cwd, options: SiteLoopPayload = {}) 
       : blockers.map((blocker) => blocker.next_action).filter(Boolean),
     readiness,
     commands: {
-      readiness: `pnpm cli -- ops readiness${requireProduction ? ' --require-production' : ''}${requireMailboxProof ? ' --require-mailbox-proof' : ''}`,
-      status: 'pnpm cli -- ops loop',
+      readiness: `${siteLoopConfig.commands.readiness}${requireProduction ? ' --require-production' : ''}${requireMailboxProof ? ' --require-mailbox-proof' : ''}`,
+      status: siteLoopConfig.commands.status,
       mailbox_proof: readiness.operating_layer?.commands?.mailbox_proof ?? null,
-      background_agent_cli: 'pnpm cli -- resident summon --background --json',
+      background_agent_cli: siteLoopConfig.commands.background_agent_cli,
     },
   };
 }
@@ -1000,7 +1100,7 @@ function coherenceBlocker(gate, readiness) {
       code: 'blocked_by_no_usable_resident_carrier',
       next_action: readiness.operating_layer?.commands?.agent_cli_resident
         ? `Start resident carrier: ${readiness.operating_layer.commands.agent_cli_resident}`
-        : 'Start sonar.resident agent-cli carrier.',
+        : 'Start the configured resident carrier.',
     };
   }
   if (gate.gate === 'projection_drift') {
@@ -1029,10 +1129,10 @@ function productionRuntimeBlockCode(operating) {
 }
 
 function productionRuntimeRemediation(operating) {
-  const command = operating.commands?.agent_cli_resident ?? '.\\narada-sonar.ps1 agent-start -Agent sonar.resident -Runtime agent-cli -Exec';
+  const command = operating.commands?.agent_cli_resident ?? 'configured resident carrier start command unavailable';
   if (operating.resident?.primary_runtime_ready !== true) return `Start and keep open the primary resident carrier: ${command}`;
-  if (operating.resident?.proof_driver === true) return 'Run production proof through live agent-cli resident, not the agent-runtime-server proof driver.';
-  if (operating.latest_activity?.production_proof_fresh !== true) return 'Run a fresh controlled resident proof through the primary agent-cli carrier.';
+  if (operating.resident?.proof_driver === true) return 'Run production proof through the configured preferred resident runtime, not the configured fallback proof driver.';
+  if (operating.latest_activity?.production_proof_fresh !== true) return 'Run a fresh controlled resident proof through the configured preferred resident carrier.';
   return 'Inspect resident readiness evidence.';
 }
 
@@ -1167,6 +1267,7 @@ function appendNodeOption(existing, option) {
 }
 
 function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const policyPath = join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json');
   const actionDir = join(siteRoot, '.narada', 'crew', 'action-admission');
   const declaredTools = loadSurfaceDeclaredTools(policyPath);
@@ -1182,7 +1283,7 @@ function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
   const repairedHistorical: SurfacePolicyNoise[] = [];
   if (!existsSync(actionDir)) {
     const result: SiteLoopPayload = {
-      schema: 'narada.sonar.surface_policy_noise.v1',
+      schema: schemaName(siteLoopConfig, 'surface_policy_noise'),
       status: 'ok',
       policy_path: policyPath,
       current_count: 0,
@@ -1214,7 +1315,7 @@ function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
     else historical.push(item);
   }
   const result: SiteLoopPayload = {
-    schema: 'narada.sonar.surface_policy_noise.v1',
+    schema: schemaName(siteLoopConfig, 'surface_policy_noise'),
     status: current.length === 0 ? 'ok' : 'attention_needed',
     policy_path: policyPath,
     policy_mtime_ms: repairedAtMs,
@@ -1234,13 +1335,14 @@ function residentMailboxProofDir(siteRoot) {
 }
 
 function recordResidentMailboxProof(siteRoot, proof) {
+  const siteLoopConfig = configForSite(siteRoot);
   const dir = residentMailboxProofDir(siteRoot);
   mkdirSync(dir, { recursive: true });
   const proofId = proof.proof_id ?? `mailbox_proof_${new Date().toISOString().replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`;
   const packet = {
-    schema: 'narada.sonar.resident_mailbox_proof.v1',
-    site_id: 'narada-sonar',
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    schema: siteLoopConfig.mailbox_proof.schema,
+    site_id: siteLoopConfig.site_id,
+    loop_id: siteLoopConfig.loop_id,
     proved_at: new Date().toISOString(),
     ...proof,
     proof_id: proofId,
@@ -1251,12 +1353,13 @@ function recordResidentMailboxProof(siteRoot, proof) {
 }
 
 function latestResidentMailboxProof(siteRoot, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const dir = residentMailboxProofDir(siteRoot);
   const nowMs = Number(options.nowMs ?? Date.now());
-  const freshnessWindowMs = Number(options.freshnessMs ?? MAILBOX_PROOF_FRESHNESS_MS);
+  const freshnessWindowMs = Number(options.freshnessMs ?? siteLoopConfig.mailbox_proof.freshness_ms);
   if (!existsSync(dir)) {
     return {
-      schema: 'narada.sonar.resident_mailbox_proof_status.v1',
+      schema: siteLoopConfig.mailbox_proof.status_schema,
       status: 'missing',
       directory: dir,
       freshness_window_ms: freshnessWindowMs,
@@ -1276,7 +1379,7 @@ function latestResidentMailboxProof(siteRoot, options: SiteLoopPayload = {}) {
   const latest = proofs[0] ?? null;
   if (!latest) {
     return {
-      schema: 'narada.sonar.resident_mailbox_proof_status.v1',
+      schema: siteLoopConfig.mailbox_proof.status_schema,
       status: 'missing',
       directory: dir,
       freshness_window_ms: freshnessWindowMs,
@@ -1286,7 +1389,7 @@ function latestResidentMailboxProof(siteRoot, options: SiteLoopPayload = {}) {
   const ageMs = nowMs - Date.parse(latest.proved_at ?? '');
   const fresh = Number.isFinite(ageMs) && ageMs <= freshnessWindowMs;
   return {
-    schema: 'narada.sonar.resident_mailbox_proof_status.v1',
+    schema: siteLoopConfig.mailbox_proof.status_schema,
     status: fresh ? 'fresh' : 'stale',
     directory: dir,
     freshness_window_ms: freshnessWindowMs,
@@ -1312,24 +1415,26 @@ function loadSurfaceDeclaredTools(policyPath) {
   return declared;
 }
 
-export function setSonarEmailResidentLoopControl(cwd, control) {
-  const store = openSiteLoopStore(resolve(cwd));
+export function setSiteLoopControl(cwd, control) {
+  const siteRoot = resolve(cwd);
+  const store = openSiteLoopStore(siteRoot);
   try {
-    return setLoopControl(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, ...control });
+    return setLoopControl(store, { loopId: configuredLoopId(siteRoot), ...control });
   } finally {
     store.close();
   }
 }
 
-export function sonarResidentStatus(cwd, options: SiteLoopPayload = {}) {
+export function siteResidentStatus(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const status = getResidentStatus(siteRoot, options);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   ensureSiteLoopTables(lifecycleStore.db);
   try {
-    const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? 24 * 60 * 60_000);
+    const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
     const latestProductionOutcome = latestProductionReportedOutcome(listDirectiveOutcomes({ db: lifecycleStore.db }, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       outcome: 'reported',
       limit: 500,
     }));
@@ -1339,7 +1444,7 @@ export function sonarResidentStatus(cwd, options: SiteLoopPayload = {}) {
     const productionProofFresh = latestProductionOutcome
       && Number.isFinite(productionProofAgeMs)
       && productionProofAgeMs <= productionProofFreshnessWindowMs;
-    const productionReady = status.active_runtime === 'agent-cli'
+    const productionReady = status.active_runtime === siteLoopConfig.resident_runtime.preferred_runtime
       && status.fallback_active !== true
       && status.proof_driver_active !== true
       && productionProofFresh;
@@ -1352,10 +1457,11 @@ export function sonarResidentStatus(cwd, options: SiteLoopPayload = {}) {
         production_proof_freshness_window_ms: productionProofFreshnessWindowMs,
       },
       runtime_coherent: status.runtime_coherent === true && status.terminal_work_inflight?.status !== 'terminal_inflight',
-      outcome_summary: getDirectiveOutcomeSummary({ db: lifecycleStore.db }, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID }),
-      pending_summary: sonarResidentPendingFromDb(lifecycleStore.db, {
-        agentId: options.agentId ?? RESIDENT_AGENT_ID,
-        role: options.role ?? RESIDENT_ROLE,
+      outcome_summary: getDirectiveOutcomeSummary({ db: lifecycleStore.db }, { loopId: siteLoopConfig.loop_id }),
+      pending_summary: siteResidentPendingFromDb(lifecycleStore.db, {
+        agentId: options.agentId ?? siteLoopConfig.resident.agent_id,
+        role: options.role ?? siteLoopConfig.resident.role,
+        siteRoot,
         limit: 500,
       }),
       resident_backlog: residentBacklogSummaryFromDb(lifecycleStore.db, {
@@ -1369,38 +1475,41 @@ export function sonarResidentStatus(cwd, options: SiteLoopPayload = {}) {
   }
 }
 
-export function sonarResidentPending(cwd, options: SiteLoopPayload = {}) {
+export function siteResidentPending(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
-    return sonarResidentPendingFromDb(lifecycleStore.db, options);
+    return siteResidentPendingFromDb(lifecycleStore.db, { ...options, siteRoot });
   } finally {
     lifecycleStore.db.close();
   }
 }
 
-function sonarResidentPendingFromDb(db, options: SiteLoopPayload = {}) {
+function siteResidentPendingFromDb(db, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db });
   directiveStore.initSchema();
   const limit = Number(options.limit ?? 25);
-  const agentId = stringValue(options.agentId, RESIDENT_AGENT_ID);
-  const role = stringValue(options.role, RESIDENT_ROLE);
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const role = stringValue(options.role, siteLoopConfig.resident.role);
   const pending = dedupeByDirectiveId([
     ...directiveStore.listPending({ target: { kind: 'agent', id: agentId }, limit }),
     ...directiveStore.listPending({ target: { kind: 'role', id: role }, limit }),
   ]).slice(0, limit);
   return {
-    schema: 'narada.sonar.resident_pending_directives.v1',
+    schema: schemaName(siteLoopConfig, 'resident_pending_directives'),
     status: 'ok',
-    agent_id: options.agentId ?? RESIDENT_AGENT_ID,
-    role: options.role ?? RESIDENT_ROLE,
+    agent_id: agentId,
+    role,
     pending_count: pending.length,
     directives: pending.map(publicDirectiveSummary),
   };
 }
 
-export function sonarResidentReceipts(cwd, options: SiteLoopPayload = {}) {
+export function siteResidentReceipts(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
     const limit = Number(options.limit ?? 25);
@@ -1411,9 +1520,9 @@ export function sonarResidentReceipts(cwd, options: SiteLoopPayload = {}) {
     `).get();
     if (!table) {
       return {
-        schema: 'narada.sonar.resident_receipts.v1',
+        schema: schemaName(siteLoopConfig, 'resident_receipts'),
         status: 'ok',
-        agent_id: options.agentId ?? RESIDENT_AGENT_ID,
+        agent_id: agentId,
         receipt_count: 0,
         receipts: [],
       };
@@ -1424,11 +1533,11 @@ export function sonarResidentReceipts(cwd, options: SiteLoopPayload = {}) {
       WHERE agent_id = ?
       ORDER BY received_at DESC
       LIMIT ?
-    `).all(options.agentId ?? RESIDENT_AGENT_ID, limit);
+    `).all(agentId, limit);
     return {
-      schema: 'narada.sonar.resident_receipts.v1',
+      schema: schemaName(siteLoopConfig, 'resident_receipts'),
       status: 'ok',
-      agent_id: options.agentId ?? RESIDENT_AGENT_ID,
+      agent_id: agentId,
       receipt_count: rows.length,
       receipts: rows.map((row) => ({
         receipt_id: String(row.receipt_id),
@@ -1444,22 +1553,24 @@ export function sonarResidentReceipts(cwd, options: SiteLoopPayload = {}) {
   }
 }
 
-export function sonarResidentOutcomes(cwd, options: SiteLoopPayload = {}) {
-  const store = openSiteLoopStore(resolve(cwd));
+export function siteResidentOutcomes(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const store = openSiteLoopStore(siteRoot);
   try {
     const outcomes = listDirectiveOutcomes(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       outcome: stringOrNull(options.outcome),
       limit: Number(options.limit ?? 50),
     });
     return {
-      schema: 'narada.sonar.resident_outcomes.v1',
+      schema: schemaName(siteLoopConfig, 'resident_outcomes'),
       status: 'ok',
-      agent_id: options.agentId ?? RESIDENT_AGENT_ID,
-      loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      agent_id: options.agentId ?? siteLoopConfig.resident.agent_id,
+      loop_id: siteLoopConfig.loop_id,
       summary: {
-        ...getDirectiveOutcomeSummary(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID }),
-        proof_split: directiveOutcomeProofSplit(outcomes),
+        ...getDirectiveOutcomeSummary(store, { loopId: siteLoopConfig.loop_id }),
+        proof_split: directiveOutcomeProofSplit(outcomes, siteLoopConfig),
       },
       outcomes,
     };
@@ -1468,14 +1579,14 @@ export function sonarResidentOutcomes(cwd, options: SiteLoopPayload = {}) {
   }
 }
 
-function directiveOutcomeProofSplit(outcomes) {
+function directiveOutcomeProofSplit(outcomes, siteLoopConfig: SiteLoopConfig) {
   const latestByDirective = new Map();
   for (const item of outcomes) {
     if (!latestByDirective.has(item.directive_id)) latestByDirective.set(item.directive_id, item);
   }
   const reported = [...latestByDirective.values()].filter((item) => item.outcome === 'reported');
   return {
-    schema: 'narada.sonar.directive_outcome_proof_split.v1',
+    schema: schemaName(siteLoopConfig, 'directive_outcome_proof_split'),
     reported_total_in_view: reported.length,
     reported_production_in_view: reported.filter((item) => item.evidence?.production_proof === true || item.evidence?.proof_mode === 'agent_reasoning').length,
     reported_proof_driver_in_view: reported.filter((item) => item.evidence?.proof_mode === 'proof_driver' || item.evidence?.production_proof === false || item.task_id?.includes('resident-e2e-fixture')).length,
@@ -1484,6 +1595,7 @@ function directiveOutcomeProofSplit(outcomes) {
 }
 
 function residentBacklogSummaryFromDb(db, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
   const nowIso = options.nowIso ?? new Date().toISOString();
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const candidates = residentBacklogCandidates(db, { limit: 500, siteRoot: options.siteRoot });
@@ -1496,7 +1608,7 @@ function residentBacklogSummaryFromDb(db, options: SiteLoopPayload = {}) {
       historicalFixtureCount += 1;
       continue;
     }
-    const decision = residentBacklogRecoveryDecision(db, candidate, { nowIso, actionStaleMinutes, recordAttention: false });
+    const decision = residentBacklogRecoveryDecision(db, candidate, { ...options, nowIso, actionStaleMinutes, recordAttention: false });
     const bucket = decision.status === 'emit'
       ? candidate.status === 'opened' ? 'recoverable_opened'
         : candidate.status === 'needs_continuation' ? 'recoverable_needs_continuation'
@@ -1516,7 +1628,7 @@ function residentBacklogSummaryFromDb(db, options: SiteLoopPayload = {}) {
     });
   }
   return {
-    schema: 'narada.sonar.resident_backlog_summary.v1',
+    schema: schemaName(siteLoopConfig, 'resident_backlog_summary'),
     status: 'ok',
     now: nowIso,
     action_stale_minutes: actionStaleMinutes,
@@ -1536,6 +1648,8 @@ function isResidentFixtureHistoryTask(candidate) {
 }
 
 async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
   const limit = Number(options.limit ?? 100);
   const nowIso = options.nowIso ?? new Date().toISOString();
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
@@ -1553,7 +1667,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: Si
         AND r.agent_id = ?
       ORDER BY tl.task_number DESC, r.submitted_at DESC
       LIMIT ?
-    `).all(RESIDENT_AGENT_ID, limit);
+    `).all(siteLoopConfig.resident.agent_id, limit);
     const byTask = new Map();
     for (const row of rows) {
       if (!byTask.has(row.task_id)) byTask.set(row.task_id, row);
@@ -1588,7 +1702,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: Si
         if (row.assignment_id) {
           lifecycleStore.releaseAssignment(String(row.assignment_id), 'reported_resident_autowork_reconciled_to_needs_continuation');
         }
-        lifecycleStore.updateStatus(String(row.task_id), targetStatus, 'sonar.email-resident.loop');
+        lifecycleStore.updateStatus(String(row.task_id), targetStatus, loopActor);
       });
       update();
       await writeTaskProjection(taskFile.path, { ...frontMatter, status: targetStatus }, body);
@@ -1603,7 +1717,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot, options: Si
       });
     }
     return {
-      schema: 'narada.sonar.reported_resident_task_state_reconciliation.v1',
+      schema: schemaName(siteLoopConfig, 'reported_resident_task_state_reconciliation'),
       status: 'ok',
       now: nowIso,
       repaired_count: repaired.length,
@@ -1630,6 +1744,8 @@ function isResidentAutoworkReport(row) {
 
 export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
   const dryRun = options.dryRun === true || options.dry_run === true;
   const limit = Number(options.limit ?? 100);
   const nowIso = options.nowIso ?? new Date().toISOString();
@@ -1650,7 +1766,7 @@ export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayloa
         AND r.agent_id = ?
       ORDER BY tl.task_number DESC, r.submitted_at DESC
       LIMIT ?
-    `).all(RESIDENT_AGENT_ID, limit);
+    `).all(siteLoopConfig.resident.agent_id, limit);
     const byTask = new Map();
     for (const row of rows) {
       if (!byTask.has(row.task_id)) byTask.set(row.task_id, row);
@@ -1682,9 +1798,9 @@ export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayloa
         const { frontMatter, body } = await readTaskFile(taskFile.path);
         const update = lifecycleStore.db.transaction(() => {
           if (row.assignment_id) lifecycleStore.releaseAssignment(String(row.assignment_id), 'resident_fixture_residue_archived');
-          lifecycleStore.updateStatus(taskId, targetStatus, 'sonar.email-resident.loop', {
+          lifecycleStore.updateStatus(taskId, targetStatus, loopActor, {
             closed_at: nowIso,
-            closed_by: 'sonar.email-resident.loop',
+            closed_by: loopActor,
             closure_mode: 'test_fixture_archive',
           });
         });
@@ -1693,7 +1809,7 @@ export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayloa
           ...frontMatter,
           status: targetStatus,
           closed_at: nowIso,
-          closed_by: 'sonar.email-resident.loop',
+          closed_by: loopActor,
           closure_mode: 'test_fixture_archive',
         }, body);
       }
@@ -1715,7 +1831,7 @@ export async function cleanupResidentFixtureResidue(cwd, options: SiteLoopPayloa
       refused,
     });
     return {
-      schema: 'narada.sonar.resident_fixture_residue_cleanup.v1',
+      schema: schemaName(siteLoopConfig, 'resident_fixture_residue_cleanup'),
       status: 'ok',
       dry_run: dryRun,
       now: nowIso,
@@ -1739,14 +1855,16 @@ function isResidentFixtureEnvelopeId(envelopeId) {
 }
 
 function writeResidentFixtureResidueCleanupEvidence(siteRoot, evidence) {
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
   const dir = join(siteRoot, '.ai', 'mutation-evidence', 'resident-fixture-cleanup');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `resident_fixture_cleanup_${new Date().toISOString().replace(/[:.]/g, '')}_${randomUUID().slice(0, 8)}.json`);
   writeFileSync(path, JSON.stringify({
-    schema: 'narada.sonar.resident_fixture_residue_cleanup_evidence.v1',
+    schema: schemaName(siteLoopConfig, 'resident_fixture_residue_cleanup_evidence'),
     mutation_kind: 'resident_fixture_residue_archive',
     authority: {
-      actor: 'sonar.email-resident.loop',
+      actor: loopActor,
       basis: 'synthetic resident fixture/drill task with existing resident report; no customer-visible task is eligible',
     },
     ...evidence,
@@ -1800,15 +1918,16 @@ function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stale
 }
 
 function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const runId = stringValue(options.runId);
   const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const requireFreshProductionProof = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
-  const resident = sonarResidentStatus(siteRoot);
-  const pending = sonarResidentPending(siteRoot, { limit: 500 });
+  const resident = siteResidentStatus(siteRoot);
+  const pending = siteResidentPending(siteRoot, { limit: 500 });
   const dbHealth = taskLifecycleDbHealth(siteRoot);
-  const health = getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
+  const health = getLoopHealth(store, siteLoopConfig.loop_id);
   const stalePending = stalePendingDirectives(pending.directives ?? [], { now: nowIso });
-  const status = sonarEmailResidentOperatingLayerStatus(siteRoot, {
+  const status = siteLoopOperatingLayerStatus(siteRoot, {
     nowIso,
     requireFreshProductionProof,
   });
@@ -1825,13 +1944,13 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
     .filter((item) => ['error', 'critical'].includes(stringValue(item.severity)));
   const activeKinds = new Set(alerts.map((alert) => stringValue(alert.kind)));
   const resolved = [];
-  for (const item of listLoopAttention(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, status: 'opened', limit: 500 })) {
+  for (const item of listLoopAttention(store, { loopId: siteLoopConfig.loop_id, status: 'opened', limit: 500 })) {
     if (!String(item.directive_id ?? '').startsWith('operating-layer:')) continue;
     if (activeKinds.has(item.classification)) continue;
     const ack = acknowledgeLoopAttention(store, {
       attentionId: stringValue(item.escalation_id),
       reason: 'operating_layer_alert_resolved',
-      acknowledgedBy: 'sonar.site-loop',
+      acknowledgedBy: configuredLoopActor(siteRoot),
       at: nowIso,
     });
     resolved.push({ classification: item.classification, attention_id: item.attention_id, status: ack.status });
@@ -1849,12 +1968,12 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
       severity: alertSeverity,
     }, { runId, nowIso });
     const escalation = recordLoopEscalation(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId,
       classification: alertKind,
       envelopeId: envelope.envelope_id,
       escalation: {
-        schema: 'narada.sonar.operating_layer_alert.v1',
+        schema: schemaName(siteLoopConfig, 'operating_layer_alert'),
         ...alert,
         run_id: runId,
         envelope_path: envelope.path,
@@ -1869,7 +1988,7 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
     });
   }
   return {
-    schema: 'narada.sonar.operating_layer_alert_reconciliation.v1',
+    schema: schemaName(siteLoopConfig, 'operating_layer_alert_reconciliation'),
     status: 'ok',
     alert_count: alerts.length,
     created,
@@ -1878,23 +1997,26 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
 }
 
 export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const refusalSchema = schemaName(siteLoopConfig, 'resident_refusal');
   const directiveId = stringValue(options.directiveId ?? options.directive_id);
   const reason = stringValue(options.reason);
-  const agentId = stringValue(options.agentId, RESIDENT_AGENT_ID);
-  if (!directiveId) return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'directive_required' };
-  if (!reason || !String(reason).trim()) return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'reason_required' };
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(resolve(cwd));
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  if (!directiveId) return { schema: refusalSchema, status: 'refused', reason: 'directive_required' };
+  if (!reason || !String(reason).trim()) return { schema: refusalSchema, status: 'refused', reason: 'reason_required' };
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
   try {
     const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
     directiveStore.initSchema();
     const directive = directiveStore.getDirective(directiveId);
     if (!directive) {
-      return { schema: 'narada.sonar.resident_refusal.v1', status: 'refused', reason: 'directive_not_found', directive_id: directiveId };
+      return { schema: refusalSchema, status: 'refused', reason: 'directive_not_found', directive_id: directiveId };
     }
-    if (!isResidentDirectiveTarget(directive, options)) {
+    if (!isResidentDirectiveTarget(directive, { ...options, siteLoopConfig })) {
       return {
-        schema: 'narada.sonar.resident_refusal.v1',
+        schema: refusalSchema,
         status: 'refused',
         reason: 'directive_not_targeted_to_resident',
         directive_id: directiveId,
@@ -1910,7 +2032,7 @@ export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
     });
     const taskId = directiveTaskRef(directive);
     const outcome = recordDirectiveOutcome({ db: lifecycleStore.db }, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId,
       outcome: 'refused',
       agentId,
@@ -1927,48 +2049,53 @@ export function refuseResidentDirective(cwd, options: SiteLoopPayload = {}) {
       },
     });
     return {
-      schema: 'narada.sonar.resident_refusal.v1',
+      schema: refusalSchema,
       status: 'recorded',
       directive: publicDirectiveSummary(directive),
       triage,
       outcome,
-      health: getLoopHealth({ db: lifecycleStore.db }, SONAR_EMAIL_RESIDENT_LOOP_ID),
+      health: getLoopHealth({ db: lifecycleStore.db }, siteLoopConfig.loop_id),
     };
   } finally {
     lifecycleStore.db.close();
   }
 }
 
-export function sonarResidentCapabilities(cwd, options: SiteLoopPayload = {}) {
+export function siteResidentCapabilities(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
-  const agentId = options.agentId ?? RESIDENT_AGENT_ID;
+  const siteLoopConfig = configForSite(siteRoot);
+  const runtimeConfig = siteLoopConfig.resident_runtime;
+  const agentId = options.agentId ?? siteLoopConfig.resident.agent_id;
   const identities = readJson(join(siteRoot, 'operator-surfaces', 'identities.json'));
   const identity = (identities?.identities ?? []).find((item) => item.identity_id === agentId) ?? null;
-  const declaredRuntime = identity?.carrier_projections?.['agent-cli']?.runtime ?? null;
-  const declaredFallbackRuntime = identity?.carrier_projections?.['agent-runtime-server']?.runtime ?? identity?.carrier_projections?.nars?.runtime ?? null;
-  const mcpProbe = probeTaskLifecycleMcpTools(siteRoot);
+  const declaredRuntime = identity?.carrier_projections?.[runtimeConfig.preferred_runtime]?.runtime ?? null;
+  const declaredFallbackRuntime = configuredFallbackRuntimeNames(siteLoopConfig)
+    .map((runtime) => identity?.carrier_projections?.[runtime]?.runtime)
+    .find(Boolean) ?? null;
+  const mcpProbe = probeTaskLifecycleMcpTools(siteRoot, siteLoopConfig);
   const availableTaskTools = new Set(mcpProbe.tools.length > 0 ? mcpProbe.tools : taskLifecycleTools().map((tool) => tool.name));
-  const missingTools = REQUIRED_RESIDENT_TASK_TOOLS.filter((tool) => !availableTaskTools.has(tool));
+  const missingTools = siteLoopConfig.resident.required_task_tools.filter((tool) => !availableTaskTools.has(tool));
   const surfacePolicy = readResidentTaskLifecycleSurfacePolicy(siteRoot);
-  const missingMutatingAuthority = REQUIRED_RESIDENT_MUTATING_TASK_TOOLS.filter((tool) => !surfacePolicy.mutating_tools.includes(tool));
+  const missingMutatingAuthority = siteLoopConfig.resident.required_mutating_task_tools.filter((tool) => !surfacePolicy.mutating_tools.includes(tool));
   const status = identity
-    && declaredRuntime === 'agent-cli'
+    && declaredRuntime === runtimeConfig.preferred_runtime
     && mcpProbe.status === 'ok'
     && missingTools.length === 0
     && missingMutatingAuthority.length === 0
     ? 'ready'
     : 'not_ready';
   return {
-    schema: 'narada.sonar.resident_capabilities.v1',
+    schema: schemaName(siteLoopConfig, 'resident_capabilities'),
     status,
     agent_id: agentId,
-    role: RESIDENT_ROLE,
-    preferred_runtime: 'agent-cli',
-    fallback_runtime: 'agent-runtime-server',
+    role: siteLoopConfig.resident.role,
+    preferred_runtime: runtimeConfig.preferred_runtime,
+    fallback_runtime: runtimeConfig.fallback_runtime,
+    legacy_fallback_runtimes: runtimeConfig.legacy_fallback_runtimes,
     declared_runtime: declaredRuntime,
     declared_fallback_runtime: declaredFallbackRuntime,
-    required_tools: REQUIRED_RESIDENT_TASK_TOOLS,
-    required_mutating_authority_tools: REQUIRED_RESIDENT_MUTATING_TASK_TOOLS,
+    required_tools: siteLoopConfig.resident.required_task_tools,
+    required_mutating_authority_tools: siteLoopConfig.resident.required_mutating_task_tools,
     missing_tools: missingTools,
     missing_mutating_authority_tools: missingMutatingAuthority,
     evidence: {
@@ -1976,19 +2103,20 @@ export function sonarResidentCapabilities(cwd, options: SiteLoopPayload = {}) {
       task_mcp_probe: mcpProbe,
       task_lifecycle_surface_policy: surfacePolicy,
       identity_found: Boolean(identity),
-      runtime_agent_cli_preferred: declaredRuntime === 'agent-cli',
-      runtime_agent_runtime_server_fallback: declaredFallbackRuntime === 'agent-runtime-server',
+      preferred_runtime_matched: declaredRuntime === runtimeConfig.preferred_runtime,
+      fallback_runtime_matched: configuredFallbackRuntimeNames(siteLoopConfig).includes(String(declaredFallbackRuntime ?? '')),
     },
   };
 }
 
 function readResidentTaskLifecycleSurfacePolicy(siteRoot) {
+  const siteLoopConfig = configForSite(siteRoot);
   const path = join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json');
   const registry = readJson(path);
   const surface = (registry?.surfaces ?? []).find((item) => item.surface_id === 'task-lifecycle-mcp.local') ?? null;
   const contract = surface?.tool_contract ?? {};
   return {
-    schema: 'narada.sonar.resident_task_lifecycle_surface_policy.v1',
+    schema: schemaName(siteLoopConfig, 'resident_task_lifecycle_surface_policy'),
     status: surface ? 'ok' : 'missing',
     path,
     surface_id: surface?.surface_id ?? null,
@@ -2000,35 +2128,38 @@ function readResidentTaskLifecycleSurfacePolicy(siteRoot) {
 
 export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const residentAgentId = siteLoopConfig.resident.agent_id;
+  const supervisorSchema = schemaName(siteLoopConfig, 'resident_supervisor');
   const control = asRecord(options.control ?? readLoopControlForSupervisor(siteRoot));
   if (control.paused === true) {
     return {
-      schema: 'narada.sonar.resident_supervisor.v1',
+      schema: supervisorSchema,
       status: 'blocked',
       reason: 'loop_paused',
-      agent_id: RESIDENT_AGENT_ID,
+      agent_id: residentAgentId,
       control,
-      before: getResidentStatus(siteRoot, { agentId: RESIDENT_AGENT_ID, requireLiveCarrier: options.requireLiveCarrier !== false }),
+      before: getResidentStatus(siteRoot, { agentId: residentAgentId, requireLiveCarrier: options.requireLiveCarrier !== false }),
       launch: null,
     };
   }
-  const runtimeCleanup = cleanupResidentRuntime(siteRoot, { runtime: 'agent-cli' });
-  const before = getResidentStatus(siteRoot, { agentId: RESIDENT_AGENT_ID, requireLiveCarrier: options.requireLiveCarrier !== false });
+  const runtimeCleanup = cleanupResidentRuntime(siteRoot, { runtime: siteLoopConfig.resident_runtime.preferred_runtime });
+  const before = getResidentStatus(siteRoot, { agentId: residentAgentId, requireLiveCarrier: options.requireLiveCarrier !== false });
   const beforeCarrier: SiteLoopPayload = before.carrier ?? {};
-  if (['available', 'busy'].includes(before.status) && residentCarrierAcceptableForSupervisor(before)) {
-    const redundantFallbackCleanup = beforeCarrier.runtime === 'agent-cli'
+  if (['available', 'busy'].includes(before.status) && residentCarrierAcceptableForSupervisor(before, siteLoopConfig)) {
+    const redundantFallbackCleanup = beforeCarrier.runtime === siteLoopConfig.resident_runtime.preferred_runtime
       ? cleanupRedundantNarsFallbacks(siteRoot, before)
-      : { status: 'skipped', reason: 'primary_agent_cli_not_selected' };
+      : { status: 'skipped', reason: 'preferred_runtime_not_selected' };
     return {
-      schema: 'narada.sonar.resident_supervisor.v1',
-      agent_id: RESIDENT_AGENT_ID,
+      schema: supervisorSchema,
+      agent_id: residentAgentId,
       runtime_cleanup: runtimeCleanup,
       redundant_fallback_cleanup: redundantFallbackCleanup,
       before,
       launch: null,
     };
   }
-  const policy = loadSonarEmailResidentOperatingPolicy(siteRoot).policy;
+  const policy = loadSiteLoopOperatingPolicy(siteRoot).policy;
   const restartPolicy = evaluateResidentRestartPolicy(siteRoot, {
     maxRestarts: policy.rate_limits?.max_restarts_per_window,
     windowMs: policy.rate_limits?.restart_window_ms,
@@ -2036,10 +2167,10 @@ export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   });
   if (restartPolicy.status === 'blocked') {
     return {
-      schema: 'narada.sonar.resident_supervisor.v1',
+      schema: supervisorSchema,
       status: 'blocked',
       reason: restartPolicy.reason,
-      agent_id: RESIDENT_AGENT_ID,
+      agent_id: residentAgentId,
       runtime_cleanup: runtimeCleanup,
       before,
       restart_policy: restartPolicy,
@@ -2047,12 +2178,12 @@ export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
     };
   }
   const runner = typeof options.runner === 'function' ? options.runner : defaultResidentLaunchRunner;
-  const launch = runner(siteRoot);
-  const after = getResidentStatus(siteRoot, { agentId: RESIDENT_AGENT_ID, requireLiveCarrier: options.requireLiveCarrier !== false });
+  const launch = runner(siteRoot, siteLoopConfig);
+  const after = getResidentStatus(siteRoot, { agentId: residentAgentId, requireLiveCarrier: options.requireLiveCarrier !== false });
   return {
-    schema: 'narada.sonar.resident_supervisor.v1',
+    schema: supervisorSchema,
     status: launch.status === 'launching' ? 'launch_requested' : launch.status === 'blocked' ? 'blocked' : 'launch_failed',
-    agent_id: RESIDENT_AGENT_ID,
+    agent_id: residentAgentId,
     runtime_cleanup: runtimeCleanup,
     before,
     launch,
@@ -2060,8 +2191,10 @@ export function ensureResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   };
 }
 
-function residentCarrierAcceptableForSupervisor(status) {
-  if (status?.carrier?.runtime !== 'agent-runtime-server' && status?.carrier?.legacy_runtime !== 'nars') return true;
+function residentCarrierAcceptableForSupervisor(status, siteLoopConfig: SiteLoopConfig) {
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
+  const runtime = status?.carrier?.runtime ?? status?.carrier?.legacy_runtime;
+  if (!fallbackRuntimes.includes(String(runtime ?? ''))) return true;
   if (!residentCarrierPolicyGenerationCurrent(status)) return false;
   const proofDriver = status?.host?.started_event?.resident_proof_driver === true
     || status?.host?.started_event?.resident_autowork === true;
@@ -2070,21 +2203,23 @@ function residentCarrierAcceptableForSupervisor(status) {
 }
 
 function cleanupRedundantNarsFallbacks(siteRoot, primaryStatus) {
+  const siteLoopConfig = configForSite(siteRoot);
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
   const primaryCarrierId = primaryStatus?.carrier?.carrierSessionId ?? null;
-  if (primaryStatus?.carrier?.runtime !== 'agent-cli' || !primaryCarrierId) {
-    return { status: 'skipped', reason: 'primary_agent_cli_not_selected' };
+  if (primaryStatus?.carrier?.runtime !== siteLoopConfig.resident_runtime.preferred_runtime || !primaryCarrierId) {
+    return { status: 'skipped', reason: 'preferred_runtime_not_selected' };
   }
   const resultsDir = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
   const retired = [];
   const stopped = [];
   const skipped = [];
   if (!existsSync(resultsDir)) {
-    return { schema: 'narada.sonar.redundant_fallback_cleanup.v1', status: 'ok', retired, stopped, skipped };
+    return { schema: schemaName(siteLoopConfig, 'redundant_fallback_cleanup'), status: 'ok', retired, stopped, skipped };
   }
   for (const name of readdirSafe(resultsDir).filter((entry) => entry.endsWith('.result.json'))) {
     const path = join(resultsDir, name);
     const packet = readJson(path);
-    if (packet?.identity !== RESIDENT_AGENT_ID || (packet?.runtime !== 'agent-runtime-server' && packet?.runtime !== 'nars')) continue;
+    if (packet?.identity !== siteLoopConfig.resident.agent_id || !fallbackRuntimes.includes(String(packet?.runtime ?? ''))) continue;
     const carrierSessionId = packet.carrier_session?.carrier_session_id
       ?? packet.carrier_session_id
       ?? packet.required_environment?.NARADA_CARRIER_SESSION_ID
@@ -2099,13 +2234,13 @@ function cleanupRedundantNarsFallbacks(siteRoot, primaryStatus) {
       continue;
     }
     const live = isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs: 120000 });
-    if (live.live) stopped.push(stopResidentCarrierProcesses(carrierSessionId));
+    if (live.live) stopped.push(stopResidentCarrierProcesses(carrierSessionId, siteLoopConfig));
     retired.push(retireResidentCarrier(siteRoot, carrierSessionId, {
       reason: `redundant_fallback_retired:primary=${primaryCarrierId}`,
     }));
   }
   return {
-    schema: 'narada.sonar.redundant_fallback_cleanup.v1',
+    schema: schemaName(siteLoopConfig, 'redundant_fallback_cleanup'),
     status: 'ok',
     primary_carrier_session_id: primaryCarrierId,
     retired_count: retired.length,
@@ -2116,13 +2251,14 @@ function cleanupRedundantNarsFallbacks(siteRoot, primaryStatus) {
   };
 }
 
-function stopResidentCarrierProcesses(carrierSessionId) {
+function stopResidentCarrierProcesses(carrierSessionId, siteLoopConfig: SiteLoopConfig) {
+  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.fallback_process_probe_patterns);
   const result = spawnSync('powershell.exe', [
     '-NoProfile',
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $self=$PID; $p=Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $self -and $_.CommandLine -and $_.CommandLine.Contains($needle) -and ($_.CommandLine -like '*agent-runtime-server-control-host.js*' -or $_.CommandLine -like '*nars-control-host.js*') }; $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }`,
+    `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $self=$PID; $p=Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $self -and $_.CommandLine -and $_.CommandLine.Contains($needle) -and (${processPatternExpression}) }; $p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }`,
   ], {
     encoding: 'utf8',
     windowsHide: true,
@@ -2153,13 +2289,14 @@ function residentCarrierPolicyGenerationCurrent(status) {
 function readLoopControlForSupervisor(siteRoot) {
   const store = openSiteLoopStore(siteRoot);
   try {
-    return getLoopControl(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
+    return getLoopControl(store, configuredLoopId(siteRoot));
   } finally {
     store.close();
   }
 }
 
 function evaluateResidentRestartPolicy(siteRoot, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const maxRestarts = Number(options.maxRestarts ?? options.max_restarts ?? 3);
   const windowMs = Number(options.windowMs ?? options.window_ms ?? 10 * 60 * 1000);
   const sinceMs = Date.now() - windowMs;
@@ -2168,9 +2305,9 @@ function evaluateResidentRestartPolicy(siteRoot, options: SiteLoopPayload = {}) 
   if (existsSync(resultsDir)) {
     for (const name of readdirSafe(resultsDir).filter((entry) => entry.endsWith('.result.json'))) {
       const packet = readJson(join(resultsDir, name));
-      if (packet?.identity !== RESIDENT_AGENT_ID || (packet?.runtime !== 'agent-runtime-server' && packet?.runtime !== 'nars')) continue;
+      if (packet?.identity !== siteLoopConfig.resident.agent_id || !configuredFallbackRuntimeNames(siteLoopConfig).includes(String(packet?.runtime ?? ''))) continue;
       const launchSource = packet.launch_source ?? packet.carrier_session?.record?.launch_source ?? null;
-      if (launchSource !== 'sonar.email-resident.loop.supervisor') continue;
+      if (launchSource !== `${siteLoopConfig.loop_id}.loop.supervisor`) continue;
       const ts = Date.parse(packet.started_at ?? packet.carrier_session?.record?.started_at ?? packet.agent_start_event ?? '');
       if (Number.isFinite(ts) && ts >= sinceMs) {
         recent.push({ path: join(resultsDir, name), started_at: packet.started_at ?? null, carrier_session_id: packet.carrier_session_id ?? packet.carrier_session?.carrier_session_id ?? null });
@@ -2178,7 +2315,7 @@ function evaluateResidentRestartPolicy(siteRoot, options: SiteLoopPayload = {}) 
     }
   }
   return {
-    schema: 'narada.sonar.resident_restart_policy.v1',
+    schema: schemaName(siteLoopConfig, 'resident_restart_policy'),
     status: recent.length >= maxRestarts ? 'blocked' : 'ok',
     reason: recent.length >= maxRestarts ? 'restart_rate_limited' : null,
     max_restarts: maxRestarts,
@@ -2196,13 +2333,16 @@ function readdirSafe(path) {
   }
 }
 
-export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
+export async function runSiteResidentE2E(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const e2eSchema = schemaName(siteLoopConfig, 'resident_e2e');
   const mailboxProof = options.mailboxProof === true || options.mailbox_proof === true;
   const controlledMailboxProof = options.controlledMailboxProof === true || options.controlled_mailbox_proof === true;
   const controlledMailboxSource = options.controlledMailboxSource ?? options.controlled_mailbox_source ?? options.controlledSource ?? options.controlled_source ?? null;
   if (mailboxProof && controlledMailboxProof !== true) {
     return {
-      schema: 'narada.sonar.resident_e2e.v1',
+      schema: e2eSchema,
       status: 'refused',
       reason: 'controlled_mailbox_source_required',
       mode: 'mailbox_live_unattended',
@@ -2213,7 +2353,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   }
   if (mailboxProof && controlledMailboxProof === true && !controlledMailboxSource) {
     return {
-      schema: 'narada.sonar.resident_e2e.v1',
+      schema: e2eSchema,
       status: 'refused',
       reason: 'controlled_mailbox_source_required',
       mode: 'mailbox_live_unattended',
@@ -2224,7 +2364,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   }
   if (options.ackFixture !== true && !mailboxProof) {
     return {
-      schema: 'narada.sonar.resident_e2e.v1',
+      schema: e2eSchema,
       status: 'refused',
       reason: 'ack_fixture_required',
       required_flag: '--ack-fixture',
@@ -2234,36 +2374,35 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   const simulate = options.simulateResident === true || options.simulate_resident === true;
   if (live && simulate) {
     return {
-      schema: 'narada.sonar.resident_e2e.v1',
+      schema: e2eSchema,
       status: 'refused',
       reason: 'live_e2e_cannot_use_store_simulation',
       mode: 'live_unattended',
       live_unattended_proven: false,
     };
   }
-  const siteRoot = resolve(cwd);
   const fixtureId = options.id ?? `resident-e2e-${Date.now()}`;
   const expectedCarrierPreference = options.expectCarrierPreference ?? options.expect_carrier_preference ?? null;
   const requireProductionProof = options.requireProductionProof === true || options.require_production_proof === true;
   if (requireProductionProof) {
-    cleanupResidentRuntime(siteRoot, { runtime: 'agent-cli' });
-    const currentResident = sonarResidentStatus(siteRoot);
+    cleanupResidentRuntime(siteRoot, { runtime: siteLoopConfig.resident_runtime.preferred_runtime });
+    const currentResident = siteResidentStatus(siteRoot);
     const currentCarrier: SiteLoopPayload = currentResident?.carrier ?? {};
     const observedPreference = currentCarrier.preference ?? null;
-    const observedPrimary = currentCarrier.runtime === 'agent-cli'
-      && observedPreference === 'interactive_agent_cli'
+    const observedPrimary = currentCarrier.runtime === siteLoopConfig.resident_runtime.preferred_runtime
+      && observedPreference === siteLoopConfig.resident_runtime.preferred_preference
       && currentResident?.host?.started_event?.resident_proof_driver !== true;
     if ((expectedCarrierPreference && observedPreference !== expectedCarrierPreference) || !observedPrimary) {
       return {
-        schema: 'narada.sonar.resident_e2e.v1',
+        schema: e2eSchema,
         status: 'refused',
         reason: 'production_carrier_not_available',
         mode: mailboxProof ? 'mailbox_live_unattended' : live ? 'live_unattended' : 'live_poll',
         live_unattended_proven: false,
         production_proof: false,
         production_proof_required: true,
-        required_carrier: 'interactive_agent_cli',
-        fallback_carrier: currentCarrier.preference === 'agent_runtime_server_fallback'
+        required_carrier: siteLoopConfig.resident_runtime.preferred_preference,
+        fallback_carrier: currentCarrier.preference === siteLoopConfig.resident_runtime.fallback_preference
           ? {
               status: 'available_but_insufficient_for_production_proof',
               runtime: currentCarrier.runtime ?? null,
@@ -2271,7 +2410,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
             }
           : null,
         start_command: residentAgentCliStartCommand(siteRoot),
-        remediation: 'Start a live sonar.resident agent-cli carrier, then rerun the strict production proof.',
+        remediation: `Start a live ${siteLoopConfig.resident.agent_id} carrier, then rerun the strict production proof.`,
         carrier_preference_assertion: {
           expected: expectedCarrierPreference,
           observed: observedPreference,
@@ -2292,7 +2431,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   const beforeDirectiveIds = mailboxProof ? allResidentDirectiveIds(siteRoot) : [];
   const deadline = Date.now() + Number(options.timeoutMs ?? options.timeout_ms ?? 120_000);
   const pollMs = Number(options.pollMs ?? options.poll_ms ?? 5_000);
-  let firstRun: SiteLoopPayload = await runSonarEmailResidentLoop(siteRoot, {
+  let firstRun: SiteLoopPayload = await runSiteLoop(siteRoot, {
     limit: options.limit ?? 25,
     sourceSync: options.sourceSync === true || mailboxProof,
     sourceSyncRunner: options.sourceSyncRunner,
@@ -2302,7 +2441,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   const initialRuns = [{ run_id: firstRun.run_id, status: firstRun.status, summary: firstRun.summary ?? null }];
   while (firstRun.status === 'locked' && Date.now() < deadline) {
     await sleep(pollMs);
-    firstRun = await runSonarEmailResidentLoop(siteRoot, {
+    firstRun = await runSiteLoop(siteRoot, {
       limit: options.limit ?? 25,
       sourceSync: false,
       ensureResident: options.ensureResident === true,
@@ -2330,12 +2469,12 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   let finalOutcome = runAgentOutcomeReconciliation(siteRoot, {
     directiveIds: effectiveDirectiveIds,
     includeBacklog: false,
-    resident: sonarResidentStatus(siteRoot),
+    resident: siteResidentStatus(siteRoot),
   });
   const polls = [];
   while (!hasReportedOutcome(finalOutcome) && Date.now() < deadline) {
     await sleep(pollMs);
-    const cycle = await runSonarEmailResidentLoop(siteRoot, {
+    const cycle = await runSiteLoop(siteRoot, {
       limit: options.limit ?? 25,
       ensureResident: options.ensureResident === true,
       requireLiveCarrier: !simulate,
@@ -2343,11 +2482,11 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
     finalOutcome = runAgentOutcomeReconciliation(siteRoot, {
       directiveIds: effectiveDirectiveIds,
       includeBacklog: false,
-      resident: sonarResidentStatus(siteRoot),
+      resident: siteResidentStatus(siteRoot),
     });
     polls.push({ run_id: cycle.run_id, status: cycle.status, counts: finalOutcome.counts });
   }
-  const finalResident = sonarResidentStatus(siteRoot);
+  const finalResident = siteResidentStatus(siteRoot);
   const finalCarrier: SiteLoopPayload = finalResident?.carrier ?? {};
   const carrierPreferenceObserved = finalCarrier.preference ?? null;
   const carrierPreferenceMatch = expectedCarrierPreference
@@ -2369,7 +2508,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
     : null;
   const firstRunSummary = asRecord(firstRun.summary);
   return {
-    schema: 'narada.sonar.resident_e2e.v1',
+    schema: e2eSchema,
     status,
     incomplete_reason: status === 'passed'
       ? null
@@ -2389,6 +2528,7 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
       finalOutcome,
       directiveIds: effectiveDirectiveIds,
       resident: finalResident,
+      siteLoopConfig,
     }),
     carrier_preference_assertion: {
       expected: expectedCarrierPreference,
@@ -2426,11 +2566,11 @@ export async function runSonarResidentE2E(cwd, options: SiteLoopPayload = {}) {
   };
 }
 
-function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, resident }) {
+function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, resident, siteLoopConfig }) {
   const counts = finalOutcome?.counts ?? {};
   const productionProof = hasProductionReportedOutcome(finalOutcome);
   return {
-    schema: 'narada.sonar.resident_e2e.proof.v1',
+    schema: schemaName(siteLoopConfig, 'resident_e2e_proof'),
     required_observations: ['directive_emitted', 'carrier_receipt', 'task_report_with_directive_id'],
     directive_count: directiveIds.length,
     directive_emitted: directiveIds.length > 0,
@@ -2443,6 +2583,7 @@ function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, residen
 }
 
 function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const at = stringValue(options.at, new Date().toISOString());
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
@@ -2466,7 +2607,7 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: Site
         : directiveStore.recordReceipt(directiveId, {
             received_at: at,
             carrier_session_id: 'fixture_simulated_resident',
-            agent_id: RESIDENT_AGENT_ID,
+            agent_id: siteLoopConfig.resident.agent_id,
             transport: 'fixture_simulation',
           });
       const reportAt = new Date(Date.parse(at) + 1).toISOString();
@@ -2474,7 +2615,7 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: Site
       lifecycleStore.insertReport({
         report_id: reportId,
         task_id: taskId,
-        agent_id: RESIDENT_AGENT_ID,
+        agent_id: siteLoopConfig.resident.agent_id,
         summary: `Fixture resident completed directive_id:${directiveId}`,
         changed_files_json: '[]',
         verification_json: JSON.stringify([{ kind: 'fixture_simulation', status: 'passed' }]),
@@ -2484,7 +2625,7 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: Site
       completed.push({ directive_id: directiveId, status: 'reported', task_id: taskId, report_id: reportId, receipt_id: receipt?.receipt_id ?? directive.delivery?.receipt_id ?? null });
     }
     return {
-      schema: 'narada.sonar.resident_e2e.store_simulation.v1',
+      schema: schemaName(siteLoopConfig, 'resident_e2e_store_simulation'),
       status: completed.every((item) => item.status === 'reported') ? 'ok' : 'partial',
       mode: 'store_simulation',
       live_unattended_proven: false,
@@ -2495,12 +2636,14 @@ function simulateResidentFixtureCompletion(siteRoot, directiveIds, options: Site
   }
 }
 
-export function listSonarLoopAttention(cwd, options: SiteLoopPayload = {}) {
-  const store = openSiteLoopStore(resolve(cwd));
-  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
+export function listSiteLoopAttention(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const store = openSiteLoopStore(siteRoot);
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
   try {
     return {
-      schema: 'narada.sonar.loop_attention_list.v1',
+      schema: schemaName(siteLoopConfig, 'loop_attention_list'),
       loop_id: loopId,
       summary: getLoopAttentionSummary(store, { loopId }),
       attention: listLoopAttention(store, {
@@ -2514,12 +2657,14 @@ export function listSonarLoopAttention(cwd, options: SiteLoopPayload = {}) {
   }
 }
 
-export function showSonarLoopAttention(cwd, attentionId) {
-  const store = openSiteLoopStore(resolve(cwd));
+export function showSiteLoopAttention(cwd, attentionId) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const store = openSiteLoopStore(siteRoot);
   try {
     const attention = getLoopAttention(store, { attentionId });
     return {
-      schema: 'narada.sonar.loop_attention_show.v1',
+      schema: schemaName(siteLoopConfig, 'loop_attention_show'),
       status: attention ? 'ok' : 'not_found',
       attention,
     };
@@ -2528,12 +2673,14 @@ export function showSonarLoopAttention(cwd, attentionId) {
   }
 }
 
-export function ackSonarLoopAttention(cwd, attentionId, options: SiteLoopPayload = {}) {
-  const store = openSiteLoopStore(resolve(cwd));
-  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
+export function ackSiteLoopAttention(cwd, attentionId, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const store = openSiteLoopStore(siteRoot);
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
   try {
     return {
-      schema: 'narada.sonar.loop_attention_ack.v1',
+      schema: schemaName(siteLoopConfig, 'loop_attention_ack'),
       ...acknowledgeLoopAttention(store, {
         attentionId,
         reason: stringValue(options.reason),
@@ -2548,13 +2695,15 @@ export function ackSonarLoopAttention(cwd, attentionId, options: SiteLoopPayload
 
 export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const recoverySchema = schemaName(siteLoopConfig, 'resident_recover_stale');
   const reason = String(options.reason ?? '').trim();
-  if (!reason) return { schema: 'narada.sonar.resident_recover_stale.v1', status: 'refused', reason: 'reason_required' };
-  const resident = sonarResidentStatus(siteRoot);
+  if (!reason) return { schema: recoverySchema, status: 'refused', reason: 'reason_required' };
+  const resident = siteResidentStatus(siteRoot);
   const recoverableCarrierStates = new Set(['stale_busy', 'policy_stale']);
   if (!recoverableCarrierStates.has(resident.carrier_state?.state)) {
     return {
-      schema: 'narada.sonar.resident_recover_stale.v1',
+      schema: recoverySchema,
       status: 'skipped',
       reason: 'resident_carrier_not_recoverable',
       carrier_state: resident.carrier_state ?? null,
@@ -2563,7 +2712,7 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
   const store = openSiteLoopStore(siteRoot);
   try {
     const at = new Date().toISOString();
-    const pending = sonarResidentPendingFromDb(store.db, { limit: 500 });
+    const pending = siteResidentPendingFromDb(store.db, { limit: 500, siteRoot });
     const recovered = [];
     const directiveStore = new SqliteDirectiveRuntimeStore({ db: store.db });
     directiveStore.initSchema();
@@ -2600,12 +2749,12 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
       severity,
     }, { runId: 'resident_recover_stale', nowIso: at });
     const escalation = recordLoopEscalation(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId: carrierDirectiveId,
       classification: attentionKind,
       envelopeId: envelope.envelope_id,
       escalation: {
-        schema: 'narada.sonar.resident_stale_carrier_recovery.v1',
+        schema: schemaName(siteLoopConfig, 'resident_stale_carrier_recovery'),
         severity,
         reason,
         resident: resident.carrier_state,
@@ -2616,7 +2765,7 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
       at,
     });
     return {
-      schema: 'narada.sonar.resident_recover_stale.v1',
+      schema: recoverySchema,
       status: 'recovered',
       carrier_state: resident.carrier_state,
       recovered_count: recovered.length,
@@ -2631,6 +2780,8 @@ export function recoverStaleResidentCarrier(cwd, options: SiteLoopPayload = {}) 
 
 export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const cleanupSchema = schemaName(siteLoopConfig, 'resident_runtime_cleanup');
   const runtime = options.runtime ?? 'all';
   const dryRun = options.dryRun === true;
   const nowIso = options.nowIso ?? new Date().toISOString();
@@ -2640,7 +2791,7 @@ export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
   const skipped = [];
   if (!existsSync(resultsDir)) {
     return {
-      schema: 'narada.sonar.resident_runtime_cleanup.v1',
+      schema: cleanupSchema,
       status: 'ok',
       dry_run: dryRun,
       inspected_count: 0,
@@ -2655,7 +2806,7 @@ export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
     .map((name) => {
       const path = join(resultsDir, name);
       const packet = readJson(path);
-      if (!packet || packet.identity !== RESIDENT_AGENT_ID) return null;
+      if (!packet || packet.identity !== siteLoopConfig.resident.agent_id) return null;
       const carrierSessionId = packet.carrier_session?.carrier_session_id
         ?? packet.carrier_session_id
         ?? packet.required_environment?.NARADA_CARRIER_SESSION_ID
@@ -2692,7 +2843,7 @@ export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
     }));
   }
   return {
-    schema: 'narada.sonar.resident_runtime_cleanup.v1',
+    schema: cleanupSchema,
     status: 'ok',
     dry_run: dryRun,
     runtime,
@@ -2704,12 +2855,13 @@ export function cleanupResidentRuntime(cwd, options: SiteLoopPayload = {}) {
   };
 }
 
-export function sonarResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
+export function siteResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
-  const resident = sonarResidentStatus(siteRoot);
-  const receipts = sonarResidentReceipts(siteRoot, { limit: Number(options.limit ?? 5) });
-  const outcomes = sonarResidentOutcomes(siteRoot, { limit: Number(options.limit ?? 5) });
-  const pending = sonarResidentPending(siteRoot, { limit: Number(options.limit ?? 25) });
+  const siteLoopConfig = configForSite(siteRoot);
+  const resident = siteResidentStatus(siteRoot);
+  const receipts = siteResidentReceipts(siteRoot, { limit: Number(options.limit ?? 5) });
+  const outcomes = siteResidentOutcomes(siteRoot, { limit: Number(options.limit ?? 5) });
+  const pending = siteResidentPending(siteRoot, { limit: Number(options.limit ?? 25) });
   const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
   const reportedOutcomes = (outcomes.outcomes ?? []).filter((item) => item.outcome === 'reported');
   const proofDriverReports = reportedOutcomes.filter((item) => item.evidence?.proof_mode === 'proof_driver'
@@ -2717,28 +2869,29 @@ export function sonarResidentProofPacket(cwd, options: SiteLoopPayload = {}) {
   const productionReports = reportedOutcomes.filter((item) => item.evidence?.production_proof === true
     || item.evidence?.proof_mode === 'agent_reasoning').length;
   const proofCarrier: SiteLoopPayload = asRecord(resident.carrier);
+  const runtimeConfig = siteLoopConfig.resident_runtime;
   const proofPreferredInteractive = asRecord(proofCarrier.preferred_interactive);
-  const primaryRuntimeReady = proofCarrier.runtime === 'agent-cli'
-    && proofCarrier.preference === 'interactive_agent_cli'
+  const primaryRuntimeReady = proofCarrier.runtime === runtimeConfig.preferred_runtime
+    && proofCarrier.preference === runtimeConfig.preferred_preference
     && proofDriver !== true;
   const latestProductionOutcome = latestProductionReportedOutcome(reportedOutcomes);
   const productionProofAgeMs = latestProductionOutcome?.event_at
     ? Date.now() - Date.parse(latestProductionOutcome.event_at)
     : null;
-  const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? 24 * 60 * 60_000);
+  const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
   const productionProofFresh = Boolean(latestProductionOutcome)
     && Number.isFinite(productionProofAgeMs)
     && productionProofAgeMs <= productionProofFreshnessWindowMs;
   return {
-    schema: 'narada.sonar.resident_proof_packet.v1',
+    schema: schemaName(siteLoopConfig, 'resident_proof_packet'),
     status: resident.status === 'available' || resident.status === 'busy'
       ? primaryRuntimeReady && productionReports > 0 ? 'production_ready' : 'transport_ready'
       : 'attention_needed',
-    mode: proofDriver ? 'proof_driver' : proofCarrier.runtime === 'agent-cli' ? 'agent_cli_reasoning' : proofCarrier.runtime === 'agent-runtime-server' ? 'agent_runtime_server_fallback_reasoning' : proofCarrier.legacy_runtime === 'nars' ? 'agent_runtime_server_fallback_reasoning' : 'no_live_carrier',
+    mode: configuredRuntimeMode(siteLoopConfig, proofCarrier, proofDriver),
     primary_runtime_ready: primaryRuntimeReady,
     agent_cli_ready: proofPreferredInteractive.status === 'available' || primaryRuntimeReady,
     agent_cli_control_path: stringOrNull(proofPreferredInteractive.controlPath) ?? (primaryRuntimeReady ? stringOrNull(proofCarrier.controlPath) : null),
-    preferred_runtime_selected: proofCarrier.preference === 'interactive_agent_cli',
+    preferred_runtime_selected: proofCarrier.preference === runtimeConfig.preferred_preference,
     production_ready: primaryRuntimeReady && productionProofFresh,
     production_proof_age_ms: productionProofAgeMs,
     production_proof_fresh: productionProofFresh,
@@ -2761,10 +2914,11 @@ function hasProductionReportedOutcome(outcome) {
   return (outcome?.classifications ?? []).some((item) => item.status === 'reported' && item.production_proof === true);
 }
 
-export async function runSonarResidentRecoveryDrill(cwd, options: SiteLoopPayload = {}) {
+export async function runSiteResidentRecoveryDrill(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const fixtureId = options.id ?? `resident-recovery-drill-${Date.now()}`;
-  const before = sonarResidentStatus(siteRoot);
+  const before = siteResidentStatus(siteRoot);
   const beforeCarrier: SiteLoopPayload = before.carrier ?? {};
   const retired = beforeCarrier.carrierSessionId
     ? retireResidentCarrier(siteRoot, beforeCarrier.carrierSessionId, {
@@ -2773,7 +2927,7 @@ export async function runSonarResidentRecoveryDrill(cwd, options: SiteLoopPayloa
       })
     : { status: 'skipped', reason: 'no_current_carrier' };
   const replacement = ensureResidentCarrier(siteRoot, { requireLiveCarrier: true });
-  const proof = await runSonarResidentE2E(siteRoot, {
+  const proof = await runSiteResidentE2E(siteRoot, {
     ackFixture: true,
     live: true,
     ensureResident: true,
@@ -2784,11 +2938,11 @@ export async function runSonarResidentRecoveryDrill(cwd, options: SiteLoopPayloa
     pollMs: options.pollMs ?? 5_000,
   });
   const cleanup = cleanupResidentWorkFixture(siteRoot, { id: fixtureId });
-  const after = sonarResidentStatus(siteRoot);
+  const after = siteResidentStatus(siteRoot);
   const accepted = proof.proof?.carrier_receipt_observed === true;
   const productionProof = proof.production_proof === true;
   return {
-    schema: 'narada.sonar.resident_recovery_drill.v1',
+    schema: schemaName(siteLoopConfig, 'resident_recovery_drill'),
     status: retired.status === 'retired' && ['launch_requested', 'already_available'].includes(replacement.status) && accepted
       ? productionProof ? 'production_passed' : 'transport_passed'
       : 'incomplete',
@@ -2803,13 +2957,15 @@ export async function runSonarResidentRecoveryDrill(cwd, options: SiteLoopPayloa
   };
 }
 
-export function inspectSonarEmailResidentLoopSchema(cwd) {
-  const store = openSiteLoopStore(resolve(cwd));
+export function inspectSiteLoopSchema(cwd) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const store = openSiteLoopStore(siteRoot);
   try {
     const columns = store.db.prepare('PRAGMA table_info(task_reports)').all().map((row) => String(row.name));
-    const health = getLoopHealth(store, SONAR_EMAIL_RESIDENT_LOOP_ID);
+    const health = getLoopHealth(store, siteLoopConfig.loop_id);
     return {
-      schema: 'narada.sonar.site_loop_schema_repair.v1',
+      schema: schemaName(siteLoopConfig, 'site_loop_schema_repair'),
       status: 'ok',
       db_path: join(resolve(cwd), '.ai', 'task-lifecycle.db'),
       task_reports_directive_id: columns.includes('directive_id') ? 'present' : 'missing',
@@ -2823,10 +2979,12 @@ export function inspectSonarEmailResidentLoopSchema(cwd) {
   }
 }
 
-export function resolveSonarResidentOutcome(cwd, options: SiteLoopPayload = {}) {
+export function resolveSiteResidentOutcome(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const directiveId = stringValue(options.directiveId ?? options.directive_id);
-  const loopId = stringValue(options.loopId, SONAR_EMAIL_RESIDENT_LOOP_ID);
-  const store = openSiteLoopStore(resolve(cwd));
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
+  const store = openSiteLoopStore(siteRoot);
   try {
     return {
       ...resolveDirectiveOutcome(store, {
@@ -2843,16 +3001,18 @@ export function resolveSonarResidentOutcome(cwd, options: SiteLoopPayload = {}) 
 }
 
 export function seedResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const fixtureSeedSchema = schemaName(siteLoopConfig, 'loop_fixture_seed');
   if (options.ackFixture !== true) {
     return {
-      schema: 'narada.sonar.loop_fixture_seed.v1',
+      schema: fixtureSeedSchema,
       status: 'refused',
       reason: 'ack_fixture_required',
       required_flag: '--ack-fixture',
       outbound_mutation: false,
     };
   }
-  const siteRoot = resolve(cwd);
   const id = options.id ?? 'resident_work_fixture';
   const nowIso = options.receivedAt ?? new Date().toISOString();
   const envelopeId = `env_${sanitizeId(id)}`;
@@ -2865,13 +3025,13 @@ export function seedResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
     envelope_id: envelopeId,
     received_at: nowIso,
     kind: 'incident',
-    authority: { level: 'system_test', principal: 'sonar.site-loop.fixture' },
+    authority: { level: 'system_test', principal: `${siteLoopConfig.loop_id}.fixture` },
     source: { kind: 'synthetic_fixture', ref: id },
     payload: {
       title: options.title ?? 'Resident synthetic work fixture',
       summary: options.summary ?? 'Synthetic local fixture for resident loop E2E validation.',
-      target_role: RESIDENT_ROLE,
-      preferred_agent_id: RESIDENT_AGENT_ID,
+      target_role: siteLoopConfig.resident.role,
+      preferred_agent_id: siteLoopConfig.resident.agent_id,
       fixture: true,
       fixture_id: id,
     },
@@ -2879,7 +3039,7 @@ export function seedResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
   };
   if (!existed) writeFileSync(path, JSON.stringify(envelope, null, 2), 'utf8');
   return {
-    schema: 'narada.sonar.loop_fixture_seed.v1',
+    schema: fixtureSeedSchema,
     status: existed ? 'exists' : 'created',
     envelope_id: envelopeId,
     path,
@@ -2889,23 +3049,26 @@ export function seedResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
 
 export function cleanupResidentWorkFixture(cwd, options: SiteLoopPayload = {}) {
   const siteRoot = resolve(cwd);
+  const fixtureCleanupSchema = schemaName(configForSite(siteRoot), 'loop_fixture_cleanup');
   const id = options.id ?? 'resident_work_fixture';
   const envelopeId = `env_${sanitizeId(id)}`;
   const path = join(siteRoot, '.ai', 'inbox-envelopes', `fixture-${envelopeId}.json`);
   if (!existsSync(path)) {
-    return { schema: 'narada.sonar.loop_fixture_cleanup.v1', status: 'not_found', envelope_id: envelopeId, path };
+    return { schema: fixtureCleanupSchema, status: 'not_found', envelope_id: envelopeId, path };
   }
   // Keep cleanup intentionally narrow: remove only deterministic files created by seedResidentWorkFixture.
   try {
     rmSync(path, { force: true });
   } catch (error) {
-    return { schema: 'narada.sonar.loop_fixture_cleanup.v1', status: 'error', envelope_id: envelopeId, path, error: error instanceof Error ? error.message : String(error) };
+    return { schema: fixtureCleanupSchema, status: 'error', envelope_id: envelopeId, path, error: error instanceof Error ? error.message : String(error) };
   }
-  return { schema: 'narada.sonar.loop_fixture_cleanup.v1', status: 'removed', envelope_id: envelopeId, path };
+  return { schema: fixtureCleanupSchema, status: 'removed', envelope_id: envelopeId, path };
 }
 
-export async function superviseSonarEmailResidentLoop(cwd, options: SiteLoopPayload = {}) {
-  const policy = loadSonarEmailResidentOperatingPolicy(cwd).policy;
+export async function superviseSiteLoop(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const policy = loadSiteLoopOperatingPolicy(cwd).policy;
   const cycles = options.cycles == null ? Infinity : Number(options.cycles);
   const intervalMs = Number(options.intervalMs ?? options.interval_ms ?? policy.cadence.supervise_interval_ms);
   const jitterMs = Number(options.jitterMs ?? options.jitter_ms ?? 10_000);
@@ -2918,7 +3081,7 @@ export async function superviseSonarEmailResidentLoop(cwd, options: SiteLoopPayl
   process.once('SIGTERM', stop);
   try {
     for (let index = 0; index < cycles && !stopped; index += 1) {
-      const result = await runSonarEmailResidentLoop(cwd, {
+      const result = await runSiteLoop(cwd, {
         dryRun: options.dryRun,
         sourceSync: options.sourceSync,
         sourceSyncRunner: options.sourceSyncRunner,
@@ -2928,7 +3091,7 @@ export async function superviseSonarEmailResidentLoop(cwd, options: SiteLoopPayl
         ensureResident: options.ensureResident,
         requireFreshProductionProof: options.requireFreshProductionProof,
       });
-      const statusAfterRun = sonarEmailResidentOperatingLayerStatus(cwd, {
+      const statusAfterRun = siteLoopOperatingLayerStatus(cwd, {
         productionProofFreshnessMs: options.productionProofFreshnessMs ?? options.production_proof_freshness_ms,
         requireFreshProductionProof: options.requireFreshProductionProof === true || options.require_fresh_production_proof === true,
       });
@@ -2951,24 +3114,26 @@ export async function superviseSonarEmailResidentLoop(cwd, options: SiteLoopPayl
     process.removeListener('SIGTERM', stop);
   }
   return {
-    schema: 'narada.sonar.site_loop_supervisor_run.v1',
+    schema: schemaName(siteLoopConfig, 'site_loop_supervisor_run'),
     status: stopped ? 'stopped' : 'ok',
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loop_id: siteLoopConfig.loop_id,
     cycles_requested: Number.isFinite(cycles) ? cycles : null,
     cycles_completed: runs.length,
     runs,
   };
 }
 
-export async function runSonarEmailResidentSoak(cwd, options: SiteLoopPayload = {}) {
+export async function runSiteLoopSoak(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const cycles = Math.max(1, Number(options.cycles ?? 3));
-  const result = await superviseSonarEmailResidentLoop(cwd, {
+  const result = await superviseSiteLoop(cwd, {
     ...options,
     cycles,
     intervalMs: options.intervalMs ?? options.interval_ms ?? 0,
     jitterMs: options.jitterMs ?? options.jitter_ms ?? 0,
   });
-  const status = sonarEmailResidentOperatingLayerStatus(cwd, {
+  const status = siteLoopOperatingLayerStatus(cwd, {
     productionProofFreshnessMs: options.productionProofFreshnessMs ?? options.production_proof_freshness_ms,
   });
   const failedRuns = result.runs.filter((run) => run.status !== 'ok');
@@ -2987,9 +3152,9 @@ export async function runSonarEmailResidentSoak(cwd, options: SiteLoopPayload = 
     && blockingAlerts.length === 0
     && productionFreshOk;
   return {
-    schema: 'narada.sonar.site_loop_soak.v1',
+    schema: schemaName(siteLoopConfig, 'site_loop_soak'),
     status: passed ? 'passed' : 'failed',
-    loop_id: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loop_id: siteLoopConfig.loop_id,
     cycles_requested: cycles,
     cycles_completed: result.cycles_completed,
     require_fresh_production_proof: requireFreshProductionProof,
@@ -3077,9 +3242,9 @@ function summarizeBridgeResult(result) {
   };
 }
 
-function summarizeSourceSync(result) {
+function summarizeSourceSync(result, siteLoopConfig: SiteLoopConfig) {
   return {
-    schema: result?.schema ?? 'narada.sonar.source_sync.v1',
+    schema: result?.schema ?? schemaName(siteLoopConfig, 'source_sync'),
     status: result?.status ?? result?.outcome ?? 'ok',
     dry_run: result?.dry_run ?? result?.dryRun ?? null,
     synced_count: result?.synced_count ?? result?.synced ?? result?.changed ?? null,
@@ -3118,9 +3283,9 @@ function summarizeResidentDirectiveEmission(result) {
   };
 }
 
-function summarizeTicketTaskReconciliation(result) {
+function summarizeTicketTaskReconciliation(result, siteLoopConfig: SiteLoopConfig) {
   return {
-    schema: result?.schema ?? 'narada.sonar.ticket_task_reconciliation.v1',
+    schema: result?.schema ?? schemaName(siteLoopConfig, 'ticket_task_reconciliation'),
     status: result?.status ?? 'unknown',
     dry_run: result?.dry_run ?? false,
     scanned: result?.scanned ?? 0,
@@ -3140,9 +3305,9 @@ function summarizeTicketTaskReconciliation(result) {
   };
 }
 
-function summarizeResidentBacklogRecovery(result) {
+function summarizeResidentBacklogRecovery(result, siteLoopConfig: SiteLoopConfig) {
   return {
-    schema: result?.schema ?? 'narada.sonar.resident_backlog_recovery.v1',
+    schema: result?.schema ?? schemaName(siteLoopConfig, 'resident_backlog_recovery'),
     status: result?.status ?? 'unknown',
     emitted_count: result?.emitted?.length ?? 0,
     created_count: (result?.emitted ?? []).filter((item) => item.emission_status === 'created').length,
@@ -3155,6 +3320,7 @@ function summarizeResidentBacklogRecovery(result) {
 }
 
 function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const limit = Math.max(0, Number(options.limit ?? 25));
@@ -3186,11 +3352,11 @@ function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayloa
       }
       const staleBucket = Math.floor(Date.parse(nowIso) / Math.max(1, actionStaleMinutes) / 60000);
       const result = directiveStore.emitResidentDirectiveForAdmittedWork({
-        siteId: 'sonar',
+        siteId: siteLoopConfig.site_id,
         authorityLocus: 'client_service',
-        systemEmitterId: 'sonar.system.directive_emitter',
-        residentAgentId: RESIDENT_AGENT_ID,
-        residentRole: RESIDENT_ROLE,
+        systemEmitterId: `${siteLoopConfig.site_id}.system.directive_emitter`,
+        residentAgentId: siteLoopConfig.resident.agent_id,
+        residentRole: siteLoopConfig.resident.role,
         taskId,
         taskNumber,
         sourceId: mailboxTicketId ?? undefined,
@@ -3208,6 +3374,7 @@ function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayloa
           taskId: candidate.task_id,
           reason: decision.reason,
           at: nowIso,
+          siteLoopConfig,
         });
       }
       emitted.push({
@@ -3221,7 +3388,7 @@ function emitResidentBacklogRecoveryDirectives(siteRoot, options: SiteLoopPayloa
       });
     }
     return {
-      schema: 'narada.sonar.resident_backlog_recovery.v1',
+      schema: schemaName(siteLoopConfig, 'resident_backlog_recovery'),
       status: 'ok',
       now: nowIso,
       action_stale_minutes: actionStaleMinutes,
@@ -3304,7 +3471,8 @@ function safeEvidenceName(value) {
   return String(value).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function residentBacklogRecoveryDecision(db, candidate, { siteRoot = null, nowIso, actionStaleMinutes, recordAttention = true }) {
+function residentBacklogRecoveryDecision(db, candidate, { siteRoot = null, siteLoopConfig = null, nowIso, actionStaleMinutes, recordAttention = true }) {
+  const resolvedSiteLoopConfig = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
   if (candidate.status === 'claimed') {
     if (!candidate.assignment_id) {
       if (recordAttention) {
@@ -3317,7 +3485,7 @@ function residentBacklogRecoveryDecision(db, candidate, { siteRoot = null, nowIs
       }
       return { status: 'skip', reason: 'claimed_missing_active_assignment' };
     }
-    if (candidate.active_agent_id !== RESIDENT_AGENT_ID) {
+    if (candidate.active_agent_id !== resolvedSiteLoopConfig.resident.agent_id) {
       if (recordAttention) {
         recordTaskBacklogAttention(db, candidate, {
           siteRoot,
@@ -3329,7 +3497,7 @@ function residentBacklogRecoveryDecision(db, candidate, { siteRoot = null, nowIs
       return { status: 'skip', reason: 'claimed_by_other_agent' };
     }
   }
-  const directives = residentDirectivesForTask(db, candidate.task_id);
+  const directives = residentDirectivesForTask(db, candidate.task_id, resolvedSiteLoopConfig);
   if (directives.some((directive) => directive.outcome === 'reported')) {
     return { status: 'skip', reason: 'already_reported' };
   }
@@ -3353,7 +3521,7 @@ function residentBacklogRecoveryDecision(db, candidate, { siteRoot = null, nowIs
   };
 }
 
-function residentDirectivesForTask(db, taskId) {
+function residentDirectivesForTask(db, taskId, siteLoopConfig: SiteLoopConfig) {
   return db.prepare(`
     SELECT dr.directive_id, dr.created_at, dr.delivery_status,
            dol.outcome, dol.observed_at, dol.recorded_at
@@ -3369,7 +3537,7 @@ function residentDirectivesForTask(db, taskId) {
         OR (dr.target_kind = 'role' AND dr.target_id = ?)
       )
     ORDER BY dr.created_at DESC, dr.directive_id DESC
-  `).all(SONAR_EMAIL_RESIDENT_LOOP_ID, taskId, RESIDENT_AGENT_ID, RESIDENT_ROLE).map((row) => ({
+  `).all(siteLoopConfig.loop_id, taskId, siteLoopConfig.resident.agent_id, siteLoopConfig.resident.role).map((row) => ({
     directive_id: String(row.directive_id),
     created_at: String(row.created_at),
     delivery_status: String(row.delivery_status),
@@ -3388,21 +3556,21 @@ function isResidentDirectiveActive(directive, { nowIso, actionStaleMinutes }) {
   return minutesBetween(anchor, nowIso) < actionStaleMinutes;
 }
 
-function supersedeRecoveredDirective(db, { priorDirectiveId, replacementDirectiveId, taskId, reason, at }) {
-  const existing = latestDirectiveOutcome(db, priorDirectiveId);
+function supersedeRecoveredDirective(db, { priorDirectiveId, replacementDirectiveId, taskId, reason, at, siteLoopConfig }) {
+  const existing = latestDirectiveOutcome(db, priorDirectiveId, siteLoopConfig.loop_id);
   if (existing?.outcome === 'superseded') return null;
   return recordDirectiveOutcome({ db }, {
-    loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loopId: siteLoopConfig.loop_id,
     directiveId: priorDirectiveId,
     outcome: 'superseded',
-    agentId: RESIDENT_AGENT_ID,
+    agentId: siteLoopConfig.resident.agent_id,
     taskId,
     reason: 'superseded_by_recovery_directive',
     eventAt: at,
     observedAt: at,
     recordedAt: at,
     evidence: {
-      schema: 'narada.sonar.directive_recovery_supersession.v1',
+      schema: schemaName(siteLoopConfig, 'directive_recovery_supersession'),
       previous_outcome: existing,
       replacement_directive_id: replacementDirectiveId,
       task_id: taskId,
@@ -3411,11 +3579,12 @@ function supersedeRecoveredDirective(db, { priorDirectiveId, replacementDirectiv
   });
 }
 
-function recordTaskBacklogAttention(db, candidate, { siteRoot, classification, reason, nowIso }) {
+function recordTaskBacklogAttention(db, candidate, { siteRoot, siteLoopConfig = null, classification, reason, nowIso }) {
+  const resolvedSiteLoopConfig = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
   const directiveId = `task:${candidate.task_id}`;
   const envelopeId = `operator_attention_${safeFileToken(candidate.task_id)}_${safeFileToken(classification)}`;
   const existing = getLoopEscalation({ db }, {
-    loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loopId: resolvedSiteLoopConfig.loop_id,
     directiveId,
     classification,
   });
@@ -3428,12 +3597,12 @@ function recordTaskBacklogAttention(db, candidate, { siteRoot, classification, r
     nowIso,
   });
   const escalation = recordLoopEscalation({ db }, {
-    loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loopId: resolvedSiteLoopConfig.loop_id,
     directiveId,
     classification,
     envelopeId,
     escalation: {
-      schema: 'narada.sonar.resident_task_backlog_attention.v1',
+      schema: schemaName(resolvedSiteLoopConfig, 'resident_task_backlog_attention'),
       subject_ref: directiveId,
       task_id: candidate.task_id,
       task_number: candidate.task_number,
@@ -3450,6 +3619,7 @@ function recordTaskBacklogAttention(db, candidate, { siteRoot, classification, r
 }
 
 function writeTaskBacklogAttentionEnvelope(candidate, { siteRoot, envelopeId, classification, reason, nowIso }) {
+  const siteLoopConfig = configForSite(resolve(siteRoot));
   const dir = join(resolve(siteRoot), '.ai', 'operator-attention');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${envelopeId}.json`);
@@ -3459,8 +3629,8 @@ function writeTaskBacklogAttentionEnvelope(candidate, { siteRoot, envelopeId, cl
       envelope_id: envelopeId,
       kind: 'operator_attention',
       received_at: nowIso,
-      authority: { level: 'system_reported', principal: 'sonar.email-resident' },
-      source: { kind: 'site_loop', ref: SONAR_EMAIL_RESIDENT_LOOP_ID },
+      authority: { level: 'system_reported', principal: siteLoopConfig.loop_id },
+      source: { kind: 'site_loop', ref: siteLoopConfig.loop_id },
       payload: {
         title: `Resident task needs operator attention: ${classification}`,
         summary: `Resident-governed task ${candidate.task_id} cannot be recovered automatically: ${reason}.`,
@@ -3549,6 +3719,8 @@ function sourceSyncRefs(result) {
 }
 
 export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}) {
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const nowMs = Date.parse(nowIso);
   const deliveryStaleMinutes = Number(options.deliveryStaleMinutes ?? 5);
@@ -3558,7 +3730,7 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
     : [];
   const includeBacklog = options.includeBacklog !== false;
   const resident = asRecord(options.resident);
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
@@ -3566,8 +3738,8 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
     const baseWhere = `
       admission_status = 'admitted'
       AND (
-        (target_kind = 'agent' AND target_id = 'sonar.resident')
-        OR (target_kind = 'role' AND target_id = 'resident')
+        (target_kind = 'agent' AND target_id = ?)
+        OR (target_kind = 'role' AND target_id = ?)
       )
     `;
     const rows = directiveIds.length === 0 && !includeBacklog
@@ -3579,7 +3751,7 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
           WHERE ${baseWhere}
             AND directive_id IN (${directiveIds.map(() => '?').join(', ')})
           ORDER BY created_at ASC, directive_id ASC
-        `).all(...directiveIds)
+        `).all(siteLoopConfig.resident.agent_id, siteLoopConfig.resident.role, ...directiveIds)
       : directiveIds.length > 0
         ? lifecycleStore.db.prepare(`
           SELECT directive_id, directive_json, created_at, delivery_status
@@ -3590,14 +3762,14 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
               OR delivery_status IN ('pending', 'leased', 'failed', 'receipt_recorded')
             )
           ORDER BY created_at ASC, directive_id ASC
-        `).all(...directiveIds)
+        `).all(siteLoopConfig.resident.agent_id, siteLoopConfig.resident.role, ...directiveIds)
         : lifecycleStore.db.prepare(`
           SELECT directive_id, directive_json, created_at, delivery_status
           FROM directive_records
           WHERE ${baseWhere}
             AND delivery_status IN ('pending', 'leased', 'failed', 'receipt_recorded')
           ORDER BY created_at ASC, directive_id ASC
-        `).all();
+        `).all(siteLoopConfig.resident.agent_id, siteLoopConfig.resident.role);
     const classifications = rows.map((row) => classifyDirectiveOutcome(lifecycleStore.db, {
       directive_id: String(row.directive_id),
       created_at: String(row.created_at),
@@ -3609,14 +3781,15 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
       deliveryStaleMinutes,
       actionStaleMinutes,
       resident,
+      siteLoopConfig,
     }));
     const outcomeRecords = classifications
-      .map((item) => recordOutcomeForClassification({ db: lifecycleStore.db }, item, { nowIso }))
+      .map((item) => recordOutcomeForClassification({ db: lifecycleStore.db }, item, { nowIso, siteLoopConfig }))
       .filter(Boolean);
     const counts = {};
     for (const item of classifications) counts[item.status] = (counts[item.status] ?? 0) + 1;
     return {
-      schema: 'narada.sonar.agent_outcome_reconciliation.v1',
+      schema: schemaName(siteLoopConfig, 'agent_outcome_reconciliation'),
       status: 'ok',
       now: nowIso,
       delivery_stale_minutes: deliveryStaleMinutes,
@@ -3640,6 +3813,7 @@ export function runAgentOutcomeReconciliation(cwd, options: SiteLoopPayload = {}
 }
 
 function classifyDirectiveOutcome(db, row, options) {
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
   const directive = row.directive;
   const taskRef = (directive.content?.refs ?? []).find((ref) => ref.kind === 'task')?.id
     ?? directive.content?.data?.task_id
@@ -3661,7 +3835,7 @@ function classifyDirectiveOutcome(db, row, options) {
     });
   }
 
-  const previousOutcome = latestDirectiveOutcome(db, directive.directive_id);
+  const previousOutcome = latestDirectiveOutcome(db, directive.directive_id, siteLoopConfig.loop_id);
   if (previousOutcome?.outcome === 'superseded') {
     return baseOutcome(row, 'superseded', {
       reason: previousOutcome.reason ?? 'previous_outcome_superseded',
@@ -3693,7 +3867,7 @@ function classifyDirectiveOutcome(db, row, options) {
     });
   }
 
-  const triage = latestDirectiveTriage(db, directive.directive_id, 'sonar.resident');
+  const triage = latestDirectiveTriage(db, directive.directive_id, siteLoopConfig.resident.agent_id);
   if (triage?.status === 'refused') {
     return baseOutcome(row, 'refused', {
       reason: triage.reason ?? 'resident_refused_directive',
@@ -3705,7 +3879,7 @@ function classifyDirectiveOutcome(db, row, options) {
     });
   }
 
-  const report = latestDirectiveLinkedTaskReportAfter(db, taskRef, receiptAt ?? createdAt, 'sonar.resident', directive.directive_id);
+  const report = latestDirectiveLinkedTaskReportAfter(db, taskRef, receiptAt ?? createdAt, siteLoopConfig.resident.agent_id, directive.directive_id);
   if (report) {
     return baseOutcome(row, 'reported', {
       reason: report.proof_mode === 'proof_driver'
@@ -3737,12 +3911,12 @@ function classifyDirectiveOutcome(db, row, options) {
   });
 }
 
-function latestDirectiveOutcome(db, directiveId) {
+function latestDirectiveOutcome(db, directiveId, loopId) {
   const row = db.prepare(`
     SELECT outcome, reason, receipt_id, report_id, observed_at, recorded_at
     FROM directive_outcome_latest
     WHERE loop_id = ? AND directive_id = ?
-  `).get(SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId);
+  `).get(loopId, directiveId);
   return row ? {
     outcome: String(row.outcome),
     reason: row.reason ? String(row.reason) : null,
@@ -3754,9 +3928,10 @@ function latestDirectiveOutcome(db, directiveId) {
 }
 
 function recordOutcomeForClassification(store, classification, { nowIso = new Date().toISOString() }: SiteLoopPayload = {}) {
+  const siteLoopConfig = siteLoopConfigFromOptions(asRecord(arguments[2]));
   if (!classification?.directive_id || classification.status === 'unknown') return null;
   if (classification.status === 'superseded') {
-    const existing = latestDirectiveOutcome(store.db, classification.directive_id);
+    const existing = latestDirectiveOutcome(store.db, classification.directive_id, siteLoopConfig.loop_id);
     if (existing?.outcome === 'superseded') return null;
   }
   const observedAt = stringValue(nowIso, new Date().toISOString());
@@ -3765,10 +3940,10 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
     observedAt,
   );
   return recordDirectiveOutcome(store, {
-    loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+    loopId: siteLoopConfig.loop_id,
     directiveId: classification.directive_id,
     outcome: classification.status,
-    agentId: RESIDENT_AGENT_ID,
+    agentId: siteLoopConfig.resident.agent_id,
     taskId: classification.task_id ?? null,
     reportId: classification.report_id ?? null,
     receiptId: classification.receipt_id ?? null,
@@ -3781,6 +3956,7 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
 }
 
 function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const runId = stringValue(options.runId);
   const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const created = [];
@@ -3791,7 +3967,7 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
     const directiveId = stringValue(item.directive_id);
     const classificationStatus = stringValue(item.status);
     const observation = recordLoopClassificationObservation(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId,
       classification: classificationStatus,
       observation: { ...item, run_id: runId },
@@ -3800,13 +3976,13 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
     observed.push(observation);
     if (['reported', 'refused', 'superseded'].includes(classificationStatus)) {
       for (const classification of ['delivery_stale', 'action_stale', 'blocked_no_carrier', 'stale_busy_carrier']) {
-        const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId, classification });
+        const existing = getLoopEscalation(store, { loopId: siteLoopConfig.loop_id, directiveId, classification });
         if (existing?.status === 'opened') {
           const attentionId = stringValue(existing.envelope_id ?? existing.escalation_id);
           const ack = acknowledgeLoopAttention(store, {
             attentionId,
             reason: `cleared_by_directive_outcome:${classificationStatus}`,
-            acknowledgedBy: 'sonar.email-resident.loop',
+            acknowledgedBy: configuredLoopActor(siteRoot),
             at: nowIso,
           });
           cleared.push({ directive_id: directiveId, classification, outcome: classificationStatus, attention_id: attentionId, status: ack.status });
@@ -3815,18 +3991,18 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
     }
     if (!['delivery_stale', 'action_stale', 'blocked_no_carrier'].includes(classificationStatus)) continue;
     const count = countRecentConsecutiveLoopClassificationObservations(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId,
       classification: classificationStatus,
       limit: 3,
     });
     if (count < 3) continue;
-    const existing = getLoopEscalation(store, { loopId: SONAR_EMAIL_RESIDENT_LOOP_ID, directiveId, classification: classificationStatus });
+    const existing = getLoopEscalation(store, { loopId: siteLoopConfig.loop_id, directiveId, classification: classificationStatus });
     if (existing?.status === 'opened') continue;
     const severity = loopAttentionSeverity(siteRoot, classificationStatus);
     const envelope = writeOperatorAttentionEnvelope(siteRoot, { ...item, severity }, { runId, nowIso });
     const escalation = recordLoopEscalation(store, {
-      loopId: SONAR_EMAIL_RESIDENT_LOOP_ID,
+      loopId: siteLoopConfig.loop_id,
       directiveId,
       classification: classificationStatus,
       envelopeId: envelope.envelope_id,
@@ -3836,7 +4012,7 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
     created.push({ ...escalation, envelope_id: envelope.envelope_id, path: envelope.path });
   }
   return {
-    schema: 'narada.sonar.loop_escalation_reconciliation.v1',
+    schema: schemaName(siteLoopConfig, 'loop_escalation_reconciliation'),
     status: 'ok',
     observed_count: observed.length,
     created_count: created.length,
@@ -3848,16 +4024,16 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
 }
 
 function loopAttentionSeverity(siteRoot, classification) {
-  const policy = loadSonarEmailResidentOperatingPolicy(siteRoot).policy;
+  const policy = loadSiteLoopOperatingPolicy(siteRoot).policy;
   return policy.attention?.[classification] ?? policy.attention?.[classification === 'blocked_no_carrier' ? 'no_carrier' : classification] ?? 'warning';
 }
 
-function probeTaskLifecycleMcpTools(siteRoot) {
-  const configPath = join(siteRoot, '.ai', 'mcp', 'narada-sonar-task-lifecycle-mcp.json');
+function probeTaskLifecycleMcpTools(siteRoot, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)) {
+  const configPath = join(siteRoot, siteLoopConfig.mcp.task_lifecycle_config_path);
   const config = readJson(configPath);
-  const server = config?.mcpServers?.['narada-sonar-task-lifecycle'] ?? null;
+  const server = config?.mcpServers?.[siteLoopConfig.mcp.task_lifecycle_server_key] ?? null;
   const entrypoint = Array.isArray(server?.args)
-    ? server.args.find((arg) => String(arg).replace(/\\/g, '/').includes('tools/task-lifecycle/task-mcp-server.js'))
+    ? server.args.find((arg) => String(arg).replace(/\\/g, '/').includes(siteLoopConfig.mcp.task_lifecycle_entrypoint_hint))
     : null;
   if (!server || !entrypoint) {
     return { status: 'missing_config', config_path: configPath, tools: [] };
@@ -3892,29 +4068,30 @@ function probeTaskLifecycleMcpTools(siteRoot) {
   }
 }
 
-function defaultResidentLaunchRunner(siteRoot) {
-  const launcher = join(siteRoot, 'tools', 'agent-start', 'start-agent.js');
-  const host = join(siteRoot, 'tools', 'site-loop', 'agent-runtime-server-control-host.js');
+function defaultResidentLaunchRunner(siteRoot, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)) {
+  const launchConfig = siteLoopConfig.resident_launch;
+  const launcher = join(siteRoot, launchConfig.launcher_path);
+  const host = join(siteRoot, launchConfig.host_path);
   if (!existsSync(launcher)) {
     return { status: 'failed', reason: 'agent_start_launcher_missing', launcher };
   }
   if (!existsSync(host)) {
-    return { status: 'failed', reason: 'agent_runtime_server_control_host_missing', host };
+    return { status: 'failed', reason: 'resident_control_host_missing', host };
   }
   const materialized = spawnSync(process.execPath, [
     launcher,
-    RESIDENT_AGENT_ID,
+    siteLoopConfig.resident.agent_id,
     '--runtime',
-    'agent-runtime-server',
+    launchConfig.runtime,
     '--json',
     '--launch-source',
-    'sonar.email-resident.loop.supervisor',
+    launchConfig.launch_source ?? configuredLoopSupervisorActor(siteRoot),
     '--trigger-source',
-    'loop_ensure_resident',
+    launchConfig.trigger_source,
     '--trigger-reason',
-    'no_acceptable_live_resident_carrier',
+    launchConfig.trigger_reason,
     '--requested-by',
-    'sonar.email-resident.loop',
+    launchConfig.requested_by ?? configuredLoopActor(siteRoot),
   ], {
     cwd: siteRoot,
     encoding: 'utf8',
@@ -3943,7 +4120,7 @@ function defaultResidentLaunchRunner(siteRoot) {
   if (!carrierSessionId) {
     return { status: 'failed', reason: 'agent_start_materialization_missing_carrier_session', launcher, launch_result: launchResult };
   }
-  const sessionDir = join(siteRoot, '.narada', 'crew', 'nars-sessions', carrierSessionId);
+  const sessionDir = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
   const controlFlagIndex = Array.isArray(launchResult.runtime_args) ? launchResult.runtime_args.indexOf('--control-jsonl') : -1;
   const controlPath = (controlFlagIndex >= 0 ? launchResult.runtime_args[controlFlagIndex + 1] : null)
     ?? join(sessionDir, 'control.jsonl');
@@ -3954,7 +4131,7 @@ function defaultResidentLaunchRunner(siteRoot) {
     '--site-root',
     siteRoot,
     '--identity',
-    RESIDENT_AGENT_ID,
+    siteLoopConfig.resident.agent_id,
     '--session',
     carrierSessionId,
     '--control-jsonl',
@@ -3968,24 +4145,23 @@ function defaultResidentLaunchRunner(siteRoot) {
       ...process.env,
       NARADA_SITE_ROOT: siteRoot,
       NARADA_WORKSPACE_ROOT: siteRoot,
-      NARADA_AGENT_ID: RESIDENT_AGENT_ID,
+      NARADA_AGENT_ID: siteLoopConfig.resident.agent_id,
       NARADA_CARRIER_SESSION_ID: carrierSessionId,
-      NARADA_RESIDENT_PROOF_DRIVER: '1',
-      NARADA_RESIDENT_AUTOWORK: '1',
+      ...launchConfig.env,
     },
   });
   child.unref();
   const resultPath = launchResult.launch_result_path ?? null;
   const enrichedLaunchResult = {
     ...launchResult,
-    runtime: 'agent-runtime-server',
+    runtime: launchConfig.runtime,
     status: 'launching',
     control_path: controlPath,
-    agent_runtime_server_launch: {
-      schema: 'narada.agent_start.agent_runtime_server.v0',
+    resident_launch: {
+      schema: launchConfig.control_transport_schema,
       status: 'launching',
-      transport: 'jsonl_stdio_hosted_by_control_jsonl',
-      carrier_relation: 'resident_agent_runtime_server_control_host',
+      transport: launchConfig.transport,
+      carrier_relation: launchConfig.carrier_relation,
       session_dir: sessionDir,
       session_path: join(sessionDir, 'session.jsonl'),
       control_path: controlPath,
@@ -4003,16 +4179,17 @@ function defaultResidentLaunchRunner(siteRoot) {
     host,
     event_path: resultPath,
     carrier_session_id: carrierSessionId,
-    runtime: 'agent-runtime-server',
-    preferred_runtime: 'agent-cli',
-    selection_reason: 'no_live_interactive_agent_cli_control_path',
-    trigger_reason: 'no_acceptable_live_resident_carrier',
-    requested_by: 'sonar.email-resident.loop',
+    runtime: launchConfig.runtime,
+    preferred_runtime: launchConfig.preferred_runtime,
+    selection_reason: launchConfig.selection_reason,
+    trigger_reason: launchConfig.trigger_reason,
+    requested_by: launchConfig.requested_by ?? configuredLoopActor(siteRoot),
     control_path: controlPath,
   };
 }
 
 function writeOperatorAttentionEnvelope(siteRoot, classification, { runId, nowIso }) {
+  const siteLoopConfig = configForSite(siteRoot);
   const envelopeId = `operator_attention_${safeFileToken(classification.directive_id)}_${safeFileToken(classification.status)}`;
   const dir = join(siteRoot, '.ai', 'operator-attention');
   mkdirSync(dir, { recursive: true });
@@ -4023,7 +4200,7 @@ function writeOperatorAttentionEnvelope(siteRoot, classification, { runId, nowIs
       envelope_id: envelopeId,
       kind: 'operator_attention',
       received_at: nowIso,
-      authority: { level: 'system_reported', principal: 'sonar.email-resident' },
+      authority: { level: 'system_reported', principal: siteLoopConfig.loop_id },
       source: { kind: 'site_loop', ref: runId },
       payload: {
         title: `Resident directive needs operator attention: ${classification.status}`,
@@ -4041,12 +4218,13 @@ function writeOperatorAttentionEnvelope(siteRoot, classification, { runId, nowIs
 }
 
 function retireResidentCarrier(siteRoot, carrierSessionId, { reason, at }: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   if (!carrierSessionId) return { status: 'skipped', reason: 'carrier_session_id_missing' };
-  const dir = join(siteRoot, '.narada', 'crew', 'nars-sessions', carrierSessionId);
+  const dir = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'retired.json');
   const record = {
-    schema: 'narada.sonar.resident_carrier_retirement.v1',
+    schema: schemaName(siteLoopConfig, 'resident_carrier_retirement'),
     status: 'retired',
     carrier_session_id: carrierSessionId,
     retired_at: at ?? new Date().toISOString(),
@@ -4057,17 +4235,21 @@ function retireResidentCarrier(siteRoot, carrierSessionId, { reason, at }: SiteL
 }
 
 function residentAgentCliStartCommand(siteRoot) {
-  return `pwsh -NoExit -Command "Set-Location -LiteralPath '${siteRoot}'; .\\narada-sonar.ps1 agent-start -Agent sonar.resident -Runtime agent-cli -Exec"`;
+  const siteLoopConfig = configForSite(siteRoot);
+  return `pwsh -NoExit -Command "Set-Location -LiteralPath '${siteRoot}'; ${siteLoopConfig.commands.agent_cli_resident}"`;
 }
 
 function readCarrierRetirement(siteRoot, carrierSessionId) {
   if (!carrierSessionId) return null;
-  const path = join(siteRoot, '.narada', 'crew', 'nars-sessions', carrierSessionId, 'retired.json');
+  const siteLoopConfig = configForSite(siteRoot);
+  const path = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'retired.json');
   return readJson(path);
 }
 
 function isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs = 30000 }: SiteLoopPayload = {}) {
   if (!carrierSessionId) return { live: false, reason: 'carrier_session_id_missing' };
+  const siteLoopConfig = configForSite(siteRoot);
+  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
   const heartbeat = readCarrierHeartbeat(siteRoot, carrierSessionId, staleAfterMs);
   if (heartbeat.fresh) {
     return {
@@ -4081,7 +4263,7 @@ function isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs = 3000
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and ($_.CommandLine -like '*agent-cli*' -or $_.CommandLine -like '*agent-runtime-server-control-host*' -or $_.CommandLine -like '*nars-control-host*') -and $_.CommandLine.Contains($needle) }).Count`,
+    `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (${processPatternExpression}) -and $_.CommandLine.Contains($needle) }).Count`,
   ], {
     encoding: 'utf8',
     windowsHide: true,
@@ -4103,7 +4285,8 @@ function isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs = 3000
 }
 
 function readCarrierHeartbeat(siteRoot, carrierSessionId, staleAfterMs) {
-  const path = join(siteRoot, '.narada', 'crew', 'nars-sessions', carrierSessionId, 'heartbeat.json');
+  const siteLoopConfig = configForSite(siteRoot);
+  const path = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'heartbeat.json');
   if (!existsSync(path)) return { status: 'missing', fresh: false, path };
   try {
     const record = JSON.parse(readFileSync(path, 'utf8'));
@@ -4226,10 +4409,13 @@ function reportMentionsDirective(report, directiveId) {
 }
 
 function isResidentDirectiveTarget(directive, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
+  const residentAgentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const residentRole = stringValue(options.role, siteLoopConfig.resident.role);
   const target = directive?.target;
   if (!target) return false;
-  if (target.kind === 'agent' && target.id === (options.agentId ?? RESIDENT_AGENT_ID)) return true;
-  if (target.kind === 'role' && target.id === (options.role ?? RESIDENT_ROLE)) return true;
+  if (target.kind === 'agent' && target.id === residentAgentId) return true;
+  if (target.kind === 'role' && target.id === residentRole) return true;
   return false;
 }
 
@@ -4373,10 +4559,11 @@ function directiveMatchesControlledSource(db, directive, controlledSource) {
 }
 
 function controlledMailboxSourceStatus(siteRoot, controlledSource, options: SiteLoopPayload = {}) {
+  const siteLoopConfig = configForSite(siteRoot);
   const sourceRef = controlledSource == null ? null : String(controlledSource);
   if (!sourceRef) {
     return {
-      schema: 'narada.sonar.controlled_mailbox_source_status.v1',
+      schema: schemaName(siteLoopConfig, 'controlled_mailbox_source_status'),
       status: 'missing',
       source_ref: null,
       matched_directive_count: 0,
@@ -4411,7 +4598,7 @@ function controlledMailboxSourceStatus(siteRoot, controlledSource, options: Site
   const matchedDirectiveIds = Array.isArray(options.directiveIds) ? options.directiveIds.map(String) : [];
   const runSummary = asRecord(asRecord(options.run).summary);
   return {
-    schema: 'narada.sonar.controlled_mailbox_source_status.v1',
+    schema: schemaName(siteLoopConfig, 'controlled_mailbox_source_status'),
     status: matchedDirectiveIds.length > 0
       ? 'matched_new_directive'
       : matchingEnvelopes.length > 0
@@ -4443,6 +4630,7 @@ function directiveLooksSyntheticFixture(siteRoot, directive) {
 }
 
 function allResidentDirectiveIds(siteRoot) {
+  const siteLoopConfig = configForSite(siteRoot);
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
@@ -4456,7 +4644,7 @@ function allResidentDirectiveIds(siteRoot) {
           OR (target_kind = 'role' AND target_id = ?)
         )
       ORDER BY directive_id ASC
-    `).all(RESIDENT_AGENT_ID, RESIDENT_ROLE);
+    `).all(siteLoopConfig.resident.agent_id, siteLoopConfig.resident.role);
     return rows.map((row) => String(row.directive_id));
   } finally {
     lifecycleStore.db.close();
@@ -4567,12 +4755,14 @@ function parseArgs(argv) {
   }
   return parsed;
 }
+
+
 const isEntrypoint = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
 if (isEntrypoint) {
   const args = parseArgs(process.argv.slice(2));
-  runSonarEmailResidentLoop(args.cwd, args)
+  runSiteLoop(args.cwd, args)
     .then((result) => {
       console.log(JSON.stringify(result, null, 2));
       process.exit(result.status === 'ok' ? 0 : 1);

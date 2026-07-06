@@ -1,0 +1,216 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "narada:site-loop-config.v1.schema.json",
+  "title": "Narada Site Loop Config",
+  "description": "Schema for .narada/capabilities/site-loop-config.json. This file is a site-owned override merged onto the neutral site-loop defaults; root identity fields are required so active site-loop behavior is explicitly site-bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "loop_id", "site_id", "display_name", "resident", "refs"],
+  "properties": {
+    "schema": { "const": "narada.site_loop.config.v1" },
+    "loop_id": { "$ref": "#/$defs/nonEmptyString" },
+    "site_id": { "$ref": "#/$defs/nonEmptyString" },
+    "display_name": { "$ref": "#/$defs/nonEmptyString" },
+    "resident": { "$ref": "#/$defs/resident" },
+    "refs": { "$ref": "#/$defs/refs" },
+    "mcp": { "$ref": "#/$defs/mcp" },
+    "scheduler": { "$ref": "#/$defs/scheduler" },
+    "resident_launch": { "$ref": "#/$defs/residentLaunch" },
+    "resident_runtime": { "$ref": "#/$defs/residentRuntime" },
+    "recovery_plan": { "$ref": "#/$defs/recoveryPlan" },
+    "schemas": { "$ref": "#/$defs/stringMap" },
+    "commands": { "$ref": "#/$defs/commands" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "mailbox_proof": { "$ref": "#/$defs/mailboxProof" },
+    "docs": { "$ref": "#/$defs/docs" },
+    "tests": { "$ref": "#/$defs/tests" },
+    "notes": { "$ref": "#/$defs/stringArray" }
+  },
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "positiveNumber": { "type": "number", "exclusiveMinimum": 0 },
+    "stringArray": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "resident": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_id", "role"],
+      "properties": {
+        "agent_id": { "$ref": "#/$defs/nonEmptyString" },
+        "role": { "$ref": "#/$defs/nonEmptyString" },
+        "required_task_tools": { "$ref": "#/$defs/stringArray" },
+        "required_mutating_task_tools": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "refs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ticket_projection"],
+      "properties": {
+        "ticket_projection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": { "$ref": "#/$defs/nonEmptyString" },
+            "ref": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task_lifecycle_config_path": { "$ref": "#/$defs/nonEmptyString" },
+        "task_lifecycle_server_key": { "$ref": "#/$defs/nonEmptyString" },
+        "task_lifecycle_entrypoint_hint": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "scheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default_task_name": { "$ref": "#/$defs/nonEmptyString" },
+        "pid_files": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "residentLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "launcher_path": { "$ref": "#/$defs/nonEmptyString" },
+        "host_path": { "$ref": "#/$defs/nonEmptyString" },
+        "runtime": { "$ref": "#/$defs/nonEmptyString" },
+        "launch_source": { "$ref": "#/$defs/nonEmptyString" },
+        "trigger_source": { "$ref": "#/$defs/nonEmptyString" },
+        "trigger_reason": { "$ref": "#/$defs/nonEmptyString" },
+        "requested_by": { "$ref": "#/$defs/nonEmptyString" },
+        "preferred_runtime": { "$ref": "#/$defs/nonEmptyString" },
+        "selection_reason": { "$ref": "#/$defs/nonEmptyString" },
+        "control_transport_schema": { "$ref": "#/$defs/nonEmptyString" },
+        "transport": { "$ref": "#/$defs/nonEmptyString" },
+        "carrier_relation": { "$ref": "#/$defs/nonEmptyString" },
+        "env": { "$ref": "#/$defs/stringMap" }
+      }
+    },
+    "residentRuntime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preferred_runtime": { "$ref": "#/$defs/nonEmptyString" },
+        "fallback_runtime": { "$ref": "#/$defs/nonEmptyString" },
+        "legacy_fallback_runtimes": { "$ref": "#/$defs/stringArray" },
+        "preferred_preference": { "$ref": "#/$defs/nonEmptyString" },
+        "fallback_preference": { "$ref": "#/$defs/nonEmptyString" },
+        "process_probe_patterns": { "$ref": "#/$defs/stringArray" },
+        "fallback_process_probe_patterns": { "$ref": "#/$defs/stringArray" },
+        "session_root": { "$ref": "#/$defs/nonEmptyString" },
+        "external_session_roots": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "recoveryPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "reason"],
+            "properties": {
+              "id": { "$ref": "#/$defs/nonEmptyString" },
+              "reason": { "$ref": "#/$defs/nonEmptyString" },
+              "command": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        "guardrails": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "args"],
+      "properties": {
+        "command": { "$ref": "#/$defs/nonEmptyString" },
+        "args": { "$ref": "#/$defs/stringArray" },
+        "dry_run_arg": { "$ref": "#/$defs/nonEmptyString" },
+        "limit_arg": { "$ref": "#/$defs/nonEmptyString" },
+        "preferred_role_arg": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "executableCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution", "command", "args"],
+      "properties": {
+        "execution": { "const": "direct_spawn" },
+        "command": { "$ref": "#/$defs/nonEmptyString" },
+        "args": { "$ref": "#/$defs/stringArray" },
+        "dry_run_arg": { "$ref": "#/$defs/nonEmptyString" },
+        "limit_arg": { "$ref": "#/$defs/nonEmptyString" },
+        "preferred_role_arg": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_sync": { "$ref": "#/$defs/executableCommand" },
+        "ticket_task_reconciliation": { "$ref": "#/$defs/executableCommand" },
+        "status": { "$ref": "#/$defs/nonEmptyString" },
+        "readiness": { "$ref": "#/$defs/nonEmptyString" },
+        "projection_drift": { "$ref": "#/$defs/nonEmptyString" },
+        "run_once": { "$ref": "#/$defs/nonEmptyString" },
+        "supervise": { "$ref": "#/$defs/nonEmptyString" },
+        "agent_cli_resident": { "$ref": "#/$defs/nonEmptyString" },
+        "live_fixture_proof": { "$ref": "#/$defs/nonEmptyString" },
+        "mailbox_proof": { "$ref": "#/$defs/nonEmptyString" },
+        "background_agent_cli": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/nonEmptyString" },
+        "allowed_preferred_carriers": { "$ref": "#/$defs/stringArray" },
+        "allowed_fallback_carriers": { "$ref": "#/$defs/stringArray" },
+        "attention": { "$ref": "#/$defs/stringMap" }
+      }
+    },
+    "mailboxProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "$ref": "#/$defs/nonEmptyString" },
+        "status_schema": { "$ref": "#/$defs/nonEmptyString" },
+        "freshness_ms": { "$ref": "#/$defs/positiveNumber" }
+      }
+    },
+    "docs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "description"],
+        "properties": {
+          "path": { "$ref": "#/$defs/nonEmptyString" },
+          "description": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/command" }
+    }
+  }
+}
