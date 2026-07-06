@@ -44,6 +44,33 @@ try {
   assert.equal(response.error.data.exit_code, 42);
   assert.match(response.error.data.stderr_tail, /missing shared dist/);
 
+  const silentEntrypoint = join(root, 'silent-child.mjs');
+  writeFileSync(silentEntrypoint, "process.stdin.resume(); setInterval(() => {}, 1000);\n", 'utf8');
+  const silentProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'silent-surface',
+    '--entrypoint',
+    silentEntrypoint,
+    '--request-timeout-ms',
+    '100',
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+
+  let silentStdout = '';
+  silentProxy.stdout.setEncoding('utf8');
+  silentProxy.stdout.on('data', (chunk) => { silentStdout += chunk; });
+  silentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'slow-1', method: 'tools/list', params: {} })}\n`);
+
+  const silentExitCode = await new Promise<number | null>((resolve) => silentProxy.on('close', resolve));
+  assert.notEqual(silentExitCode, 0);
+  const timeoutResponse = JSON.parse(silentStdout.trim());
+  assert.equal(timeoutResponse.id, 'slow-1');
+  assert.equal(timeoutResponse.error.data.schema, 'narada.mcp_runtime_proxy.error.v1');
+  assert.equal(timeoutResponse.error.data.code, 'child_request_timeout');
+  assert.equal(timeoutResponse.error.data.method, 'tools/list');
+  assert.equal(timeoutResponse.error.data.surface_id, 'silent-surface');
+
   console.log('mcp-runtime-proxy behavior ok');
 } finally {
   rmSync(root, { recursive: true, force: true });

@@ -9,13 +9,18 @@ type PendingRequest = {
   id: string | number;
   method: string;
   framed: boolean;
+  timeoutTimer: NodeJS.Timeout;
 };
 
 const STDERR_TAIL_LIMIT = 8000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
+const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
+const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
 
-function parseArgs(argv: string[]): { entrypoint: string; childArgs: string[]; surfaceId: string | null } {
+function parseArgs(argv: string[]): { entrypoint: string; childArgs: string[]; surfaceId: string | null; requestTimeoutMs: number } {
   let entrypoint = '';
   let surfaceId: string | null = null;
+  let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
   let passthroughIndex = argv.indexOf('--');
   if (passthroughIndex < 0) passthroughIndex = argv.length;
   const prelude = argv.slice(0, passthroughIndex);
@@ -23,9 +28,10 @@ function parseArgs(argv: string[]): { entrypoint: string; childArgs: string[]; s
     const arg = prelude[index];
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
+    else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
-  return { entrypoint: resolve(entrypoint), childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)), surfaceId };
+  return { entrypoint: resolve(entrypoint), childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)), surfaceId, requestTimeoutMs };
 }
 
 export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
@@ -35,6 +41,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   }
 
   const pending = new Map<string | number, PendingRequest>();
+  const timedOutRequests = new Map<string | number, NodeJS.Timeout>();
+  const childTerminationTimers = new Set<NodeJS.Timeout>();
   let parentBuffer = '';
   let childBuffer = '';
   let stderrTail = '';
@@ -59,7 +67,22 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     for (const request of drained.requests) {
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
-        pending.set(id, { id, method: request.method, framed: drained.framed });
+        const timeoutTimer = setTimeout(() => {
+          const pendingRequest = pending.get(id);
+          if (!pendingRequest) return;
+          pending.delete(id);
+          rememberTimedOutRequest(timedOutRequests, id);
+          writePendingError(pendingRequest, options, {
+            code: 'child_request_timeout',
+            message: `child_request_timeout:${request.method}:${options.requestTimeoutMs}ms`,
+            stderrTail,
+            exitCode: null,
+            signal: null,
+          });
+          sendCancellationToChild(child, pendingRequest, 'request timed out in mcp runtime proxy');
+          terminateChildAfterRequestTimeout(child, childTerminationTimers, () => childClosed);
+        }, options.requestTimeoutMs);
+        pending.set(id, { id, method: request.method, framed: drained.framed, timeoutTimer });
       }
     }
   });
@@ -69,13 +92,18 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   child.stdout.on('data', (chunk) => {
-    process.stdout.write(chunk);
     childBuffer += chunk;
     const drained = childBuffer.includes('Content-Length:') ? drainJsonRpcFrames(childBuffer) : drainJsonLines(childBuffer);
     childBuffer = drained.remaining;
     for (const response of drained.requests) {
       const id = response.id;
-      if (typeof id === 'string' || typeof id === 'number') pending.delete(id);
+      if (typeof id === 'string' || typeof id === 'number') {
+        const request = pending.get(id);
+        if (request) clearTimeout(request.timeoutTimer);
+        pending.delete(id);
+        if (timedOutRequests.has(id)) continue;
+      }
+      writeJsonRpcMessage(response, drained.framed);
     }
   });
 
@@ -97,6 +125,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
 
   child.on('close', (code, signal) => {
     childClosed = true;
+    process.stdin.pause();
     if (pending.size > 0) {
       flushPendingErrors(pending, options, {
         code: 'child_exited_before_response',
@@ -106,6 +135,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
         signal,
       });
     }
+    clearTimedOutRequests(timedOutRequests);
+    clearTimers(childTerminationTimers);
     process.exitCode = typeof code === 'number' ? code : 1;
   });
 
@@ -123,26 +154,86 @@ function flushPendingErrors(
   diagnostic: { code: string; message: string; stderrTail: string; exitCode: number | null; signal: NodeJS.Signals | null },
 ): void {
   for (const request of pending.values()) {
-    writeJsonRpcMessage({
-      jsonrpc: '2.0',
-      id: request.id,
-      error: {
-        code: -32000,
-        message: diagnostic.message,
-        data: {
-          schema: 'narada.mcp_runtime_proxy.error.v1',
-          code: diagnostic.code,
-          method: request.method,
-          surface_id: options.surfaceId,
-          entrypoint: options.entrypoint,
-          exit_code: diagnostic.exitCode,
-          signal: diagnostic.signal,
-          stderr_tail: diagnostic.stderrTail,
-        },
-      },
-    }, request.framed);
+    writePendingError(request, options, diagnostic);
   }
   pending.clear();
+}
+
+function writePendingError(
+  request: PendingRequest,
+  options: { entrypoint: string; surfaceId: string | null },
+  diagnostic: { code: string; message: string; stderrTail: string; exitCode: number | null; signal: NodeJS.Signals | null },
+): void {
+  clearTimeout(request.timeoutTimer);
+  writeJsonRpcMessage({
+    jsonrpc: '2.0',
+    id: request.id,
+    error: {
+      code: -32000,
+      message: diagnostic.message,
+      data: {
+        schema: 'narada.mcp_runtime_proxy.error.v1',
+        code: diagnostic.code,
+        method: request.method,
+        surface_id: options.surfaceId,
+        entrypoint: options.entrypoint,
+        exit_code: diagnostic.exitCode,
+        signal: diagnostic.signal,
+        stderr_tail: diagnostic.stderrTail,
+      },
+    },
+  }, request.framed);
+}
+
+function sendCancellationToChild(child: ReturnType<typeof spawn>, request: PendingRequest, reason: string): void {
+  if (child.stdin.destroyed || !child.stdin.writable) return;
+  writeJsonRpcMessageToStream(child.stdin, {
+    jsonrpc: '2.0',
+    method: 'notifications/cancelled',
+    params: {
+      requestId: request.id,
+      reason,
+    },
+  }, request.framed);
+}
+
+function rememberTimedOutRequest(timedOutRequests: Map<string | number, NodeJS.Timeout>, id: string | number): void {
+  const existingTimer = timedOutRequests.get(id);
+  if (existingTimer) clearTimeout(existingTimer);
+  const cleanupTimer = setTimeout(() => {
+    timedOutRequests.delete(id);
+  }, SUPPRESSED_RESPONSE_TTL_MS);
+  timedOutRequests.set(id, cleanupTimer);
+}
+
+function clearTimedOutRequests(timedOutRequests: Map<string | number, NodeJS.Timeout>): void {
+  for (const timer of timedOutRequests.values()) clearTimeout(timer);
+  timedOutRequests.clear();
+}
+
+function terminateChildAfterRequestTimeout(
+  child: ReturnType<typeof spawn>,
+  timers: Set<NodeJS.Timeout>,
+  isChildClosed: () => boolean,
+): void {
+  if (!child.stdin.destroyed) child.stdin.end();
+  child.kill('SIGTERM');
+  const sigkillTimer = setTimeout(() => {
+    timers.delete(sigkillTimer);
+    if (!isChildClosed()) child.kill('SIGKILL');
+  }, DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS);
+  timers.add(sigkillTimer);
+}
+
+function clearTimers(timers: Set<NodeJS.Timeout>): void {
+  for (const timer of timers) clearTimeout(timer);
+  timers.clear();
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`mcp_runtime_proxy_invalid_${name}:${value}`);
+  return parsed;
 }
 
 function drainJsonLines(buffer: string): { framed: boolean; remaining: string; requests: JsonRecord[] } {
@@ -174,9 +265,13 @@ function drainJsonRpcFrames(buffer: string): { framed: boolean; remaining: strin
 }
 
 function writeJsonRpcMessage(message: JsonRecord, framed: boolean): void {
+  writeJsonRpcMessageToStream(process.stdout, message, framed);
+}
+
+function writeJsonRpcMessageToStream(stream: NodeJS.WritableStream, message: JsonRecord, framed: boolean): void {
   const json = JSON.stringify(message);
-  if (framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`);
-  else process.stdout.write(`${json}\n`);
+  if (framed) stream.write(`Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`);
+  else stream.write(`${json}\n`);
 }
 
 function tail(text: string, limit: number): string {

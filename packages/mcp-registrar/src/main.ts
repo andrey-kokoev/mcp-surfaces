@@ -125,7 +125,7 @@ const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_doctor', 'task_lifecycle_list', 't
 const WORKER_DELEGATION_TOOLS = ['worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe'];
 const DELEGATED_TASK_TOOLS = ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
 const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach'];
-const REGISTRAR_TOOLS = ['registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'];
+const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
 
 const SURFACES: SurfaceDef[] = [
@@ -1357,19 +1357,28 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const launch = carrierLaunchCommand(overridden, surfaceId);
+    const carrierAvailableTools = codexCarrierAvailableTools(server);
     lines.push(`[mcp_servers.${key}]`);
     lines.push(`command = "${launch.command}"`);
     lines.push(`args = ${JSON.stringify(launch.args)}`);
-    if (carrier.surface_overrides?.[surfaceId]?.approval_mode) {
-      lines.push(`approval_mode = "${carrier.surface_overrides[surfaceId].approval_mode}"`);
-    }
+    lines.push('approval_mode = "approve"');
     if (overridden.env_vars) {
       lines.push(`env_vars = ${JSON.stringify(overridden.env_vars)}`);
     }
     lines.push('');
+    if (carrierAvailableTools.length > 0) {
+      lines.push('# Generated carrier availability metadata. Narada MCP surfaces own policy.');
+      for (const toolName of carrierAvailableTools) {
+        lines.push(`[mcp_servers.${key}.tools.${toolName}]`);
+        lines.push('approval_mode = "approve"');
+        lines.push('');
+      }
+    }
     mcpServers[key] = {
       command: launch.command,
       args: launch.args,
+      approval_mode: 'approve',
+      carrier_tool_availability: carrierAvailableTools.map((toolName) => ({ tool_name: toolName, approval_mode: 'approve' })),
       uses_runtime_proxy: launch.uses_runtime_proxy,
       runtime_proxy_entrypoint: launch.runtime_proxy_entrypoint,
       child_entrypoint: launch.child_entrypoint,
@@ -1378,6 +1387,11 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
   }
   const structured = { trust_projects: trustProjects, mcpServers };
   return { content: lines.join('\n') + '\n', structured };
+}
+
+function codexCarrierAvailableTools(server: MaterializedServer): string[] {
+  if (server.kind === 'shared') return uniqueStrings((server.surface as SurfaceDef).tools);
+  return [];
 }
 
 function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
@@ -1404,6 +1418,8 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
+  const configPath = carrier.config_path;
+  const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
     case 'opencode': result = emitOpencodeConfig(carrier); break;
@@ -1411,10 +1427,9 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
     case 'codex': result = emitCodexConfig(carrier); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const configPath = carrier.config_path;
-  if (existsSync(configPath)) {
+  if (existingContent !== null) {
     const backupPath = `${configPath}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    writeFileSync(backupPath, readFileSync(configPath, 'utf8'), 'utf8');
+    writeFileSync(backupPath, existingContent, 'utf8');
   }
   const dir = resolve(configPath, '..');
   mkdirSync(dir, { recursive: true });

@@ -314,6 +314,11 @@ try {
     if (carrierId === 'codex-andrey') {
       assert.match(content, /--anchored-allowed-root/);
       assert.match(content, /user_home:\.codex/);
+      assert.match(content, /\[mcp_servers\.narada-andrey-local-filesystem\][\s\S]*?approval_mode = "approve"/);
+      assert.match(content, /Generated carrier availability metadata\. Narada MCP surfaces own policy\./);
+      assert.match(content, /\[mcp_servers\.narada-andrey-local-filesystem\.tools\.fs_apply_patch\]\s+approval_mode = "approve"/);
+      assert.match(content, /\[mcp_servers\.narada-andrey-structured-command\.tools\.structured_command_execute\]\s+approval_mode = "approve"/);
+      assert.doesNotMatch(content, /approval_mode = "auto"/);
     }
   }
 
