@@ -19,7 +19,18 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.worker.run_wait_batch.v1') return renderRunWaitBatch(record);
   if (record.schema === 'narada.worker.runs_synthesis.v1') return renderRunsSynthesis(record);
   if (record.schema === 'narada.worker.dashboard.v1') return renderDashboard(record);
+  if (record.schema === 'narada.mcp_affordances.v1') return renderAffordances(record);
   throw diagnosticError('worker_unrenderable_result_schema', 'worker_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderAffordances(record: Record<string, unknown>): string {
+  return compactLines([
+    `mcp_affordances: ${record.surface_id ?? ''}`,
+    `audience: ${arrayList(record.audience)}`,
+    `panels: ${arrayCount(record.panels)}`,
+    `actions: ${arrayCount(record.actions)}`,
+    `refs: ${arrayCount(record.refs)}`,
+  ]);
 }
 
 function renderRunReap(record: Record<string, unknown>): string {

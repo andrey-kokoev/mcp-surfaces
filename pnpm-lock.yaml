@@ -159,7 +159,11 @@ importers:
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core
 
-  packages/worker-delegation-mcp: {}
+  packages/worker-delegation-mcp:
+    dependencies:
+      '@narada2/mcp-affordances':
+        specifier: workspace:*
+        version: link:../shared/mcp-affordances
 
 packages:
 

@@ -12,6 +12,7 @@ import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, runArtif
 import { reapEvidence } from './recovery.js';
 import { extractSessionEventEvidence } from './runtime-events.js';
 import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from './tool-handlers/batch.js';
+import { workerOperatorAffordances } from './tool-handlers/affordances.js';
 import { dashboardApiEndpoints, dashboardMode, dashboardPendingJoinGates, dashboardRun } from './tool-handlers/dashboard.js';
 import { workerEditRunArgs } from './tool-handlers/edit.js';
 import { includeRunByStatus, isTerminalRunStatus, modeWithInference, runListItem, runSortKey, runWaitPayload } from './tool-handlers/status.js';
@@ -25,6 +26,7 @@ export type WorkerRequestContext = {
 };
 
 export async function callWorkerTool(name: string, args: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext = {}): Promise<unknown> {
+  if (name === 'worker_operator_affordances') return workerOperatorAffordances(state);
   if (name === 'worker_policy_inspect') return publicWorkerPolicy(state.policy);
   if (name === 'worker_config_resolve') return workerConfigResolve(args, state);
   if (name === 'worker_run') return workerRun(args, state, null, context, 'worker_run');
