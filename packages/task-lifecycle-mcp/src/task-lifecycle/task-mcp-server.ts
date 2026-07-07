@@ -481,6 +481,16 @@ function buildPostCloseoutContinuation({ agentId, result }) {
 }
 
 function patchLocalToolDefinition(toolDef) {
+  if (toolDef?.name === 'task_lifecycle_doctor') {
+    return {
+      ...toolDef,
+      description: 'Inspect Task Lifecycle MCP readiness without mutating. Defaults to a concise startup-safe summary; pass verbose=true or detail=full for full diagnostics.',
+      inputSchema: objectSchema({
+        verbose: { type: 'boolean', description: 'Return full diagnostics. Defaults false.' },
+        detail: stringSchema('Optional detail level. Use full for full diagnostics; default returns summary.'),
+      }),
+    };
+  }
   if (toolDef?.name !== 'task_lifecycle_review') return toolDef;
   return {
     ...toolDef,
@@ -2034,8 +2044,11 @@ function legacyTaskLifecycleToolsSnapshot() {
   return [
     {
       name: 'task_lifecycle_doctor',
-      description: 'Inspect Task Lifecycle MCP readiness without mutating.',
-      inputSchema: objectSchema({}),
+      description: 'Inspect Task Lifecycle MCP readiness without mutating. Defaults to a concise startup-safe summary; pass verbose=true or detail=full for full diagnostics.',
+      inputSchema: objectSchema({
+        verbose: { type: 'boolean', description: 'Return full diagnostics. Defaults false.' },
+        detail: stringSchema('Optional detail level. Use full for full diagnostics; default returns summary.'),
+      }),
     },
     {
       name: 'task_lifecycle_list',

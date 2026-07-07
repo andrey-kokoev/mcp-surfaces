@@ -31,7 +31,7 @@ node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --si
 
 Inspection and workboard:
 
-- `task_lifecycle_doctor`
+- `task_lifecycle_doctor` returns a concise startup-safe readiness summary by default; pass `verbose=true` or `detail=full` for the full diagnostic dump.
 - `task_lifecycle_list`
 - `task_lifecycle_show`
 - `task_lifecycle_roster`

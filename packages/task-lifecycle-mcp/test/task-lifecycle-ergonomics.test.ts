@@ -685,8 +685,25 @@ try {
     params: { name: 'task_lifecycle_doctor', arguments: {} },
   }, builderRuntime);
   const policyDoctorPayload = await responsePayload(policyDoctorResponse, builderRuntime, 4201);
+  assert.equal(policyDoctorPayload.schema, 'narada.task_lifecycle.doctor.v1');
+  assert.equal(policyDoctorPayload.detail, 'summary');
   assert.equal(policyDoctorPayload.site_policy.source, 'site_config');
   assert.equal(policyDoctorPayload.site_policy.roster.roles_are_obligation_targets, true);
+  assert.equal(policyDoctorPayload.canonical_tools, undefined);
+  assert.equal(policyDoctorPayload.allowed_tools, undefined);
+  assert.equal(policyDoctorPayload.tool_posture.canonical_count > 0, true);
+  assert.equal(JSON.stringify(policyDoctorPayload).length < 2000, true);
+
+  const fullPolicyDoctorResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 4201,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_doctor', arguments: { detail: 'full' } },
+  }, builderRuntime);
+  const fullPolicyDoctorPayload = await responsePayload(fullPolicyDoctorResponse, builderRuntime, 4201);
+  assert.equal(fullPolicyDoctorPayload.detail, 'full');
+  assert.equal(Array.isArray(fullPolicyDoctorPayload.canonical_tools), true);
+  assert.equal(fullPolicyDoctorPayload.site_policy.path.endsWith('task-lifecycle.toml'), true);
 
   const defaultPolicyRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-role-policy-default-'));
   mkdirSync(join(defaultPolicyRoot, '.ai', 'agents'), { recursive: true });
