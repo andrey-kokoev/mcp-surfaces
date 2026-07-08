@@ -39,7 +39,11 @@ export type SiteLoopConfig = {
   };
   resident_launch: {
     launcher_path: string;
-    host_path: string;
+    host_path?: string;
+    materialization_command?: {
+      command: string;
+      args: string[];
+    };
     runtime: string;
     launch_source?: string;
     trigger_source: string;
@@ -153,7 +157,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
   mcp: {
     task_lifecycle_config_path: '.ai/mcp/task-lifecycle-mcp.json',
     task_lifecycle_server_key: 'task-lifecycle',
-    task_lifecycle_entrypoint_hint: 'tools/task-lifecycle/task-mcp-server.js',
+    task_lifecycle_entrypoint_hint: 'D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js',
   },
   scheduler: {
     default_task_name: '\\Narada-Site-Loop',
@@ -288,7 +292,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     },
     status: 'pnpm cli -- ops loop',
     readiness: 'pnpm cli -- ops readiness',
-    projection_drift: 'pnpm cli -- task projection drift --json',
+    projection_drift: 'not_available: task projection drift check is not configured; provide a typed MCP/site-loop check before enabling this readiness gate',
     run_once: 'pnpm cli -- loop run site.loop --once --ensure-resident',
     supervise: 'pnpm cli -- loop supervise site.loop --ensure-resident',
     agent_cli_resident: '.\\narada-site.ps1 agent-start -Agent site.resident -Runtime agent-cli -Exec',
@@ -344,7 +348,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     check: { command: 'pnpm', args: ['check'] },
     launcher_smoke: { command: 'node', args: ['tools/agent-context/agent-launcher-smoke.js'] },
     agent_context_smoke: { command: 'node', args: ['tools/agent-context/agent-context-smoke.js'] },
-    mcp_bridge_poll: { command: 'node', args: ['tools/task-lifecycle/tests/Test-McpBridgePoll.js'] },
+    mcp_bridge_poll: { command: 'not_available', args: ['legacy task-lifecycle bridge poll test removed; use task_lifecycle_test_mcp_tool when admitted'] },
   },
   notes: [
     'This status is scoped by site-loop config.',
@@ -473,8 +477,15 @@ function validateTestAuthority(errors: string[], testAuthority: SiteLoopConfig['
 }
 
 function validateResidentLaunch(errors: string[], launch: SiteLoopConfig['resident_launch']) {
-  requireSafeRelativePath(errors, launch?.launcher_path, 'resident_launch.launcher_path');
-  requireSafeRelativePath(errors, launch?.host_path, 'resident_launch.host_path');
+  if (launch?.materialization_command) {
+    requireNonEmptyString(errors, launch.materialization_command.command, 'resident_launch.materialization_command.command');
+    if (!Array.isArray(launch.materialization_command.args)) errors.push('resident_launch.materialization_command.args_array_required');
+  } else {
+    requireSafeRelativePath(errors, launch?.launcher_path, 'resident_launch.launcher_path');
+  }
+  if (!launch?.materialization_command || launch?.host_path != null) {
+    requireSafeRelativePath(errors, launch?.host_path, 'resident_launch.host_path');
+  }
   requireNonEmptyString(errors, launch?.runtime, 'resident_launch.runtime');
   requireNonEmptyString(errors, launch?.trigger_source, 'resident_launch.trigger_source');
   requireNonEmptyString(errors, launch?.trigger_reason, 'resident_launch.trigger_reason');
@@ -583,6 +594,7 @@ function validateOverrideShape(base: unknown, override: unknown, path = 'config'
   for (const [key, value] of Object.entries(override)) {
     const childPath = `${path}.${key}`;
     if (!(key in base)) {
+      if (isKnownOptionalOverrideKey(path, key)) continue;
       errors.push(`${childPath}_unknown_key`);
       continue;
     }
@@ -602,6 +614,10 @@ function validateOverrideShape(base: unknown, override: unknown, path = 'config'
     if (typeof value !== typeof baseValue) errors.push(`${childPath}_${typeof baseValue}_required`);
   }
   return errors;
+}
+
+function isKnownOptionalOverrideKey(path: string, key: string) {
+  return path === 'config.resident_launch' && key === 'materialization_command';
 }
 
 function isOpenKeyMapPath(path: string) {

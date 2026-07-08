@@ -10,6 +10,12 @@ type WorkerToolDefinition = {
 export function listTools(): WorkerToolDefinition[] {
   return decorateTools([
     guidanceToolDefinition(),
+    { name: 'worker_output_show', description: 'Read a materialized worker MCP output ref with offset/limit paging.', inputSchema: objectSchema({
+      ref: { type: 'string' },
+      output_ref: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 0 },
+    }) },
     { name: 'worker_operator_affordances', description: 'Return UI-neutral operator affordances for rendering worker run dashboards, launch controls, artifact refs, and recovery actions.', inputSchema: objectSchema({}) },
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
     { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker, including narada-agent-runtime-server Site binding status.', inputSchema: objectSchema({

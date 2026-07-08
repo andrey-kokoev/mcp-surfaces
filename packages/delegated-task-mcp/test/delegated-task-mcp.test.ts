@@ -24,7 +24,21 @@ try {
   writeFileSync(join(siteRoot, '.narada', 'secrets.json'), JSON.stringify({ env: { DELEGATED_TASK_TEST_SECRET: 'from-site-secret' } }), 'utf8');
   writeFileSync(join(siteRoot, '.narada', 'allowed-roots.json'), JSON.stringify({ extra_allowed_roots: [extraRoot] }), 'utf8');
   const providerRegistryPath = join(root, 'provider-registry.json');
-  writeFileSync(providerRegistryPath, JSON.stringify({ providers: { test: { credential_requirement: { kind: 'api_key_secret', env_names: ['MOONSHOT_API_KEY'], secret_ref: 'delegated-task-provider-secret' } } } }), 'utf8');
+  writeFileSync(providerRegistryPath, JSON.stringify({
+    default_provider: 'test',
+    providers: {
+      test: {
+        default_model: 'test-medium',
+        available_models: ['test-low', 'test-medium', 'test-high'],
+        cognition_defaults: {
+          low: { model: 'test-low', reasoning_effort: 'low' },
+          medium: { model: 'test-medium', reasoning_effort: 'medium' },
+          high: { model: 'test-high', reasoning_effort: 'high' },
+        },
+        credential_requirement: { kind: 'api_key_secret', env_names: ['MOONSHOT_API_KEY'], secret_ref: 'delegated-task-provider-secret' },
+      },
+    },
+  }), 'utf8');
   const originalMoonshotApiKey = process.env.MOONSHOT_API_KEY;
   delete process.env.MOONSHOT_API_KEY;
 
@@ -172,6 +186,8 @@ try {
   assert.equal(policyView.workflow_engine.milestone_support.workflow_milestones, true);
   assert.equal(policyView.workflow_engine.authority_gate_support.delegated_task_executes_git, false);
   assert.equal(policyView.template_catalog.some((template: Record<string, any>) => template.template_id === 'commit_push_guarded'), true);
+  assert.equal(policyView.worker_policy.default_narada_agent_runtime_provider, 'test');
+  assert.deepEqual(policyView.worker_policy.provider_cognition_defaults.test.high, { model: 'test-high', reasoning_effort: 'high' });
 
   const catalog = await callTool(state, 'delegated_task_template_catalog', { template_id: 'commit_push_guarded' });
   const catalogView = catalog.result.structuredContent as Record<string, any>;

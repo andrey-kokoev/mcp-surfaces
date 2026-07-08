@@ -120,6 +120,7 @@ export function createServerState(options: JsonRecord = {}): State {
   const stateEnv = { ...process.env };
   loadSiteSecrets(siteRoot, stateEnv);
   loadProviderCredentialSecrets(siteRoot, stateEnv, options);
+  const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
   const currentSiteId = resolveCurrentSiteId(options, siteRoot, stateEnv);
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const roots = normalizeRoots([...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)]);
@@ -129,7 +130,7 @@ export function createServerState(options: JsonRecord = {}): State {
   }
   const workerPolicyOptions = rec(options.workerPolicy);
   const workerState: WorkerMcpState = {
-    policy: createWorkerPolicy({ runRoot: resolve(taskRoot, '.narada', 'runtime', 'worker-delegation'), ...workerPolicyOptions, allowedRoots }),
+    policy: createWorkerPolicy({ runRoot: resolve(taskRoot, '.narada', 'runtime', 'worker-delegation'), ...providerPolicyDefaults, ...workerPolicyOptions, allowedRoots }),
     env: stateEnv,
     activeRunCount: 0,
   };
@@ -2528,6 +2529,24 @@ function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.Proce
     const baseUrl = typeof metadata.base_url === 'string' && metadata.base_url.trim() ? metadata.base_url.trim() : null;
     if (primaryBaseUrlEnv && baseUrl && !targetEnv[primaryBaseUrlEnv]) targetEnv[primaryBaseUrlEnv] = baseUrl;
   }
+}
+function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): JsonRecord {
+  const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
+  if (!registryPath || !existsSync(registryPath)) return {};
+  let registry: JsonRecord;
+  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return {}; }
+  const providers = rec(registry.providers);
+  const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
+  const providerCognitionDefaults: JsonRecord = {};
+  for (const [provider, metadata] of Object.entries(providers)) {
+    const defaults = rec(rec(metadata).cognition_defaults);
+    if (Object.keys(defaults).length > 0) providerCognitionDefaults[provider] = defaults;
+  }
+  return {
+    ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
+    ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
+    ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
+  };
 }
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
   const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);

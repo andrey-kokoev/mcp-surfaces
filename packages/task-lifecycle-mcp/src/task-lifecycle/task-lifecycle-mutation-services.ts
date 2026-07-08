@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { findTaskFile, readTaskFile, writeTaskProjection, isValidTransition } from '@narada2/task-governance-core/task-governance';
 import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
+import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
 import { deriveClosureAuthority } from './closure-authority.js';
 
 export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId }) {
@@ -26,6 +27,7 @@ export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId 
     assignment_id: assignmentId,
     task_id: lifecycle.task_id,
     agent_id: agentId,
+    agent_identity_ref_json: taskAgentIdentityRefJson(agentId, { siteId: process.env.NARADA_SITE_ID ?? null }),
     claimed_at: new Date().toISOString(),
     released_at: null,
     release_reason: null,

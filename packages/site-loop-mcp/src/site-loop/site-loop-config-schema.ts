@@ -88,6 +88,15 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
       properties: {
         launcher_path: { $ref: '#/$defs/nonEmptyString' },
         host_path: { $ref: '#/$defs/nonEmptyString' },
+        materialization_command: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['command', 'args'],
+          properties: {
+            command: { $ref: '#/$defs/nonEmptyString' },
+            args: { $ref: '#/$defs/stringArray' },
+          },
+        },
         runtime: { $ref: '#/$defs/nonEmptyString' },
         launch_source: { $ref: '#/$defs/nonEmptyString' },
         trigger_source: { $ref: '#/$defs/nonEmptyString' },

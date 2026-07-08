@@ -11,6 +11,12 @@ import {
   type AffordanceAction,
   type AffordancePanel,
 } from '@narada2/mcp-affordances';
+import {
+  buildBoundedToolResult,
+  listOutputResources,
+  outputShow,
+  readOutputResource,
+} from '@narada2/mcp-transport';
 import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
 import { siteLoopDependencyBoundaries } from './site-loop/site-loop-boundary.js';
 let siteLoopModulePromise = null;
@@ -29,6 +35,7 @@ type SiteOpsChildResult = {
 const SERVER_NAME = 'narada-site-loop-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
+const INLINE_RESULT_BYTE_LIMIT = 6000;
 const options = parseArgs(process.argv.slice(2));
 const siteRoot = resolve(String(options.siteRoot ?? process.cwd()));
 
@@ -63,6 +70,17 @@ const TOOLS = [
   tool('site_loop_operating_status', 'Show composed operating-layer status for the configured site loop.', {
     limit: { type: 'number', description: 'Pending/directive row limit.' },
   }),
+  tool('site_loop_proof_status', 'Show proof freshness and configured proof commands without running proof workflows.', {}),
+  tool('site_loop_proof_run', 'Run a controlled resident or mailbox proof workflow through the configured Site Loop proof engine.', {
+    proof_kind: { type: 'string', enum: ['resident_production', 'controlled_mailbox'], description: 'Proof workflow to run.' },
+    controlled_mailbox_source: { type: 'string', description: 'Required for controlled_mailbox proof. Source ref used to identify new controlled mailbox work.' },
+    wait_for_completion: { type: 'boolean', description: 'Wait synchronously for proof completion. Refused when timeout exceeds the MCP transport budget.' },
+    timeout_ms: { type: 'number', description: 'Maximum proof wait time in milliseconds.' },
+    poll_ms: { type: 'number', description: 'Polling interval in milliseconds.' },
+    limit: { type: 'number', description: 'Site Loop processing limit during proof.' },
+    ensure_resident: { type: 'boolean', description: 'Ensure the configured resident carrier before dispatch.' },
+    require_live_carrier: { type: 'boolean', description: 'Require live carrier rather than fixture simulation.' },
+  }, ['proof_kind']),
   tool('site_loop_readiness', 'Evaluate unattended-operation readiness gates for the configured site loop.', {
     require_production: { type: 'boolean', description: 'Require production proof, not only transport proof.' },
   }),
@@ -75,7 +93,16 @@ const TOOLS = [
   }),
   tool('site_loop_run_show', 'Show a Site Operating Loop run by run id.', {
     run_id: { type: 'string', description: 'Loop run id.' },
+    detail: { type: 'string', enum: ['summary', 'full'], description: 'summary returns bounded step/evidence summaries and is the default. full returns the complete stored run and may be materialized as an output ref.' },
+    include_evidence_preview: { type: 'boolean', description: 'Include short bounded evidence previews in summary mode. Defaults false.' },
+    evidence_preview_chars: { type: 'number', description: 'Maximum evidence preview characters per step in summary mode. Capped at 1000.' },
   }, ['run_id']),
+  tool('site_loop_output_show', 'Read a materialized Site Loop MCP output ref with offset/limit paging.', {
+    ref: { type: 'string', description: 'Output ref returned by a Site Loop MCP tool.' },
+    output_ref: { type: 'string', description: 'Alias for ref.' },
+    offset: { type: 'number', description: 'Character offset into the materialized output.' },
+    limit: { type: 'number', description: 'Maximum characters to return.' },
+  }),
   tool('site_loop_attention_list', 'List configured loop attention records.', {
     status: { type: 'string', description: 'Optional attention status filter.' },
     limit: { type: 'number', description: 'Maximum attention records.' },
@@ -96,6 +123,8 @@ const TOOLS = [
   }, ['reason']),
   tool('site_loop_run_once', 'Run one bounded configured site loop pass.', {
     dry_run: { type: 'boolean', description: 'Plan/read without mutation.' },
+    wait_for_completion: { type: 'boolean', description: 'Required for mutating MCP execution. Long-running loop passes should use the site scheduler/supervisor, not this synchronous MCP call.' },
+    timeout_ms: { type: 'number', description: 'Maximum synchronous wait budget. Values over 10000 are refused before side effects.' },
     test_authority: { type: 'boolean', description: 'Run non-dry work against the configured test authority root instead of production state.' },
     limit: { type: 'number', description: 'Processing limit.' },
     drain: { type: 'boolean', description: 'Drain eligible intake when supported.' },
@@ -208,7 +237,7 @@ async function handleMessage(message) {
     if (message.method === 'initialize') {
       respond(id, {
         protocolVersion: message.params?.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       });
       return;
@@ -219,7 +248,15 @@ async function handleMessage(message) {
     }
     if (message.method === 'tools/call') {
       const result = await callTool(message.params?.name, message.params?.arguments ?? {}, { abortSignal: abortController?.signal });
-      respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
+      respond(id, toolResult(result, String(message.params?.name ?? 'unknown_tool')));
+      return;
+    }
+    if (message.method === 'resources/list') {
+      respond(id, listOutputResources({ siteRoot }));
+      return;
+    }
+    if (message.method === 'resources/read') {
+      respond(id, readOutputResource({ siteRoot, uri: message.params?.uri }));
       return;
     }
     if (message.method === 'prompts/list') {
@@ -273,8 +310,18 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
+function toolResult(value: unknown, toolName: string) {
+  return buildBoundedToolResult({
+    siteRoot,
+    toolName,
+    value,
+    limit: INLINE_RESULT_BYTE_LIMIT,
+    readerTool: 'site_loop_output_show',
+  });
+}
+
 async function callTool(name, args, context: SiteOpsRequestContext = {}) {
-  if (name !== 'site_loop_guidance' && name !== 'site_ops_guidance' && name !== 'site_loop_doctor' && name !== 'site_ops_doctor' && name !== 'site_loop_config_validate') {
+  if (name !== 'site_loop_guidance' && name !== 'site_ops_guidance' && name !== 'site_loop_doctor' && name !== 'site_ops_doctor' && name !== 'site_loop_config_validate' && name !== 'site_loop_output_show') {
     requireActiveSiteLoopConfig();
   }
   switch (name) {
@@ -351,6 +398,10 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       return (await loadSiteLoopModule()).siteLoopHealth(siteRoot);
     case 'site_loop_operating_status':
       return (await loadSiteLoopModule()).siteLoopOperatingLayerStatus(siteRoot, normalizeLoopOptions(args));
+    case 'site_loop_proof_status':
+      return (await loadSiteLoopModule()).siteLoopProofStatus(siteRoot, normalizeLoopOptions(args));
+    case 'site_loop_proof_run':
+      return (await loadSiteLoopModule()).runSiteResidentE2E(siteRoot, normalizeProofRunOptions(args));
     case 'site_loop_readiness':
       return (await loadSiteLoopModule()).siteLoopReadiness(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_coherence':
@@ -358,7 +409,9 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
     case 'site_loop_runs_list':
       return (await loadSiteLoopModule()).listSiteLoopRuns(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_run_show':
-      return (await loadSiteLoopModule()).showSiteLoopRun(siteRoot, args.run_id);
+      return (await loadSiteLoopModule()).showSiteLoopRun(siteRoot, args);
+    case 'site_loop_output_show':
+      return outputShow({ siteRoot, args });
     case 'site_loop_attention_list':
       return (await loadSiteLoopModule()).listSiteLoopAttention(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_attention_show':
@@ -368,6 +421,7 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
     case 'site_loop_control_set':
       return (await loadSiteLoopModule()).setSiteLoopControl(siteRoot, normalizeLoopControl(args));
     case 'site_loop_run_once':
+      assertRunOnceTransportBudget(args);
       return (await loadSiteLoopModule()).runSiteLoop(siteRoot, normalizeLoopOptions(args));
     default:
       throw new Error(`unknown_tool: ${name}`);
@@ -460,17 +514,40 @@ function siteLoopOperatorAffordances() {
       idempotent: false,
     }),
     affordanceToolAction({
-      id: 'run_once',
-      label: 'Run once',
+      id: 'run_resident_proof',
+      label: 'Run resident proof',
       intent: 'run',
-      tool: 'site_loop_run_once',
-      arguments: { dry_run: false, limit: 25 },
-      description: 'Run one bounded mutating Site Loop pass.',
+      tool: 'site_loop_proof_run',
+      arguments: { proof_kind: 'resident_production', ensure_resident: true, require_live_carrier: true, wait_for_completion: false },
+      description: 'Start the controlled resident production proof required for unattended operation; poll proof status/readiness afterward.',
       audience: ['operator'],
       danger_level: 'high',
       read_only: false,
       idempotent: false,
-      confirmation: { required: true, message: 'Run one bounded mutating Site Loop pass.' },
+      confirmation: { required: true, message: 'Run a controlled resident production proof.' },
+    }),
+    affordanceToolAction({
+      id: 'run_mailbox_proof',
+      label: 'Run mailbox proof',
+      intent: 'run',
+      tool: 'site_loop_proof_run',
+      arguments: { proof_kind: 'controlled_mailbox', ensure_resident: true, require_live_carrier: true },
+      description: 'Run the controlled mailbox proof required for strict coherence.',
+      audience: ['operator'],
+      danger_level: 'high',
+      read_only: false,
+      idempotent: false,
+      confirmation: { required: true, message: 'Run a controlled mailbox proof with an operator-approved source ref.' },
+      input_schema: {
+        type: 'object',
+        required: ['proof_kind', 'controlled_mailbox_source'],
+        properties: {
+          proof_kind: { type: 'string', enum: ['controlled_mailbox'] },
+          controlled_mailbox_source: { type: 'string' },
+          timeout_ms: { type: 'number' },
+          poll_ms: { type: 'number' },
+        },
+      },
     }),
     affordanceToolAction({
       id: 'pause_loop',
@@ -537,7 +614,7 @@ function siteLoopOperatorAffordances() {
       title: 'Runs',
       kind: 'runs',
       priority: 30,
-      actions: ['dry_run_once', 'run_once'],
+      actions: ['dry_run_once', 'run_resident_proof', 'run_mailbox_proof'],
     },
     {
       id: 'controls',
@@ -612,6 +689,54 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
     requireProduction: args.require_production === true || args.requireProduction === true,
     requireMailboxChain: args.require_mailbox_chain === true || args.requireMailboxChain === true,
   };
+}
+
+function assertRunOnceTransportBudget(args: SiteLoopToolArgs = {}) {
+  const dryRun = args.dry_run === true || args.dryRun === true;
+  if (dryRun) return;
+  throw new Error('site_loop_run_once_mutating_mcp_not_supported: use the scheduler/supervisor path for production mutation; MCP run_once is dry-run only');
+}
+
+function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {
+  const config = requireActiveSiteLoopConfig();
+  const proofKind = optionalString(args.proof_kind) ?? optionalString(args.proofKind);
+  const waitForCompletion = args.wait_for_completion === true || args.waitForCompletion === true;
+  const timeoutMs = optionalNumber(args.timeout_ms) ?? optionalNumber(args.timeoutMs);
+  if (waitForCompletion && timeoutMs && timeoutMs > 10_000) {
+    throw new Error('proof_run_wait_exceeds_mcp_transport_budget: use bounded start mode, then poll site_loop_proof_status/readiness');
+  }
+  const base = {
+    live: true,
+    requireProductionProof: true,
+    expectCarrierPreference: config.resident_runtime.preferred_preference,
+    ensureResident: args.ensure_resident !== false && args.ensureResident !== false,
+    requireLiveCarrier: typeof args.require_live_carrier === 'boolean'
+      ? args.require_live_carrier
+      : typeof args.requireLiveCarrier === 'boolean'
+        ? args.requireLiveCarrier
+        : true,
+    timeoutMs,
+    pollMs: optionalNumber(args.poll_ms) ?? optionalNumber(args.pollMs),
+    limit: optionalNumber(args.limit),
+  };
+  if (proofKind === 'resident_production') {
+    return {
+      ...base,
+      ackFixture: true,
+      startOnly: !waitForCompletion,
+    };
+  }
+  if (proofKind === 'controlled_mailbox') {
+    const controlledMailboxSource = optionalString(args.controlled_mailbox_source) ?? optionalString(args.controlledMailboxSource);
+    if (!controlledMailboxSource) throw new Error('controlled_mailbox_source_required');
+    return {
+      ...base,
+      mailboxProof: true,
+      controlledMailboxProof: true,
+      controlledMailboxSource,
+    };
+  }
+  throw new Error(`unknown_proof_kind: ${proofKind ?? ''}`);
 }
 
 function normalizeLoopControl(args: LoopControlToolArgs = {}) {

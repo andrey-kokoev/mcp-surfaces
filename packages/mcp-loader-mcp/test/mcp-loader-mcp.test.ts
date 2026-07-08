@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
+const aggregateRoot = join(mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-aggregate-parent-')), 'narada.sonar');
+mkdirSync(join(aggregateRoot, '.ai', 'mcp'), { recursive: true });
 const externalRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-external-'));
 const externalAgentContextEntrypoint = join(externalRoot, 'packages', 'agent-context-tools', 'src', 'agent-context-mcp-server.mjs');
 mkdirSync(dirname(externalAgentContextEntrypoint), { recursive: true });
@@ -29,9 +31,17 @@ writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
     },
   },
 }), 'utf8');
+writeFileSync(join(aggregateRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
+  mcpServers: {
+    'site-loop': {
+      command: 'node',
+      args: ['--version'],
+    },
+  },
+}), 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';
@@ -60,6 +70,11 @@ try {
   assert.equal(listResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
   const surfaces = listResult?.surfaces as { surface_id: string }[];
   assert.ok(surfaces.some((s) => s.surface_id === 'test-echo'), `expected test-echo in ${JSON.stringify(surfaces)}`);
+
+  const aggregateListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: aggregateRoot } }, 10);
+  assert.equal(aggregateListResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
+  const aggregateSurfaces = aggregateListResult?.surfaces as { surface_id: string }[];
+  assert.ok(aggregateSurfaces.some((s) => s.surface_id === 'site-loop'), `expected site-loop in ${JSON.stringify(aggregateSurfaces)}`);
 
   const diagnosticsResult = await call('tools/call', { name: 'mcp_loader_site_fabric_diagnostics', arguments: { site_root: root } }, 4);
   assert.equal(diagnosticsResult?.schema, 'narada.mcp_loader.site_fabric_diagnostics.v1');
@@ -95,5 +110,6 @@ try {
   child.stdin.end();
   await new Promise((resolve) => child.on('close', resolve));
   rmSync(root, { recursive: true, force: true });
+  rmSync(dirname(aggregateRoot), { recursive: true, force: true });
   rmSync(externalRoot, { recursive: true, force: true });
 }

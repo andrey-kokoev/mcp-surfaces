@@ -93,6 +93,34 @@ try {
   assert.equal(cancelledResponse.result.structuredContent.status, 'cancelled');
   assert.equal(cancelledResponse.result.structuredContent.cancelled, true);
 
+  const framedChild = spawn(process.execPath, [serverPath, '--allowed-root', root, '--allow-command', 'node'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
+  let framedStdout = '';
+  let framedStderr = '';
+  framedChild.stdout.setEncoding('utf8');
+  framedChild.stderr.setEncoding('utf8');
+  framedChild.stdout.on('data', (chunk) => { framedStdout += chunk; });
+  framedChild.stderr.on('data', (chunk) => { framedStderr += chunk; });
+  framedChild.stdin.write(frameJsonRpc({
+    jsonrpc: '2.0',
+    id: 20,
+    method: 'initialize',
+    params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'probe', version: '0' } },
+  }));
+  framedChild.stdin.write(frameJsonRpc({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} }));
+  framedChild.stdin.write(frameJsonRpc({ jsonrpc: '2.0', id: 21, method: 'tools/list', params: {} }));
+  await waitForFramedMessage(() => framedStdout, 21);
+  framedChild.kill();
+  const framedExitCode = await new Promise<number | null>((resolve) => framedChild.on('close', resolve));
+  assert.notEqual(framedExitCode, 0, framedStderr);
+  const framedMessages = parseFramedMessages(framedStdout);
+  assert.equal(framedMessages.some((message) => message.id === 20 && message.result?.serverInfo?.name === 'structured-command-mcp'), true);
+  const framedTools = framedMessages.find((message) => message.id === 21);
+  assert.ok(framedTools, framedStdout);
+  assert.equal(framedTools.result.tools.some((tool: ToolSummary) => tool.name === 'structured_command_execution_policy_inspect'), true);
+
   const rootsChild = spawn(process.execPath, [serverPath, '--allowed-root', root, '--allow-command', 'node'], {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -126,6 +154,34 @@ async function waitForLines(read: () => string, count: number) {
   const started = Date.now();
   while (read().trim().split(/\r?\n/).filter(Boolean).length < count) {
     if (Date.now() - started > 5000) throw new Error(`timed out waiting for ${count} lines`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function frameJsonRpc(message: Record<string, unknown>) {
+  const body = JSON.stringify(message);
+  return `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`;
+}
+
+function parseFramedMessages(output: string) {
+  const messages: any[] = [];
+  let remaining = output;
+  while (remaining.length > 0) {
+    const match = remaining.match(/^Content-Length:\s*(\d+)\r?\n\r?\n/i);
+    if (!match) break;
+    const headerLength = match[0].length;
+    const length = Number(match[1]);
+    const body = remaining.slice(headerLength, headerLength + length);
+    messages.push(JSON.parse(body));
+    remaining = remaining.slice(headerLength + length);
+  }
+  return messages;
+}
+
+async function waitForFramedMessage(read: () => string, id: number) {
+  const started = Date.now();
+  while (!parseFramedMessages(read()).some((message) => message.id === id)) {
+    if (Date.now() - started > 5000) throw new Error(`timed out waiting for framed response ${id}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }

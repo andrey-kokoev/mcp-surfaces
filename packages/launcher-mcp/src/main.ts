@@ -10,7 +10,7 @@ const SERVER_NAME = 'launcher-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_NARADA_ROOT = 'C:/Users/Andrey/Narada';
-const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'Profile', 'ConfigPath', 'RegistryPath', 'OperatorSurface', 'Runtime', 'IntelligenceProvider', 'McpScope', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
+const DECLARED_OPTIONS = ['Agent', 'All', 'Role', 'Site', 'Profile', 'ConfigPath', 'RegistryPath', 'OperatorSurface', 'Runtime', 'IntelligenceProvider', 'McpScope', 'LauncherUiPort', 'LauncherUiPortFallback', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'];
 const ADMITTED_MCP_SCOPES = ['all', 'host', 'user-site', 'local-site', 'none'];
 const SURFACE_ID = 'launcher';
 const LAUNCHER_TELEMETRY_TOOL_NAMES = new Set([
@@ -547,7 +547,7 @@ function chooseRepresentative(records: AgentRecord[]): AgentRecord | undefined {
 }
 
 function optionKind(name: string): string {
-  return ['All', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'].includes(name) ? 'switch' : 'value';
+  return ['All', 'LauncherUiPortFallback', 'EnableNativeShell', 'NoWaitForEnterBeforeExec', 'Smoke', 'DryRun'].includes(name) ? 'switch' : 'value';
 }
 
 function siteAliases(record: AgentRecord): string[] {

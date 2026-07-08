@@ -5,6 +5,7 @@ import { classifyPostCloseoutContinuation, evaluatePostTransitionFollowups } fro
 import { closeTaskService } from '@narada2/task-governance-core/task-close-service';
 import { searchTasksService } from '@narada2/task-governance-core/task-search-service';
 import { continueTaskService } from '@narada2/task-governance-core/task-assignment-lifecycle-service';
+import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
 import { inspectTaskEvidence, findTaskFile, readTaskFile, writeTaskProjection, allocateTaskNumbers } from '@narada2/task-governance-core/task-governance';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { buildWorkboard } from './workboard.js';
@@ -375,25 +376,29 @@ function listDueRecurringDefinitions(taskStore, now = new Date()) {
 
 function recordBlockedTaskReport({ store, report }) {
   const reportJson = JSON.stringify(report);
+  const agentIdentityRefJson = taskAgentIdentityRefJson(report.agent_id, { siteId: process.env.NARADA_SITE_ID ?? null });
   if (store.upsertReportRecord) {
     store.upsertReportRecord({
       report_id: report.report_id,
       task_id: report.task_id,
       assignment_id: report.assignment_id,
       agent_id: report.agent_id,
+      agent_identity_ref_json: agentIdentityRefJson,
       reported_at: report.reported_at,
       report_json: reportJson,
     });
   }
   const tableExists = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
   if (!tableExists) return;
+  ensureTaskReportsIdentityRefColumn(store.db);
   store.db.prepare(`
     INSERT INTO task_reports (
-      report_id, task_id, agent_id, summary, changed_files_json, verification_json, submitted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      report_id, task_id, agent_id, agent_identity_ref_json, summary, changed_files_json, verification_json, submitted_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(report_id) DO UPDATE SET
       task_id = excluded.task_id,
       agent_id = excluded.agent_id,
+      agent_identity_ref_json = excluded.agent_identity_ref_json,
       summary = excluded.summary,
       changed_files_json = excluded.changed_files_json,
       verification_json = excluded.verification_json,
@@ -402,11 +407,19 @@ function recordBlockedTaskReport({ store, report }) {
     report.report_id,
     report.task_id,
     report.agent_id,
+    agentIdentityRefJson,
     report.summary,
     JSON.stringify([]),
     JSON.stringify([]),
     report.reported_at,
   );
+}
+
+function ensureTaskReportsIdentityRefColumn(db) {
+  const columns = db.prepare('pragma table_info(task_reports)').all();
+  if (!columns.some((column) => column.name === 'agent_identity_ref_json')) {
+    db.exec('ALTER TABLE task_reports ADD COLUMN agent_identity_ref_json text');
+  }
 }
 
 function gitVisiblePathSubset(cwd, files) {

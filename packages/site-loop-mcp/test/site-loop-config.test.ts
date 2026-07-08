@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
+import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
 import { DEFAULT_SITE_LOOP_PHASE_PLAN, SITE_LOOP_ADAPTER_PHASE_PLAN, listSiteLoopRuns, runSiteLoop, siteLoopStatus } from '../src/site-loop/site-loop.js';
 import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
+import { getResidentStatus } from '../src/task-lifecycle/dispatch-directives.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-'));
 const packageRoot = new URL('..', import.meta.url);
@@ -35,6 +37,67 @@ assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
   'operating_alert_reconciliation',
 ]);
 assert.deepEqual([...SITE_LOOP_ADAPTER_PHASE_PLAN], [...DEFAULT_SITE_LOOP_PHASE_PLAN]);
+
+assert.deepEqual(processLaunchRequiredEnvironment({
+  NARADA_SITE_ROOT: 'D:/site',
+  KIMI_CODE_API_KEY: '<set>',
+  OPENAI_API_KEY: '<set:51>',
+  DEEPSEEK_API_KEY: '<redacted>',
+  NARADA_AI_MODEL: 'kimi-k2.7',
+  NON_STRING: 1,
+}), {
+  NARADA_SITE_ROOT: 'D:/site',
+  NARADA_AI_MODEL: 'kimi-k2.7',
+});
+assert.deepEqual(processLaunchSpawnEnvironmentDelta({
+  KIMI_CODE_API_KEY: 'real-key',
+  NARADA_AI_MODEL: 'kimi-k2.7',
+}), {
+  status: 'ok',
+  env: {
+    KIMI_CODE_API_KEY: 'real-key',
+    NARADA_AI_MODEL: 'kimi-k2.7',
+  },
+});
+assert.equal(processLaunchSpawnEnvironmentDelta(null).status, 'refused');
+assert.equal(processLaunchSpawnEnvironmentDelta({ KIMI_CODE_API_KEY: '<set>' }).status, 'refused');
+
+const legacyProjectionConfig = {
+  ...DEFAULT_SITE_LOOP_CONFIG,
+  commands: {
+    ...DEFAULT_SITE_LOOP_CONFIG.commands,
+    projection_drift: 'pnpm cli -- task projection drift --json',
+  },
+};
+const legacyProjectionCheck = runProjectionDriftCheck(siteRoot, legacyProjectionConfig);
+assert.equal(legacyProjectionCheck.status, 'not_configured');
+assert.equal(legacyProjectionCheck.exit_code, 0);
+assert.equal((legacyProjectionCheck as Record<string, unknown>).note, 'legacy_projection_drift_cli_handler_not_migrated');
+
+const modernTaskLifecycleRoot = mkdtempSync(join(tmpdir(), 'site-loop-modern-task-lifecycle-'));
+const modernTaskLifecyclePackageRoot = join(modernTaskLifecycleRoot, 'packages', 'task-lifecycle-mcp');
+mkdirSync(join(modernTaskLifecyclePackageRoot, 'dist', 'src', 'task-lifecycle'), { recursive: true });
+writeFileSync(join(modernTaskLifecyclePackageRoot, 'package.json'), JSON.stringify({
+  name: '@narada2/task-lifecycle-mcp',
+  dependencies: { '@narada2/task-governance-core': 'workspace:*' },
+}, null, 2), 'utf8');
+const modernSiteRoot = mkdtempSync(join(tmpdir(), 'site-loop-modern-site-'));
+mkdirSync(join(modernSiteRoot, '.ai', 'mcp'), { recursive: true });
+writeFileSync(join(modernSiteRoot, '.ai', 'mcp', 'narada-modern-mcp.json'), JSON.stringify({
+  schema: 'narada.mcp.client_config.v0',
+  mcpServers: {
+    'narada-modern-task-lifecycle': {
+      transport: 'stdio',
+      command: 'node',
+      args: [join(modernTaskLifecyclePackageRoot, 'dist', 'src', 'task-lifecycle', 'task-mcp-server.js'), '--site-root', modernSiteRoot],
+      surface_id: 'task-lifecycle',
+    },
+  },
+}, null, 2), 'utf8');
+const modernBoundary = checkTaskGovernancePackageBoundary(modernSiteRoot);
+assert.equal(modernBoundary.status, 'ok');
+assert.equal(modernBoundary.boundary_mode, 'shared_mcp_package');
+assert.equal(modernBoundary.task_lifecycle_root, modernTaskLifecyclePackageRoot);
 
 function writeSiteLoopConfig(root, config) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
@@ -249,6 +312,16 @@ assert.equal(configuredRuns.schema, 'narada.example.loop.runs.v1');
 assert.equal(configuredRuns.loop_id, 'example.loop');
 const configuredStatus = siteLoopStatus(siteRoot);
 assert.equal(configuredStatus.loop_id, 'example.loop');
+const configuredResident = getResidentStatus(siteRoot);
+assert.equal(configuredResident.agent_id, 'example.resident');
+const writeLockedStore = openSiteLoopStore(siteRoot);
+try {
+  const attentionList = listSiteLoopAttention(siteRoot, { limit: 1 });
+  assert.equal(attentionList.loop_id, 'example.loop');
+  assert.equal(Array.isArray(attentionList.attention), true);
+} finally {
+  writeLockedStore.close();
+}
 assert.equal(overrideLoad.config.tests.smoke.command, 'node');
 assert.equal(overrideLoad.config.docs[0].path, 'README.md');
 

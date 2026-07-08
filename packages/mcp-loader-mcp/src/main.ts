@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { spawn, ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
@@ -213,7 +213,7 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
 function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord {
   const siteRoot = normalizePath(requiredString(args.site_root, 'missing_site_root'));
   ensureSiteRootAllowed(siteRoot, state.policy);
-  const fabricPath = resolve(siteRoot, '.ai', 'mcp', 'config.json');
+  const fabricPath = resolveSiteFabricPath(siteRoot);
   const fabric = readSiteFabric(siteRoot);
   const servers = asRecord(fabric.mcpServers);
   const diagnostics = Object.entries(servers).map(([surfaceId, server]) => {
@@ -246,7 +246,7 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
         reason: 'mcp-loader reads site fabric but does not own the generator or VCS ignore rules for this config.',
       },
       provenance: {
-        config_source: 'site_root/.ai/mcp/config.json',
+        config_source: fabricPath,
         shared_registry_source: shared ? '@narada2/mcp-loader-mcp embedded registry' : null,
         generator: typeof fabric.generated_by === 'string' ? fabric.generated_by : null,
         generated_at: typeof fabric.generated_at === 'string' ? fabric.generated_at : null,
@@ -522,8 +522,35 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
 };
 
+function resolveSiteFabricPath(siteRoot: string): string {
+  const mcpDir = resolve(siteRoot, '.ai', 'mcp');
+  const canonicalPath = resolve(mcpDir, 'config.json');
+  if (existsSync(canonicalPath)) return canonicalPath;
+  const siteBase = basename(siteRoot).replace(/\./g, '-');
+  const siteAggregatePath = resolve(mcpDir, `${siteBase}-mcp.json`);
+  if (existsSync(siteAggregatePath)) return siteAggregatePath;
+  if (!existsSync(mcpDir)) {
+    throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${canonicalPath}`);
+  }
+  const candidates = readdirSync(mcpDir)
+    .filter((name) => name.endsWith('-mcp.json'))
+    .map((name) => resolve(mcpDir, name))
+    .filter((candidatePath) => {
+      try {
+        return Boolean(asRecord(JSON.parse(readFileSync(candidatePath, 'utf8'))).mcpServers);
+      } catch {
+        return false;
+      }
+    });
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.length > 1) {
+    throw diagnosticError('site_fabric_ambiguous', `site_fabric_ambiguous:${mcpDir}`);
+  }
+  throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${canonicalPath}`);
+}
+
 function readSiteFabric(siteRoot: string): JsonRecord {
-  const fabricPath = resolve(siteRoot, '.ai', 'mcp', 'config.json');
+  const fabricPath = resolveSiteFabricPath(siteRoot);
   if (!existsSync(fabricPath)) {
     throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${fabricPath}`);
   }

@@ -30,6 +30,7 @@ export type WorkerPolicy = {
   defaultRuntime: WorkerRuntimeId;
   defaultAuthority: WorkerAuthority;
   defaultCognition: WorkerCognition;
+  defaultNaradaAgentRuntimeProvider: string | null;
   allowedAuthorities: WorkerAuthority[];
   allowedCognition: WorkerCognition[];
   runRoot: string;
@@ -47,6 +48,7 @@ export type WorkerPolicy = {
   maxOutputBytes: number;
   maxRunMs: number;
   cognitionDefaults: Record<WorkerCognition, WorkerCognitionDefaults>;
+  providerCognitionDefaults: Record<string, Record<WorkerCognition, WorkerCognitionDefaults>>;
   runtimes: {
     codex: WorkerRuntimeConfig;
     naradaAgentRuntimeServer: WorkerRuntimeConfig;
@@ -108,6 +110,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
 
   const allowedRuntimes = runtimeList(merged.allowedRuntime ?? merged.allowedRuntimes ?? policy.allowed_runtimes ?? ['codex', 'narada-agent-runtime-server']);
   const allowedNaradaAgentRuntimeProviders = providerList(merged.allowedNaradaAgentRuntimeProvider ?? merged.allowedNaradaAgentRuntimeProviders ?? policy.allowed_narada_agent_runtime_providers ?? DEFAULT_NARADA_AGENT_RUNTIME_PROVIDERS);
+  const defaultNaradaAgentRuntimeProvider = stringOrNull(merged.defaultNaradaAgentRuntimeProvider ?? policy.default_narada_agent_runtime_provider);
 
   const allowedSandboxes = stringList(merged.allowedSandbox ?? merged.allowedSandboxes ?? policy.allowed_sandboxes ?? ['read-only', 'workspace-write']).map(validateSandbox);
   const allowDangerFullAccess = booleanValue(merged.allowDangerFullAccess ?? policy.allow_danger_full_access, false);
@@ -128,12 +131,14 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
   const naradaAgentRuntimeServerDefaultSandbox = validateSandbox(merged.naradaAgentRuntimeServerDefaultSandbox ?? naradaAgentRuntimeServerCfg.default_sandbox ?? 'workspace-write');
   if (!allowedSandboxes.includes(naradaAgentRuntimeServerDefaultSandbox)) throw diagnosticError('worker_invalid_sandbox', 'worker_invalid_sandbox', { sandbox: naradaAgentRuntimeServerDefaultSandbox });
 
+  const providerDefaults = providerCognitionDefaults(merged.providerCognitionDefaults ?? policy.provider_cognition_defaults);
   const finalCognitionDefaults = cognitionDefaults(cognition, merged);
 
   return {
     defaultRuntime,
     defaultAuthority: validateAuthority(merged.defaultAuthority ?? worker.default_authority ?? 'read'),
     defaultCognition: validateCognition(merged.defaultCognition ?? worker.default_cognition ?? 'low'),
+    defaultNaradaAgentRuntimeProvider,
     allowedAuthorities: authorityList(merged.allowedAuthority ?? merged.allowedAuthorities ?? policy.allowed_authorities ?? WORKER_AUTHORITIES),
     allowedCognition: cognitionList(merged.allowedCognition ?? merged.allowedCognitionLevels ?? policy.allowed_cognition ?? WORKER_COGNITION),
     runRoot: resolve(stringValue(merged.runRoot ?? worker.run_root ?? defaultRunRoot())),
@@ -151,6 +156,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
     cognitionDefaults: finalCognitionDefaults,
+    providerCognitionDefaults: providerDefaults,
     runtimes: {
       codex: {
         command: codexCommand,
@@ -212,7 +218,8 @@ function assertWorkerRuntime(value: unknown): asserts value is WorkerRuntimeId {
   if (!isWorkerRuntime(value)) throw diagnosticError('worker_invalid_runtime', 'worker_invalid_runtime', { runtime: value, allowed_runtimes: ['codex', 'narada-agent-runtime-server'] });
 }
 
-export function defaultConfigForCognition(cognition: WorkerCognition, policy: WorkerPolicy): WorkerCognitionDefaults {
+export function defaultConfigForCognition(cognition: WorkerCognition, policy: WorkerPolicy, provider: string | null = null): WorkerCognitionDefaults {
+  if (provider && policy.providerCognitionDefaults[provider]?.[cognition]) return policy.providerCognitionDefaults[provider][cognition];
   return policy.cognitionDefaults[cognition] ?? policy.cognitionDefaults.low;
 }
 
@@ -248,6 +255,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     allowed_roots: policy.allowedRoots,
     roots_from_trust_config: policy.rootsFromTrustConfig,
     allowed_runtimes: policy.allowedRuntimes,
+    default_narada_agent_runtime_provider: policy.defaultNaradaAgentRuntimeProvider,
     allowed_narada_agent_runtime_providers: policy.allowedNaradaAgentRuntimeProviders,
     allowed_sandboxes: policy.allowedSandboxes,
     allowed_config_keys: policy.allowedConfigKeys,
@@ -272,6 +280,10 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       model: defaults.model,
       reasoning_effort: defaults.reasoningEffort,
     }])),
+    provider_cognition_defaults: Object.fromEntries(Object.entries(policy.providerCognitionDefaults).map(([provider, defaultsByCognition]) => [provider, Object.fromEntries(Object.entries(defaultsByCognition).map(([cognition, defaults]) => [cognition, {
+      model: defaults.model,
+      reasoning_effort: defaults.reasoningEffort,
+    }]))])),
     runtimes: {
       codex: {
         id: 'codex',
@@ -363,6 +375,7 @@ export function validateRuntime(value: unknown, policy: WorkerPolicy): WorkerRun
 
 export function resolveNaradaAgentRuntimeProvider(value: unknown, policy: WorkerPolicy): { provider: string | null; source: string } {
   const provider = stringOrNull(value);
+  if (!provider && policy.defaultNaradaAgentRuntimeProvider) return { provider: policy.defaultNaradaAgentRuntimeProvider, source: 'registry_default' };
   if (!provider) return { provider: null, source: 'runtime_default' };
   if (!policy.allowedNaradaAgentRuntimeProviders.includes(provider)) {
     throw diagnosticError('worker_narada_provider_not_allowed', 'worker_narada_provider_not_allowed', { provider, allowed_providers: policy.allowedNaradaAgentRuntimeProviders });
@@ -515,6 +528,22 @@ function cognitionDefault(level: WorkerCognition, cognition: Record<string, unkn
     model: stringOrNull(options[`cognition${pascal}Model`] ?? config.model ?? defaultModel),
     reasoningEffort: stringOrNull(options[`cognition${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? defaultReasoningEffort),
   };
+}
+
+function providerCognitionDefaults(value: unknown): Record<string, Record<WorkerCognition, WorkerCognitionDefaults>> {
+  const providers = asRecord(value);
+  const result: Record<string, Record<WorkerCognition, WorkerCognitionDefaults>> = {};
+  for (const [provider, rawDefaults] of Object.entries(providers)) {
+    const key = provider.trim();
+    if (!key) continue;
+    const defaults = asRecord(rawDefaults);
+    result[key] = {
+      low: cognitionDefault('low', defaults, {}, null, null),
+      medium: cognitionDefault('medium', defaults, {}, null, null),
+      high: cognitionDefault('high', defaults, {}, null, null),
+    };
+  }
+  return result;
 }
 
 function authorityList(value: unknown): WorkerAuthority[] {

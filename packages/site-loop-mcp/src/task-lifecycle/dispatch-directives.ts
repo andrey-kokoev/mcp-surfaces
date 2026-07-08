@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { randomBytes, createHash } from 'node:crypto';
+import { Socket } from 'node:net';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -47,7 +49,7 @@ function configuredExternalSessionRoots(cwd: string, siteLoopConfig: SiteLoopCon
   return siteLoopConfig.resident_runtime.external_session_roots.map((root) => isAbsolute(root) ? root : join(cwd, root));
 }
 
-export function dispatchPendingDirectives({
+export async function dispatchPendingDirectives({
   cwd,
   agentId,
   role,
@@ -68,6 +70,8 @@ export function dispatchPendingDirectives({
   const leaseRecovery = recoverExpiredLeases(store);
   const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, effectiveAgentId, { requireLiveCarrier }) as ResidentControlTarget | null;
   const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
+  const eventEndpoint = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
+  const deliveryTarget = eventEndpoint ?? controlPath;
   const pending = dedupeDirectives([
     ...store.listPending({ target: { kind: 'agent', id: effectiveAgentId }, limit }),
     ...store.listPending({ target: { kind: 'role', id: effectiveRole }, limit }),
@@ -75,7 +79,7 @@ export function dispatchPendingDirectives({
   const dispatched: DirectiveDispatchEntry[] = [];
   const skipped: DirectiveDispatchEntry[] = [];
 
-  if (!controlPath) {
+  if (!deliveryTarget) {
     lifecycleStore.db.close();
     return {
       schema: dispatchSchema,
@@ -84,12 +88,13 @@ export function dispatchPendingDirectives({
       agent_id: effectiveAgentId,
       role: effectiveRole,
       control_path: null,
+      event_endpoint: null,
       carrier,
       pending_count: pending.length,
       receipt_reconciliation: receiptReconciliation,
       lease_recovery: leaseRecovery,
       dispatched: [],
-      skipped: pending.map((directive) => ({ directive_id: directive.directive_id, reason: carrier?.reason ?? 'no_live_agent_cli_control_path' })),
+      skipped: pending.map((directive) => ({ directive_id: directive.directive_id, reason: carrier?.reason ?? 'no_live_resident_input_target' })),
     };
   }
 
@@ -107,6 +112,7 @@ export function dispatchPendingDirectives({
       agent_id: effectiveAgentId,
       role: effectiveRole,
       control_path: controlPath,
+      event_endpoint: eventEndpoint,
       carrier,
       carrier_state: carrierState,
       carrier_session_state: sessionState,
@@ -136,7 +142,7 @@ export function dispatchPendingDirectives({
     const lease = {
       leaseId: leaseId(directive.directive_id, activeCarrierSessionId),
       leasedUntil: leaseExpiryIso(5),
-      transport: 'agent_cli_control_jsonl',
+      transport: eventEndpoint ? 'agent_runtime_event_websocket' : 'agent_cli_control_jsonl',
       carrierSessionId: activeCarrierSessionId,
     };
     if (dryRun) {
@@ -144,22 +150,29 @@ export function dispatchPendingDirectives({
       continue;
     }
     const attempt = store.leaseDelivery(directive.directive_id, lease);
+    const frame = {
+      id: `directive-${directive.directive_id}`,
+      method: 'system_directive.deliver',
+      params: {
+        directive_id: directive.directive_id,
+        directive,
+        message: directiveDeliveryMessage(directive, { agentId: effectiveAgentId }),
+        authority_ref: directive.directive_id,
+      },
+    };
     try {
-      appendControlFrame(controlPath, {
-        id: `directive-${directive.directive_id}`,
-        method: 'system_directive.deliver',
-        params: {
-          directive_id: directive.directive_id,
-          directive,
-          message: directiveDeliveryMessage(directive, { agentId: effectiveAgentId }),
-          authority_ref: directive.directive_id,
-        },
-      });
+      if (eventEndpoint) {
+        await sendWebSocketJsonFrame(eventEndpoint, frame);
+      } else if (controlPath) {
+        appendControlFrame(controlPath, frame);
+      } else {
+        throw new Error('resident_input_target_missing');
+      }
     } catch (error) {
-      failDirectiveDelivery(store, directive.directive_id, 'control_jsonl_append_failed');
+      failDirectiveDelivery(store, directive.directive_id, eventEndpoint ? 'event_websocket_send_failed' : 'control_jsonl_append_failed');
       skipped.push({
         directive_id: directive.directive_id,
-        reason: 'control_jsonl_append_failed',
+        reason: eventEndpoint ? 'event_websocket_send_failed' : 'control_jsonl_append_failed',
         error: error instanceof Error ? error.message : String(error),
       });
       continue;
@@ -169,6 +182,8 @@ export function dispatchPendingDirectives({
       attempt_id: attempt.attempt_id,
       lease_id: attempt.lease_id ?? lease.leaseId,
       control_path: controlPath,
+      event_endpoint: eventEndpoint,
+      transport: lease.transport,
       carrier_session_id: carrierSessionId,
       receipt_recorded: false,
     });
@@ -182,6 +197,7 @@ export function dispatchPendingDirectives({
     agent_id: effectiveAgentId,
     role: effectiveRole,
     control_path: controlPath,
+    event_endpoint: eventEndpoint,
     carrier,
     carrier_state: carrierState,
     carrier_session_state: sessionState,
@@ -211,7 +227,8 @@ function directiveDeliveryMessage(directive, options: DirectiveDispatchPayload =
     [
       'Use task_lifecycle_claim first when the task is unclaimed.',
       `Then call task_lifecycle_disposition_closeout with task_number, agent_id="${stringValue(options.agentId)}", disposition="acknowledged", and a short summary so task-owned evidence is written.`,
-      `Then call task_lifecycle_submit_report with task_number, agent_id="${stringValue(options.agentId)}", summary under 180 characters, directive_id="${directiveId}", reviewer="reviewer-agent", and changed_files from the closeout result. If closeout reports no task file change, use no_files_changed=true.`,
+      `Then call task_lifecycle_submit_report with task_number, agent_id="${stringValue(options.agentId)}", summary under 180 characters, directive_id="${directiveId}", and changed_files from the closeout result. If closeout reports no task file change, use no_files_changed=true.`,
+      'If the report tool requires reviewer routing, pass only a real admitted distinct reviewer or reviewer role from the site roster; never pass a placeholder reviewer id. If no distinct reviewer can be resolved, report that blocker instead of inventing review authority.',
       'Do not include reviewer_agent_id, execution_notes, verification_notes, envelope_id, or disposition in task_lifecycle_submit_report.',
       `If the tool does not expose directive_id, include this exact fallback token in the report summary: directive_id:${directiveId}`,
     ].join(' '),
@@ -286,7 +303,7 @@ export function getResidentStatus(cwd, { agentId, requireLiveCarrier = true }: R
       WHERE agent_id = ?
       ORDER BY submitted_at DESC
       LIMIT 1
-    `).get(agentId) ?? null;
+    `).get(agentIdString) ?? null;
     const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
     const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
     const policy = loadSiteLoopOperatingPolicy(cwd).policy;
@@ -597,7 +614,7 @@ function validateCarrierEventForDirective(directive, event, sessionPath, siteLoo
     return { status: 'skipped', reason: 'agent_mismatch_resident_role' };
   }
   const transport = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
-  if (!['agent_cli_control_jsonl', 'control_jsonl', 'jsonl_stdio'].includes(transport)) {
+  if (!['agent_cli_control_jsonl', 'agent_runtime_event_websocket', 'control_jsonl', 'jsonl_stdio'].includes(transport)) {
     return { status: 'skipped', reason: 'unsupported_carrier_event_transport' };
   }
   return { status: 'ok' };
@@ -641,7 +658,11 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
   const runtimeConfig = siteLoopConfig.resident_runtime;
   const policy = loadSiteLoopOperatingPolicy(cwd).policy;
   const interactive = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.preferred_runtime, { requireLiveCarrier });
-  if (interactive.status === 'available') return { ...interactive, preference: runtimeConfig.preferred_preference };
+  if (interactive.status === 'available') {
+    const preferred = { ...interactive, preference: runtimeConfig.preferred_preference };
+    if (residentControlTargetSelectable(cwd, preferred, policy, siteLoopConfig)) return preferred;
+    (interactive as DirectiveDispatchPayload).selection_block = 'preferred_carrier_policy_stale';
+  }
   if (policy?.carrier?.fallback_enabled !== true) {
     return {
       status: 'unavailable',
@@ -650,9 +671,11 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
       preferred_interactive: interactive,
     };
   }
-  const agentRuntimeServer = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.fallback_runtime, { requireLiveCarrier });
+  const fallbackRuntimes = fallbackRuntimeCandidates(runtimeConfig);
+  const [fallbackRuntime, ...legacyFallbackRuntimes] = fallbackRuntimes;
+  const agentRuntimeServer = findLatestControlTargetByRuntime(cwd, agentId, fallbackRuntime, { requireLiveCarrier });
   if (agentRuntimeServer.status === 'available') return { ...agentRuntimeServer, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive };
-  const legacyFallbacks = runtimeConfig.legacy_fallback_runtimes.map((runtime) => ({
+  const legacyFallbacks = legacyFallbackRuntimes.map((runtime) => ({
     runtime,
     carrier: findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier }),
   }));
@@ -672,6 +695,21 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
   };
 }
 
+function fallbackRuntimeCandidates(runtimeConfig) {
+  return [
+    runtimeConfig.fallback_runtime,
+    'narada-agent-runtime-server',
+    ...runtimeConfig.legacy_fallback_runtimes,
+  ].filter((runtime, index, runtimes) => typeof runtime === 'string' && runtime.length > 0 && runtimes.indexOf(runtime) === index);
+}
+
+function residentControlTargetSelectable(cwd, carrier, policy, siteLoopConfig: SiteLoopConfig) {
+  const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
+  const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
+  const state = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
+  return state.state !== 'policy_stale';
+}
+
 function noLaunchResultReason(runtime: string) {
   return `no_${runtime.replace(/[^a-z0-9]+/gi, '_')}_launch_result`;
 }
@@ -680,10 +718,11 @@ export function findLatestAgentCliControlTarget(cwd, agentId, { requireLiveCarri
   return findLatestControlTargetByRuntime(cwd, agentId, requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime, { requireLiveCarrier });
 }
 
-function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true }: RuntimeControlTargetOptions = {}) {
+function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true, maxLivenessCandidates = 5, max_liveness_candidates }: RuntimeControlTargetOptions = {}) {
   const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing', runtime };
-  const candidates: ResidentControlTarget[] = readdirSync(resultsDir)
+  const maxCandidates = Math.max(1, Number(max_liveness_candidates ?? maxLivenessCandidates ?? 5));
+  const allCandidates: ResidentControlTarget[] = readdirSync(resultsDir)
     .filter((name) => name.endsWith('.result.json'))
     .map((name) => {
       try {
@@ -700,8 +739,13 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
         const carrierSessionId = packet.carrier_session?.carrier_session_id
           ?? packet.carrier_session_id
           ?? carrierSessionIdFromControlPath(controlPath);
-        return packet.identity === agentId && packet.runtime === runtime && controlPath
-          ? { path, controlPath, carrierSessionId, runtime, startedAt: packet.started_at ?? packet.agent_start_event ?? name }
+        const sessionIndex = carrierSessionId ? readResidentSessionIndex(cwd, carrierSessionId) : null;
+        const eventEndpoint = sessionIndex?.event_endpoint ?? packet.event_endpoint ?? packet.websocket_endpoint ?? null;
+        const healthEndpoint = sessionIndex?.health_endpoint ?? packet.health_endpoint ?? null;
+        const packetRuntime = typeof packet.runtime === 'string' ? packet.runtime : null;
+        const configuredRuntime = typeof packet.configured_runtime === 'string' ? packet.configured_runtime : null;
+        return packet.identity === agentId && (packetRuntime === runtime || configuredRuntime === runtime) && (controlPath || eventEndpoint)
+          ? { path, controlPath, eventEndpoint, healthEndpoint, carrierSessionId, runtime, actual_runtime: packetRuntime, configured_runtime: configuredRuntime, startedAt: packet.started_at ?? packet.agent_start_event ?? name }
           : null;
       } catch {
         return null;
@@ -709,6 +753,8 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
     })
     .filter(Boolean)
     .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+  const candidates = allCandidates.slice(0, maxCandidates);
+  const uninspectedCandidateCount = Math.max(0, allCandidates.length - candidates.length);
   for (const candidate of candidates) {
     const retirement = readCarrierRetirement(cwd, candidate.carrierSessionId);
     if (retirement) {
@@ -724,17 +770,103 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
     status: 'unavailable',
     controlPath: null,
     reason: activeStaleCandidates.length > 0 ? `no_live_${runtime}_carrier` : `no_${runtime.replace(/[^a-z0-9]+/gi, '_')}_launch_result`,
+    runtime,
     stale_candidate_count: activeStaleCandidates.length,
     retired_candidate_count: candidates.length - activeStaleCandidates.length,
+    uninspected_candidate_count: uninspectedCandidateCount,
+    total_candidate_count: allCandidates.length,
     stale_candidates: activeStaleCandidates.map((candidate) => ({
       path: candidate.path,
       controlPath: candidate.controlPath,
+      eventEndpoint: candidate.eventEndpoint,
+      healthEndpoint: candidate.healthEndpoint,
       carrierSessionId: candidate.carrierSessionId,
       runtime: candidate.runtime,
     })),
   };
 }
 
+function readResidentSessionIndex(cwd, carrierSessionId) {
+  if (!carrierSessionId) return null;
+  return readJsonIfExists(join(configuredSessionRoot(cwd), carrierSessionId, 'session-index-record.json'));
+}
+
+async function sendWebSocketJsonFrame(endpoint, frame, timeoutMs = 5000) {
+  const url = new URL(String(endpoint));
+  if (url.protocol !== 'ws:') throw new Error(`unsupported_websocket_protocol:${url.protocol}`);
+  const port = Number(url.port || 80);
+  const path = `${url.pathname || '/'}${url.search || ''}`;
+  const key = randomBytes(16).toString('base64');
+  const request = [
+    `GET ${path} HTTP/1.1`,
+    `Host: ${url.hostname}:${port}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Key: ${key}`,
+    'Sec-WebSocket-Version: 13',
+    '',
+    '',
+  ].join('\r\n');
+  const expectedAccept = createHash('sha1')
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest('base64');
+  const payload = JSON.stringify(frame);
+  const encoded = encodeClientWebSocketTextFrame(payload);
+  return await new Promise((resolvePromise, reject) => {
+    const socket = new Socket();
+    let settled = false;
+    let buffer = Buffer.alloc(0);
+    const settle = (error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (error) reject(error);
+      else resolvePromise({ status: 'sent', endpoint, bytes: Buffer.byteLength(payload) });
+    };
+    const timer = setTimeout(() => settle(new Error('websocket_send_timeout')), timeoutMs);
+    socket.once('error', settle);
+    socket.connect(port, url.hostname, () => socket.write(request));
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const text = buffer.toString('utf8');
+      const headerEnd = text.indexOf('\r\n\r\n');
+      if (headerEnd === -1) return;
+      const header = text.slice(0, headerEnd);
+      if (!/^HTTP\/1\.1 101\b/.test(header)) {
+        settle(new Error(`websocket_handshake_failed:${header.split(/\r?\n/)[0] ?? 'unknown'}`));
+        return;
+      }
+      if (!header.toLowerCase().includes(`sec-websocket-accept: ${expectedAccept.toLowerCase()}`)) {
+        settle(new Error('websocket_accept_mismatch'));
+        return;
+      }
+      socket.write(encoded, (error) => settle(error ?? null));
+    });
+  });
+}
+
+function encodeClientWebSocketTextFrame(text) {
+  const body = Buffer.from(text, 'utf8');
+  const mask = randomBytes(4);
+  let header;
+  if (body.length < 126) {
+    header = Buffer.from([0x81, 0x80 | body.length]);
+  } else if (body.length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(body.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(body.length), 2);
+  }
+  const masked = Buffer.alloc(body.length);
+  for (let index = 0; index < body.length; index += 1) masked[index] = body[index] ^ mask[index % 4];
+  return Buffer.concat([header, mask, masked]);
+}
 function readCarrierRetirement(cwd, carrierSessionId) {
   if (!carrierSessionId) return null;
   const path = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
@@ -1003,7 +1135,7 @@ if (isEntrypoint) {
 
   let exitCode = 0;
   try {
-    const result = dispatchPendingDirectives({ cwd, agentId, role, limit, dryRun, requireLiveCarrier });
+    const result = await dispatchPendingDirectives({ cwd, agentId, role, limit, dryRun, requireLiveCarrier });
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     console.error(JSON.stringify({

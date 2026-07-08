@@ -43,15 +43,10 @@ function normalizedNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function looksLikeAgentId(value) {
-  return Boolean(normalizedNonEmptyString(value)?.includes('.'));
-}
-
-function firstPayloadString(payload, fields, { requireAgentId = false } = {}) {
+function firstPayloadString(payload, fields) {
   for (const field of fields) {
     const value = normalizedNonEmptyString(payload?.[field]);
     if (!value) continue;
-    if (requireAgentId && !looksLikeAgentId(value)) continue;
     return { field, value };
   }
   return null;
@@ -91,7 +86,7 @@ function ensureTaskRolePreferencesTable(store) {
 
 export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskLifecyclePayload = {}, store = null) {
   const payload = envelope?.payload ?? {};
-  const ownership = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE, { requireAgentId: true });
+  const ownership = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE);
   const explicitRole = firstPayloadString(payload, ROLE_FIELD_PRECEDENCE);
   const preferredAgentId = ownership?.value ?? null;
   const agentRole = resolveAgentRoleFromStore(store, preferredAgentId);
@@ -101,7 +96,7 @@ export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskL
   const ownershipValues = new Map();
   for (const field of OWNERSHIP_FIELD_PRECEDENCE) {
     const value = normalizedNonEmptyString(payload[field]);
-    if (value && looksLikeAgentId(value)) ownershipValues.set(field, value);
+    if (value) ownershipValues.set(field, value);
   }
   const uniqueOwners = new Set(ownershipValues.values());
   if (uniqueOwners.size > 1) {
@@ -712,7 +707,7 @@ export function readUnprocessedEnvelopes(cwd) {
   // Try admission log first
   try {
     const latestEvents = getLatestEventsByEnvelope(cwd);
-    const processedKinds = new Set(['envelope_promoted', 'envelope_dismissed', 'envelope_acknowledged']);
+    const processedKinds = new Set(['envelope_promoted', 'envelope_dismissed', 'envelope_acknowledged', 'bridge_materialized']);
     const logEnvelopes = [];
 
     for (const envelope of fileEnvelopes) {

@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Config-governed site-loop MCP runtime and site operations tools.",
   "bin": {
-    "site-loop-mcp": "./dist/src/site-loop-mcp-server.js"
+    "site-loop-mcp": "./dist/src/site-loop-mcp-server.js",
+    "site-loop-runner": "./dist/src/site-loop/site-loop-engine.js"
   },
   "exports": {
     ".": { "default": "./dist/src/site-loop-mcp-server.js" },
@@ -23,7 +24,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-live-e2e.test.js"
+    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-live-e2e.test.js"
   },
   "dependencies": {
     "ajv": "^8.20.0",

@@ -129,7 +129,8 @@ export async function runStdioServer(options: Record<string, unknown>) {
         }
         continue;
       }
-      processStdioRequest(record, state, activeRequests, { framed: sawFramedInput });
+      const processing = processStdioRequest(record, state, activeRequests, { framed: sawFramedInput });
+      if (record.method !== 'tools/call') await processing;
     }
   }
 }
@@ -181,7 +182,7 @@ async function processStdioRequest(request: Record<string, unknown>, state: Stru
     }, options);
   };
   progress(0, 'started');
-  handleRequest(request, state, { abortSignal: abortController.signal, progress }).then((response) => {
+  return handleRequest(request, state, { abortSignal: abortController.signal, progress }).then((response) => {
     progress(abortController.signal.aborted ? 1 : 1, abortController.signal.aborted ? 'cancelled' : 'completed');
     if (response) writeJsonRpcMessage(response, options);
   }).finally(() => {

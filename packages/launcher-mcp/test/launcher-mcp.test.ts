@@ -37,6 +37,8 @@ try {
   assert.ok((options.declared_options as string[]).includes('OperatorSurface'));
   assert.ok((options.declared_options as string[]).includes('McpScope'));
   assert.ok((options.declared_options as string[]).includes('Profile'));
+  assert.ok((options.declared_options as string[]).includes('LauncherUiPort'));
+  assert.ok((options.declared_options as string[]).includes('LauncherUiPortFallback'));
 
   const toolList = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state) as Record<string, any>;
   const launcherPlanTool = toolList.result.tools.find((tool: Record<string, any>) => tool.name === 'launcher_plan');

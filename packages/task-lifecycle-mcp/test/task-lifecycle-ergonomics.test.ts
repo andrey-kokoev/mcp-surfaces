@@ -1568,6 +1568,19 @@ try {
   const genericEngineerWithAuthorityPayload = await responsePayload(genericEngineerWithAuthorityResponse, surfaceEngineerRuntime, 1056);
   assert.equal(genericEngineerWithAuthorityPayload.status, 'claimed');
   assert.equal(genericEngineerWithAuthorityPayload.role_claim_warning.kind, 'generic_engineer_role_claim');
+  const claimIdentityStore = openTaskLifecycleStore(siteRoot);
+  try {
+    const lifecycle = claimIdentityStore.getLifecycleByNumber(9207);
+    const assignment = claimIdentityStore.getActiveAssignment(lifecycle.task_id);
+    const identityRef = JSON.parse(assignment.agent_identity_ref_json);
+    assert.equal(assignment.agent_id, 'mcp-surfaces.codex');
+    assert.equal(identityRef.schema, 'narada.agent_identity_ref.v2');
+    assert.equal(identityRef.identity_scope.site_id, 'mcp-surfaces');
+    assert.equal(identityRef.local_agent_id, 'codex');
+    assert.equal(identityRef.legacy_agent_id, 'mcp-surfaces.codex');
+  } finally {
+    claimIdentityStore.db.close();
+  }
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.kind, 'operator_direct_instruction');
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.target_role, 'engineer');
   assert.equal(genericEngineerWithAuthorityPayload.role_mismatch_authority.agent_role, 'mcp-surfaces-engineer');
