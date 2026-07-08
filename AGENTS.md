@@ -4,7 +4,7 @@ Guidance for agents working in this repository.
 
 ## Repository Purpose
 
-`mcp-surfaces` contains standalone MCP surface packages shared by Narada sites and carriers.
+`mcp-surfaces` contains MCP surface packages shared by Narada sites and carriers. Some surfaces are standalone and can be used outside Narada; package READMEs and wiring docs carry the setup details. See `docs/mcp-taxonomy.md` for the generic-versus-Narada-specific split.
 
 Current packages:
 

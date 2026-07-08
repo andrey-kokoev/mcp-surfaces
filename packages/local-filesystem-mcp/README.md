@@ -2,6 +2,21 @@
 
 Canonical local filesystem MCP server.
 
+## Standalone Usage
+
+This package can be installed and run without Narada. It needs only a Node.js runtime, the package build, and the filesystem roots you choose to admit.
+
+The example below is path-agnostic. Replace the entrypoint path with the location of your installed package.
+
+Example:
+
+```powershell
+pnpm --filter @narada2/local-filesystem-mcp build
+node <installed-package>/dist/src/main.js --mode read --allowed-root <your-workspace-root>
+```
+
+If you want Narada to inject the surface into a CLI or TUI, use `@narada2/mcp-registrar` to write the carrier config.
+
 Tool results use `structuredContent` as the authoritative machine payload. The text content is a deterministic, compact rendering for agent transcripts. Large read and search results are bounded by the producing tool's own offset/limit or snapshot paging arguments.
 
 Read mode tools:

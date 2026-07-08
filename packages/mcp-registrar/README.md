@@ -28,6 +28,16 @@ Carrier approval controls are treated as volatile carrier UX/admission mechanics
 
 This is the `CarrierAdmissionNeutralization` concept in Narada proper: `D:/code/narada/packages/domains/concepts/records/carrier-admission-neutralization.concept.json`.
 
+## Wiring Surfaces
+
+Use the registrar when you want to inject a standalone MCP surface into Codex, opencode, Kimi, or a Narada site without hand-editing carrier config.
+
+- `registrar_site_bind` writes a site-local `.ai/mcp/` binding.
+- `registrar_carrier_bind` writes carrier config in the carrier's own format.
+- `registrar_sync` applies the same surface binding across the supported sites and carriers.
+
+For a concrete example, `@narada2/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
+
 ## Quick Start
 
 ```
