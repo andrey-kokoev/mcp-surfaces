@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -345,6 +345,33 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'sop_template_candidate_list',
+      description: 'List SOP YAML template files found in configured sops directories and classify their import state against the registry.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', default: 50 },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_template_candidate_list', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'sop_template_candidate_show',
+      description: 'Show one SOP YAML template candidate from configured sops directories and classify its import state against the registry.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sop_id: { type: 'string', description: 'SOP identifier matching a .sop.yaml file in configured sops directories.' },
+        },
+        required: ['sop_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_template_candidate_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'sop_template_update',
       description: 'Update an SOP template, creating a new version.',
       inputSchema: {
@@ -557,6 +584,8 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_template_export': result = sopTemplateExport(args, state); break;
     case 'sop_template_list': result = sopTemplateList(args, state); break;
     case 'sop_template_search': result = sopTemplateSearch(args, state); break;
+    case 'sop_template_candidate_list': result = sopTemplateCandidateList(args, state); break;
+    case 'sop_template_candidate_show': result = sopTemplateCandidateShow(args, state); break;
     case 'sop_template_import_yaml': result = sopTemplateImportYaml(args, state); break;
     case 'sop_template_update': result = sopTemplateUpdate(args, state); break;
     case 'sop_template_deprecate': result = sopTemplateDeprecate(args, state); break;
@@ -621,7 +650,44 @@ function sopTemplateExport(args: JsonRecord, state: SopState) {
   };
 }
 
+function sopTemplateCandidateList(args: JsonRecord, state: SopState) {
+  const limit = clamp(integer(args.limit, 50, 1, 200), 1, 200);
+  const discovery = discoverTemplateCandidates(state);
+  return {
+    schema: 'narada.sop.template_candidates.v1',
+    sops_dirs: state.sopsDirs,
+    sops_dir_errors: discovery.dir_errors,
+    items: discovery.candidates.slice(0, limit),
+    count: Math.min(discovery.candidates.length, limit),
+    total_count: discovery.candidates.length,
+  };
+}
+
+function sopTemplateCandidateShow(args: JsonRecord, state: SopState) {
+  const sopId = requiredString(args.sop_id, 'sop_requires_sop_id');
+  const discovery = discoverTemplateCandidates(state);
+  const candidates = discovery.candidates.filter((candidate) => candidate.sop_id === sopId);
+  if (candidates.length === 0) {
+    throw diagnosticError('sop_yaml_not_found', `sop_yaml_not_found:${sopId}`, { searched: state.sopsDirs, file: `${sopId}.sop.yaml`, sops_dir_errors: discovery.dir_errors });
+  }
+  return {
+    schema: 'narada.sop.template_candidate.v1',
+    sop_id: sopId,
+    sops_dir_errors: discovery.dir_errors,
+    candidates,
+    count: candidates.length,
+    selected_candidate: candidates.find((candidate) => candidate.import_resolution === 'selected') ?? candidates[0],
+  };
+}
+
 function sopDoctor(state: SopState): JsonRecord {
+  const discovery = discoverTemplateCandidates(state);
+  const candidates = discovery.candidates;
+  const registeredTemplateCount = Number((state.db.prepare(
+    'SELECT COUNT(*) as c FROM (SELECT sop_id, MAX(version) FROM sop_templates GROUP BY sop_id)'
+  ).get() as JsonRecord | undefined)?.c ?? 0);
+  const notImportedCandidateCount = candidates.filter((candidate) => candidate.import_status === 'not_imported').length;
+  const invalidCandidateCount = candidates.filter((candidate) => candidate.import_status === 'invalid_yaml').length;
   return {
     schema: 'narada.sop.doctor.v1',
     status: 'ok',
@@ -631,10 +697,20 @@ function sopDoctor(state: SopState): JsonRecord {
     template_response_schema: 'narada.sop.template.v1',
     template_show_render_mode: 'summary_text_with_full_structured_content',
     full_step_definitions_path: 'structuredContent.steps',
-    recovery_tools: ['sop_template_show', 'sop_template_export'],
+    recovery_tools: ['sop_template_show', 'sop_template_export', 'sop_template_candidate_list', 'sop_template_candidate_show'],
     sop_root: state.sopRoot,
     db_path: resolve(state.sopRoot, '.sop', 'sop.db'),
     sops_dirs: state.sopsDirs,
+    registered_template_count: registeredTemplateCount,
+    candidate_template_file_count: candidates.length,
+    not_imported_candidate_count: notImportedCandidateCount,
+    invalid_candidate_count: invalidCandidateCount,
+    sops_dir_errors: discovery.dir_errors,
+    next_actions: [
+      'Use sop_template_list/show/search for imported registry templates.',
+      'Use sop_template_candidate_list/show for YAML files in configured sops_dirs.',
+      'Use sop_template_import_yaml to validate and import a candidate into the registry.',
+    ],
   };
 }
 
@@ -671,6 +747,179 @@ function sopTemplateSearch(args: JsonRecord, state: SopState) {
   return { items: rows.map(hydrateTemplate), count: rows.length, query };
 }
 
+function discoverTemplateCandidates(state: SopState): { candidates: JsonRecord[]; dir_errors: JsonRecord[] } {
+  const paths: Array<{ directory: string; path: string; file_name: string; sop_id: string; order: number }> = [];
+  const dirErrors: JsonRecord[] = [];
+  state.sopsDirs.forEach((dir, order) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.sop.yaml'))
+        .map((entry) => entry.name)
+        .sort();
+    } catch (err) {
+      dirErrors.push({
+        directory: dir,
+        code: 'sop_sops_dir_read_error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+      entries = [];
+    }
+    for (const fileName of entries) {
+      paths.push({
+        directory: dir,
+        path: resolve(dir, fileName),
+        file_name: fileName,
+        sop_id: fileName.slice(0, -'.sop.yaml'.length),
+        order,
+      });
+    }
+  });
+
+  const firstBySopId = new Map<string, string>();
+  const countBySopId = new Map<string, number>();
+  for (const candidate of paths) {
+    countBySopId.set(candidate.sop_id, (countBySopId.get(candidate.sop_id) ?? 0) + 1);
+    if (!firstBySopId.has(candidate.sop_id)) firstBySopId.set(candidate.sop_id, candidate.path);
+  }
+
+  return {
+    candidates: paths.map((candidate) => classifyTemplateCandidate(state, candidate, firstBySopId.get(candidate.sop_id) === candidate.path, countBySopId.get(candidate.sop_id) ?? 1)),
+    dir_errors: dirErrors,
+  };
+}
+
+function classifyTemplateCandidate(
+  state: SopState,
+  candidate: { directory: string; path: string; file_name: string; sop_id: string; order: number },
+  selected: boolean,
+  duplicateCount: number,
+): JsonRecord {
+  const base = {
+    sop_id: candidate.sop_id,
+    file_name: candidate.file_name,
+    path: candidate.path,
+    directory: candidate.directory,
+    directory_order: candidate.order,
+    import_resolution: selected ? 'selected' : 'shadowed',
+    duplicate_count: duplicateCount,
+  };
+
+  let parsed: TemplateYamlCandidate;
+  try {
+    parsed = parseTemplateYamlFile(candidate.path, candidate.sop_id, state);
+  } catch (err) {
+    const diagnostic = errorDiagnostic(err);
+    return {
+      ...base,
+      import_status: 'invalid_yaml',
+      diagnostic,
+      title: null,
+      version_if_imported: null,
+    };
+  }
+
+  if (!selected) {
+    return {
+      ...base,
+      import_status: 'shadowed',
+      title: parsed.title,
+      status: parsed.status,
+      step_count: parsed.steps.length,
+      version_if_imported: null,
+    };
+  }
+
+  const current = latestTemplateRow(state, parsed.sop_id);
+  if (!current) {
+    return {
+      ...base,
+      sop_id: parsed.sop_id,
+      import_status: 'not_imported',
+      title: parsed.title,
+      status: parsed.status,
+      step_count: parsed.steps.length,
+      version_if_imported: 1,
+    };
+  }
+
+  const previous = hydrateTemplate(current);
+  const unchanged = templateYamlMatchesImportUnchangedSemantics(previous, parsed);
+  return {
+    ...base,
+    sop_id: parsed.sop_id,
+    import_status: unchanged ? 'imported_current' : 'imported_changed',
+    title: parsed.title,
+    status: parsed.status,
+    step_count: parsed.steps.length,
+    current_version: previous.version,
+    version_if_imported: unchanged ? previous.version : Number(previous.version) + 1,
+  };
+}
+
+type TemplateYamlCandidate = {
+  sop_id: string;
+  title: string;
+  description: string;
+  trigger_kind: string;
+  status: string;
+  steps: SopStep[];
+  acceptance_criteria: string[];
+  evidence_requirements: string[];
+};
+
+function parseTemplateYamlFile(yamlPath: string, expectedSopId: string, state: SopState): TemplateYamlCandidate {
+  let raw: string;
+  try {
+    raw = readFileSync(yamlPath, 'utf8');
+  } catch (err) {
+    throw diagnosticError('sop_yaml_read_error', `sop_yaml_read_error:${expectedSopId}`, { yaml_path: yamlPath, message: err instanceof Error ? err.message : String(err) });
+  }
+
+  let doc: unknown;
+  try {
+    doc = loadYaml(raw, { schema: JSON_SCHEMA, filename: yamlPath });
+  } catch (err) {
+    throw diagnosticError('sop_yaml_parse_error', `sop_yaml_parse_error:${expectedSopId}`, { yaml_path: yamlPath, message: err instanceof Error ? err.message : String(err) });
+  }
+
+  if (!validateYamlSchema(doc)) {
+    const errors = (validateYamlSchema.errors ?? []).map((e) => `${e.instancePath || '(root)'} ${e.message}`).join('; ');
+    throw diagnosticError('sop_yaml_schema_error', `sop_yaml_schema_error:${expectedSopId}`, { yaml_path: yamlPath, errors });
+  }
+
+  const data = doc as JsonRecord;
+  const yamlSopId = requiredString(data.sop_id, 'sop_yaml_requires_sop_id', { yaml_path: yamlPath });
+  if (yamlSopId !== expectedSopId) {
+    throw diagnosticError('sop_yaml_id_mismatch', `sop_yaml_id_mismatch:arg=${expectedSopId} yaml=${yamlSopId}`, { yaml_path: yamlPath });
+  }
+
+  return {
+    sop_id: yamlSopId,
+    title: requiredString(data.title, 'sop_yaml_requires_title', { yaml_path: yamlPath }),
+    description: optionalString(data.description) ?? '',
+    trigger_kind: optionalString(data.trigger_kind) ?? 'manual',
+    status: optionalString(data.status) ?? 'draft',
+    steps: validateSteps(arrayOfRecords(data.steps, true), state),
+    acceptance_criteria: stringList(data.acceptance_criteria),
+    evidence_requirements: stringList(data.evidence_requirements),
+  };
+}
+
+function latestTemplateRow(state: SopState, sopId: string): JsonRecord | undefined {
+  return state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? ORDER BY version DESC LIMIT 1').get(sopId) as JsonRecord | undefined;
+}
+
+function templateYamlMatchesImportUnchangedSemantics(previous: SopTemplate, next: TemplateYamlCandidate): boolean {
+  return previous.title === next.title &&
+    previous.status === next.status &&
+    previous.description === next.description &&
+    previous.trigger_kind === next.trigger_kind &&
+    JSON.stringify(previous.steps) === JSON.stringify(next.steps) &&
+    JSON.stringify(previous.acceptance_criteria) === JSON.stringify(next.acceptance_criteria) &&
+    JSON.stringify(previous.evidence_requirements) === JSON.stringify(next.evidence_requirements);
+}
+
 function sopTemplateImportYaml(args: JsonRecord, state: SopState) {
   const sopId = requiredString(args.sop_id, 'sop_requires_sop_id');
   const fileName = `${sopId}.sop.yaml`;
@@ -684,52 +933,14 @@ function sopTemplateImportYaml(args: JsonRecord, state: SopState) {
     throw diagnosticError('sop_yaml_not_found', `sop_yaml_not_found:${sopId}`, { searched: state.sopsDirs, file: fileName });
   }
 
-  let raw: string;
-  try {
-    raw = readFileSync(yamlPath, 'utf8');
-  } catch (err) {
-    throw diagnosticError('sop_yaml_read_error', `sop_yaml_read_error:${sopId}`, { yaml_path: yamlPath, message: err instanceof Error ? err.message : String(err) });
-  }
-
-  let doc: unknown;
-  try {
-    doc = loadYaml(raw, { schema: JSON_SCHEMA, filename: yamlPath });
-  } catch (err) {
-    throw diagnosticError('sop_yaml_parse_error', `sop_yaml_parse_error:${sopId}`, { message: err instanceof Error ? err.message : String(err) });
-  }
-
-  if (!validateYamlSchema(doc)) {
-    const errors = (validateYamlSchema.errors ?? []).map((e) => `${e.instancePath || '(root)'} ${e.message}`).join('; ');
-    throw diagnosticError('sop_yaml_schema_error', `sop_yaml_schema_error:${sopId}`, { errors });
-  }
-
-  const data = doc as JsonRecord;
-  const yamlSopId = requiredString(data.sop_id, 'sop_yaml_requires_sop_id');
-  if (yamlSopId !== sopId) {
-    throw diagnosticError('sop_yaml_id_mismatch', `sop_yaml_id_mismatch:arg=${sopId} yaml=${yamlSopId}`);
-  }
-
-  const steps = validateSteps(arrayOfRecords(data.steps, true), state);
-  const title = requiredString(data.title, 'sop_yaml_requires_title');
-  const description = optionalString(data.description) ?? '';
-  const triggerKind = optionalString(data.trigger_kind) ?? 'manual';
-  const status = optionalString(data.status) ?? 'draft';
-  const criteria = stringList(data.acceptance_criteria);
-  const evidenceReq = stringList(data.evidence_requirements);
+  const parsed = parseTemplateYamlFile(yamlPath, sopId, state);
 
   const current = state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? ORDER BY version DESC LIMIT 1').get(sopId) as JsonRecord | undefined;
 
   if (current) {
     const prev = hydrateTemplate(current);
-    if (
-      prev.title === title &&
-      prev.description === description &&
-      prev.trigger_kind === triggerKind &&
-      JSON.stringify(prev.steps) === JSON.stringify(steps) &&
-      JSON.stringify(prev.acceptance_criteria) === JSON.stringify(criteria) &&
-      JSON.stringify(prev.evidence_requirements) === JSON.stringify(evidenceReq)
-    ) {
-      return { status: 'unchanged', sop_id: sopId, version: prev.version, title, step_count: steps.length };
+    if (templateYamlMatchesImportUnchangedSemantics(prev, parsed)) {
+      return { status: 'unchanged', sop_id: sopId, version: prev.version, title: parsed.title, step_count: parsed.steps.length };
     }
   }
 
@@ -738,11 +949,11 @@ function sopTemplateImportYaml(args: JsonRecord, state: SopState) {
 
   state.db.prepare(
     'INSERT INTO sop_templates (sop_id, version, title, status, description, steps_json, trigger_kind, acceptance_criteria_json, evidence_requirements_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(sopId, version, title, status, description, JSON.stringify(steps), triggerKind, JSON.stringify(criteria), JSON.stringify(evidenceReq), now, now);
+  ).run(sopId, version, parsed.title, parsed.status, parsed.description, JSON.stringify(parsed.steps), parsed.trigger_kind, JSON.stringify(parsed.acceptance_criteria), JSON.stringify(parsed.evidence_requirements), now, now);
 
   const eventKind = current ? 'template_updated' : 'template_created';
   appendSopEvent(state, eventKind, { sop_id: sopId, version, previous_version: current ? current.version : undefined, source: 'yaml_import', yaml_path: yamlPath });
-  return { status: current ? 'updated' : 'created', sop_id: sopId, version, previous_version: current ? current.version : undefined, title, step_count: steps.length };
+  return { status: current ? 'updated' : 'created', sop_id: sopId, version, previous_version: current ? current.version : undefined, title: parsed.title, step_count: parsed.steps.length };
 }
 
 function sopTemplateUpdate(args: JsonRecord, state: SopState) {
@@ -1329,10 +1540,15 @@ function renderResult(result: JsonRecord): string {
     const items = result.items as JsonRecord[];
     const header = items.length > 0 && items[0].event_kind
       ? [`events: ${result.count ?? 0}`]
+      : result.schema === 'narada.sop.template_candidates.v1'
+        ? [`sop_template_candidates: ${result.count ?? 0}${result.total_count !== undefined ? `/${result.total_count}` : ''}`]
       : [`sop_list: ${result.count ?? 0}`];
     const lines = items.map((item) => {
       if (item.event_kind) {
         return `  ${item.event_kind}: step=${item.step_id || '-'} at ${(String(item.recorded_at ?? '')).slice(0, 19)}`;
+      }
+      if (item.import_status) {
+        return `  ${item.sop_id ?? ''}: ${item.title ?? item.file_name ?? ''} [${item.import_status}]`;
       }
       return `  ${item.sop_id ?? item.run_id ?? ''}: ${item.title ?? item.sop_title ?? ''} [${item.status ?? ''}]`;
     });

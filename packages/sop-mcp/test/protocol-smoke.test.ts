@@ -45,6 +45,8 @@ try {
     'sop_template_export',
     'sop_template_list',
     'sop_template_search',
+    'sop_template_candidate_list',
+    'sop_template_candidate_show',
     'sop_template_update',
     'sop_template_deprecate',
     'sop_template_import_yaml',

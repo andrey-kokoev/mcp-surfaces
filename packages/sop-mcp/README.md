@@ -12,10 +12,14 @@ Manages reusable procedural templates (versioned) and durable run execution. Ste
 |------|-------------|
 | `sop_template_create` | Create a versioned SOP template with ordered steps |
 | `sop_template_show` | Show a template by ID and optional version |
+| `sop_template_export` | Export one template version with full recovery data |
 | `sop_template_list` | List latest templates with status filter |
 | `sop_template_search` | Search by title or description text |
+| `sop_template_candidate_list` | List YAML template candidates in configured SOP dirs and classify their import state |
+| `sop_template_candidate_show` | Show one YAML template candidate and its registry/import classification |
 | `sop_template_update` | Update a template, creating a new version |
 | `sop_template_deprecate` | Mark a template deprecated |
+| `sop_template_import_yaml` | Import a YAML candidate into the durable template registry |
 | `sop_run_start` | Start a run from the latest active template version |
 | `sop_run_status` | Check run status with per-step state and `next_step` projection |
 | `sop_run_advance` | Complete a blocking step and auto-advance dependents |
@@ -39,3 +43,11 @@ SOP steps use `executor: sop`, `sop_id`, optional `sop_version`, and `wait_polic
 ```
 pnpm --filter @narada2/sop-mcp test
 ```
+
+## Template Registry vs YAML Candidates
+
+`sop_template_list`, `sop_template_show`, `sop_template_search`, and `sop_template_export` read the durable SOP template registry in SQLite. They report templates that have been imported or created as versioned registry records.
+
+YAML files under configured `sops_dirs` are source candidates until imported. Use `sop_template_candidate_list` or `sop_template_candidate_show` to inspect those files without mutating the registry. Candidate tools classify files as `not_imported`, `imported_current`, `imported_changed`, `invalid_yaml`, or `shadowed`. Use `sop_template_import_yaml` to validate and import the selected candidate into the registry.
+
+`sop_doctor` reports both registered template counts and YAML candidate counts so an empty registry is not confused with missing SOP files.

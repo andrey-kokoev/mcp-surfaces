@@ -58,6 +58,9 @@ try {
   assert.equal(view(doctor).schema, 'narada.sop.doctor.v1');
   assert.equal(view(doctor).full_step_definitions_path, 'structuredContent.steps');
   assert.equal((view(doctor).recovery_tools as string[]).includes('sop_template_export'), true);
+  assert.equal((view(doctor).recovery_tools as string[]).includes('sop_template_candidate_list'), true);
+  assert.equal(view(doctor).registered_template_count, 1);
+  assert.equal(view(doctor).candidate_template_file_count, 0);
 
   const dup = await call('sop_template_create', {
     sop_id: 'site-onboarding',
@@ -115,6 +118,16 @@ evidence_requirements:
   - YAML file
 `.trim() + '\n', 'utf8');
 
+  const candidateList = await call('sop_template_candidate_list', {});
+  assert.equal(view(candidateList).count, 1);
+  assert.equal((view(candidateList).items as Array<Record<string, any>>)[0].sop_id, 'import-test');
+  assert.equal((view(candidateList).items as Array<Record<string, any>>)[0].import_status, 'not_imported');
+  assert.equal((view(candidateList).items as Array<Record<string, any>>)[0].version_if_imported, 1);
+
+  const candidateShow = await call('sop_template_candidate_show', { sop_id: 'import-test' });
+  assert.equal(view(candidateShow).count, 1);
+  assert.equal((view(candidateShow).selected_candidate as Record<string, any>).import_status, 'not_imported');
+
   const imported = await call('sop_template_import_yaml', { sop_id: 'import-test' });
   assert.equal(view(imported).status, 'created');
   assert.equal(view(imported).sop_id, 'import-test');
@@ -135,6 +148,36 @@ evidence_requirements:
   const reimport = await call('sop_template_import_yaml', { sop_id: 'import-test' });
   assert.equal(view(reimport).status, 'unchanged');
   assert.equal(view(reimport).version, 1);
+
+  const currentCandidate = await call('sop_template_candidate_show', { sop_id: 'import-test' });
+  assert.equal((view(currentCandidate).selected_candidate as Record<string, any>).import_status, 'imported_current');
+  assert.equal((view(currentCandidate).selected_candidate as Record<string, any>).version_if_imported, 1);
+
+  writeFileSync(join(sopsDir, 'import-test.sop.yaml'), `
+sop_id: import-test
+title: Imported SOP
+description: Created from YAML.
+status: active
+steps:
+  - id: step1
+    executor: engine
+    blocking: false
+    title: Step One
+    instructions: Do step one.
+    depends_on: []
+acceptance_criteria:
+  - Import succeeds
+evidence_requirements:
+  - YAML file
+`.trim() + '\n', 'utf8');
+
+  const statusChangedCandidate = await call('sop_template_candidate_show', { sop_id: 'import-test' });
+  assert.equal((view(statusChangedCandidate).selected_candidate as Record<string, any>).import_status, 'imported_changed');
+  assert.equal((view(statusChangedCandidate).selected_candidate as Record<string, any>).version_if_imported, 2);
+
+  const statusChangedImport = await call('sop_template_import_yaml', { sop_id: 'import-test' });
+  assert.equal(view(statusChangedImport).status, 'updated');
+  assert.equal(view(statusChangedImport).version, 2);
 
   writeFileSync(join(sopsDir, 'import-test.sop.yaml'), `
 sop_id: import-test
@@ -159,14 +202,18 @@ evidence_requirements:
   - Updated YAML file
 `.trim() + '\n', 'utf8');
 
+  const changedCandidate = await call('sop_template_candidate_show', { sop_id: 'import-test' });
+  assert.equal((view(changedCandidate).selected_candidate as Record<string, any>).import_status, 'imported_changed');
+  assert.equal((view(changedCandidate).selected_candidate as Record<string, any>).version_if_imported, 3);
+
   const reimportChanged = await call('sop_template_import_yaml', { sop_id: 'import-test' });
   assert.equal(view(reimportChanged).status, 'updated');
-  assert.equal(view(reimportChanged).version, 2);
+  assert.equal(view(reimportChanged).version, 3);
   assert.equal(view(reimportChanged).title, 'Imported SOP v2');
   assert.equal(view(reimportChanged).step_count, 2);
 
   const showV2 = await call('sop_template_show', { sop_id: 'import-test' });
-  assert.equal(view(showV2).version, 2);
+  assert.equal(view(showV2).version, 3);
 
   // --- YAML error cases ---
 
@@ -174,7 +221,36 @@ evidence_requirements:
 
   writeFileSync(join(sopsDir, 'bad-syntax.sop.yaml'), 'sop_id: bad-syntax\n  steps:\n', 'utf8');
 
+  const invalidCandidate = await call('sop_template_candidate_show', { sop_id: 'bad-syntax' });
+  assert.equal((view(invalidCandidate).selected_candidate as Record<string, any>).import_status, 'invalid_yaml');
+  assert.equal(((view(invalidCandidate).selected_candidate as Record<string, any>).diagnostic as Record<string, any>).code, 'sop_yaml_parse_error');
+
   assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'bad-syntax' })), 'sop_yaml_parse_error');
+
+  state.sopsDirs.push(join(root, 'missing-sops-dir'));
+  const missingDirDoctor = await call('sop_doctor', {});
+  assert.equal((view(missingDirDoctor).sops_dir_errors as Array<Record<string, any>>).length, 1);
+  assert.equal((view(missingDirDoctor).sops_dir_errors as Array<Record<string, any>>)[0].code, 'sop_sops_dir_read_error');
+  const missingDirCandidateList = await call('sop_template_candidate_list', {});
+  assert.equal((view(missingDirCandidateList).sops_dir_errors as Array<Record<string, any>>).length, 1);
+
+  const shadowDir = join(root, 'shadow-sops');
+  mkdirSync(shadowDir, { recursive: true });
+  state.sopsDirs.push(shadowDir);
+  writeFileSync(join(shadowDir, 'import-test.sop.yaml'), `
+sop_id: import-test
+title: Shadowed SOP
+steps:
+  - id: s1
+    executor: engine
+    blocking: false
+    title: S1
+    instructions: Do.
+`.trim() + '\n', 'utf8');
+  const shadowedCandidate = await call('sop_template_candidate_show', { sop_id: 'import-test' });
+  const shadowedItems = view(shadowedCandidate).candidates as Array<Record<string, any>>;
+  assert.equal(shadowedItems.length, 2);
+  assert.equal(shadowedItems.some((item) => item.import_status === 'shadowed'), true);
 
   writeFileSync(join(sopsDir, 'id-mismatch.sop.yaml'), 'sop_id: wrong-id\ntitle: Test\nsteps:\n  - id: s1\n    executor: engine\n    title: S1\n    instructions: Do.\n', 'utf8');
 
