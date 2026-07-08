@@ -41,6 +41,14 @@ Current packages:
 
 Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
 
+## Carrier and Site MCP Fabric
+
+Carrier-native config files are host/user-site bootstrap profiles. A naked carrier launch should receive the User Site MCP surfaces only, wired through carrier-specific mechanics such as Codex TOML, OpenCode JSONC, or Kimi MCP JSON.
+
+Local Site MCP fabric is injected by Narada launch/session materialization, not by creating carrier profiles named for individual sites. Do not add site-specific carrier profiles such as `opencode-sonar`; bind the Site through the launcher/site fabric instead. If a carrier needs a different local Site, launch it through Narada so the Site-owned MCP aggregate is selected at session start.
+
+Registrar tests must cover generated carrier configs for all supported carrier kinds and prove that shared surfaces use shared package entrypoints and current tool metadata. Generated carrier configs must not preserve legacy Site-local entrypoints or obsolete tool names after a surface migrates to a shared package.
+
 ## MCP Guidance Commands
 
 Most MCP surface packages should expose a read-only `_guidance` command using the surface's normal tool prefix, for example `task_lifecycle_guidance`, `git_guidance`, `fs_guidance`, or `graph_mail_guidance`.
@@ -83,6 +91,7 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 - Prefer package-local tests for narrow changes, then root tests when shared behavior changes.
 - Keep MCP tool schemas explicit and conservative: no broad shell strings, wildcard filesystem access, or implicit mutation paths.
 - Keep transport helpers generic. Do not add Narada task-domain behavior to `@narada2/mcp-transport`.
+- Model-facing MCP tool output that can exceed a small inline envelope must pass through the shared `mcp-transport` output-ref boundary or an explicit package-owned equivalent. Large domain results should be materialized and returned with a bounded inline envelope plus a reader tool.
 - Shared libraries such as `@narada2/mcp-transport` live under `packages/shared/*`; runnable MCP surfaces remain top-level packages until the broader `packages/surfaces/*` migration is executed.
 
 ## Common Commands

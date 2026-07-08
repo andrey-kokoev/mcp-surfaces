@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildSiteBindConfig, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric } from '../src/main.js';
+import { buildSiteBindConfig, buildSiteSurfaceRegistry, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 
@@ -66,7 +66,10 @@ try {
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_attachment_upload_file'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_reply_all_to_last_in_thread_draft_create'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_submit_work'));
-  assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_stage_submission_workflow'));
+  assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
+  assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
+  assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_submit'));
+  assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_output_show'));
   assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_dashboard_describe'));
   assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), false);
   assert.ok((bySurface.get('delegated-task')?.tools as string[]).includes('delegated_task_result'));
@@ -102,6 +105,9 @@ try {
   const carriers = await call('registrar_carrier_list', {});
   const carrierData = view(carriers);
   assert.ok((carrierData.items as Array<unknown>).length >= 3);
+  const carrierIds = (carrierData.items as Array<Record<string, any>>).map((carrier) => carrier.carrier_id);
+  assert.deepEqual(carrierIds.sort(), ['codex-andrey', 'kimi-andrey', 'opencode-andrey']);
+  assert.equal(carrierIds.includes('opencode-sonar'), false);
 
   const materialize = await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey' });
   const matData = view(materialize);
@@ -118,6 +124,22 @@ try {
   const materializedConfig = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
   const materializedFilesystem = materializedConfig.mcpServers['narada-andrey-local-filesystem'];
   assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
+  for (const carrierId of ['codex-andrey', 'kimi-andrey', 'opencode-andrey']) {
+    const generatedPath = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
+    view(await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: generatedPath }));
+    const generatedText = readFileSync(generatedPath, 'utf8');
+    const normalizedGeneratedText = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
+    assert.equal(generatedText.includes('opencode-sonar'), false);
+    assert.equal(generatedText.includes('tools/typed-mcp/inbox-mcp-server.mjs'), false);
+    assert.equal(generatedText.includes('inbox_stage_submission_workflow'), false);
+    assert.equal(generatedText.includes('inbox_submit_typed_envelope'), false);
+    assert.equal(generatedText.includes('mcp_command_create'), false);
+    assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js'), true);
+    if (carrierId === 'codex-andrey') {
+      assert.equal(generatedText.includes('inbox_submit'), true);
+      assert.equal(generatedText.includes('inbox_output_show'), true);
+    }
+  }
 
   const carrierValidate = view(await call('registrar_carrier_validate', { carrier_id: 'kimi-andrey', include_ok: true }));
   const validateFindings = carrierValidate.findings as Array<Record<string, any>>;
@@ -302,7 +324,7 @@ try {
   assert.ok(missingDefaultFinding);
   assert.equal(missingDefault.status, 'invalid');
 
-  for (const carrierId of ['opencode-andrey', 'opencode-sonar', 'kimi-andrey', 'codex-andrey']) {
+  for (const carrierId of ['opencode-andrey', 'kimi-andrey', 'codex-andrey']) {
     const outputPath = join(root, `${carrierId}.generated`);
     const materializedCarrier = await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: outputPath });
     assert.equal(view(materializedCarrier).status, 'materialized');
@@ -353,6 +375,23 @@ try {
   const aggregateArtifactFinding = (aggregateWithArtifacts.findings as Array<Record<string, any>>).find((finding) => finding.server_key === 'narada-sonar-artifacts' && finding.code === 'registrar_site_fabric_server_key_ok');
   assert.ok(aggregateArtifactFinding);
   assert.equal(aggregateArtifactFinding.surface_id, 'artifacts');
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-inbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-inbox': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/narada.sonar/tools/inbox/inbox-mcp-server.mjs', '--site-root', aggregateSiteRoot],
+        tools: ['inbox_doctor', 'inbox_list', 'inbox_show'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const surfaceRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const inboxRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-inbox');
+  assert.ok(inboxRegistry);
+  assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
+  assert.ok((inboxRegistry.registered_live_tools as string[]).includes('inbox_acknowledge'));
+  assert.ok((inboxRegistry.tool_contract.mutating_tools as string[]).includes('inbox_acknowledge'));
   const sidecarRefusal = siteBindSidecarRefusal(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     'scheduler',

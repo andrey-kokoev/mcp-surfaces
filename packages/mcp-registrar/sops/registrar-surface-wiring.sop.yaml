@@ -53,10 +53,16 @@ steps:
     title: Bind surface to carriers
     depends_on: [bind_sites]
     instructions: |
+      Bind only host/user-site carrier profiles. Naked carrier launches
+      receive User Site MCP surfaces; local Site MCP fabric is injected by
+      Narada launcher/session materialization. Do not create site-specific
+      carrier profiles such as opencode-sonar.
+
       For each target carrier, call registrar_carrier_bind with:
-      - carrier_id (e.g., opencode-sonar, kimi-andrey, codex-andrey)
+      - carrier_id (e.g., opencode-andrey, kimi-andrey, codex-andrey)
       - surface_id
-      - site_id (for arg interpolation context)
+      - site_id for the User Site interpolation context unless the operator
+        has explicitly requested a compatibility sidecar
       Report success/failure per carrier.
 
   - id: sync_all
@@ -77,10 +83,13 @@ steps:
     depends_on: [sync_all]
     instructions: |
       Check each carrier config file for the new surface entry:
-      - opencode: D:/code/narada.sonar/opencode.json
+      - opencode: C:/Users/Andrey/.config/opencode/opencode.jsonc
       - codex: C:/Users/Andrey/.codex/config.toml
       - kimi: C:/Users/Andrey/.kimi/mcp.json
       Verify the command, args, and env_vars are correct.
+      Verify no local Site carrier config was created and no generated
+      carrier config contains stale Site-local entrypoints or obsolete tool
+      metadata for migrated shared surfaces.
       For sop-mcp bindings, verify --sops-dir entries include
       all expected SOP directories.
 
@@ -124,7 +133,9 @@ acceptance_criteria:
   - SurfaceDef is complete in registrar/src/main.ts
   - Surface is bound to all target sites
   - Surface is bound to all target carriers
+  - No site-specific carrier profile is created for ordinary Site launches
   - Carrier config files contain correct entries
+  - Carrier config files do not contain stale local entrypoints or obsolete tool metadata
   - SOPs are discoverable if surface owns any
   - Carriers are restarted with new surface visible
   - Read-only tool call succeeds in each carrier
@@ -135,6 +146,7 @@ evidence_requirements:
   - Per-site binding results
   - Per-carrier binding results
   - Carrier config file diffs
+  - Evidence that site-specific carrier profiles were not created
   - SOP import results (if applicable)
   - Carrier restart confirmation
   - Read-only tool call output per carrier

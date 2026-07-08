@@ -120,12 +120,12 @@ const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 
 const GIT_TOOLS = ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
 const GRAPH_MAIL_TOOLS = ['graph_mail_doctor', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
-const SITE_INBOX_TOOLS = ['inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_next', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_amend_capa', 'inbox_create_capa', 'inbox_export_disposition_ledger', 'inbox_stage_submission_workflow', 'inbox_submit_observation', 'inbox_submit_typed_envelope', 'capa_queue', 'capa_related', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'mcp_command_author_and_submit', 'mcp_command_create', 'mcp_command_show', 'mcp_command_submit', 'mcp_command_validate', 'mcp_output_show', 'mcp_result_show'];
+const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
 const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref'];
 const WORKER_DELEGATION_TOOLS = ['worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe'];
 const DELEGATED_TASK_TOOLS = ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
 const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach'];
-const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'];
+const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
 
 const SURFACES: SurfaceDef[] = [
@@ -159,8 +159,8 @@ const SURFACES: SurfaceDef[] = [
   },
   {
     id: 'site-inbox', package: 'site-inbox-mcp',
-    entrypoint: '{site_root}/tools/typed-mcp/inbox-mcp-server.mjs',
-    kind: 'site_tool',
+    entrypoint: `${MCP_SURFACES_ROOT}/site-inbox-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
     tools: SITE_INBOX_TOOLS,
   },
@@ -197,7 +197,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
+    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_proof_run', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
   },
   {
     id: 'site-lifecycle', package: 'site-lifecycle-mcp',
@@ -364,39 +364,6 @@ const CARRIERS: CarrierDef[] = [
     extra_allowed_roots: ['D:/code'],
     surface_overrides: {
       'surface-feedback': { args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
-    },
-  },
-  {
-    carrier_id: 'opencode-sonar', kind: 'opencode', config_path: 'D:/code/narada.sonar/opencode.json', surfaces: [],
-    site_bindings: [{
-      site_id: 'narada-sonar',
-      surfaces: [
-        'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'site-loop',
-        'mailbox',
-        'graph-mail',
-        'git',
-        'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'sop',
-        'scheduler',
-        'surface-feedback',
-        'launcher',
-        'delegated-task',
-        'speech',
-        'mcp-loader',
-        'artifacts',
-      ],
-      prefix: 'narada-sonar',
-      extra_allowed_roots: ['D:/code'],
-    }],
-    extra_allowed_roots: ['D:/code'],
-    surface_overrides: {
-      'surface-feedback': { args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
-      'site-inbox': { entrypoint: 'D:/code/narada.sonar/tools/inbox/inbox-mcp-server.mjs' },
     },
   },
   {
@@ -793,6 +760,21 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'registrar_site_surface_registry_sync',
+      description: 'Regenerate a site action-admission MCP surface registry from the site MCP fabric and registrar surface catalog.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          site_id: { type: 'string', description: 'Site identifier, e.g. narada-sonar.' },
+          dry_run: { type: 'boolean', description: 'Return the generated registry without writing it.' },
+        },
+        required: ['site_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'registrar_site_surface_registry_sync', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'registrar_surface_tool_inventory_check',
       description: 'Compare registrar surface tool metadata with observed MCP tools/list names and report per-surface drift.',
       inputSchema: {
@@ -832,6 +814,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_carrier_diff': result = registrarCarrierDiff(args); break;
     case 'registrar_surface_usage': result = registrarSurfaceUsage(args); break;
     case 'registrar_site_mcp_fabric_validate': result = registrarSiteMcpFabricValidate(args); break;
+    case 'registrar_site_surface_registry_sync': result = registrarSiteSurfaceRegistrySync(args); break;
     case 'registrar_surface_tool_inventory_check': result = registrarSurfaceToolInventoryCheck(args); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
@@ -878,6 +861,14 @@ function stripJsoncComments(text: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^\\:])\/\/.*$/gm, '$1')
     .replace(/^\s*\/\/.*$/gm, '');
+}
+
+function readJsonFile(path: string): JsonRecord | null {
+  try {
+    return asRecord(JSON.parse(stripJsoncComments(readFileSync(path, 'utf8'))));
+  } catch {
+    return null;
+  }
 }
 
 function readSiteConfig(site: SiteDef): SiteLocalSurface[] {
@@ -1033,6 +1024,17 @@ function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
     };
     writeFileSync(join(naradaDir, 'allowed-roots.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
   }
+}
+
+function writeSiteSurfaceRegistriesForCarrier(carrier: CarrierDef): JsonRecord[] {
+  const seen = new Set<string>();
+  const results: JsonRecord[] = [];
+  for (const binding of carrier.site_bindings) {
+    if (seen.has(binding.site_id)) continue;
+    seen.add(binding.site_id);
+    results.push(writeSiteSurfaceRegistry(lookupSite(binding.site_id)));
+  }
+  return results;
 }
 
 function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId: string, extraRoots: string[]): { key: string; server: MaterializedServer } {
@@ -1434,7 +1436,9 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
   const dir = resolve(configPath, '..');
   mkdirSync(dir, { recursive: true });
   writeFileSync(configPath, result.content, 'utf8');
-  return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scope_counts: injectionSummary.counts };
+  writeSiteAllowedRootsConfig(carrier);
+  const site_surface_registries = writeSiteSurfaceRegistriesForCarrier(carrier);
+  return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scope_counts: injectionSummary.counts, site_surface_registries };
 }
 
 function registrarCarrierValidate(args: JsonRecord): JsonRecord {
@@ -1939,14 +1943,128 @@ function fabricSurfaceId(serverKey: string, site: SiteDef): string {
     const rest = serverKey.slice(canonicalPrefix.length + 1);
     const known = SURFACES.find((s) => s.id === rest);
     if (known) return known.id;
+    const alias = catalogSurfaceAlias(rest);
+    if (alias) return alias.id;
   }
   const prefix = site.site_id.replace('narada-', '');
   if (serverKey.startsWith(`${prefix}-`)) {
     const rest = serverKey.slice(prefix.length + 1);
     const known = SURFACES.find((s) => s.id === rest);
     if (known) return known.id;
+    const alias = catalogSurfaceAlias(rest);
+    if (alias) return alias.id;
   }
   return serverKey;
+}
+
+function catalogSurfaceAlias(surfaceId: string): SurfaceDef | undefined {
+  if (surfaceId === 'inbox') return catalogSurface('site-inbox');
+  return undefined;
+}
+
+type SiteSurfaceRegistrySurface = {
+  surface_id: string;
+  display_name: string;
+  server_name: string;
+  authority_boundary: JsonRecord;
+  client_config: JsonRecord;
+  tool_contract: {
+    read_only_tools: string[];
+    mutating_tools: string[];
+    refused_tools: string[];
+  };
+  registered_live_tools: string[];
+  catalog_surface_id: string;
+};
+
+function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface {
+  const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
+  const catalog = catalogSurface(surfaceId) ?? catalogSurfaceAlias(surfaceId);
+  const registeredTools = uniqueStrings(catalog?.tools ?? readConfiguredServerTools(site, server));
+  return {
+    surface_id: `${server.server_key}.local`,
+    display_name: server.server_key,
+    server_name: server.server_key,
+    authority_boundary: {
+      posture: 'registrar_generated_runtime_surface_registry',
+      grants_tool_authority: true,
+      granted_tool_authority_kind: 'declared_enabled_mcp_surface_tools',
+      source: 'site_mcp_fabric_and_registrar_catalog',
+    },
+    client_config: {
+      generated_path: `.ai/mcp/${server.source_file}`,
+      generated_file: server.source_file,
+    },
+    tool_contract: {
+      read_only_tools: [],
+      mutating_tools: registeredTools,
+      refused_tools: [],
+    },
+    registered_live_tools: registeredTools,
+    catalog_surface_id: catalog?.id ?? surfaceId,
+  };
+}
+
+function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): string[] {
+  const filePath = join(site.root, '.ai', 'mcp', server.source_file);
+  const cfg = readJsonFile(filePath);
+  const rawServer = asRecord(asRecord(cfg?.mcpServers)[server.server_key]);
+  return Array.isArray(rawServer.tools) ? uniqueStrings(rawServer.tools.map(String)) : [];
+}
+
+export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
+  const servers = discoverSiteMcpFabric(site);
+  const surfaces = servers
+    .map((server) => registrySurfaceForFabricServer(site, server))
+    .filter((surface) => surface.registered_live_tools.length > 0)
+    .sort((a, b) => a.server_name.localeCompare(b.server_name));
+  return {
+    schema: 'narada.site.capabilities.mcp_surfaces.v1',
+    site_id: site.site_id,
+    generated_by: 'mcp-registrar',
+    generated_at: new Date().toISOString(),
+    generation_policy: {
+      source: '.ai/mcp + registrar surface catalog',
+      mode: 'enabled_surface_tool_authority',
+      note: 'Every tool exposed by an enabled MCP surface is declared for action admission. The MCP surface remains responsible for command policy and mutation enforcement.',
+    },
+    surfaces,
+  };
+}
+
+function writeSiteSurfaceRegistry(site: SiteDef): JsonRecord {
+  const registry = buildSiteSurfaceRegistry(site);
+  const dir = join(site.root, '.narada', 'capabilities');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'mcp-surfaces.json');
+  writeFileSync(path, JSON.stringify(registry, null, 2) + '\n', 'utf8');
+  return {
+    status: 'synced',
+    site_id: site.site_id,
+    path,
+    surface_count: Array.isArray(registry.surfaces) ? registry.surfaces.length : 0,
+    tool_count: Array.isArray(registry.surfaces)
+      ? registry.surfaces.reduce((sum, surface) => {
+        const tools = asRecord(surface).registered_live_tools;
+        return sum + (Array.isArray(tools) ? tools.length : 0);
+      }, 0)
+      : 0,
+  };
+}
+
+function registrarSiteSurfaceRegistrySync(args: JsonRecord): JsonRecord {
+  const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
+  const site = lookupSite(siteId);
+  const registry = buildSiteSurfaceRegistry(site);
+  if (args.dry_run === true) {
+    return {
+      status: 'dry_run',
+      site_id: siteId,
+      path: join(site.root, '.narada', 'capabilities', 'mcp-surfaces.json'),
+      registry,
+    };
+  }
+  return writeSiteSurfaceRegistry(site);
 }
 
 export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRecord {
@@ -2083,8 +2201,7 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
   let result: JsonRecord;
   switch (carrier.kind) {
     case 'opencode':
-      result = opencodeBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
-      break;
+      throw diagnosticError('registrar_single_surface_bind_unsupported_for_opencode_aggregate', 'registrar_single_surface_bind_unsupported_for_opencode_aggregate');
     case 'kimi':
       result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
       break;
@@ -2118,8 +2235,7 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   let result: JsonRecord;
   switch (carrier.kind) {
     case 'opencode':
-      result = opencodeUnbind(carrier.config_path, surfaceId);
-      break;
+      throw diagnosticError('registrar_single_surface_unbind_unsupported_for_opencode_aggregate', 'registrar_single_surface_unbind_unsupported_for_opencode_aggregate');
     case 'kimi':
       result = kimiUnbind(carrier.config_path, surfaceId);
       break;
@@ -2131,36 +2247,6 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   }
   writeSiteAllowedRootsConfig(carrier);
   return result;
-}
-
-function opencodeBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
-  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
-  const content = readFileSync(configPath, 'utf8');
-  const cfg = JSON.parse(content);
-  const mcp = asRecord(cfg.mcp);
-  const serverKey = `narada-sonar-${surfaceId}`;
-  if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
-  const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-sonar'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-sonar') }, surfaceId);
-  mcp[serverKey] = {
-    type: 'local',
-    command: [launch.command, ...launch.args],
-    enabled: true,
-  };
-  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  return { status: 'bound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
-}
-
-function opencodeUnbind(configPath: string, surfaceId: string): JsonRecord {
-  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
-  const content = readFileSync(configPath, 'utf8');
-  const cfg = JSON.parse(content);
-  const mcp = asRecord(cfg.mcp);
-  const serverKey = `narada-sonar-${surfaceId}`;
-  if (!mcp[serverKey]) return { status: 'not_bound', carrier_id: 'opencode-sonar', surface_id: surfaceId };
-  delete mcp[serverKey];
-  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  return { status: 'unbound', carrier_id: 'opencode-sonar', surface_id: surfaceId, server_key: serverKey };
 }
 
 function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
