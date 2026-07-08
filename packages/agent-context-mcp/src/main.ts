@@ -14,6 +14,12 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import {
+  buildBoundedToolResult,
+  listOutputResources,
+  outputShow,
+  readOutputResource,
+} from '@narada2/mcp-transport';
+import {
   listAgentStartSessions,
   materializeAgentSessionStart,
   openAgentContextDb,
@@ -162,6 +168,19 @@ const TOOLS = [
       type: 'object',
       properties: {
         identity: { type: 'string' },
+        limit: { type: 'integer' },
+      },
+    },
+  },
+  {
+    name: 'agent_context_output_show',
+    description: 'Read a materialized Agent Context MCP output ref with offset/limit paging.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        output_ref: { type: 'string' },
+        offset: { type: 'integer' },
         limit: { type: 'integer' },
       },
     },
@@ -344,7 +363,7 @@ function handleMessage(message) {
       traceStartup('initialize');
       respond(id, {
         protocolVersion: message.params?.protocolVersion ?? PROTOCOL_VERSION,
-        capabilities: { tools: {}, prompts: {}, completions: {}, logging: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {}, completions: {}, logging: {} },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
       });
       return;
@@ -359,7 +378,21 @@ function handleMessage(message) {
       const name = message.params?.name;
       const toolArgs = message.params?.arguments ?? {};
       const result = callTool(name, toolArgs);
-      respond(id, { content: [assistantTextContent(JSON.stringify(result, null, 2))] });
+      respond(id, buildBoundedToolResult({
+        siteRoot,
+        toolName: String(name ?? 'unknown_tool'),
+        value: result,
+        limit: 6000,
+        readerTool: 'agent_context_output_show',
+      }));
+      return;
+    }
+    if (message.method === 'resources/list') {
+      respond(id, listOutputResources({ siteRoot }));
+      return;
+    }
+    if (message.method === 'resources/read') {
+      respond(id, readOutputResource({ siteRoot, uri: message.params?.uri }));
       return;
     }
     if (message.method === 'prompts/list') {
@@ -416,6 +449,8 @@ function callTool(name, toolArgs) {
       return buildGuidanceResult(toolArgs);
     case 'agent_context_doctor':
       return doctor();
+    case 'agent_context_output_show':
+      return outputShow({ siteRoot, args: toolArgs });
     case 'agent_context_whoami':
       return whoami(toolArgs);
     case 'agent_context_start_session':
@@ -777,7 +812,4 @@ function parseJson(value, fallback) {
     return fallback;
   }
 }
-
-
-
 

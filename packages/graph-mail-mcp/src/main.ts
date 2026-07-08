@@ -7,6 +7,7 @@ import { basename, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
 import { decideDraftSend, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
 import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 
 const SERVER_NAME = 'narada-graph-mail-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -260,6 +261,12 @@ export function listTools(): unknown[] {
       confirm_send: { type: 'boolean', default: false, description: 'Must be true for send attempts.' },
       approval_token: { type: 'string', description: 'Optional site-configured approval token.' },
     }, ['draft_id']),
+    tool('graph_mail_output_show', 'Read a materialized Graph Mail MCP output ref with offset/limit paging.', {
+      ref: { type: 'string' },
+      output_ref: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 0 },
+    }),
   ];
 }
 
@@ -523,19 +530,24 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
       case 'graph_mail_draft_send':
         result = await graphMailDraftSend(args, state);
         break;
+      case 'graph_mail_output_show':
+        result = outputShow({ siteRoot: state.siteRoot, args });
+        break;
       default:
         throw new Error(`unknown_tool: ${name}`);
     }
     emitGraphMailTelemetry(name, asRecord(result), state, startedAt);
-    return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
+    return buildBoundedToolResult({
+      siteRoot: state.siteRoot,
+      toolName: name,
+      value: result,
+      limit: 6000,
+      readerTool: 'graph_mail_output_show',
+    });
   } catch (error) {
     emitGraphMailTelemetry(name, {}, state, startedAt, error);
     throw error;
   }
-}
-
-function assistantTextContent(text: string) {
-  return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
 function emitGraphMailTelemetry(toolName: string, result: GraphMailRecord, state: GraphMailServerState, startedAt: number, error?: unknown): void {

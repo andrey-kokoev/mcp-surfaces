@@ -8,7 +8,7 @@ const DEFAULT_PAYLOAD_DIR = '.ai/tmp/mcp-payloads';
 const DEFAULT_OUTPUT_DIR = '.ai/tmp/mcp-outputs';
 const DEFAULT_WORKSPACE_DIR = 'workspace';
 export const DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT = 20_000;
-export const DEFAULT_INLINE_OUTPUT_CHAR_LIMIT = 200;
+export const DEFAULT_INLINE_OUTPUT_CHAR_LIMIT = 2_000;
 export const DEFAULT_OUTPUT_SHOW_CHAR_LIMIT = 10_000;
 const REF_PATTERN = /^mcp_payload:([A-Za-z0-9][A-Za-z0-9_-]{2,63})@v([1-9][0-9]*)$/;
 const OUTPUT_REF_PATTERN = /^mcp_output:([A-Za-z0-9][A-Za-z0-9_-]{2,63})$/;
@@ -380,6 +380,34 @@ export function buildOutputRefToolContent({
   };
 }
 
+export function buildBoundedToolResult({
+  siteRoot,
+  toolName,
+  value,
+  isError = false,
+  limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
+  outputPageLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT,
+  readerTool = 'mcp_output_show',
+}: Record<string, unknown> = {}): any {
+  const fullText = JSON.stringify(value, null, 2);
+  const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_OUTPUT_CHAR_LIMIT;
+  const pageLimit = typeof outputPageLimit === 'number' ? outputPageLimit : DEFAULT_OUTPUT_SHOW_CHAR_LIMIT;
+  if (isOutputShowResult(value) && fullText.length <= pageLimit) {
+    return { content: [assistantTextContent(fullText)], structuredContent: value, ...(isError ? { isError: true } : {}) };
+  }
+  if (fullText.length <= inlineLimit) {
+    return { content: [assistantTextContent(fullText)], structuredContent: value, ...(isError ? { isError: true } : {}) };
+  }
+  return buildOutputRefToolContent({
+    siteRoot,
+    toolName,
+    value,
+    isError,
+    limit: inlineLimit,
+    readerTool,
+  });
+}
+
 function assistantTextContent(text: string): any {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
@@ -629,22 +657,46 @@ function fitInlineJson(value, limit) {
   let text = JSON.stringify(value);
   if (text.length <= limit) return text;
   if (value.schema === 'narada.producer_output_page.v1') {
+    const outputRef = value.output_ref ?? value.ref;
+    const payloadRef = value.payload_ref ?? (typeof value.ref === 'string' && value.ref.startsWith('mcp_payload:') ? value.ref : undefined);
+    const outputText = String(value.output_text ?? '');
     const minimalPage = {
       schema: value.schema,
       status: value.status,
       truncated: true,
+      output_ref: outputRef,
+      ref: outputRef,
+      ...(payloadRef ? { payload_ref: payloadRef } : {}),
       tool_name: value.tool_name,
       offset: value.offset,
       limit: value.limit,
       next_offset: value.next_offset,
       output_truncated: value.output_truncated,
-      output_text: value.output_text,
       full_output_char_length: value.full_output_char_length,
-      reader_tool: null,
+      reader_tool: value.reader_tool,
     };
+    const withPreview = { ...minimalPage, output_text: outputText };
+    text = JSON.stringify(withPreview);
+    if (text.length <= limit) return text;
+    const emptyPreviewLength = JSON.stringify({ ...minimalPage, output_text: '' }).length;
+    const previewLimit = Math.max(0, limit - emptyPreviewLength - 16);
+    if (previewLimit > 0) {
+      text = JSON.stringify({ ...minimalPage, output_text: outputText.slice(0, previewLimit) });
+      if (text.length <= limit) return text;
+    }
     text = JSON.stringify(minimalPage);
     if (text.length <= limit) return text;
-    return JSON.stringify({ ...minimalPage, output_text: String(value.output_text ?? '').slice(0, Math.max(0, limit - 400)) });
+    const irreduciblePage = {
+      schema: value.schema,
+      status: value.status,
+      truncated: true,
+      output_ref: outputRef,
+      reader_tool: value.reader_tool,
+      full_output_char_length: value.full_output_char_length,
+    };
+    text = JSON.stringify(irreduciblePage);
+    if (text.length <= limit) return text;
+    return JSON.stringify({ output_ref: outputRef, reader_tool: value.reader_tool, truncated: true });
   }
   const outputRef = value.output_ref ?? value.ref;
   const payloadRef = value.payload_ref ?? (typeof value.ref === 'string' && value.ref.startsWith('mcp_payload:') ? value.ref : undefined);

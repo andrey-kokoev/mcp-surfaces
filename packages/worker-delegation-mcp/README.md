@@ -61,7 +61,7 @@ Defaults:
 - allowed config keys: `model`, `model_reasoning_effort`
 - raw config overrides: disabled
 - `danger-full-access`: disabled unless explicitly admitted
-- cognition defaults: model and reasoning effort are runtime-default opaque unless configured by policy or request overrides
+- cognition defaults: plain `codex` workers remain runtime-default opaque unless configured by policy or request overrides; `narada-agent-runtime-server` workers resolve provider-specific defaults from the Narada provider registry when available
 - worker runs are non-resumable by default; set `constraints.resumable: true` when the returned session should be continued with `worker_resume`
 - worker runs are asynchronous by default; set `constraints.wait_for_completion: true` or `wait_for_completion: true` on `worker_edit` when the caller intentionally wants to block for completion
 - max parallel runs: `10`
@@ -93,8 +93,18 @@ Common flags:
 - `--cognition-low-model <model>` and `--cognition-low-reasoning-effort <value>`: defaults for low cognition.
 - `--cognition-medium-model <model>` and `--cognition-medium-reasoning-effort <value>`: defaults for medium cognition.
 - `--cognition-high-model <model>` and `--cognition-high-reasoning-effort <value>`: defaults for high cognition.
+- `--provider-registry-path <path>`: path to Narada's provider registry. When present, worker-delegation loads `default_provider`, admitted provider ids, and `providers.<id>.cognition_defaults` for NARS workers.
 - `--max-parallel-runs <count>`: maximum simultaneous worker runs, default `10`; enforced for `worker_run`, `worker_edit`, and `worker_resume`.
 - `--max-run-ms <ms>`, `--max-prompt-bytes <bytes>`, `--max-output-bytes <bytes>`: set limits.
+
+Provider registry cognition defaults are provider-specific. For `narada-agent-runtime-server`, resolution precedence is:
+
+1. Request override: `constraints.overrides.model`, `constraints.overrides.reasoning_effort`, or admitted config keys.
+2. `providers.<provider-id>.cognition_defaults.<low|medium|high>` from the provider registry.
+3. Legacy global cognition defaults from CLI/config flags such as `--cognition-low-model`.
+4. Runtime default opaque when no concrete model or reasoning effort is available.
+
+If `constraints.provider` is absent for a NARS worker, the provider registry `default_provider` is used when available. `worker_policy_inspect` exposes both `default_narada_agent_runtime_provider` and `provider_cognition_defaults`; use it before delegating when model cost or capability matters.
 
 ## Agent Contract
 
@@ -110,9 +120,9 @@ Normalized constraints:
 - `authority: "read"`: inspection within the admitted root envelope; default sandbox `read-only`.
 - `authority: "write"`: edit-capable work within the admitted root envelope; default sandbox `workspace-write`.
 - `authority: "command"`: command-capable delegation through governed MCP command surfaces such as `structured-command`; default sandbox `workspace-write`.
-- `cognition: "low"`: policy-selected low cognition tier; model and reasoning effort are runtime-default opaque unless configured.
-- `cognition: "medium"`: policy-selected medium cognition tier; model and reasoning effort are runtime-default opaque unless configured.
-- `cognition: "high"`: policy-selected high cognition tier; model and reasoning effort are runtime-default opaque unless configured.
+- `cognition: "low"`: policy-selected low cognition tier; for NARS workers this usually resolves to the selected provider's low model/reasoning default.
+- `cognition: "medium"`: policy-selected medium cognition tier; for NARS workers this usually resolves to the selected provider's default/general model and medium reasoning effort.
+- `cognition: "high"`: policy-selected high cognition tier; for NARS workers this usually resolves to the selected provider's strongest admitted model or high reasoning effort.
 
 Delegation mode is explicit intent, not mechanical authority. `intent.mode` may be `audit_only`, `plan_only`, `implement`, or `implement_and_verify`. Read authority defaults to `audit_only`; write and command authority default to `implement`. The mode is recorded as `requested_mode`, included in the worker prompt, and summarized in run/list output so an audit cannot be mistaken for a migration or implementation. Mechanical enforcement still comes from `constraints.authority`, sandbox, allowed roots, and policy.
 
@@ -195,7 +205,7 @@ DeepSeek is routed through `narada-agent-runtime-server` with `constraints.provi
 }
 ```
 
-Provider credentials are loaded through the Narada provider registry and secret lookup path used by NARS. Run records expose provider names and environment key names, not secret values.
+Provider credentials and cognition defaults are loaded through the Narada provider registry path used by NARS. Credentials come from `credential_requirement`; cognition defaults come from `providers.<provider-id>.cognition_defaults`. Run records expose provider names, resolved model/reasoning values, and environment key names, not secret values.
 
 ## Example Tool Arguments
 

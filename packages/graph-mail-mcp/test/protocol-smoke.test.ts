@@ -50,6 +50,7 @@ try {
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
+    'graph_mail_output_show',
   ]);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_query')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);

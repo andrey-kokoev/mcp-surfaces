@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { buildGraphUrl, graphCalendarPath, graphRequest, graphTop, requiredString } from './graph-client.js';
 import { decideEventWrite, loadCalendarPolicy, recordCalendarAudit } from './policy.js';
 import { buildCalendarTelemetryDeclaration, emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 
 const SERVER_NAME = 'narada-calendar-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -165,6 +166,12 @@ export function listTools(): unknown[] {
       confirm_write: { type: 'boolean', default: false, description: 'Must be true for write attempts.' },
       approval_token: { type: 'string', description: 'Optional site-configured approval token.' },
     }, ['event_id']),
+    tool('calendar_output_show', 'Read a materialized Calendar MCP output ref with offset/limit paging.', {
+      ref: { type: 'string' },
+      output_ref: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 0 },
+    }),
   ];
 }
 
@@ -202,7 +209,13 @@ async function callTool(params: CalendarRecord, state: CalendarServerState) {
     const status = String(resultRecord.status ?? 'ok');
     const eventKind = status === 'refused' ? 'tool_refused' : 'tool_completed';
     emitCalendarTelemetry(name, eventKind, status, startedAt, state, resultRecord);
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2), annotations: { audience: ['assistant'] } }], structuredContent: result };
+    return buildBoundedToolResult({
+      siteRoot: state.siteRoot,
+      toolName: name,
+      value: result,
+      limit: 6000,
+      readerTool: 'calendar_output_show',
+    });
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
     emitCalendarTelemetry(name, 'tool_failed', 'error', startedAt, state, { message: diagnostic.message });
@@ -275,6 +288,8 @@ async function callNamedTool(name: string, args: CalendarRecord, state: Calendar
       return calendarEventUpdate(args, state);
     case 'calendar_event_delete':
       return calendarEventDelete(args, state);
+    case 'calendar_output_show':
+      return outputShow({ siteRoot: state.siteRoot, args });
     default:
       throw new Error(`unknown_tool: ${name}`);
   }

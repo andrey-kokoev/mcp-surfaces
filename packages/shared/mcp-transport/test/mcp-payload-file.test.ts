@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  buildBoundedToolResult,
   buildOutputRefToolContent,
   enforceInlinePayloadLimit,
   listOutputResources,
@@ -49,7 +50,7 @@ assert.equal(listOutputTools()[0].name, 'mcp_output_show');
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {
-  const longValue = { status: 'ok', output: 'x'.repeat(500) };
+  const longValue = { status: 'ok', output: 'x'.repeat(5_000) };
   const longResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
     toolName: 'representative_tool',
@@ -59,16 +60,46 @@ try {
   const envelope = JSON.parse(longResult.content[0].text);
   const structuredEnvelope = (longResult as { structuredContent: Record<string, unknown> }).structuredContent;
   assert.equal(envelope.truncated, true);
+  assert.match(String(envelope.output_ref), /^mcp_output:/);
+  assert.equal(envelope.reader_tool, 'mcp_output_show');
+  assert.equal(typeof envelope.output_text, 'string');
+  assert.equal(envelope.output_text.length > 0, true);
   assert.match(String(structuredEnvelope.output_ref), /^mcp_output:/);
   assert.equal(structuredEnvelope.schema, 'narada.producer_output_page.v1');
   assert.equal(structuredEnvelope.offset, 0);
-  assert.equal(structuredEnvelope.next_offset, 200);
-  assert.equal(structuredEnvelope.transport_next_offset, 200);
+  assert.equal(typeof structuredEnvelope.next_offset, 'number');
+  assert.equal(structuredEnvelope.transport_next_offset, structuredEnvelope.next_offset);
+  assert.equal((structuredEnvelope.next_offset as number) <= 2_000, true);
+  assert.equal((structuredEnvelope.output_text as string).length, structuredEnvelope.next_offset);
   assert.equal(typeof structuredEnvelope.site_root, 'string');
   assert.equal(structuredEnvelope.reader_tool, 'mcp_output_show');
   assert.match(String(structuredEnvelope.read_command), /mcp_output_show/);
   assert.equal(longResult.content.length, 1);
   assert.equal(longResult.content[0].type, 'text');
+
+  const boundedSmall = buildBoundedToolResult({
+    siteRoot: tempRoot,
+    toolName: 'bounded_small_tool',
+    value: { status: 'ok', compact: true },
+  });
+  assert.deepEqual((boundedSmall as { structuredContent: Record<string, unknown> }).structuredContent, { status: 'ok', compact: true });
+
+  const boundedLarge = buildBoundedToolResult({
+    siteRoot: tempRoot,
+    toolName: 'bounded_large_tool',
+    value: { status: 'ok', output: 'y'.repeat(5_000) },
+    readerTool: 'surface_output_show',
+  });
+  const boundedLargeEnvelope = JSON.parse(boundedLarge.content[0].text);
+  const boundedLargeStructured = (boundedLarge as { structuredContent: Record<string, unknown> }).structuredContent;
+  assert.equal(boundedLargeEnvelope.schema, 'narada.producer_output_page.v1');
+  assert.equal(boundedLargeStructured.schema, 'narada.producer_output_page.v1');
+  assert.equal(boundedLargeStructured.reader_tool, 'surface_output_show');
+  assert.equal(JSON.stringify(boundedLargeStructured).includes('y'.repeat(5_000)), false);
+  assert.equal((boundedLarge.content[0].text as string).length <= 2_000, true);
+  assert.match(String(boundedLargeStructured.output_ref), /^mcp_output:/);
+  assert.equal(typeof boundedLargeStructured.output_text, 'string');
+  assert.equal((boundedLargeStructured.output_text as string).length <= 2_000, true);
 
   const shownLongResult = outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, limit: 10 } });
   assert.equal(shownLongResult.schema, 'narada.mcp_output_page.v1');
@@ -78,7 +109,7 @@ try {
   const bulkyResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
     toolName: 'bulky_tool',
-    value: { status: 'ok', payload: 'x'.repeat(1200), ref: `mcp_payload:${'p'.repeat(30)}@v1` },
+    value: { status: 'ok', payload: 'x'.repeat(5_000), ref: `mcp_payload:${'p'.repeat(30)}@v1` },
   });
   const bulkyEnvelope = JSON.parse(bulkyResult.content[0].text);
   const bulkyStructuredEnvelope = (bulkyResult as { structuredContent: Record<string, unknown> }).structuredContent;
@@ -95,7 +126,7 @@ try {
     value: structuredEnvelope,
   });
   const wrappedFirstPageStructuredContent = (wrappedFirstPage as { structuredContent: Record<string, unknown> }).structuredContent;
-  assert.equal(wrappedFirstPageStructuredContent.next_offset, 200);
+  assert.equal(wrappedFirstPageStructuredContent.next_offset, 2000);
   assert.equal(wrappedFirstPageStructuredContent.output_truncated, true);
 
   assert.throws(
@@ -110,14 +141,14 @@ try {
   const emptyPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: {}, allow_empty: true, payload_id: 'empty_payload_ok' } });
   assert.equal(emptyPayload.status, 'created');
 
-  const createdPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { summary: 'x'.repeat(500) } } });
+  const createdPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { summary: 'x'.repeat(5_000) } } });
   const createdPayloadResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
     toolName: 'mcp_payload_create',
     value: createdPayload,
   });
-  const createdPayloadEnvelope = (createdPayloadResult as { structuredContent: Record<string, unknown> }).structuredContent;
-  assert.match(String(createdPayloadEnvelope.payload_ref), /^mcp_payload:/);
+  const createdPayloadEnvelope = JSON.parse(createdPayloadResult.content[0].text);
+  assert.match(String(createdPayloadEnvelope.ref), /^mcp_payload:/);
 
   const jsonPayload = payloadCreate({ siteRoot: tempRoot, args: { payload_json: '{"x":"y"}', payload_id: 'json_payload_ok' } });
   assert.equal(jsonPayload.status, 'created');

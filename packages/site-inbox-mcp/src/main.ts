@@ -2,6 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { admitEnvelope, emitEnvelopeAcknowledged, emitEnvelopeDismissed, emitEnvelopePromoted, readAdmissionLog } from './admission-log.js';
 import { INBOX_ENVELOPE_KINDS, assertKnownInboxEnvelopeKind } from './envelope-kinds.js';
 import { readInboxEnvelopeById, readIndexedInboxBacklog, readIndexedInboxRows, readInboxIndexCounts, refreshInboxIndex } from './inbox-index.js';
@@ -186,6 +187,12 @@ export function listTools(): unknown[] {
     tool('capa_queue', 'List inbox envelopes classified as CAPA review candidates.', {
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum envelopes. Defaults to 20.' },
     }),
+    tool('inbox_output_show', 'Read a materialized Inbox MCP output ref with offset/limit paging.', {
+      ref: { type: 'string' },
+      output_ref: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 0 },
+    }),
   ];
 }
 
@@ -227,14 +234,19 @@ function callTool(params: InboxRecord, state: InboxServerState) {
     case 'capa_queue':
       result = capaQueue(args, state);
       break;
+    case 'inbox_output_show':
+      result = outputShow({ siteRoot: state.siteRoot, args });
+      break;
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
-  return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
-}
-
-function assistantTextContent(text: string) {
-  return { type: 'text', text, annotations: { audience: ['assistant'] } };
+  return buildBoundedToolResult({
+    siteRoot: state.siteRoot,
+    toolName: String(name ?? 'unknown_tool'),
+    value: result,
+    limit: 6000,
+    readerTool: 'inbox_output_show',
+  });
 }
 
 function inboxSubmit(args: InboxRecord, state: InboxServerState): InboxRecord {

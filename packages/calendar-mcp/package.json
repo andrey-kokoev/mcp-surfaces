@@ -20,7 +20,8 @@
     "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/calendar-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-telemetry": "workspace:*"
+    "@narada2/mcp-telemetry": "workspace:*",
+    "@narada2/mcp-transport": "workspace:*"
   },
   "files": [
     "dist/",

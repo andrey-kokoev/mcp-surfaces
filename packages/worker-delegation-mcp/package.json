@@ -20,7 +20,8 @@
     "test": "pnpm build && node dist/test/output-contract.test.js && node dist/test/runtime-events.test.js && node dist/test/diagnostics.test.js && node dist/test/run-store.test.js && node dist/test/status-handler.test.js && node dist/test/batch-handler.test.js && node dist/test/dashboard-handler.test.js && node dist/test/prompt.test.js && node dist/test/worker-delegation-mcp.test.js && node dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
-    "@narada2/mcp-affordances": "workspace:*"
+    "@narada2/mcp-affordances": "workspace:*",
+    "@narada2/mcp-transport": "workspace:*"
   },
   "files": [
     "dist/",

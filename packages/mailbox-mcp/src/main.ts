@@ -2,6 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { messageMatchesQuery, readMailboxProjection, summarizeMessage } from './mailbox-store.js';
 
 const SERVER_NAME = 'narada-mailbox-mcp';
@@ -144,6 +145,12 @@ export function listTools(): unknown[] {
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 50, description: 'Maximum messages. Defaults to 50.' },
       include_body: { type: 'boolean', default: true, description: 'Include plain text bodies.' },
     }, ['thread_id']),
+    tool('mailbox_output_show', 'Read a materialized Mailbox MCP output ref with offset/limit paging.', {
+      ref: { type: 'string' },
+      output_ref: { type: 'string' },
+      offset: { type: 'integer', minimum: 0 },
+      limit: { type: 'integer', minimum: 0 },
+    }),
   ];
 }
 
@@ -173,14 +180,19 @@ function callTool(params: MailboxRecord, state: MailboxServerState) {
     case 'mailbox_thread_show':
       result = mailboxThreadShow(args, state);
       break;
+    case 'mailbox_output_show':
+      result = outputShow({ siteRoot: state.siteRoot, args });
+      break;
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
-  return { content: [assistantTextContent(JSON.stringify(result, null, 2))], structuredContent: result };
-}
-
-function assistantTextContent(text: string) {
-  return { type: 'text', text, annotations: { audience: ['assistant'] } };
+  return buildBoundedToolResult({
+    siteRoot: state.siteRoot,
+    toolName: String(name ?? 'unknown_tool'),
+    value: result,
+    limit: 6000,
+    readerTool: 'mailbox_output_show',
+  });
 }
 
 function mailboxDoctor(state: MailboxServerState): MailboxRecord {

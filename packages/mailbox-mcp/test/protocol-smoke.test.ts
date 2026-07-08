@@ -38,6 +38,7 @@ try {
     'mailbox_message_show',
     'mailbox_search',
     'mailbox_thread_show',
+    'mailbox_output_show',
   ]);
   assert.equal(toolRows.every((tool) => tool.annotations.readOnlyHint), true);
   const list = toolRows.find((tool) => tool.name === 'mailbox_messages_list');

@@ -3,8 +3,8 @@ import { createWorkerPolicy } from './policy.js';
 import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
-import { renderToolResultText } from './result-rendering.js';
 import type { WorkerMcpState } from './state.js';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -67,10 +67,12 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   const stateEnv = { ...env };
   loadSiteSecrets(siteRoot, stateEnv);
   loadProviderCredentialSecrets(siteRoot, stateEnv, options);
+  const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
+  const baseOptions = { ...providerPolicyDefaults, ...options };
   const mergedOptions = siteExtraRoots.length > 0
-    ? { ...options, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
-    : options;
+    ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
+    : baseOptions;
   return { policy: createWorkerPolicy(mergedOptions), env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
@@ -151,29 +153,27 @@ async function callTool(params: Record<string, unknown>, state: WorkerMcpState, 
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   if (name === 'worker_guidance') return toolResult(buildGuidanceResult(args), state, name);
+  if (name === 'worker_output_show') return toolResult(outputShow({ siteRoot: workerOutputRoot(state), args }), state, name);
   const result = await callWorkerTool(name, args, state, context);
   return toolResult(result, state, name);
 }
 
 function toolResult(value: unknown, state: WorkerMcpState, toolName: string) {
-  const text = renderToolResultText(value);
-  const structuredText = JSON.stringify(value, null, 2);
-  if (Buffer.byteLength(text, 'utf8') <= state.policy.maxOutputBytes && Buffer.byteLength(structuredText, 'utf8') <= state.policy.maxOutputBytes) {
-    return { content: [assistantTextContent(text)], structuredContent: value };
-  }
-  return {
-    content: [assistantTextContent(`${toolName}: output exceeds compact text limit; full result is in structuredContent`)],
-    structuredContent: {
-      ...asRecord(value),
-      result_materialized: true,
-      reader_tool: null,
-      full_output_byte_length: Buffer.byteLength(structuredText, 'utf8'),
-    },
-  };
+  return buildBoundedToolResult({
+    siteRoot: workerOutputRoot(state),
+    toolName,
+    value,
+    limit: state.policy.maxOutputBytes,
+    readerTool: 'worker_output_show',
+  });
 }
 
 function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
+}
+
+function workerOutputRoot(state: WorkerMcpState): string {
+  return resolve(String(process.env.NARADA_SITE_ROOT || state.policy.allowedRoots[0] || process.cwd()));
 }
 
 function listWorkerResources(state: WorkerMcpState) {
@@ -413,6 +413,29 @@ function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv,
     const baseUrl = typeof metadata.base_url === 'string' && metadata.base_url.trim() ? metadata.base_url.trim() : null;
     if (value && primaryBaseUrlEnv && baseUrl && !env[primaryBaseUrlEnv]) env[primaryBaseUrlEnv] = baseUrl;
   }
+}
+
+function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): Record<string, unknown> {
+  const registryPath = providerRegistryPath(siteRoot, env, options);
+  if (!registryPath || !existsSync(registryPath)) return {};
+  let registry: Record<string, unknown>;
+  try {
+    registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+  const providers = asRecord(registry.providers);
+  const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
+  const providerCognitionDefaults: Record<string, unknown> = {};
+  for (const [provider, metadata] of Object.entries(providers)) {
+    const defaults = asRecord(asRecord(metadata).cognition_defaults);
+    if (Object.keys(defaults).length > 0) providerCognitionDefaults[provider] = defaults;
+  }
+  return {
+    ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
+    ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
+    ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
+  };
 }
 
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {

@@ -43,6 +43,7 @@ try {
     'inbox_audit',
     'inbox_next',
     'capa_queue',
+    'inbox_output_show',
   ]);
   const inboxList = toolRows.find((tool) => tool.name === 'inbox_list');
   assert.ok(inboxList);

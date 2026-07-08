@@ -38,6 +38,7 @@ try {
     'calendar_event_create',
     'calendar_event_update',
     'calendar_event_delete',
+    'calendar_output_show',
   ]);
   assert.equal(toolRows.find((tool) => tool.name === 'calendar_event_query')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'calendar_event_create')?.annotations.readOnlyHint, false);

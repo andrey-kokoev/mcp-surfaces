@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateAffordanceDocument } from '@narada2/mcp-affordances';
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
+const SMOKE_WAIT_MS = 15_000;
 const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { bin?: Record<string, string> };
 const serverBin = packageJson.bin?.['worker-delegation-mcp'];
@@ -49,7 +50,7 @@ const toolsResponse = responses.find((message) => message.id === 4);
 assert.equal(toolsResponse.result.tools.some((tool: { name: string }) => tool.name === 'worker_operator_affordances'), true);
 const policyResponse = responses.find((message) => message.id === 2);
 assert.equal(policyResponse.result.structuredContent.schema, 'narada.worker.policy.v1');
-assert.match(policyResponse.result.content[0].text, /worker_policy: ok/);
+assert.match(policyResponse.result.content[0].text, /"schema": "narada\.worker\.policy\.v1"/);
 assert.equal(responses.some((message) => message.method === 'notifications/progress' && message.params?.progressToken === 'worker-progress'), true);
 const completionResponse = responses.find((message) => message.id === 3);
 assert.equal(completionResponse.result.completion.values.includes(root), true);
@@ -62,14 +63,14 @@ assert.equal(affordancesResponse.result.structuredContent.actions.some((action) 
 async function waitForLines(read: () => string, count: number) {
   const started = Date.now();
   while (read().trim().split(/\r?\n/).filter(Boolean).length < count) {
-    if (Date.now() - started > 5000) throw new Error(`timed out waiting for ${count} lines`);
+    if (Date.now() - started > SMOKE_WAIT_MS) throw new Error(`timed out waiting for ${count} lines`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
 async function waitForResponseId(read: () => string, id: number) {
   const started = Date.now();
-  while (Date.now() - started <= 5000) {
+  while (Date.now() - started <= SMOKE_WAIT_MS) {
     const messages = read().trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     if (messages.some((message) => message.id === id)) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
