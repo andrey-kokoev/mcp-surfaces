@@ -10,6 +10,7 @@ type PendingRequest = {
   method: string;
   framed: boolean;
   timeoutTimer: NodeJS.Timeout;
+  requestedToolTimeoutMs: number | null;
 };
 
 const STDERR_TAIL_LIMIT = 8000;
@@ -82,7 +83,13 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           sendCancellationToChild(child, pendingRequest, 'request timed out in mcp runtime proxy');
           terminateChildAfterRequestTimeout(child, childTerminationTimers, () => childClosed);
         }, options.requestTimeoutMs);
-        pending.set(id, { id, method: request.method, framed: drained.framed, timeoutTimer });
+        pending.set(id, {
+          id,
+          method: request.method,
+          framed: drained.framed,
+          timeoutTimer,
+          requestedToolTimeoutMs: extractRequestedToolTimeoutMs(request),
+        });
       }
     }
   });
@@ -161,10 +168,23 @@ function flushPendingErrors(
 
 function writePendingError(
   request: PendingRequest,
-  options: { entrypoint: string; surfaceId: string | null },
+  options: { entrypoint: string; surfaceId: string | null; requestTimeoutMs?: number },
   diagnostic: { code: string; message: string; stderrTail: string; exitCode: number | null; signal: NodeJS.Signals | null },
 ): void {
   clearTimeout(request.timeoutTimer);
+  const proxyRequestTimeoutMs = typeof options.requestTimeoutMs === 'number' ? options.requestTimeoutMs : null;
+  const proxyWatchdogData = diagnostic.code === 'child_request_timeout'
+    ? {
+      timeout_layer: 'mcp_runtime_proxy_watchdog',
+      proxy_request_timeout_ms: proxyRequestTimeoutMs,
+      requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+      surface_timeout_expected_before_proxy:
+        request.requestedToolTimeoutMs !== null &&
+        proxyRequestTimeoutMs !== null &&
+        request.requestedToolTimeoutMs < proxyRequestTimeoutMs,
+      kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
+    }
+    : {};
   writeJsonRpcMessage({
     jsonrpc: '2.0',
     id: request.id,
@@ -180,9 +200,28 @@ function writePendingError(
         exit_code: diagnostic.exitCode,
         signal: diagnostic.signal,
         stderr_tail: diagnostic.stderrTail,
+        ...proxyWatchdogData,
       },
     },
   }, request.framed);
+}
+
+function extractRequestedToolTimeoutMs(request: JsonRecord): number | null {
+  const params = request.params;
+  if (!isJsonRecord(params)) return null;
+  const directTimeoutMs = normalizedPositiveInteger(params.timeout_ms);
+  if (directTimeoutMs !== null) return directTimeoutMs;
+  const toolArguments = params.arguments;
+  if (!isJsonRecord(toolArguments)) return null;
+  return normalizedPositiveInteger(toolArguments.timeout_ms);
+}
+
+function normalizedPositiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function sendCancellationToChild(child: ReturnType<typeof spawn>, request: PendingRequest, reason: string): void {

@@ -60,7 +60,7 @@ try {
   let silentStdout = '';
   silentProxy.stdout.setEncoding('utf8');
   silentProxy.stdout.on('data', (chunk) => { silentStdout += chunk; });
-  silentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'slow-1', method: 'tools/list', params: {} })}\n`);
+  silentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'slow-1', method: 'tools/call', params: { name: 'slow_read', arguments: { timeout_ms: 5 } } })}\n`);
 
   const silentExitCode = await new Promise<number | null>((resolve) => silentProxy.on('close', resolve));
   assert.notEqual(silentExitCode, 0);
@@ -68,8 +68,13 @@ try {
   assert.equal(timeoutResponse.id, 'slow-1');
   assert.equal(timeoutResponse.error.data.schema, 'narada.mcp_runtime_proxy.error.v1');
   assert.equal(timeoutResponse.error.data.code, 'child_request_timeout');
-  assert.equal(timeoutResponse.error.data.method, 'tools/list');
+  assert.equal(timeoutResponse.error.data.method, 'tools/call');
   assert.equal(timeoutResponse.error.data.surface_id, 'silent-surface');
+  assert.equal(timeoutResponse.error.data.timeout_layer, 'mcp_runtime_proxy_watchdog');
+  assert.equal(timeoutResponse.error.data.proxy_request_timeout_ms, 100);
+  assert.equal(timeoutResponse.error.data.requested_tool_timeout_ms, 5);
+  assert.equal(timeoutResponse.error.data.surface_timeout_expected_before_proxy, true);
+  assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
 
   console.log('mcp-runtime-proxy behavior ok');
 } finally {

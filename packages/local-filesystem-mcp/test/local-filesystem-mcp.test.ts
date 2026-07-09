@@ -632,6 +632,44 @@ trust_level = "untrusted"
   assert.equal(delayedWriteResponse.error.data.code, 'fs_write_file_timed_out');
   assert.equal(delayedDoctorResponse.result.structuredContent.status, 'ok');
 
+  const blockedReadBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 303,
+    method: 'tools/call',
+    params: {
+      name: 'fs_read_file_range',
+      arguments: { path: join(trusted, 'a.txt'), start_line: 1, end_line: 1, timeout_ms: 5 },
+    },
+  });
+  const blockedReadDoctorBody = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 304,
+    method: 'tools/call',
+    params: { name: 'fs_doctor', arguments: {} },
+  });
+  const framedBlockedReadStartedAt = Date.now();
+  const blockedRead = spawnSync(process.execPath, [
+    serverPath,
+    '--mode', 'read',
+    '--allowed-root', trusted,
+    '--output-root', tempRoot,
+  ], {
+    input: `Content-Length: ${Buffer.byteLength(blockedReadBody, 'utf8')}\r\n\r\n${blockedReadBody}Content-Length: ${Buffer.byteLength(blockedReadDoctorBody, 'utf8')}\r\n\r\n${blockedReadDoctorBody}`,
+    encoding: 'utf8',
+    timeout: 5000,
+    env: { ...process.env, NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS: '60000' },
+  });
+  const framedBlockedReadElapsedMs = Date.now() - framedBlockedReadStartedAt;
+  assert.equal(blockedRead.status, 0, blockedRead.stderr);
+  assert.equal(framedBlockedReadElapsedMs < 5000, true);
+  const blockedReadFrames = parseJsonRpcFrames(blockedRead.stdout);
+  const blockedReadResponse = blockedReadFrames.find((frame) => frame.id === 303);
+  const blockedReadDoctorResponse = blockedReadFrames.find((frame) => frame.id === 304);
+  assert.equal(blockedReadResponse.error.data.code, 'fs_read_file_range_timed_out');
+  assert.equal(blockedReadResponse.error.data.details.timeout_kind, 'read_timeout');
+  assert.equal(blockedReadResponse.error.data.details.timeout_ms, 5);
+  assert.equal(blockedReadDoctorResponse.result.structuredContent.status, 'ok');
+
   const replaceRangeResponse = call(writeState, 31, 'fs_replace_range', { path: join(trusted, 'b.txt'), start_line: 1, end_line: 1, replacement: 'range-edited' });
   assert.equal(replaceRangeResponse.result.structuredContent.schema, 'local.filesystem.replace_range.v1');
   assert.equal(replaceRangeResponse.result.structuredContent.status, 'replaced_range');
