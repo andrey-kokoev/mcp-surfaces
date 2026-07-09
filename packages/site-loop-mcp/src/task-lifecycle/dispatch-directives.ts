@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { Socket } from 'node:net';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   SqliteDirectiveRuntimeStore,
@@ -514,11 +514,16 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
 
 function carrierPolicyStale(carrier, host) {
   const siteRoot = host?.session_dir ? resolve(host.session_dir, '..', '..', '..', '..') : null;
-  const policyPath = siteRoot ? join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json') : null;
+  const policyPath = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
   if (!policyPath || !existsSync(policyPath)) return false;
   const policyMtime = statSync(policyPath).mtimeMs;
   const startedAt = Date.parse(host?.started_event?.timestamp ?? carrier?.startedAt ?? '');
   return Number.isFinite(startedAt) && startedAt < policyMtime;
+}
+
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
 export function reconcileCarrierReceipts(cwd, store) {

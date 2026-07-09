@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { enrichFailedRunDiagnostics, readDiagnosticTail, readJsonPreview, readTextTail, withFreshProgress, withProgressObservability, withRunningLiveness } from './diagnostics.js';
 import { recoverCompletedRunFromEvents, recoverExpiredRunningRun, recoverOrphanedRunningRun } from './recovery.js';
@@ -7,6 +7,11 @@ import type { RunRecordPaths } from './run-record.js';
 import type { WorkerMcpState } from './state.js';
 
 export type LocatedRunResult = { runRoot: string; runDir: string; resultPath: string; primary: boolean };
+
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
 
 export function listRunIds(state: WorkerMcpState): string[] {
   return uniqueStrings(candidateRunRoots(state).flatMap((root) => {
@@ -57,7 +62,7 @@ export function candidateRunRoots(state: WorkerMcpState): string[] {
   const roots = [resolve(state.policy.runRoot)];
   const userHome = process.env.USERPROFILE || process.env.HOME;
   const codeHome = process.env.CODEX_HOME;
-  if (process.env.NARADA_SITE_ROOT) roots.push(resolve(process.env.NARADA_SITE_ROOT, '.narada', 'runtime', 'worker-delegation'));
+  if (process.env.NARADA_SITE_ROOT) roots.push(resolve(siteControlRoot(process.env.NARADA_SITE_ROOT), 'runtime', 'worker-delegation'));
   if (userHome) {
     roots.push(resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation'));
     roots.push(resolve(userHome, 'worker-delegation', 'runs'));

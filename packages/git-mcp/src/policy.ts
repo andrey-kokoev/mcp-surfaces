@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type GitMcpMode = 'read' | 'write';
 
@@ -198,9 +198,14 @@ function isPathInside(path: string, root: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
   try {
-    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    const configPath = join(siteControlRoot(siteRoot), 'allowed-roots.json');
     if (!existsSync(configPath)) return [];
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0);

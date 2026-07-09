@@ -4,7 +4,7 @@ import { guidanceToolDefinition } from './guidance.js';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir as mkdirAsync, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -1691,9 +1691,14 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
   }
 }
 
+function siteControlRoot(siteRoot) {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 function loadSiteExtraAllowedRoots(siteRoot) {
   try {
-    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    const configPath = join(siteControlRoot(siteRoot), 'allowed-roots.json');
     if (!existsSync(configPath)) return [];
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     return [
@@ -1708,7 +1713,7 @@ function loadSiteExtraAllowedRoots(siteRoot) {
 
 function loadSiteSecrets(siteRoot, targetEnv) {
   try {
-    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    const configPath = join(siteControlRoot(siteRoot), 'secrets.json');
     if (!existsSync(configPath)) return;
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     const secretEnv = data.env;

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 
 const IMPLEMENTATION_IDENTITY = Object.freeze({
@@ -546,6 +546,11 @@ function providerCognitionDefaults(value: unknown): Record<string, Record<Worker
   return result;
 }
 
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 function authorityList(value: unknown): WorkerAuthority[] {
   const list = stringList(value).map(validateAuthority);
   return list.length > 0 ? list : [...WORKER_AUTHORITIES];
@@ -558,7 +563,7 @@ function cognitionList(value: unknown): WorkerCognition[] {
 
 function defaultRunRoot(): string {
   const siteRoot = process.env.NARADA_SITE_ROOT;
-  if (siteRoot) return resolve(siteRoot, '.narada', 'runtime', 'worker-delegation');
+  if (siteRoot) return resolve(siteControlRoot(siteRoot), 'runtime', 'worker-delegation');
   const userHome = process.env.USERPROFILE || process.env.HOME;
   if (userHome && existsSync(resolve(userHome, 'Narada'))) {
     return resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation');

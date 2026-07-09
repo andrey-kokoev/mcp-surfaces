@@ -1919,7 +1919,7 @@ function portablePath(path: string): string {
 function siteMcpControlRoot(site: SiteDef): string {
   if (site.root.replace(/\\/g, '/').endsWith('/.narada')) return site.root;
   if (existsSync(join(site.root, '.ai', 'mcp'))) return site.root;
-  const nestedControlRoot = join(site.root, '.narada');
+  const nestedControlRoot = sitePathInterpolation(site.root).siteControlRoot;
   if (existsSync(join(nestedControlRoot, '.ai', 'mcp'))) return nestedControlRoot;
   return site.root;
 }

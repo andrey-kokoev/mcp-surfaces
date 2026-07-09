@@ -7,7 +7,7 @@ import type { WorkerMcpState } from './state.js';
 import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -361,7 +361,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
   try {
-    const configPath = join(siteRoot, '.narada', 'allowed-roots.json');
+    const configPath = join(siteControlRoot(siteRoot), 'allowed-roots.json');
     if (!existsSync(configPath)) return [];
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0);
@@ -373,7 +373,7 @@ function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
 
 function loadSiteSecrets(siteRoot: string, env: NodeJS.ProcessEnv): void {
   try {
-    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    const configPath = join(siteControlRoot(siteRoot), 'secrets.json');
     if (!existsSync(configPath)) return;
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     const secretEnv = data.env;
@@ -387,6 +387,11 @@ function loadSiteSecrets(siteRoot: string, env: NodeJS.ProcessEnv): void {
   } catch {
     // Best-effort.
   }
+}
+
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
 function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): void {

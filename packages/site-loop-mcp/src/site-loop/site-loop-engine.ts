@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { SqliteDirectiveRuntimeStore } from '@narada2/task-governance-core/directive-runtime-store';
 import { findTaskFile, readTaskFile, writeTaskProjection } from '@narada2/task-governance-core/task-governance';
@@ -207,6 +207,11 @@ function testAuthorityRequested(options: SiteLoopPayload = {}) {
   return options.testAuthority === true || options.test_authority === true;
 }
 
+function siteControlRoot(siteRoot) {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 function prepareTestAuthorityBinding(productionSiteRoot: string, siteLoopConfig: SiteLoopConfig, options: SiteLoopPayload = {}) {
   if (!testAuthorityRequested(options)) return { binding: null, refusal: null };
   const config = siteLoopConfig.test_authority;
@@ -232,7 +237,7 @@ function prepareTestAuthorityBinding(productionSiteRoot: string, siteLoopConfig:
     };
   }
   const executionSiteRoot = resolve(productionSiteRoot, config.state_root);
-  const configDir = join(executionSiteRoot, '.narada', 'capabilities');
+  const configDir = join(siteControlRoot(executionSiteRoot), 'capabilities');
   mkdirSync(configDir, { recursive: true });
   mkdirSync(join(executionSiteRoot, '.ai'), { recursive: true });
   writeFileSync(join(configDir, 'site-loop-config.json'), JSON.stringify(siteLoopConfig, null, 2), 'utf8');
@@ -1250,7 +1255,7 @@ function resolveSharedTaskLifecyclePackageRoot(siteRoot) {
 }
 
 function taskLifecycleEntrypointsFromRegistration(siteRoot) {
-  const registrationPath = join(siteRoot, '.narada', 'capabilities', 'mcp-registration.json');
+  const registrationPath = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-registration.json');
   if (!existsSync(registrationPath)) return [];
   try {
     const registration = JSON.parse(readFileSync(registrationPath, 'utf8'));
@@ -1465,8 +1470,8 @@ function appendNodeOption(existing, option) {
 
 function recentSurfacePolicyNoise(siteRoot, options: SiteLoopPayload = {}) {
   const siteLoopConfig = configForSite(siteRoot);
-  const policyPath = join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json');
-  const actionDir = join(siteRoot, '.narada', 'crew', 'action-admission');
+  const policyPath = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
+  const actionDir = join(siteControlRoot(siteRoot), 'crew', 'action-admission');
   const declaredTools = loadSurfaceDeclaredTools(policyPath);
   const includeEvidence = options.includeEvidence === true || options.include_evidence === true;
   const repairedAtMs = existsSync(policyPath) ? statSync(policyPath).mtimeMs : 0;
@@ -2319,7 +2324,7 @@ export function siteResidentCapabilities(cwd, options: SiteLoopPayload = {}) {
 
 function readResidentTaskLifecycleSurfacePolicy(siteRoot) {
   const siteLoopConfig = configForSite(siteRoot);
-  const path = join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json');
+  const path = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
   const registry = readJson(path);
   const surface = (registry?.surfaces ?? []).find((item) => item.surface_id === 'task-lifecycle-mcp.local') ?? null;
   const contract = surface?.tool_contract ?? {};
@@ -2504,7 +2509,7 @@ function residentCarrierPolicyGenerationCurrent(status) {
   const siteRoot = status?.host?.session_dir
     ? resolve(status.host.session_dir, '..', '..', '..', '..')
     : null;
-  const policyPath = siteRoot ? join(siteRoot, '.narada', 'capabilities', 'mcp-surfaces.json') : null;
+  const policyPath = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
   if (!policyPath || !existsSync(policyPath)) return true;
   const policyMtime = statSync(policyPath).mtimeMs;
   const startedAt = Date.parse(status?.host?.started_event?.timestamp ?? status?.carrier?.startedAt ?? '');

@@ -1,6 +1,6 @@
 import { buildGuidanceResult } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildOutputRefToolContent,
@@ -371,9 +371,14 @@ function firstOption(value: unknown): string | null {
   return values.length > 0 ? values[0] : null;
 }
 
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void {
   try {
-    const configPath = join(siteRoot, '.narada', 'secrets.json');
+    const configPath = join(siteControlRoot(siteRoot), 'secrets.json');
     if (!existsSync(configPath)) return;
     const data = JSON.parse(readFileSync(configPath, 'utf8'));
     const secretEnv = data.env;

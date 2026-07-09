@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 export type TaskLifecycleSitePolicy = {
   roster: {
@@ -18,9 +18,13 @@ export const DEFAULT_TASK_LIFECYCLE_SITE_POLICY: TaskLifecycleSitePolicy = Objec
     roles_are_obligation_targets: false,
   }),
 });
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
 
 export function taskLifecycleSitePolicyPath(siteRoot: string): string {
-  return join(siteRoot, '.narada', 'task-lifecycle.toml');
+  return join(siteControlRoot(siteRoot), 'task-lifecycle.toml');
 }
 
 export function readTaskLifecycleSitePolicy(siteRoot: string): TaskLifecycleSitePolicyRead {

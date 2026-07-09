@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 const SERVER_NAME = 'operator-routing-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -42,7 +42,12 @@ export async function runStdioServer(options: unknown): Promise<void> {
 export function createServerState(options: JsonRecord = {}): RoutingState {
   const normalized = asRecord(options);
   const siteRoot = resolve(String(normalized.siteRoot ?? normalized.site_root ?? process.cwd()));
-  return { siteRoot, logRoot: resolve(String(normalized.logRoot ?? normalized.log_root ?? resolve(siteRoot, '.narada', 'runtime', 'operator-routing'))), serverName: String(normalized.serverName ?? SERVER_NAME) };
+  return { siteRoot, logRoot: resolve(String(normalized.logRoot ?? normalized.log_root ?? resolve(siteControlRoot(siteRoot), 'runtime', 'operator-routing'))), serverName: String(normalized.serverName ?? SERVER_NAME) };
+}
+
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
 export function handleRequest(request: JsonRecord, state: RoutingState): any {

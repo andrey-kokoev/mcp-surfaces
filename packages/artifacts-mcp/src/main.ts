@@ -363,8 +363,13 @@ function sessionIndexPath(state: ArtifactState): string | null { return sessionI
 function sessionIndexPaths(state: ArtifactState): string[] {
   if (!state.siteRoot || !state.sessionId) return [];
   const direct = resolve(state.siteRoot, 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json');
-  const nested = resolve(state.siteRoot, '.narada', 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json');
-  return basename(resolve(state.siteRoot)).toLowerCase() === '.narada' ? [direct, nested] : [nested, direct];
+  const control = siteControlRoot(state.siteRoot);
+  const contained = resolve(control, 'crew', 'nars-sessions', state.sessionId, 'session-index-record.json');
+  return control === resolve(state.siteRoot) ? [direct] : [contained, direct];
+}
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 function optionalString(value: unknown): string | null { return typeof value === 'string' && value.trim() ? value.trim() : null; }
 function firstConfigured(entries: Array<[string, unknown]>): { value: string | null; source: string | null } { for (const [source, value] of entries) { const text = optionalString(value); if (text) return { value: text, source }; } return { value: null, source: null }; }

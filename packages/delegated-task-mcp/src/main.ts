@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { callWorkerTool, createWorkerPolicy, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
@@ -114,6 +114,11 @@ type StepState = {
 };
 type AdvanceOptions = { waitUntilTerminal?: boolean; timeoutMs?: number; pollMs?: number };
 
+function siteControlRoot(siteRoot: string): string {
+  const root = resolve(siteRoot);
+  return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
+}
+
 export function createServerState(options: JsonRecord = {}): State {
   const taskRoot = resolve(String(options.taskRoot ?? options.outputRoot ?? process.cwd()));
   const siteRoot = resolve(String(options.siteRoot ?? taskRoot));
@@ -130,7 +135,7 @@ export function createServerState(options: JsonRecord = {}): State {
   }
   const workerPolicyOptions = rec(options.workerPolicy);
   const workerState: WorkerMcpState = {
-    policy: createWorkerPolicy({ runRoot: resolve(taskRoot, '.narada', 'runtime', 'worker-delegation'), ...providerPolicyDefaults, ...workerPolicyOptions, allowedRoots }),
+    policy: createWorkerPolicy({ runRoot: resolve(siteControlRoot(taskRoot), 'runtime', 'worker-delegation'), ...providerPolicyDefaults, ...workerPolicyOptions, allowedRoots }),
     env: stateEnv,
     activeRunCount: 0,
   };
@@ -2489,12 +2494,12 @@ function recordList(value: unknown): JsonRecord[] { return Array.isArray(value) 
 function uniqueStrings(values: string[]): string[] { return [...new Set(values.filter(Boolean))]; }
 function uniqueRecords(values: JsonRecord[]): JsonRecord[] { const seen = new Set<string>(); const out: JsonRecord[] = []; for (const value of values) { const key = JSON.stringify(value); if (!seen.has(key)) { seen.add(key); out.push(value); } } return out; }
 function inside(path: string, root: string): boolean { const rel = relative(root, path); return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel); }
-function loadSiteExtraAllowedRoots(siteRoot: string): string[] { try { const configPath = join(siteRoot, '.narada', 'allowed-roots.json'); if (!existsSync(configPath)) return []; const data = JSON.parse(readFileSync(configPath, 'utf8')); if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0); } catch { } return []; }
+function loadSiteExtraAllowedRoots(siteRoot: string): string[] { try { const configPath = join(siteControlRoot(siteRoot), 'allowed-roots.json'); if (!existsSync(configPath)) return []; const data = JSON.parse(readFileSync(configPath, 'utf8')); if (Array.isArray(data.extra_allowed_roots)) return data.extra_allowed_roots.filter((r: unknown) => typeof r === 'string' && r.trim().length > 0); } catch { } return []; }
 function resolveCurrentSiteId(options: JsonRecord, siteRoot: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const explicit = opt(options.siteId) ?? opt(options.site_id) ?? opt(options.currentSiteId) ?? opt(options.current_site_id) ?? opt(env.NARADA_SITE_ID) ?? opt(env.SITE_ID) ?? opt(env.NARADA_SITE);
   if (explicit) return explicit;
   try {
-    const siteConfigPath = join(siteRoot, '.narada', 'site.json');
+    const siteConfigPath = join(siteControlRoot(siteRoot), 'site.json');
     if (existsSync(siteConfigPath)) {
       const data = rec(JSON.parse(readFileSync(siteConfigPath, 'utf8')));
       const configured = opt(data.site_id) ?? opt(data.id);
@@ -2508,7 +2513,7 @@ function taskRootScope(state: State): string {
   if (state.taskRoot === state.siteRoot || inside(state.taskRoot, state.siteRoot)) return 'site_root';
   return state.currentSiteId ? 'shared_physical_store' : 'user_global';
 }
-function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void { try { const configPath = join(siteRoot, '.narada', 'secrets.json'); if (!existsSync(configPath)) return; const data = JSON.parse(readFileSync(configPath, 'utf8')); const env = data.env; if (env && typeof env === 'object' && !Array.isArray(env)) { for (const [key, value] of Object.entries(env)) { if (typeof value === 'string' && value.trim() && !targetEnv[key]) { targetEnv[key] = value; } } } } catch { } }
+function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void { try { const configPath = join(siteControlRoot(siteRoot), 'secrets.json'); if (!existsSync(configPath)) return; const data = JSON.parse(readFileSync(configPath, 'utf8')); const env = data.env; if (env && typeof env === 'object' && !Array.isArray(env)) { for (const [key, value] of Object.entries(env)) { if (typeof value === 'string' && value.trim() && !targetEnv[key]) { targetEnv[key] = value; } } } } catch { } }
 function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): void {
   const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
   if (!registryPath || !existsSync(registryPath)) return;
