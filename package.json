@@ -15,7 +15,6 @@
     "test:mcp-runtime-proxy": "pnpm --filter @narada2/mcp-runtime-proxy test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
     "test:git": "pnpm --filter @narada2/git-mcp test",
-    "test:completion-audit": "pnpm --filter @narada2/completion-audit-mcp test",
     "test:delegated-task": "pnpm --filter @narada2/delegated-task-mcp test",
     "test:delegated-task:live": "pnpm --filter @narada2/delegated-task-mcp test:live",
     "test:worker-delegation": "pnpm --filter @narada2/worker-delegation-mcp test",

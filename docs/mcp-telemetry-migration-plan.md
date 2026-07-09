@@ -21,7 +21,6 @@ Shared packages:
 | `local-filesystem-mcp` | mutation-audited filesystem | errors_only initially; all for safe metadata later | no raw paths until path policy is explicit; path class/hash only | path redaction helper | 0.91 |
 | `structured-command-mcp` | command/execution | errors_only | command id, catalog id, exit status only; no stdout/stderr/env | command redaction helper | 0.94 |
 | `git-mcp` | mutation-audited publication | errors_only for mutations, all for status/show | repo-relative metadata only; no patch bodies by default | path/diff redaction helper | 0.90 |
-| `completion-audit-mcp` | durable audit/evidence | errors_only | no requirement/evidence bodies | audit-boundary review | 0.82 |
 | `site-inbox-mcp` | intake/triage mutation | errors_only | no message bodies; ids/status only | message redaction helper | 0.88 |
 | `mailbox-mcp` | read-only mailbox projection | errors_only; all optional for operator debugging | no subject/body/sender by default; ids/counts only | message redaction helper | 0.92 |
 | `graph-mail-mcp` | external-service audited mail draft lifecycle | errors_only for writes/refusals; all optional for reads | no body, recipients, upload URLs, attachment bytes, tokens | message/attachment redaction helper | 0.95 |

@@ -11,7 +11,6 @@ This repository mixes reusable substrate surfaces with Narada-specific control-p
 - `@narada2/local-filesystem-mcp`
 - `@narada2/structured-command-mcp`
 - `@narada2/git-mcp`
-- `@narada2/completion-audit-mcp`
 
 ## Narada-Specific
 

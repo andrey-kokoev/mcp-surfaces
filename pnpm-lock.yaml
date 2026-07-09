@@ -46,8 +46,6 @@ importers:
 
   packages/cloudflare-carrier-mcp: {}
 
-  packages/completion-audit-mcp: {}
-
   packages/delegated-task-mcp:
     dependencies:
       '@narada2/worker-delegation-mcp':

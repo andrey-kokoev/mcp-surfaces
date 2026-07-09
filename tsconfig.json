@@ -8,7 +8,6 @@
     { "path": "./packages/local-filesystem-mcp" },
     { "path": "./packages/structured-command-mcp" },
     { "path": "./packages/git-mcp" },
-    { "path": "./packages/completion-audit-mcp" },
     { "path": "./packages/worker-delegation-mcp" },
     { "path": "./packages/delegated-task-mcp" },
     { "path": "./packages/site-inbox-mcp" },

@@ -15,7 +15,6 @@ Current packages:
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
-- `@narada2/completion-audit-mcp`: requirement/evidence/verdict completion audit MCP surface.
 - `@narada2/site-inbox-mcp`: governed inbox intake and triage MCP surface.
 - `@narada2/mailbox-mcp`: read-only synced mailbox projection MCP surface.
 - `@narada2/graph-mail-mcp`: policy-gated Microsoft Graph mail MCP surface for live reads and draft management.
@@ -106,7 +105,6 @@ pnpm test:mcp-runtime-proxy
 pnpm test:local-filesystem
 pnpm test:structured-command
 pnpm test:git
-pnpm test:completion-audit
 pnpm test:worker-delegation
 pnpm test:inbox
 pnpm test:mailbox
@@ -137,7 +135,6 @@ Before handing off changes:
 
 - `local-filesystem-mcp` owns governed file inspection and mutation tools.
 - `structured-command-mcp` owns argv-based command execution policy.
-- `completion-audit-mcp` owns durable requirement/evidence/verdict completion audit records; it must not inspect repositories, execute commands, or infer whether a requirement is true.
 - `worker-delegation-mcp` owns policy-gated delegation to worker runtimes; it is not a general shell, task lifecycle, or recursive worker-control surface.
 - `delegated-task-mcp` owns durable delegated task records, workflow plans, acceptance contracts, events, and handoff packets; it must not become a shell, git, filesystem mutation, worker runtime, or Narada workboard surface.
 - `sop-mcp` owns versioned SOP templates and durable run execution; it orchestrates procedural steps but does not own tasks, workers, filesystem access, or shell execution directly — it delegates those to their respective MCP surfaces.

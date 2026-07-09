@@ -17,20 +17,6 @@ It does not infer which dirty files belong to the current agent. Callers must pa
 the intended scope explicitly, either through mutation `scope_label` values or
 `expected_paths_by_repository` in `git_repositories_summary`.
 
-## Completion Audit
-
-Completion audit is not a Git operation. A coherent completion artifact has this
-shape:
-
-- `requirement`: concrete item that must be true
-- `evidence`: command, tool result, rendered artifact, or source inspection
-- `verdict`: `proved`, `contradicted`, `incomplete`, or `missing`
-- `residual_risk`: remaining uncertainty, if any
-
-That artifact is owned here by `@narada2/completion-audit-mcp` and its
-`completion_audit_record` tool. It should not be hidden in `git_status` or
-`git_push`.
-
 ## Local Search Accounting
 
 `local-filesystem-mcp` search results keep the legacy `scanned` field for
