@@ -132,6 +132,37 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_recurring_retire',
 ]);
 
+const TASK_LIFECYCLE_READ_ONLY_TOOLS = new Set([
+  'task_lifecycle_guidance',
+  'task_lifecycle_doctor',
+  'task_lifecycle_list',
+  'task_lifecycle_show',
+  'task_lifecycle_roster',
+  'task_lifecycle_payload_schema',
+  'task_lifecycle_evidence_preflight',
+  'task_lifecycle_next',
+  'task_lifecycle_workboard_snapshot',
+  'task_lifecycle_obligations',
+  'task_lifecycle_inspect',
+  'task_lifecycle_inspect_range',
+  'task_lifecycle_audit',
+  'task_lifecycle_search',
+  'task_lifecycle_related',
+  'mcp_payload_show',
+  'mcp_payload_validate',
+  'task_lifecycle_recurring_list',
+  'task_lifecycle_recurring_show',
+  'task_lifecycle_recurring_runs',
+  'task_lifecycle_chapter_show',
+  'task_lifecycle_diagnose_task_ref',
+]);
+
+const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS = new Set([
+  'task_lifecycle_close',
+  'task_lifecycle_defer',
+  'task_lifecycle_recurring_retire',
+]);
+
 // Session identity binding for mechanical identity verification.
 // If NARADA_AGENT_ID is set, mutating operations warn/block on mismatched agent_id params.
 let SESSION_IDENTITY = null;
@@ -260,22 +291,7 @@ function taskLifecycleTools() {
         outcome_contract: { type: 'object', additionalProperties: true, description: 'Optional outcome contract for the required task. Fields: outcome_type, allowed_outcomes, satisfying_outcomes, blocking_outcomes, required_fields, capability_requirement.' },
         dependency_id: stringSchema('Optional stable dependency id. Defaults to a deterministic id from parent, required task, and kind.'),
       }, ['parent_task_number', 'required_task_number', 'agent_id', 'kind', 'satisfying_outcomes']),
-    },
-    {
-      name: 'task_lifecycle_dependency_disposition_record',
-      description: 'Record explicit disposition for a blocking dependency outcome. Use after dependency satisfaction reports disposition_required=true; required_outcome_id is inferred from the latest outcome when omitted.',
-      inputSchema: objectSchema({
-        dependency_id: stringSchema('Dependency id whose blocking outcome is being dispositioned.'),
-        agent_id: stringSchema('Agent id recording the disposition.'),
-        kind: stringSchema('Disposition kind: remediation_task, covered_by_existing_task, routed_obligation, operator_decision_required, operator_deferred, or out_of_scope_or_rejected.'),
-        summary: stringSchema('Concise disposition summary and authority rationale.'),
-        required_outcome_id: stringSchema('Optional specific task_outcomes.outcome_id. Defaults to latest outcome on the required task.'),
-        status: stringSchema('Disposition status. Defaults to open, or deferred for operator_deferred/out_of_scope_or_rejected.'),
-        target_task_id: stringSchema('Optional task_id for remediation_task or covered_by_existing_task disposition.'),
-        routed_obligation_id: stringSchema('Optional directed obligation id for routed_obligation disposition.'),
-        authority_basis: authorityBasisSchema('Required authority basis for operator_deferred and out_of_scope_or_rejected dispositions; optional otherwise.'),
-      }, ['dependency_id', 'agent_id', 'kind', 'summary']),
-      annotations: { title: 'task_lifecycle_dependency_disposition_record', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: { title: 'task_lifecycle_dependency_declare', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     ...listPayloadTools(),
@@ -494,9 +510,21 @@ function buildPostCloseoutContinuation({ agentId, result }) {
 }
 
 function patchLocalToolDefinition(toolDef) {
-  if (toolDef?.name === 'task_lifecycle_doctor') {
+  const name = String(toolDef?.name ?? '');
+  const readOnly = TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name);
+  const annotatedToolDef = {
+    ...toolDef,
+    annotations: {
+      title: name,
+      readOnlyHint: readOnly,
+      destructiveHint: TASK_LIFECYCLE_DESTRUCTIVE_TOOLS.has(name),
+      idempotentHint: readOnly,
+      openWorldHint: false,
+    },
+  };
+  if (name === 'task_lifecycle_doctor') {
     return {
-      ...toolDef,
+      ...annotatedToolDef,
       description: 'Inspect Task Lifecycle MCP readiness without mutating. Defaults to a concise startup-safe summary; pass verbose=true or detail=full for full diagnostics.',
       inputSchema: objectSchema({
         verbose: { type: 'boolean', description: 'Return full diagnostics. Defaults false.' },
@@ -504,14 +532,14 @@ function patchLocalToolDefinition(toolDef) {
       }),
     };
   }
-  if (toolDef?.name !== 'task_lifecycle_review') return toolDef;
+  if (name !== 'task_lifecycle_review') return annotatedToolDef;
   return {
-    ...toolDef,
-    description: `${toolDef.description} For long findings, create payload { findings: [{ severity, description, location? }] } and retry with payload_ref plus top-level task_number, agent_id, and verdict.`,
+    ...annotatedToolDef,
+    description: `${annotatedToolDef.description} For long findings, create payload { findings: [{ severity, description, location? }] } and retry with payload_ref plus top-level task_number, agent_id, and verdict.`,
     inputSchema: {
-      ...toolDef.inputSchema,
+      ...annotatedToolDef.inputSchema,
       properties: {
-        ...(toolDef.inputSchema?.properties ?? {}),
+        ...(annotatedToolDef.inputSchema?.properties ?? {}),
         findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
       },
     },

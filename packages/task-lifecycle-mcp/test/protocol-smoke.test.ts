@@ -32,6 +32,12 @@ const tools = await handleTaskLifecycleMcpRequest({
 });
 assert.equal(tools.error, undefined);
 const names = tools.result.tools.map((tool) => tool.name);
+assert.equal(new Set(names).size, names.length, 'task-lifecycle tools/list must not contain duplicate tool names');
+assert.deepEqual(
+  tools.result.tools.filter((tool) => typeof tool.annotations?.readOnlyHint !== 'boolean').map((tool) => tool.name),
+  [],
+  'every task-lifecycle tool must declare readOnlyHint explicitly',
+);
 assert.equal(names.includes('task_lifecycle_next'), true);
 assert.equal(names.includes('task_lifecycle_doctor'), true);
 assert.equal(names.includes('task_lifecycle_chapter_add_task'), true);
@@ -39,6 +45,7 @@ assert.equal(names.includes('task_lifecycle_chapter_show'), true);
 assert.equal(names.includes('mcp_output_show'), false);
 const payloadCreateTool = tools.result.tools.find((tool) => tool.name === 'mcp_payload_create');
 assert.equal(Boolean(payloadCreateTool?.inputSchema?.properties?.payload_json), true);
+assert.equal(tools.result.tools.find((tool) => tool.name === 'mcp_payload_validate')?.annotations?.readOnlyHint, true);
 
 const emptyPayloadCreate = await handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',

@@ -4,7 +4,7 @@ MCP surface registrar for binding/unbinding surfaces across Narada sites and car
 
 ## Purpose
 
-Manages the surface-to-site-to-carrier weave — so you never edit `config.toml` or `mcp.json` by hand. Knows the catalog of all 14 MCP surfaces, all 8 Narada sites, and all 3 carriers.
+Manages the surface-to-site-to-carrier weave so carrier and Site MCP config is generated rather than hand-maintained.
 
 ## Tools
 
@@ -18,7 +18,22 @@ Manages the surface-to-site-to-carrier weave — so you never edit `config.toml`
 | `registrar_carrier_list` | List carriers |
 | `registrar_carrier_bind` | Add surface to a carrier (JSON for opencode/kimi, TOML for Codex) |
 | `registrar_carrier_unbind` | Remove from carrier |
-| `registrar_sync` | Bind a surface to all 8 sites + 3 carriers in one call |
+| `registrar_sync` | Bind surfaces across configured sites and carriers |
+| `registrar_site_mcp_fabric_validate` | Validate a Site's materialized MCP fabric |
+| `registrar_site_surface_registry_sync` | Materialize the Site action-admission registry from fabric and catalog |
+| `registrar_site_registry_conformance_check` | Prove live tools, fabric, catalog, and materialized registry agree |
+| `registrar_site_output_reader_closure_check` | Prove output-ref producers retain an admitted read-only reader |
+
+## Materialized Registry Conformance
+
+Conformance is a four-layer proof, not a tool-name allowlist check:
+
+1. Run `mcp_loader_site_tool_inventory_check` against the target Site root. It starts fresh children and returns `observed_tools`, `observed_read_only_tools`, and `observed_mutating_tools`.
+2. Validate the Site fabric with `registrar_site_mcp_fabric_validate`.
+3. Materialize intentional changes with `registrar_site_surface_registry_sync`.
+4. Pass all three live observation maps unchanged to `registrar_site_registry_conformance_check`.
+
+The proof fails on missing live evidence, absent boolean `readOnlyHint`, duplicate tools, incomplete or overlapping semantics, external refusal lists, fabric/catalog/live drift, projection/provenance drift, and missing output-reader closure. Tool names never determine behavior.
 
 ## Boundary
 

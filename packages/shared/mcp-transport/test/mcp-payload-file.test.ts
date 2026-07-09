@@ -7,6 +7,7 @@ import {
   buildBoundedToolResult,
   buildOutputRefToolContent,
   enforceInlinePayloadLimit,
+  listPayloadTools,
   listOutputResources,
   listOutputTools,
   outputShow,
@@ -47,6 +48,14 @@ assert.doesNotThrow(() => enforceInlinePayloadLimit({
 }));
 
 assert.equal(listOutputTools()[0].name, 'mcp_output_show');
+
+const payloadTools = listPayloadTools();
+const payloadTool = (name: string) => payloadTools.find((tool) => tool.name === name);
+assert.equal(payloadTool('mcp_payload_create')?.annotations.readOnlyHint, false);
+assert.equal(payloadTool('mcp_payload_show')?.annotations.readOnlyHint, true);
+assert.equal(payloadTool('mcp_payload_derive')?.annotations.readOnlyHint, false);
+assert.equal(payloadTool('mcp_payload_validate')?.annotations.readOnlyHint, true);
+assert.equal(payloadTool('mcp_payload_validate')?.annotations.idempotentHint, true);
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {

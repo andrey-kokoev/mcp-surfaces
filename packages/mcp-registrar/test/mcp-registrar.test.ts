@@ -1,10 +1,52 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildSiteBindConfig, buildSiteSurfaceRegistry, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric } from '../src/main.js';
+import { fileURLToPath } from 'node:url';
+import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
+
+async function observeToolsList(entrypoint: string, args: string[]): Promise<string[]> {
+  const child = spawn(process.execPath, [entrypoint, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  let stdout = '';
+  let stderr = '';
+  return new Promise<string[]>((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error(`tools_list_timeout:${stderr.slice(-2000)}`)), 5000);
+    let initialized = false;
+    const finish = (error: Error | null, tools?: string[]) => {
+      clearTimeout(timeout);
+      if (!child.killed) child.kill();
+      if (error) reject(error);
+      else resolve(tools ?? []);
+    };
+    child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-2000); });
+    child.once('error', (error) => finish(error));
+    child.once('exit', (code) => {
+      if (!initialized && code !== null) finish(new Error(`tools_list_child_exited:${code}:${stderr}`));
+    });
+    child.stdout.on('data', (chunk) => {
+      stdout += String(chunk);
+      const lines = stdout.split(/\r?\n/);
+      stdout = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const message = JSON.parse(line) as Record<string, any>;
+        if (message.id === 100) {
+          initialized = true;
+          child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
+          child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 101, method: 'tools/list', params: {} })}\n`);
+        } else if (message.id === 101) {
+          finish(null, (message.result?.tools ?? []).map((tool: Record<string, unknown>) => String(tool.name)));
+        }
+      }
+    });
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'registrar-inventory-test', version: '1.0.0' } } })}\n`);
+  });
+}
 
 try {
   const state = createServerState({});
@@ -22,6 +64,80 @@ try {
     assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
     assert.ok(args.includes('--'));
   }
+  function registryWithMailboxSurface(registeredLiveTools: string[], readOnlyTools: string[]): Record<string, any> {
+    return {
+      schema: 'narada.site.capabilities.mcp_surfaces.v1',
+      site_id: 'fixture-site',
+      surfaces: [{
+        surface_id: 'fixture-mailbox.local',
+        display_name: 'fixture-mailbox',
+        server_name: 'fixture-mailbox',
+        authority_boundary: {},
+        client_config: {},
+        tool_contract: {
+          read_only_tools: readOnlyTools,
+          mutating_tools: registeredLiveTools.filter((tool) => !readOnlyTools.includes(tool)),
+          refused_tools: [],
+        },
+        registered_live_tools: registeredLiveTools,
+        catalog_surface_id: 'mailbox',
+      }],
+    };
+  }
+  function registryWithSurface(catalogSurfaceId: string, registeredLiveTools: string[], readOnlyTools: string[]): Record<string, any> {
+    return {
+      schema: 'narada.site.capabilities.mcp_surfaces.v1',
+      site_id: 'fixture-site',
+      surfaces: [{
+        surface_id: `fixture-${catalogSurfaceId}.local`,
+        display_name: `fixture-${catalogSurfaceId}`,
+        server_name: `fixture-${catalogSurfaceId}`,
+        authority_boundary: {},
+        client_config: {},
+        tool_contract: {
+          read_only_tools: readOnlyTools,
+          mutating_tools: registeredLiveTools.filter((tool) => !readOnlyTools.includes(tool)),
+          refused_tools: [],
+        },
+        registered_live_tools: registeredLiveTools,
+        catalog_surface_id: catalogSurfaceId,
+      }],
+    };
+  }
+  function assertOutputReaderClosure(registry: Record<string, any>, label: string): void {
+    const result = checkOutputReaderClosureForRegistry(registry, { site_id: label, site_root: root, registry_path: join(root, `${label}-mcp-surfaces.json`) });
+    assert.equal(result.status, 'ok', `${label} output reader closure violations: ${JSON.stringify(result.violations)}`);
+  }
+
+  const missingReaderCheck = checkOutputReaderClosureForRegistry(
+    registryWithMailboxSurface(['mailbox_message_show'], ['mailbox_message_show']),
+    { site_id: 'missing-reader', site_root: root, registry_path: join(root, 'missing-reader-mcp-surfaces.json') },
+  );
+  assert.equal(missingReaderCheck.status, 'drift');
+  assert.deepEqual((missingReaderCheck.violations as Array<Record<string, any>>).map((violation) => violation.violation), [
+    'missing_registered_live_tool',
+    'missing_read_only_admission',
+  ]);
+  assert.deepEqual((missingReaderCheck.violations as Array<Record<string, any>>).map((violation) => violation.required_reader_tool), [
+    'mailbox_output_show',
+    'mailbox_output_show',
+  ]);
+
+  const missingReadOnlyCheck = checkOutputReaderClosureForRegistry(
+    registryWithMailboxSurface(['mailbox_message_show', 'mailbox_output_show'], ['mailbox_message_show']),
+    { site_id: 'missing-read-only', site_root: root, registry_path: join(root, 'missing-read-only-mcp-surfaces.json') },
+  );
+  assert.equal(missingReadOnlyCheck.status, 'drift');
+  assert.deepEqual((missingReadOnlyCheck.violations as Array<Record<string, any>>).map((violation) => violation.violation), [
+    'missing_read_only_admission',
+  ]);
+
+  const goodReaderCheck = checkOutputReaderClosureForRegistry(
+    registryWithMailboxSurface(['mailbox_message_show', 'mailbox_output_show'], ['mailbox_message_show', 'mailbox_output_show']),
+    { site_id: 'good-reader', site_root: root, registry_path: join(root, 'good-reader-mcp-surfaces.json') },
+  );
+  assert.equal(goodReaderCheck.status, 'ok');
+  assert.deepEqual(goodReaderCheck.violations, []);
 
   const surfaces = await call('registrar_surface_list', {});
   const surfaceData = view(surfaces);
@@ -38,7 +154,7 @@ try {
   assert.equal((speech.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
   assert.equal((speech.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.equal(speech.default_injection, 'all_carrier_sessions');
-  assert.deepEqual(speech.tools, ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
+  assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
   const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
   assert.equal(operatorRouting.injection_scope, 'user_site');
@@ -60,6 +176,8 @@ try {
   assert.equal(registrar.injection_scope, 'user_site');
   assert.deepEqual(registrar.authority_locus, { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' });
   assert.ok(registrar.tools.includes('registrar_surface_tool_inventory_check'));
+  assert.ok(registrar.tools.includes('registrar_site_registry_conformance_check'));
+  assert.ok(registrar.tools.includes('registrar_site_output_reader_closure_check'));
   const bySurface = new Map((surfaceData.items as Array<Record<string, any>>).map((surface) => [surface.id, surface]));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_changed_summary'));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_unstage'));
@@ -68,17 +186,274 @@ try {
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_submit_work'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
+  assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_output_show'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_submit'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_output_show'));
   assert.ok((bySurface.get('mailbox')?.tools as string[]).includes('mailbox_output_show'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_output_show'));
+  assert.ok((bySurface.get('calendar')?.tools as string[]).includes('calendar_output_show'));
   assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_dashboard_describe'));
-  assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), false);
+  assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), true);
   assert.ok((bySurface.get('delegated-task')?.tools as string[]).includes('delegated_task_result'));
   assert.ok((bySurface.get('agent-context')?.tools as string[]).includes('agent_context_list_sessions'));
   assert.ok((bySurface.get('sop')?.tools as string[]).includes('sop_doctor'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_fabric_diagnostics'));
+  assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_tool_inventory_check'));
+  assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_status'));
+  assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_restart'));
   assert.ok((bySurface.get('surface-feedback')?.tools as string[]).includes('surface_feedback_import'));
+
+  const localFilesystemEntrypoint = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
+  const observedLocalFilesystemTools = await observeToolsList(localFilesystemEntrypoint, [
+    '--mode', 'write',
+    '--allowed-root', root,
+    '--output-root', root,
+  ]);
+  const mailboxEntrypoint = fileURLToPath(new URL('../../../mailbox-mcp/dist/src/main.js', import.meta.url));
+  const observedMailboxTools = await observeToolsList(mailboxEntrypoint, ['--site-root', root]);
+  const liveInventoryCheck = view(await call('registrar_surface_tool_inventory_check', {
+    observed_tools: {
+      'local-filesystem': observedLocalFilesystemTools,
+      mailbox: observedMailboxTools,
+    },
+  }));
+  assert.equal(liveInventoryCheck.status, 'ok', JSON.stringify(liveInventoryCheck));
+  assert.ok(observedLocalFilesystemTools.includes('fs_guidance'));
+  assert.ok(observedLocalFilesystemTools.includes('fs_doctor'));
+  assert.ok(observedMailboxTools.includes('mailbox_guidance'));
+  assert.ok(observedMailboxTools.includes('mailbox_output_show'));
+
+  const conformanceSiteRoot = join(root, 'registry-conformance-site');
+  mkdirSync(join(conformanceSiteRoot, '.ai', 'mcp'), { recursive: true });
+  const mailboxCatalogTools = bySurface.get('mailbox')?.tools as string[];
+  writeFileSync(join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-mailbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    site_id: 'registry-conformance-site',
+    mcpServers: {
+      'fixture-mailbox': {
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', conformanceSiteRoot],
+        tools: mailboxCatalogTools,
+        surface_id: 'mailbox',
+      },
+    },
+  }, null, 2), 'utf8');
+  const conformanceSite = {
+    site_id: 'registry-conformance-site',
+    root: conformanceSiteRoot,
+    config_path: join(conformanceSiteRoot, 'config.json'),
+    surfaces: [],
+  };
+  const conformingRegistry = buildSiteSurfaceRegistry(conformanceSite);
+  const conformingSurface = (conformingRegistry.surfaces as Array<Record<string, any>>)[0];
+  const observedConformanceTools = { 'fixture-mailbox': mailboxCatalogTools };
+  const observedConformanceReadOnlyTools = { 'fixture-mailbox': conformingSurface.tool_contract.read_only_tools as string[] };
+  const observedConformanceMutatingTools = { 'fixture-mailbox': conformingSurface.tool_contract.mutating_tools as string[] };
+  const conformingCheck = checkSiteRegistryConformance(
+    conformanceSite,
+    conformingRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+    true,
+  );
+  assert.equal(conformingCheck.status, 'ok', JSON.stringify(conformingCheck));
+  assert.equal(conformingCheck.violation_count, 0);
+
+  const staleRegistry = structuredClone(conformingRegistry);
+  const staleSurface = (staleRegistry.surfaces as Array<Record<string, any>>)[0];
+  staleSurface.registered_live_tools = (staleSurface.registered_live_tools as string[]).filter((tool) => tool !== 'mailbox_output_show');
+  staleSurface.tool_contract.read_only_tools = (staleSurface.tool_contract.read_only_tools as string[]).filter((tool: string) => tool !== 'mailbox_output_show');
+  const staleCheck = checkSiteRegistryConformance(
+    conformanceSite,
+    staleRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  );
+  assert.equal(staleCheck.status, 'drift');
+  const staleCodes = (staleCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  assert.ok(staleCodes.includes('registered_tools_differ_from_live'));
+  assert.ok(staleCodes.includes('output_reader_closure_violation'));
+
+  const overlappingRegistry = structuredClone(conformingRegistry);
+  const overlappingSurface = (overlappingRegistry.surfaces as Array<Record<string, any>>)[0];
+  overlappingSurface.tool_contract.mutating_tools.push('mailbox_doctor');
+  const overlappingCheck = checkSiteRegistryConformance(
+    conformanceSite,
+    overlappingRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  );
+  const overlappingCodes = (overlappingCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  assert.ok(overlappingCodes.includes('tool_contract_partition_overlap'));
+  assert.ok(overlappingCodes.includes('mutating_classification_differ_from_live'));
+
+  const missingEvidenceCheck = checkSiteRegistryConformance(conformanceSite, conformingRegistry, {}, {}, {});
+  const missingEvidenceCodes = (missingEvidenceCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  assert.ok(missingEvidenceCodes.includes('live_tool_observation_missing'));
+  assert.ok(missingEvidenceCodes.includes('live_read_only_observation_missing'));
+  assert.ok(missingEvidenceCodes.includes('live_mutating_observation_missing'));
+
+  const violationCodes = (check: Record<string, any>) =>
+    new Set((check.violations as Array<Record<string, any>>).map((violation) => violation.code));
+
+  const provenanceRegistry = structuredClone(conformingRegistry);
+  provenanceRegistry.schema = 'wrong.schema';
+  provenanceRegistry.site_id = 'wrong-site';
+  provenanceRegistry.generated_by = 'manual';
+  provenanceRegistry.generated_at = 'not-a-time';
+  provenanceRegistry.generation_policy = { mode: 'manual', source: 'unknown', note: 'unknown' };
+  const provenanceCodes = violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    provenanceRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  ));
+  for (const code of [
+    'registry_schema_mismatch',
+    'registry_site_id_mismatch',
+    'registry_generator_mismatch',
+    'registry_generation_policy_mismatch',
+    'registry_generation_source_mismatch',
+    'registry_generation_note_mismatch',
+    'registry_generated_at_invalid',
+  ]) assert.ok(provenanceCodes.has(code), code);
+
+  const missingSurfaceRegistry = structuredClone(conformingRegistry);
+  missingSurfaceRegistry.surfaces = [];
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    missingSurfaceRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('registry_surface_missing'));
+
+  const extraSurfaceRegistry = structuredClone(conformingRegistry);
+  (extraSurfaceRegistry.surfaces as Array<Record<string, any>>).push({ ...structuredClone(conformingSurface), server_name: 'not-in-fabric', surface_id: 'not-in-fabric.local' });
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    extraSurfaceRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('registry_surface_not_in_fabric'));
+
+  const duplicateSurfaceRegistry = structuredClone(conformingRegistry);
+  (duplicateSurfaceRegistry.surfaces as Array<Record<string, any>>).push(structuredClone(conformingSurface));
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    duplicateSurfaceRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('registry_surface_server_name_duplicate'));
+
+  const incompleteContractRegistry = structuredClone(conformingRegistry);
+  const incompleteContractSurface = incompleteContractRegistry.surfaces[0];
+  incompleteContractSurface.tool_contract.read_only_tools =
+    incompleteContractSurface.tool_contract.read_only_tools.filter((tool: string) => tool !== 'mailbox_doctor');
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    incompleteContractRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('tool_contract_partition_incomplete'));
+
+  const refusedContractRegistry = structuredClone(conformingRegistry);
+  const refusedContractSurface = refusedContractRegistry.surfaces[0];
+  refusedContractSurface.tool_contract.read_only_tools =
+    refusedContractSurface.tool_contract.read_only_tools.filter((tool: string) => tool !== 'mailbox_doctor');
+  refusedContractSurface.tool_contract.refused_tools.push('mailbox_doctor');
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    refusedContractRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('tool_contract_contains_external_refusals'));
+
+  const duplicateContractRegistry = structuredClone(conformingRegistry);
+  duplicateContractRegistry.surfaces[0].registered_live_tools.push('mailbox_doctor');
+  duplicateContractRegistry.surfaces[0].tool_contract.read_only_tools.push('mailbox_doctor');
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    duplicateContractRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('tool_contract_contains_duplicates'));
+
+  const incompleteLiveReadOnly = {
+    'fixture-mailbox': observedConformanceReadOnlyTools['fixture-mailbox'].slice(1),
+  };
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    conformingRegistry,
+    observedConformanceTools,
+    incompleteLiveReadOnly,
+    observedConformanceMutatingTools,
+  )).has('live_tool_semantics_partition_incomplete'));
+
+  const overlappingLiveMutating = {
+    'fixture-mailbox': [...observedConformanceMutatingTools['fixture-mailbox'], 'mailbox_doctor'],
+  };
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    conformingRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    overlappingLiveMutating,
+  )).has('live_tool_semantics_partition_overlap'));
+
+  const duplicateLiveTools = {
+    'fixture-mailbox': [...mailboxCatalogTools, mailboxCatalogTools[0]],
+  };
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    conformingRegistry,
+    duplicateLiveTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('live_tools_duplicate'));
+
+  const projectionDriftRegistry = structuredClone(conformingRegistry);
+  projectionDriftRegistry.surfaces[0].display_name = 'manually changed';
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    projectionDriftRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('registry_surface_projection_drift'));
+
+  const missingCatalogRegistry = structuredClone(conformingRegistry);
+  missingCatalogRegistry.surfaces[0].catalog_surface_id = 'missing-catalog-surface';
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    missingCatalogRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('catalog_surface_missing'));
+
+  const conformanceFabricPath = join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-mailbox-mcp.json');
+  const duplicateFabricConfig = JSON.parse(readFileSync(conformanceFabricPath, 'utf8'));
+  duplicateFabricConfig.mcpServers['fixture-mailbox'].tools.push('mailbox_doctor');
+  writeFileSync(conformanceFabricPath, JSON.stringify(duplicateFabricConfig, null, 2), 'utf8');
+  assert.ok(violationCodes(checkSiteRegistryConformance(
+    conformanceSite,
+    conformingRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  )).has('fabric_tools_duplicate'));
+  duplicateFabricConfig.mcpServers['fixture-mailbox'].tools.pop();
+  writeFileSync(conformanceFabricPath, JSON.stringify(duplicateFabricConfig, null, 2), 'utf8');
 
   const inventoryCheck = view(await call('registrar_surface_tool_inventory_check', {
     include_ok: true,
@@ -100,6 +475,47 @@ try {
   assert.ok(gitDrift);
   assert.deepEqual(gitDrift.missing_from_registrar, ['git_extra_observed']);
   assert.ok((gitDrift.extra_in_registrar as string[]).includes('git_policy_inspect'));
+
+  const badMaterializedSiteRoot = join(root, 'bad-materialized-site');
+  mkdirSync(join(badMaterializedSiteRoot, '.narada', 'capabilities'), { recursive: true });
+  writeFileSync(
+    join(badMaterializedSiteRoot, '.narada', 'capabilities', 'mcp-surfaces.json'),
+    JSON.stringify(registryWithMailboxSurface(['mailbox_message_show'], ['mailbox_message_show']), null, 2),
+    'utf8',
+  );
+  const materializedClosureCheck = view(await call('registrar_site_output_reader_closure_check', {
+    site_roots: [badMaterializedSiteRoot],
+  }));
+  assert.equal(materializedClosureCheck.status, 'drift');
+  assert.equal(materializedClosureCheck.violation_count, 2);
+  const materializedViolations = materializedClosureCheck.violations as Array<Record<string, any>>;
+  assert.equal(materializedViolations[0].site_root, badMaterializedSiteRoot);
+  assert.equal(materializedViolations[0].registry_path, join(badMaterializedSiteRoot, '.narada', 'capabilities', 'mcp-surfaces.json'));
+  assert.equal(materializedViolations[0].server_name, 'fixture-mailbox');
+  assert.equal(materializedViolations[0].producer_tool, 'mailbox_message_show');
+  assert.equal(materializedViolations[0].required_reader_tool, 'mailbox_output_show');
+  const missingMaterializedClosureCheck = view(await call('registrar_site_output_reader_closure_check', {
+    site_roots: [join(root, 'site-without-materialized-registry')],
+  }));
+  assert.equal(missingMaterializedClosureCheck.status, 'missing');
+  assert.equal(missingMaterializedClosureCheck.missing_count, 1);
+  assert.equal(missingMaterializedClosureCheck.violation_count, 0);
+
+  const missingCalendarReaderCheck = checkOutputReaderClosureForRegistry(
+    registryWithSurface('calendar', ['calendar_event_query'], ['calendar_event_query']),
+    { site_id: 'missing-calendar-reader', site_root: root, registry_path: join(root, 'missing-calendar-reader-mcp-surfaces.json') },
+  );
+  assert.equal(missingCalendarReaderCheck.status, 'drift');
+  assert.deepEqual((missingCalendarReaderCheck.violations as Array<Record<string, any>>).map((violation) => violation.required_reader_tool), [
+    'calendar_output_show',
+    'calendar_output_show',
+  ]);
+
+  const goodSiteLoopReaderCheck = checkOutputReaderClosureForRegistry(
+    registryWithSurface('site-loop', ['site_loop_guidance', 'site_loop_output_show'], ['site_loop_guidance', 'site_loop_output_show']),
+    { site_id: 'good-site-loop-reader', site_root: root, registry_path: join(root, 'good-site-loop-reader-mcp-surfaces.json') },
+  );
+  assert.equal(goodSiteLoopReaderCheck.status, 'ok');
 
   const sites = await call('registrar_site_list', {});
   const siteData = view(sites);
@@ -140,6 +556,7 @@ try {
     assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js'), true);
     assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/calendar-mcp/dist/src/main.js'), true);
     assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/mcp-loader-mcp/dist/src/main.js'), true);
+    assert.equal(normalizedGeneratedText.includes('C:/Users/Andrey/Narada'), true);
     if (carrierId === 'codex-andrey') {
       assert.equal(generatedText.includes('inbox_submit'), true);
       assert.equal(generatedText.includes('inbox_output_show'), true);
@@ -411,6 +828,7 @@ try {
     },
   }, null, 2), 'utf8');
   const surfaceRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  assertOutputReaderClosure(surfaceRegistry, 'aggregate surface registry');
   const inboxRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-inbox');
   assert.ok(inboxRegistry);
   assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
@@ -439,6 +857,7 @@ try {
     },
   }, null, 2), 'utf8');
   const mailRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  assertOutputReaderClosure(mailRegistry, 'mail surface registry');
   const mailboxRegistry = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mailbox');
   assert.ok(mailboxRegistry);
   assert.ok((mailboxRegistry.registered_live_tools as string[]).includes('mailbox_output_show'));
@@ -448,8 +867,8 @@ try {
   assert.ok(graphMailRegistry);
   assert.ok((graphMailRegistry.registered_live_tools as string[]).includes('graph_mail_output_show'));
   assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_output_show'));
-  assert.ok((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'));
-  assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), false);
+  assert.equal((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'), false);
+  assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), true);
 
   const nestedSiteRoot = join(root, 'nested-control-site');
   mkdirSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp'), { recursive: true });
@@ -465,6 +884,7 @@ try {
     },
   }, null, 2), 'utf8');
   const nestedRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: nestedSiteRoot, config_path: join(nestedSiteRoot, '.narada', 'config.json'), surfaces: [] });
+  assertOutputReaderClosure(nestedRegistry, 'nested surface registry');
   assert.equal((nestedRegistry.surfaces as Array<Record<string, any>>).length, 1);
   assert.ok(((nestedRegistry.surfaces as Array<Record<string, any>>)[0].tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
   const sidecarRefusal = siteBindSidecarRefusal(

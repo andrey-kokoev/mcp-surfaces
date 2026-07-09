@@ -37,6 +37,8 @@ type SurfaceDef = {
   kind: 'mcp_surface' | 'site_tool';
   args: string[];
   tools: string[];
+  output_reader_closure?: Record<string, string>;
+  output_reader_policy_note?: string;
   injection_scope?: McpInjectionScope;
   default_injection?: McpDefaultInjection;
   restart_owner?: McpRestartOwner;
@@ -118,46 +120,44 @@ const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 
-const GIT_TOOLS = ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
-const GRAPH_MAIL_TOOLS = ['graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
+const GIT_TOOLS = ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
+const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
 const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
-const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref'];
-const WORKER_DELEGATION_TOOLS = ['worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe'];
-const DELEGATED_TASK_TOOLS = ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
-const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach'];
-const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check'];
+const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref', 'task_lifecycle_evidence_preflight', 'task_lifecycle_dependency_declare', 'task_lifecycle_dependency_disposition_record'];
+const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
+const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
+const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
+const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
 
 const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
-  'local-filesystem': ['fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search'],
-  'structured-command': ['structured_command_execution_policy_inspect'],
-  git: ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show'],
+  'local-filesystem': ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor'],
+  'structured-command': ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check'],
+  git: ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show'],
   'site-inbox': ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'],
-  mailbox: ['mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
-  'graph-mail': ['graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
-  calendar: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show'],
-  'task-lifecycle': ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_audit', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_bridge_poll', 'mcp_payload_show', 'mcp_payload_validate', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_show', 'task_lifecycle_diagnose_task_ref'],
-  'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
+  mailbox: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
+  'graph-mail': ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
+  calendar: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show'],
+  'task-lifecycle': ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_evidence_preflight', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_audit', 'task_lifecycle_search', 'task_lifecycle_related', 'mcp_payload_show', 'mcp_payload_validate', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_show', 'task_lifecycle_diagnose_task_ref'],
+  'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
   'site-lifecycle': ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
-  'agent-context': ['agent_context_doctor', 'agent_context_whoami', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
-  'worker-delegation': ['worker_policy_inspect', 'worker_config_resolve', 'worker_run_status', 'worker_runs_list', 'worker_dashboard_describe'],
-  'delegated-task': ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_events', 'delegated_tasks_list'],
-  sop: ['sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_run_status', 'sop_run_refresh', 'sop_run_list', 'sop_run_events'],
-  scheduler: ['scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
-  'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest'],
-  'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'],
-  'surface-feedback': ['surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+  'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+  'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
+  'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
+  sop: ['sop_guidance', 'sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_status', 'sop_run_list', 'sop_run_events', 'sop_run_coverage_since'],
+  scheduler: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
+  'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
+  'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'],
+  'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
   launcher: ['launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
-  speech: ['speech_voices', 'speech_listen_status'],
+  speech: ['speech_guidance', 'speech_voices', 'speech_listen_status'],
   'operator-routing': ['operator_route_doctor'],
-  artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_present'],
+  artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_message_part_create'],
   'cloudflare-carrier': ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
   'site-coherence': ['site_coherence_check', 'site_coherence_doctor'],
 };
 
-const REFUSED_TOOLS_BY_SURFACE: Record<string, string[]> = {
-  'graph-mail': ['graph_mail_draft_send'],
-};
+const REFUSED_TOOLS_BY_SURFACE: Record<string, string[]> = {};
 
 const SURFACES: SurfaceDef[] = [
   {
@@ -165,14 +165,14 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--mode', 'write', '--allowed-root', '{site_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
-    tools: ['fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
+    tools: ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
   },
   {
     id: 'structured-command', package: 'structured-command-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/structured-command-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--allowed-root', '{site_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'],
-    tools: ['structured_command_execution_policy_inspect', 'structured_command_execute', 'structured_command_elevated_window_execute', 'structured_command_input_create'],
+    tools: ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check', 'structured_command_execute', 'structured_command_elevated_window_execute', 'structured_command_input_create'],
   },
   {
     id: 'git', package: 'git-mcp',
@@ -180,6 +180,12 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--allowed-root', '{site_root}', '--mode', 'write'],
     tools: GIT_TOOLS,
+    output_reader_closure: {
+      git_status: 'git_output_show',
+      git_diff: 'git_output_show',
+      git_log: 'git_output_show',
+      git_show: 'git_output_show',
+    },
   },
   {
     id: 'site-inbox', package: 'site-inbox-mcp',
@@ -187,13 +193,24 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
     tools: SITE_INBOX_TOOLS,
+    output_reader_closure: {
+      inbox_list: 'inbox_output_show',
+      inbox_show: 'inbox_output_show',
+      inbox_audit: 'inbox_output_show',
+    },
   },
   {
     id: 'mailbox', package: 'mailbox-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/mailbox-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
+    tools: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
+    output_reader_closure: {
+      mailbox_messages_list: 'mailbox_output_show',
+      mailbox_message_show: 'mailbox_output_show',
+      mailbox_search: 'mailbox_output_show',
+      mailbox_thread_show: 'mailbox_output_show',
+    },
   },
   {
     id: 'graph-mail', package: 'graph-mail-mcp',
@@ -201,13 +218,22 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
     tools: GRAPH_MAIL_TOOLS,
+    output_reader_closure: {
+      graph_mail_query: 'graph_mail_output_show',
+      graph_mail_message_show: 'graph_mail_output_show',
+    },
   },
   {
     id: 'calendar', package: 'calendar-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
+    tools: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
+    output_reader_closure: {
+      calendar_list: 'calendar_output_show',
+      calendar_event_query: 'calendar_output_show',
+      calendar_event_show: 'calendar_output_show',
+    },
   },
   {
     id: 'task-lifecycle', package: 'task-lifecycle-mcp',
@@ -221,7 +247,11 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_proof_run', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
+    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_proof_run', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
+    output_reader_closure: {
+      site_loop_guidance: 'site_loop_output_show',
+      site_ops_guidance: 'site_loop_output_show',
+    },
   },
   {
     id: 'site-lifecycle', package: 'site-lifecycle-mcp',
@@ -235,7 +265,11 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}', '--site-id', '{site_id}'],
-    tools: ['agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+    tools: ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+    output_reader_closure: {
+      agent_context_hydrate_current: 'agent_context_output_show',
+      agent_context_startup_sequence: 'agent_context_output_show',
+    },
   },
   {
     id: 'worker-delegation', package: 'worker-delegation-mcp',
@@ -257,7 +291,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'],
-    tools: ['sop_doctor', 'sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events'],
+    tools: ['sop_guidance', 'sop_doctor', 'sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_template_unimport', 'sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events', 'sop_run_coverage_since'],
     sops_dir: `${MCP_SURFACES_ROOT}/sop-mcp/sops`,
   },
   {
@@ -265,13 +299,13 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: [],
-    tools: ['scheduler_task_list', 'scheduler_task_show', 'scheduler_task_create', 'scheduler_task_delete', 'scheduler_task_update_action', 'scheduler_task_enable', 'scheduler_task_disable', 'scheduler_task_run', 'scheduler_task_history'],
+    tools: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_create', 'scheduler_task_delete', 'scheduler_task_update_action', 'scheduler_task_enable', 'scheduler_task_disable', 'scheduler_task_run', 'scheduler_task_history'],
   },
   {
     id: 'mcp-loader', package: 'mcp-loader-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/mcp-loader-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--allowed-site-root', 'D:/code', '--allowed-entrypoint-prefix', `${MCP_SURFACES_ROOT}/`, '--allowed-entrypoint-prefix', '{site_root}/tools/'],
+    args: ['--allowed-site-root', 'D:/code', '--allowed-site-root', USER_NARADA_ROOT, '--allowed-entrypoint-prefix', `${MCP_SURFACES_ROOT}/`, '--allowed-entrypoint-prefix', `${USER_NARADA_ROOT}/tools/`, '--allowed-entrypoint-prefix', '{site_root}/tools/'],
     tools: MCP_LOADER_TOOLS,
   },
   {
@@ -288,7 +322,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--feedback-root', 'D:/code/mcp-surfaces'],
-    tools: ['surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+    tools: ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
     injection_scope: 'user_site',
   },
   {
@@ -304,7 +338,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: [],
-    tools: ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
+    tools: ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     injection_scope: 'host',
     default_injection: 'all_carrier_sessions',
     env_vars: ['OPENAI_API_KEY'],
@@ -468,6 +502,16 @@ type RegistrarState = JsonRecord;
 
 export function createServerState(_options: JsonRecord = {}): RegistrarState {
   return {};
+}
+
+function duplicateStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) duplicates.add(value);
+    else seen.add(value);
+  }
+  return [...duplicates].sort();
 }
 
 function siteAggregateMcpFileName(siteId: string): string {
@@ -816,6 +860,41 @@ export function listTools() {
       annotations: { title: 'registrar_surface_tool_inventory_check', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
+    {
+      name: 'registrar_site_registry_conformance_check',
+      description: 'Prove materialized site MCP registry conformance across live tools/list observations, site fabric declarations, registrar catalog metadata, and admission classification.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          site_id: { type: 'string', description: 'Known site identifier, e.g. smart-scheduling.' },
+          observed_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools/list names keyed by site fabric server name.' },
+          observed_read_only_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools with readOnlyHint=true keyed by site fabric server name.' },
+          observed_mutating_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools with readOnlyHint=false keyed by site fabric server name.' },
+          include_ok: { type: 'boolean', description: 'Include passing per-surface findings.' },
+        },
+        required: ['site_id', 'observed_tools', 'observed_read_only_tools', 'observed_mutating_tools'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'registrar_site_registry_conformance_check', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'registrar_site_output_reader_closure_check',
+      description: 'Check materialized site MCP surface registries for output-ref producer tools whose required reader tools are missing from live or read-only admission metadata.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          site_id: { type: 'string', description: 'Single known site identifier to inspect.' },
+          site_ids: { type: 'array', items: { type: 'string' }, description: 'Known site identifiers to inspect.' },
+          site_root: { type: 'string', description: 'Single explicit site root to inspect.' },
+          site_roots: { type: 'array', items: { type: 'string' }, description: 'Explicit site roots to inspect.' },
+          include_ok: { type: 'boolean', description: 'Include passing site summaries in output.' },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'registrar_site_output_reader_closure_check', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
   ];
 }
 
@@ -844,6 +923,8 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_site_mcp_fabric_validate': result = registrarSiteMcpFabricValidate(args); break;
     case 'registrar_site_surface_registry_sync': result = registrarSiteSurfaceRegistrySync(args); break;
     case 'registrar_surface_tool_inventory_check': result = registrarSurfaceToolInventoryCheck(args); break;
+    case 'registrar_site_registry_conformance_check': result = registrarSiteRegistryConformanceCheck(args); break;
+    case 'registrar_site_output_reader_closure_check': result = registrarSiteOutputReaderClosureCheck(args); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
@@ -1709,6 +1790,462 @@ function registrarSurfaceToolInventoryCheck(args: JsonRecord): JsonRecord {
   };
 }
 
+function sameStringSet(left: string[], right: string[]): boolean {
+  const a = uniqueStrings(left).sort();
+  const b = uniqueStrings(right).sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function stringSetDifference(left: string[], right: string[]): string[] {
+  const rightSet = new Set(uniqueStrings(right));
+  return uniqueStrings(left).filter((value) => !rightSet.has(value)).sort();
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  const record = asRecord(value);
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+}
+
+function observedToolsForSurface(input: JsonRecord, server: SiteMcpFabricServer, registrySurface?: JsonRecord): string[] | null {
+  const keys = uniqueStrings([
+    server.server_key,
+    `${server.server_key}.local`,
+    server.surface_id ?? '',
+    String(registrySurface?.catalog_surface_id ?? ''),
+  ]);
+  for (const key of keys) {
+    if (Object.hasOwn(input, key) && Array.isArray(input[key])) {
+      return (input[key] as unknown[]).map(String);
+    }
+  }
+  return null;
+}
+
+export function checkSiteRegistryConformance(
+  site: SiteDef,
+  registry: JsonRecord,
+  observedToolsInput: JsonRecord,
+  observedReadOnlyToolsInput: JsonRecord,
+  observedMutatingToolsInput: JsonRecord,
+  includeOk = false,
+): JsonRecord {
+  const violations: JsonRecord[] = [];
+  const surfaceResults: JsonRecord[] = [];
+  const rawRegistrySurfaces = Array.isArray(registry.surfaces) ? registry.surfaces : [];
+  const registrySurfaces = rawRegistrySurfaces.map((entry) => asRecord(entry));
+  const registryByServer = new Map<string, JsonRecord>();
+
+  const addGlobal = (code: string, details: JsonRecord = {}) => {
+    violations.push({ layer: 'materialized_registry', code, surface_id: null, server_name: null, ...details });
+  };
+
+  if (registry.schema !== 'narada.site.capabilities.mcp_surfaces.v1') {
+    addGlobal('registry_schema_mismatch', { expected: 'narada.site.capabilities.mcp_surfaces.v1', actual: registry.schema ?? null });
+  }
+  if (registry.site_id !== site.site_id) {
+    addGlobal('registry_site_id_mismatch', { expected: site.site_id, actual: registry.site_id ?? null });
+  }
+  if (registry.generated_by !== 'mcp-registrar') {
+    addGlobal('registry_generator_mismatch', { expected: 'mcp-registrar', actual: registry.generated_by ?? null });
+  }
+  const generationPolicy = asRecord(registry.generation_policy);
+  if (generationPolicy.mode !== 'enabled_surface_tool_authority') {
+    addGlobal('registry_generation_policy_mismatch', { expected: 'enabled_surface_tool_authority', actual: generationPolicy.mode ?? null });
+  }
+  if (generationPolicy.source !== '.ai/mcp + registrar surface catalog') {
+    addGlobal('registry_generation_source_mismatch', { expected: '.ai/mcp + registrar surface catalog', actual: generationPolicy.source ?? null });
+  }
+  if (generationPolicy.note !== 'Every tool exposed by an enabled MCP surface is declared for action admission. The MCP surface remains responsible for command policy and mutation enforcement.') {
+    addGlobal('registry_generation_note_mismatch');
+  }
+  if (typeof registry.generated_at !== 'string' || !Number.isFinite(Date.parse(registry.generated_at))) {
+    addGlobal('registry_generated_at_invalid', { actual: registry.generated_at ?? null });
+  }
+  if (!Array.isArray(registry.surfaces)) {
+    addGlobal('registry_surfaces_invalid', { actual_type: typeof registry.surfaces });
+  }
+
+  for (const surface of registrySurfaces) {
+    const serverName = String(surface.server_name ?? '');
+    if (!serverName) {
+      addGlobal('registry_surface_server_name_missing', { surface_id: surface.surface_id ?? null });
+      continue;
+    }
+    if (registryByServer.has(serverName)) {
+      addGlobal('registry_surface_server_name_duplicate', { server_name: serverName });
+      continue;
+    }
+    registryByServer.set(serverName, surface);
+  }
+
+  const fabricServers = discoverSiteMcpFabric(site);
+  const fabricServerNames = new Set(fabricServers.map((server) => server.server_key));
+  for (const registryServerName of registryByServer.keys()) {
+    if (!fabricServerNames.has(registryServerName)) {
+      addGlobal('registry_surface_not_in_fabric', { server_name: registryServerName });
+    }
+  }
+
+  for (const server of fabricServers) {
+    const surfaceViolations: JsonRecord[] = [];
+    const actualSurface = registryByServer.get(server.server_key);
+    const catalogSurfaceId = actualSurface
+      ? String(actualSurface.catalog_surface_id ?? '')
+      : (server.surface_id ?? fabricSurfaceId(server.server_key, site));
+    const catalog = catalogSurface(catalogSurfaceId) ?? catalogSurfaceAlias(catalogSurfaceId);
+    const rawFabricTools = readConfiguredServerToolsRaw(site, server);
+    const fabricTools = uniqueStrings(rawFabricTools);
+    const liveTools = observedToolsForSurface(observedToolsInput, server, actualSurface);
+    const liveReadOnlyTools = observedToolsForSurface(observedReadOnlyToolsInput, server, actualSurface);
+    const liveMutatingTools = observedToolsForSurface(observedMutatingToolsInput, server, actualSurface);
+    const add = (layer: string, code: string, details: JsonRecord = {}) => {
+      const violation = {
+        layer,
+        code,
+        surface_id: actualSurface?.surface_id ?? `${server.server_key}.local`,
+        server_name: server.server_key,
+        catalog_surface_id: catalog?.id ?? catalogSurfaceId,
+        ...details,
+      };
+      surfaceViolations.push(violation);
+      violations.push(violation);
+    };
+    const compare = (layer: string, code: string, expected: string[], actual: string[]) => {
+      if (sameStringSet(expected, actual)) return;
+      add(layer, code, {
+        missing: stringSetDifference(expected, actual),
+        extra: stringSetDifference(actual, expected),
+        expected_count: uniqueStrings(expected).length,
+        actual_count: uniqueStrings(actual).length,
+      });
+    };
+
+    if (!actualSurface) add('materialized_registry', 'registry_surface_missing');
+    if (!catalog) add('registrar_catalog', 'catalog_surface_missing');
+    if (liveTools === null) add('live_surface', 'live_tool_observation_missing');
+    if (liveReadOnlyTools === null) add('live_surface', 'live_read_only_observation_missing');
+    if (liveMutatingTools === null) add('live_surface', 'live_mutating_observation_missing');
+    const duplicateFabricTools = duplicateStrings(rawFabricTools);
+    if (duplicateFabricTools.length > 0) add('site_fabric', 'fabric_tools_duplicate', { duplicate_tools: duplicateFabricTools });
+    if (liveTools !== null) {
+      const duplicateLiveTools = duplicateStrings(liveTools);
+      if (duplicateLiveTools.length > 0) add('live_surface', 'live_tools_duplicate', { duplicate_tools: duplicateLiveTools });
+    }
+    if (liveReadOnlyTools !== null) {
+      const duplicateLiveReadOnlyTools = duplicateStrings(liveReadOnlyTools);
+      if (duplicateLiveReadOnlyTools.length > 0) add('live_surface', 'live_read_only_tools_duplicate', { duplicate_tools: duplicateLiveReadOnlyTools });
+    }
+    if (liveMutatingTools !== null) {
+      const duplicateLiveMutatingTools = duplicateStrings(liveMutatingTools);
+      if (duplicateLiveMutatingTools.length > 0) add('live_surface', 'live_mutating_tools_duplicate', { duplicate_tools: duplicateLiveMutatingTools });
+    }
+    if (liveTools !== null && liveReadOnlyTools !== null && liveMutatingTools !== null) {
+      compare('live_surface', 'live_tool_semantics_partition_incomplete', liveTools, [...liveReadOnlyTools, ...liveMutatingTools]);
+      const liveOverlaps = uniqueStrings(liveReadOnlyTools.filter((tool) => liveMutatingTools.includes(tool)));
+      if (liveOverlaps.length > 0) add('live_surface', 'live_tool_semantics_partition_overlap', { overlapping_tools: liveOverlaps });
+    }
+
+    if (liveTools !== null) {
+      compare('site_fabric', 'fabric_tools_differ_from_live', liveTools, fabricTools);
+      if (catalog) compare('registrar_catalog', 'catalog_tools_differ_from_live', liveTools, catalog.tools);
+    }
+
+    if (actualSurface) {
+      const registeredTools = uniqueStrings(Array.isArray(actualSurface.registered_live_tools) ? actualSurface.registered_live_tools.map(String) : []);
+      const contract = asRecord(actualSurface.tool_contract);
+      const rawRegisteredTools = Array.isArray(actualSurface.registered_live_tools) ? actualSurface.registered_live_tools.map(String) : [];
+      const rawReadOnlyTools = Array.isArray(contract.read_only_tools) ? contract.read_only_tools.map(String) : [];
+      const rawMutatingTools = Array.isArray(contract.mutating_tools) ? contract.mutating_tools.map(String) : [];
+      const rawRefusedTools = Array.isArray(contract.refused_tools) ? contract.refused_tools.map(String) : [];
+      const readOnlyTools = uniqueStrings(rawReadOnlyTools);
+      const mutatingTools = uniqueStrings(rawMutatingTools);
+      const refusedTools = uniqueStrings(rawRefusedTools);
+      const contractUnion = uniqueStrings([...readOnlyTools, ...mutatingTools, ...refusedTools]);
+      const overlaps = uniqueStrings([
+        ...readOnlyTools.filter((tool) => mutatingTools.includes(tool) || refusedTools.includes(tool)),
+        ...mutatingTools.filter((tool) => refusedTools.includes(tool)),
+      ]);
+      const duplicateContractTools = {
+        registered_live_tools: duplicateStrings(rawRegisteredTools),
+        read_only_tools: duplicateStrings(rawReadOnlyTools),
+        mutating_tools: duplicateStrings(rawMutatingTools),
+        refused_tools: duplicateStrings(rawRefusedTools),
+      };
+      if (Object.values(duplicateContractTools).some((entries) => entries.length > 0)) {
+        add('tool_contract', 'tool_contract_contains_duplicates', duplicateContractTools);
+      }
+
+      if (liveTools !== null) compare('materialized_registry', 'registered_tools_differ_from_live', liveTools, registeredTools);
+      compare('materialized_registry', 'registered_tools_differ_from_fabric', fabricTools, registeredTools);
+      if (catalog) compare('materialized_registry', 'registered_tools_differ_from_catalog', catalog.tools, registeredTools);
+      compare('tool_contract', 'tool_contract_partition_incomplete', registeredTools, contractUnion);
+      if (overlaps.length > 0) add('tool_contract', 'tool_contract_partition_overlap', { overlapping_tools: overlaps });
+      if (refusedTools.length > 0) add('tool_contract', 'tool_contract_contains_external_refusals', { refused_tools: refusedTools });
+      if (liveReadOnlyTools !== null) {
+        compare('tool_contract', 'read_only_classification_differ_from_live', liveReadOnlyTools, readOnlyTools);
+      }
+      if (liveMutatingTools !== null) compare('tool_contract', 'mutating_classification_differ_from_live', liveMutatingTools, mutatingTools);
+
+      const expectedSurface = registrySurfaceForFabricServer(site, server);
+      for (const field of ['surface_id', 'display_name', 'server_name', 'authority_boundary', 'client_config', 'catalog_surface_id']) {
+        if (canonicalJson(actualSurface[field]) !== canonicalJson(asRecord(expectedSurface)[field])) {
+          add('materialized_registry', 'registry_surface_projection_drift', { field });
+        }
+      }
+    }
+
+    if (includeOk || surfaceViolations.length > 0) {
+      surfaceResults.push({
+        surface_id: actualSurface?.surface_id ?? `${server.server_key}.local`,
+        server_name: server.server_key,
+        catalog_surface_id: catalog?.id ?? catalogSurfaceId,
+        status: surfaceViolations.length === 0 ? 'ok' : 'drift',
+        violation_count: surfaceViolations.length,
+        violations: surfaceViolations,
+      });
+    }
+  }
+
+  const outputReaderCheck = checkOutputReaderClosureForRegistry(registry, {
+    site_id: site.site_id,
+    site_root: site.root,
+    registry_path: materializedSurfaceRegistryPathForRoot(site.root),
+  });
+  for (const rawViolation of Array.isArray(outputReaderCheck.violations) ? outputReaderCheck.violations : []) {
+    const violation = { layer: 'output_reader_closure', code: 'output_reader_closure_violation', ...asRecord(rawViolation) };
+    violations.push(violation);
+  }
+
+  return {
+    schema: 'narada.registrar.site_registry_conformance_check.v1',
+    status: violations.length === 0 ? 'ok' : 'drift',
+    site_id: site.site_id,
+    site_root: site.root,
+    registry_path: materializedSurfaceRegistryPathForRoot(site.root),
+    checked_surface_count: fabricServers.length,
+    observed_surface_count: Object.keys(observedToolsInput).length,
+    violation_count: violations.length,
+    violations,
+    surfaces: surfaceResults,
+    output_reader_closure: outputReaderCheck,
+  };
+}
+
+function registrarSiteRegistryConformanceCheck(args: JsonRecord): JsonRecord {
+  const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
+  const site = lookupSite(siteId);
+  const registryPath = materializedSurfaceRegistryPathForRoot(site.root);
+  if (!existsSync(registryPath)) {
+    throw diagnosticError('registrar_site_surface_registry_not_found', `registrar_site_surface_registry_not_found:${registryPath}`, { site_id: siteId, registry_path: registryPath });
+  }
+  let registry: JsonRecord;
+  try {
+    registry = asRecord(JSON.parse(readFileSync(registryPath, 'utf8')));
+  } catch (error) {
+    throw diagnosticError('registrar_site_surface_registry_parse_failed', `registrar_site_surface_registry_parse_failed:${registryPath}`, {
+      site_id: siteId,
+      registry_path: registryPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return checkSiteRegistryConformance(
+    site,
+    registry,
+    asRecord(args.observed_tools),
+    asRecord(args.observed_read_only_tools),
+    asRecord(args.observed_mutating_tools),
+    args.include_ok === true,
+  );
+}
+
+type OutputReaderClosureContext = {
+  site_id?: string;
+  site_root?: string;
+  registry_path?: string;
+};
+
+export function checkOutputReaderClosureForRegistry(registry: JsonRecord, context: OutputReaderClosureContext = {}): JsonRecord {
+  const rawSurfaces = asRecord(registry).surfaces;
+  const violations: JsonRecord[] = [];
+  let producerRuleCount = 0;
+  if (!Array.isArray(rawSurfaces)) {
+    violations.push({
+      site_id: context.site_id ?? null,
+      site_root: context.site_root ?? null,
+      registry_path: context.registry_path ?? null,
+      surface_id: null,
+      server_name: null,
+      catalog_surface_id: null,
+      producer_tool: null,
+      required_reader_tool: null,
+      violation: 'invalid_registry_surfaces',
+    });
+  } else {
+    for (const rawSurface of rawSurfaces) {
+      const surface = asRecord(rawSurface);
+      const registeredTools = new Set(uniqueStrings(Array.isArray(surface.registered_live_tools) ? surface.registered_live_tools : []));
+      const toolContract = asRecord(surface.tool_contract);
+      const readOnlyTools = new Set(uniqueStrings(Array.isArray(toolContract.read_only_tools) ? toolContract.read_only_tools : []));
+      const outputReaderClosure = outputReaderClosureForRegistrySurface(surface);
+      producerRuleCount += Object.keys(outputReaderClosure).length;
+      for (const [producerTool, requiredReaderTool] of Object.entries(outputReaderClosure)) {
+        if (!registeredTools.has(producerTool)) continue;
+        const base = {
+          site_id: context.site_id ?? null,
+          site_root: context.site_root ?? null,
+          registry_path: context.registry_path ?? null,
+          surface_id: String(surface.surface_id ?? ''),
+          server_name: String(surface.server_name ?? ''),
+          catalog_surface_id: String(surface.catalog_surface_id ?? ''),
+          producer_tool: producerTool,
+          required_reader_tool: requiredReaderTool,
+        };
+        if (!registeredTools.has(requiredReaderTool)) {
+          violations.push({ ...base, violation: 'missing_registered_live_tool' });
+        }
+        if (!readOnlyTools.has(requiredReaderTool)) {
+          violations.push({ ...base, violation: 'missing_read_only_admission' });
+        }
+      }
+    }
+  }
+  return {
+    schema: 'narada.registrar.output_reader_closure_check.v1',
+    status: violations.length > 0 ? 'drift' : 'ok',
+    site_id: context.site_id ?? null,
+    site_root: context.site_root ?? null,
+    registry_path: context.registry_path ?? null,
+    checked_surface_count: Array.isArray(rawSurfaces) ? rawSurfaces.length : 0,
+    producer_rule_count: producerRuleCount,
+    violation_count: violations.length,
+    violations,
+  };
+}
+
+function outputReaderClosureForRegistrySurface(surface: JsonRecord): Record<string, string> {
+  const catalogSurfaceId = typeof surface.catalog_surface_id === 'string' ? surface.catalog_surface_id : '';
+  const registeredTools = uniqueStrings(Array.isArray(surface.registered_live_tools) ? surface.registered_live_tools : []);
+  const resolvedCatalogSurface = catalogSurfaceId ? (catalogSurface(catalogSurfaceId) ?? catalogSurfaceAlias(catalogSurfaceId)) : null;
+  if (resolvedCatalogSurface?.output_reader_closure) return resolvedCatalogSurface.output_reader_closure;
+  const inferredSurface = SURFACES.find((candidate) => {
+    if (!candidate.output_reader_closure) return false;
+    return Object.keys(candidate.output_reader_closure).some((producerTool) => registeredTools.includes(producerTool));
+  });
+  return inferredSurface?.output_reader_closure ?? {};
+}
+
+function materializedSurfaceRegistryPathForRoot(siteRoot: string): string {
+  const resolvedRoot = resolve(siteRoot);
+  const normalizedRoot = resolvedRoot.replace(/\\/g, '/');
+  const controlRoot = normalizedRoot.endsWith('/.narada') ? resolvedRoot : join(resolvedRoot, '.narada');
+  return join(controlRoot, 'capabilities', 'mcp-surfaces.json');
+}
+
+function knownSiteIdForRoot(siteRoot: string): string | null {
+  const requested = portablePath(siteRoot);
+  const match = KNOWN_SITES.find((site) => {
+    const siteRoot = portablePath(site.root);
+    const controlRoot = portablePath(siteMcpControlRoot(site));
+    return requested === siteRoot || requested === controlRoot;
+  });
+  return match?.site_id ?? null;
+}
+
+function registrarSiteOutputReaderClosureCheck(args: JsonRecord): JsonRecord {
+  const includeOk = args.include_ok === true;
+  const requested: OutputReaderClosureContext[] = [];
+  const seenRegistryPaths = new Set<string>();
+
+  function add(siteRoot: string, siteId?: string): void {
+    const registryPath = materializedSurfaceRegistryPathForRoot(siteRoot);
+    const normalizedRegistryPath = portablePath(registryPath);
+    if (seenRegistryPaths.has(normalizedRegistryPath)) return;
+    seenRegistryPaths.add(normalizedRegistryPath);
+    requested.push({
+      site_id: siteId ?? knownSiteIdForRoot(siteRoot) ?? undefined,
+      site_root: resolve(siteRoot),
+      registry_path: registryPath,
+    });
+  }
+
+  const siteIds = uniqueStrings([
+    ...(args.site_id ? [args.site_id] : []),
+    ...(Array.isArray(args.site_ids) ? args.site_ids : []),
+  ]);
+  for (const siteId of siteIds) {
+    const site = lookupSite(siteId);
+    add(site.root, site.site_id);
+  }
+
+  const siteRoots = uniqueStrings([
+    ...(args.site_root ? [args.site_root] : []),
+    ...(Array.isArray(args.site_roots) ? args.site_roots : []),
+  ]);
+  for (const siteRoot of siteRoots) add(siteRoot);
+
+  if (requested.length === 0) {
+    throw diagnosticError('registrar_requires_site_for_output_reader_closure_check', 'registrar_requires_site_for_output_reader_closure_check', {
+      expected: 'Pass site_id, site_ids, site_root, or site_roots.',
+    });
+  }
+
+  const sites: JsonRecord[] = [];
+  const violations: JsonRecord[] = [];
+  let missingCount = 0;
+  let driftCount = 0;
+  let checkedSurfaceCount = 0;
+
+  for (const context of requested) {
+    const registryPath = requiredString(context.registry_path, 'registrar_internal_missing_registry_path');
+    if (!existsSync(registryPath)) {
+      missingCount++;
+      const missing = {
+        status: 'missing',
+        site_id: context.site_id ?? null,
+        site_root: context.site_root ?? null,
+        registry_path: registryPath,
+        violation: 'missing_registry',
+      };
+      sites.push(missing);
+      continue;
+    }
+    const registry = readJsonFile(registryPath);
+    if (!registry) {
+      driftCount++;
+      const invalid = {
+        status: 'drift',
+        site_id: context.site_id ?? null,
+        site_root: context.site_root ?? null,
+        registry_path: registryPath,
+        violation: 'invalid_registry_json',
+      };
+      sites.push(invalid);
+      violations.push(invalid);
+      continue;
+    }
+    const check = checkOutputReaderClosureForRegistry(registry, context);
+    checkedSurfaceCount += Number(check.checked_surface_count ?? 0);
+    if (check.status === 'drift') driftCount++;
+    violations.push(...((check.violations as JsonRecord[] | undefined) ?? []));
+    if (check.status !== 'ok' || includeOk) sites.push(check);
+  }
+
+  return {
+    schema: 'narada.registrar.site_output_reader_closure_check.v1',
+    status: driftCount > 0 ? 'drift' : missingCount > 0 ? 'missing' : 'ok',
+    checked_site_count: requested.length,
+    checked_surface_count: checkedSurfaceCount,
+    missing_count: missingCount,
+    drift_count: driftCount,
+    violation_count: violations.length,
+    violations,
+    sites,
+  };
+}
+
 function registrarSiteList(_args: JsonRecord): JsonRecord {
   return { items: KNOWN_SITES, count: KNOWN_SITES.length };
 }
@@ -2057,11 +2594,15 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
   };
 }
 
-function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): string[] {
+function readConfiguredServerToolsRaw(site: SiteDef, server: SiteMcpFabricServer): string[] {
   const filePath = join(siteMcpControlRoot(site), '.ai', 'mcp', server.source_file);
   const cfg = readJsonFile(filePath);
   const rawServer = asRecord(asRecord(cfg?.mcpServers)[server.server_key]);
-  return Array.isArray(rawServer.tools) ? uniqueStrings(rawServer.tools.map(String)) : [];
+  return Array.isArray(rawServer.tools) ? rawServer.tools.map(String) : [];
+}
+
+function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): string[] {
+  return uniqueStrings(readConfiguredServerToolsRaw(site, server));
 }
 
 function surfaceToolContract(surfaceId: string, registeredTools: string[]): SiteSurfaceRegistrySurface['tool_contract'] {

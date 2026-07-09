@@ -18,14 +18,126 @@ const DEFAULT_TOOL_CALL_TIMEOUT_MS = 120000;
 const STDERR_TAIL_LIMIT = 8000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
 
-const DEFAULT_ALLOWED_ENTRYPOINT_PREFIXES = [
-  'D:/code/mcp-surfaces/packages/',
-  '{site_root}/tools/',
-];
+function defaultAllowedSiteRoots(): string[] {
+  const roots = ['D:/code'];
+  const userProfile = process.env.USERPROFILE || process.env.HOME;
+  if (userProfile) roots.push(resolve(userProfile, 'Narada'));
+  return roots;
+}
 
-const DEFAULT_ALLOWED_SITE_ROOTS = [
-  'D:/code',
-];
+function duplicateStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) duplicates.add(value);
+    else seen.add(value);
+  }
+  return [...duplicates].sort();
+}
+
+async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
+  const siteRoot = normalizePath(requiredString(args.site_root, 'missing_site_root'));
+  ensureSiteRootAllowed(siteRoot, state.policy);
+  const servers = asRecord(readSiteFabric(siteRoot).mcpServers);
+  const requestedSurfaceIds = stringArray(args.surface_ids);
+  const surfaceIds = requestedSurfaceIds ?? Object.keys(servers).sort();
+  const includeOk = args.include_ok === true;
+  const findings: JsonRecord[] = [];
+  const observedToolsBySurface: Record<string, string[]> = {};
+  const observedReadOnlyToolsBySurface: Record<string, string[]> = {};
+  const observedMutatingToolsBySurface: Record<string, string[]> = {};
+  const observedUnclassifiedToolsBySurface: Record<string, string[]> = {};
+
+  for (const surfaceId of surfaceIds) {
+    const server = asRecord(servers[surfaceId]);
+    if (!servers[surfaceId]) {
+      findings.push({ surface_id: surfaceId, status: 'surface_not_declared', declared_tools: [], observed_tools: [] });
+      continue;
+    }
+    const rawDeclaredTools = stringArray(server.tools) ?? [];
+    const declaredTools = [...new Set(rawDeclaredTools)].sort();
+    const duplicateDeclaredTools = duplicateStrings(rawDeclaredTools);
+    let connectionId: string | null = null;
+    try {
+      const attached = await attachSurface({ site_root: siteRoot, surface_id: surfaceId }, state);
+      connectionId = requiredString(attached.connection_id, 'attached_connection_id_missing');
+      const connection = getConnection({ connection_id: connectionId }, state);
+      const observedDefinitions = connection.toolSnapshot ?? [];
+      const rawObservedTools = observedDefinitions.map((tool) => String(tool.name ?? '')).filter(Boolean);
+      const observedTools = [...new Set(rawObservedTools)].sort();
+      const duplicateObservedTools = duplicateStrings(rawObservedTools);
+      const observedReadOnlyTools = [...new Set(observedDefinitions
+        .filter((tool) => asRecord(tool.annotations).readOnlyHint === true)
+        .map((tool) => String(tool.name ?? ''))
+        .filter(Boolean))].sort();
+      const observedMutatingTools = [...new Set(observedDefinitions
+        .filter((tool) => asRecord(tool.annotations).readOnlyHint === false)
+        .map((tool) => String(tool.name ?? ''))
+        .filter(Boolean))].sort();
+      const observedUnclassifiedTools = [...new Set(observedDefinitions
+        .filter((tool) => typeof asRecord(tool.annotations).readOnlyHint !== 'boolean')
+        .map((tool) => String(tool.name ?? ''))
+        .filter(Boolean))].sort();
+      observedToolsBySurface[surfaceId] = observedTools;
+      observedReadOnlyToolsBySurface[surfaceId] = observedReadOnlyTools;
+      observedMutatingToolsBySurface[surfaceId] = observedMutatingTools;
+      observedUnclassifiedToolsBySurface[surfaceId] = observedUnclassifiedTools;
+      const missingFromFabric = observedTools.filter((toolName) => !declaredTools.includes(toolName));
+      const extraInFabric = declaredTools.filter((toolName) => !observedTools.includes(toolName));
+      const status = missingFromFabric.length === 0
+        && extraInFabric.length === 0
+        && duplicateDeclaredTools.length === 0
+        && duplicateObservedTools.length === 0
+        && observedUnclassifiedTools.length === 0
+        ? 'ok'
+        : 'drift';
+      if (includeOk || status !== 'ok') {
+        findings.push({
+          surface_id: surfaceId,
+          status,
+          declared_count: declaredTools.length,
+          observed_count: observedTools.length,
+          missing_from_fabric: missingFromFabric,
+          extra_in_fabric: extraInFabric,
+          duplicate_declared_tools: duplicateDeclaredTools,
+          duplicate_observed_tools: duplicateObservedTools,
+          unclassified_observed_tools: observedUnclassifiedTools,
+        });
+      }
+    } catch (error) {
+      const diagnostic = errorDiagnostic(error);
+      findings.push({ surface_id: surfaceId, status: 'probe_failed', error: diagnostic });
+    } finally {
+      if (connectionId && state.connections.has(connectionId)) {
+        detachConnection({ connection_id: connectionId }, state);
+      }
+    }
+  }
+
+  const violationCount = findings.filter((finding) => finding.status !== 'ok').length;
+  return {
+    schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
+    status: violationCount === 0 ? 'ok' : 'drift',
+    site_root: siteRoot,
+    checked_surface_count: surfaceIds.length,
+    violation_count: violationCount,
+    observed_tools: observedToolsBySurface,
+    observed_read_only_tools: observedReadOnlyToolsBySurface,
+    observed_mutating_tools: observedMutatingToolsBySurface,
+    observed_unclassified_tools: observedUnclassifiedToolsBySurface,
+    findings,
+  };
+}
+
+function defaultAllowedEntrypointPrefixes(): string[] {
+  const prefixes = [
+    'D:/code/mcp-surfaces/packages/',
+    '{site_root}/tools/',
+  ];
+  const userProfile = process.env.USERPROFILE || process.env.HOME;
+  if (userProfile) prefixes.push(resolve(userProfile, 'Narada', 'tools'));
+  return prefixes;
+}
 
 const DEFAULT_ALLOWED_ENV_VARS = [
   'NODE_OPTIONS',
@@ -54,6 +166,8 @@ type ChildConnection = {
   surfaceId: string;
   entrypoint: string;
   args: string[];
+  requestedEntrypoint: string | null;
+  extraArgs: string[];
   process: ChildProcess;
   pending: Map<number | string, { resolve: (value: JsonRecord) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>;
   nextId: number;
@@ -63,6 +177,8 @@ type ChildConnection = {
   serverInfo: JsonRecord;
   toolSnapshot: JsonRecord[] | null;
   detached: boolean;
+  attachedAt: string;
+  detachedAt: string | null;
   stderrTail: string;
 };
 
@@ -72,13 +188,13 @@ type LoaderState = {
 };
 
 export function createServerState(options: JsonRecord = {}): LoaderState {
-  const rawAllowedSiteRoots = normalizeStringArray(options.allowedSiteRoots) ?? DEFAULT_ALLOWED_SITE_ROOTS;
-  const rawAllowedPrefixes = normalizeStringArray(options.allowedEntrypointPrefixes) ?? DEFAULT_ALLOWED_ENTRYPOINT_PREFIXES;
+  const rawAllowedSiteRoots = normalizeStringArray(options.allowedSiteRoots) ?? defaultAllowedSiteRoots();
+  const rawAllowedPrefixes = normalizeStringArray(options.allowedEntrypointPrefixes) ?? defaultAllowedEntrypointPrefixes();
   const rawAllowedSurfaces = normalizeStringArray(options.allowedSurfaceIds);
   const allowedSurfaceIds: string[] | 'site_fabric' = rawAllowedSurfaces && rawAllowedSurfaces.length > 0 ? rawAllowedSurfaces : 'site_fabric';
   const policy: LoaderPolicy = {
     allowedSiteRoots: rawAllowedSiteRoots.map((p) => normalizePath(p)),
-    allowedEntrypointPrefixes: rawAllowedPrefixes.map((p) => normalizePath(p)).sort((a, b) => b.length - a.length),
+    allowedEntrypointPrefixes: [...new Set(rawAllowedPrefixes.map((p) => normalizePolicyPrefix(p)))].sort((a, b) => b.length - a.length),
     allowedSurfaceIds,
     allowedEnvVars: normalizeStringArray(options.allowedEnvVars) ?? DEFAULT_ALLOWED_ENV_VARS,
     maxConnections: integer(options.maxConnections, DEFAULT_MAX_CONNECTIONS, 1, 64),
@@ -125,7 +241,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: LoaderS
     case 'tools/list':
       return { tools: listTools() };
     case 'tools/call':
-      return callTool(params, state);
+      return callToolResult(await callTool(params, state));
     default:
       throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method:${method}`);
   }
@@ -133,33 +249,45 @@ async function dispatchMethod(method: string, params: JsonRecord, state: LoaderS
 
 export function listTools() {
   return [
-    tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, []),
+    tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
       site_root: { type: 'string', description: 'Site root directory.' },
-    }, ['site_root']),
+    }, ['site_root'], { readOnly: true }),
     tool('mcp_loader_site_fabric_diagnostics', 'Inspect site MCP fabric provenance and classify shared-registry drift or intentional entrypoint overrides.', {
       site_root: { type: 'string', description: 'Site root directory.' },
-    }, ['site_root']),
+    }, ['site_root'], { readOnly: true }),
+    tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric tool declarations with authoritative live tools/list responses from freshly attached surface children.', {
+      site_root: { type: 'string', description: 'Site root directory.' },
+      surface_ids: { type: 'array', items: { type: 'string' }, description: 'Optional surface ids to check. Defaults to every surface in the site fabric.' },
+      include_ok: { type: 'boolean', description: 'Include passing surface findings.' },
+    }, ['site_root'], { readOnly: true }),
     tool('mcp_loader_attach_surface', 'Spawn and initialize a stdio MCP surface and return a connection id.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_id: { type: 'string', description: 'Surface identifier from the site fabric or shared surface registry.' },
       entrypoint: { type: 'string', description: 'Optional explicit entrypoint path; must be allowed by policy if provided.' },
       args: { type: 'array', items: { type: 'string' }, description: 'Optional additional args appended after resolved args.' },
-    }, ['site_root', 'surface_id']),
+    }, ['site_root', 'surface_id'], { readOnly: false }),
     tool('mcp_loader_list_tools', 'List tools exposed by an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
-    }, ['connection_id']),
+    }, ['connection_id'], { readOnly: true }),
+    tool('mcp_loader_surface_status', 'Inspect the runtime status of an attached MCP surface child process.', {
+      connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
+    }, ['connection_id'], { readOnly: true }),
     tool('mcp_loader_tool_discovery_manifest', 'Return canonical semantic tool names for an attached surface and flag generated aliases as non-authoritative.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
-    }, ['connection_id']),
+    }, ['connection_id'], { readOnly: true }),
     tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       tool_name: { type: 'string', description: 'Tool name on the attached surface.' },
       arguments: { type: 'object', description: 'Arguments object for the tool call.' },
-    }, ['connection_id', 'tool_name']),
+    }, ['connection_id', 'tool_name'], { readOnly: false }),
     tool('mcp_loader_detach', 'Detach and terminate an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
-    }, ['connection_id']),
+    }, ['connection_id'], { readOnly: false, destructive: true }),
+    tool('mcp_loader_surface_restart', 'Replace an attached MCP surface child process with a freshly initialized connection using the same site, surface, entrypoint, and args.', {
+      connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
+      reason: { type: 'string', description: 'Optional operator or caller reason for the restart.' },
+    }, ['connection_id'], { readOnly: false, destructive: true }),
   ];
 }
 
@@ -173,16 +301,22 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
       return listSiteSurfaces(args, state);
     case 'mcp_loader_site_fabric_diagnostics':
       return siteFabricDiagnostics(args, state);
+    case 'mcp_loader_site_tool_inventory_check':
+      return siteToolInventoryCheck(args, state);
     case 'mcp_loader_attach_surface':
       return attachSurface(args, state);
     case 'mcp_loader_list_tools':
       return listAttachedTools(args, state);
+    case 'mcp_loader_surface_status':
+      return surfaceStatus(args, state);
     case 'mcp_loader_tool_discovery_manifest':
       return toolDiscoveryManifest(args, state);
     case 'mcp_loader_call_tool':
       return callAttachedTool(args, state);
     case 'mcp_loader_detach':
       return detachConnection(args, state);
+    case 'mcp_loader_surface_restart':
+      return restartConnection(args, state);
     default:
       throw diagnosticError('unknown_tool', `unknown_tool:${name}`);
   }
@@ -213,10 +347,11 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
 function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord {
   const siteRoot = normalizePath(requiredString(args.site_root, 'missing_site_root'));
   ensureSiteRootAllowed(siteRoot, state.policy);
-  const fabricPath = resolveSiteFabricPath(siteRoot);
-  const fabric = readSiteFabric(siteRoot);
+  const bundle = readSiteFabricBundle(siteRoot);
+  const fabric = bundle.fabric;
   const servers = asRecord(fabric.mcpServers);
   const diagnostics = Object.entries(servers).map(([surfaceId, server]) => {
+    const fabricPath = bundle.sourceBySurface[surfaceId] ?? bundle.paths[0];
     const rec = asRecord(server);
     const command = String(rec.command ?? '');
     const rawArgs = stringArray(rec.args) ?? [];
@@ -270,8 +405,9 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
   return {
     schema: 'narada.mcp_loader.site_fabric_diagnostics.v1',
     site_root: siteRoot,
-    config_path: fabricPath,
-    config_exists: existsSync(fabricPath),
+    config_path: bundle.paths.length === 1 ? bundle.paths[0] : null,
+    config_paths: bundle.paths,
+    config_exists: bundle.paths.every((fabricPath) => existsSync(fabricPath)),
     diagnostics,
     shared_registry_fallbacks: sharedFallbacks,
   };
@@ -296,6 +432,28 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
     throw diagnosticError('entrypoint_not_found', `entrypoint_not_found:${entrypoint}`);
   }
 
+  const connection = await openConnection({
+    state,
+    siteRoot,
+    surfaceId,
+    entrypoint,
+    resolvedArgs,
+    requestedEntrypoint: explicitEntrypoint,
+    extraArgs: extraArgs ?? [],
+  });
+  return attachedResponse(connection);
+}
+
+async function openConnection(input: {
+  state: LoaderState;
+  siteRoot: string;
+  surfaceId: string;
+  entrypoint: string;
+  resolvedArgs: string[];
+  requestedEntrypoint: string | null;
+  extraArgs: string[];
+}): Promise<ChildConnection> {
+  const { state, siteRoot, surfaceId, entrypoint, resolvedArgs, requestedEntrypoint, extraArgs } = input;
   const connectionId = randomUUID();
   const child = spawn(process.execPath, [entrypoint, ...resolvedArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -310,6 +468,8 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
     surfaceId,
     entrypoint,
     args: resolvedArgs,
+    requestedEntrypoint,
+    extraArgs,
     process: child,
     pending: new Map(),
     nextId: 1,
@@ -319,6 +479,8 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
     serverInfo: {},
     toolSnapshot: null,
     detached: false,
+    attachedAt: new Date().toISOString(),
+    detachedAt: null,
     stderrTail: '',
   };
 
@@ -341,13 +503,17 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
   const toolsResult = await sendChildRequest(connection, 'tools/list', {}, state.policy.attachTimeoutMs);
   connection.toolSnapshot = (toolsResult.tools as JsonRecord[]) ?? [];
 
+  return connection;
+}
+
+function attachedResponse(connection: ChildConnection): JsonRecord {
   return {
     schema: 'narada.mcp_loader.surface_attached.v1',
-    connection_id: connectionId,
-    site_root: siteRoot,
-    surface_id: surfaceId,
-    entrypoint,
-    args: resolvedArgs,
+    connection_id: connection.connectionId,
+    site_root: connection.siteRoot,
+    surface_id: connection.surfaceId,
+    entrypoint: connection.entrypoint,
+    args: connection.args,
     server_info: connection.serverInfo,
     tools: connection.toolSnapshot,
   };
@@ -360,6 +526,14 @@ async function listAttachedTools(args: JsonRecord, state: LoaderState): Promise<
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
     tools: connection.toolSnapshot ?? [],
+  };
+}
+
+function surfaceStatus(args: JsonRecord, state: LoaderState): JsonRecord {
+  const connection = getConnection(args, state);
+  return {
+    schema: 'narada.mcp_loader.surface_status.v1',
+    ...connectionStatusFields(connection),
   };
 }
 
@@ -416,6 +590,37 @@ function detachConnection(args: JsonRecord, state: LoaderState): JsonRecord {
   };
 }
 
+async function restartConnection(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
+  const connection = getConnection(args, state);
+  const previous = connectionStatusFields(connection);
+  const previousConnectionId = connection.connectionId;
+  terminateConnection(connection);
+  state.connections.delete(previousConnectionId);
+  const replacement = await openConnection({
+    state,
+    siteRoot: connection.siteRoot,
+    surfaceId: connection.surfaceId,
+    entrypoint: connection.entrypoint,
+    resolvedArgs: connection.args,
+    requestedEntrypoint: connection.requestedEntrypoint,
+    extraArgs: connection.extraArgs,
+  });
+  return {
+    schema: 'narada.mcp_loader.surface_restarted.v1',
+    status: 'restarted',
+    reason: optionalString(args.reason),
+    previous_connection: previous,
+    replacement_connection: connectionStatusFields(replacement),
+    connection_id: replacement.connectionId,
+    previous_connection_id: previousConnectionId,
+    surface_id: replacement.surfaceId,
+    entrypoint: replacement.entrypoint,
+    args: replacement.args,
+    server_info: replacement.serverInfo,
+    tools: replacement.toolSnapshot,
+  };
+}
+
 async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, explicitEntrypoint: string | null, extraArgs: string[] | null): Promise<{ entrypoint: string; resolvedArgs: string[] }> {
   if (explicitEntrypoint) {
     return { entrypoint: normalizePath(explicitEntrypoint), resolvedArgs: extraArgs ?? [] };
@@ -427,11 +632,12 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
     const rec = asRecord(server);
     const command = String(rec.command ?? '');
     const rawArgs = stringArray(rec.args) ?? [];
-    if (!command || !command.includes('main.js')) {
+    const declaredEntrypoint = extractNodeEntrypoint(command, rawArgs);
+    if (!declaredEntrypoint) {
       throw diagnosticError('surface_command_unsupported', `surface_command_unsupported:${surfaceId}:${command}`);
     }
-    const args = rawArgs.filter((a) => a !== '--site-root' && a !== siteRoot);
-    const entrypoint = normalizePath(command.replace(/^node\s+--import\s+tsx\s+/i, '').replace(/^node\s+/i, ''));
+    const entrypoint = normalizePath(declaredEntrypoint);
+    const args = removeEntrypointArg(rawArgs, declaredEntrypoint);
     return { entrypoint, resolvedArgs: [...args, ...extraArgs ?? []] };
   }
   const shared = SHARED_SURFACE_REGISTRY[surfaceId];
@@ -447,6 +653,18 @@ function extractNodeEntrypoint(command: string, args: string[]): string | null {
   const commandEntrypoint = command.replace(/^node\s+--import\s+tsx\s+/i, '').replace(/^node\s+/i, '').trim();
   if (commandEntrypoint && commandEntrypoint !== 'node') return commandEntrypoint;
   return args.find((arg) => /\.m?js$/i.test(arg) || /\.cjs$/i.test(arg)) ?? null;
+}
+
+function removeEntrypointArg(args: string[], entrypoint: string): string[] {
+  let removed = false;
+  const normalizedEntrypoint = normalizePath(entrypoint);
+  return args.filter((arg) => {
+    if (!removed && normalizePath(arg) === normalizedEntrypoint) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
 }
 
 function classifyFabricEntrypoint({ siteRoot, declaredEntrypoint, expectedEntrypoint, entrypointExists }: {
@@ -521,18 +739,19 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
 };
 
-function resolveSiteFabricPath(siteRoot: string): string {
+function resolveSiteFabricPaths(siteRoot: string): string[] {
   const mcpDir = resolve(siteRoot, '.ai', 'mcp');
   const canonicalPath = resolve(mcpDir, 'config.json');
-  if (existsSync(canonicalPath)) return canonicalPath;
+  if (existsSync(canonicalPath)) return [canonicalPath];
   const siteBase = basename(siteRoot).replace(/\./g, '-');
   const siteAggregatePath = resolve(mcpDir, `${siteBase}-mcp.json`);
-  if (existsSync(siteAggregatePath)) return siteAggregatePath;
+  if (existsSync(siteAggregatePath)) return [siteAggregatePath];
   if (!existsSync(mcpDir)) {
     throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${canonicalPath}`);
   }
   const candidates = readdirSync(mcpDir)
     .filter((name) => name.endsWith('-mcp.json'))
+    .sort()
     .map((name) => resolve(mcpDir, name))
     .filter((candidatePath) => {
       try {
@@ -541,23 +760,48 @@ function resolveSiteFabricPath(siteRoot: string): string {
         return false;
       }
     });
-  if (candidates.length === 1) return candidates[0];
-  if (candidates.length > 1) {
-    throw diagnosticError('site_fabric_ambiguous', `site_fabric_ambiguous:${mcpDir}`);
-  }
+  if (candidates.length > 0) return candidates;
   throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${canonicalPath}`);
 }
 
+function readSiteFabricBundle(siteRoot: string): { fabric: JsonRecord; paths: string[]; sourceBySurface: Record<string, string> } {
+  const paths = resolveSiteFabricPaths(siteRoot);
+  const mcpServers: JsonRecord = {};
+  const sourceBySurface: Record<string, string> = {};
+  let siteId: string | null = null;
+  for (const fabricPath of paths) {
+    let fragment: JsonRecord;
+    try {
+      fragment = asRecord(JSON.parse(readFileSync(fabricPath, 'utf8')));
+    } catch (error) {
+      throw diagnosticError('site_fabric_parse_error', `site_fabric_parse_error:${fabricPath}:${error instanceof Error ? error.message : String(error)}`);
+    }
+    const fragmentSiteId = typeof fragment.site_id === 'string' ? fragment.site_id : null;
+    if (fragmentSiteId && siteId && fragmentSiteId !== siteId) {
+      throw diagnosticError('site_fabric_site_id_mismatch', `site_fabric_site_id_mismatch:${siteId}:${fragmentSiteId}:${fabricPath}`);
+    }
+    if (fragmentSiteId) siteId = fragmentSiteId;
+    for (const [surfaceId, server] of Object.entries(asRecord(fragment.mcpServers))) {
+      if (Object.hasOwn(mcpServers, surfaceId)) {
+        throw diagnosticError('site_fabric_duplicate_surface', `site_fabric_duplicate_surface:${surfaceId}:${sourceBySurface[surfaceId]}:${fabricPath}`);
+      }
+      mcpServers[surfaceId] = server;
+      sourceBySurface[surfaceId] = fabricPath;
+    }
+  }
+  return {
+    fabric: {
+      schema: paths.length === 1 ? 'narada.mcp_loader.site_fabric.v1' : 'narada.mcp_loader.fragmented_site_fabric.v1',
+      site_id: siteId,
+      mcpServers,
+    },
+    paths,
+    sourceBySurface,
+  };
+}
+
 function readSiteFabric(siteRoot: string): JsonRecord {
-  const fabricPath = resolveSiteFabricPath(siteRoot);
-  if (!existsSync(fabricPath)) {
-    throw diagnosticError('site_fabric_not_found', `site_fabric_not_found:${fabricPath}`);
-  }
-  try {
-    return JSON.parse(readFileSync(fabricPath, 'utf8'));
-  } catch (error) {
-    throw diagnosticError('site_fabric_parse_error', `site_fabric_parse_error:${error instanceof Error ? error.message : String(error)}`);
-  }
+  return readSiteFabricBundle(siteRoot).fabric;
 }
 
 function buildChildEnv(siteRoot: string, policy: LoaderPolicy): NodeJS.ProcessEnv {
@@ -595,7 +839,7 @@ function ensureEntrypointAllowed(siteRoot: string, entrypoint: string, policy: L
   const resolvedSiteRoot = normalizePath(siteRoot);
   for (const prefix of policy.allowedEntrypointPrefixes) {
     const expanded = prefix.replace(/{site_root}/g, resolvedSiteRoot);
-    if (realEntrypoint === expanded || realEntrypoint.startsWith(expanded)) return;
+    if (realEntrypoint === expanded || realEntrypoint.startsWith(`${expanded}/`)) return;
   }
   throw diagnosticError('entrypoint_not_allowed', `entrypoint_not_allowed:${entrypoint}`);
 }
@@ -672,6 +916,7 @@ function cleanupConnection(connection: ChildConnection) {
 
 function terminateConnection(connection: ChildConnection) {
   connection.detached = true;
+  connection.detachedAt = new Date().toISOString();
   const proc = connection.process;
   if (!proc.killed && proc.exitCode === null) {
     proc.kill('SIGTERM');
@@ -679,6 +924,31 @@ function terminateConnection(connection: ChildConnection) {
       if (!proc.killed && proc.exitCode === null) proc.kill('SIGKILL');
     }, 5000);
   }
+}
+
+function connectionStatusFields(connection: ChildConnection): JsonRecord {
+  const proc = connection.process;
+  const live = !connection.detached && proc.exitCode === null && proc.signalCode === null && !proc.killed;
+  return {
+    connection_id: connection.connectionId,
+    site_root: connection.siteRoot,
+    surface_id: connection.surfaceId,
+    entrypoint: connection.entrypoint,
+    args: connection.args,
+    status: live ? 'live' : 'closed',
+    detached: connection.detached,
+    initialized: connection.initialized,
+    pid: proc.pid ?? null,
+    exit_code: proc.exitCode,
+    signal_code: proc.signalCode,
+    killed: proc.killed,
+    pending_count: connection.pending.size,
+    attached_at: connection.attachedAt,
+    detached_at: connection.detachedAt,
+    stderr_tail: connection.stderrTail,
+    server_info: connection.serverInfo,
+    tool_count: connection.toolSnapshot?.length ?? null,
+  };
 }
 
 function enforceRequestSize(args: JsonRecord, maxBytes: number) {
@@ -704,18 +974,37 @@ function childRuntimeDiagnostic(connection: ChildConnection, extra: JsonRecord =
   };
 }
 
+function callToolResult(result: JsonRecord): JsonRecord {
+  return {
+    content: [{
+      type: 'text',
+      text: renderResult(result),
+      annotations: { audience: ['assistant'] },
+    }],
+    structuredContent: result,
+  };
+}
+
+function renderResult(result: JsonRecord): string {
+  const schema = typeof result.schema === 'string' ? result.schema : 'mcp_loader.result';
+  const status = typeof result.status === 'string' ? result.status : 'ok';
+  const connectionId = typeof result.connection_id === 'string' ? `\nconnection_id: ${result.connection_id}` : '';
+  const surfaceId = typeof result.surface_id === 'string' ? `\nsurface_id: ${result.surface_id}` : '';
+  return `${schema}: ${status}${connectionId}${surfaceId}`;
+}
+
 function tail(text: string, limit: number): string {
   return text.length <= limit ? text : text.slice(text.length - limit);
 }
 
-function tool(name: string, description: string, properties: JsonRecord, required: string[]) {
+function tool(name: string, description: string, properties: JsonRecord, required: string[], semantics: { readOnly: boolean; destructive?: boolean }) {
   return {
     name,
     description,
     annotations: {
       title: name,
-      readOnlyHint: name === 'mcp_loader_policy_inspect' || name === 'mcp_loader_list_site_surfaces' || name === 'mcp_loader_site_fabric_diagnostics' || name === 'mcp_loader_list_tools',
-      destructiveHint: name === 'mcp_loader_detach',
+      readOnlyHint: semantics.readOnly,
+      destructiveHint: semantics.destructive === true,
       idempotentHint: false,
       openWorldHint: true,
     },
@@ -726,6 +1015,12 @@ function tool(name: string, description: string, properties: JsonRecord, require
 
 function normalizePath(p: string): string {
   return resolve(p).replace(/\\/g, '/');
+}
+
+function normalizePolicyPrefix(prefix: string): string {
+  const normalized = prefix.replace(/\\/g, '/').replace(/\/+$/g, '');
+  if (normalized === '{site_root}' || normalized.startsWith('{site_root}/')) return normalized;
+  return normalizePath(prefix);
 }
 
 function deriveSiteId(siteRoot: string): string {

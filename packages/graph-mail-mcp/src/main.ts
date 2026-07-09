@@ -1310,6 +1310,47 @@ function redactTokenResponse(text: string): string {
   return text.replace(/("(?:access_token|client_secret|refresh_token)"\s*:\s*")([^"]+)(")/gi, '$1<redacted>$3');
 }
 
+const GRAPH_MAIL_MUTATING_TOOLS = new Set([
+  'graph_mail_auth_device_code_start',
+  'graph_mail_auth_device_code_poll',
+  'graph_mail_auth_clear',
+  'graph_mail_folder_create',
+  'graph_mail_message_move',
+  'graph_mail_attachment_add',
+  'graph_mail_attachment_upload_session_create',
+  'graph_mail_attachment_upload_chunk',
+  'graph_mail_attachment_upload_file',
+  'graph_mail_attachment_delete',
+  'graph_mail_draft_create',
+  'graph_mail_reply_draft_create',
+  'graph_mail_reply_all_draft_create',
+  'graph_mail_forward_draft_create',
+  'graph_mail_reply_all_to_last_in_thread_draft_create',
+  'graph_mail_draft_update',
+  'graph_mail_draft_discard',
+  'graph_mail_draft_send',
+]);
+
+const GRAPH_MAIL_DESTRUCTIVE_TOOLS = new Set([
+  'graph_mail_auth_clear',
+  'graph_mail_message_move',
+  'graph_mail_attachment_delete',
+  'graph_mail_draft_discard',
+  'graph_mail_draft_send',
+]);
+
+const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
+  'graph_mail_guidance',
+  'graph_mail_doctor',
+  'graph_mail_auth_status',
+  'graph_mail_query',
+  'graph_mail_message_show',
+  'graph_mail_output_show',
+  'graph_mail_folder_list',
+  'graph_mail_attachment_list',
+  'graph_mail_attachment_get',
+]);
+
 function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {
   return {
     name,
@@ -1326,12 +1367,11 @@ function tool(name: string, description: string, properties: unknown, required: 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /auth_device_code_start|auth_device_code_poll|auth_clear|draft_create|draft_update|draft_discard|draft_send|attachment_add|attachment_upload_session_create|attachment_upload_chunk|attachment_delete|folder_create|message_move/.test(name);
   return {
     title: name,
-    readOnlyHint: !writes,
-    destructiveHint: /auth_clear|draft_discard|draft_send|attachment_delete|message_move/.test(name),
-    idempotentHint: /doctor|auth_status|query|show|folder_list|attachment_list|attachment_get/.test(name),
+    readOnlyHint: !GRAPH_MAIL_MUTATING_TOOLS.has(name),
+    destructiveHint: GRAPH_MAIL_DESTRUCTIVE_TOOLS.has(name),
+    idempotentHint: GRAPH_MAIL_IDEMPOTENT_TOOLS.has(name),
     openWorldHint: true,
   };
 }

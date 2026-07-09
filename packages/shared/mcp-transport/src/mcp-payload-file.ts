@@ -720,6 +720,7 @@ export function listPayloadTools() {
     toolDefinition({
       name: 'mcp_payload_create',
       description: 'Create immutable transient MCP payload revision v1 under .ai/tmp/mcp-payloads/workspace.',
+      behavior: { readOnly: false, destructive: false, idempotent: false },
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -736,6 +737,7 @@ export function listPayloadTools() {
     toolDefinition({
       name: 'mcp_payload_show',
       description: 'Show an immutable transient MCP payload revision by ref.',
+      behavior: { readOnly: true, destructive: false, idempotent: true },
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -746,6 +748,7 @@ export function listPayloadTools() {
     toolDefinition({
       name: 'mcp_payload_derive',
       description: 'Derive a new immutable payload revision by applying a constrained object overlay.',
+      behavior: { readOnly: false, destructive: false, idempotent: false },
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -762,6 +765,7 @@ export function listPayloadTools() {
     toolDefinition({
       name: 'mcp_payload_validate',
       description: 'Validate that a payload ref exists, is well-formed, and is within size limits.',
+      behavior: { readOnly: true, destructive: false, idempotent: true },
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -773,21 +777,17 @@ export function listPayloadTools() {
 }
 
 function toolDefinition(definition) {
+  const { behavior, ...tool } = definition;
   return {
-    ...definition,
-    annotations: toolAnnotations(definition.name),
+    ...tool,
+    annotations: {
+      title: String(tool.name),
+      readOnlyHint: behavior.readOnly,
+      destructiveHint: behavior.destructive,
+      idempotentHint: behavior.idempotent,
+      openWorldHint: false,
+    },
     outputSchema: genericToolOutputSchema(),
-  };
-}
-
-function toolAnnotations(name) {
-  const destructive = /delete|remove|write|replace|move|rename|apply|create|derive|validate/.test(String(name));
-  return {
-    title: String(name),
-    readOnlyHint: !destructive,
-    destructiveHint: /delete|remove|replace|move|rename|apply/.test(String(name)),
-    idempotentHint: /show|inspect|list|read|validate/.test(String(name)),
-    openWorldHint: false,
   };
 }
 

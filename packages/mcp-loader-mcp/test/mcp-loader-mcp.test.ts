@@ -9,13 +9,36 @@ const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
 const aggregateRoot = join(mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-aggregate-parent-')), 'narada.sonar');
 mkdirSync(join(aggregateRoot, '.ai', 'mcp'), { recursive: true });
+const fragmentedRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-fragmented-'));
+mkdirSync(join(fragmentedRoot, '.ai', 'mcp'), { recursive: true });
+const duplicateRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-duplicate-'));
+mkdirSync(join(duplicateRoot, '.ai', 'mcp'), { recursive: true });
 const externalRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-external-'));
 const externalAgentContextEntrypoint = join(externalRoot, 'packages', 'agent-context-tools', 'src', 'agent-context-mcp-server.mjs');
 mkdirSync(dirname(externalAgentContextEntrypoint), { recursive: true });
 writeFileSync(externalAgentContextEntrypoint, 'export {};\n', 'utf8');
-const failingEntrypoint = join(root, 'failing-child.mjs');
-writeFileSync(failingEntrypoint, "process.stderr.write('loader child import failed\\n'); process.exit(42);\n", 'utf8');
-writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
+  const failingEntrypoint = join(root, 'failing-child.mjs');
+  writeFileSync(failingEntrypoint, "process.stderr.write('loader child import failed\\n'); process.exit(42);\n", 'utf8');
+  const restartableEntrypoint = join(root, 'restartable-child.mjs');
+  writeFileSync(restartableEntrypoint, `
+process.stdin.setEncoding('utf8');
+let buffer = '';
+function write(message) { process.stdout.write(JSON.stringify(message) + '\\n'); }
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  const lines = buffer.split(/\\r?\\n/);
+  buffer = lines.pop() ?? '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const request = JSON.parse(line);
+    if (request.method === 'initialize') write({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'restartable-child', pid: process.pid } } });
+    else if (request.method === 'tools/list') write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }] } });
+    else if (request.method === 'tools/call') write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2) } } });
+    else write({ jsonrpc: '2.0', id: request.id, result: {} });
+  }
+});
+`, 'utf8');
+  writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
   mcpServers: {
     'test-echo': {
       command: 'node',
@@ -29,6 +52,21 @@ writeFileSync(join(root, '.ai', 'mcp', 'config.json'), JSON.stringify({
       command: 'node',
       args: [externalAgentContextEntrypoint],
     },
+    restartable: {
+      command: 'node',
+      args: [restartableEntrypoint, '--site-root', root, '--marker', 'fabric'],
+      tools: ['echo'],
+    },
+    'restartable-drift': {
+      command: 'node',
+      args: [restartableEntrypoint, '--site-root', root, '--marker', 'drift'],
+      tools: [],
+    },
+    'restartable-unclassified': {
+      command: 'node',
+      args: [restartableEntrypoint, '--site-root', root, '--unclassified'],
+      tools: ['echo'],
+    },
   },
 }), 'utf8');
 writeFileSync(join(aggregateRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
@@ -39,9 +77,25 @@ writeFileSync(join(aggregateRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.s
     },
   },
 }), 'utf8');
+writeFileSync(join(fragmentedRoot, '.ai', 'mcp', 'alpha-mcp.json'), JSON.stringify({
+  site_id: 'fragmented-site',
+  mcpServers: { alpha: { command: 'node', args: ['--version'] } },
+}), 'utf8');
+writeFileSync(join(fragmentedRoot, '.ai', 'mcp', 'beta-mcp.json'), JSON.stringify({
+  site_id: 'fragmented-site',
+  mcpServers: { beta: { command: 'node', args: ['--version'] } },
+}), 'utf8');
+writeFileSync(join(duplicateRoot, '.ai', 'mcp', 'alpha-mcp.json'), JSON.stringify({
+  site_id: 'duplicate-site',
+  mcpServers: { duplicate: { command: 'node', args: ['--version'] } },
+}), 'utf8');
+writeFileSync(join(duplicateRoot, '.ai', 'mcp', 'beta-mcp.json'), JSON.stringify({
+  site_id: 'duplicate-site',
+  mcpServers: { duplicate: { command: 'node', args: ['--help'] } },
+}), 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';
@@ -56,10 +110,18 @@ function rpc(method: string, params: Record<string, unknown>, id: number) {
 
 async function call(method: string, params: Record<string, unknown>, id: number): Promise<Record<string, any> | undefined> {
   child.stdin.write(rpc(method, params, id));
-  await new Promise((r) => setTimeout(r, 150));
-  const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
-  const response = lines.map((line) => JSON.parse(line)).find((m) => m.id === id);
-  return (response?.result ?? response?.error) as Record<string, any> | undefined;
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+    const response = lines.map((line) => JSON.parse(line)).find((m) => m.id === id);
+    if (response) {
+      if (response.error) return response.error as Record<string, any>;
+      const result = response.result as Record<string, any>;
+      return (result.structuredContent ?? result) as Record<string, any>;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return undefined;
 }
 
 try {
@@ -75,6 +137,28 @@ try {
   assert.equal(aggregateListResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
   const aggregateSurfaces = aggregateListResult?.surfaces as { surface_id: string }[];
   assert.ok(aggregateSurfaces.some((s) => s.surface_id === 'site-loop'), `expected site-loop in ${JSON.stringify(aggregateSurfaces)}`);
+
+  const fragmentedListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: fragmentedRoot } }, 21);
+  assert.equal(fragmentedListResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
+  const fragmentedSurfaces = fragmentedListResult?.surfaces as { surface_id: string }[];
+  assert.deepEqual(fragmentedSurfaces.map((surface) => surface.surface_id).sort(), ['alpha', 'beta']);
+
+  const duplicateListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: duplicateRoot } }, 22);
+  assert.equal(duplicateListResult?.data?.code, 'site_fabric_duplicate_surface');
+
+  const inventoryOk = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable'], include_ok: true } }, 23);
+  assert.equal(inventoryOk?.status, 'ok');
+  assert.equal(inventoryOk?.violation_count, 0);
+  assert.deepEqual(inventoryOk?.observed_tools?.restartable, ['echo']);
+  assert.deepEqual(inventoryOk?.observed_read_only_tools?.restartable, []);
+  assert.deepEqual(inventoryOk?.observed_mutating_tools?.restartable, ['echo']);
+  assert.deepEqual(inventoryOk?.observed_unclassified_tools?.restartable, []);
+  const inventoryDrift = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-drift'] } }, 24);
+  assert.equal(inventoryDrift?.status, 'drift');
+  assert.deepEqual(inventoryDrift?.findings?.[0]?.missing_from_fabric, ['echo']);
+  const inventoryUnclassified = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-unclassified'] } }, 25);
+  assert.equal(inventoryUnclassified?.status, 'drift');
+  assert.deepEqual(inventoryUnclassified?.findings?.[0]?.unclassified_observed_tools, ['echo']);
 
   const diagnosticsResult = await call('tools/call', { name: 'mcp_loader_site_fabric_diagnostics', arguments: { site_root: root } }, 4);
   assert.equal(diagnosticsResult?.schema, 'narada.mcp_loader.site_fabric_diagnostics.v1');
@@ -105,11 +189,44 @@ try {
   assert.equal(feedbackArgs.includes(root), false);
   await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: feedbackAttach?.connection_id } }, 8);
 
+  const fabricAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable' } }, 18);
+  assert.equal(fabricAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  assert.equal(fabricAttach?.entrypoint, restartableEntrypoint.replace(/\\/g, '/'));
+  assert.deepEqual(fabricAttach?.args, ['--site-root', root, '--marker', 'fabric']);
+  const fabricCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { n: 0 } } }, 19);
+  assert.deepEqual(fabricCall?.result?.structuredContent?.child_args, ['--site-root', root, '--marker', 'fabric']);
+  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
+
+  const restartableAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable', entrypoint: restartableEntrypoint } }, 11);
+  assert.equal(restartableAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  const oldConnectionId = String(restartableAttach?.connection_id);
+  const initialStatus = await call('tools/call', { name: 'mcp_loader_surface_status', arguments: { connection_id: oldConnectionId } }, 12);
+  assert.equal(initialStatus?.schema, 'narada.mcp_loader.surface_status.v1');
+  assert.equal(initialStatus?.status, 'live');
+  const firstCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: oldConnectionId, tool_name: 'echo', arguments: { n: 1 } } }, 13);
+  assert.equal(firstCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  const firstPid = firstCall?.result?.structuredContent?.pid;
+  const restart = await call('tools/call', { name: 'mcp_loader_surface_restart', arguments: { connection_id: oldConnectionId, reason: 'test transport replacement' } }, 14);
+  assert.equal(restart?.schema, 'narada.mcp_loader.surface_restarted.v1');
+  assert.equal(restart?.status, 'restarted');
+  assert.equal(restart?.previous_connection_id, oldConnectionId);
+  assert.notEqual(restart?.connection_id, oldConnectionId);
+  assert.equal(restart?.previous_connection?.status, 'live');
+  assert.equal(restart?.replacement_connection?.status, 'live');
+  const oldCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: oldConnectionId, tool_name: 'echo', arguments: {} } }, 15);
+  assert.equal(oldCall?.data?.code, 'connection_not_found');
+  const replacementCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: restart?.connection_id, tool_name: 'echo', arguments: { n: 2 } } }, 16);
+  assert.equal(replacementCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  assert.notEqual(replacementCall?.result?.structuredContent?.pid, firstPid);
+  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: restart?.connection_id } }, 17);
+
   console.log('mcp-loader-mcp behavior ok');
 } finally {
   child.stdin.end();
   await new Promise((resolve) => child.on('close', resolve));
   rmSync(root, { recursive: true, force: true });
   rmSync(dirname(aggregateRoot), { recursive: true, force: true });
+  rmSync(fragmentedRoot, { recursive: true, force: true });
+  rmSync(duplicateRoot, { recursive: true, force: true });
   rmSync(externalRoot, { recursive: true, force: true });
 }
