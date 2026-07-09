@@ -223,7 +223,7 @@ try {
       package: 'worker-delegation-mcp',
       entrypoint: 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
       kind: 'mcp_surface',
-      args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_root}/.narada/runtime/worker-delegation'],
+      args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
       tools: ['worker_run'],
       env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
     },
@@ -233,9 +233,28 @@ try {
   assertRuntimeProxy(workerServer, 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js');
   assert.ok(workerServer.args.includes('--site-root'));
   assert.equal(workerServer.args[workerServer.args.indexOf('--site-root') + 1], root);
+  assert.equal(String(workerServer.args[workerServer.args.indexOf('--run-root') + 1]).replace(/\\/g, '/'), join(root, '.narada', 'runtime', 'worker-delegation').replace(/\\/g, '/'));
   assert.ok(workerServer.env_vars.includes('DEEPSEEK_API_KEY'));
   assert.ok(workerServer.env_vars.includes('DEEPSEEK_API_BASE_URL'));
   assert.ok(workerServer.env_vars.includes('NARADA_WORKER_MCP_CONFIG'));
+
+  const controlRootSite = join(root, 'control-root-site', '.narada');
+  mkdirSync(controlRootSite, { recursive: true });
+  const controlRootWorkerBindConfig = buildSiteBindConfig(
+    { site_id: 'smart-scheduling', root: controlRootSite, config_path: join(controlRootSite, 'config.json'), surfaces: [] },
+    {
+      id: 'worker-delegation',
+      package: 'worker-delegation-mcp',
+      entrypoint: 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
+      kind: 'mcp_surface',
+      args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
+      tools: ['worker_run'],
+    },
+  );
+  const controlRootWorkerServer = (controlRootWorkerBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-worker-delegation'];
+  const controlRootRunRoot = String(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--run-root') + 1]);
+  assert.equal(controlRootRunRoot.replace(/\\/g, '/'), join(controlRootSite, 'runtime', 'worker-delegation').replace(/\\/g, '/'));
+  assert.equal(controlRootRunRoot.replace(/\\/g, '/').includes('/.narada/.narada/'), false);
 
   const surfaceFeedbackBindConfig = buildSiteBindConfig(
     { site_id: 'narada-staccato', root, config_path: join(root, 'site.json'), surfaces: [] },

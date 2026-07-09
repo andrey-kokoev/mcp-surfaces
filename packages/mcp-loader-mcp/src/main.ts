@@ -437,7 +437,7 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
   const shared = SHARED_SURFACE_REGISTRY[surfaceId];
   if (shared) {
     const entrypoint = normalizePath(shared.entrypoint.replace(/{site_root}/g, siteRoot));
-    const args = shared.args.map((a) => a.replace(/{site_root}/g, siteRoot).replace(/{site_id}/g, deriveSiteId(siteRoot)));
+    const args = shared.args.map((a) => interpolateSiteArg(a, siteRoot));
     return { entrypoint, resolvedArgs: [...args, ...extraArgs ?? []] };
   }
   throw diagnosticError('surface_not_found', `surface_not_found:${surfaceId}`);
@@ -508,7 +508,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'task-lifecycle': { entrypoint: '{site_root}/tools/task-lifecycle/task-mcp-server.mjs', args: ['--site-root', '{site_root}'] },
   'site-loop': { entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`, args: ['--site-root', '{site_root}'] },
   'agent-context': { entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
-  'worker-delegation': { entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--run-root', '{site_root}/.narada/runtime/worker-delegation'] },
+  'worker-delegation': { entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'] },
   'delegated-task': { entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`, args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'] },
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
   'scheduler': { entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`, args: [] },
@@ -732,6 +732,16 @@ function deriveSiteId(siteRoot: string): string {
   const parts = siteRoot.replace(/\\/g, '/').split('/').filter(Boolean);
   const last = parts[parts.length - 1] ?? 'site';
   return last.replace(/^narada\./, '').replace(/^narada-/, '');
+}
+
+function interpolateSiteArg(value: string, siteRoot: string): string {
+  const normalizedRoot = siteRoot.replace(/\\/g, '/');
+  const siteControlRoot = normalizedRoot.endsWith('/.narada') ? siteRoot : resolve(siteRoot, '.narada');
+  return value
+    .replace(/\{site_root\}/g, siteRoot)
+    .replace(/\{site_control_root\}/g, siteControlRoot)
+    .replace(/\{site_runtime_root\}/g, resolve(siteControlRoot, 'runtime'))
+    .replace(/\{site_id\}/g, deriveSiteId(siteRoot));
 }
 
 function normalizeStringArray(value: unknown): string[] | null {

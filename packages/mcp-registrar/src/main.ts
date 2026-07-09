@@ -241,7 +241,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'worker-delegation', package: 'worker-delegation-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_root}/.narada/runtime/worker-delegation'],
+    args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
     tools: WORKER_DELEGATION_TOOLS,
     env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
   },
@@ -867,12 +867,34 @@ function lookupCarrier(carrierId: string): CarrierDef {
   return carrier;
 }
 
-function interpolateArgs(args: string[], siteId: string, siteRoot: string): string[] {
-  return args.map((a) => interpolateArg(a, siteId, siteRoot));
+type SitePathInterpolation = {
+  siteRoot: string;
+  siteControlRoot: string;
+  siteRuntimeRoot: string;
+};
+
+function sitePathInterpolation(siteRoot: string): SitePathInterpolation {
+  const normalizedRoot = siteRoot.replace(/\\/g, '/');
+  const siteControlRoot = normalizedRoot.endsWith('/.narada') ? siteRoot : join(siteRoot, '.narada');
+  return {
+    siteRoot,
+    siteControlRoot,
+    siteRuntimeRoot: join(siteControlRoot, 'runtime'),
+  };
 }
 
-function interpolateArg(value: string, siteId: string, siteRoot: string): string {
-  return value.replace(/\{site_root\}/g, siteRoot).replace(/\{site_id\}/g, siteId);
+function interpolateArgs(args: string[], siteId: string, siteRoot: string): string[] {
+  const paths = sitePathInterpolation(siteRoot);
+  return args.map((a) => interpolateArg(a, siteId, paths));
+}
+
+function interpolateArg(value: string, siteId: string, paths: SitePathInterpolation | string): string {
+  const resolvedPaths = typeof paths === 'string' ? sitePathInterpolation(paths) : paths;
+  return value
+    .replace(/\{site_root\}/g, resolvedPaths.siteRoot)
+    .replace(/\{site_control_root\}/g, resolvedPaths.siteControlRoot)
+    .replace(/\{site_runtime_root\}/g, resolvedPaths.siteRuntimeRoot)
+    .replace(/\{site_id\}/g, siteId);
 }
 
 function appendSopsDirs(args: string[]): string[] {
@@ -1034,6 +1056,7 @@ function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
   for (const binding of carrier.site_bindings) {
     const site = lookupSite(binding.site_id);
     const siteRoot = site.root.replace(/\\/g, '/');
+    const siteControlRoot = sitePathInterpolation(site.root).siteControlRoot;
     const extraRoots = dedupeRoots([
       ...(carrier.extra_allowed_roots ?? []),
       ...(binding.extra_allowed_roots ?? []),
@@ -1041,7 +1064,7 @@ function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
 
     if (extraRoots.length === 0) continue;
 
-    const naradaDir = join(site.root, '.narada');
+    const naradaDir = siteControlRoot;
     try { mkdirSync(naradaDir, { recursive: true }); } catch { /* existing */ }
     const config = {
       schema: 'narada.site.allowed_roots.v1',
