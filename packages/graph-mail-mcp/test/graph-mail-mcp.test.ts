@@ -70,7 +70,15 @@ try {
   assert.equal(doctor.error, undefined);
   assert.equal(doctor.result.structuredContent.has_access_token, true);
   assert.equal(doctor.result.structuredContent.auth_mode, 'access_token');
+  assert.equal(doctor.result.structuredContent.allow_device_code_auth, false);
+  assert.equal(doctor.result.structuredContent.device_code_tenant_configured, false);
+  assert.equal(doctor.result.structuredContent.device_code_client_configured, false);
+  assert.deepEqual(doctor.result.structuredContent.device_code_allowed_scopes, []);
+  assert.equal(doctor.result.structuredContent.delegated_token.status, 'missing');
   assert.equal(doctor.result.structuredContent.allow_send_draft, false);
+  assert.equal(doctor.result.structuredContent.allow_folder_create, false);
+  assert.equal(doctor.result.structuredContent.allow_message_move, false);
+  assert.equal(doctor.result.structuredContent.mailbox_organization_approval_token_configured, false);
   assert.deepEqual(doctor.result.structuredContent.allowed_attachment_roots, [root]);
 
   const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, attachmentState);
@@ -79,8 +87,15 @@ try {
   assert.deepEqual(toolRows.map((tool: DynamicTestValue) => tool.name), [
     'graph_mail_guidance',
     'graph_mail_doctor',
+    'graph_mail_auth_device_code_start',
+    'graph_mail_auth_device_code_poll',
+    'graph_mail_auth_status',
+    'graph_mail_auth_clear',
     'graph_mail_query',
     'graph_mail_message_show',
+    'graph_mail_folder_list',
+    'graph_mail_folder_create',
+    'graph_mail_message_move',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
     'graph_mail_attachment_add',
@@ -100,12 +115,362 @@ try {
   ]);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_device_code_start')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_status')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_clear')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.required.join(','), 'display_name');
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.required.join(','), 'message_id,destination_folder_id');
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.inputSchema.required.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_file')?.inputSchema.required.join(','), 'file_path');
+
+  const blockedFolderCalls: CapturedRequest[] = [];
+  const blockedFolderState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(blockedFolderCalls, [{ body: { value: [{ id: 'folder-1', displayName: 'Inbox' }] } }]),
+  });
+
+  const folderList = await rpc({
+    jsonrpc: '2.0',
+    id: 31,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_folder_list',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        parent_folder_id: 'archive',
+        select: 'id,displayName',
+        limit: 10,
+      },
+    },
+  }, blockedFolderState);
+  assert.equal(folderList.error, undefined);
+  assert.equal(blockedFolderCalls[0].init.method, 'GET');
+  assert.equal(blockedFolderCalls[0].init.headers.Authorization, 'Bearer test-token');
+  assert.equal(blockedFolderCalls[0].url, 'https://graph.example.test/v1.0/users/support%40example.test/mailFolders/archive/childFolders?%24top=10&%24select=id%2CdisplayName');
+  assert.equal(folderList.result.structuredContent.folders.value[0].id, 'folder-1');
+
+  const blockedFolderCreate = await rpc({
+    jsonrpc: '2.0',
+    id: 34,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_folder_create',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        parent_folder_id: 'archive',
+        display_name: 'Customers',
+        confirm_write: true,
+      },
+    },
+  }, blockedFolderState);
+  assert.equal(blockedFolderCreate.error, undefined);
+  assert.equal(blockedFolderCreate.result.structuredContent.status, 'refused');
+  assert.equal(blockedFolderCreate.result.structuredContent.reason, 'folder_create_disallowed_by_policy');
+
+  const blockedMessageMove = await rpc({
+    jsonrpc: '2.0',
+    id: 35,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_message_move',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        message_id: 'message-1',
+        destination_folder_id: 'folder-2',
+        confirm_write: true,
+      },
+    },
+  }, blockedFolderState);
+  assert.equal(blockedMessageMove.error, undefined);
+  assert.equal(blockedMessageMove.result.structuredContent.status, 'refused');
+  assert.equal(blockedMessageMove.result.structuredContent.reason, 'message_move_disallowed_by_policy');
+  assert.equal(blockedFolderCalls.length, 1);
+  const blockedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
+  assert.match(blockedMailboxOrganizationAudit, /folder_create_refused/);
+  assert.match(blockedMailboxOrganizationAudit, /message_move_refused/);
+
+  const blockedAuth = await rpc({
+    jsonrpc: '2.0',
+    id: 38,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_start',
+      arguments: { scope: 'https://graph.microsoft.com/Mail.ReadWrite' },
+    },
+  }, blockedFolderState);
+  assert.equal(blockedAuth.error, undefined);
+  assert.equal(blockedAuth.result.structuredContent.status, 'refused');
+  assert.equal(blockedAuth.result.structuredContent.reason, 'device_code_auth_disallowed_by_policy');
+
+  writeFileSync(join(root, '.ai', 'graph-mail-mcp.json'), JSON.stringify({
+    graph_base_url: 'https://graph.example.test/v1.0',
+    allowed_mailboxes: ['support@example.test'],
+    allow_device_code_auth: true,
+    device_code_tenant_id: 'tenant-1',
+    device_code_client_id: 'client-1',
+    device_code_allowed_scopes: ['https://graph.microsoft.com/Mail.ReadWrite'],
+  }));
+  const authCalls: CapturedRequest[] = [];
+  const authState = createServerState({
+    siteRoot: root,
+    clientSecret: 'client-credentials-secret-must-not-be-used-for-device-code',
+    fetchImpl: mockFetch(authCalls, [
+      {
+        body: {
+          device_code: 'secret-device-code',
+          user_code: 'ABCD-EFGH',
+          verification_uri: 'https://microsoft.com/devicelogin',
+          expires_in: 900,
+          interval: 5,
+          message: 'Open the verification URL and enter the code.',
+        },
+      },
+      { ok: false, status: 400, text: '{"error":"authorization_pending"}' },
+      { body: { access_token: 'delegated-token-1', expires_in: 3600 } },
+      { body: { value: [{ id: 'folder-delegated', displayName: 'Inbox' }] } },
+    ]),
+  });
+
+  const authStart = await rpc({
+    jsonrpc: '2.0',
+    id: 39,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_start',
+      arguments: { scope: 'https://graph.microsoft.com/Mail.ReadWrite' },
+    },
+  }, authState);
+  assert.equal(authStart.error, undefined);
+  assert.equal(authStart.result.structuredContent.status, 'authorization_pending');
+  assert.equal(authStart.result.structuredContent.user_code, 'ABCD-EFGH');
+  assert.equal(authStart.result.structuredContent.device_code, undefined);
+  const flowId = String(authStart.result.structuredContent.flow_id);
+  assert.equal(authCalls[0].url, 'https://login.microsoftonline.com/tenant-1/oauth2/v2.0/devicecode');
+  assert.match(String(authCalls[0].init.body), /client_id=client-1/);
+
+  const authPending = await rpc({
+    jsonrpc: '2.0',
+    id: 40,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_poll',
+      arguments: { flow_id: flowId },
+    },
+  }, authState);
+  assert.equal(authPending.error, undefined);
+  assert.equal(authPending.result.structuredContent.status, 'authorization_pending');
+  assert.doesNotMatch(String(authCalls[1].init.body), /client_secret=/);
+
+  const authPoll = await rpc({
+    jsonrpc: '2.0',
+    id: 41,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_poll',
+      arguments: { flow_id: flowId },
+    },
+  }, authState);
+  assert.equal(authPoll.error, undefined);
+  assert.equal(authPoll.result.structuredContent.status, 'authorized');
+  assert.equal(authPoll.result.structuredContent.access_token, undefined);
+
+  const authStatus = await rpc({
+    jsonrpc: '2.0',
+    id: 42,
+    method: 'tools/call',
+    params: { name: 'graph_mail_auth_status', arguments: {} },
+  }, authState);
+  assert.equal(authStatus.error, undefined);
+  assert.equal(authStatus.result.structuredContent.delegated_token.status, 'available');
+  assert.equal(authStatus.result.structuredContent.delegated_token.access_token, undefined);
+
+  const delegatedFolderList = await rpc({
+    jsonrpc: '2.0',
+    id: 43,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_folder_list',
+      arguments: { mailbox_id: 'support@example.test' },
+    },
+  }, authState);
+  assert.equal(delegatedFolderList.error, undefined);
+  assert.equal(authCalls[3].init.headers.Authorization, 'Bearer delegated-token-1');
+
+  const authClearRefused = await rpc({
+    jsonrpc: '2.0',
+    id: 44,
+    method: 'tools/call',
+    params: { name: 'graph_mail_auth_clear', arguments: {} },
+  }, authState);
+  assert.equal(authClearRefused.error, undefined);
+  assert.equal(authClearRefused.result.structuredContent.status, 'refused');
+  assert.equal(authClearRefused.result.structuredContent.reason, 'confirm_clear_required');
+
+  const authClear = await rpc({
+    jsonrpc: '2.0',
+    id: 45,
+    method: 'tools/call',
+    params: { name: 'graph_mail_auth_clear', arguments: { confirm_clear: true } },
+  }, authState);
+  assert.equal(authClear.error, undefined);
+  assert.equal(authClear.result.structuredContent.status, 'cleared');
+
+  const invalidClientCalls: CapturedRequest[] = [];
+  const invalidClientState = createServerState({
+    siteRoot: root,
+    clientSecret: 'client-credentials-secret-must-not-be-used-for-device-code',
+    fetchImpl: mockFetch(invalidClientCalls, [
+      {
+        body: {
+          device_code: 'secret-device-code-2',
+          user_code: 'WXYZ-1234',
+          verification_uri: 'https://microsoft.com/devicelogin',
+          expires_in: 900,
+          interval: 5,
+        },
+      },
+      {
+        ok: false,
+        status: 401,
+        text: JSON.stringify({
+          error: 'invalid_client',
+          error_description: "AADSTS7000218: The request body must contain the following parameter: 'client_assertion' or 'client_secret'.",
+        }),
+      },
+    ]),
+  });
+  const invalidStart = await rpc({
+    jsonrpc: '2.0',
+    id: 46,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_start',
+      arguments: { scope: 'https://graph.microsoft.com/Mail.ReadWrite' },
+    },
+  }, invalidClientState);
+  const invalidPoll = await rpc({
+    jsonrpc: '2.0',
+    id: 47,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_auth_device_code_poll',
+      arguments: { flow_id: String(invalidStart.result.structuredContent.flow_id) },
+    },
+  }, invalidClientState);
+  assert.equal(invalidPoll.error, undefined);
+  assert.equal(invalidPoll.result.structuredContent.status, 'refused');
+  assert.equal(invalidPoll.result.structuredContent.reason, 'device_code_client_must_be_public_client');
+  assert.doesNotMatch(String(invalidClientCalls[1].init.body), /client_secret=/);
+
+  writeFileSync(join(root, '.ai', 'graph-mail-mcp.json'), JSON.stringify({
+    graph_base_url: 'https://graph.example.test/v1.0',
+    allowed_mailboxes: ['support@example.test'],
+    allow_folder_create: true,
+    allow_message_move: true,
+    mailbox_organization_approval_token: 'organize-123',
+  }));
+  const folderCalls: CapturedRequest[] = [];
+  const folderState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(folderCalls, [
+      { body: { id: 'folder-2', displayName: 'Customers' } },
+      { body: { id: 'message-2', parentFolderId: 'folder-2' } },
+    ]),
+  });
+
+  const folderCreateMissingToken = await rpc({
+    jsonrpc: '2.0',
+    id: 36,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_folder_create',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        display_name: 'Customers',
+        confirm_write: true,
+      },
+    },
+  }, folderState);
+  assert.equal(folderCreateMissingToken.error, undefined);
+  assert.equal(folderCreateMissingToken.result.structuredContent.status, 'refused');
+  assert.equal(folderCreateMissingToken.result.structuredContent.reason, 'mailbox_organization_approval_token_required');
+
+  const messageMoveMissingConfirm = await rpc({
+    jsonrpc: '2.0',
+    id: 37,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_message_move',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        message_id: 'message-1',
+        destination_folder_id: 'folder-2',
+        approval_token: 'organize-123',
+      },
+    },
+  }, folderState);
+  assert.equal(messageMoveMissingConfirm.error, undefined);
+  assert.equal(messageMoveMissingConfirm.result.structuredContent.status, 'refused');
+  assert.equal(messageMoveMissingConfirm.result.structuredContent.reason, 'confirm_write_required');
+  assert.equal(folderCalls.length, 0);
+
+  const folderCreate = await rpc({
+    jsonrpc: '2.0',
+    id: 32,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_folder_create',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        parent_folder_id: 'archive',
+        display_name: 'Customers',
+        confirm_write: true,
+        approval_token: 'organize-123',
+      },
+    },
+  }, folderState);
+  assert.equal(folderCreate.error, undefined);
+  assert.equal(folderCalls[0].init.method, 'POST');
+  assert.equal(folderCalls[0].url, 'https://graph.example.test/v1.0/users/support%40example.test/mailFolders/archive/childFolders');
+  assert.equal(JSON.parse(folderCalls[0].init.body).displayName, 'Customers');
+  assert.equal(folderCreate.result.structuredContent.folder.id, 'folder-2');
+
+  const messageMove = await rpc({
+    jsonrpc: '2.0',
+    id: 33,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_message_move',
+      arguments: {
+        mailbox_id: 'support@example.test',
+        message_id: 'message-1',
+        destination_folder_id: 'folder-2',
+        confirm_write: true,
+        approval_token: 'organize-123',
+      },
+    },
+  }, folderState);
+  assert.equal(messageMove.error, undefined);
+  assert.equal(folderCalls[1].init.method, 'POST');
+  assert.equal(folderCalls[1].url, 'https://graph.example.test/v1.0/users/support%40example.test/messages/message-1/move');
+  assert.equal(JSON.parse(folderCalls[1].init.body).destinationId, 'folder-2');
+  assert.equal(messageMove.result.structuredContent.message.id, 'message-2');
+  const allowedMailboxOrganizationAudit = readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8');
+  assert.match(allowedMailboxOrganizationAudit, /folder_create_completed/);
+  assert.match(allowedMailboxOrganizationAudit, /message_move_completed/);
 
   const attachmentList = await rpc({
     jsonrpc: '2.0',

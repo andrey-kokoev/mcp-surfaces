@@ -12,8 +12,15 @@ export type GraphMailPolicy = {
   graph_base_url: string;
   allowed_mailboxes: string[];
   allowed_attachment_roots: string[];
+  allow_device_code_auth: boolean;
+  device_code_tenant_id: string | null;
+  device_code_client_id: string | null;
+  device_code_allowed_scopes: string[];
   allow_send_draft: boolean;
   send_approval_token: string | null;
+  allow_folder_create: boolean;
+  allow_message_move: boolean;
+  mailbox_organization_approval_token: string | null;
 };
 
 function asRecord(value: unknown): GraphMailRecord {
@@ -35,11 +42,30 @@ export function loadGraphMailPolicy(siteRootInput: string): GraphMailPolicy {
       : DEFAULT_GRAPH_BASE_URL,
     allowed_mailboxes: asStringArray(config.allowed_mailboxes ?? config.allowedMailboxes),
     allowed_attachment_roots: asStringArray(config.allowed_attachment_roots ?? config.allowedAttachmentRoots).map((root) => resolve(siteRoot, root)),
+    allow_device_code_auth: config.allow_device_code_auth === true || config.allowDeviceCodeAuth === true,
+    device_code_tenant_id: typeof config.device_code_tenant_id === 'string'
+      ? config.device_code_tenant_id
+      : typeof config.deviceCodeTenantId === 'string'
+        ? config.deviceCodeTenantId
+        : null,
+    device_code_client_id: typeof config.device_code_client_id === 'string'
+      ? config.device_code_client_id
+      : typeof config.deviceCodeClientId === 'string'
+        ? config.deviceCodeClientId
+        : null,
+    device_code_allowed_scopes: asStringArray(config.device_code_allowed_scopes ?? config.deviceCodeAllowedScopes),
     allow_send_draft: config.allow_send_draft === true || config.allowSendDraft === true,
     send_approval_token: typeof config.send_approval_token === 'string'
       ? config.send_approval_token
       : typeof config.sendApprovalToken === 'string'
         ? config.sendApprovalToken
+        : null,
+    allow_folder_create: config.allow_folder_create === true || config.allowFolderCreate === true,
+    allow_message_move: config.allow_message_move === true || config.allowMessageMove === true,
+    mailbox_organization_approval_token: typeof config.mailbox_organization_approval_token === 'string'
+      ? config.mailbox_organization_approval_token
+      : typeof config.mailboxOrganizationApprovalToken === 'string'
+        ? config.mailboxOrganizationApprovalToken
         : null,
   };
 }
@@ -56,6 +82,20 @@ export function decideDraftSend(policy: GraphMailPolicy, args: GraphMailRecord):
   if (args.confirm_send !== true && args.confirmSend !== true) return { status: 'refused', reason: 'confirm_send_required' };
   if (policy.send_approval_token && args.approval_token !== policy.send_approval_token) {
     return { status: 'refused', reason: 'send_approval_token_required' };
+  }
+  return { status: 'allowed' };
+}
+
+export function decideMailboxOrganizationWrite(
+  policy: GraphMailPolicy,
+  args: GraphMailRecord,
+  operation: 'folder_create' | 'message_move',
+): { status: 'allowed' | 'refused'; reason?: string } {
+  if (operation === 'folder_create' && !policy.allow_folder_create) return { status: 'refused', reason: 'folder_create_disallowed_by_policy' };
+  if (operation === 'message_move' && !policy.allow_message_move) return { status: 'refused', reason: 'message_move_disallowed_by_policy' };
+  if (args.confirm_write !== true && args.confirmWrite !== true) return { status: 'refused', reason: 'confirm_write_required' };
+  if (policy.mailbox_organization_approval_token && args.approval_token !== policy.mailbox_organization_approval_token) {
+    return { status: 'refused', reason: 'mailbox_organization_approval_token_required' };
   }
   return { status: 'allowed' };
 }

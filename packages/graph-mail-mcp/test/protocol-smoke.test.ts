@@ -33,8 +33,15 @@ try {
   assert.deepEqual(toolRows.map((tool) => tool.name), [
     'graph_mail_guidance',
     'graph_mail_doctor',
+    'graph_mail_auth_device_code_start',
+    'graph_mail_auth_device_code_poll',
+    'graph_mail_auth_status',
+    'graph_mail_auth_clear',
     'graph_mail_query',
     'graph_mail_message_show',
+    'graph_mail_folder_list',
+    'graph_mail_folder_create',
+    'graph_mail_message_move',
     'graph_mail_attachment_list',
     'graph_mail_attachment_get',
     'graph_mail_attachment_add',
@@ -53,11 +60,23 @@ try {
     'graph_mail_output_show',
   ]);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_query')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_device_code_start')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_status')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_clear')?.annotations.destructiveHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.annotations.readOnlyHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_create')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.inputSchema.properties.confirm_send.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.inputSchema.required.join(','), 'display_name');
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.inputSchema.required.join(','), 'message_id,destination_folder_id');
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);

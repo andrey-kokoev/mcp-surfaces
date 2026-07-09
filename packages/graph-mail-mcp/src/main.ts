@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { basename, resolve } from 'node:path';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { basename, dirname, join, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
-import { decideDraftSend, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
+import { decideDraftSend, decideMailboxOrganizationWrite, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
 import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
 import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 
@@ -17,8 +17,15 @@ const DEFAULT_ATTACHMENT_UPLOAD_CHUNK_SIZE = 10 * ATTACHMENT_UPLOAD_CHUNK_GRANUL
 const SURFACE_ID = 'graph-mail';
 const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_doctor',
+  'graph_mail_auth_device_code_start',
+  'graph_mail_auth_device_code_poll',
+  'graph_mail_auth_status',
+  'graph_mail_auth_clear',
   'graph_mail_query',
   'graph_mail_message_show',
+  'graph_mail_folder_list',
+  'graph_mail_folder_create',
+  'graph_mail_message_move',
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
   'graph_mail_attachment_add',
@@ -48,6 +55,29 @@ type GraphMailServerState = GraphMailRecord & {
   tokenEndpoint: string | null;
   tokenCache: { accessToken: string; expiresAtMs: number } | null;
   fetchImpl: typeof fetch;
+};
+type DeviceCodeFlowState = {
+  schema: 'narada.graph_mail_mcp.device_code_flow.v1';
+  flow_id: string;
+  tenant_id: string;
+  client_id: string;
+  scope: string;
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_at_ms: number;
+  interval_seconds: number;
+  created_at: string;
+};
+type DelegatedTokenState = {
+  schema: 'narada.graph_mail_mcp.delegated_token.v1';
+  auth_mode: 'delegated_device_code';
+  tenant_id: string;
+  client_id: string;
+  scope: string;
+  access_token: string;
+  expires_at_ms: number;
+  acquired_at: string;
 };
 
 function asRecord(value: unknown): GraphMailRecord {
@@ -170,6 +200,16 @@ export function listTools(): unknown[] {
   return [
     guidanceToolDefinition(),
     tool('graph_mail_doctor', 'Inspect Microsoft Graph mail MCP readiness and policy.', {}),
+    tool('graph_mail_auth_device_code_start', 'Start an operator-approved Microsoft Graph device-code auth flow. Disabled unless site policy opts in.', {
+      scope: { type: 'string', description: 'Space-separated Microsoft Graph scopes. Must exactly match one configured allowed scope set.' },
+    }),
+    tool('graph_mail_auth_device_code_poll', 'Poll an existing device-code auth flow and store a delegated access token when approved.', {
+      flow_id: { type: 'string', description: 'Flow id returned by graph_mail_auth_device_code_start.' },
+    }, ['flow_id']),
+    tool('graph_mail_auth_status', 'Inspect delegated Graph auth metadata without exposing access tokens.', {}),
+    tool('graph_mail_auth_clear', 'Clear stored delegated Graph auth token and pending device-code flows for this site.', {
+      confirm_clear: { type: 'boolean', default: false, description: 'Must be true to clear delegated auth material.' },
+    }),
     tool('graph_mail_query', 'Query live Microsoft Graph messages for an allowed mailbox.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       folder_id: { type: 'string', description: 'Optional mail folder id. Defaults to messages across mailbox.' },
@@ -183,6 +223,26 @@ export function listTools(): unknown[] {
       message_id: { type: 'string', description: 'Graph message id.' },
       select: { type: 'string', description: 'Optional comma-separated Graph $select list.' },
     }, ['message_id']),
+    tool('graph_mail_folder_list', 'List live Microsoft Graph mail folders for an allowed mailbox.', {
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+      parent_folder_id: { type: 'string', description: 'Optional parent folder id. When set, lists child folders under that folder.' },
+      select: { type: 'string', description: 'Optional comma-separated Graph $select list.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 50, description: 'Maximum folders.' },
+    }),
+    tool('graph_mail_folder_create', 'Create a live Microsoft Graph mail folder under an allowed mailbox.', {
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+      display_name: { type: 'string', description: 'Folder display name.' },
+      parent_folder_id: { type: 'string', description: 'Optional parent folder id. When set, creates a child folder under that folder.' },
+      confirm_write: { type: 'boolean', default: false, description: 'Must be true for folder create attempts.' },
+      approval_token: { type: 'string', description: 'Optional site-configured mailbox organization approval token.' },
+    }, ['display_name']),
+    tool('graph_mail_message_move', 'Move a live Microsoft Graph message to a destination folder.', {
+      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
+      message_id: { type: 'string', description: 'Graph message id.' },
+      destination_folder_id: { type: 'string', description: 'Destination folder id or well-known folder name accepted by Microsoft Graph.' },
+      confirm_write: { type: 'boolean', default: false, description: 'Must be true for message move attempts.' },
+      approval_token: { type: 'string', description: 'Optional site-configured mailbox organization approval token.' },
+    }, ['message_id', 'destination_folder_id']),
     tool('graph_mail_attachment_list', 'List attachments for a live message or draft.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       message_id: { type: 'string', description: 'Message id or draft id.' },
@@ -479,11 +539,32 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
       case 'graph_mail_doctor':
         result = await graphMailDoctor(state);
         break;
+      case 'graph_mail_auth_device_code_start':
+        result = await graphMailAuthDeviceCodeStart(args, state);
+        break;
+      case 'graph_mail_auth_device_code_poll':
+        result = await graphMailAuthDeviceCodePoll(args, state);
+        break;
+      case 'graph_mail_auth_status':
+        result = graphMailAuthStatus(state);
+        break;
+      case 'graph_mail_auth_clear':
+        result = graphMailAuthClear(args, state);
+        break;
       case 'graph_mail_query':
         result = await graphMailQuery(args, state);
         break;
       case 'graph_mail_message_show':
         result = await graphMailMessageShow(args, state);
+        break;
+      case 'graph_mail_folder_list':
+        result = await graphMailFolderList(args, state);
+        break;
+      case 'graph_mail_folder_create':
+        result = await graphMailFolderCreate(args, state);
+        break;
+      case 'graph_mail_message_move':
+        result = await graphMailMessageMove(args, state);
         break;
       case 'graph_mail_attachment_list':
         result = await graphMailAttachmentList(args, state);
@@ -584,11 +665,11 @@ function emitGraphMailTelemetry(toolName: string, result: GraphMailRecord, state
 
 function graphMailTelemetryDeclaration(toolName: string): TelemetryDeclaration | null {
   if (!GRAPH_MAIL_TELEMETRY_TOOL_NAMES.has(toolName)) return null;
-  const highSensitivity = /attachment|draft|message_show|query/.test(toolName);
+  const highSensitivity = /attachment|draft|message_show|query|auth/.test(toolName);
   const lowSensitivity = /doctor/.test(toolName);
   return buildGraphMailTelemetryDeclaration({
     sensitivity: lowSensitivity ? 'low' : highSensitivity ? 'high' : 'medium',
-    policyDecision: /draft_send/.test(toolName),
+    policyDecision: /draft_send|folder_create|message_move/.test(toolName),
   });
 }
 
@@ -604,10 +685,156 @@ async function graphMailDoctor(state: GraphMailServerState): Promise<GraphMailRe
     auth_mode: auth.authMode,
     allowed_mailboxes: policy.allowed_mailboxes,
     allowed_attachment_roots: policy.allowed_attachment_roots.length > 0 ? policy.allowed_attachment_roots : [policy.site_root],
+    allow_device_code_auth: policy.allow_device_code_auth,
+    device_code_tenant_configured: !!policy.device_code_tenant_id || !!state.tenantId,
+    device_code_client_configured: !!policy.device_code_client_id || !!state.clientId,
+    device_code_allowed_scopes: policy.device_code_allowed_scopes,
+    delegated_token: delegatedTokenSummary(state.siteRoot),
     allow_send_draft: policy.allow_send_draft,
     send_approval_token_configured: !!policy.send_approval_token,
+    allow_folder_create: policy.allow_folder_create,
+    allow_message_move: policy.allow_message_move,
+    mailbox_organization_approval_token_configured: !!policy.mailbox_organization_approval_token,
     server_name: state.serverName,
   };
+}
+
+async function graphMailAuthDeviceCodeStart(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  const deviceAuth = resolveDeviceCodePolicy(policy, state, args);
+  if (deviceAuth.status !== 'allowed') {
+    recordGraphMailAudit(state.siteRoot, { event_kind: 'device_code_start_refused', reason: deviceAuth.reason });
+    return { schema: 'narada.graph_mail_mcp.device_code_start.v1', status: 'refused', reason: deviceAuth.reason };
+  }
+  const endpoint = `https://login.microsoftonline.com/${encodeURIComponent(deviceAuth.tenantId)}/oauth2/v2.0/devicecode`;
+  const body = new URLSearchParams({ client_id: deviceAuth.clientId, scope: deviceAuth.scope });
+  const response = await state.fetchImpl(endpoint, { method: 'POST', body } as any);
+  const text = typeof response.text === 'function' ? await response.text() : '';
+  if (!response.ok || response.status < 200 || response.status >= 300) {
+    throw new Error(`ms_graph_device_code_start_failed:${response.status}:${redactTokenResponse(text || response.statusText || 'unknown_error')}`);
+  }
+  const payload = asRecord(JSON.parse(text));
+  const deviceCode = requiredString(payload, 'device_code');
+  const userCode = requiredString(payload, 'user_code');
+  const verificationUri = stringOption(payload.verification_uri) ?? stringOption(payload.verification_url);
+  if (!verificationUri) throw new Error('ms_graph_device_code_response_missing_verification_uri');
+  const expiresInSeconds = positiveInteger(payload.expires_in, 900);
+  const intervalSeconds = positiveInteger(payload.interval, 5);
+  const flow: DeviceCodeFlowState = {
+    schema: 'narada.graph_mail_mcp.device_code_flow.v1',
+    flow_id: `flow_${randomUUID()}`,
+    tenant_id: deviceAuth.tenantId,
+    client_id: deviceAuth.clientId,
+    scope: deviceAuth.scope,
+    device_code: deviceCode,
+    user_code: userCode,
+    verification_uri: verificationUri,
+    expires_at_ms: Date.now() + expiresInSeconds * 1000,
+    interval_seconds: intervalSeconds,
+    created_at: new Date().toISOString(),
+  };
+  writeJson(flowPath(state.siteRoot, flow.flow_id), flow);
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'device_code_start_completed', flow_id: flow.flow_id, scope: flow.scope, expires_at_ms: flow.expires_at_ms });
+  return {
+    schema: 'narada.graph_mail_mcp.device_code_start.v1',
+    status: 'authorization_pending',
+    flow_id: flow.flow_id,
+    user_code: flow.user_code,
+    verification_uri: flow.verification_uri,
+    expires_in: expiresInSeconds,
+    interval: intervalSeconds,
+    message: typeof payload.message === 'string' ? payload.message : null,
+  };
+}
+
+async function graphMailAuthDeviceCodePoll(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const flowId = requiredString(args, 'flow_id');
+  const flow = readDeviceCodeFlow(state.siteRoot, flowId);
+  if (!flow) return { schema: 'narada.graph_mail_mcp.device_code_poll.v1', status: 'refused', reason: 'device_code_flow_not_found', flow_id: flowId };
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  const deviceAuth = resolveDeviceCodePolicy(policy, state, { scope: flow.scope });
+  if (deviceAuth.status !== 'allowed') return { schema: 'narada.graph_mail_mcp.device_code_poll.v1', status: 'refused', reason: deviceAuth.reason, flow_id: flowId };
+  if (Date.now() >= flow.expires_at_ms) return { schema: 'narada.graph_mail_mcp.device_code_poll.v1', status: 'expired', flow_id: flowId };
+  const endpoint = `https://login.microsoftonline.com/${encodeURIComponent(flow.tenant_id)}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    client_id: flow.client_id,
+    device_code: flow.device_code,
+  });
+  const response = await state.fetchImpl(endpoint, { method: 'POST', body } as any);
+  const text = typeof response.text === 'function' ? await response.text() : '';
+  const payload = parseJsonRecord(text);
+  if (!response.ok || response.status < 200 || response.status >= 300) {
+    const errorCode = stringOption(payload.error);
+    if (errorCode === 'authorization_pending' || errorCode === 'slow_down') {
+      return {
+        schema: 'narada.graph_mail_mcp.device_code_poll.v1',
+        status: errorCode,
+        flow_id: flowId,
+        interval: errorCode === 'slow_down' ? flow.interval_seconds + 5 : flow.interval_seconds,
+        expires_at_ms: flow.expires_at_ms,
+      };
+    }
+    if (errorCode === 'invalid_client' && String(payload.error_description ?? '').includes('AADSTS7000218')) {
+      recordGraphMailAudit(state.siteRoot, { event_kind: 'device_code_poll_refused', flow_id: flowId, reason: 'device_code_client_must_be_public_client' });
+      return {
+        schema: 'narada.graph_mail_mcp.device_code_poll.v1',
+        status: 'refused',
+        reason: 'device_code_client_must_be_public_client',
+        flow_id: flowId,
+        recovery: 'Configure device_code_client_id to an Entra public-client app with device-code/native-client support. Do not use a confidential client or client secret for device-code auth.',
+      };
+    }
+    throw new Error(`ms_graph_device_code_poll_failed:${response.status}:${redactTokenResponse(text || response.statusText || 'unknown_error')}`);
+  }
+  const accessToken = requiredString(payload, 'access_token');
+  const expiresInSeconds = positiveInteger(payload.expires_in, 3599);
+  const token: DelegatedTokenState = {
+    schema: 'narada.graph_mail_mcp.delegated_token.v1',
+    auth_mode: 'delegated_device_code',
+    tenant_id: flow.tenant_id,
+    client_id: flow.client_id,
+    scope: flow.scope,
+    access_token: accessToken,
+    expires_at_ms: Date.now() + Math.max(60, expiresInSeconds) * 1000,
+    acquired_at: new Date().toISOString(),
+  };
+  writeJson(delegatedTokenPath(state.siteRoot), token);
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'device_code_poll_completed', flow_id: flow.flow_id, scope: flow.scope, expires_at_ms: token.expires_at_ms });
+  return {
+    schema: 'narada.graph_mail_mcp.device_code_poll.v1',
+    status: 'authorized',
+    flow_id: flow.flow_id,
+    auth_mode: 'delegated_device_code',
+    scope: flow.scope,
+    expires_at_ms: token.expires_at_ms,
+  };
+}
+
+function graphMailAuthStatus(state: GraphMailServerState): GraphMailRecord {
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  return {
+    schema: 'narada.graph_mail_mcp.auth_status.v1',
+    status: 'ok',
+    allow_device_code_auth: policy.allow_device_code_auth,
+    device_code_tenant_configured: !!policy.device_code_tenant_id || !!state.tenantId,
+    device_code_client_configured: !!policy.device_code_client_id || !!state.clientId,
+    device_code_allowed_scopes: policy.device_code_allowed_scopes,
+    delegated_token: delegatedTokenSummary(state.siteRoot),
+  };
+}
+
+function graphMailAuthClear(args: GraphMailRecord, state: GraphMailServerState): GraphMailRecord {
+  if (args.confirm_clear !== true && args.confirmClear !== true) {
+    return { schema: 'narada.graph_mail_mcp.auth_clear.v1', status: 'refused', reason: 'confirm_clear_required' };
+  }
+  let removed = 0;
+  if (existsSync(delegatedTokenPath(state.siteRoot))) {
+    unlinkSync(delegatedTokenPath(state.siteRoot));
+    removed += 1;
+  }
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'device_code_auth_cleared', removed });
+  return { schema: 'narada.graph_mail_mcp.auth_clear.v1', status: 'cleared', removed };
 }
 
 async function graphMailQuery(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
@@ -636,6 +863,60 @@ async function graphMailMessageShow(args: GraphMailRecord, state: GraphMailServe
   const query = typeof args.select === 'string' ? { '$select': args.select } : {};
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { path, query });
   return { schema: 'narada.graph_mail_mcp.message.v1', status: 'ok', message: graph };
+}
+
+async function graphMailFolderList(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const { policy, accessToken, fetchImpl } = await clientParts(state);
+  const parentFolderId = stringOption(args.parent_folder_id);
+  const suffix = parentFolderId
+    ? `mailFolders/${encodeURIComponent(parentFolderId)}/childFolders`
+    : 'mailFolders';
+  const path = graphMailboxPath(args.mailbox_id, suffix, policy);
+  const query: Record<string, string | number | boolean> = { '$top': graphTop(args.limit, 50) };
+  if (typeof args.select === 'string') query['$select'] = args.select;
+  const graph = await graphRequest({ policy, accessToken, fetchImpl }, { path, query });
+  return {
+    schema: 'narada.graph_mail_mcp.folders.v1',
+    status: 'ok',
+    request_url: buildGraphUrl(policy, path, query),
+    folders: graph,
+  };
+}
+
+async function graphMailFolderCreate(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  const displayName = requiredString(args, 'display_name');
+  const parentFolderId = stringOption(args.parent_folder_id);
+  const decision = decideMailboxOrganizationWrite(policy, args, 'folder_create');
+  if (decision.status !== 'allowed') return refusedMailboxOrganizationWrite(state, args, 'folder_create_refused', decision.reason, { parent_folder_id: parentFolderId, display_name: displayName });
+  const { accessToken, fetchImpl } = await clientParts(state, policy);
+  const suffix = parentFolderId
+    ? `mailFolders/${encodeURIComponent(parentFolderId)}/childFolders`
+    : 'mailFolders';
+  const path = graphMailboxPath(args.mailbox_id, suffix, policy);
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'folder_create_requested', mailbox_id: args.mailbox_id ?? 'me', parent_folder_id: parentFolderId, display_name: displayName });
+  const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'POST', path, body: { displayName } });
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'folder_create_completed', mailbox_id: args.mailbox_id ?? 'me', parent_folder_id: parentFolderId, folder_id: asRecord(graph).id ?? null, display_name: asRecord(graph).displayName ?? displayName });
+  return { schema: 'narada.graph_mail_mcp.folder.v1', status: 'created', folder: graph };
+}
+
+async function graphMailMessageMove(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
+  const policy = loadGraphMailPolicy(state.siteRoot);
+  const messageId = requiredString(args, 'message_id');
+  const destinationId = requiredString(args, 'destination_folder_id');
+  const decision = decideMailboxOrganizationWrite(policy, args, 'message_move');
+  if (decision.status !== 'allowed') return refusedMailboxOrganizationWrite(state, args, 'message_move_refused', decision.reason, { message_id: messageId, destination_folder_id: destinationId });
+  const { accessToken, fetchImpl } = await clientParts(state, policy);
+  const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(messageId)}/move`, policy);
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'message_move_requested', mailbox_id: args.mailbox_id ?? 'me', message_id: messageId, destination_folder_id: destinationId });
+  const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'POST', path, body: { destinationId } });
+  recordGraphMailAudit(state.siteRoot, { event_kind: 'message_move_completed', mailbox_id: args.mailbox_id ?? 'me', message_id: messageId, destination_folder_id: destinationId, moved_message_id: asRecord(graph).id ?? null });
+  return { schema: 'narada.graph_mail_mcp.message_move.v1', status: 'moved', message: graph };
+}
+
+function refusedMailboxOrganizationWrite(state: GraphMailServerState, args: GraphMailRecord, eventKind: string, reason = 'mailbox_organization_write_refused', extra: GraphMailRecord = {}): GraphMailRecord {
+  recordGraphMailAudit(state.siteRoot, { event_kind: eventKind, mailbox_id: args.mailbox_id ?? 'me', reason, ...extra });
+  return { schema: 'narada.graph_mail_mcp.mailbox_organization_write.v1', status: 'refused', reason, ...extra };
 }
 
 async function graphMailAttachmentList(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
@@ -846,6 +1127,13 @@ async function clientParts(state: GraphMailServerState, policy = loadGraphMailPo
 
 async function resolveAccessToken(state: GraphMailServerState, options: { probeOnly?: boolean } = {}): Promise<{ available: true; accessToken: string; authMode: string } | { available: false; accessToken: null; authMode: 'missing' }> {
   if (state.accessToken) return { available: true, accessToken: state.accessToken, authMode: 'access_token' };
+  const delegatedToken = readDelegatedToken(state.siteRoot);
+  if (delegatedToken && delegatedToken.expires_at_ms > Date.now() + 60_000) {
+    const policy = loadGraphMailPolicy(state.siteRoot);
+    if (policy.allow_device_code_auth && scopeAllowed(policy, delegatedToken.scope)) {
+      return { available: true, accessToken: options.probeOnly ? '<delegated_device_code_available>' : delegatedToken.access_token, authMode: 'delegated_device_code' };
+    }
+  }
   if (!state.tenantId || !state.clientId || !state.clientSecret) {
     if (options.probeOnly) return { available: false, accessToken: null, authMode: 'missing' };
     throw new Error('ms_graph_auth_required: set MS_GRAPH_ACCESS_TOKEN or GRAPH_TENANT_ID/GRAPH_CLIENT_ID/GRAPH_CLIENT_SECRET');
@@ -879,6 +1167,120 @@ async function resolveAccessToken(state: GraphMailServerState, options: { probeO
   const expiresAtMs = Date.now() + Math.max(60, Number.isFinite(expiresInSeconds) ? expiresInSeconds : 3599) * 1000;
   state.tokenCache = { accessToken, expiresAtMs };
   return { available: true, accessToken, authMode: 'client_credentials' };
+}
+
+function resolveDeviceCodePolicy(
+  policy: ReturnType<typeof loadGraphMailPolicy>,
+  state: GraphMailServerState,
+  args: GraphMailRecord,
+): { status: 'allowed'; tenantId: string; clientId: string; scope: string } | { status: 'refused'; reason: string } {
+  if (!policy.allow_device_code_auth) return { status: 'refused', reason: 'device_code_auth_disallowed_by_policy' };
+  const tenantId = stringOption(policy.device_code_tenant_id) ?? state.tenantId;
+  if (!tenantId) return { status: 'refused', reason: 'device_code_tenant_id_required' };
+  const clientId = stringOption(policy.device_code_client_id) ?? state.clientId;
+  if (!clientId) return { status: 'refused', reason: 'device_code_client_id_required' };
+  const scope = stringOption(args.scope) ?? (policy.device_code_allowed_scopes.length === 1 ? policy.device_code_allowed_scopes[0] : null);
+  if (!scope) return { status: 'refused', reason: 'device_code_scope_required' };
+  if (!scopeAllowed(policy, scope)) return { status: 'refused', reason: 'device_code_scope_not_allowed' };
+  return { status: 'allowed', tenantId, clientId, scope };
+}
+
+function scopeAllowed(policy: ReturnType<typeof loadGraphMailPolicy>, scope: string): boolean {
+  return policy.device_code_allowed_scopes.includes(scope);
+}
+
+function delegatedTokenSummary(siteRoot: string): GraphMailRecord {
+  const token = readDelegatedToken(siteRoot);
+  if (!token) return { status: 'missing', fresh: false };
+  return {
+    status: token.expires_at_ms > Date.now() + 60_000 ? 'available' : 'expired',
+    fresh: token.expires_at_ms > Date.now() + 60_000,
+    auth_mode: token.auth_mode,
+    tenant_id: token.tenant_id,
+    client_id: token.client_id,
+    scope: token.scope,
+    acquired_at: token.acquired_at,
+    expires_at_ms: token.expires_at_ms,
+  };
+}
+
+function readDelegatedToken(siteRoot: string): DelegatedTokenState | null {
+  const path = delegatedTokenPath(siteRoot);
+  if (!existsSync(path)) return null;
+  const record = asRecord(JSON.parse(readFileSync(path, 'utf8')));
+  if (record.schema !== 'narada.graph_mail_mcp.delegated_token.v1') return null;
+  const accessToken = stringOption(record.access_token);
+  const tenantId = stringOption(record.tenant_id);
+  const clientId = stringOption(record.client_id);
+  const scope = stringOption(record.scope);
+  const expiresAtMs = Number(record.expires_at_ms);
+  if (!accessToken || !tenantId || !clientId || !scope || !Number.isFinite(expiresAtMs)) return null;
+  return {
+    schema: 'narada.graph_mail_mcp.delegated_token.v1',
+    auth_mode: 'delegated_device_code',
+    tenant_id: tenantId,
+    client_id: clientId,
+    scope,
+    access_token: accessToken,
+    expires_at_ms: expiresAtMs,
+    acquired_at: stringOption(record.acquired_at) ?? '',
+  };
+}
+
+function readDeviceCodeFlow(siteRoot: string, flowId: string): DeviceCodeFlowState | null {
+  const path = flowPath(siteRoot, flowId);
+  if (!existsSync(path)) return null;
+  const record = asRecord(JSON.parse(readFileSync(path, 'utf8')));
+  if (record.schema !== 'narada.graph_mail_mcp.device_code_flow.v1') return null;
+  const tenantId = stringOption(record.tenant_id);
+  const clientId = stringOption(record.client_id);
+  const scope = stringOption(record.scope);
+  const deviceCode = stringOption(record.device_code);
+  const userCode = stringOption(record.user_code);
+  const verificationUri = stringOption(record.verification_uri);
+  const expiresAtMs = Number(record.expires_at_ms);
+  const intervalSeconds = positiveInteger(record.interval_seconds, 5);
+  if (!tenantId || !clientId || !scope || !deviceCode || !userCode || !verificationUri || !Number.isFinite(expiresAtMs)) return null;
+  return {
+    schema: 'narada.graph_mail_mcp.device_code_flow.v1',
+    flow_id: flowId,
+    tenant_id: tenantId,
+    client_id: clientId,
+    scope,
+    device_code: deviceCode,
+    user_code: userCode,
+    verification_uri: verificationUri,
+    expires_at_ms: expiresAtMs,
+    interval_seconds: intervalSeconds,
+    created_at: stringOption(record.created_at) ?? '',
+  };
+}
+
+function delegatedTokenPath(siteRoot: string): string {
+  return join(siteRoot, '.ai', 'runtime', 'graph-mail-mcp', 'delegated-token.json');
+}
+
+function flowPath(siteRoot: string, flowId: string): string {
+  const safeFlowId = flowId.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  return join(siteRoot, '.ai', 'runtime', 'graph-mail-mcp', 'device-code-flows', `${safeFlowId}.json`);
+}
+
+function writeJson(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2));
+}
+
+function parseJsonRecord(text: string): GraphMailRecord {
+  try {
+    return asRecord(JSON.parse(text || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+function positiveInteger(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
 }
 
 function loadGraphMailEnvironment(siteRoot: string): Record<string, string> {
@@ -924,12 +1326,12 @@ function tool(name: string, description: string, properties: unknown, required: 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /draft_create|draft_update|draft_discard|draft_send|attachment_add|attachment_upload_session_create|attachment_upload_chunk|attachment_delete/.test(name);
+  const writes = /auth_device_code_start|auth_device_code_poll|auth_clear|draft_create|draft_update|draft_discard|draft_send|attachment_add|attachment_upload_session_create|attachment_upload_chunk|attachment_delete|folder_create|message_move/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,
-    destructiveHint: /draft_discard|draft_send|attachment_delete/.test(name),
-    idempotentHint: /doctor|query|show|attachment_list|attachment_get/.test(name),
+    destructiveHint: /auth_clear|draft_discard|draft_send|attachment_delete|message_move/.test(name),
+    idempotentHint: /doctor|auth_status|query|show|folder_list|attachment_list|attachment_get/.test(name),
     openWorldHint: true,
   };
 }
