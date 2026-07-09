@@ -215,6 +215,34 @@ evidence_requirements:
   const showV2 = await call('sop_template_show', { sop_id: 'import-test' });
   assert.equal(view(showV2).version, 3);
 
+  assert.equal(errCode(await call('sop_template_unimport', { sop_id: 'import-test', version: 3, principal: 'tester' })), 'sop_unimport_requires_reason');
+  const unimportV3 = await call('sop_template_unimport', {
+    sop_id: 'import-test',
+    version: 3,
+    reason: 'Imported during candidate discovery testing.',
+    principal: 'tester',
+  });
+  assert.equal(view(unimportV3).status, 'unimported');
+  assert.equal(view(unimportV3).version, 3);
+  assert.deepEqual(view(unimportV3).remaining_versions, [1, 2]);
+  assert.equal(typeof view(unimportV3).event_id, 'string');
+
+  const showAfterUnimport = await call('sop_template_show', { sop_id: 'import-test' });
+  assert.equal(view(showAfterUnimport).version, 2);
+
+  const runForUnimportGuard = await call('sop_run_start', {
+    sop_id: 'import-test',
+    sop_version: 2,
+    triggered_by: 'tester',
+  });
+  assert.equal(view(runForUnimportGuard).sop_version, 2);
+  assert.equal(errCode(await call('sop_template_unimport', {
+    sop_id: 'import-test',
+    version: 2,
+    reason: 'Should be blocked because a run exists.',
+    principal: 'tester',
+  })), 'sop_template_has_runs');
+
   // --- YAML error cases ---
 
   assert.equal(errCode(await call('sop_template_import_yaml', { sop_id: 'nonexistent' })), 'sop_yaml_not_found');

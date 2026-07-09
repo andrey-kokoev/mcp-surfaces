@@ -33,7 +33,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'sop_template_create or sop_template_import_yaml to define a versioned SOP.',
         'sop_template_show/export/list/search inspect imported registry templates before execution.',
         'sop_template_candidate_list/show inspect YAML files in configured sops_dirs before import.',
-        'sop_template_update or sop_template_deprecate for governed template changes.'
+        'sop_template_update or sop_template_deprecate for governed template changes.',
+        'sop_template_unimport removes accidental registry imports with no runs; it does not delete YAML files.'
       ],
       durable_run_execution: [
         'sop_run_start creates a durable run from an active template.',
@@ -46,7 +47,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       ]
     },
     tool_inventory: {
-      templates: ['sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml'],
+      templates: ['sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_unimport', 'sop_template_import_yaml'],
       runs: ['sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_coverage_since', 'sop_run_cancel', 'sop_run_events']
     },
     examples: [
@@ -58,6 +59,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not use filesystem listing as the normal way to discover importable SOP YAML; use sop_template_candidate_list/show.',
+      'Do not use deprecate for accidental imports that have no run history; use sop_template_unimport with reason and principal.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'

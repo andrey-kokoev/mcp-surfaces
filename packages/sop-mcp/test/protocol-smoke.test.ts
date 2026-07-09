@@ -49,6 +49,7 @@ try {
     'sop_template_candidate_show',
     'sop_template_update',
     'sop_template_deprecate',
+    'sop_template_unimport',
     'sop_template_import_yaml',
     'sop_run_start',
     'sop_run_status',

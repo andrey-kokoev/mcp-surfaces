@@ -19,6 +19,7 @@ Manages reusable procedural templates (versioned) and durable run execution. Ste
 | `sop_template_candidate_show` | Show one YAML template candidate and its registry/import classification |
 | `sop_template_update` | Update a template, creating a new version |
 | `sop_template_deprecate` | Mark a template deprecated |
+| `sop_template_unimport` | Remove an accidental registry import with no run references |
 | `sop_template_import_yaml` | Import a YAML candidate into the durable template registry |
 | `sop_run_start` | Start a run from the latest active template version |
 | `sop_run_status` | Check run status with per-step state and `next_step` projection |
@@ -51,3 +52,5 @@ pnpm --filter @narada2/sop-mcp test
 YAML files under configured `sops_dirs` are source candidates until imported. Use `sop_template_candidate_list` or `sop_template_candidate_show` to inspect those files without mutating the registry. Candidate tools classify files as `not_imported`, `imported_current`, `imported_changed`, `invalid_yaml`, or `shadowed`. Use `sop_template_import_yaml` to validate and import the selected candidate into the registry.
 
 `sop_doctor` reports both registered template counts and YAML candidate counts so an empty registry is not confused with missing SOP files.
+
+Use `sop_template_deprecate` when a real template should remain in history but no longer be selected for new runs. Use `sop_template_unimport` for accidental registry imports that have no SOP runs referencing the selected version. Unimport removes only the registry version, records an audit event, and never deletes YAML files.

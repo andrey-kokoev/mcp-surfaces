@@ -430,6 +430,23 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'sop_template_unimport',
+      description: 'Remove an accidentally imported SOP template version from the registry when no runs reference it. Does not delete YAML files.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sop_id: { type: 'string' },
+          version: { type: 'number', description: 'Specific imported version to remove. Defaults to latest version.' },
+          reason: { type: 'string', description: 'Why this registry import is being removed.' },
+          principal: { type: 'string', description: 'Identity of the principal requesting cleanup.' },
+        },
+        required: ['sop_id', 'reason', 'principal'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'sop_template_unimport', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'sop_template_import_yaml',
       description: 'Import an SOP template from a YAML file in the sops/ directory. Validates against the SOP JSON Schema before inserting.',
       inputSchema: {
@@ -589,6 +606,7 @@ async function callTool(params: JsonRecord, state: SopState) {
     case 'sop_template_import_yaml': result = sopTemplateImportYaml(args, state); break;
     case 'sop_template_update': result = sopTemplateUpdate(args, state); break;
     case 'sop_template_deprecate': result = sopTemplateDeprecate(args, state); break;
+    case 'sop_template_unimport': result = sopTemplateUnimport(args, state); break;
     case 'sop_run_start': result = await sopRunStart(args, state); break;
     case 'sop_run_status': result = await sopRunStatus(args, state); break;
     case 'sop_run_refresh': result = await sopRunRefresh(args, state); break;
@@ -982,6 +1000,56 @@ function sopTemplateDeprecate(args: JsonRecord, state: SopState) {
   state.db.prepare('UPDATE sop_templates SET status = ? WHERE sop_id = ? AND version = ?').run('deprecated', sopId, Number(current.version));
   appendSopEvent(state, 'template_deprecated', { sop_id: sopId, version: current.version, reason: optionalString(args.reason) });
   return { status: 'deprecated', sop_id: sopId, version: current.version };
+}
+
+function sopTemplateUnimport(args: JsonRecord, state: SopState) {
+  const sopId = requiredString(args.sop_id, 'sop_requires_sop_id');
+  const reason = requiredString(args.reason, 'sop_unimport_requires_reason');
+  const principal = requiredString(args.principal, 'sop_unimport_requires_principal');
+  const version = args.version !== undefined && args.version !== null ? Number(args.version) : undefined;
+  if (version !== undefined && (!Number.isInteger(version) || version < 1)) {
+    throw diagnosticError('sop_invalid_version', `sop_invalid_version:${version}`, { sop_id: sopId });
+  }
+
+  const row = version !== undefined
+    ? state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? AND version = ?').get(sopId, version) as JsonRecord | undefined
+    : state.db.prepare('SELECT * FROM sop_templates WHERE sop_id = ? ORDER BY version DESC LIMIT 1').get(sopId) as JsonRecord | undefined;
+  if (!row) throw diagnosticError('sop_not_found', `sop_not_found:${sopId}${version ? `@v${version}` : ''}`);
+
+  const selectedVersion = Number(row.version);
+  const runRefs = state.db.prepare(
+    'SELECT run_id, status, created_at FROM sop_runs WHERE sop_id = ? AND sop_version = ? ORDER BY created_at DESC LIMIT 10'
+  ).all(sopId, selectedVersion) as JsonRecord[];
+  const runCount = Number((state.db.prepare(
+    'SELECT COUNT(*) as c FROM sop_runs WHERE sop_id = ? AND sop_version = ?'
+  ).get(sopId, selectedVersion) as JsonRecord | undefined)?.c ?? 0);
+  if (runCount > 0) {
+    throw diagnosticError('sop_template_has_runs', `sop_template_has_runs:${sopId}@v${selectedVersion}`, {
+      sop_id: sopId,
+      version: selectedVersion,
+      run_count: runCount,
+      run_refs: runRefs,
+    });
+  }
+
+  state.db.prepare('DELETE FROM sop_templates WHERE sop_id = ? AND version = ?').run(sopId, selectedVersion);
+  const remainingRows = state.db.prepare('SELECT version FROM sop_templates WHERE sop_id = ? ORDER BY version ASC').all(sopId) as JsonRecord[];
+  const remainingVersions = remainingRows.map((remaining) => Number(remaining.version));
+  const eventId = appendSopEvent(state, 'template_unimported', {
+    sop_id: sopId,
+    version: selectedVersion,
+    reason,
+    principal,
+    remaining_versions: remainingVersions,
+  });
+  return {
+    status: 'unimported',
+    sop_id: sopId,
+    version: selectedVersion,
+    remaining_versions: remainingVersions,
+    runs_checked: runCount,
+    event_id: eventId,
+  };
 }
 
 function nextStep(stepStates: SopStepState[]): JsonRecord | null {
@@ -1406,9 +1474,10 @@ function validateSteps(steps: JsonRecord[], state: SopState): SopStep[] {
   return validated;
 }
 
-function appendSopEvent(state: SopState, eventKind: string, details: JsonRecord) {
+function appendSopEvent(state: SopState, eventKind: string, details: JsonRecord): string {
   const eventId = `soe_${randomUUID().slice(0, 12)}`;
   state.db.prepare('INSERT INTO sop_events (event_id, run_id, step_id, event_kind, details_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?)').run(eventId, '', '', eventKind, JSON.stringify(details), nowIso());
+  return eventId;
 }
 
 function appendRunEvent(state: SopState, runId: string, stepId: string | null, eventKind: string, details: JsonRecord) {
