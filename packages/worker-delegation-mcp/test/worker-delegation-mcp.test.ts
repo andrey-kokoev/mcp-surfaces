@@ -649,6 +649,31 @@ const agentRuntimeState = createServerState({
   agentRuntimeServerCommand: process.execPath,
   agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
 });
+
+const splitWorkspaceRoot = join(root, 'split-workspace');
+const splitSiteRoot = join(splitWorkspaceRoot, '.narada');
+mkdirSync(join(splitSiteRoot, '.ai', 'mcp'), { recursive: true });
+const splitBindingState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'split-binding-runs'),
+  agentRuntimeServerCommand: process.execPath,
+  agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+}, {
+  ...process.env,
+  NARADA_SITE_ROOT: splitSiteRoot,
+  NARADA_WORKSPACE_ROOT: splitWorkspaceRoot,
+});
+const splitBindingResolve = await rpc({ jsonrpc: '2.0', id: 5001, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
+  intent: { instruction: 'resolve split Site and workspace binding' },
+  constraints: { cwd: splitWorkspaceRoot, authority: 'read', cognition: 'low', overrides: { runtime: 'narada-agent-runtime-server' } },
+} } }, splitBindingState);
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.site_root, splitSiteRoot);
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.workspace_root, splitWorkspaceRoot);
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.site_root_source, 'bound_environment');
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.site_binding.source, 'bound_environment');
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_SITE_ROOT'), true);
+assert.equal(splitBindingResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKSPACE_ROOT'), true);
+
 const agentRuntimeResolve = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: runArgs('server runtime resolve', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.authority, 'read');

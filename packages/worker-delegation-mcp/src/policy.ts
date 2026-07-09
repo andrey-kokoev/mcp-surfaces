@@ -327,24 +327,41 @@ export function resolveWorkingDirectory(input: unknown, policy: WorkerPolicy): s
 
 export type NaradaSiteBinding = {
   siteRoot: string;
+  workspaceRoot: string;
   marker: string;
-  source: 'explicit' | 'nearest_marker';
+  source: 'explicit' | 'bound_environment' | 'nearest_marker';
 };
 
-export function resolveNaradaSiteBinding(cwd: string, policy: WorkerPolicy, explicitSiteRoot?: unknown): NaradaSiteBinding {
+export function resolveNaradaSiteBinding(
+  cwd: string,
+  policy: WorkerPolicy,
+  explicitSiteRoot?: unknown,
+  boundEnvironment?: { siteRoot?: string; workspaceRoot?: string },
+): NaradaSiteBinding {
   if (explicitSiteRoot !== undefined && explicitSiteRoot !== null && String(explicitSiteRoot).trim()) {
     const siteRoot = resolveWorkingDirectory(explicitSiteRoot, policy);
     const marker = naradaSiteRootMarker(siteRoot);
     if (!marker) {
       throw diagnosticError('worker_narada_site_root_not_found', 'worker_narada_site_root_not_found', siteRootNotFoundDetails({ cwd, site_root: siteRoot, explicit: true }));
     }
-    return { siteRoot, marker, source: 'explicit' };
+    return { siteRoot, workspaceRoot: cwd, marker, source: 'explicit' };
+  }
+
+  const boundSiteRoot = boundEnvironment?.siteRoot?.trim();
+  const boundWorkspaceRoot = boundEnvironment?.workspaceRoot?.trim();
+  if (boundSiteRoot && boundWorkspaceRoot) {
+    const siteRoot = resolve(boundSiteRoot);
+    const workspaceRoot = resolve(boundWorkspaceRoot);
+    const marker = naradaSiteRootMarker(siteRoot);
+    if (marker && (areSamePath(cwd, workspaceRoot) || isPathInside(cwd, workspaceRoot))) {
+      return { siteRoot, workspaceRoot, marker, source: 'bound_environment' };
+    }
   }
 
   let current = resolve(cwd);
   while (true) {
     const marker = naradaSiteRootMarker(current);
-    if (marker) return { siteRoot: current, marker, source: 'nearest_marker' };
+    if (marker) return { siteRoot: current, workspaceRoot: cwd, marker, source: 'nearest_marker' };
     const parent = dirname(current);
     if (parent === current) break;
     if (!policy.allowedRoots.some((root) => areSamePath(parent, root) || isPathInside(parent, root))) break;

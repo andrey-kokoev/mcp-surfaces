@@ -94,11 +94,14 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   let invocation: Invocation;
   if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
-    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
+    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root, {
+      siteRoot: state.env.NARADA_SITE_ROOT,
+      workspaceRoot: state.env.NARADA_WORKSPACE_ROOT,
+    });
     const siteRoot = resolvedSiteBinding.siteRoot;
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     environment.NARADA_SITE_ROOT = siteRoot;
-    environment.NARADA_WORKSPACE_ROOT = cwd;
+    environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
@@ -115,7 +118,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       argv,
       cwd,
       site_root: siteRoot,
-      workspace_root: cwd,
+      workspace_root: resolvedSiteBinding.workspaceRoot,
       site_bound: true,
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
@@ -204,12 +207,16 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   };
 }
 
-function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: string; marker: string; source: 'explicit' | 'nearest_marker' }): Record<string, unknown> {
+function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: string; workspaceRoot: string; marker: string; source: 'explicit' | 'bound_environment' | 'nearest_marker' }): Record<string, unknown> {
   return {
     site_bound: true,
     site_root: siteBinding.siteRoot,
-    workspace_root: cwd,
-    source: siteBinding.source === 'explicit' ? 'constraints.site_root' : 'nearest_parent_marker',
+    workspace_root: siteBinding.workspaceRoot,
+    source: siteBinding.source === 'explicit'
+      ? 'constraints.site_root'
+      : siteBinding.source === 'bound_environment'
+        ? 'bound_environment'
+        : 'nearest_parent_marker',
     matched_marker: siteBinding.marker,
     required_markers: [...NARADA_SITE_ROOT_MARKERS],
     environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID'],
@@ -320,12 +327,15 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 
   if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
-    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root);
+    const resolvedSiteBinding = resolveNaradaSiteBinding(cwd, state.policy, request.constraints.site_root, {
+      siteRoot: state.env.NARADA_SITE_ROOT,
+      workspaceRoot: state.env.NARADA_WORKSPACE_ROOT,
+    });
     const siteRoot = resolvedSiteBinding.siteRoot;
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     const workerSessionId = resumeSessionId ?? runRecord.runId;
     environment.NARADA_SITE_ROOT = siteRoot;
-    environment.NARADA_WORKSPACE_ROOT = cwd;
+    environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
     if (providerResolution.provider) environment.NARADA_INTELLIGENCE_PROVIDER = providerResolution.provider;
@@ -342,7 +352,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       argv,
       cwd,
       site_root: siteRoot,
-      workspace_root: cwd,
+      workspace_root: resolvedSiteBinding.workspaceRoot,
       site_bound: true,
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
