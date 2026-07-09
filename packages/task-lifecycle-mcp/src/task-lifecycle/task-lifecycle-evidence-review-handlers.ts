@@ -213,10 +213,20 @@ function rosterOperatorIdentity(store: DependencyConflictStore, agentId: string 
   try {
     const entry = store.getRosterEntry?.(agentId);
     if (entry?.operator_identity) return entry.operator_identity;
+    if (!hasAgentRosterColumn(store, 'operator_identity')) return null;
     const row = store.db.prepare('select operator_identity from agent_roster where agent_id = ?').get(agentId);
     return typeof row?.operator_identity === 'string' ? row.operator_identity : null;
   } catch {
     return null;
+  }
+}
+
+function hasAgentRosterColumn(store: DependencyConflictStore, columnName: string): boolean {
+  try {
+    const statement = store.db.prepare('PRAGMA table_info(agent_roster)') as unknown as { all: () => Array<{ name?: unknown }> };
+    return statement.all().some((column) => column.name === columnName);
+  } catch {
+    return false;
   }
 }
 

@@ -283,6 +283,86 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   } finally {
     verifyStore.db.close();
   }
+
+  const legacySchemaTaskId = '20260604-9003-legacy-roster-report';
+  writeFileSync(
+    join(siteRoot, '.ai', 'do-not-open', 'tasks', `${legacySchemaTaskId}.md`),
+    `---
+task_id: ${legacySchemaTaskId}
+task_number: 9003
+status: claimed
+governed_by: builder
+---
+
+# Legacy roster report regression
+
+## Goal
+
+Submit report with an old agent_roster schema.
+
+## Execution Notes
+
+<!-- Record what was done, decisions made, and files changed during execution. -->
+
+## Verification
+
+<!-- Record commands run, results observed, and how correctness was checked. -->
+
+## Acceptance Criteria
+
+- [x] Report submission does not fail on missing operator_identity column.
+`,
+  );
+  const legacyStore = openTaskLifecycleStore(siteRoot);
+  try {
+    let legacyLifecycle = legacyStore.getLifecycleByNumber(9003);
+    if (!legacyLifecycle) {
+      legacyStore.upsertLifecycle({
+        task_id: legacySchemaTaskId,
+        task_number: 9003,
+        status: 'claimed',
+        governed_by: 'builder',
+        closed_at: null,
+        closed_by: null,
+        closure_mode: null,
+        reopened_at: null,
+        reopened_by: null,
+        continuation_packet_json: null,
+        updated_at: '2026-06-04T00:00:00Z',
+      });
+      legacyLifecycle = legacyStore.getLifecycleByNumber(9003);
+    }
+    legacyStore.insertAssignment({
+      assignment_id: 'assign-legacy-roster-report',
+      task_id: legacyLifecycle?.task_id ?? legacySchemaTaskId,
+      agent_id: 'smart-scheduling.builder',
+      claimed_at: '2026-06-04T00:00:00Z',
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
+    legacyStore.db.prepare('ALTER TABLE agent_roster DROP COLUMN operator_identity').run();
+  } finally {
+    legacyStore.db.close();
+  }
+  const legacyReportResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: 9003,
+        agent_id: 'smart-scheduling.builder',
+        reviewer: 'smart-scheduling.architect',
+        summary: 'Verified legacy roster schema report path.',
+        no_files_changed: true,
+      },
+    },
+  }, runtimeOptions);
+  assert.equal(legacyReportResponse.error, undefined);
+  const legacyReportPayload = legacyReportResponse.result.structuredContent;
+  assert.notEqual(legacyReportPayload.status, 'error');
 } finally {
   try {
     rmSync(siteRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

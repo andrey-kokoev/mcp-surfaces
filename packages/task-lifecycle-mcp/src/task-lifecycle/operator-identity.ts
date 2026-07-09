@@ -48,10 +48,19 @@ export function getSingleOperatorReviewMeta(reviewRow) {
 
 export function getOperatorIdentity(store, agentId) {
   try {
+    if (!hasAgentRosterColumn(store, 'operator_identity')) return null;
     const row = store.db.prepare("SELECT operator_identity FROM agent_roster WHERE agent_id = ?").get(agentId);
     return row?.operator_identity ?? null;
   } catch {
     return null;
+  }
+}
+
+function hasAgentRosterColumn(store, columnName) {
+  try {
+    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column) => column.name === columnName);
+  } catch {
+    return false;
   }
 }
 
@@ -116,7 +125,10 @@ export function detectSelfReview(store, reviewerAgent, taskNumber) {
     }
 
     // Singleton role: check if reviewer is the only agent in their role with review capability
-    const reviewerRow = store.db.prepare("SELECT role, operator_identity FROM agent_roster WHERE agent_id = ?").get(reviewerAgent);
+    const selectReviewer = hasAgentRosterColumn(store, 'operator_identity')
+      ? "SELECT role, operator_identity FROM agent_roster WHERE agent_id = ?"
+      : "SELECT role FROM agent_roster WHERE agent_id = ?";
+    const reviewerRow = store.db.prepare(selectReviewer).get(reviewerAgent);
     if (!reviewerRow?.role) return { selfReview: false };
 
     const peerCount = store.db.prepare(
@@ -131,7 +143,7 @@ export function detectSelfReview(store, reviewerAgent, taskNumber) {
         kind: 'singleton_role',
         reviewerAgent,
         finisherAgent,
-        operatorIdentity: reviewerRow.operator_identity,
+        operatorIdentity: reviewerRow.operator_identity ?? null,
         role: reviewerRow.role,
         warning: `Singleton-role review detected: reviewer ${reviewerAgent} (role '${reviewerRow.role}') has no peer reviewers available.`,
       };

@@ -26,9 +26,11 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
   // Preload operator identities for agents in the workboard
   const operatorIdentities = new Map();
   try {
-    const rows = store.db.prepare("SELECT agent_id, operator_identity FROM agent_roster WHERE operator_identity IS NOT NULL").all();
-    for (const row of rows) {
-      operatorIdentities.set(row.agent_id, row.operator_identity);
+    if (hasAgentRosterColumn(store, 'operator_identity')) {
+      const rows = store.db.prepare("SELECT agent_id, operator_identity FROM agent_roster WHERE operator_identity IS NOT NULL").all();
+      for (const row of rows) {
+        operatorIdentities.set(row.agent_id, row.operator_identity);
+      }
     }
   } catch {
     // Best-effort; column may not exist in minimal stores
@@ -358,10 +360,19 @@ function readLatestReportAgentId(store, taskId) {
 
 function readOperatorIdentity(store, agentId) {
   try {
+    if (!hasAgentRosterColumn(store, 'operator_identity')) return null;
     const row = store.db.prepare('select operator_identity from agent_roster where agent_id = ?').get(agentId);
     return typeof row?.operator_identity === 'string' ? row.operator_identity : null;
   } catch {
     return null;
+  }
+}
+
+function hasAgentRosterColumn(store, columnName) {
+  try {
+    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column) => column.name === columnName);
+  } catch {
+    return false;
   }
 }
 
