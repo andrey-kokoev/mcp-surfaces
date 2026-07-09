@@ -119,7 +119,7 @@ const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-pr
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 
 const GIT_TOOLS = ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
-const GRAPH_MAIL_TOOLS = ['graph_mail_doctor', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
+const GRAPH_MAIL_TOOLS = ['graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
 const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
 const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref'];
 const WORKER_DELEGATION_TOOLS = ['worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe'];
@@ -127,6 +127,37 @@ const DELEGATED_TASK_TOOLS = ['delegated_task_policy_inspect', 'delegated_task_t
 const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach'];
 const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
+
+const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
+  'local-filesystem': ['fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search'],
+  'structured-command': ['structured_command_execution_policy_inspect'],
+  git: ['git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show'],
+  'site-inbox': ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'],
+  mailbox: ['mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
+  'graph-mail': ['graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
+  calendar: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show'],
+  'task-lifecycle': ['task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_audit', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_bridge_poll', 'mcp_payload_show', 'mcp_payload_validate', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_show', 'task_lifecycle_diagnose_task_ref'],
+  'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
+  'site-lifecycle': ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
+  'agent-context': ['agent_context_doctor', 'agent_context_whoami', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+  'worker-delegation': ['worker_policy_inspect', 'worker_config_resolve', 'worker_run_status', 'worker_runs_list', 'worker_dashboard_describe'],
+  'delegated-task': ['delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_events', 'delegated_tasks_list'],
+  sop: ['sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_run_status', 'sop_run_refresh', 'sop_run_list', 'sop_run_events'],
+  scheduler: ['scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
+  'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_list_tools', 'mcp_loader_tool_discovery_manifest'],
+  'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check'],
+  'surface-feedback': ['surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats'],
+  launcher: ['launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
+  speech: ['speech_voices', 'speech_listen_status'],
+  'operator-routing': ['operator_route_doctor'],
+  artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_present'],
+  'cloudflare-carrier': ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+  'site-coherence': ['site_coherence_check', 'site_coherence_doctor'],
+};
+
+const REFUSED_TOOLS_BY_SURFACE: Record<string, string[]> = {
+  'graph-mail': ['graph_mail_draft_send'],
+};
 
 const SURFACES: SurfaceDef[] = [
   {
@@ -151,13 +182,6 @@ const SURFACES: SurfaceDef[] = [
     tools: GIT_TOOLS,
   },
   {
-    id: 'completion-audit', package: 'completion-audit-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/completion-audit-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--audit-root', '{site_root}'],
-    tools: ['completion_audit_record'],
-  },
-  {
     id: 'site-inbox', package: 'site-inbox-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/site-inbox-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
@@ -169,7 +193,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/mailbox-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_search', 'mailbox_thread_show'],
+    tools: ['mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
   },
   {
     id: 'graph-mail', package: 'graph-mail-mcp',
@@ -211,7 +235,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}', '--site-id', '{site_id}'],
-    tools: ['agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions'],
+    tools: ['agent_context_doctor', 'agent_context_whoami', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
   },
   {
     id: 'worker-delegation', package: 'worker-delegation-mcp',
@@ -343,6 +367,7 @@ const CARRIERS: CarrierDef[] = [
         'site-inbox',
         'mailbox',
         'graph-mail',
+        'calendar',
         'git',
         'local-filesystem',
         'structured-command',
@@ -356,6 +381,7 @@ const CARRIERS: CarrierDef[] = [
         'speech',
         'cloudflare-carrier',
         'site-coherence',
+        'mcp-loader',
         'artifacts',
       ],
       prefix: 'narada-andrey',
@@ -376,6 +402,7 @@ const CARRIERS: CarrierDef[] = [
         'site-inbox',
         'mailbox',
         'graph-mail',
+        'calendar',
         'git',
         'local-filesystem',
         'structured-command',
@@ -410,6 +437,7 @@ const CARRIERS: CarrierDef[] = [
         'site-inbox',
         'mailbox',
         'graph-mail',
+        'calendar',
         'git',
         'local-filesystem',
         'structured-command',
@@ -1380,11 +1408,6 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
       command: launch.command,
       args: launch.args,
       approval_mode: 'approve',
-      carrier_tool_availability: carrierAvailableTools.map((toolName) => ({ tool_name: toolName, approval_mode: 'approve' })),
-      uses_runtime_proxy: launch.uses_runtime_proxy,
-      runtime_proxy_entrypoint: launch.runtime_proxy_entrypoint,
-      child_entrypoint: launch.child_entrypoint,
-      child_args: launch.child_args,
     };
   }
   const structured = { trust_projects: trustProjects, mcpServers };
@@ -1870,8 +1893,17 @@ function portablePath(path: string): string {
   return resolve(path).replace(/\\/g, '/');
 }
 
+function siteMcpControlRoot(site: SiteDef): string {
+  if (site.root.replace(/\\/g, '/').endsWith('/.narada')) return site.root;
+  if (existsSync(join(site.root, '.ai', 'mcp'))) return site.root;
+  const nestedControlRoot = join(site.root, '.narada');
+  if (existsSync(join(nestedControlRoot, '.ai', 'mcp'))) return nestedControlRoot;
+  return site.root;
+}
+
 function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
-  const configDir = join(site.root, '.ai', 'mcp');
+  const controlRoot = siteMcpControlRoot(site);
+  const configDir = join(controlRoot, '.ai', 'mcp');
   if (!existsSync(configDir)) return [];
   const servers: SiteMcpFabricServer[] = [];
   for (const file of readdirSync(configDir)) {
@@ -1918,8 +1950,8 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
         entrypoint = args.shift() ?? '';
       }
       // Resolve {site_root} placeholders
-      entrypoint = entrypoint.replace(/\{site_root\}/g, site.root);
-      const resolvedArgs = args.map((a) => a.replace(/\{site_root\}/g, site.root));
+      entrypoint = entrypoint.replace(/\{site_root\}/g, controlRoot);
+      const resolvedArgs = args.map((a) => a.replace(/\{site_root\}/g, controlRoot));
       const unwrapped = unwrapRuntimeProxyLaunch(entrypoint, resolvedArgs);
       servers.push({
         server_key: serverKey,
@@ -1929,7 +1961,7 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
         launch_entrypoint: unwrapped.launchEntrypoint,
         uses_runtime_proxy: unwrapped.usesRuntimeProxy,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
-        narada_scope: readNaradaScope(server, surfaceId, site.root, site.site_id),
+        narada_scope: readNaradaScope(server, surfaceId, controlRoot, site.site_id),
         source_file: file,
       });
     }
@@ -1981,6 +2013,7 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
   const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
   const catalog = catalogSurface(surfaceId) ?? catalogSurfaceAlias(surfaceId);
   const registeredTools = uniqueStrings(catalog?.tools ?? readConfiguredServerTools(site, server));
+  const toolContract = surfaceToolContract(catalog?.id ?? surfaceId, registeredTools);
   return {
     surface_id: `${server.server_key}.local`,
     display_name: server.server_key,
@@ -1995,21 +2028,30 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
       generated_path: `.ai/mcp/${server.source_file}`,
       generated_file: server.source_file,
     },
-    tool_contract: {
-      read_only_tools: [],
-      mutating_tools: registeredTools,
-      refused_tools: [],
-    },
+    tool_contract: toolContract,
     registered_live_tools: registeredTools,
     catalog_surface_id: catalog?.id ?? surfaceId,
   };
 }
 
 function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): string[] {
-  const filePath = join(site.root, '.ai', 'mcp', server.source_file);
+  const filePath = join(siteMcpControlRoot(site), '.ai', 'mcp', server.source_file);
   const cfg = readJsonFile(filePath);
   const rawServer = asRecord(asRecord(cfg?.mcpServers)[server.server_key]);
   return Array.isArray(rawServer.tools) ? uniqueStrings(rawServer.tools.map(String)) : [];
+}
+
+function surfaceToolContract(surfaceId: string, registeredTools: string[]): SiteSurfaceRegistrySurface['tool_contract'] {
+  const readOnlyTools = uniqueStrings(READ_ONLY_TOOLS_BY_SURFACE[surfaceId] ?? [])
+    .filter((tool) => registeredTools.includes(tool));
+  const refusedTools = uniqueStrings(REFUSED_TOOLS_BY_SURFACE[surfaceId] ?? [])
+    .filter((tool) => registeredTools.includes(tool));
+  const classified = new Set([...readOnlyTools, ...refusedTools]);
+  return {
+    read_only_tools: readOnlyTools,
+    mutating_tools: registeredTools.filter((tool) => !classified.has(tool)),
+    refused_tools: refusedTools,
+  };
 }
 
 export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
@@ -2034,7 +2076,7 @@ export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
 
 function writeSiteSurfaceRegistry(site: SiteDef): JsonRecord {
   const registry = buildSiteSurfaceRegistry(site);
-  const dir = join(site.root, '.narada', 'capabilities');
+  const dir = join(siteMcpControlRoot(site), 'capabilities');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'mcp-surfaces.json');
   writeFileSync(path, JSON.stringify(registry, null, 2) + '\n', 'utf8');
@@ -2060,7 +2102,7 @@ function registrarSiteSurfaceRegistrySync(args: JsonRecord): JsonRecord {
     return {
       status: 'dry_run',
       site_id: siteId,
-      path: join(site.root, '.narada', 'capabilities', 'mcp-surfaces.json'),
+      path: join(siteMcpControlRoot(site), 'capabilities', 'mcp-surfaces.json'),
       registry,
     };
   }

@@ -70,6 +70,8 @@ try {
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_submit'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_output_show'));
+  assert.ok((bySurface.get('mailbox')?.tools as string[]).includes('mailbox_output_show'));
+  assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_output_show'));
   assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_dashboard_describe'));
   assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), false);
   assert.ok((bySurface.get('delegated-task')?.tools as string[]).includes('delegated_task_result'));
@@ -82,13 +84,14 @@ try {
     include_ok: true,
     observed_tools: {
       git: bySurface.get('git')?.tools,
+      mailbox: bySurface.get('mailbox')?.tools,
       'graph-mail': bySurface.get('graph-mail')?.tools,
       'worker-delegation': bySurface.get('worker-delegation')?.tools,
     },
   }));
   assert.equal(inventoryCheck.status, 'ok');
-  assert.equal(inventoryCheck.checked_count, 3);
-  assert.equal((inventoryCheck.findings as Array<Record<string, any>>).length, 3);
+  assert.equal(inventoryCheck.checked_count, 4);
+  assert.equal((inventoryCheck.findings as Array<Record<string, any>>).length, 4);
   const driftCheck = view(await call('registrar_surface_tool_inventory_check', {
     observed_tools: { git: ['git_status', 'git_extra_observed'] },
   }));
@@ -135,6 +138,8 @@ try {
     assert.equal(generatedText.includes('inbox_submit_typed_envelope'), false);
     assert.equal(generatedText.includes('mcp_command_create'), false);
     assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js'), true);
+    assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/calendar-mcp/dist/src/main.js'), true);
+    assert.equal(normalizedGeneratedText.includes('D:/code/mcp-surfaces/packages/mcp-loader-mcp/dist/src/main.js'), true);
     if (carrierId === 'codex-andrey') {
       assert.equal(generatedText.includes('inbox_submit'), true);
       assert.equal(generatedText.includes('inbox_output_show'), true);
@@ -381,7 +386,7 @@ try {
       'narada-sonar-inbox': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/narada.sonar/tools/inbox/inbox-mcp-server.mjs', '--site-root', aggregateSiteRoot],
+        args: ['D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
         tools: ['inbox_doctor', 'inbox_list', 'inbox_show'],
       },
     },
@@ -392,6 +397,57 @@ try {
   assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
   assert.ok((inboxRegistry.registered_live_tools as string[]).includes('inbox_acknowledge'));
   assert.ok((inboxRegistry.tool_contract.mutating_tools as string[]).includes('inbox_acknowledge'));
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-mailbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-mailbox': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
+        tools: ['mailbox_message_show'],
+      },
+    },
+  }, null, 2), 'utf8');
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-graph-mail-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-graph-mail': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/graph-mail-mcp/dist/src/main.js', '--site-root', aggregateSiteRoot],
+        tools: ['graph_mail_message_show'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const mailRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const mailboxRegistry = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mailbox');
+  assert.ok(mailboxRegistry);
+  assert.ok((mailboxRegistry.registered_live_tools as string[]).includes('mailbox_output_show'));
+  assert.ok((mailboxRegistry.tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
+  assert.deepEqual(mailboxRegistry.tool_contract.mutating_tools, []);
+  const graphMailRegistry = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'graph-mail');
+  assert.ok(graphMailRegistry);
+  assert.ok((graphMailRegistry.registered_live_tools as string[]).includes('graph_mail_output_show'));
+  assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_output_show'));
+  assert.ok((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'));
+  assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), false);
+
+  const nestedSiteRoot = join(root, 'nested-control-site');
+  mkdirSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp'), { recursive: true });
+  writeFileSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp', 'narada-sonar-mailbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-mailbox': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/mailbox-mcp/dist/src/main.js', '--site-root', join(nestedSiteRoot, '.narada')],
+        tools: ['mailbox_message_show'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const nestedRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: nestedSiteRoot, config_path: join(nestedSiteRoot, '.narada', 'config.json'), surfaces: [] });
+  assert.equal((nestedRegistry.surfaces as Array<Record<string, any>>).length, 1);
+  assert.ok(((nestedRegistry.surfaces as Array<Record<string, any>>)[0].tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
   const sidecarRefusal = siteBindSidecarRefusal(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     'scheduler',
