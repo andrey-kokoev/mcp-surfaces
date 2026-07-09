@@ -9,3 +9,4 @@ packages/shared/*/dist/
 .tmp/
 packages/*/.tmp-tests/
 packages/*/sessions/
+executions/

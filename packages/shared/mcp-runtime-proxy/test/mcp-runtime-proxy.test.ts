@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,6 +46,7 @@ try {
 
   const silentEntrypoint = join(root, 'silent-child.mjs');
   writeFileSync(silentEntrypoint, "process.stdin.resume(); setInterval(() => {}, 1000);\n", 'utf8');
+  const diagnosticsDir = join(root, 'diagnostics');
   const silentProxy = spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
@@ -54,6 +55,8 @@ try {
     silentEntrypoint,
     '--request-timeout-ms',
     '100',
+    '--diagnostics-dir',
+    diagnosticsDir,
     '--',
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
@@ -75,6 +78,27 @@ try {
   assert.equal(timeoutResponse.error.data.requested_tool_timeout_ms, 5);
   assert.equal(timeoutResponse.error.data.surface_timeout_expected_before_proxy, true);
   assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
+  assert.equal(typeof timeoutResponse.error.data.forensic_artifact_path, 'string');
+  assert.match(timeoutResponse.error.data.forensic_artifact_path, /silent-surface/);
+  const artifacts = readdirSync(diagnosticsDir).filter((file) => file.endsWith('.json'));
+  assert.equal(artifacts.length, 1);
+  const artifact = JSON.parse(readFileSync(join(diagnosticsDir, artifacts[0]), 'utf8'));
+  assert.equal(artifact.schema, 'narada.mcp_runtime_proxy.forensic_artifact.v1');
+  assert.equal(artifact.event, 'proxy_child_request_timeout');
+  assert.equal(artifact.surface.surface_id, 'silent-surface');
+  assert.equal(artifact.request.id, 'slow-1');
+  assert.equal(artifact.request.method, 'tools/call');
+  assert.equal(artifact.request.tool_name, 'slow_read');
+  assert.equal(artifact.request.requested_tool_timeout_ms, 5);
+  assert.equal(typeof artifact.request.args_hash, 'string');
+  assert.equal(artifact.request.args_summary.timeout_ms, 5);
+  assert.equal(artifact.pending_requests.length, 0);
+  assert.equal(artifact.proxy.request_timeout_ms, 100);
+  assert.equal(artifact.child_process.entrypoint, silentEntrypoint);
+  assert.equal(typeof artifact.child_process.entrypoint_sha256, 'string');
+  assert.equal(artifact.diagnostic.code, 'child_request_timeout');
+  assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'proxy_timeout'));
+  assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'child_termination_requested'));
 
   console.log('mcp-runtime-proxy behavior ok');
 } finally {

@@ -1,27 +1,50 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 type JsonRecord = Record<string, unknown>;
+type RequestLifecycleEvent = {
+  at: string;
+  event: string;
+  detail?: JsonRecord;
+};
 type PendingRequest = {
   id: string | number;
   method: string;
   framed: boolean;
   timeoutTimer: NodeJS.Timeout;
   requestedToolTimeoutMs: number | null;
+  toolName: string | null;
+  argsHash: string | null;
+  argsSummary: JsonRecord;
+  startedAt: string;
+  progressToken: string | number | null;
+  lastProgress: JsonRecord | null;
+  lifecycle: RequestLifecycleEvent[];
+};
+type ProxyOptions = {
+  entrypoint: string;
+  childArgs: string[];
+  surfaceId: string | null;
+  requestTimeoutMs: number;
+  diagnosticsDir: string | null;
 };
 
 const STDERR_TAIL_LIMIT = 8000;
+const STDOUT_TAIL_LIMIT = 8000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
 const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
 const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
+const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1';
 
-function parseArgs(argv: string[]): { entrypoint: string; childArgs: string[]; surfaceId: string | null; requestTimeoutMs: number } {
+function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
   let surfaceId: string | null = null;
   let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
+  let diagnosticsDir = process.env.NARADA_MCP_RUNTIME_PROXY_DIAGNOSTICS_DIR ?? '';
   let passthroughIndex = argv.indexOf('--');
   if (passthroughIndex < 0) passthroughIndex = argv.length;
   const prelude = argv.slice(0, passthroughIndex);
@@ -30,9 +53,16 @@ function parseArgs(argv: string[]): { entrypoint: string; childArgs: string[]; s
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
+    else if (arg === '--diagnostics-dir' && prelude[index + 1]) diagnosticsDir = prelude[++index];
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
-  return { entrypoint: resolve(entrypoint), childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)), surfaceId, requestTimeoutMs };
+  return {
+    entrypoint: resolve(entrypoint),
+    childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
+    surfaceId,
+    requestTimeoutMs,
+    diagnosticsDir: diagnosticsDir ? resolve(diagnosticsDir) : defaultDiagnosticsDir(),
+  };
 }
 
 export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
@@ -47,7 +77,9 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let parentBuffer = '';
   let childBuffer = '';
   let stderrTail = '';
+  let stdoutTail = '';
   let childClosed = false;
+  const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs);
 
   const child = spawn(process.execPath, [options.entrypoint, ...options.childArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -73,22 +105,52 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           if (!pendingRequest) return;
           pending.delete(id);
           rememberTimedOutRequest(timedOutRequests, id);
+          recordLifecycle(pendingRequest, 'proxy_timeout', {
+            proxy_request_timeout_ms: options.requestTimeoutMs,
+            requested_tool_timeout_ms: pendingRequest.requestedToolTimeoutMs,
+          });
+          recordLifecycle(pendingRequest, 'child_termination_requested', { signal: 'SIGTERM' });
+          const artifactPath = writeForensicArtifact({
+            event: 'proxy_child_request_timeout',
+            request: pendingRequest,
+            pending,
+            options,
+            child,
+            childIdentity,
+            stderrTail,
+            stdoutTail,
+            childBuffer,
+            diagnostic: {
+              code: 'child_request_timeout',
+              message: `child_request_timeout:${request.method}:${options.requestTimeoutMs}ms`,
+              exitCode: null,
+              signal: null,
+            },
+          });
           writePendingError(pendingRequest, options, {
             code: 'child_request_timeout',
             message: `child_request_timeout:${request.method}:${options.requestTimeoutMs}ms`,
             stderrTail,
+            stdoutTail,
             exitCode: null,
             signal: null,
+            forensicArtifactPath: artifactPath,
           });
           sendCancellationToChild(child, pendingRequest, 'request timed out in mcp runtime proxy');
+          recordLifecycle(pendingRequest, 'cancellation_sent');
           terminateChildAfterRequestTimeout(child, childTerminationTimers, () => childClosed);
         }, options.requestTimeoutMs);
+        const requestMetadata = requestMetadataFor(request);
         pending.set(id, {
           id,
           method: request.method,
           framed: drained.framed,
           timeoutTimer,
           requestedToolTimeoutMs: extractRequestedToolTimeoutMs(request),
+          ...requestMetadata,
+          startedAt: new Date().toISOString(),
+          lastProgress: null,
+          lifecycle: [{ at: new Date().toISOString(), event: 'request_forwarded' }],
         });
       }
     }
@@ -99,14 +161,19 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   child.stdout.on('data', (chunk) => {
+    stdoutTail = tail(`${stdoutTail}${chunk}`, STDOUT_TAIL_LIMIT);
     childBuffer += chunk;
     const drained = childBuffer.includes('Content-Length:') ? drainJsonRpcFrames(childBuffer) : drainJsonLines(childBuffer);
     childBuffer = drained.remaining;
     for (const response of drained.requests) {
+      observeChildMessage(response, pending);
       const id = response.id;
       if (typeof id === 'string' || typeof id === 'number') {
         const request = pending.get(id);
-        if (request) clearTimeout(request.timeoutTimer);
+        if (request) {
+          recordLifecycle(request, 'child_response');
+          clearTimeout(request.timeoutTimer);
+        }
         pending.delete(id);
         if (timedOutRequests.has(id)) continue;
       }
@@ -125,9 +192,10 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       code: 'child_spawn_error',
       message: error.message,
       stderrTail,
+      stdoutTail,
       exitCode: null,
       signal: null,
-    });
+    }, child, childIdentity, childBuffer);
   });
 
   child.on('close', (code, signal) => {
@@ -138,9 +206,10 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
         code: 'child_exited_before_response',
         message: `child_exited_before_response:${code ?? signal ?? 'unknown'}`,
         stderrTail,
+        stdoutTail,
         exitCode: code,
         signal,
-      });
+      }, child, childIdentity, childBuffer);
     }
     clearTimedOutRequests(timedOutRequests);
     clearTimers(childTerminationTimers);
@@ -157,19 +226,44 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
 
 function flushPendingErrors(
   pending: Map<string | number, PendingRequest>,
-  options: { entrypoint: string; surfaceId: string | null },
-  diagnostic: { code: string; message: string; stderrTail: string; exitCode: number | null; signal: NodeJS.Signals | null },
+  options: ProxyOptions,
+  diagnostic: ProxyDiagnostic,
+  child: ReturnType<typeof spawn>,
+  childIdentity: JsonRecord,
+  childBuffer: string,
 ): void {
   for (const request of pending.values()) {
-    writePendingError(request, options, diagnostic);
+    const forensicArtifactPath = writeForensicArtifact({
+      event: diagnostic.code,
+      request,
+      pending,
+      options,
+      child,
+      childIdentity,
+      stderrTail: diagnostic.stderrTail,
+      stdoutTail: diagnostic.stdoutTail,
+      childBuffer,
+      diagnostic,
+    });
+    writePendingError(request, options, { ...diagnostic, forensicArtifactPath });
   }
   pending.clear();
 }
 
+type ProxyDiagnostic = {
+  code: string;
+  message: string;
+  stderrTail: string;
+  stdoutTail: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  forensicArtifactPath?: string | null;
+};
+
 function writePendingError(
   request: PendingRequest,
   options: { entrypoint: string; surfaceId: string | null; requestTimeoutMs?: number },
-  diagnostic: { code: string; message: string; stderrTail: string; exitCode: number | null; signal: NodeJS.Signals | null },
+  diagnostic: ProxyDiagnostic,
 ): void {
   clearTimeout(request.timeoutTimer);
   const proxyRequestTimeoutMs = typeof options.requestTimeoutMs === 'number' ? options.requestTimeoutMs : null;
@@ -200,6 +294,8 @@ function writePendingError(
         exit_code: diagnostic.exitCode,
         signal: diagnostic.signal,
         stderr_tail: diagnostic.stderrTail,
+        stdout_tail: diagnostic.stdoutTail,
+        forensic_artifact_path: diagnostic.forensicArtifactPath ?? null,
         ...proxyWatchdogData,
       },
     },
@@ -214,6 +310,215 @@ function extractRequestedToolTimeoutMs(request: JsonRecord): number | null {
   const toolArguments = params.arguments;
   if (!isJsonRecord(toolArguments)) return null;
   return normalizedPositiveInteger(toolArguments.timeout_ms);
+}
+
+function requestMetadataFor(request: JsonRecord): Pick<PendingRequest, 'toolName' | 'argsHash' | 'argsSummary' | 'progressToken'> {
+  const params = isJsonRecord(request.params) ? request.params : {};
+  const toolName = typeof params.name === 'string' ? params.name : null;
+  const toolArguments = isJsonRecord(params.arguments) ? params.arguments : {};
+  const meta = isJsonRecord(params._meta) ? params._meta : {};
+  const progressToken = typeof meta.progressToken === 'string' || typeof meta.progressToken === 'number' ? meta.progressToken : null;
+  return {
+    toolName,
+    argsHash: Object.keys(toolArguments).length > 0 ? sha256Json(toolArguments) : null,
+    argsSummary: summarizeJson(toolArguments),
+    progressToken,
+  };
+}
+
+function observeChildMessage(message: JsonRecord, pending: Map<string | number, PendingRequest>): void {
+  if (message.method === 'notifications/progress') {
+    const params = isJsonRecord(message.params) ? message.params : {};
+    const progressToken = params.progressToken;
+    for (const request of pending.values()) {
+      if (request.progressToken !== null && request.progressToken === progressToken) {
+        request.lastProgress = summarizeJson(params);
+        recordLifecycle(request, 'child_progress', request.lastProgress);
+      }
+    }
+  }
+}
+
+function recordLifecycle(request: PendingRequest, event: string, detail?: JsonRecord): void {
+  request.lifecycle.push({ at: new Date().toISOString(), event, ...(detail ? { detail } : {}) });
+}
+
+function writeForensicArtifact(input: {
+  event: string;
+  request: PendingRequest;
+  pending: Map<string | number, PendingRequest>;
+  options: { entrypoint: string; childArgs: string[]; surfaceId: string | null; requestTimeoutMs: number; diagnosticsDir: string | null };
+  child: ReturnType<typeof spawn>;
+  childIdentity: JsonRecord;
+  stderrTail: string;
+  stdoutTail: string;
+  childBuffer: string;
+  diagnostic: { code: string; message: string; exitCode: number | null; signal: NodeJS.Signals | null };
+}): string | null {
+  if (!input.options.diagnosticsDir) return null;
+  try {
+    mkdirSync(input.options.diagnosticsDir, { recursive: true });
+    const now = new Date();
+    const artifact = {
+      schema: FORENSIC_ARTIFACT_SCHEMA,
+      event: input.event,
+      captured_at: now.toISOString(),
+      proxy: {
+        pid: process.pid,
+        ppid: process.ppid,
+        argv: process.argv,
+        cwd: process.cwd(),
+        request_timeout_ms: input.options.requestTimeoutMs,
+        kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
+      },
+      surface: {
+        surface_id: input.options.surfaceId,
+        entrypoint: input.options.entrypoint,
+        child_args: input.options.childArgs,
+      },
+      child_process: {
+        pid: input.child.pid ?? null,
+        killed: input.child.killed,
+        exit_code: input.diagnostic.exitCode,
+        signal: input.diagnostic.signal,
+        ...input.childIdentity,
+      },
+      diagnostic: input.diagnostic,
+      request: serializeRequest(input.request),
+      pending_requests: [...input.pending.values()].map(serializeRequest),
+      stream_tails: {
+        stderr_tail: input.stderrTail,
+        stdout_tail: input.stdoutTail,
+        child_stdout_partial_buffer_tail: tail(input.childBuffer, STDOUT_TAIL_LIMIT),
+      },
+    };
+    const fileName = `${toArtifactTimestamp(now)}-${safeSegment(input.options.surfaceId ?? 'surface')}-${safeSegment(String(input.request.id))}-${safeSegment(input.event)}.json`;
+    const artifactPath = join(input.options.diagnosticsDir, fileName);
+    writeFileSync(artifactPath, JSON.stringify(artifact, null, 2) + '\n', 'utf8');
+    return artifactPath;
+  } catch {
+    return null;
+  }
+}
+
+function serializeRequest(request: PendingRequest): JsonRecord {
+  return {
+    id: request.id,
+    method: request.method,
+    tool_name: request.toolName,
+    started_at: request.startedAt,
+    age_ms: Date.now() - Date.parse(request.startedAt),
+    requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+    progress_token: request.progressToken,
+    last_progress: request.lastProgress,
+    args_hash: request.argsHash,
+    args_summary: request.argsSummary,
+    lifecycle: request.lifecycle,
+  };
+}
+
+function buildChildIdentity(entrypoint: string, childArgs: string[]): JsonRecord {
+  const entrypointStat = safeStat(entrypoint);
+  const sourcePath = sourcePathForEntrypoint(entrypoint);
+  const sourceStat = sourcePath ? safeStat(sourcePath) : null;
+  return {
+    parent_pid: process.pid,
+    command: process.execPath,
+    entrypoint,
+    child_args: childArgs,
+    entrypoint_basename: basename(entrypoint),
+    entrypoint_sha256: sha256File(entrypoint),
+    entrypoint_mtime: entrypointStat?.mtime.toISOString() ?? null,
+    entrypoint_size: entrypointStat?.size ?? null,
+    source_path: sourcePath,
+    source_sha256: sourcePath ? sha256File(sourcePath) : null,
+    source_mtime: sourceStat?.mtime.toISOString() ?? null,
+    source_size: sourceStat?.size ?? null,
+    build_freshness: sourceStat && entrypointStat
+      ? sourceStat.mtimeMs > entrypointStat.mtimeMs ? 'source_newer_than_entrypoint' : 'entrypoint_not_older_than_source'
+      : 'unknown',
+    package: packageMetadataFor(entrypoint),
+  };
+}
+
+function sourcePathForEntrypoint(entrypoint: string): string | null {
+  const normalized = entrypoint.replace(/\\/g, '/');
+  const marker = '/dist/src/';
+  const index = normalized.indexOf(marker);
+  if (index < 0) return null;
+  const candidate = `${normalized.slice(0, index)}/src/${normalized.slice(index + marker.length).replace(/\.js$/, '.ts')}`;
+  return existsSync(candidate) ? candidate : null;
+}
+
+function packageMetadataFor(entrypoint: string): JsonRecord | null {
+  let current = dirname(entrypoint);
+  for (let i = 0; i < 8; i += 1) {
+    const packagePath = join(current, 'package.json');
+    if (existsSync(packagePath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as JsonRecord;
+        return {
+          package_json_path: packagePath,
+          name: typeof parsed.name === 'string' ? parsed.name : null,
+          version: typeof parsed.version === 'string' ? parsed.version : null,
+          package_json_sha256: sha256File(packagePath),
+        };
+      } catch {
+        return { package_json_path: packagePath, status: 'unreadable' };
+      }
+    }
+    const next = dirname(current);
+    if (next === current) break;
+    current = next;
+  }
+  return null;
+}
+
+function defaultDiagnosticsDir(): string | null {
+  const siteRoot = process.env.NARADA_SITE_ROOT || process.env.NARADA_WORKSPACE_ROOT || '';
+  if (siteRoot) return join(resolve(siteRoot), '.ai', 'runtime', 'mcp-runtime-proxy');
+  return join(process.cwd(), '.ai', 'runtime', 'mcp-runtime-proxy');
+}
+
+function safeStat(path: string): ReturnType<typeof statSync> | null {
+  try {
+    return statSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function sha256File(path: string): string | null {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function sha256Json(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function summarizeJson(value: JsonRecord): JsonRecord {
+  const summary: JsonRecord = {};
+  for (const [key, raw] of Object.entries(value).slice(0, 25)) {
+    if (typeof raw === 'string') summary[key] = raw.length > 120 ? { type: 'string', length: raw.length, prefix: raw.slice(0, 120) } : raw;
+    else if (typeof raw === 'number' || typeof raw === 'boolean' || raw === null) summary[key] = raw;
+    else if (Array.isArray(raw)) summary[key] = { type: 'array', length: raw.length };
+    else if (typeof raw === 'object') summary[key] = { type: 'object', keys: Object.keys(raw as JsonRecord).slice(0, 20) };
+    else summary[key] = { type: typeof raw };
+  }
+  if (Object.keys(value).length > 25) summary.__truncated_keys = Object.keys(value).length - 25;
+  return summary;
+}
+
+function toArtifactTimestamp(date: Date): string {
+  return date.toISOString().replace(/[-:.]/g, '').replace('T', 'T').replace('Z', 'Z');
+}
+
+function safeSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]+/g, '_').slice(0, 80) || 'unknown';
 }
 
 function normalizedPositiveInteger(value: unknown): number | null {
