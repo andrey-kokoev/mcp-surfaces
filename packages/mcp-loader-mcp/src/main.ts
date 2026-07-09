@@ -4,6 +4,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 
@@ -17,6 +18,9 @@ const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TOOL_CALL_TIMEOUT_MS = 120000;
 const STDERR_TAIL_LIMIT = 8000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
+const SITE_TOOL_OBSERVATION_PAYLOAD_PREFIX = 'site-tools-';
+const SITE_TOOL_OBSERVATION_MAX_ENTRIES = 32;
+const SITE_TOOL_OBSERVATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function defaultAllowedSiteRoots(): string[] {
   const roots = ['D:/code'];
@@ -115,10 +119,11 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
   }
 
   const violationCount = findings.filter((finding) => finding.status !== 'ok').length;
-  return {
+  const observation = {
     schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
     status: violationCount === 0 ? 'ok' : 'drift',
     site_root: siteRoot,
+    observed_at: new Date().toISOString(),
     checked_surface_count: surfaceIds.length,
     violation_count: violationCount,
     observed_tools: observedToolsBySurface,
@@ -126,6 +131,27 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
     observed_mutating_tools: observedMutatingToolsBySurface,
     observed_unclassified_tools: observedUnclassifiedToolsBySurface,
     findings,
+  };
+  const materialized = payloadCreate({
+    siteRoot,
+    args: {
+      payload_id: `site-tools-${randomUUID().replace(/-/g, '').slice(0, 24)}`,
+      payload: observation,
+      created_by: SERVER_NAME,
+    },
+  });
+  const retention = prunePayloadWorkspaces({
+    siteRoot,
+    payloadIdPrefix: SITE_TOOL_OBSERVATION_PAYLOAD_PREFIX,
+    maxEntries: SITE_TOOL_OBSERVATION_MAX_ENTRIES,
+    maxAgeMs: SITE_TOOL_OBSERVATION_MAX_AGE_MS,
+  });
+  return {
+    ...observation,
+    observation_ref: materialized.ref,
+    observation_sha256: materialized.sha256,
+    observation_byte_size: materialized.byte_size,
+    observation_retention: retention,
   };
 }
 
@@ -256,7 +282,7 @@ export function listTools() {
     tool('mcp_loader_site_fabric_diagnostics', 'Inspect site MCP fabric provenance and classify shared-registry drift or intentional entrypoint overrides.', {
       site_root: { type: 'string', description: 'Site root directory.' },
     }, ['site_root'], { readOnly: true }),
-    tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric tool declarations with authoritative live tools/list responses from freshly attached surface children.', {
+    tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric declarations with fresh child tools/list responses and materialize an immutable observation_ref for Registrar conformance checks.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_ids: { type: 'array', items: { type: 'string' }, description: 'Optional surface ids to check. Defaults to every surface in the site fabric.' },
       include_ok: { type: 'boolean', description: 'Include passing surface findings.' },

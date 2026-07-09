@@ -19,7 +19,9 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/mcp-transport": "workspace:*"
+  },
   "files": [
     "dist/"
   ]

@@ -20,6 +20,7 @@
     "test": "pnpm --filter @narada2/mcp-runtime-proxy build && pnpm --filter @narada2/local-filesystem-mcp build && pnpm --filter @narada2/mailbox-mcp build && pnpm build && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-transport": "workspace:*",
     "@narada2/mcp-runtime-proxy": "workspace:*"
   },
   "files": [

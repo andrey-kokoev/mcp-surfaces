@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { payloadShow } from '@narada2/mcp-transport';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
@@ -153,6 +154,13 @@ try {
   assert.deepEqual(inventoryOk?.observed_read_only_tools?.restartable, []);
   assert.deepEqual(inventoryOk?.observed_mutating_tools?.restartable, ['echo']);
   assert.deepEqual(inventoryOk?.observed_unclassified_tools?.restartable, []);
+  assert.match(String(inventoryOk?.observation_ref), /^mcp_payload:/);
+  const materializedObservation = payloadShow({ siteRoot: root, args: { ref: inventoryOk?.observation_ref } });
+  assert.equal(materializedObservation.sha256, inventoryOk?.observation_sha256);
+  assert.deepEqual(materializedObservation.payload?.observed_mutating_tools?.restartable, ['echo']);
+  assert.equal(inventoryOk?.observation_retention?.max_entries, 32);
+  assert.equal(inventoryOk?.observation_retention?.max_age_ms, 7 * 24 * 60 * 60 * 1000);
+  assert.ok(inventoryOk?.observation_retention?.retained_payload_ids.includes(materializedObservation.payload_id));
   const inventoryDrift = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-drift'] } }, 24);
   assert.equal(inventoryDrift?.status, 'drift');
   assert.deepEqual(inventoryDrift?.findings?.[0]?.missing_from_fabric, ['echo']);

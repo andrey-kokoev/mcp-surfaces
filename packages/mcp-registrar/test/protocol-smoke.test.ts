@@ -16,6 +16,34 @@ child.stderr.setEncoding('utf8');
 child.stdout.on('data', (chunk) => { stdout += chunk; });
 child.stderr.on('data', (chunk) => { stderr += chunk; });
 
+async function exchangeThroughProxy(): Promise<Record<string, any>[]> {
+  const proxyPath = fileURLToPath(new URL('../../../shared/mcp-runtime-proxy/dist/src/main.js', import.meta.url));
+  const proxy = spawn(process.execPath, [
+    proxyPath,
+    '--surface-id', 'mcp-registrar',
+    '--entrypoint', serverPath,
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let proxyStdout = '';
+  let proxyStderr = '';
+  proxy.stdout.setEncoding('utf8');
+  proxy.stderr.setEncoding('utf8');
+  proxy.stdout.on('data', (chunk) => { proxyStdout += chunk; });
+  proxy.stderr.on('data', (chunk) => { proxyStderr += chunk; });
+  proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
+  proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/list', params: {} })}\n`);
+  proxy.stdin.end();
+  const exitCode = await Promise.race([
+    new Promise<number | null>((resolve) => proxy.on('close', resolve)),
+    new Promise<never>((_, reject) => setTimeout(() => {
+      proxy.kill();
+      reject(new Error('registrar_proxy_protocol_timeout'));
+    }, 5_000)),
+  ]);
+  assert.equal(exitCode, 0, proxyStderr);
+  return proxyStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+}
+
 try {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
@@ -37,6 +65,14 @@ try {
 
   const unbindTool = tools.find((t: { name: string }) => t.name === 'registrar_site_unbind');
   assert.equal(unbindTool.annotations.destructiveHint, true);
+
+  const conformanceTool = tools.find((t: { name: string }) => t.name === 'registrar_site_registry_conformance_check');
+  assert.deepEqual(conformanceTool.inputSchema.required, ['site_id', 'observation_ref']);
+  assert.equal(conformanceTool.inputSchema.properties.observed_tools, undefined);
+
+  const proxyResponses = await exchangeThroughProxy();
+  assert.equal(proxyResponses.find((message) => message.id === 11)?.result?.serverInfo?.name, 'mcp-registrar');
+  assert.equal(proxyResponses.find((message) => message.id === 12)?.result?.tools?.length, expected.length);
 
   console.log('mcp-registrar protocol smoke ok');
 } finally {

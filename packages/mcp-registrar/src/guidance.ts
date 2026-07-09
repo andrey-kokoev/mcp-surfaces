@@ -17,33 +17,33 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     requested: { workflow, tool },
     first_use: [
       'Validate the Site fabric with registrar_site_mcp_fabric_validate before regenerating its materialized registry.',
-      'Use mcp_loader_site_tool_inventory_check to obtain fresh observed_tools, observed_read_only_tools, and observed_mutating_tools from actual child tools/list responses.',
-      'Pass all three observation maps unchanged to registrar_site_registry_conformance_check; missing observations are failures, not permission defaults.',
+      'Use mcp_loader_site_tool_inventory_check to obtain an immutable observation_ref from actual child tools/list responses.',
+      'Pass observation_ref unchanged to registrar_site_registry_conformance_check; the Registrar resolves it against the target Site root.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.',
     ],
     tool_preference: [
       { step: 'validate_fabric', guidance: 'Call registrar_site_mcp_fabric_validate for the target Site.' },
       { step: 'observe_live', guidance: 'Call mcp_loader_site_tool_inventory_check against the same Site root. Every live tool must explicitly declare readOnlyHint=true or false.' },
       { step: 'materialize', guidance: 'Call registrar_site_surface_registry_sync only when the Site fabric and catalog are intentional.' },
-      { step: 'prove', guidance: 'Call registrar_site_registry_conformance_check with all live observation maps. Status ok is the authority projection proof.' },
+      { step: 'prove', guidance: 'Call registrar_site_registry_conformance_check with the Loader observation_ref. Status ok is the authority projection proof.' },
       { step: 'repair', guidance: 'Repair drift at its owning layer: surface annotations, Site fabric, registrar catalog, or materialized registry generation.' },
     ],
     examples: [
       { intent: 'First use', call: 'registrar_guidance({})' },
       { intent: 'Validate Site fabric', call: 'registrar_site_mcp_fabric_validate({ site_id: "<site_id>" })' },
       { intent: 'Materialize Site registry', call: 'registrar_site_surface_registry_sync({ site_id: "<site_id>", dry_run: false })' },
-      { intent: 'Prove conformance', call: 'registrar_site_registry_conformance_check({ site_id: "<site_id>", observed_tools, observed_read_only_tools, observed_mutating_tools })' },
+      { intent: 'Prove conformance', call: 'registrar_site_registry_conformance_check({ site_id: "<site_id>", observation_ref: "<ref from Loader>" })' },
     ],
     anti_patterns: [
       'Do not infer mutation semantics from tool names. The live surface must declare readOnlyHint explicitly.',
       'Do not treat a tools/list name match as full conformance; classification, provenance, partition, projection, and output-reader closure must also pass.',
-      'Do not hand-build observation maps when mcp_loader_site_tool_inventory_check can produce them from fresh children.',
+      'Do not copy or hand-build observation maps; pass the immutable Loader observation_ref.',
       'Do not regenerate a registry to conceal drift in a surface annotation or Site fabric declaration.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
     ],
     recovery: [
       'For unknown_tool, call tools/list and this guidance command again after restart.',
-      'For live_tool_observation_missing or live classification observation missing, rerun mcp_loader_site_tool_inventory_check and pass every returned observation map.',
+      'For missing live observations, rerun mcp_loader_site_tool_inventory_check and pass its new observation_ref.',
       'For live_tool_semantics_partition_incomplete, add an explicit boolean readOnlyHint at the owning surface; do not default it.',
       'For registry drift, repair the named layer and then rematerialize and rerun the full proof.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
@@ -60,6 +60,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     boundaries: [
       'The registrar materializes and verifies authority declarations; it does not infer policy from names.',
       'MCP Loader owns fresh child attachment and live tools/list observation.',
+      'Observation created_by and payload-id checks are declarative lineage guards, not cryptographic provenance or authority.',
       'Each owning MCP surface remains authoritative for execution policy and domain enforcement.',
     ],
   };

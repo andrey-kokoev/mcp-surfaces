@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
+import { createHash } from 'node:crypto';
+import { payloadShow } from '@narada2/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -862,17 +864,15 @@ export function listTools() {
     },
     {
       name: 'registrar_site_registry_conformance_check',
-      description: 'Prove materialized site MCP registry conformance across live tools/list observations, site fabric declarations, registrar catalog metadata, and admission classification.',
+      description: 'Prove materialized site MCP registry conformance from an immutable Loader observation ref across live tools/list, site fabric, registrar catalog, and admission classification.',
       inputSchema: {
         type: 'object',
         properties: {
           site_id: { type: 'string', description: 'Known site identifier, e.g. smart-scheduling.' },
-          observed_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools/list names keyed by site fabric server name.' },
-          observed_read_only_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools with readOnlyHint=true keyed by site fabric server name.' },
-          observed_mutating_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Live tools with readOnlyHint=false keyed by site fabric server name.' },
+          observation_ref: { type: 'string', description: 'Immutable mcp_payload ref returned by mcp_loader_site_tool_inventory_check for this Site.' },
           include_ok: { type: 'boolean', description: 'Include passing per-surface findings.' },
         },
-        required: ['site_id', 'observed_tools', 'observed_read_only_tools', 'observed_mutating_tools'],
+        required: ['site_id', 'observation_ref'],
         additionalProperties: false,
       },
       annotations: { title: 'registrar_site_registry_conformance_check', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -1664,7 +1664,35 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
   const currentContent = existsSync(currentPath) ? readFileSync(currentPath, 'utf8') : null;
   const currentStructured = currentContent ? parseCarrierConfig(carrier.kind, currentContent) : null;
 
-  const generatedServers = asRecord(generated.structured.mcpServers ?? generated.structured.mcp ?? {});
+  return compareCarrierProjection({
+    carrierId,
+    configPath: currentPath,
+    generatedContent: generated.content,
+    generatedStructured: generated.structured,
+    currentContent,
+    currentStructured,
+  });
+}
+
+export function compareCarrierProjection({
+  carrierId,
+  configPath,
+  generatedContent,
+  generatedStructured,
+  currentContent,
+  currentStructured,
+}: {
+  carrierId: string;
+  configPath: string;
+  generatedContent: string;
+  generatedStructured: JsonRecord;
+  currentContent: string | null;
+  currentStructured: JsonRecord | null;
+}): JsonRecord {
+  const contentSha256 = (content: string | null) =>
+    content === null ? null : createHash('sha256').update(content, 'utf8').digest('hex');
+
+  const generatedServers = asRecord(generatedStructured.mcpServers ?? generatedStructured.mcp ?? {});
   const currentServers = currentStructured ? asRecord(currentStructured.mcpServers ?? currentStructured.mcp ?? {}) : {};
 
   const added: string[] = [];
@@ -1675,7 +1703,7 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
   for (const key of Object.keys(generatedServers)) {
     if (!(key in currentServers)) {
       added.push(key);
-    } else if (JSON.stringify(generatedServers[key]) !== JSON.stringify(currentServers[key])) {
+    } else if (canonicalJson(generatedServers[key]) !== canonicalJson(currentServers[key])) {
       changed.push(key);
     } else {
       unchanged.push(key);
@@ -1685,11 +1713,36 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
     if (!(key in generatedServers)) removed.push(key);
   }
 
+  const projectionChanged = currentContent !== generatedContent;
+  const serverProjectionChanged = added.length > 0 || removed.length > 0 || changed.length > 0;
+  const carrierMetadataOrFormatOnly = currentContent !== null && projectionChanged && !serverProjectionChanged;
+  const changeScopes = currentContent === null
+    ? ['full_projection_missing']
+    : !projectionChanged
+      ? []
+      : ['full_projection', serverProjectionChanged ? 'server_definitions' : 'carrier_metadata_or_format'];
+
   return {
-    status: 'diff',
+    schema: 'narada.registrar.carrier_projection_diff.v1',
+    status: currentContent === null ? 'missing' : projectionChanged ? 'diff' : 'clean',
     carrier_id: carrierId,
-    config_path: currentPath,
+    config_path: configPath,
     current_exists: currentContent !== null,
+    projection_changed: projectionChanged,
+    server_projection_changed: serverProjectionChanged,
+    carrier_metadata_or_format_only: carrierMetadataOrFormatOnly,
+    change_scopes: changeScopes,
+    explanation_code: currentContent === null
+      ? 'carrier_projection_missing'
+      : !projectionChanged
+        ? 'carrier_projection_exact_match'
+        : carrierMetadataOrFormatOnly
+          ? 'carrier_metadata_or_format_changed_without_server_definition_change'
+          : 'carrier_server_definition_change',
+    generated_sha256: contentSha256(generatedContent),
+    current_sha256: contentSha256(currentContent),
+    generated_byte_size: Buffer.byteLength(generatedContent, 'utf8'),
+    current_byte_size: currentContent === null ? null : Buffer.byteLength(currentContent, 'utf8'),
     added,
     removed,
     changed,
@@ -1697,6 +1750,17 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
     added_count: added.length,
     removed_count: removed.length,
     changed_count: changed.length,
+    server_changed_count: changed.length,
+    count_semantics: 'added_removed_changed_counts_cover_server_definitions_only',
+    server_changes: {
+      added,
+      removed,
+      changed,
+      unchanged,
+      added_count: added.length,
+      removed_count: removed.length,
+      changed_count: changed.length,
+    },
   };
 }
 
@@ -2037,6 +2101,7 @@ export function checkSiteRegistryConformance(
 function registrarSiteRegistryConformanceCheck(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const site = lookupSite(siteId);
+  const observationRef = requiredString(args.observation_ref, 'registrar_requires_observation_ref');
   const registryPath = materializedSurfaceRegistryPathForRoot(site.root);
   if (!existsSync(registryPath)) {
     throw diagnosticError('registrar_site_surface_registry_not_found', `registrar_site_surface_registry_not_found:${registryPath}`, { site_id: siteId, registry_path: registryPath });
@@ -2051,14 +2116,73 @@ function registrarSiteRegistryConformanceCheck(args: JsonRecord): JsonRecord {
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  return checkSiteRegistryConformance(
+  return checkSiteRegistryConformanceFromObservation(
     site,
     registry,
-    asRecord(args.observed_tools),
-    asRecord(args.observed_read_only_tools),
-    asRecord(args.observed_mutating_tools),
+    observationRef,
     args.include_ok === true,
   );
+}
+
+export function checkSiteRegistryConformanceFromObservation(
+  site: SiteDef,
+  registry: JsonRecord,
+  observationRef: string,
+  includeOk = false,
+): JsonRecord {
+  const shown = asRecord(payloadShow({ siteRoot: site.root, args: { ref: observationRef } }));
+  if (shown.created_by !== 'mcp-loader-mcp' || !String(shown.payload_id ?? '').startsWith('site-tools-')) {
+    throw diagnosticError('registrar_inventory_observation_lineage_mismatch', 'registrar_inventory_observation_lineage_mismatch', {
+      expected_declared_creator: 'mcp-loader-mcp',
+      actual_declared_creator: shown.created_by ?? null,
+      payload_id: shown.payload_id ?? null,
+      assurance: 'declarative_lineage_guard_not_cryptographic_provenance',
+    });
+  }
+  const observation = validateSiteToolInventoryObservation(site, asRecord(shown.payload));
+  const result = checkSiteRegistryConformance(
+    site,
+    registry,
+    asRecord(observation.observed_tools),
+    asRecord(observation.observed_read_only_tools),
+    asRecord(observation.observed_mutating_tools),
+    includeOk,
+  );
+  return {
+    ...result,
+    observation_ref: observationRef,
+    observation_sha256: shown.sha256 ?? null,
+    observation_created_at: shown.created_at ?? null,
+    observation_status: observation.status ?? null,
+    observation_observed_at: observation.observed_at ?? null,
+    observation_lineage: {
+      declared_creator: shown.created_by ?? null,
+      payload_id: shown.payload_id ?? null,
+      assurance: 'declarative_lineage_guard_not_cryptographic_provenance',
+      authority_effect: 'none',
+    },
+  };
+}
+
+export function validateSiteToolInventoryObservation(site: SiteDef, observation: JsonRecord): JsonRecord {
+  if (observation.schema !== 'narada.mcp_loader.site_tool_inventory_check.v1') {
+    throw diagnosticError('registrar_inventory_observation_schema_mismatch', 'registrar_inventory_observation_schema_mismatch', {
+      expected: 'narada.mcp_loader.site_tool_inventory_check.v1',
+      actual: observation.schema ?? null,
+    });
+  }
+  if (portablePath(String(observation.site_root ?? '')) !== portablePath(site.root)) {
+    throw diagnosticError('registrar_inventory_observation_site_mismatch', 'registrar_inventory_observation_site_mismatch', {
+      expected_site_root: site.root,
+      actual_site_root: observation.site_root ?? null,
+    });
+  }
+  for (const field of ['observed_tools', 'observed_read_only_tools', 'observed_mutating_tools']) {
+    if (!observation[field] || typeof observation[field] !== 'object' || Array.isArray(observation[field])) {
+      throw diagnosticError('registrar_inventory_observation_field_missing', `registrar_inventory_observation_field_missing:${field}`, { field });
+    }
+  }
+  return observation;
 }
 
 type OutputReaderClosureContext = {

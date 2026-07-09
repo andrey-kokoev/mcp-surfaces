@@ -28,12 +28,16 @@ Manages the surface-to-site-to-carrier weave so carrier and Site MCP config is g
 
 Conformance is a four-layer proof, not a tool-name allowlist check:
 
-1. Run `mcp_loader_site_tool_inventory_check` against the target Site root. It starts fresh children and returns `observed_tools`, `observed_read_only_tools`, and `observed_mutating_tools`.
+1. Run `mcp_loader_site_tool_inventory_check` against the target Site root. It starts fresh children and materializes an immutable `observation_ref`.
 2. Validate the Site fabric with `registrar_site_mcp_fabric_validate`.
 3. Materialize intentional changes with `registrar_site_surface_registry_sync`.
-4. Pass all three live observation maps unchanged to `registrar_site_registry_conformance_check`.
+4. Pass `observation_ref` unchanged to `registrar_site_registry_conformance_check`; Registrar resolves it only under the target Site root.
 
 The proof fails on missing live evidence, absent boolean `readOnlyHint`, duplicate tools, incomplete or overlapping semantics, external refusal lists, fabric/catalog/live drift, projection/provenance drift, and missing output-reader closure. Tool names never determine behavior.
+
+The ref's `created_by` and payload-id namespace provide declarative lineage and accidental-misrouting protection only. They are not cryptographic provenance, grant no authority, and do not resist a principal that already has arbitrary Site filesystem-write authority.
+
+`registrar_carrier_diff` distinguishes the exact full-file projection from parsed server definitions. `projection_changed` covers the complete generated carrier file; `server_projection_changed` and `server_changes` cover server entries only; `carrier_metadata_or_format_only` explains a full-file difference with unchanged server definitions.
 
 ## Boundary
 

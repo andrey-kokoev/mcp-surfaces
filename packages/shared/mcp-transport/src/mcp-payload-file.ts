@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -117,6 +117,64 @@ export function resolveToolPayloadArgs({
       max_bytes: maxBytes,
       transient_not_authority: true,
     },
+  };
+}
+
+export function prunePayloadWorkspaces({
+  siteRoot,
+  payloadIdPrefix,
+  maxEntries,
+  maxAgeMs,
+  payloadDir = DEFAULT_PAYLOAD_DIR,
+  now = Date.now(),
+}) {
+  if (typeof payloadIdPrefix !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(payloadIdPrefix)) {
+    throw new Error('payload_prune_prefix_invalid');
+  }
+  if (!Number.isInteger(maxEntries) || maxEntries < 1) throw new Error('payload_prune_max_entries_invalid');
+  if (!Number.isFinite(maxAgeMs) || maxAgeMs < 0) throw new Error('payload_prune_max_age_ms_invalid');
+  const workspaceRoot = resolve(siteRoot, payloadDir, DEFAULT_WORKSPACE_DIR);
+  if (!existsSync(workspaceRoot)) {
+    return {
+      status: 'ok',
+      payload_id_prefix: payloadIdPrefix,
+      max_entries: maxEntries,
+      max_age_ms: maxAgeMs,
+      considered_count: 0,
+      retained_count: 0,
+      removed_count: 0,
+      retained_payload_ids: [],
+      removed_payload_ids: [],
+    };
+  }
+  const entries = readdirSync(workspaceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(payloadIdPrefix))
+    .map((entry) => {
+      const path = resolve(workspaceRoot, entry.name);
+      return { payloadId: entry.name, path, mtimeMs: statSync(path).mtimeMs };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs || right.payloadId.localeCompare(left.payloadId));
+  const retainedPayloadIds: string[] = [];
+  const removedPayloadIds: string[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const expired = now - entry.mtimeMs > maxAgeMs;
+    if (index >= maxEntries || expired) {
+      rmSync(entry.path, { recursive: true, force: true });
+      removedPayloadIds.push(entry.payloadId);
+    } else {
+      retainedPayloadIds.push(entry.payloadId);
+    }
+  }
+  return {
+    status: 'ok',
+    payload_id_prefix: payloadIdPrefix,
+    max_entries: maxEntries,
+    max_age_ms: maxAgeMs,
+    considered_count: entries.length,
+    retained_count: retainedPayloadIds.length,
+    removed_count: removedPayloadIds.length,
+    retained_payload_ids: retainedPayloadIds,
+    removed_payload_ids: removedPayloadIds,
   };
 }
 

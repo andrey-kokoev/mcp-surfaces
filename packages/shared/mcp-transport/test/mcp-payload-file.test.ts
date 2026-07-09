@@ -13,6 +13,7 @@ import {
   outputShow,
   payloadCreate,
   payloadShow,
+  prunePayloadWorkspaces,
   readOutputResource,
   resolveToolPayloadArgs,
 } from '../src/mcp-payload-file.js';
@@ -56,6 +57,26 @@ assert.equal(payloadTool('mcp_payload_show')?.annotations.readOnlyHint, true);
 assert.equal(payloadTool('mcp_payload_derive')?.annotations.readOnlyHint, false);
 assert.equal(payloadTool('mcp_payload_validate')?.annotations.readOnlyHint, true);
 assert.equal(payloadTool('mcp_payload_validate')?.annotations.idempotentHint, true);
+
+const retentionRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-payload-retention-'));
+try {
+  for (const payloadId of ['retained-test-a', 'retained-test-b', 'retained-test-c']) {
+    payloadCreate({ siteRoot: retentionRoot, args: { payload_id: payloadId, payload: { payloadId } } });
+  }
+  const retention = prunePayloadWorkspaces({
+    siteRoot: retentionRoot,
+    payloadIdPrefix: 'retained-test-',
+    maxEntries: 1,
+    maxAgeMs: 24 * 60 * 60 * 1000,
+  });
+  assert.equal(retention.considered_count, 3);
+  assert.equal(retention.retained_count, 1);
+  assert.equal(retention.removed_count, 2);
+  assert.equal(retention.retained_payload_ids.length, 1);
+  assert.equal(retention.removed_payload_ids.length, 2);
+} finally {
+  rmSync(retentionRoot, { recursive: true, force: true });
+}
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {

@@ -4,9 +4,41 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric } from '../src/main.js';
+import { payloadCreate } from '@narada2/mcp-transport';
+import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
+
+const nestedCarrierMetadataDiff = compareCarrierProjection({
+  carrierId: 'fixture-codex',
+  configPath: 'fixture.toml',
+  generatedContent: '[mcp_servers.fixture]\ncommand = "node"\n[mcp_servers.fixture.tools.new_tool]\napproval_mode = "approve"\n',
+  generatedStructured: { mcpServers: { fixture: { command: 'node' } } },
+  currentContent: '[mcp_servers.fixture]\ncommand = "node"\n',
+  currentStructured: { mcpServers: { fixture: { command: 'node' } } },
+});
+assert.equal(nestedCarrierMetadataDiff.status, 'diff');
+assert.equal(nestedCarrierMetadataDiff.projection_changed, true);
+assert.equal(nestedCarrierMetadataDiff.changed_count, 0);
+assert.equal(nestedCarrierMetadataDiff.server_projection_changed, false);
+assert.equal(nestedCarrierMetadataDiff.carrier_metadata_or_format_only, true);
+assert.deepEqual(nestedCarrierMetadataDiff.change_scopes, ['full_projection', 'carrier_metadata_or_format']);
+assert.equal(nestedCarrierMetadataDiff.explanation_code, 'carrier_metadata_or_format_changed_without_server_definition_change');
+assert.equal(nestedCarrierMetadataDiff.count_semantics, 'added_removed_changed_counts_cover_server_definitions_only');
+assert.notEqual(nestedCarrierMetadataDiff.generated_sha256, nestedCarrierMetadataDiff.current_sha256);
+
+const identicalCarrierProjection = compareCarrierProjection({
+  carrierId: 'fixture-codex',
+  configPath: 'fixture.toml',
+  generatedContent: 'same\n',
+  generatedStructured: { mcpServers: {} },
+  currentContent: 'same\n',
+  currentStructured: { mcpServers: {} },
+});
+assert.equal(identicalCarrierProjection.status, 'clean');
+assert.equal(identicalCarrierProjection.projection_changed, false);
+assert.deepEqual(identicalCarrierProjection.change_scopes, []);
+assert.equal(identicalCarrierProjection.explanation_code, 'carrier_projection_exact_match');
 
 async function observeToolsList(entrypoint: string, args: string[]): Promise<string[]> {
   const child = spawn(process.execPath, [entrypoint, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -244,6 +276,20 @@ try {
     config_path: join(conformanceSiteRoot, 'config.json'),
     surfaces: [],
   };
+  assert.equal(validateSiteToolInventoryObservation(conformanceSite, {
+    schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
+    site_root: conformanceSiteRoot,
+    observed_tools: {},
+    observed_read_only_tools: {},
+    observed_mutating_tools: {},
+  }).schema, 'narada.mcp_loader.site_tool_inventory_check.v1');
+  assert.throws(() => validateSiteToolInventoryObservation(conformanceSite, {
+    schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
+    site_root: join(conformanceSiteRoot, 'other'),
+    observed_tools: {},
+    observed_read_only_tools: {},
+    observed_mutating_tools: {},
+  }), /registrar_inventory_observation_site_mismatch/);
   const conformingRegistry = buildSiteSurfaceRegistry(conformanceSite);
   const conformingSurface = (conformingRegistry.surfaces as Array<Record<string, any>>)[0];
   const observedConformanceTools = { 'fixture-mailbox': mailboxCatalogTools };
@@ -259,6 +305,51 @@ try {
   );
   assert.equal(conformingCheck.status, 'ok', JSON.stringify(conformingCheck));
   assert.equal(conformingCheck.violation_count, 0);
+  const observationPayload = payloadCreate({
+    siteRoot: conformanceSiteRoot,
+    args: {
+      payload_id: 'site-tools-fixture-observation',
+      payload: {
+        schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
+        status: 'ok',
+        site_root: conformanceSiteRoot,
+        observed_at: new Date().toISOString(),
+        observed_tools: observedConformanceTools,
+        observed_read_only_tools: observedConformanceReadOnlyTools,
+        observed_mutating_tools: observedConformanceMutatingTools,
+      },
+      created_by: 'mcp-loader-mcp',
+    },
+  });
+  const refConformanceCheck = checkSiteRegistryConformanceFromObservation(
+    conformanceSite,
+    conformingRegistry,
+    observationPayload.ref,
+  );
+  assert.equal(refConformanceCheck.status, 'ok', JSON.stringify(refConformanceCheck));
+  assert.equal(refConformanceCheck.observation_ref, observationPayload.ref);
+  assert.equal(refConformanceCheck.observation_sha256, observationPayload.sha256);
+  const observationLineage = refConformanceCheck.observation_lineage as Record<string, any>;
+  assert.equal(observationLineage.assurance, 'declarative_lineage_guard_not_cryptographic_provenance');
+  assert.equal(observationLineage.authority_effect, 'none');
+  const forgedLineagePayload = payloadCreate({
+    siteRoot: conformanceSiteRoot,
+    args: {
+      payload_id: 'site-tools-wrong-lineage',
+      payload: {
+        schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
+        site_root: conformanceSiteRoot,
+        observed_tools: observedConformanceTools,
+        observed_read_only_tools: observedConformanceReadOnlyTools,
+        observed_mutating_tools: observedConformanceMutatingTools,
+      },
+      created_by: 'not-the-loader',
+    },
+  });
+  assert.throws(
+    () => checkSiteRegistryConformanceFromObservation(conformanceSite, conformingRegistry, forgedLineagePayload.ref),
+    /registrar_inventory_observation_lineage_mismatch/,
+  );
 
   const staleRegistry = structuredClone(conformingRegistry);
   const staleSurface = (staleRegistry.surfaces as Array<Record<string, any>>)[0];
