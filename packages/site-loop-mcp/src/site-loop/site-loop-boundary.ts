@@ -26,9 +26,9 @@ export const SITE_LOOP_BOUNDARIES: SiteLoopDependencyBoundary[] = [
   {
     surface: 'sop',
     kind: 'delegated_surface',
-    siteLoopUse: 'Site-specific procedural workflows such as synced-email control cycles when configured by a site.',
-    owner: '@narada2/sop-mcp or site-owned SOP adapters',
-    rule: 'Site Loop may observe or invoke configured SOP adapter commands, but SOP templates and run state are not Site Loop state.',
+    siteLoopUse: 'Period-keyed scheduling of site-owned SOP work through deterministic inbox envelopes.',
+    owner: '@narada2/sop-mcp',
+    rule: 'Site Loop may emit a due work reference to a configured SOP, but SOP templates and run state remain owned by SOP MCP and semantic policy changes require explicit review.',
   },
   {
     surface: 'scheduler',
@@ -50,13 +50,6 @@ export const SITE_LOOP_BOUNDARIES: SiteLoopDependencyBoundary[] = [
     siteLoopUse: 'Bounded configured source-sync, reconciliation, proof, and smoke-test commands.',
     owner: '@narada2/structured-command-mcp or local approved process execution policy',
     rule: 'Site Loop accepts argv-shaped configured command slots only. It must not accept arbitrary shell strings or open-ended command execution.',
-  },
-  {
-    surface: 'site-ops naming',
-    kind: 'compatibility',
-    siteLoopUse: 'Legacy tool and entrypoint names retained as aliases during the migration from sonar-site-ops to site-loop.',
-    owner: '@narada2/site-loop-mcp',
-    rule: 'New docs and tests should prefer site_loop_* names. Compatibility aliases must remain documented until all registered callers move.',
   },
 ];
 

@@ -14,6 +14,18 @@ export type SiteLoopCommandConfig = {
   preferred_role_arg?: string;
 };
 
+export type SiteLoopScheduledSop = {
+  id: string;
+  sop_id: string;
+  title: string;
+  instructions: string;
+  interval_days: number;
+  anchor_at: string;
+  target_role: string;
+  preferred_agent_id: string;
+  mutation_posture: 'proposal_only';
+};
+
 export type SiteLoopConfig = {
   schema: string;
   loop_id: string;
@@ -37,6 +49,7 @@ export type SiteLoopConfig = {
     default_task_name: string;
     pid_files: string[];
   };
+  scheduled_sops: SiteLoopScheduledSop[];
   resident_launch: {
     launcher_path: string;
     host_path?: string;
@@ -126,6 +139,25 @@ export function siteLoopConfigJsonSchema() {
   return SITE_LOOP_CONFIG_JSON_SCHEMA;
 }
 
+function validateScheduledSops(errors: string[], schedules: SiteLoopScheduledSop[]) {
+  if (!Array.isArray(schedules)) {
+    errors.push('scheduled_sops_array_required');
+    return;
+  }
+  const ids = new Set<string>();
+  for (const [index, schedule] of schedules.entries()) {
+    const path = `scheduled_sops[${index}]`;
+    for (const key of ['id', 'sop_id', 'title', 'instructions', 'anchor_at', 'target_role', 'preferred_agent_id'] as const) {
+      requireNonEmptyString(errors, schedule?.[key], `${path}.${key}`);
+    }
+    if (ids.has(schedule?.id)) errors.push(`${path}.id_duplicate:${schedule.id}`);
+    ids.add(schedule?.id);
+    if (!Number.isFinite(schedule?.interval_days) || schedule.interval_days <= 0) errors.push(`${path}.interval_days_positive_number_required`);
+    if (!Number.isFinite(Date.parse(schedule?.anchor_at))) errors.push(`${path}.anchor_at_iso_timestamp_required`);
+    if (schedule?.mutation_posture !== 'proposal_only') errors.push(`${path}.mutation_posture_proposal_only_required`);
+  }
+}
+
 export function validateSiteLoopConfigDocument(document: unknown) {
   const ok = validateSiteLoopConfigSchemaDocument(document);
   return ok ? [] : (validateSiteLoopConfigSchemaDocument.errors ?? []).map(siteLoopConfigSchemaError);
@@ -163,6 +195,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     default_task_name: '\\Narada-Site-Loop',
     pid_files: ['daemon.pid', 'recurring-runner.pid', 'site-loop-runner.pid'],
   },
+  scheduled_sops: [],
   resident_launch: {
     launcher_path: 'tools/agent-start/start-agent.js',
     host_path: 'tools/site-loop/agent-runtime-server-control-host.js',
@@ -438,6 +471,7 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   for (const [index, path] of (Array.isArray(config.scheduler?.pid_files) ? config.scheduler.pid_files : []).entries()) {
     requireSafeRelativePath(errors, path, `scheduler.pid_files[${index}]`);
   }
+  validateScheduledSops(errors, config.scheduled_sops);
   validateResidentLaunch(errors, config.resident_launch);
   validateResidentRuntime(errors, config.resident_runtime);
   validateRecoveryPlan(errors, config.recovery_plan);

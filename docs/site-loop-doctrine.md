@@ -17,7 +17,6 @@ typed adapters, or governed tool boundaries.
 - allowlisted documentation and test selector exposure
 - loop status, health, run, attention, and control readback/mutation
 - bounded `site_loop_run_once` orchestration
-- compatibility aliases for the older `site_ops_*` naming
 
 Site identity, resident identity, refs, schema names, scheduler hints, recovery
 steps, docs, tests, and configured commands are site config. They must not be
@@ -138,12 +137,6 @@ Required behavior:
 The intended e2e is a non-dry `site_loop_run_once` that mutates only the
 declared test authority roots, verifies run records and expected fixture
 processing, and proves no production state changed.
-
-## Naming
-
-New callers should use `site_loop_*` names. The older `site_ops_*` tool and
-prompt names are compatibility aliases retained for registered callers created
-before the Site Loop extraction.
 
 ## Minimal Site Config
 

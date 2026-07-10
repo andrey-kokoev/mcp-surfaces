@@ -60,6 +60,7 @@ export type SiteLoopPhaseAdapter<TState extends SiteLoopPayload = SiteLoopPayloa
 
 export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
   'source_sync',
+  'scheduled_sop_triggers',
   'inbox_bridge',
   'task_materialization',
   'resident_directive_emission',

@@ -107,7 +107,6 @@ try {
   assert.equal(tools.error, undefined);
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('site_loop_doctor'), true);
-  assert.equal(names.includes('site_ops_doctor'), true);
   assert.equal(names.includes('site_docs_list'), true);
   assert.equal(names.includes('site_docs_show'), true);
   assert.equal(names.includes('site_test_list'), true);

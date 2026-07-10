@@ -11,7 +11,6 @@
   "exports": {
     ".": { "default": "./dist/src/site-loop-mcp-server.js" },
     "./site-loop-mcp-server": { "default": "./dist/src/site-loop-mcp-server.js" },
-    "./site-ops-mcp-server": { "default": "./dist/src/site-ops-mcp-server.js" },
     "./site-loop/site-loop-boundary": { "default": "./dist/src/site-loop/site-loop-boundary.js" },
     "./site-loop/site-loop": { "default": "./dist/src/site-loop/site-loop.js" },
     "./site-loop/site-loop-config": { "default": "./dist/src/site-loop/site-loop-config.js" },
@@ -24,7 +23,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-live-e2e.test.js"
+    "test": "pnpm build && node dist/test/syntax-check-all.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-live-e2e.test.js"
   },
   "dependencies": {
     "ajv": "^8.20.0",

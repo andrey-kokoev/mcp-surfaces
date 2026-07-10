@@ -11,6 +11,7 @@ import { pollInboxBridge, targetInboxEnvelope } from '@narada2/task-lifecycle-mc
 import { dispatchPendingDirectives, getResidentStatus } from '../task-lifecycle/dispatch-directives.js';
 import { taskLifecycleTools } from '../task-lifecycle/task-mcp-tool-registry.js';
 import { loadSiteLoopOperatingPolicy } from './operating-loop-policy.js';
+import { emitScheduledSopTriggers } from './scheduled-sop-triggers.js';
 import { requireSiteLoopConfig, schemaName, type SiteLoopCommandConfig, type SiteLoopConfig } from './site-loop-config.js';
 import {
   acknowledgeLoopAttention,
@@ -173,6 +174,7 @@ function selectPhaseAdapters<TState extends SiteLoopPayload>(adapters: SiteLoopP
 
 const ALL_SITE_LOOP_PHASE_ADAPTERS = createSiteLoopPhaseAdapters({
   runSourceSync,
+  emitScheduledSopTriggers,
   runInboxBridge: (siteRoot, options) => pollInboxBridge(siteRoot, options),
   runTicketTaskReconcile,
   getResidentStatus,
@@ -2097,16 +2099,17 @@ function stalePendingDirectives(directives, options: SiteLoopPayload = {}) {
   });
 }
 
-function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stalePending, requireFreshProductionProof = false, productionProofFresh = null }) {
+export function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stalePending, requireFreshProductionProof = false, productionProofFresh = null }) {
   const alerts = [];
-  if (!['available', 'busy'].includes(resident.status)) {
+  const pendingCount = Number(pending?.pending_count ?? 0);
+  if (pendingCount > 0 && !['available', 'busy'].includes(resident.status)) {
     alerts.push({
       kind: resident.carrier_state?.state === 'policy_stale' ? 'policy_stale_resident' : 'no_available_resident',
       severity: 'error',
       detail: resident.carrier_state?.dispatch_skip_reason ?? resident.status,
     });
   }
-  if (resident.carrier_state?.state === 'stale_busy') {
+  if (pendingCount > 0 && resident.carrier_state?.state === 'stale_busy') {
     alerts.push({ kind: 'stale_busy_resident', severity: 'error', detail: resident.carrier_state?.dispatch_skip_reason ?? null });
   }
   if (dbHealth?.status !== 'ok') {
@@ -2118,8 +2121,8 @@ function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stale
   if (Number(health?.consecutive_failures ?? 0) > 0) {
     alerts.push({ kind: 'repeated_loop_failure', severity: Number(health?.consecutive_failures ?? 0) > 2 ? 'critical' : 'warning', count: Number(health?.consecutive_failures ?? 0), detail: health?.failing_step ?? null });
   }
-  if (Number(pending?.pending_count ?? 0) > 0 && resident.status === 'blocked') {
-    alerts.push({ kind: 'pending_directives_without_resident', severity: 'error', count: Number(pending.pending_count ?? 0) });
+  if (pendingCount > 0 && resident.status === 'blocked') {
+    alerts.push({ kind: 'pending_directives_without_resident', severity: 'error', count: pendingCount });
   }
   if (requireFreshProductionProof && productionProofFresh !== true) {
     alerts.push({ kind: 'production_proof_not_fresh', severity: 'error', detail: 'fresh_production_proof_required' });

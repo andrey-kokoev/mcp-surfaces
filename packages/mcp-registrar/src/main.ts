@@ -252,7 +252,6 @@ const SURFACES: SurfaceDef[] = [
     tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_proof_run', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
     output_reader_closure: {
       site_loop_guidance: 'site_loop_output_show',
-      site_ops_guidance: 'site_loop_output_show',
     },
   },
   {
@@ -411,6 +410,7 @@ const CARRIERS: CarrierDef[] = [
         'delegated-task',
         'sop',
         'scheduler',
+        'site-loop',
         'mcp-registrar',
         'surface-feedback',
         'launcher',
@@ -446,6 +446,7 @@ const CARRIERS: CarrierDef[] = [
         'delegated-task',
         'sop',
         'scheduler',
+        'site-loop',
         'mcp-registrar',
         'surface-feedback',
         'launcher',
@@ -481,6 +482,7 @@ const CARRIERS: CarrierDef[] = [
         'delegated-task',
         'sop',
         'scheduler',
+        'site-loop',
         'mcp-registrar',
         'surface-feedback',
         'launcher',

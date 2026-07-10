@@ -15,6 +15,7 @@ export type SiteLoopPhaseState = SiteLoopPayload & {
 
 type SiteLoopPhaseDeps = {
   runSourceSync: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
+  emitScheduledSopTriggers: (siteRoot: string, config: SiteLoopConfig, options: SiteLoopPayload) => unknown;
   runInboxBridge: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   runTicketTaskReconcile: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   getResidentStatus: (siteRoot: string) => unknown;
@@ -118,6 +119,19 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       }),
       outputRefs: (result) => deps.sourceSyncRefs(result),
       evidence: (result, context) => deps.summarizeSourceSync(result, context.siteLoopConfig),
+    },
+    {
+      id: 'scheduled_sop_triggers',
+      shouldRun: (context) => !context.drain && context.siteLoopConfig.scheduled_sops.length > 0,
+      inputRefs: (context) => context.siteLoopConfig.scheduled_sops.map((schedule) => ({ kind: 'sop_schedule', ref: schedule.id })),
+      execute: (context) => deps.emitScheduledSopTriggers(context.siteRoot, context.siteLoopConfig, {
+        dryRun: context.dryRun,
+        now: context.options.now,
+      }),
+      outputRefs: (result) => items(record(result).results)
+        .filter((item) => typeof item.envelope_id === 'string')
+        .map((item) => ({ kind: 'inbox_envelope', ref: item.envelope_id })),
+      evidence: (result) => result,
     },
     {
       id: 'inbox_bridge',

@@ -89,8 +89,6 @@ try {
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('site_loop_guidance'), true);
   assert.equal(names.includes('site_loop_doctor'), true);
-  assert.equal(names.includes('site_ops_guidance'), true);
-  assert.equal(names.includes('site_ops_doctor'), true);
   assert.equal(names.includes('site_loop_config_validate'), true);
   assert.equal(names.includes('site_loop_operator_affordances'), true);
   assert.equal(names.includes('site_loop_proof_status'), true);
@@ -115,8 +113,6 @@ try {
   assert.equal(doctorPayload.site_loop_config.status, 'ok');
   assert.equal(doctorPayload.site_loop_config.loop_id, 'protocol.loop');
   assert.equal(doctorPayload.site_loop_config.display_name, 'Protocol loop');
-  assert.equal(doctorPayload.compatibility_aliases.tools.includes('site_ops_doctor'), true);
-  assert.equal(doctorPayload.compatibility_aliases.prompts.includes('site_ops_workflow'), true);
   assert.equal(doctorPayload.dependency_boundaries.some((item: { surface: string }) => item.surface === 'task-lifecycle'), true);
 
   writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'site_loop_config_validate', arguments: {} } });

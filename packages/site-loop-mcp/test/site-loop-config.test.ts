@@ -19,9 +19,9 @@ assert.deepEqual(publishedSchema, siteLoopConfigJsonSchema());
 const boundaries = siteLoopDependencyBoundaries();
 assert.equal(boundaries.some((item) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
 assert.equal(boundaries.some((item) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
-assert.equal(boundaries.some((item) => item.surface === 'site-ops naming' && item.kind === 'compatibility'), true);
 assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
   'source_sync',
+  'scheduled_sop_triggers',
   'inbox_bridge',
   'task_materialization',
   'resident_directive_emission',

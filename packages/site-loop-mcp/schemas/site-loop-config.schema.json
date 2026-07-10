@@ -15,6 +15,7 @@
     "refs": { "$ref": "#/$defs/refs" },
     "mcp": { "$ref": "#/$defs/mcp" },
     "scheduler": { "$ref": "#/$defs/scheduler" },
+    "scheduled_sops": { "$ref": "#/$defs/scheduledSops" },
     "resident_launch": { "$ref": "#/$defs/residentLaunch" },
     "resident_runtime": { "$ref": "#/$defs/residentRuntime" },
     "recovery_plan": { "$ref": "#/$defs/recoveryPlan" },
@@ -33,6 +34,25 @@
     "stringArray": {
       "type": "array",
       "items": { "$ref": "#/$defs/nonEmptyString" }
+    },
+    "scheduledSops": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sop_id", "title", "instructions", "interval_days", "anchor_at", "target_role", "preferred_agent_id", "mutation_posture"],
+        "properties": {
+          "id": { "$ref": "#/$defs/nonEmptyString" },
+          "sop_id": { "$ref": "#/$defs/nonEmptyString" },
+          "title": { "$ref": "#/$defs/nonEmptyString" },
+          "instructions": { "$ref": "#/$defs/nonEmptyString" },
+          "interval_days": { "$ref": "#/$defs/positiveNumber" },
+          "anchor_at": { "$ref": "#/$defs/nonEmptyString" },
+          "target_role": { "$ref": "#/$defs/nonEmptyString" },
+          "preferred_agent_id": { "$ref": "#/$defs/nonEmptyString" },
+          "mutation_posture": { "const": "proposal_only" }
+        }
+      }
     },
     "stringMap": {
       "type": "object",

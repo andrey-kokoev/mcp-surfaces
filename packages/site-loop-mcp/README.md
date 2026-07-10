@@ -65,8 +65,6 @@ General Site Loop:
 
 Compatibility aliases retained for existing callers:
 
-- `site_ops_guidance`
-- `site_ops_doctor`
 
 Configured site loop:
 

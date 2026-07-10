@@ -45,9 +45,7 @@ function currentSiteLoopConfigLoad() {
 
 const TOOLS = [
   guidanceToolDefinition(),
-  guidanceToolDefinition('site_ops_guidance', 'Compatibility alias for site_loop_guidance. Prefer site_loop_guidance for new callers.'),
   tool('site_loop_doctor', 'Inspect configured Site Loop MCP readiness.', {}),
-  tool('site_ops_doctor', 'Compatibility alias for site_loop_doctor. Prefer site_loop_doctor for new callers.', {}),
   tool('site_docs_list', 'List configured read-only documentation paths exposed to agents.', {}),
   tool('site_docs_show', 'Show a configured allowlisted documentation file.', {
     path: { type: 'string', description: 'Allowlisted docs path from site_docs_list.' },
@@ -142,7 +140,7 @@ function toolAnnotations(name: string) {
     destructiveHint: /control_set/.test(name),
     idempotentHint: /doctor|validate|list|show|status|health|readiness|coherence/.test(name),
     openWorldHint: true,
-    deprecatedHint: name.startsWith('site_ops_'),
+    deprecatedHint: false,
   };
 }
 
@@ -287,13 +285,12 @@ async function handleMessage(message) {
 function listPrompts() {
   return [
     { name: 'site_loop_workflow', title: 'Site Loop Workflow', description: 'Guidance for Site Loop tools.', arguments: [] },
-    { name: 'site_ops_workflow', title: 'Site Ops Workflow', description: 'Compatibility alias for site_loop_workflow.', arguments: [] },
   ];
 }
 
 function promptGet(params) {
   const name = String(params.name ?? '');
-  if (name !== 'site_loop_workflow' && name !== 'site_ops_workflow') throw new Error(`unknown_prompt: ${name}`);
+  if (name !== 'site_loop_workflow') throw new Error(`unknown_prompt: ${name}`);
   return {
     description: 'Guidance for Site Loop tools.',
     messages: [{ role: 'user', content: { type: 'text', text: 'Inspect readiness, health, and coherence before running site operations or changing loop control flags.' } }],
@@ -321,15 +318,13 @@ function toolResult(value: unknown, toolName: string) {
 }
 
 async function callTool(name, args, context: SiteOpsRequestContext = {}) {
-  if (name !== 'site_loop_guidance' && name !== 'site_ops_guidance' && name !== 'site_loop_doctor' && name !== 'site_ops_doctor' && name !== 'site_loop_config_validate' && name !== 'site_loop_output_show') {
+  if (name !== 'site_loop_guidance' && name !== 'site_loop_doctor' && name !== 'site_loop_config_validate' && name !== 'site_loop_output_show') {
     requireActiveSiteLoopConfig();
   }
   switch (name) {
     case 'site_loop_guidance':
-    case 'site_ops_guidance':
       return buildGuidanceResult(args);
-    case 'site_loop_doctor':
-    case 'site_ops_doctor': {
+    case 'site_loop_doctor': {
       const loaded = currentSiteLoopConfigLoad();
       const config = loaded.config;
       return {
@@ -342,10 +337,6 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
           loop_id: config.loop_id,
           display_name: config.display_name,
           errors: loaded.errors,
-        },
-        compatibility_aliases: {
-          tools: ['site_ops_guidance', 'site_ops_doctor'],
-          prompts: ['site_ops_workflow'],
         },
         dependency_boundaries: siteLoopDependencyBoundaries(),
         read_only_docs: config.docs.length,
