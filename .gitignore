@@ -3,6 +3,7 @@ node_modules/
 .DS_Store
 *.log
 .ai/
+.narada/crew/
 packages/*/dist/
 packages/shared/*/dist/
 .feedback/
