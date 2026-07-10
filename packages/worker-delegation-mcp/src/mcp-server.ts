@@ -1,5 +1,6 @@
 import { buildGuidanceResult } from './guidance.js';
 import { createWorkerPolicy } from './policy.js';
+import { loadCognitionDefaultsState, type ProviderCognitionDefaults } from './cognition-defaults.js';
 import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
@@ -68,12 +69,17 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   loadSiteSecrets(siteRoot, stateEnv);
   loadProviderCredentialSecrets(siteRoot, stateEnv, options);
   const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
+  const loadedCognitionDefaults = loadCognitionDefaultsState({
+    siteRoot,
+    providerModels: providerPolicyDefaults.providerModels,
+    registryDefaults: providerPolicyDefaults.policyOptions.providerCognitionDefaults as ProviderCognitionDefaults ?? {},
+  });
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
-  const baseOptions = { ...providerPolicyDefaults, ...options };
+  const baseOptions = { ...providerPolicyDefaults.policyOptions, providerCognitionDefaults: loadedCognitionDefaults.defaults, ...options };
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
-  return { policy: createWorkerPolicy(mergedOptions), env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  return { policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -420,27 +426,31 @@ function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv,
   }
 }
 
-function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): Record<string, unknown> {
+function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): { policyOptions: Record<string, unknown>; providerModels: Record<string, string[]> } {
   const registryPath = providerRegistryPath(siteRoot, env, options);
-  if (!registryPath || !existsSync(registryPath)) return {};
+  if (!registryPath || !existsSync(registryPath)) return { policyOptions: {}, providerModels: {} };
   let registry: Record<string, unknown>;
   try {
     registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
   } catch {
-    return {};
+    return { policyOptions: {}, providerModels: {} };
   }
   const providers = asRecord(registry.providers);
   const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
   const providerCognitionDefaults: Record<string, unknown> = {};
+  const providerModels: Record<string, string[]> = {};
   for (const [provider, metadata] of Object.entries(providers)) {
-    const defaults = asRecord(asRecord(metadata).cognition_defaults);
+    const providerMetadata = asRecord(metadata);
+    const defaults = asRecord(providerMetadata.cognition_defaults);
     if (Object.keys(defaults).length > 0) providerCognitionDefaults[provider] = defaults;
+    const models = Array.isArray(providerMetadata.available_models) ? providerMetadata.available_models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0) : [];
+    if (models.length > 0) providerModels[provider] = models;
   }
-  return {
+  return { policyOptions: {
     ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
     ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
     ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
-  };
+  }, providerModels };
 }
 
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {

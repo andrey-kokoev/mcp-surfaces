@@ -18,6 +18,11 @@ const nestedMessageTracker = new AgentRuntimeEventTracker();
 nestedMessageTracker.handleEvent({ event: 'assistant_message', message: { content: 'assistant text from nested message' } });
 assert.equal(nestedMessageTracker.finalAssistantMessage, 'assistant text from nested message');
 
+const mcpFaultTracker = new AgentRuntimeEventTracker();
+mcpFaultTracker.handleEvent({ type: 'error', message: 'surface_registry_tool_not_declared: fs_grep_search' });
+assert.equal(mcpFaultTracker.turnCompleted, true);
+assert.deepEqual(mcpFaultTracker.evidence().terminal_events, ['mcp_tool_error']);
+
 const runtimeEventsPath = join(root, 'runtime-events.jsonl');
 writeFileSync(runtimeEventsPath, [
   JSON.stringify({ method: 'conversation.send', request_id: 'req-1' }),

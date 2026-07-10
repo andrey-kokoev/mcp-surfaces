@@ -9,6 +9,16 @@ export type AssistantExtractionEvidence = {
   failures: string[];
 };
 
+const UNAVAILABLE_MCP_RUNTIME_ERROR = /mcp runtime fault|mcp_runtime_fault|surface_registry_tool_not_declared|admission_required|tool_not_declared|unknown[_ -]tool|unavailable[_ -]tool/i;
+
+export function extractUnavailableMcpRuntimeError(text: string): string | null {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => UNAVAILABLE_MCP_RUNTIME_ERROR.test(line)) ?? null;
+}
+
+export function isUnavailableMcpRuntimeError(text: string): boolean {
+  return UNAVAILABLE_MCP_RUNTIME_ERROR.test(text);
+}
+
 export class AgentRuntimeEventTracker {
   workerSessionId: string | null = null;
   finalAssistantMessage: string | null = null;
@@ -23,8 +33,9 @@ export class AgentRuntimeEventTracker {
   handleEvent(event: unknown): void {
     if (!event || typeof event !== 'object' || Array.isArray(event)) return;
     const record = event as Record<string, unknown>;
+    const eventName = typeof record.event === 'string' ? record.event : typeof record.type === 'string' ? record.type : null;
     if (typeof record.session_id === 'string' && record.session_id) this.workerSessionId ||= record.session_id;
-    if (record.event === 'assistant_message') {
+    if (eventName === 'assistant_message') {
       this.assistantMessageSeen = true;
       this.assistantMessageEventCount += 1;
       const assistantText = assistantMessageText(record);
@@ -35,20 +46,26 @@ export class AgentRuntimeEventTracker {
         this.assistantExtractionFailures.add('assistant_message_without_text_content');
       }
     }
-    if (record.event === 'error') {
+    if (eventName === 'error') {
       const message = eventErrorMessage(record);
-      if (message) this.runtimeError ||= message;
+      if (message) {
+        this.runtimeError ||= message;
+        if (isUnavailableMcpRuntimeError(message)) {
+          this.terminalEvents.add('mcp_tool_error');
+          this.turnCompleted = true;
+        }
+      }
     }
-    if (record.event === 'turn_failed') {
+    if (eventName === 'turn_failed') {
       this.terminalEvents.add('turn_failed');
       this.runtimeError = eventErrorMessage(record) ?? this.runtimeError ?? 'turn_failed';
       this.turnCompleted = true;
     }
-    if (record.event === 'turn_complete') {
+    if (eventName === 'turn_complete') {
       this.terminalEvents.add('turn_complete');
       this.turnCompleted = true;
     }
-    if (record.event === 'session_closed') this.terminalEvents.add('session_closed');
+    if (eventName === 'session_closed') this.terminalEvents.add('session_closed');
   }
 
   evidence(): AssistantExtractionEvidence {

@@ -1,9 +1,11 @@
 import type { WorkerPolicy } from './policy.js';
+import type { CognitionDefaultsState } from './cognition-defaults.js';
 
 export type WorkerMcpState = {
   policy: WorkerPolicy;
   env: NodeJS.ProcessEnv;
   activeRunCount: number;
+  cognitionDefaults?: CognitionDefaultsState;
   activeRunControllers?: Map<string, AbortController>;
   activeRunCompletions?: Map<string, Promise<Record<string, unknown>>>;
   activeRunCancellationRequests?: Set<string>;

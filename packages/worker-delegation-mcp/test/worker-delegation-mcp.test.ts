@@ -110,6 +110,12 @@ process.stdin.on('data', (chunk) => {
         process.stdout.write(JSON.stringify({ event: 'turn_failed', request_id: frame.id, turn_id: 'turn-provider-failed', error: 'API error 429: rate_limit_reached_error: quota exhausted' }) + '\\n');
         continue;
       }
+      if (frame.params.message.includes('agent runtime mcp tool fault')) {
+        process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-mcp-tool-fault' }) + String.fromCharCode(10));
+        process.stderr.write('[agent-runtime-server] MCP runtime fault narada-mcp-surfaces-filesystem:fs_grep_search');
+        setInterval(() => {}, 1000);
+        continue;
+      }
       if (frame.params.message.includes('agent runtime no assistant message')) {
         process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime-no-assistant', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-no-assistant' }) + '\\n');
@@ -215,6 +221,8 @@ assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
   'worker_output_show',
   'worker_operator_affordances',
   'worker_policy_inspect',
+  'worker_cognition_defaults_inspect',
+  'worker_cognition_defaults_update',
   'worker_config_resolve',
   'worker_run',
   'worker_edit',
@@ -236,6 +244,8 @@ for (const tool of tools.result?.tools ?? []) {
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_cognition_defaults_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_cognition_defaults_update')?.annotations?.readOnlyHint, false);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.annotations?.readOnlyHint, true);
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
 assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.outputSchema?.properties?.schema?.const, 'narada.worker.config_resolve.v1');
@@ -492,6 +502,16 @@ assert.equal(providerPolicy.result?.structuredContent.allowed_narada_agent_runti
 assert.equal(providerPolicy.result?.structuredContent.default_narada_agent_runtime_provider, 'deepseek-api');
 assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].low, { model: 'deepseek-chat', reasoning_effort: 'low' });
 assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high, { model: 'deepseek-reasoner', reasoning_effort: 'high' });
+const cognitionDefaultsBefore = await rpc({ jsonrpc: '2.0', id: 1971, method: 'tools/call', params: { name: 'worker_cognition_defaults_inspect', arguments: {} } }, providerState);
+assert.equal(cognitionDefaultsBefore.result?.structuredContent.version, 0);
+assert.equal(cognitionDefaultsBefore.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high.source, 'provider_registry');
+const invalidCognitionUpdate = await rpc({ jsonrpc: '2.0', id: 1972, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'not-a-deepseek-model', reasoning_effort: 'high' } } }, providerState);
+assert.equal(invalidCognitionUpdate.error?.data.code, 'worker_cognition_model_not_allowed');
+const cognitionUpdate = await rpc({ jsonrpc: '2.0', id: 1973, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'deepseek-chat', reasoning_effort: 'max', actor: 'worker-test' } } }, providerState);
+assert.equal(cognitionUpdate.result?.structuredContent.version, 1);
+assert.equal(cognitionUpdate.result?.structuredContent.current.model, 'deepseek-chat');
+assert.equal(existsSync(join(providerRoot, '.narada', 'worker-cognition-defaults.json')), true);
+assert.equal(existsSync(join(providerRoot, '.narada', 'worker-cognition-defaults.audit.jsonl')), true);
 const directDeepseekResolve = await rpc({ jsonrpc: '2.0', id: 198, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek direct runtime rejected' }, constraints: { cwd: providerRoot, overrides: { runtime: 'deepseek-api' } } } } }, providerState);
 assert.equal(directDeepseekResolve.error?.data.code, 'worker_runtime_migrated_to_nars_provider');
 assert.match(String(directDeepseekResolve.error?.data.details.remediation), /provider="deepseek-api"/);
@@ -507,8 +527,14 @@ assert.equal(JSON.stringify(deepseekResolve.result?.structuredContent).includes(
 const deepseekDefaultProviderResolve = await rpc({ jsonrpc: '2.0', id: 200, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek registry default provider check' }, constraints: { cwd: providerRoot, cognition: 'high', overrides: { runtime: 'narada-agent-runtime-server' } } } } }, providerState);
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_source, 'registry_default');
-assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-reasoner');
-assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
+assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-chat');
+assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'max');
+assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.config_resolution.cognition_default_source, 'site_runtime_override');
+assert.match(String(deepseekDefaultProviderResolve.result?.structuredContent.config_resolution.precedence), /request_override > site_runtime_override/);
+const reloadedProviderState = createServerState({ siteRoot: providerRoot, allowedRoot: providerRoot, runRoot: providerRunRoot, defaultRuntime: 'codex', codexCommand: process.execPath, agentRuntimeServerCommand: process.execPath, providerRegistryPath }, { PATH: process.env.PATH });
+const reloadedCognitionDefaults = await rpc({ jsonrpc: '2.0', id: 2001, method: 'tools/call', params: { name: 'worker_cognition_defaults_inspect', arguments: {} } }, reloadedProviderState);
+assert.equal(reloadedCognitionDefaults.result?.structuredContent.version, 1);
+assert.equal(reloadedCognitionDefaults.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high.source, 'site_runtime_override');
 
 if (process.platform === 'win32') {
   const mixedCaseState = createServerState({ allowedRoot: root.toLowerCase(), runRoot, defaultRuntime: 'codex', codexCommand: process.execPath });
@@ -735,6 +761,9 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_confi
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.worker_mcp_projection, undefined);
 assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.enforced_by_delegation, false);
 assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.enforcement_surface, null);
+assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.verification_state, 'no_tools_projected');
+assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.no_tools_posture, true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.preflight.some((check) => check.name === 'mcp_tool_projection' && check.status === 'warning'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_bound, true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_root_source, 'nearest_marker');
@@ -818,6 +847,8 @@ assert.match(agentRuntimePrompt, /NARS worker completion guard/);
 assert.match(agentRuntimePrompt, /Do not call lifecycle, pause, sleep, wait, delegation, or worker_\* tools/);
 assert.match(agentRuntimePrompt, /Do not invent or guess tool names such as andrey-user-filesystem/);
 assert.match(agentRuntimePrompt, /admission_required, surface_registry_tool_not_declared, mcp_runtime_fault/);
+assert.match(agentRuntimePrompt, /Only the following exact MCP tool names are projected into this worker run/);
+assert.match(agentRuntimePrompt, /- mailbox_messages_list/);
 assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
 const agentRuntimeInvocation = JSON.parse(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
 assert.equal(agentRuntimeInvocation.authority, 'read');
@@ -869,6 +900,17 @@ assert.match(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnost
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.progress.latest_event_type, 'turn_failed');
 const agentRuntimeFailedWait = await rpc({ jsonrpc: '2.0', id: 5023, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);
 assert.match(agentRuntimeFailedWait.result?.structuredContent.run.error_preview, /rate_limit_reached_error/);
+const agentRuntimeMcpToolFault = await rpc({ jsonrpc: '2.0', id: 50230, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime mcp tool fault', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
+assert.equal(agentRuntimeMcpToolFault.error?.data.code, 'worker_runtime_failed');
+const agentRuntimeMcpToolFaultRunId = String(agentRuntimeMcpToolFault.error?.data.details.run_id);
+const agentRuntimeMcpToolFaultStatus = await rpc({ jsonrpc: '2.0', id: 502301, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: agentRuntimeMcpToolFaultRunId } } }, agentRuntimeState);
+assert.match(agentRuntimeMcpToolFaultStatus.result?.structuredContent.error, /MCP runtime fault/);
+assert.equal(agentRuntimeMcpToolFaultStatus.result?.structuredContent.error_classification, 'mcp_tool_failure');
+assert.equal(agentRuntimeMcpToolFaultStatus.result?.structuredContent.runtime_diagnostics.phase, 'mcp_tool_failure');
+assert.deepEqual(agentRuntimeMcpToolFaultStatus.result?.structuredContent.runtime_diagnostics.assistant_extraction.terminal_events, ['mcp_tool_error']);
+const agentRuntimeMcpToolFaultWait = await rpc({ jsonrpc: '2.0', id: 502302, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: agentRuntimeMcpToolFaultRunId, timeout_ms: 0 } } }, agentRuntimeState);
+assert.equal(agentRuntimeMcpToolFaultWait.result?.structuredContent.wait.status, 'finished');
+assert.equal(agentRuntimeMcpToolFaultWait.result?.structuredContent.run.status, 'failed');
 const agentRuntimeNoAssistant = await rpc({ jsonrpc: '2.0', id: 50231, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime no assistant message', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeState);
 assert.equal(agentRuntimeNoAssistant.error?.data.code, 'worker_runtime_failed');
 const agentRuntimeNoAssistantRunId = String(agentRuntimeNoAssistant.error?.data.details.run_id);

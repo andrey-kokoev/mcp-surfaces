@@ -18,6 +18,14 @@ export function listTools(): WorkerToolDefinition[] {
     }) },
     { name: 'worker_operator_affordances', description: 'Return UI-neutral operator affordances for rendering worker run dashboards, launch controls, artifact refs, and recovery actions.', inputSchema: objectSchema({}) },
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
+    { name: 'worker_cognition_defaults_inspect', description: 'Inspect provider-scoped low, medium, and high cognition defaults, their sources, precedence, version, and audit location.', inputSchema: objectSchema({}) },
+    { name: 'worker_cognition_defaults_update', description: 'Update one provider cognition tier for future new runs. The model must be listed in that provider registry catalog; resumed sessions retain their resolved settings unless explicitly overridden.', inputSchema: objectSchema({
+      provider: { type: 'string' },
+      cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
+      model: { type: 'string' },
+      reasoning_effort: { type: 'string' },
+      actor: { type: 'string', description: 'Optional audit actor label.' },
+    }, ['provider', 'cognition', 'model', 'reasoning_effort']) },
     { name: 'worker_config_resolve', description: 'Resolve worker run inputs without launching a worker, including narada-agent-runtime-server Site binding status.', inputSchema: objectSchema({
       worker_session_id: { type: 'string', description: 'Optional existing worker session whose constraints should be inherited like worker_resume.' },
       intent: intentSchema(),
@@ -216,7 +224,7 @@ function decorateTools(tools: WorkerToolDefinition[]): WorkerToolDefinition[] {
 
 function toolAnnotations(name: string) {
   const startsWorker = name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_batch';
-  const mutatesRunRecord = name === 'worker_run_reap';
+  const mutatesRunRecord = name === 'worker_run_reap' || name === 'worker_cognition_defaults_update';
   return {
     title: name,
     readOnlyHint: !startsWorker && !mutatesRunRecord,
@@ -228,6 +236,7 @@ function toolAnnotations(name: string) {
 
 function toolOutputSchema(name: string): Record<string, unknown> {
   if (name === 'worker_policy_inspect') return workerPolicyOutputSchema();
+  if (name === 'worker_cognition_defaults_inspect' || name === 'worker_cognition_defaults_update') return { type: 'object', additionalProperties: true };
   if (name === 'worker_operator_affordances') return { type: 'object', additionalProperties: true };
   if (name === 'worker_config_resolve') return workerConfigResolveOutputSchema();
   if (name === 'worker_run' || name === 'worker_edit' || name === 'worker_resume' || name === 'worker_run_status') return workerRunOutputSchema();

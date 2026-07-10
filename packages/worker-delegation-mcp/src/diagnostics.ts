@@ -115,6 +115,7 @@ export function runtimeFailurePhase(
   outcomeError: string | null,
 ): string {
   const error = String(outcomeError ?? result.error ?? result.event_error ?? result.runtime_error ?? '').toLowerCase();
+  if (error.includes('mcp runtime fault') || error.includes('mcp_runtime_fault') || error.includes('surface_registry_tool_not_declared') || error.includes('admission_required') || error.includes('tool_not_declared')) return 'mcp_tool_failure';
   if (error.includes('completed_without_assistant_output')) return 'completed_without_assistant_output';
   if (error.includes('exited_before_assistant_output')) return 'pre_first_assistant_failure';
   if (parsed.ok === false && parsed.reason === 'missing_file' && !result.error && !result.event_error && !result.runtime_error) return 'pre_first_assistant_failure';
@@ -127,6 +128,7 @@ export function runtimeFailurePhase(
 }
 
 export function runtimeFailureRemediation(phase: string): string[] {
+  if (phase === 'mcp_tool_failure') return ['Declare exact constraints.required_mcp_tools so the worker receives an explicit MCP allowlist, or keep the worker MCP-free.', 'Inspect stdout_tail and diagnostic_tail for the refused or unavailable tool name.'];
   if (phase === 'startup_failure') return ['Check runtime command availability and argv.', 'Inspect diagnostic_tail for process launch errors.'];
   if (phase === 'pre_first_assistant_failure') return ['Inspect stdout_tail for startup/session events and diagnostic_tail for stderr.', 'Retry with the same run_id only if the runtime supports resume; otherwise route to runtime repair.'];
   if (phase === 'completed_without_assistant_output') return ['Inspect runtime_diagnostics.assistant_extraction and session_event_evidence.terminal_events.', 'If assistant_message_seen is false, fix the runtime/provider to emit assistant_message before terminal events; if true but not extracted, repair assistant event text projection.'];
@@ -408,6 +410,7 @@ function classifyDiagnosticTail(text: string): string {
 
 export function classifyRuntimeError(text: string): string | null {
   const lower = text.toLowerCase();
+  if (lower.includes('mcp runtime fault') || lower.includes('mcp_runtime_fault') || lower.includes('surface_registry_tool_not_declared') || lower.includes('admission_required') || lower.includes('tool_not_declared')) return 'mcp_tool_failure';
   if (lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('429')) return 'provider_rate_limited';
   if (lower.includes('unauthorized') || lower.includes('authentication') || lower.includes('api key') || lower.includes('401') || lower.includes('403')) return 'provider_auth';
   if (lower.includes('invalid_request') || lower.includes('invalid request') || lower.includes('function name is invalid') || lower.includes('400')) return 'provider_invalid_request';

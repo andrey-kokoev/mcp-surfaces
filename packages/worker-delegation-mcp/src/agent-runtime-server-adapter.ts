@@ -4,7 +4,7 @@ import { dirname, extname, resolve } from 'node:path';
 import { parseLastMessage, resultStatus, type Invocation, type ResolvedWorkerConfig, type WorkerOutputParseResult, type WorkerRunTerminalStatus } from './codex-adapter.js';
 import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation, workerAiProcessRefusalError } from './ai-process-invocation.js';
 import { workerOutputFromAgentMessage } from './output-contract.js';
-import { AgentRuntimeEventTracker, emptyAssistantExtraction, missingAssistantMessageError } from './runtime-events.js';
+import { AgentRuntimeEventTracker, emptyAssistantExtraction, extractUnavailableMcpRuntimeError, isUnavailableMcpRuntimeError, missingAssistantMessageError } from './runtime-events.js';
 
 export type { Invocation, ResolvedWorkerConfig, WorkerOutputParseResult, WorkerRunTerminalStatus };
 
@@ -121,6 +121,8 @@ export async function runAgentRuntimeServerInvocation(options: {
     let released = false;
     let cancelled = false;
     let eventError: string | null = null;
+    let fatalRuntimeError: string | null = null;
+    let stderrBuffer = '';
     let closeFrameSent = false;
 
     const finish = (result: { exit_code: number | null; signal: string | null; cancelled: boolean; error: string | null }) => {
@@ -160,7 +162,22 @@ export async function runAgentRuntimeServerInvocation(options: {
 
     const handleEvent = (event: unknown) => {
       runtimeEvents.handleEvent(event);
+      if (!fatalRuntimeError && isUnavailableMcpRuntimeError(runtimeEvents.runtimeError ?? '')) {
+        fatalRuntimeError = runtimeEvents.runtimeError;
+        try { child.kill(); } catch { /* ignore */ }
+      }
       closeAfterTurn();
+    };
+
+    const handleDiagnosticChunk = (chunk: unknown) => {
+      const text = String(chunk);
+      diagnostics.write(text);
+      stderrBuffer = `${stderrBuffer}${text}`.slice(-16_384);
+      const detected = extractUnavailableMcpRuntimeError(stderrBuffer);
+      if (!detected || fatalRuntimeError) return;
+      fatalRuntimeError = detected;
+      runtimeEvents.handleEvent({ event: 'error', message: detected });
+      try { child.kill(); } catch { /* ignore */ }
     };
 
     const drainStdout = (chunk: string) => {
@@ -195,13 +212,14 @@ export async function runAgentRuntimeServerInvocation(options: {
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => drainStdout(String(chunk)));
-    child.stderr.on('data', (chunk) => diagnostics.write(String(chunk)));
-    child.on('error', (error) => finish({ exit_code: null, signal: null, cancelled: false, error: error.message }));
+    child.stderr.on('data', handleDiagnosticChunk);
+    child.on('error', (error) => finish({ exit_code: null, signal: null, cancelled: false, error: fatalRuntimeError ?? error.message }));
     child.on('close', (code, signal) => {
       if (stdoutBuffer.trim()) eventError ||= 'unterminated json event';
       const assistantExtraction = runtimeEvents.evidence();
+      const terminalRuntimeError = fatalRuntimeError ?? (isUnavailableMcpRuntimeError(runtimeEvents.runtimeError ?? '') ? runtimeEvents.runtimeError : null);
       const missingTurnOutput = !cancelled && code === 0 && runtimeEvents.finalAssistantMessage === null ? runtimeEvents.runtimeError ?? missingAssistantMessageError(assistantExtraction) : null;
-      finish({ exit_code: code, signal, cancelled, error: missingTurnOutput });
+      finish({ exit_code: code, signal, cancelled, error: terminalRuntimeError ?? missingTurnOutput });
     });
 
     const requestId = `worker-conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;

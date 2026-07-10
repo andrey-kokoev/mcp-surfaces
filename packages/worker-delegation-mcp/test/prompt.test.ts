@@ -28,9 +28,13 @@ const narsPrompt = buildWorkerPrompt({
   preflight: [{ name: 'requested_mode', status: 'ok', message: 'requested_mode=implement' }],
   outputContract: { schema: 'test.contract' },
   exitInterview: true,
+  requiredMcpTools: ['local-filesystem.fs_read_file'],
 });
 
 assert.match(narsPrompt, /NARS worker completion guard/);
 assert.match(narsPrompt, /Complete this turn by returning the required JSON object/);
+assert.match(narsPrompt, /Only the following exact MCP tool names are projected into this worker run/);
+assert.match(narsPrompt, /- local-filesystem\.fs_read_file/);
 assert.match(narsPrompt, /Exit interview/);
 assert.match(narsPrompt, /observed_incoherencies/);
+assert.match(basePrompt, /No MCP tools are projected into this worker run/);

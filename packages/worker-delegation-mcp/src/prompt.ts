@@ -8,9 +8,11 @@ export type WorkerPromptOptions = {
   preflight: WorkerPreflightCheck[];
   outputContract: Record<string, unknown>;
   exitInterview: boolean;
+  requiredMcpTools?: string[];
 };
 
 export function buildWorkerPrompt(options: WorkerPromptOptions): string {
+  const requiredMcpTools = options.requiredMcpTools ?? [];
   return [
     'Intent',
     options.intent.instruction,
@@ -35,6 +37,16 @@ export function buildWorkerPrompt(options: WorkerPromptOptions): string {
     'Do not use direct shell commands for file discovery or file reads when MCP tools can do the work.',
     'Use direct shell execution only when the delegated intent explicitly requires command execution and no narrower MCP surface fits.',
     'When required_mcp_tools are listed in preflight, verify availability or use in the verification array; if falling back to shell, include a concise fallback reason in verification.summary.',
+    '',
+    'MCP tool projection',
+    ...(requiredMcpTools.length > 0 ? [
+      'Only the following exact MCP tool names are projected into this worker run:',
+      ...requiredMcpTools.map((tool) => `- ${tool}`),
+      'Do not call any MCP tool outside this explicit allowlist or guess alternate server/tool names.',
+    ] : [
+      'No MCP tools are projected into this worker run.',
+      'Do not call MCP tools. If the intent requires MCP access, return the required JSON immediately with a clear summary that MCP tools were not projected and a failed not_applicable verification entry; do not probe guessed or hidden tool names.',
+    ]),
     ...(options.mode === 'audit_only' || options.mode === 'plan_only' ? [
       'For focused source inspection, read target files directly through available filesystem MCP tools such as fs_read_file_range and fs_grep_search. Do not ask the delegating caller to provide output_refs for ordinary source files.',
       'If a file is large, generated, or secret-bearing, keep reads bounded and cite the file/path plus relevant line window rather than copying full content.',
@@ -50,7 +62,7 @@ export function buildWorkerPrompt(options: WorkerPromptOptions): string {
       'NARS worker completion guard',
       'You are running under narada-agent-runtime-server as an automated worker. Complete this turn by returning the required JSON object; do not wait for operator input.',
       'Do not call lifecycle, pause, sleep, wait, delegation, or worker_* tools from inside this worker turn.',
-      'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as narada-andrey-filesystem when they are not explicitly available.',
+      'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as andrey-user-filesystem when they are not explicitly available.',
       'If a tool call returns admission_required, surface_registry_tool_not_declared, mcp_runtime_fault, or any unavailable-tool error, stop using that tool family and return the required JSON with the issue in residual_risks or observed_incoherencies.',
       'For tasks answerable from the delegated intent, preflight evidence, or current prompt, do not probe filesystem tools just to gather extra context.',
     ] : []),
