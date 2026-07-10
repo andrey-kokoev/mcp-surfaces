@@ -32,8 +32,10 @@ This repository mixes reusable substrate surfaces with Narada-specific control-p
 - `@narada2/cloudflare-carrier-mcp`
 - `@narada2/site-coherence-mcp`
 - `@narada2/site-lifecycle-mcp`
+- `@narada2/site-registry-mcp`
 - `@narada2/operator-routing-mcp`
 - `@narada2/artifacts-mcp`
+- `@narada2/nars-session-mcp`
 - `@narada2/surface-feedback-mcp`
 - `@narada2/launcher-mcp`
 

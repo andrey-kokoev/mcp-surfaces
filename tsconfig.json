@@ -19,6 +19,7 @@
     { "path": "./packages/agent-context-mcp" },
     { "path": "./packages/launcher-mcp" },
     { "path": "./packages/runtime-introspection-mcp" },
+    { "path": "./packages/nars-session-mcp" },
     { "path": "./packages/site-lifecycle-mcp" },
     { "path": "./packages/artifacts-mcp" }
   ]

@@ -35,6 +35,16 @@ Conformance is a four-layer proof, not a tool-name allowlist check:
 
 The proof fails on missing live evidence, absent boolean `readOnlyHint`, duplicate tools, incomplete or overlapping semantics, external refusal lists, fabric/catalog/live drift, projection/provenance drift, and missing output-reader closure. Tool names never determine behavior.
 
+## Site Catalog Boundary
+
+`registrar_site_list` reads the User Site SQLite Site Registry at
+`NARADA_SITE_REGISTRY_DB`, or `%USERPROFILE%/Narada/registry.db` on the default
+Windows user-locus setup. Its output is a discovery/read-model projection, not
+Site authority. Legacy site IDs are returned only as compatibility metadata so
+existing carrier bindings can be resolved by root. If the registry cannot be
+read, the response explicitly marks `legacy_compatibility_catalog` fallback;
+the static definitions are not treated as canonical.
+
 The ref's `created_by` and payload-id namespace provide declarative lineage and accidental-misrouting protection only. They are not cryptographic provenance, grant no authority, and do not resist a principal that already has arbitrary Site filesystem-write authority.
 
 `registrar_carrier_diff` distinguishes the exact full-file projection from parsed server definitions. `projection_changed` covers the complete generated carrier file; `server_projection_changed` and `server_changes` cover server entries only; `carrier_metadata_or_format_only` explains a full-file difference with unchanged server definitions.

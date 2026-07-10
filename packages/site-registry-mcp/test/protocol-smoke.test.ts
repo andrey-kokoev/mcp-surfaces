@@ -48,15 +48,17 @@ try {
   writeMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   const init = await waitFor(1);
   assert.equal(init.error, undefined);
-  assert.equal(init.result.serverInfo.name, 'site-lifecycle-mcp');
+  assert.equal(init.result.serverInfo.name, 'site-registry-mcp');
 
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);
   assert.equal(tools.error, undefined);
   const names = tools.result.tools.map((tool: { name: string }) => tool.name);
-  assert.equal(names.includes('site_lifecycle_doctor'), true);
-  assert.equal(names.includes('site_create_plan'), true);
-  assert.equal(names.includes('site_registry_list'), false);
+  assert.equal(names.includes('site_registry_doctor'), true);
+  assert.equal(names.includes('site_create_plan'), false);
+  assert.equal(names.includes('site_registry_list'), true);
+  assert.equal(names.includes('site_registry_show'), true);
+  assert.equal(names.includes('site_registry_discover_plan'), true);
   assert.equal(stderr.trim(), '');
 } finally {
   proc.stdin?.destroy();
@@ -65,4 +67,4 @@ try {
   proc.kill();
 }
 
-console.log('site-lifecycle-mcp protocol smoke ok');
+console.log('site-registry-mcp protocol smoke ok');

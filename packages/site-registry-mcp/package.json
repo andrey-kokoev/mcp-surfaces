@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/site-registry-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "User Site MCP surface for the canonical Narada Site Registry.",
+  "bin": {
+    "site-registry-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/site-registry-mcp.test.js"
+  },
+  "dependencies": {},
+  "files": [
+    "dist/"
+  ]
+}

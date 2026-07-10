@@ -21,9 +21,12 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada2/delegated-task-mcp`: outcome-oriented delegated task orchestration MCP surface. See `packages/delegated-task-mcp/README.md`.
 - `@narada2/sop-mcp`: versioned standard operating procedure runbook engine with SQLite-backed execution. See `packages/sop-mcp/README.md`.
 - `@narada2/scheduler-mcp`: Windows Task Scheduler MCP surface for governed task registration, inspection, and execution. See `packages/scheduler-mcp/README.md`.
+- `@narada2/site-lifecycle-mcp`: governed Local Site lifecycle inspection and mutation surface. See `packages/site-lifecycle-mcp/README.md`.
+- `@narada2/site-registry-mcp`: read-only User Site surface for canonical cross-site registry inspection and reconciliation planning. See `packages/site-registry-mcp/README.md`.
 - `@narada2/mcp-registrar`: MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers. See `packages/mcp-registrar/README.md`.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing. See `packages/surface-feedback-mcp/README.md`.
 - `@narada2/speech-mcp`: host-level speech surface for TTS, bounded capture, and transcription. See `packages/speech-mcp/README.md`.
+- `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions. See `docs/nars-session-mcp-target.md`.
 
 ## Verify
 

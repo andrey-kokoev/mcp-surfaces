@@ -1,0 +1,33 @@
+{
+  "name": "@narada2/nars-session-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Governed MCP input and bounded readback for existing NARS sessions.",
+  "bin": {
+    "nars-session-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    },
+    "./session-client": {
+      "types": "./dist/src/session-client.d.ts",
+      "default": "./dist/src/session-client.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/nars-session-mcp.test.js"
+  },
+  "dependencies": {
+    "@narada2/mcp-transport": "workspace:*",
+    "@narada2/site-paths": "workspace:*"
+  },
+  "files": [
+    "dist/"
+  ]
+}

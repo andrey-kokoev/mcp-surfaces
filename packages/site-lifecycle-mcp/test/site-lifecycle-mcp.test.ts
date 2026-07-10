@@ -9,6 +9,7 @@ assert.equal(names.includes('site_lifecycle_doctor'), true);
 assert.equal(names.includes('site_create_plan'), true);
 assert.equal(names.includes('site_init'), true);
 assert.equal(names.includes('site_lifecycle_preflight'), true);
+assert.equal(names.includes('site_registry_list'), false);
 
 const doctorResponse = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'site_lifecycle_doctor', arguments: {} } }, state);
 assert.equal(doctorResponse?.error, undefined);

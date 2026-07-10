@@ -35,8 +35,10 @@ Current packages:
 - `@narada2/cloudflare-carrier-mcp`: Cloudflare-carrier live operations MCP surface wrapping product-read, session status, and continuity health.
 - `@narada2/site-coherence-mcp`: Site-level continuity coherence readback MCP surface for detecting posture mismatches between local and Cloudflare embodiments.
 - `@narada2/site-lifecycle-mcp`: governed MCP surface aligned with `narada sites ...` CLI commands for Site creation planning, lifecycle inspection, relations, and gated configuration mutations.
+- `@narada2/site-registry-mcp`: User Site MCP surface for canonical cross-site registry inspection and reconciliation planning.
 - `@narada2/operator-routing-mcp`: User Site operator routing surface for transcript-to-target decisions and inbox fallback packaging.
 - `@narada2/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
+- `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
 
 Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
 
@@ -75,7 +77,7 @@ Kinds:
 When submitting, include:
 
 - `surface_id` (e.g. `worker-delegation`, `graph-mail`, `mcp-registrar`).
-- `submitter_site_id` (e.g. `narada-andrey`, `narada-sonar`).
+- `submitter_site_id` (e.g. `andrey-user`, `narada-sonar`).
 - `submitter_principal` (your agent identity).
 - `kind` and a concise `summary`.
 - `details` with reproduction steps, expected behavior, and impact.
@@ -112,6 +114,7 @@ pnpm test:graph-mail
 pnpm test:calendar
 pnpm test:task-lifecycle
 pnpm test:site-loop
+pnpm test:site-registry
 pnpm test:agent-context
 pnpm test:delegated-task
 pnpm test:sop
@@ -121,6 +124,7 @@ pnpm test:launcher
 pnpm test:cloudflare-carrier
 pnpm test:site-coherence
 pnpm test:artifacts
+pnpm test:nars-session
 ```
 
 ## Verification Expectations
@@ -140,11 +144,13 @@ Before handing off changes:
 - `sop-mcp` owns versioned SOP templates and durable run execution; it orchestrates procedural steps but does not own tasks, workers, filesystem access, or shell execution directly — it delegates those to their respective MCP surfaces.
 - `scheduler-mcp` owns Windows Task Scheduler registration, inspection, and execution; it must not become a general shell or process orchestration surface — scheduling policy is defined at the caller level.
 - `mcp-registrar` owns the surface-to-site-to-carrier weave; it edits config files (JSON/TOML) but does not start or stop servers or mutate the surfaces themselves.
+- `site-registry-mcp` owns User Site access to the canonical cross-site registry. It is read-only, exposes reconciliation planning rather than apply, and must not acquire Local Site lifecycle responsibilities.
 - `mcp-loader-mcp` owns runtime attachment/proxying for allowed MCP surfaces; it does not own the surfaces it attaches to and must not become a general orchestration layer.
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
 - `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
 - `mcp-runtime-proxy` owns carrier-facing stdio proxy diagnostics for MCP startup. It must not authorize tools, mutate policy, or interpret surface domain behavior.
+- `nars-session-mcp` owns only the MCP adapter for concrete existing NARS sessions; NARS carrier protocol and session authority remain in Narada proper.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.
 - `calendar-mcp` owns policy-gated Microsoft Graph calendar access and event lifecycle tools; event writes must stay disallowed unless explicit site policy enables them.

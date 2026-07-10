@@ -2,3 +2,4 @@ packages:
   - "packages/*"
   - "packages/shared/*"
   - "../narada-core/packages/*"
+  - "../narada/packages/site-paths"

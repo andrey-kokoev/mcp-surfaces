@@ -27,6 +27,8 @@ importers:
         specifier: ^1.0.0
         version: 1.6.1(@types/node@22.19.19)
 
+  ../narada/packages/site-paths: {}
+
   packages/agent-context-mcp:
     dependencies:
       '@narada2/mcp-transport':
@@ -100,6 +102,15 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-transport
 
+  packages/nars-session-mcp:
+    dependencies:
+      '@narada2/mcp-transport':
+        specifier: workspace:*
+        version: link:../shared/mcp-transport
+      '@narada2/site-paths':
+        specifier: workspace:*
+        version: link:../../../narada/packages/site-paths
+
   packages/operator-routing-mcp: {}
 
   packages/runtime-introspection-mcp:
@@ -149,6 +160,8 @@ importers:
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
+
+  packages/site-registry-mcp: {}
 
   packages/sop-mcp:
     dependencies:

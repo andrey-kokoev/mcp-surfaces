@@ -220,9 +220,11 @@ try {
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_output_show'));
-  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_list'));
-  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_show'));
-  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_discover_plan'));
+  assert.equal((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_list'), false);
+  assert.ok((bySurface.get('site-registry')?.tools as string[]).includes('site_registry_list'));
+  assert.ok((bySurface.get('site-registry')?.tools as string[]).includes('site_registry_show'));
+  assert.ok((bySurface.get('site-registry')?.tools as string[]).includes('site_registry_discover_plan'));
+  assert.equal(bySurface.get('site-registry')?.injection_scope, 'user_site');
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_submit'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_output_show'));
   assert.ok((bySurface.get('mailbox')?.tools as string[]).includes('mailbox_output_show'));
@@ -694,6 +696,7 @@ try {
     view(await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: generatedPath }));
     const generatedText = readFileSync(generatedPath, 'utf8');
     const normalizedGeneratedText = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
+    assert.equal(normalizedGeneratedText.includes('site-registry-mcp/dist/src/main.js'), true);
     assert.equal(generatedText.includes('opencode-sonar'), false);
     assert.equal(generatedText.includes('tools/typed-mcp/inbox-mcp-server.mjs'), false);
     assert.equal(generatedText.includes('inbox_stage_submission_workflow'), false);
