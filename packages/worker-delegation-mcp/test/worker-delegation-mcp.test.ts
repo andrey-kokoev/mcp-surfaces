@@ -337,8 +337,23 @@ assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
-assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].low, { model: 'kimi-k2.6', reasoning_effort: 'low' });
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].low, { model: 'kimi-k2.7', reasoning_effort: 'low' });
 assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].medium, { model: 'kimi-k2.7', reasoning_effort: 'medium' });
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['openai-api'], {
+  low: { model: 'gpt-5.6-luna', reasoning_effort: 'low' },
+  medium: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+  high: { model: 'gpt-5.6-sol', reasoning_effort: 'high' },
+});
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['codex-subscription'], {
+  low: { model: 'gpt-5.6-luna', reasoning_effort: 'low' },
+  medium: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+  high: { model: 'gpt-5.6-sol', reasoning_effort: 'high' },
+});
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['openrouter-api'], {
+  low: { model: 'z-ai/glm-5-turbo', reasoning_effort: 'low' },
+  medium: { model: 'z-ai/glm-5.2', reasoning_effort: 'medium' },
+  high: { model: 'z-ai/glm-5.2', reasoning_effort: 'high' },
+});
 assert.match(policy.result?.content[0].text, /"schema": "narada\.worker\.policy\.v1"/);
 assert.match(policy.result?.content[0].text, /"site_bound": true/);
 assert.match(policy.result?.content[0].text, /"\.narada\/"/);
@@ -691,7 +706,7 @@ assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_c
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.workspace_root, root);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider, 'kimi-code-api');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider_source, 'registry_default');
-assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.6');
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.7');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AGENT_ID'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_CARRIER_SESSION_ID'), true);
@@ -768,7 +783,7 @@ assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.si
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.site_binding.source, 'nearest_parent_marker');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.provider, 'kimi-code-api');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.provider_source, 'registry_default');
-assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.6');
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.7');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.implementation_identity.surface_id, 'worker-delegation-mcp');
 assert.equal(agentRuntimeRun.result?.structuredContent.session_event_evidence.prompt_admission, 'turn_started_without_visible_send_frame');
