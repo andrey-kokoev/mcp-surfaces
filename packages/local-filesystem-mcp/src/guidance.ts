@@ -8,6 +8,25 @@ const PURPOSE = "Governed filesystem inspection and mutation under allowed roots
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
   const tool = typeof args.tool === 'string' && args.tool.trim() ? args.tool.trim() : null;
+  const patchRecovery = workflow === 'bounded_reads_and_patch_recovery' || tool === 'fs_apply_patch' || tool === 'fs_patch_outcome_show' ? {
+    patch_recovery: {
+      sequence: [
+        'Choose a stable operation_id before calling fs_apply_patch.',
+        'Call fs_apply_patch once with that operation_id and the intended patch.',
+        'After timeout or transport loss, call fs_patch_outcome_show with the same operation_id.',
+        'Retry fs_apply_patch with the same operation_id only when necessary; a matching patch hash replays the durable outcome without mutation, while a different hash is rejected.'
+      ],
+      statuses: {
+        accepted: 'The request is durable but parsing/planning has not completed.',
+        checked: 'Dry-run validation completed without mutation.',
+        applying: 'Mutation has started; inspect the outcome again rather than submitting a different patch.',
+        patched: 'Mutation completed and changed-file hashes are durable.',
+        failed_before_mutation: 'Parsing, validation, or planning failed and no mutation started.',
+        failed_rolled_back: 'Mutation started, failed, and rollback evidence is included.'
+      },
+      read_mode: 'fs_patch_outcome_show is available in both read and write modes.',
+    }
+  } : {};
   return {
     schema: 'narada.mcp_surface.guidance.v0',
     status: 'ok',
@@ -15,6 +34,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
+    ...patchRecovery,
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',

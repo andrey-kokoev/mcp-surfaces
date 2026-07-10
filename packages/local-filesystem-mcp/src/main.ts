@@ -444,6 +444,11 @@ export function listTools(mode) {
       description: 'Inspect local-filesystem MCP policy posture: mode, allowed roots with provenance, output root, audit log dir, client roots, and effective permissions.',
       inputSchema: objectSchema({}),
     },
+    {
+      name: 'fs_patch_outcome_show',
+      description: 'Read the durable outcome for an fs_apply_patch operation_id after a timeout or transport interruption.',
+      inputSchema: objectSchema({ operation_id: { type: 'string' } }, ['operation_id']),
+    },
   ];
   const writeTools = [
     {
@@ -492,11 +497,6 @@ export function listTools(mode) {
         timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
         expected_sha256: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional map from patch paths to expected current file sha256 values.' },
       }, ['patch']),
-    },
-    {
-      name: 'fs_patch_outcome_show',
-      description: 'Read the durable outcome for an fs_apply_patch operation_id after a timeout or transport interruption.',
-      inputSchema: objectSchema({ operation_id: { type: 'string' } }, ['operation_id']),
     },
     {
       name: 'fs_move_path',
@@ -1228,12 +1228,25 @@ function applyPatchTool(args, state) {
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
   const dryRun = booleanField(args, 'dry_run') ?? false;
   const operationId = stringField(args, 'operation_id') ?? randomUUID();
+  const patchSha256 = sha256(patch);
+  const priorOutcome = readPatchOutcome(state, operationId);
+  if (priorOutcome) {
+    if (priorOutcome.patch_sha256 !== patchSha256) throw diagnosticError('patch_operation_id_conflict', 'patch_operation_id_conflict', { operation_id: operationId, existing_patch_sha256: priorOutcome.patch_sha256, requested_patch_sha256: patchSha256 });
+    return { ...priorOutcome, operation_replayed: true, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
+  }
+  writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'accepted', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, accepted_at: new Date().toISOString() });
   const expectedSha256 = expectedSha256Map(args);
   const matchedExpectedSha256Keys = new Set();
   const timeoutMs = filesystemOperationTimeoutMs(args);
   const checkTimeout = createOperationTimeoutChecker('fs_apply_patch', timeoutMs);
   checkTimeout('parse_patch_start');
-  const files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError, checkTimeout });
+  let files;
+  try {
+    files = parseToolPatch(patch, { diagnosticError: patchDiagnosticError, checkTimeout });
+  } catch (error) {
+    writePatchFailureBeforeMutation(state, operationId, patchSha256, error);
+    throw error;
+  }
   checkTimeout('parse_patch_complete');
   if (files.length === 0) {
     throw patchDiagnosticError('patch_contains_no_files', patch, {
@@ -1241,7 +1254,6 @@ function applyPatchTool(args, state) {
       expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@', '*** Begin Patch', '*** Update File: <path>'],
     });
   }
-  const patchSha256 = sha256(patch);
   let planned;
   try {
   planned = files.map((filePatch) => {
@@ -1265,13 +1277,18 @@ function applyPatchTool(args, state) {
   });
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
-    writePatchOutcome(state, operationId, { status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), error: diagnostic });
+    writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_before_mutation', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, rollback_performed: false, finished_at: new Date().toISOString(), error: diagnostic });
     throw error;
   }
   checkTimeout('planned_all_files');
-  assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedExpectedSha256Keys);
+  try {
+    assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedExpectedSha256Keys);
+  } catch (error) {
+    writePatchFailureBeforeMutation(state, operationId, patchSha256, error);
+    throw error;
+  }
   if (dryRun) {
-    return {
+    const outcome = {
       schema: 'local.filesystem.apply_patch.v1',
       status: 'checked',
       operation_id: operationId,
@@ -1286,9 +1303,11 @@ function applyPatchTool(args, state) {
         after_sha256: item.filePatch.deleteFile ? null : sha256(item.after),
       })),
     };
+    writePatchOutcome(state, operationId, { ...outcome, patch_sha256: patchSha256, mutation_started: false, finished_at: new Date().toISOString() });
+    return outcome;
   }
   const changed = [];
-  writePatchOutcome(state, operationId, { status: 'applying', operation_id: operationId, patch_sha256: patchSha256, started_at: new Date().toISOString() });
+  writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'applying', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, started_at: new Date().toISOString() });
   const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
   const backups = backupPaths.map((path) => ({
     path,
@@ -1314,10 +1333,10 @@ function applyPatchTool(args, state) {
   } catch (error) {
     rollbackPatch(backups);
     const diagnostic = errorDiagnostic(error);
-    writePatchOutcome(state, operationId, { status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), error: diagnostic });
+    writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: true, rollback_succeeded: true, finished_at: new Date().toISOString(), error: diagnostic });
     throw error;
   }
-  const outcome = { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'patched', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), changed_files: changed };
+  const outcome = { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'patched', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: false, finished_at: new Date().toISOString(), changed_files: changed };
   writePatchOutcome(state, operationId, outcome);
   return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', operation_id: operationId, changed_files: changed, timeout_ms: timeoutMs, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
 }
@@ -1328,6 +1347,16 @@ function patchOutcomeShowTool(args, state) {
   const path = patchOutcomePath(state, operationId);
   if (!existsSync(path)) throw diagnosticError('patch_outcome_not_found', 'patch_outcome_not_found', { operation_id: operationId });
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function readPatchOutcome(state, operationId) {
+  const path = patchOutcomePath(state, operationId);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function writePatchFailureBeforeMutation(state, operationId, patchSha256, error) {
+  writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_before_mutation', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, rollback_performed: false, finished_at: new Date().toISOString(), error: errorDiagnostic(error) });
 }
 
 function writePatchOutcome(state, operationId, outcome) {

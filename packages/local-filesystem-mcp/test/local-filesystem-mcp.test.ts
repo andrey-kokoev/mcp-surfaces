@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { buildAllowedRoots, normalizeAllowedRoots, parseTrustedProjectRootsFromTrustConfig, resolveAllowedPath, resolveAnchoredAllowedRoot, rootEntriesToRoots } from '../src/policy.js';
 import { createServerState, handleRequest, handleRequestAsync, listTools } from '../src/main.js';
 import { parsePatch } from '../src/patch-apply.js';
+import { buildGuidanceResult } from '../src/guidance.js';
 import { RIPGREP_FIELD_SEPARATOR, grepMatchObject, runRipgrepPageAsync } from '../src/search.js';
 
 type DynamicTestValue = string & DynamicTestValue[] & {
@@ -160,6 +161,12 @@ trust_level = "untrusted"
   assert.match(String(grepToolDescription), /empty matches return ok with count 0/);
   assert.equal(readToolNames.includes('mcp_output_show'), false);
   assert.equal(readToolNames.includes('fs_write_file'), false);
+  assert.equal(readToolNames.includes('fs_apply_patch'), false);
+  assert.equal(readToolNames.includes('fs_patch_outcome_show'), true);
+  const recoveryGuidance = buildGuidanceResult({ workflow: 'bounded_reads_and_patch_recovery' }) as DynamicTestValue;
+  assert.equal(Array.isArray(recoveryGuidance.patch_recovery.sequence), true);
+  assert.match(String(recoveryGuidance.patch_recovery.sequence[2]), /fs_patch_outcome_show/);
+  assert.match(String(recoveryGuidance.patch_recovery.statuses.failed_before_mutation), /no mutation/);
 
   const writeToolNames = listTools('write').map((tool) => tool.name);
   assert.ok(writeToolNames.includes('fs_guidance'));
@@ -708,12 +715,19 @@ trust_level = "untrusted"
   assert.deepEqual(unmatchedPatchGuard.error.data.details.unmatched_expected_sha256_keys, ['typo-patch.txt']);
   const stalePatchGuard = call(writeState, 322, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, expected_sha256: { 'patch.txt': 'bad' } });
   assert.equal(stalePatchGuard.error.data.code, 'fs_apply_patch_expected_sha256_mismatch');
-  const patchResponse = call(writeState, 32, 'fs_apply_patch', { patch: `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
+  const patchText = `--- patch.txt\n+++ patch.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+patched\n`;
+  const patchResponse = call(writeState, 32, 'fs_apply_patch', { operation_id: 'idempotent-patch-test', patch: patchText, expected_sha256: { 'patch.txt': sha256('one\ntwo\n') } });
   assert.equal(patchResponse.result.structuredContent.schema, 'local.filesystem.apply_patch.v1');
   assert.equal(patchResponse.result.structuredContent.status, 'patched');
   assert.equal(patchResponse.result.structuredContent.changed_files[0].operation, 'update');
   assert.equal(patchResponse.result.structuredContent.changed_files[0].relative_path, 'patch.txt');
   assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\npatched\n');
+  const replayedPatch = call(writeState, 3200, 'fs_apply_patch', { operation_id: 'idempotent-patch-test', patch: patchText });
+  assert.equal(replayedPatch.result.structuredContent.status, 'patched');
+  assert.equal(replayedPatch.result.structuredContent.operation_replayed, true);
+  assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\npatched\n');
+  const conflictingPatch = call(writeState, 32001, 'fs_apply_patch', { operation_id: 'idempotent-patch-test', patch: `${patchText}\n` });
+  assert.equal(conflictingPatch.error.data.code, 'patch_operation_id_conflict');
   const recoveredPatchOutcome = call(writeState, 3201, 'fs_patch_outcome_show', { operation_id: patchResponse.result.structuredContent.operation_id });
   assert.equal(recoveredPatchOutcome.result.structuredContent.status, 'patched');
   assert.equal(recoveredPatchOutcome.result.structuredContent.changed_files[0].after_sha256, sha256('one\npatched\n'));
@@ -723,7 +737,9 @@ trust_level = "untrusted"
   const rollbackOutcomePatch = call(writeState, 3202, 'fs_apply_patch', { operation_id: 'rollback-outcome-test', patch: `--- rollback-outcome.txt\n+++ rollback-outcome.txt\n@@ -1 +1 @@\n-before\n+after\n--- missing-outcome.txt\n+++ missing-outcome.txt\n@@ -1 +1 @@\n-old\n+new\n` });
   assert.equal(rollbackOutcomePatch.error.data.code, 'patch_source_not_found');
   const rollbackOutcome = call(writeState, 3203, 'fs_patch_outcome_show', { operation_id: 'rollback-outcome-test' });
-  assert.equal(rollbackOutcome.result.structuredContent.status, 'failed_rolled_back');
+  assert.equal(rollbackOutcome.result.structuredContent.status, 'failed_before_mutation');
+  assert.equal(rollbackOutcome.result.structuredContent.mutation_started, false);
+  assert.equal(rollbackOutcome.result.structuredContent.rollback_performed, false);
   assert.equal(readFileSync(join(trusted, 'rollback-outcome.txt'), 'utf8'), 'before\n');
 
   writeFileSync(join(trusted, 'patch-timeout.txt'), `${Array.from({ length: 80000 }, (_, index) => `line-${index}`).join('\n')}\n`, 'utf8');
@@ -791,10 +807,14 @@ trust_level = "untrusted"
   assert.equal(malformedUnifiedPatch.error.data.details.expected_format, 'unified_diff_or_codex_apply_patch');
 
   const malformedCodexPatch = call(writeState, 357, 'fs_apply_patch', {
+    operation_id: 'malformed-parse-outcome',
     patch: `*** Begin Patch\n*** Move to: missing-update.txt\n*** End Patch\n`,
   });
   assert.equal(malformedCodexPatch.error.data.code, 'patch_move_without_update_file');
   assert.equal(malformedCodexPatch.error.data.details.expected_format, 'codex_apply_patch');
+  const malformedOutcome = call(readState, 3571, 'fs_patch_outcome_show', { operation_id: 'malformed-parse-outcome' });
+  assert.equal(malformedOutcome.result.structuredContent.status, 'failed_before_mutation');
+  assert.equal(malformedOutcome.result.structuredContent.mutation_started, false);
 
   const malformedCodexAddPatch = call(writeState, 358, 'fs_apply_patch', {
     patch: `*** Begin Patch\n*** Add File: malformed-add.txt\nmissing-plus\n*** End Patch\n`,
