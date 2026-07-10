@@ -45,7 +45,7 @@ export function listTools(): WorkerToolDefinition[] {
     { name: 'worker_run_status', description: 'Inspect a worker run by run id without waiting for completion.', inputSchema: objectSchema({
       run_id: { type: 'string' },
     }, ['run_id']) },
-    { name: 'worker_run_reap', description: 'Governed cleanup for a stale running worker record: persist a terminal orphaned/cancelled result with evidence. Does not kill OS processes.', inputSchema: objectSchema({
+    { name: 'worker_run_reap', description: 'Governed cleanup for a running worker record: abort a managed active run when possible, or persist a terminal orphaned/cancelled result with evidence for a stale run.', inputSchema: objectSchema({
       run_id: { type: 'string' },
       reason: { type: 'string', description: 'Required cleanup rationale.' },
       force: { type: 'boolean', description: 'Allow reaping a non-stale running run. Defaults false.' },

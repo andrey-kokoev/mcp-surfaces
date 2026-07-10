@@ -19,6 +19,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
       'Use bounded list/search/query tools for discovery, then show/read/detail tools before acting on a specific object.',
+      'Use worker_run_status to distinguish a managed active child from a stale orphan; worker_run_reap aborts managed runs when possible and persists evidence for stale records.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.'
     ],
     tool_preference: [
@@ -43,6 +44,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
+      'On runtime failure, inspect error_provenance: provider, transport, event-stream, and artifact errors remain separate and primary_source identifies the selected cause.',
+      'After a parent cancellation or explicit reap, read worker_run_status again and verify the terminal cancelled result and cancellation evidence.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {

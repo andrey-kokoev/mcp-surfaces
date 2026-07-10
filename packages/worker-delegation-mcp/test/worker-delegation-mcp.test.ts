@@ -22,6 +22,7 @@ const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec.cjs');
 const fakeCodexErrorScript = join(root, 'exec-error-with-output.cjs');
+const fakeCodexHangScript = join(root, 'exec-hang.cjs');
 const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure.cjs');
 const fakeAgentRuntimeServerScript = join(root, 'agent-runtime-server.cjs');
 const platformRootCase = process.platform === 'win32' ? root.toUpperCase() : root;
@@ -80,6 +81,10 @@ process.stdin.on('end', () => {
     exit_interview: null
   }));
 });
+`, 'utf8');
+writeFileSync(fakeCodexHangScript, `
+process.stdin.resume();
+process.stdin.on('end', () => { setInterval(() => {}, 1000); });
 `, 'utf8');
 writeFileSync(fakeCodexPrestartFailureScript, `
 process.stdin.resume();
@@ -658,6 +663,18 @@ assert.equal(allowedConfigRun.result?.structuredContent.confidence, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 
+const managedCancellationState = createServerState({ allowedRoot: root, runRoot: join(root, 'managed-cancellation'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexHangScript] });
+const managedCancellationStart = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'managed cancellation run' }, constraints: { cwd: root, authority: 'read' } } } }, managedCancellationState);
+assert.equal(managedCancellationStart.result?.structuredContent.status, 'running');
+const managedCancellationRunId = String(managedCancellationStart.result?.structuredContent.run_id);
+const managedCancellationStatus = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: managedCancellationRunId } } }, managedCancellationState);
+assert.equal(managedCancellationStatus.result?.structuredContent.status_liveness.process_liveness, 'managed_active');
+const managedCancellation = await rpc({ jsonrpc: '2.0', id: 503, method: 'tools/call', params: { name: 'worker_run_reap', arguments: { run_id: managedCancellationRunId, force: true, reason: 'regression test cancellation' } } }, managedCancellationState);
+assert.equal(managedCancellation.result?.structuredContent.status, 'reaped');
+assert.equal(managedCancellation.result?.structuredContent.evidence.cancellation_propagated, true);
+assert.equal(managedCancellation.result?.structuredContent.run.status, 'cancelled');
+assert.equal(managedCancellationState.activeRunCount, 0);
+
 const agentRuntimeState = createServerState({
   allowedRoot: root,
   runRoot: join(root, 'agent-runtime-runs'),
@@ -799,7 +816,7 @@ assert.equal(JSON.parse(agentRuntimeRun.result?.structuredContent.verification_r
 const agentRuntimePrompt = readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8');
 assert.match(agentRuntimePrompt, /NARS worker completion guard/);
 assert.match(agentRuntimePrompt, /Do not call lifecycle, pause, sleep, wait, delegation, or worker_\* tools/);
-assert.match(agentRuntimePrompt, /Do not invent or guess tool names such as narada-andrey-filesystem/);
+assert.match(agentRuntimePrompt, /Do not invent or guess tool names such as andrey-user-filesystem/);
 assert.match(agentRuntimePrompt, /admission_required, surface_registry_tool_not_declared, mcp_runtime_fault/);
 assert.match(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'events.jsonl'), 'utf8'), /turn_complete/);
 const agentRuntimeInvocation = JSON.parse(readFileSync(join(agentRuntimeRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
@@ -845,6 +862,9 @@ assert.match(agentRuntimeFailedStatus.result?.structuredContent.error, /rate_lim
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.error_classification, 'provider_rate_limited');
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.phase, 'runtime_reported_failure');
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.exit_code, 0);
+assert.equal(agentRuntimeFailedStatus.result?.structuredContent.error_provenance.primary_source, 'provider');
+assert.match(agentRuntimeFailedStatus.result?.structuredContent.error_provenance.provider_error, /rate_limit_reached_error/);
+assert.match(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.error_provenance.artifact_error, /missing_file/);
 assert.match(agentRuntimeFailedStatus.result?.structuredContent.runtime_diagnostics.stdout_tail, /turn_failed/);
 assert.equal(agentRuntimeFailedStatus.result?.structuredContent.progress.latest_event_type, 'turn_failed');
 const agentRuntimeFailedWait = await rpc({ jsonrpc: '2.0', id: 5023, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: agentRuntimeFailedRunId } } }, agentRuntimeState);

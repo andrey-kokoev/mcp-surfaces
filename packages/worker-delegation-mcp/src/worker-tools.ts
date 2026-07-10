@@ -451,30 +451,21 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     metadata: buildRunMetadata({ requestedMode, preflight, status: 'running', output: null, error: null }),
   });
   writeJson(runRecord.resultPath, runningPayload);
-  if (!waitForCompletion) {
-    audit(state.policy, { tool: auditTool, payload: { ...runningPayload, event: 'worker_run_started', launched_at: launchedAt.toISOString() } });
-    slot.deferRelease();
-    void completeWorkerRun({
-      state,
-      runRecord,
-      invocation,
-      prompt,
-      resolvedWorkerConfig,
-      runtime,
-      resumeSessionId,
-      resumable,
-      startedAt,
-      executorRequest,
-      auditTool,
-      inheritedOriginTool: inheritedSession?.origin_tool,
-      inheritedCreatedRunId: inheritedSession?.created_run_id,
-    }).catch(() => {
-      // The failure payload has already been written by completeWorkerRun.
-    }).finally(slot.releaseSlot);
-    return runningPayload;
-  }
-
-  return await completeWorkerRun({
+  const runAbortController = new AbortController();
+  const abortFromParent = () => runAbortController.abort();
+  if (context.abortSignal?.aborted) runAbortController.abort();
+  else if (context.abortSignal) context.abortSignal.addEventListener('abort', abortFromParent, { once: true });
+  state.activeRunControllers ??= new Map();
+  state.activeRunCompletions ??= new Map();
+  state.activeRunCancellationRequests ??= new Set();
+  state.activeRunControllers.set(runRecord.runId, runAbortController);
+  const cleanupActiveRun = () => {
+    if (context.abortSignal) context.abortSignal.removeEventListener('abort', abortFromParent);
+    state.activeRunControllers?.delete(runRecord.runId);
+    state.activeRunCompletions?.delete(runRecord.runId);
+    state.activeRunCancellationRequests?.delete(runRecord.runId);
+  };
+  const completion = () => completeWorkerRun({
     state,
     runRecord,
     invocation,
@@ -488,8 +479,27 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     auditTool,
     inheritedOriginTool: inheritedSession?.origin_tool,
     inheritedCreatedRunId: inheritedSession?.created_run_id,
-    abortSignal: context.abortSignal,
+    abortSignal: runAbortController.signal,
   });
+  if (!waitForCompletion) {
+    audit(state.policy, { tool: auditTool, payload: { ...runningPayload, event: 'worker_run_started', launched_at: launchedAt.toISOString() } });
+    slot.deferRelease();
+    const pendingCompletion = completion();
+    state.activeRunCompletions.set(runRecord.runId, pendingCompletion);
+    void pendingCompletion.catch(() => {
+      // The failure payload has already been written by completeWorkerRun.
+    }).finally(() => {
+      cleanupActiveRun();
+      slot.releaseSlot();
+    });
+    return runningPayload;
+  }
+  state.activeRunCompletions.set(runRecord.runId, completion());
+  try {
+    return await state.activeRunCompletions.get(runRecord.runId)!;
+  } finally {
+    cleanupActiveRun();
+  }
 }
 
 async function completeWorkerRun(options: {
@@ -523,7 +533,11 @@ async function completeWorkerRun(options: {
     abortSignal: options.abortSignal,
   });
   const parsed = parseLastMessage(runRecord.lastMessagePath);
-  const outcome = resultStatus(codexResult, parsed);
+  const rawOutcome = resultStatus(codexResult, parsed);
+  const cancellationRequested = state.activeRunCancellationRequests?.has(runRecord.runId) === true;
+  const outcome = cancellationRequested
+    ? { status: 'cancelled' as const, error: 'cancelled', warnings: [...rawOutcome.warnings, 'worker_run_cancellation_requested'] }
+    : rawOutcome;
   const output = parsed.ok ? parsed.data : null;
   const finishedAt = new Date();
   const runtimeDiagnostics = buildRuntimeDiagnostics({
@@ -534,6 +548,8 @@ async function completeWorkerRun(options: {
     eventsPath: runRecord.eventsPath,
     diagnosticPath: runRecord.diagnosticPath,
   });
+  const provenance = asRecord(runtimeDiagnostics?.error_provenance);
+  const primaryError = outcome.status === 'completed' ? outcome.error : typeof provenance.primary_error === 'string' && provenance.primary_error ? provenance.primary_error : outcome.error;
   const payload = buildWorkerRunPayload({
     status: outcome.status,
     runRecord,
@@ -543,12 +559,12 @@ async function completeWorkerRun(options: {
     executorRequest,
     startedAt,
     finishedAt,
-    error: outcome.error,
+    error: primaryError,
     runtimeWarnings: outcome.warnings,
     output,
     workerOutputError: parsed.ok === false ? { reason: parsed.reason, message: parsed.message, state: workerOutputState(parsed) } : undefined,
     runtimeDiagnostics,
-    metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: outcome.status, output, error: outcome.error }),
+    metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: outcome.status, output, error: primaryError }),
   });
   writeJson(runRecord.resultPath, payload);
   const workerSessionId = codexResult.worker_session_id ?? resumeSessionId;
@@ -572,8 +588,11 @@ async function completeWorkerRun(options: {
     if (codeName === 'worker_runtime_failed' || codeName === 'worker_runtime_cancelled') throw error;
     const finishedAt = new Date();
     const message = error instanceof Error ? error.message : String(error);
+    const cancellationRequested = state.activeRunCancellationRequests?.has(runRecord.runId) === true;
+    const status = cancellationRequested ? 'cancelled' as const : 'failed' as const;
+    const terminalError = cancellationRequested ? 'cancelled' : message;
     const payload = buildWorkerRunPayload({
-      status: 'failed',
+      status,
       runRecord,
       runtime,
       workerSessionId: resumeSessionId,
@@ -581,20 +600,32 @@ async function completeWorkerRun(options: {
       executorRequest,
       startedAt,
       finishedAt,
-      error: message,
+      error: terminalError,
       runtimeDiagnostics: {
         schema: 'narada.worker.runtime_diagnostics.v1',
-        phase: 'worker_delegation_exception',
+        phase: cancellationRequested ? 'worker_cancellation_requested' : 'worker_delegation_exception',
         runtime,
-        error: message,
-        remediation: runtimeFailureRemediation('worker_delegation_exception'),
+        error: terminalError,
+        error_provenance: {
+          schema: 'narada.worker.error_provenance.v1',
+          primary_error: terminalError,
+          primary_source: cancellationRequested ? 'cancellation' : 'worker_delegation',
+          transport_error: null,
+          provider_error: null,
+          event_error: null,
+          artifact_error: null,
+          outcome_error: message,
+          observed_error_candidates: [],
+        },
+        remediation: runtimeFailureRemediation(cancellationRequested ? 'worker_cancellation_requested' : 'worker_delegation_exception'),
         diagnostic_tail: readDiagnosticTail(runRecord.diagnosticPath),
         stdout_tail: readTextTail(runRecord.eventsPath, 800),
       },
-      metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status: 'failed', output: null, error: message }),
+      metadata: buildRunMetadata({ requestedMode: executorRequest.requested_mode, preflight: executorRequest.preflight, status, output: null, error: terminalError }),
     });
     writeJson(runRecord.resultPath, payload);
     audit(state.policy, { tool: auditTool, payload });
+    if (cancellationRequested) throw diagnosticError('worker_runtime_cancelled', 'worker_runtime_cancelled', { run_id: runRecord.runId, run_dir: runRecord.runDir });
     throw error;
   }
 }
@@ -667,6 +698,7 @@ function buildWorkerRunPayload(options: {
     error: options.error,
     error_classification: options.error ? classifyRuntimeError(options.error) : null,
     ...(options.runtimeDiagnostics ? { runtime_diagnostics: options.runtimeDiagnostics } : {}),
+    ...(options.runtimeDiagnostics?.error_provenance ? { error_provenance: options.runtimeDiagnostics.error_provenance } : {}),
     ...(typeof options.runtimeDiagnostics?.diagnostic_tail === 'string' ? { diagnostic_tail: options.runtimeDiagnostics.diagnostic_tail } : {}),
     worker_output_state: options.status === 'running' ? 'pending' : options.output ? 'available' : options.workerOutputError?.state ?? 'absent',
     worker_authored_output_present: Boolean(options.output),
@@ -677,10 +709,15 @@ function buildWorkerRunPayload(options: {
 
 function workerRunStatus(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
-  return readRunResult(state, runId);
+  return withManagedProcessLiveness(readRunResult(state, runId), state, runId);
 }
 
-function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
+function withManagedProcessLiveness(run: Record<string, unknown>, state: WorkerMcpState, runId: string): Record<string, unknown> {
+  if (run.status !== 'running' || !state.activeRunControllers?.has(runId)) return run;
+  return { ...run, status_liveness: { ...asRecord(run.status_liveness), process_liveness: 'managed_active', process_verification: 'abort_controller_registered' } };
+}
+
+async function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Promise<Record<string, unknown>> {
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
   const reason = requiredNonEmptyString(args.reason, 'worker_run_reap_reason_required');
   const force = Boolean(args.force);
@@ -696,13 +733,26 @@ function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Re
   if (liveness.state !== 'stale' && !force) {
     throw diagnosticError('worker_run_reap_refused_active_run', 'worker_run_reap_refused_active_run', { run_id: runId, status_liveness: liveness, remediation: 'wait_or_pass_force_true_with_operator_reason' });
   }
+  const controller = state.activeRunControllers?.get(runId);
+  const completion = state.activeRunCompletions?.get(runId);
+  if (controller) {
+    state.activeRunCancellationRequests ??= new Set();
+    state.activeRunCancellationRequests.add(runId);
+    controller.abort();
+  }
+  if (completion) await waitForActiveCompletion(completion, 5000);
+  const settled = readRunResult(state, runId);
+  if (isTerminalRunStatus(String(settled.status ?? ''))) {
+    const evidence = { ...reapEvidence(settled, reason, force), ...(controller ? { process_liveness: 'managed_active', process_verification: 'abort_controller_signalled' } : {}), cancellation_requested: Boolean(controller), cancellation_propagated: Boolean(controller) };
+    return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: settled };
+  }
   const timing = asRecord(current.timing);
   const startedAtMs = Date.parse(String(timing.started_at ?? ''));
   const finishedAt = new Date().toISOString();
   const finishedAtMs = Date.parse(finishedAt);
-  const warning = 'worker_run_reaped_stale_orphan: run record was still running but caller explicitly reaped it as stale/orphaned';
+  const warning = controller ? 'worker_run_reaped_stale_orphan: active run was cancelled through its abort controller before reaping' : 'worker_run_reaped_stale_orphan: run record was still running but caller explicitly reaped it as stale/orphaned';
   const runtimeWarnings = uniqueStrings([...(Array.isArray(current.runtime_warnings) ? current.runtime_warnings.map(String) : []), warning]);
-  const evidence = reapEvidence(current, reason, force);
+  const evidence = { ...reapEvidence(current, reason, force), ...(controller ? { process_liveness: 'managed_active', process_verification: 'abort_controller_signalled' } : {}), cancellation_requested: Boolean(controller), cancellation_propagated: Boolean(controller) };
   const reapedRun = {
     ...current,
     status: 'cancelled',
@@ -720,8 +770,18 @@ function workerRunReap(args: Record<string, unknown>, state: WorkerMcpState): Re
     reaped: evidence,
   };
   writeJson(located.resultPath, reapedRun);
+  if (!completion) state.activeRunCancellationRequests?.delete(runId);
   audit(state.policy, { tool: 'worker_run_reap', run_id: runId, reason, force, evidence, result_path: located.resultPath, at: finishedAt });
   return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: readRunResult(state, runId) };
+}
+
+async function waitForActiveCompletion(completion: Promise<Record<string, unknown>>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  await Promise.race([
+    completion.then(() => undefined, () => undefined),
+    new Promise<void>((resolvePromise) => { timer = setTimeout(resolvePromise, timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
 }
 
 function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
@@ -757,7 +817,7 @@ async function workerRunWait(args: Record<string, unknown>, state: WorkerMcpStat
   const summaryOnly = Boolean(args.summary_only);
   const started = Date.now();
   while (true) {
-    const result = readRunResult(state, runId);
+    const result = withManagedProcessLiveness(readRunResult(state, runId), state, runId);
     if (String(result.status ?? '') !== 'running') return runWaitPayload(result, { status: 'finished', timeoutMs, elapsedMs: Date.now() - started, verbose, summaryOnly });
     if (Date.now() - started >= timeoutMs) return runWaitPayload(result, { status: 'timed_out', timeoutMs, elapsedMs: Date.now() - started, verbose, summaryOnly });
     await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollMs, Math.max(1, timeoutMs - (Date.now() - started)))));

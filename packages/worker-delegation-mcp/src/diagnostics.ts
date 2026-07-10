@@ -12,10 +12,12 @@ export function buildRuntimeDiagnostics(options: {
   eventsPath: string;
   diagnosticPath: string;
 }): Record<string, unknown> | undefined {
-  if (!options.outcomeError && options.parsed.ok) return undefined;
-  const phase = runtimeFailurePhase(options.codexResult, options.parsed, options.outcomeError);
+  if (!options.outcomeError && options.parsed.ok && !options.codexResult.error && !options.codexResult.event_error && !options.codexResult.runtime_error) return undefined;
   const diagnosticTail = readDiagnosticTail(options.diagnosticPath);
   const stdoutTail = readTextTail(options.eventsPath, 1200);
+  const errorProvenance = buildErrorProvenance(options.codexResult, options.parsed, options.outcomeError, stdoutTail);
+  const primaryError = typeof errorProvenance.primary_error === 'string' ? errorProvenance.primary_error : options.outcomeError;
+  const phase = runtimeFailurePhase(options.codexResult, options.parsed, primaryError);
   const resultExtraction = runtimeResultExtraction(options.parsed);
   const sessionEventEvidence = extractSessionEventEvidence(options.eventsPath);
   return {
@@ -25,7 +27,11 @@ export function buildRuntimeDiagnostics(options: {
     exit_code: options.codexResult.exit_code,
     signal: options.codexResult.signal,
     cancelled: options.codexResult.cancelled,
-    error: options.outcomeError,
+    error: primaryError,
+    error_provenance: errorProvenance,
+    transport_error: options.codexResult.error ?? null,
+    provider_error: options.codexResult.runtime_error ?? null,
+    artifact_error: errorProvenance.artifact_error,
     runtime_error: options.codexResult.runtime_error ?? null,
     event_error: options.codexResult.event_error ?? null,
     assistant_extraction: options.codexResult.assistant_extraction ?? null,
@@ -41,6 +47,61 @@ export function buildRuntimeDiagnostics(options: {
     },
     remediation: runtimeFailureRemediation(phase),
   };
+}
+
+function buildErrorProvenance(
+  result: { error: string | null; event_error?: string | null; runtime_error?: string | null },
+  parsed: WorkerOutputParseResult,
+  outcomeError: string | null,
+  stdoutTail: string | null,
+): Record<string, unknown> {
+  const transportError = result.error ?? null;
+  const providerError = result.runtime_error ?? null;
+  const eventError = result.event_error ?? null;
+  const artifactError = parsed.ok === false ? `last_message.json:${parsed.reason}: ${parsed.message}` : null;
+  const sources: Array<{ source: string; error: string | null }> = [
+    { source: 'provider', error: providerError },
+    { source: 'transport', error: transportError },
+    { source: 'event_stream', error: eventError },
+    { source: 'outcome', error: outcomeError },
+    { source: 'artifact', error: artifactError },
+  ];
+  const primary = sources.find((item) => item.error);
+  return {
+    schema: 'narada.worker.error_provenance.v1',
+    primary_error: primary?.error ?? null,
+    primary_source: primary?.source ?? null,
+    transport_error: transportError,
+    provider_error: providerError,
+    event_error: eventError,
+    artifact_error: artifactError,
+    outcome_error: outcomeError,
+    observed_error_candidates: observedErrorCandidates(stdoutTail),
+  };
+}
+
+function observedErrorCandidates(text: string | null): string[] {
+  if (!text) return [];
+  const candidates: string[] = [];
+  const collect = (value: unknown, errorNode = false): void => {
+    if (typeof value === 'string') {
+      if (errorNode && value.trim()) candidates.push(value.trim());
+      return;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    const type = String(record.type ?? '').toLowerCase();
+    const nodeIsError = errorNode || type === 'error' || type.includes('failure') || type.includes('failed');
+    for (const [key, nested] of Object.entries(record)) {
+      const keyIsError = nodeIsError || /^(error|error_message|failure|failure_reason|reason)$/.test(key.toLowerCase());
+      collect(nested, keyIsError);
+    }
+  };
+  for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    try { collect(JSON.parse(line)); }
+    catch { if (/capacity|quota|rate.?limit|model.*(?:capacity|limit)/i.test(line)) candidates.push(line); }
+  }
+  return [...new Set(candidates.map((value) => value.replace(/\s+/g, ' ').slice(0, 400)))].slice(0, 12);
 }
 
 export function runtimeResultExtraction(parsed: WorkerOutputParseResult): Record<string, unknown> {

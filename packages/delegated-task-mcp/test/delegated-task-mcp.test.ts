@@ -222,6 +222,49 @@ try {
   assert.equal(invalidView.validation_hints.expected_shape, 'directed_acyclic_graph');
   assert.equal(invalidView.validation_hints.unknown_dependency_count, 1);
 
+  const malformedPreflight = await callTool(state, 'delegated_task_validate', {
+    objective: 'Reject malformed nested worker constraints',
+    constraints: { authority: 'read', cwd: root, preflight_paths: [join(root, 'src', 'main.ts')] },
+    workflow: { steps: [{ id: 'worker', kind: 'worker' }] },
+  });
+  const malformedPreflightView = malformedPreflight.result.structuredContent as Record<string, any>;
+  assert.equal(malformedPreflightView.status, 'rejected');
+  assert.equal(malformedPreflightView.diagnostics.some((item: Record<string, unknown>) => item.code === 'constraints_preflight_path_must_be_object'), true);
+
+  const malformedStepPreflight = await callTool(state, 'delegated_task_validate', {
+    objective: 'Reject malformed step worker constraints',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'worker', kind: 'worker', constraints: { preflight_paths: [{ path: join(root, 'src', 'main.ts'), access: 'execute' }] } }] },
+  });
+  const malformedStepPreflightView = malformedStepPreflight.result.structuredContent as Record<string, any>;
+  assert.equal(malformedStepPreflightView.status, 'rejected');
+  assert.equal(malformedStepPreflightView.diagnostics.some((item: Record<string, unknown>) => item.code === 'constraints_preflight_path_access_invalid'), true);
+
+  const malformedRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Reject malformed preflight before task creation',
+    idempotency_key: 'malformed-preflight-run',
+    constraints: { authority: 'read', cwd: root, preflight_paths: [join(root, 'src', 'main.ts')] },
+    workflow: { steps: [{ id: 'worker', kind: 'research' }] },
+  });
+  assert.equal((malformedRun.error as Record<string, any>).data.code, 'delegated_task_validation_failed');
+  const correctedRun = await callTool(state, 'delegated_task_run', {
+    objective: 'Create after malformed preflight was rejected',
+    idempotency_key: 'malformed-preflight-run',
+    constraints: { authority: 'read', cwd: root, preflight_paths: [{ path: join(root, 'src', 'main.ts'), access: 'read' }] },
+    workflow: { steps: [{ id: 'worker', kind: 'research' }] },
+    execution: { start: false },
+  });
+  assert.equal((correctedRun.result.structuredContent as Record<string, any>).created, true);
+
+  const negatedGitIntent = await callTool(state, 'delegated_task_validate', {
+    objective: 'Review changes; keep commit and push out of scope',
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'review', kind: 'review', instruction: 'Keep commit and push out of scope; do not execute either.' }] },
+  });
+  const negatedGitIntentView = negatedGitIntent.result.structuredContent as Record<string, any>;
+  assert.equal(negatedGitIntentView.status, 'ok');
+  assert.equal(negatedGitIntentView.diagnostics.some((item: Record<string, unknown>) => String(item.code).startsWith('git_publish_requires_')), false);
+
   const unknownShape = await callTool(state, 'delegated_task_validate', {
     objective: 'Unknown keys',
     constraints: { authority: 'read', cwd: root, surprise: true },
@@ -589,6 +632,7 @@ try {
   assert.match(runResult.task_id, /^task_/);
   assert.ok(statSync(runResult.task_path).isFile());
   assert.match(readFileSync(runResult.task_path, 'utf8'), /"objective": "Implement complete delegated task orchestration"/);
+  assert.equal(workerCalls.some((call) => call.name === 'worker_run' && JSON.stringify((call.args.constraints as Record<string, unknown>)?.required_mcp_tools ?? []).includes('structured-command')), true);
 
   const repeat = await callTool(state, 'delegated_task_run', { idempotency_key: 'same-key' });
   assert.equal((repeat.result.structuredContent as Record<string, any>).task_id, runResult.task_id);
@@ -1263,6 +1307,7 @@ try {
   assert.ok(limitedEventsView.last_meaningful_event_by_active_step.b);
   const cancelled = await callTool(state, 'delegated_task_cancel', { task_id: limitedView.task_id, reason: 'caller stopped concurrency test' });
   assert.equal((cancelled.result.structuredContent as Record<string, any>).task_status, 'cancelled');
+  assert.equal(workerCalls.some((call) => call.name === 'worker_run_reap' && String(call.args.run_id) === String(limitedView.progress.running_run_ids[0])), true);
   const cancelledResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, include_diagnostics: true });
   const cancelledResultView = cancelledResult.result.structuredContent as Record<string, any>;
   assert.equal(cancelledResultView.result.acceptance_verdict, 'cancelled');
@@ -1271,6 +1316,8 @@ try {
   assert.equal(cancelledResultView.result.progress.liveness, 'terminal_no_active_execution');
   assert.deepEqual(cancelledResultView.result.step_states.a.run_ids, [limitedView.progress.running_run_ids[0]]);
   assert.equal(cancelledResultView.result.step_states.a.current_run_id, null);
+  assert.equal(cancelledResultView.result.step_states.a.status, 'blocked');
+  assert.equal(cancelledResultView.result.step_states.c.status, 'blocked');
   assert.deepEqual(cancelledResultView.result.active_step_posture ?? [], []);
   assert.equal(cancelledResultView.result.worker_refs.every((ref: Record<string, any>) => ref.cancellation.requested === true), true);
   const cancelledHistory = await callTool(state, 'delegated_tasks_list', { limit: 50, include_terminal: true });
@@ -1384,10 +1431,11 @@ try {
   const launchFailureRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise worker launch failure diagnostics',
     constraints: { authority: 'read', cwd: root },
-    workflow: { steps: [{ id: 'launch-failure', kind: 'research', instruction: 'launch failure worker' }] },
+    workflow: { steps: [{ id: 'launch-failure', kind: 'research', instruction: 'launch failure worker' }, { id: 'after-failure', kind: 'note', depends_on: ['launch-failure'], instruction: 'must not run' }] },
     execution: { wait_for_completion: true },
   });
   const launchFailureView = launchFailureRun.result.structuredContent as Record<string, any>;
+  assert.equal(launchFailureView.status, 'failed');
   assert.equal(launchFailureView.task_status, 'failed');
   const launchFailureResult = await callTool(state, 'delegated_task_result', { task_id: launchFailureView.task_id, include_diagnostics: true });
   const launchFailureResultView = launchFailureResult.result.structuredContent as Record<string, any>;
@@ -1395,6 +1443,31 @@ try {
   assert.equal(launchFailureResultView.result.worker_launch_failures[0].step_id, 'launch-failure');
   assert.match(launchFailureResultView.result.worker_launch_failures[0].message, /worker launch denied/);
   assert.equal(launchFailureResultView.result.observed_incoherencies.some((item: string) => item.includes('worker_launch_failed:launch-failure')), true);
+  assert.equal(launchFailureResultView.result.step_states['after-failure'].status, 'blocked');
+
+  let replacementSourceId = launchFailureView.task_id;
+  for (let depth = 1; depth <= 3; depth += 1) {
+    const replacement = await callTool(state, 'delegated_task_run', {
+      objective: `Replacement depth ${depth}`,
+      source_task_ref: { kind: 'delegated_task', task_id: replacementSourceId },
+      constraints: { authority: 'read', cwd: root },
+      workflow: { steps: [{ id: 'launch-failure', kind: 'research', instruction: 'launch failure worker' }] },
+      execution: { wait_for_completion: true },
+    });
+    const replacementView = replacement.result.structuredContent as Record<string, any>;
+    assert.equal(replacementView.task_status, 'failed');
+    replacementSourceId = replacementView.task_id;
+  }
+  const replacementLimit = await callTool(state, 'delegated_task_run', {
+    objective: 'Replacement beyond circuit breaker',
+    source_task_ref: { kind: 'delegated_task', task_id: replacementSourceId },
+    constraints: { authority: 'read', cwd: root },
+    workflow: { steps: [{ id: 'launch-failure', kind: 'research', instruction: 'launch failure worker' }] },
+  });
+  assert.equal((replacementLimit.error as Record<string, any>).data.code, 'delegated_task_replacement_limit_reached');
+  const replacementSummary = await callTool(state, 'delegated_task_summary', { task_id: replacementSourceId });
+  assert.equal((replacementSummary.result.structuredContent as Record<string, any>).retry_replacement.available, false);
+  assert.equal((replacementSummary.result.structuredContent as Record<string, any>).retry_replacement.reason, 'replacement_limit_reached');
 
   const missing = await callTool(state, 'delegated_task_status', { task_id: 'task_missing' });
   const missingError = missing.error as Record<string, any>;
