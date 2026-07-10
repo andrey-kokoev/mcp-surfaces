@@ -79,6 +79,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let stderrTail = '';
   let stdoutTail = '';
   let childClosed = false;
+  let parentFramed = false;
   const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs);
 
   const child = spawn(process.execPath, [options.entrypoint, ...options.childArgs], {
@@ -93,11 +94,12 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
 
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
-    if (!child.stdin.destroyed) child.stdin.write(chunk);
     parentBuffer += chunk;
     const drained = parentBuffer.includes('Content-Length:') ? drainJsonRpcFrames(parentBuffer) : drainJsonLines(parentBuffer);
     parentBuffer = drained.remaining;
+    if (drained.requests.length > 0) parentFramed = drained.framed;
     for (const request of drained.requests) {
+      if (!child.stdin.destroyed) writeJsonRpcMessageToStream(child.stdin, request, false);
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
         const timeoutTimer = setTimeout(() => {
@@ -168,16 +170,18 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     for (const response of drained.requests) {
       observeChildMessage(response, pending);
       const id = response.id;
+      let responseFramed = parentFramed;
       if (typeof id === 'string' || typeof id === 'number') {
         const request = pending.get(id);
         if (request) {
+          responseFramed = request.framed;
           recordLifecycle(request, 'child_response');
           clearTimeout(request.timeoutTimer);
         }
         pending.delete(id);
         if (timedOutRequests.has(id)) continue;
       }
-      writeJsonRpcMessage(response, drained.framed);
+      writeJsonRpcMessage(response, responseFramed);
     }
   });
 
@@ -299,7 +303,7 @@ function writePendingError(
         ...proxyWatchdogData,
       },
     },
-  }, request.framed);
+  }, false);
 }
 
 function extractRequestedToolTimeoutMs(request: JsonRecord): number | null {

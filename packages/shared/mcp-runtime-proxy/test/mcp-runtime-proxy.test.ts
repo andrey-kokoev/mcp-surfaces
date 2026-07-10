@@ -100,6 +100,39 @@ try {
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'proxy_timeout'));
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'child_termination_requested'));
 
+  const framedChildEntrypoint = join(root, 'framed-child.mjs');
+  writeFileSync(framedChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.once('data', (chunk) => { const request = JSON.parse(chunk.trim()); const body = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'framed-child', version: '1' } } }); process.stdout.write('Content-Length: ' + Buffer.byteLength(body, 'utf8') + '\\r\\n\\r\\n' + body); setTimeout(() => process.exit(0), 20); });\n", 'utf8');
+  const framedProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'framed-surface',
+    '--entrypoint',
+    framedChildEntrypoint,
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let framedStdout = '';
+  framedProxy.stdout.setEncoding('utf8');
+  framedProxy.stdout.on('data', (chunk) => { framedStdout += chunk; });
+  framedProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'init-1', method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
+  framedProxy.stdin.end();
+  await new Promise<number | null>((resolve) => framedProxy.on('close', resolve));
+  assert.doesNotMatch(framedStdout, /Content-Length:/i);
+  assert.equal(JSON.parse(framedStdout.trim()).id, 'init-1');
+
+  const normalizedChildEntrypoint = join(root, 'normalized-child.mjs');
+  writeFileSync(normalizedChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.once('data', (chunk) => { if (/Content-Length:/i.test(chunk)) process.exit(41); const request = JSON.parse(chunk.trim()); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }) + '\\n'); setTimeout(() => process.exit(0), 20); });\n", 'utf8');
+  const normalizedProxy = spawn(process.execPath, [proxyEntrypoint, '--surface-id', 'normalized-surface', '--entrypoint', normalizedChildEntrypoint, '--'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let normalizedStdout = '';
+  normalizedProxy.stdout.setEncoding('utf8');
+  normalizedProxy.stdout.on('data', (chunk) => { normalizedStdout += chunk; });
+  const framedRequest = JSON.stringify({ jsonrpc: '2.0', id: 'framed-init', method: 'initialize', params: {} });
+  normalizedProxy.stdin.write(`Content-Length: ${Buffer.byteLength(framedRequest, 'utf8')}\r\n\r\n${framedRequest}`);
+  normalizedProxy.stdin.end();
+  const normalizedExitCode = await new Promise<number | null>((resolve) => normalizedProxy.on('close', resolve));
+  assert.equal(normalizedExitCode, 0);
+  assert.match(normalizedStdout, /^Content-Length:/i);
+  assert.match(normalizedStdout, /"id":"framed-init"/);
+
   console.log('mcp-runtime-proxy behavior ok');
 } finally {
   rmSync(root, { recursive: true, force: true });
