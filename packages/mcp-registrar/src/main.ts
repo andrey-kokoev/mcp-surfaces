@@ -166,21 +166,21 @@ const SURFACES: SurfaceDef[] = [
     id: 'local-filesystem', package: 'local-filesystem-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--mode', 'write', '--allowed-root', '{site_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
+    args: ['--mode', 'write', '--allowed-root', '{workspace_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
     tools: ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
   },
   {
     id: 'structured-command', package: 'structured-command-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/structured-command-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--allowed-root', '{site_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'],
+    args: ['--allowed-root', '{workspace_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'],
     tools: ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check', 'structured_command_execute', 'structured_command_elevated_window_execute', 'structured_command_input_create'],
   },
   {
     id: 'git', package: 'git-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/git-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--allowed-root', '{site_root}', '--mode', 'write'],
+    args: ['--allowed-root', '{workspace_root}', '--mode', 'write'],
     tools: GIT_TOOLS,
     output_reader_closure: {
       git_status: 'git_output_show',
@@ -277,7 +277,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'worker-delegation', package: 'worker-delegation-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
+    args: ['--site-root', '{site_root}', '--allowed-root', '{workspace_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
     tools: WORKER_DELEGATION_TOOLS,
     env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
   },
@@ -285,7 +285,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'delegated-task', package: 'delegated-task-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'],
+    args: ['--task-root', '{site_root}', '--allowed-root', '{workspace_root}'],
     tools: DELEGATED_TASK_TOOLS,
   },
   {
@@ -952,15 +952,17 @@ type SitePathInterpolation = {
   siteRoot: string;
   siteControlRoot: string;
   siteRuntimeRoot: string;
+  workspaceRoot: string;
 };
 
-function sitePathInterpolation(siteRoot: string): SitePathInterpolation {
+function sitePathInterpolation(siteRoot: string, workspaceRoot = siteRoot): SitePathInterpolation {
   const normalizedRoot = siteRoot.replace(/\\/g, '/');
   const siteControlRoot = normalizedRoot.endsWith('/.narada') ? siteRoot : join(siteRoot, '.narada');
   return {
     siteRoot,
     siteControlRoot,
     siteRuntimeRoot: join(siteControlRoot, 'runtime'),
+    workspaceRoot,
   };
 }
 
@@ -975,6 +977,7 @@ function interpolateArg(value: string, siteId: string, paths: SitePathInterpolat
     .replace(/\{site_root\}/g, resolvedPaths.siteRoot)
     .replace(/\{site_control_root\}/g, resolvedPaths.siteControlRoot)
     .replace(/\{site_runtime_root\}/g, resolvedPaths.siteRuntimeRoot)
+    .replace(/\{workspace_root\}/g, resolvedPaths.workspaceRoot)
     .replace(/\{site_id\}/g, siteId);
 }
 
@@ -2413,7 +2416,9 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
   const surfaceId = surface.id;
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
-  const resolvedArgs = interpolateArgs(surface.args, siteId, site.root);
+  const workspaceRoot = siteWorkspaceRoot(site);
+  const paths = sitePathInterpolation(site.root, workspaceRoot);
+  const resolvedArgs = surface.args.map((arg) => interpolateArg(arg, siteId, paths));
   const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
   const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root);
   const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId);
@@ -2450,6 +2455,16 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
       },
     },
   };
+}
+
+function siteWorkspaceRoot(site: SiteDef): string {
+  try {
+    const config = asRecord(JSON.parse(readFileSync(site.config_path, 'utf8')));
+    const nestedSite = asRecord(config.site);
+    const configured = optionalString(config.workspace_root) ?? optionalString(nestedSite.workspace_root);
+    if (configured) return configured;
+  } catch { /* fall back to the Site root */ }
+  return site.root;
 }
 
 function registrarSiteBind(args: JsonRecord): JsonRecord {

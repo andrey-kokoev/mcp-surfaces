@@ -960,7 +960,8 @@ function applyCognitionDefaults(request: WorkerRunToolInput, cognition: Resolved
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
-  if (defaults.model && overrides.model === undefined && config.model === undefined) overrides.model = defaults.model;
+  const deferModelToProviderCatalog = runtime === 'narada-agent-runtime-server' && provider === 'codex-subscription';
+  if (defaults.model && !deferModelToProviderCatalog && overrides.model === undefined && config.model === undefined) overrides.model = defaults.model;
   if (defaults.reasoningEffort && overrides.reasoning_effort === undefined && config.model_reasoning_effort === undefined) {
     overrides.reasoning_effort = defaults.reasoningEffort;
   }
@@ -997,6 +998,12 @@ function configResolutionMetadata(options: {
       cognitionDefault: cognitionDefaults.model,
       runtime: options.runtime,
     }),
+    model_resolution: options.runtime === 'narada-agent-runtime-server'
+      && options.provider === 'codex-subscription'
+      && options.requestedOverrides.model === undefined
+      && config.model === undefined
+      ? 'runtime_provider_catalog'
+      : 'resolved_before_runtime',
     reasoning_effort_source: configValueSource({
       explicit: options.requestedOverrides.reasoning_effort !== undefined || config.model_reasoning_effort !== undefined,
       hasResolvedValue: options.resolvedConfigInput.reasoning_effort !== null,

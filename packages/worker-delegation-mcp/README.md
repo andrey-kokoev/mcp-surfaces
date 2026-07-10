@@ -106,6 +106,8 @@ Provider registry cognition defaults are provider-specific. For `narada-agent-ru
 
 If `constraints.provider` is absent for a NARS worker, the provider registry `default_provider` is used when available. `worker_policy_inspect` exposes both `default_narada_agent_runtime_provider` and `provider_cognition_defaults`; use it before delegating when model cost or capability matters.
 
+For `codex-subscription`, cognition defaults project reasoning effort but do not freeze a registry-derived model into an explicit override. The NARS carrier resolves the model from the live Codex catalog at runtime. An explicit worker model remains authoritative.
+
 ## Agent Contract
 
 Agents should use `worker_policy_inspect` before delegating. A delegation request separates non-mechanically-enforceable intent from mechanically-enforceable constraints:

@@ -720,6 +720,10 @@ assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_work
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.provider_source, 'explicit_constraint');
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), true);
+assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.model, null);
+assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
+assert.equal(agentRuntimeProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('CODEX_MODEL'), false);
+assert.equal(agentRuntimeProviderResolve.result?.structuredContent.config_resolution.model_resolution, 'runtime_provider_catalog');
 const agentRuntimeScopedMcpResolve = await rpc({ jsonrpc: '2.0', id: 50101, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'server runtime scoped mcp resolve' },
   constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },

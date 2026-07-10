@@ -747,7 +747,9 @@ try {
   assert.ok(workerServer.env_vars.includes('NARADA_WORKER_MCP_CONFIG'));
 
   const controlRootSite = join(root, 'control-root-site', '.narada');
+  const controlRootWorkspace = join(root, 'control-root-site');
   mkdirSync(controlRootSite, { recursive: true });
+  writeFileSync(join(controlRootSite, 'config.json'), JSON.stringify({ workspace_root: controlRootWorkspace }), 'utf8');
   const controlRootWorkerBindConfig = buildSiteBindConfig(
     { site_id: 'smart-scheduling', root: controlRootSite, config_path: join(controlRootSite, 'config.json'), surfaces: [] },
     {
@@ -755,12 +757,13 @@ try {
       package: 'worker-delegation-mcp',
       entrypoint: 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js',
       kind: 'mcp_surface',
-      args: ['--site-root', '{site_root}', '--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
+      args: ['--site-root', '{site_root}', '--allowed-root', '{workspace_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
       tools: ['worker_run'],
     },
   );
   const controlRootWorkerServer = (controlRootWorkerBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-worker-delegation'];
   const controlRootRunRoot = String(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--run-root') + 1]);
+  assert.equal(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--allowed-root') + 1], controlRootWorkspace);
   assert.equal(controlRootRunRoot.replace(/\\/g, '/'), join(controlRootSite, 'runtime', 'worker-delegation').replace(/\\/g, '/'));
   assert.equal(controlRootRunRoot.replace(/\\/g, '/').includes('/.narada/.narada/'), false);
 
