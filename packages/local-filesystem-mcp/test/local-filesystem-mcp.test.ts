@@ -714,6 +714,17 @@ trust_level = "untrusted"
   assert.equal(patchResponse.result.structuredContent.changed_files[0].operation, 'update');
   assert.equal(patchResponse.result.structuredContent.changed_files[0].relative_path, 'patch.txt');
   assert.equal(readFileSync(join(trusted, 'patch.txt'), 'utf8'), 'one\npatched\n');
+  const recoveredPatchOutcome = call(writeState, 3201, 'fs_patch_outcome_show', { operation_id: patchResponse.result.structuredContent.operation_id });
+  assert.equal(recoveredPatchOutcome.result.structuredContent.status, 'patched');
+  assert.equal(recoveredPatchOutcome.result.structuredContent.changed_files[0].after_sha256, sha256('one\npatched\n'));
+  assert.equal(patchResponse.result.structuredContent.outcome_reader.tool, 'fs_patch_outcome_show');
+
+  writeFileSync(join(trusted, 'rollback-outcome.txt'), 'before\n', 'utf8');
+  const rollbackOutcomePatch = call(writeState, 3202, 'fs_apply_patch', { operation_id: 'rollback-outcome-test', patch: `--- rollback-outcome.txt\n+++ rollback-outcome.txt\n@@ -1 +1 @@\n-before\n+after\n--- missing-outcome.txt\n+++ missing-outcome.txt\n@@ -1 +1 @@\n-old\n+new\n` });
+  assert.equal(rollbackOutcomePatch.error.data.code, 'patch_source_not_found');
+  const rollbackOutcome = call(writeState, 3203, 'fs_patch_outcome_show', { operation_id: 'rollback-outcome-test' });
+  assert.equal(rollbackOutcome.result.structuredContent.status, 'failed_rolled_back');
+  assert.equal(readFileSync(join(trusted, 'rollback-outcome.txt'), 'utf8'), 'before\n');
 
   writeFileSync(join(trusted, 'patch-timeout.txt'), `${Array.from({ length: 80000 }, (_, index) => `line-${index}`).join('\n')}\n`, 'utf8');
   const timeoutPatch = call(writeState, 324, 'fs_apply_patch', {

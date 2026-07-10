@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { mkdir as mkdirAsync, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
@@ -484,13 +484,19 @@ export function listTools(mode) {
     },
     {
       name: 'fs_apply_patch',
-      description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots and append an audit record.',
+      description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots. Supply operation_id to recover a durable outcome after transport loss via fs_patch_outcome_show.',
       inputSchema: objectSchema({
         patch: { type: 'string' },
+        operation_id: { type: 'string', description: 'Caller-chosen idempotency/recovery identifier; use fs_patch_outcome_show with this value after a transport problem.' },
         dry_run: { type: 'boolean', default: false },
         timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
         expected_sha256: { type: 'object', additionalProperties: { type: 'string' }, description: 'Optional map from patch paths to expected current file sha256 values.' },
       }, ['patch']),
+    },
+    {
+      name: 'fs_patch_outcome_show',
+      description: 'Read the durable outcome for an fs_apply_patch operation_id after a timeout or transport interruption.',
+      inputSchema: objectSchema({ operation_id: { type: 'string' } }, ['operation_id']),
     },
     {
       name: 'fs_move_path',
@@ -577,6 +583,7 @@ function callTool(params, state) {
     case 'fs_str_replace_file': return toolResult(strReplaceTool(args, state));
     case 'fs_replace_range': return toolResult(replaceRangeTool(args, state));
     case 'fs_apply_patch': return toolResult(applyPatchTool(args, state));
+    case 'fs_patch_outcome_show': return toolResult(patchOutcomeShowTool(args, state));
     case 'fs_move_path': return toolResult(movePathTool(args, state));
     case 'fs_create_directory': return toolResult(createDirectoryTool(args, state));
     case 'fs_rename_directory': return toolResult(renameDirectoryTool(args, state));
@@ -1220,6 +1227,7 @@ function applyPatchTool(args, state) {
   const patch = stringField(args, 'patch');
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
   const dryRun = booleanField(args, 'dry_run') ?? false;
+  const operationId = stringField(args, 'operation_id') ?? randomUUID();
   const expectedSha256 = expectedSha256Map(args);
   const matchedExpectedSha256Keys = new Set();
   const timeoutMs = filesystemOperationTimeoutMs(args);
@@ -1233,7 +1241,10 @@ function applyPatchTool(args, state) {
       expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@', '*** Begin Patch', '*** Update File: <path>'],
     });
   }
-  const planned = files.map((filePatch) => {
+  const patchSha256 = sha256(patch);
+  let planned;
+  try {
+  planned = files.map((filePatch) => {
     checkTimeout('plan_file_start');
     const source = resolvePatchSource(filePatch, state);
     const target = resolvePatchTarget(filePatch, state);
@@ -1252,12 +1263,18 @@ function applyPatchTool(args, state) {
     checkTimeout('apply_file_patch_complete');
     return { filePatch, source, target, before, after };
   });
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    writePatchOutcome(state, operationId, { status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), error: diagnostic });
+    throw error;
+  }
   checkTimeout('planned_all_files');
   assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedExpectedSha256Keys);
   if (dryRun) {
     return {
       schema: 'local.filesystem.apply_patch.v1',
       status: 'checked',
+      operation_id: operationId,
       dry_run: true,
       timeout_ms: timeoutMs,
       changed_files: planned.map((item) => ({
@@ -1271,6 +1288,7 @@ function applyPatchTool(args, state) {
     };
   }
   const changed = [];
+  writePatchOutcome(state, operationId, { status: 'applying', operation_id: operationId, patch_sha256: patchSha256, started_at: new Date().toISOString() });
   const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
   const backups = backupPaths.map((path) => ({
     path,
@@ -1295,9 +1313,34 @@ function applyPatchTool(args, state) {
     }
   } catch (error) {
     rollbackPatch(backups);
+    const diagnostic = errorDiagnostic(error);
+    writePatchOutcome(state, operationId, { status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), error: diagnostic });
     throw error;
   }
-  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', changed_files: changed, timeout_ms: timeoutMs };
+  const outcome = { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'patched', operation_id: operationId, patch_sha256: patchSha256, finished_at: new Date().toISOString(), changed_files: changed };
+  writePatchOutcome(state, operationId, outcome);
+  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', operation_id: operationId, changed_files: changed, timeout_ms: timeoutMs, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
+}
+
+function patchOutcomeShowTool(args, state) {
+  const operationId = stringField(args, 'operation_id');
+  if (!operationId || !/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_required', 'patch_operation_id_required');
+  const path = patchOutcomePath(state, operationId);
+  if (!existsSync(path)) throw diagnosticError('patch_outcome_not_found', 'patch_outcome_not_found', { operation_id: operationId });
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+function writePatchOutcome(state, operationId, outcome) {
+  const path = patchOutcomePath(state, operationId);
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(outcome, null, 2)}\n`, 'utf8');
+  renameSync(temporary, path);
+}
+
+function patchOutcomePath(state, operationId) {
+  if (!/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_invalid', 'patch_operation_id_invalid');
+  return join(state.outputRoot, '.narada', 'local-filesystem-mcp', 'patch-outcomes', `${operationId}.json`);
 }
 
 function movePathTool(args, state) {
