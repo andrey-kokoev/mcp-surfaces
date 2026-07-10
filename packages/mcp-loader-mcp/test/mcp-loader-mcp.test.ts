@@ -14,6 +14,10 @@ const fragmentedRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-fragmented-'))
 mkdirSync(join(fragmentedRoot, '.ai', 'mcp'), { recursive: true });
 const duplicateRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-duplicate-'));
 mkdirSync(join(duplicateRoot, '.ai', 'mcp'), { recursive: true });
+const legacyAndreyRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-legacy-andrey-'));
+mkdirSync(join(legacyAndreyRoot, '.ai', 'mcp'), { recursive: true });
+const legacyUserSiteRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-legacy-user-site-'));
+mkdirSync(join(legacyUserSiteRoot, '.ai', 'mcp'), { recursive: true });
 const externalRoot = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-external-'));
 const externalAgentContextEntrypoint = join(externalRoot, 'packages', 'agent-context-tools', 'src', 'agent-context-mcp-server.mjs');
 mkdirSync(dirname(externalAgentContextEntrypoint), { recursive: true });
@@ -94,9 +98,15 @@ writeFileSync(join(duplicateRoot, '.ai', 'mcp', 'beta-mcp.json'), JSON.stringify
   site_id: 'duplicate-site',
   mcpServers: { duplicate: { command: 'node', args: ['--help'] } },
 }), 'utf8');
+for (const [legacyRoot, site_id] of [[legacyAndreyRoot, 'narada-andrey'], [legacyUserSiteRoot, 'narada-user-site']] as const) {
+  writeFileSync(join(legacyRoot, '.ai', 'mcp', 'legacy-mcp.json'), JSON.stringify({
+    site_id,
+    mcpServers: { legacy: { command: 'node', args: ['--version'] } },
+  }), 'utf8');
+}
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';
@@ -146,11 +156,20 @@ try {
 
   const duplicateListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: duplicateRoot } }, 22);
   assert.equal(duplicateListResult?.data?.code, 'site_fabric_duplicate_surface');
+  for (const legacyRoot of [legacyAndreyRoot, legacyUserSiteRoot]) {
+    const legacyListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: legacyRoot } }, 26);
+    assert.equal(legacyListResult?.data?.code, 'site_fabric_legacy_site_id_rejected');
+  }
 
   const inventoryOk = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable'], include_ok: true } }, 23);
   assert.equal(inventoryOk?.status, 'ok');
   assert.equal(inventoryOk?.violation_count, 0);
   assert.deepEqual(inventoryOk?.observed_tools?.restartable, ['echo']);
+  assert.deepEqual(inventoryOk?.requested_surface_ids, ['restartable']);
+  assert.deepEqual(inventoryOk?.attempted_surface_ids, ['restartable']);
+  assert.deepEqual(inventoryOk?.observed_surface_ids, ['restartable']);
+  assert.deepEqual(inventoryOk?.unobserved_surface_ids, []);
+  assert.equal(inventoryOk?.observation_coverage, 'partial');
   assert.deepEqual(inventoryOk?.observed_read_only_tools?.restartable, []);
   assert.deepEqual(inventoryOk?.observed_mutating_tools?.restartable, ['echo']);
   assert.deepEqual(inventoryOk?.observed_unclassified_tools?.restartable, []);
@@ -236,5 +255,7 @@ try {
   rmSync(dirname(aggregateRoot), { recursive: true, force: true });
   rmSync(fragmentedRoot, { recursive: true, force: true });
   rmSync(duplicateRoot, { recursive: true, force: true });
+  rmSync(legacyAndreyRoot, { recursive: true, force: true });
+  rmSync(legacyUserSiteRoot, { recursive: true, force: true });
   rmSync(externalRoot, { recursive: true, force: true });
 }

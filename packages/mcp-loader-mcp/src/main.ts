@@ -21,6 +21,18 @@ const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
 const SITE_TOOL_OBSERVATION_PAYLOAD_PREFIX = 'site-tools-';
 const SITE_TOOL_OBSERVATION_MAX_ENTRIES = 32;
 const SITE_TOOL_OBSERVATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const REJECTED_SITE_IDS = new Set(['narada-andrey', 'narada-user-site']);
+
+function assertSupportedSiteId(siteId: string, source: string): string {
+  if (REJECTED_SITE_IDS.has(siteId)) {
+    throw diagnosticError(
+      'site_fabric_legacy_site_id_rejected',
+      `site_fabric_legacy_site_id_rejected:${siteId}:${source}`,
+      { received: siteId, required: 'andrey-user', source },
+    );
+  }
+  return siteId;
+}
 
 function defaultAllowedSiteRoots(): string[] {
   const roots = ['D:/code'];
@@ -124,6 +136,11 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
     status: violationCount === 0 ? 'ok' : 'drift',
     site_root: siteRoot,
     observed_at: new Date().toISOString(),
+    requested_surface_ids: requestedSurfaceIds ?? null,
+    attempted_surface_ids: surfaceIds,
+    observed_surface_ids: Object.keys(observedToolsBySurface).sort(),
+    unobserved_surface_ids: surfaceIds.filter((surfaceId) => !Object.hasOwn(observedToolsBySurface, surfaceId)),
+    observation_coverage: requestedSurfaceIds ? 'partial' : 'complete',
     checked_surface_count: surfaceIds.length,
     violation_count: violationCount,
     observed_tools: observedToolsBySurface,
@@ -763,6 +780,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'site-coherence': { entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`, args: ['--narada-root', 'D:/code/narada'] },
   'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
+  'nars-session': { entrypoint: `${MCP_SURFACES_ROOT}/nars-session-mcp/dist/src/main.js`, args: [] },
 };
 
 function resolveSiteFabricPaths(siteRoot: string): string[] {
@@ -802,7 +820,9 @@ function readSiteFabricBundle(siteRoot: string): { fabric: JsonRecord; paths: st
     } catch (error) {
       throw diagnosticError('site_fabric_parse_error', `site_fabric_parse_error:${fabricPath}:${error instanceof Error ? error.message : String(error)}`);
     }
-    const fragmentSiteId = typeof fragment.site_id === 'string' ? fragment.site_id : null;
+    const fragmentSiteId = typeof fragment.site_id === 'string'
+      ? assertSupportedSiteId(fragment.site_id, fabricPath)
+      : null;
     if (fragmentSiteId && siteId && fragmentSiteId !== siteId) {
       throw diagnosticError('site_fabric_site_id_mismatch', `site_fabric_site_id_mismatch:${siteId}:${fragmentSiteId}:${fabricPath}`);
     }
@@ -1052,7 +1072,7 @@ function normalizePolicyPrefix(prefix: string): string {
 function deriveSiteId(siteRoot: string): string {
   const parts = siteRoot.replace(/\\/g, '/').split('/').filter(Boolean);
   const last = parts[parts.length - 1] ?? 'site';
-  return last.replace(/^narada\./, '').replace(/^narada-/, '');
+  return assertSupportedSiteId(last.replace(/^narada\./, '').replace(/^narada-/, ''), `site_root:${siteRoot}`);
 }
 
 function interpolateSiteArg(value: string, siteRoot: string): string {

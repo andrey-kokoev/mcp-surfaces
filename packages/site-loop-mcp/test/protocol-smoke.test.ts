@@ -94,6 +94,10 @@ try {
   assert.equal(names.includes('site_loop_proof_status'), true);
   assert.equal(names.includes('site_loop_proof_run'), true);
   assert.equal(names.includes('site_loop_status'), true);
+  const toolsByName = new Map<string, any>(tools.result.tools.map((tool) => [tool.name, tool]));
+  assert.equal(toolsByName.get('site_loop_runs_list')?.annotations?.readOnlyHint, true);
+  assert.equal(toolsByName.get('site_loop_run_show')?.annotations?.readOnlyHint, true);
+  assert.equal(toolsByName.get('site_loop_run_once')?.annotations?.readOnlyHint, false);
 
   const configDir = join(siteRoot, '.narada', 'capabilities');
   mkdirSync(configDir, { recursive: true });

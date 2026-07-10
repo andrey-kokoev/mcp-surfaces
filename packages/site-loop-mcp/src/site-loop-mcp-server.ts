@@ -43,6 +43,37 @@ function currentSiteLoopConfigLoad() {
   return loadSiteLoopConfig(siteRoot);
 }
 
+const READ_ONLY_TOOL_NAMES = new Set([
+  'site_loop_guidance',
+  'site_loop_doctor',
+  'site_docs_list',
+  'site_docs_show',
+  'site_test_list',
+  'site_loop_config_validate',
+  'site_loop_operator_affordances',
+  'site_loop_status',
+  'site_loop_unified_status',
+  'site_loop_recovery_plan',
+  'site_loop_health',
+  'site_loop_operating_status',
+  'site_loop_proof_status',
+  'site_loop_readiness',
+  'site_loop_coherence',
+  'site_loop_runs_list',
+  'site_loop_run_show',
+  'site_loop_output_show',
+  'site_loop_attention_list',
+  'site_loop_attention_show',
+]);
+
+const MUTATING_TOOL_NAMES = new Set([
+  'site_test_run',
+  'site_loop_proof_run',
+  'site_loop_attention_ack',
+  'site_loop_control_set',
+  'site_loop_run_once',
+]);
+
 const TOOLS = [
   guidanceToolDefinition(),
   tool('site_loop_doctor', 'Inspect configured Site Loop MCP readiness.', {}),
@@ -133,12 +164,16 @@ const TOOLS = [
 ].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
 
 function toolAnnotations(name: string) {
-  const writes = /run|ack|control_set|autopilot_step/.test(name);
+  const readOnly = READ_ONLY_TOOL_NAMES.has(name);
+  const mutating = MUTATING_TOOL_NAMES.has(name);
+  if (readOnly === mutating) {
+    throw new Error(`site_loop_tool_semantics_not_explicit:${name}`);
+  }
   return {
     title: name,
-    readOnlyHint: !writes,
-    destructiveHint: /control_set/.test(name),
-    idempotentHint: /doctor|validate|list|show|status|health|readiness|coherence/.test(name),
+    readOnlyHint: readOnly,
+    destructiveHint: name === 'site_loop_control_set',
+    idempotentHint: readOnly,
     openWorldHint: true,
     deprecatedHint: false,
   };

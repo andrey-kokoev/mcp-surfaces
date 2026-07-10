@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import { payloadCreate } from '@narada2/mcp-transport';
 import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
@@ -219,6 +220,9 @@ try {
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_output_show'));
+  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_list'));
+  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_show'));
+  assert.ok((bySurface.get('site-lifecycle')?.tools as string[]).includes('site_registry_discover_plan'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_submit'));
   assert.ok((bySurface.get('site-inbox')?.tools as string[]).includes('inbox_output_show'));
   assert.ok((bySurface.get('mailbox')?.tools as string[]).includes('mailbox_output_show'));
@@ -386,6 +390,37 @@ try {
   assert.ok(missingEvidenceCodes.includes('live_tool_observation_missing'));
   assert.ok(missingEvidenceCodes.includes('live_read_only_observation_missing'));
   assert.ok(missingEvidenceCodes.includes('live_mutating_observation_missing'));
+
+  writeFileSync(join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-git-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'fixture-git': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/git-mcp/dist/src/main.js'],
+        tools: ['git_guidance', 'git_add', 'git_changed_summary', 'git_commit', 'git_diff', 'git_log', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_repositories_summary', 'git_show', 'git_status', 'git_unstage', 'git_workflow_record'],
+        surface_id: 'git',
+      },
+    },
+  }, null, 2), 'utf8');
+  const partialRegistry = buildSiteSurfaceRegistry(conformanceSite);
+  const partialCheck = checkSiteRegistryConformance(
+    conformanceSite,
+    partialRegistry,
+    observedConformanceTools,
+    observedConformanceReadOnlyTools,
+    observedConformanceMutatingTools,
+  );
+  assert.equal(partialCheck.status, 'incomplete', JSON.stringify(partialCheck));
+  const partialCoverage = partialCheck.observation_coverage as Record<string, any>;
+  assert.equal(partialCoverage.status, 'partial');
+  assert.ok((partialCoverage.unobserved_server_names as string[]).includes('fixture-git'));
+  const partialGitViolations = (partialCheck.violations as Array<Record<string, any>>)
+    .filter((violation) => violation.server_name === 'fixture-git')
+    .map((violation) => violation.code);
+  assert.ok(!partialGitViolations.includes('live_tool_observation_missing'));
+  assert.ok(!partialGitViolations.includes('live_read_only_observation_missing'));
+  assert.ok(!partialGitViolations.includes('live_mutating_observation_missing'));
 
   const violationCodes = (check: Record<string, any>) =>
     new Set((check.violations as Array<Record<string, any>>).map((violation) => violation.code));
@@ -608,9 +643,29 @@ try {
   );
   assert.equal(goodSiteLoopReaderCheck.status, 'ok');
 
-  const sites = await call('registrar_site_list', {});
-  const siteData = view(sites);
-  assert.ok((siteData.items as Array<unknown>).length >= 7);
+  const catalogDbPath = join(root, 'site-registry.db');
+  const catalogDb = new DatabaseSync(catalogDbPath);
+  catalogDb.exec(`
+    CREATE TABLE site_registry (
+      site_id TEXT PRIMARY KEY,
+      site_root TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  catalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at) VALUES (?, ?, ?)').run('fixture-canonical', root, '2026-07-10T00:00:00Z');
+  catalogDb.close();
+  const previousCatalogPath = process.env.NARADA_SITE_REGISTRY_DB;
+  process.env.NARADA_SITE_REGISTRY_DB = catalogDbPath;
+  try {
+    const sites = await call('registrar_site_list', {});
+    const siteData = view(sites);
+    assert.equal(siteData.catalog_source, 'user_site_site_registry');
+    assert.equal(siteData.compatibility_fallback_used, false);
+    assert.deepEqual((siteData.items as Array<Record<string, unknown>>).map((site) => site.site_id), ['fixture-canonical']);
+  } finally {
+    if (previousCatalogPath === undefined) delete process.env.NARADA_SITE_REGISTRY_DB;
+    else process.env.NARADA_SITE_REGISTRY_DB = previousCatalogPath;
+  }
 
   const carriers = await call('registrar_carrier_list', {});
   const carrierData = view(carriers);
@@ -632,7 +687,7 @@ try {
   const materializedPath = join(root, 'kimi-generated.json');
   view(await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey', output_path: materializedPath }));
   const materializedConfig = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
-  const materializedFilesystem = materializedConfig.mcpServers['narada-andrey-local-filesystem'];
+  const materializedFilesystem = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
   assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
   for (const carrierId of ['codex-andrey', 'kimi-andrey', 'opencode-andrey']) {
     const generatedPath = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
@@ -677,6 +732,14 @@ try {
 
   assert.equal(siteSurfaceServerKey('narada-sonar', 'scheduler'), 'narada-sonar-scheduler');
   assert.equal(siteSurfaceServerKey('smart-scheduling', 'scheduler'), 'narada-smart-scheduling-scheduler');
+  assert.equal(siteSurfaceServerKey('andrey-user', 'task-lifecycle'), 'narada-site-andrey-user-task-lifecycle');
+  const userTaskBindConfig = buildSiteBindConfig(
+    { site_id: 'andrey-user', root, config_path: join(root, 'site.json'), surfaces: [] },
+    { id: 'task-lifecycle', package: 'task-lifecycle-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', kind: 'mcp_surface', args: ['--site-root', '{site_root}'], tools: ['task_lifecycle_guidance'] },
+  );
+  const userTaskServer = (userTaskBindConfig.config.mcpServers as Record<string, any>)['narada-site-andrey-user-task-lifecycle'];
+  assert.ok(userTaskServer.args.includes(root));
+  assert.ok(!userTaskServer.args.includes('{site_root}'));
   const bindConfig = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
     { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: [], tools: ['scheduler_task_list'] },
@@ -859,6 +922,63 @@ try {
   assert.ok(missingDefaultFinding);
   assert.equal(missingDefault.status, 'invalid');
 
+  const staleProjectionRoot = join(root, 'stale-carrier-projection-site');
+  const staleProjectionMcpRoot = join(staleProjectionRoot, '.ai', 'mcp');
+  mkdirSync(join(staleProjectionMcpRoot, 'carriers'), { recursive: true });
+  writeFileSync(join(staleProjectionRoot, 'site.json'), JSON.stringify({ site_id: 'andrey-user' }), 'utf8');
+  writeFileSync(join(staleProjectionMcpRoot, 'narada-site-andrey-user-site-inbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-site-andrey-user-site-inbox': {
+        surface_id: 'site-inbox',
+        command: 'node',
+        args: [
+          'D:/code/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
+          '--surface-id', 'site-inbox',
+          '--entrypoint', 'D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
+          '--', '--site-root', staleProjectionRoot,
+        ],
+      },
+    },
+  }, null, 2), 'utf8');
+  writeFileSync(join(staleProjectionMcpRoot, 'narada-site-andrey-user-inbox-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-site-andrey-user-inbox': {
+        surface_id: 'inbox',
+        command: 'node',
+        args: ['C:/Users/Andrey/Narada/tools/typed-mcp/inbox-mcp-server.mjs', '--site-root', staleProjectionRoot],
+      },
+    },
+  }, null, 2), 'utf8');
+  writeFileSync(join(staleProjectionMcpRoot, 'carriers', 'narada-site-andrey-user-kimi.mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-site-andrey-user-inbox': {
+        surface_id: 'site-inbox',
+        command: 'node',
+        args: ['C:/Users/Andrey/Narada/tools/typed-mcp/inbox-mcp-server.mjs', '--site-root', staleProjectionRoot],
+      },
+      'narada-site-andrey-user-delegated-task': {
+        surface_id: 'delegated-task',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/delegated-task-mcp/dist/src/main.js'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const staleProjectionValidation = validateSiteMcpFabric({
+    site_id: 'andrey-user',
+    root: staleProjectionRoot,
+    config_path: join(staleProjectionRoot, 'site.json'),
+    surfaces: [],
+  }, false);
+  const staleProjectionFindings = staleProjectionValidation.findings as Array<Record<string, any>>;
+  assert.equal(staleProjectionValidation.status, 'invalid');
+  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_carrier_projection_entrypoint_drift' && finding.surface_id === 'site-inbox'));
+  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_carrier_projection_missing_site_root' && finding.surface_id === 'delegated-task'));
+  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_site_fabric_duplicate_canonical_surface' && finding.canonical_surface_id === 'site-inbox'));
+  assert.equal(staleProjectionValidation.carrier_projection_count, 2);
+
   for (const carrierId of ['opencode-andrey', 'kimi-andrey', 'codex-andrey']) {
     const outputPath = join(root, `${carrierId}.generated`);
     const materializedCarrier = await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: outputPath });
@@ -871,12 +991,12 @@ try {
     if (carrierId === 'codex-andrey') {
       assert.match(content, /--anchored-allowed-root/);
       assert.match(content, /user_home:\.codex/);
-      assert.match(content, /\[mcp_servers\.narada-andrey-local-filesystem\][\s\S]*?approval_mode = "approve"/);
-      assert.match(content, /\[mcp_servers\.narada-andrey-site-loop\]/);
-      assert.doesNotMatch(content, /\[mcp_servers\.narada-andrey-site-loop\][\s\S]*?startup_timeout_sec/);
+      assert.match(content, /\[mcp_servers\.narada-site-andrey-user-local-filesystem\][\s\S]*?approval_mode = "approve"/);
+      assert.match(content, /\[mcp_servers\.narada-site-andrey-user-site-loop\]/);
+      assert.doesNotMatch(content, /\[mcp_servers\.narada-site-andrey-user-site-loop\][\s\S]*?startup_timeout_sec/);
       assert.match(content, /Generated carrier availability metadata\. Narada MCP surfaces own policy\./);
-      assert.match(content, /\[mcp_servers\.narada-andrey-local-filesystem\.tools\.fs_apply_patch\]\s+approval_mode = "approve"/);
-      assert.match(content, /\[mcp_servers\.narada-andrey-structured-command\.tools\.structured_command_execute\]\s+approval_mode = "approve"/);
+      assert.match(content, /\[mcp_servers\.narada-site-andrey-user-local-filesystem\.tools\.fs_apply_patch\]\s+approval_mode = "approve"/);
+      assert.match(content, /\[mcp_servers\.narada-site-andrey-user-structured-command\.tools\.structured_command_execute\]\s+approval_mode = "approve"/);
       assert.doesNotMatch(content, /approval_mode = "auto"/);
     }
   }
@@ -1007,6 +1127,23 @@ try {
     'scheduler',
     { allow_disabled_sidecar: true, allow_sidecar: true },
   ), null);
+
+  const unresolvedTemplateRoot = join(root, 'unresolved-template-site');
+  mkdirSync(join(unresolvedTemplateRoot, '.ai', 'mcp'), { recursive: true });
+  writeFileSync(join(unresolvedTemplateRoot, '.ai', 'mcp', 'narada-sonar-task-lifecycle-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-task-lifecycle': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', '--site-root', '{site_root}'],
+        tools: ['task_lifecycle_guidance'],
+      },
+    },
+  }, null, 2), 'utf8');
+  const unresolvedTemplateCheck = validateSiteMcpFabric({ site_id: 'narada-sonar', root: unresolvedTemplateRoot, config_path: join(unresolvedTemplateRoot, 'config.json'), surfaces: [] });
+  assert.ok((unresolvedTemplateCheck.findings as Array<Record<string, any>>)
+    .some((finding) => finding.code === 'registrar_site_fabric_unresolved_template'));
 
   console.log('mcp-registrar behavior ok');
 } finally {

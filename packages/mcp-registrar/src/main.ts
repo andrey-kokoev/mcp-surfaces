@@ -2,8 +2,9 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { payloadShow } from '@narada2/mcp-transport';
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -131,6 +132,7 @@ const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_
 const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
 const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
+const NARS_SESSION_TOOLS = ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_deliver', 'nars_session_input_status'];
 
 const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'local-filesystem': ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor'],
@@ -139,10 +141,10 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'site-inbox': ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'],
   mailbox: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
   'graph-mail': ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
-  calendar: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show'],
+  calendar: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show'],
   'task-lifecycle': ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_evidence_preflight', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_audit', 'task_lifecycle_search', 'task_lifecycle_related', 'mcp_payload_show', 'mcp_payload_validate', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_show', 'task_lifecycle_diagnose_task_ref'],
   'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
-  'site-lifecycle': ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
+  'site-lifecycle': ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
   'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
   'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
   'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
@@ -151,12 +153,13 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
   'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'],
   'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
-  launcher: ['launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
+  launcher: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
   speech: ['speech_guidance', 'speech_voices', 'speech_listen_status'],
   'operator-routing': ['operator_route_doctor'],
   artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_message_part_create'],
-  'cloudflare-carrier': ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
-  'site-coherence': ['site_coherence_check', 'site_coherence_doctor'],
+  'nars-session': ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_status'],
+  'cloudflare-carrier': ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+  'site-coherence': ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor'],
 };
 
 const REFUSED_TOOLS_BY_SURFACE: Record<string, string[]> = {};
@@ -230,7 +233,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
-    tools: ['calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
+    tools: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
     output_reader_closure: {
       calendar_list: 'calendar_output_show',
       calendar_event_query: 'calendar_output_show',
@@ -259,7 +262,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--narada-root', 'D:/code/narada'],
-    tools: ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_init', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight', 'site_deps_sync'],
+    tools: ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan', 'site_discover', 'site_show', 'site_doctor', 'site_init', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight', 'site_deps_sync'],
   },
   {
     id: 'agent-context', package: 'agent-context-mcp',
@@ -284,7 +287,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'delegated-task', package: 'delegated-task-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--task-root', '{site_root}', '--allowed-root', '{workspace_root}'],
+    args: ['--site-root', '{site_root}', '--task-root', '{site_root}', '--allowed-root', '{workspace_root}'],
     tools: DELEGATED_TASK_TOOLS,
   },
   {
@@ -331,7 +334,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/launcher-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--narada-root', 'C:/Users/Andrey/Narada'],
-    tools: ['launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
+    tools: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
     injection_scope: 'user_site',
   },
   {
@@ -364,23 +367,33 @@ const SURFACES: SurfaceDef[] = [
     env_vars: ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL'],
   },
   {
+    id: 'nars-session', package: 'nars-session-mcp',
+    entrypoint: `${MCP_SURFACES_ROOT}/nars-session-mcp/dist/src/main.js`,
+    kind: 'mcp_surface',
+    args: [],
+    tools: NARS_SESSION_TOOLS,
+    injection_scope: 'local_site',
+    default_injection: 'all_site_bound_sessions',
+    env_vars: ['NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_SESSION_ALLOW_STEER'],
+  },
+  {
     id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--repo-root', 'D:/code/narada', '--session-file', 'D:/code/narada/.narada/auth/cloudflare-operator-session.json'],
-    tools: ['cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+    tools: ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
   },
   {
     id: 'site-coherence', package: 'site-coherence-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--repo-root', 'D:/code/narada'],
-    tools: ['site_coherence_check', 'site_coherence_doctor'],
+    tools: ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor'],
   },
 ];
 
 const KNOWN_SITES: SiteDef[] = [
-  { site_id: 'narada-andrey', root: 'C:/Users/Andrey/Narada', config_path: 'C:/Users/Andrey/Narada/config.json', surfaces: [] },
+  { site_id: 'andrey-user', root: 'C:/Users/Andrey/Narada', config_path: 'C:/Users/Andrey/Narada/config.json', surfaces: [] },
   { site_id: 'narada-proper', root: 'D:/code/narada', config_path: 'D:/code/narada/config.json', surfaces: [] },
   { site_id: 'narada-sonar', root: 'D:/code/narada.sonar', config_path: 'D:/code/narada.sonar/.narada/config.json', surfaces: [] },
   { site_id: 'narada-revolution', root: 'D:/code/narada.revolution', config_path: 'D:/code/narada.revolution/config.json', surfaces: [] },
@@ -391,11 +404,94 @@ const KNOWN_SITES: SiteDef[] = [
   { site_id: 'smart-scheduling', root: 'D:/code/smart-scheduling/.narada', config_path: 'D:/code/smart-scheduling/.narada/config.json', surfaces: [] },
 ];
 
+type SiteRegistryCatalog = {
+  status: 'ready' | 'unavailable';
+  path: string;
+  items: SiteDef[];
+  error?: string;
+};
+
+type SiteRegistryRow = {
+  site_id?: unknown;
+  site_root?: unknown;
+};
+
+function comparableSiteRoot(root: string): string {
+  return root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function assertCanonicalSiteId(siteId: string, fieldName = 'site_id'): string {
+  if (siteId === 'narada-andrey' || siteId === 'narada-user-site') {
+    throw diagnosticError(
+      'registrar_legacy_site_id_rejected',
+      `registrar_legacy_site_id_rejected:${fieldName}`,
+      { field: fieldName, received: siteId, required: 'andrey-user' },
+    );
+  }
+  return siteId;
+}
+
+function siteConfigPathForRoot(root: string): string {
+  const rootConfig = join(root, 'config.json');
+  const nestedConfig = join(root, '.narada', 'config.json');
+  if (existsSync(nestedConfig)) return nestedConfig;
+  return rootConfig;
+}
+
+function defaultUserNaradaRoot(): string {
+  return process.env.NARADA_USER_SITE_ROOT
+    ?? (process.env.USERPROFILE ? join(process.env.USERPROFILE, 'Narada') : USER_NARADA_ROOT);
+}
+
+/**
+ * Read the User Site's canonical local Site catalog.
+ *
+ * The static definitions remain only as an explicit fallback when the registry
+ * cannot be read. They
+ * are never the authoritative output of registrar_site_list when the registry
+ * is available.
+ */
+function readSiteRegistryCatalog(): SiteRegistryCatalog {
+  const path = process.env.NARADA_SITE_REGISTRY_DB ?? join(defaultUserNaradaRoot(), 'registry.db');
+  if (!existsSync(path)) {
+    return { status: 'unavailable', path, items: [], error: 'registry_file_missing' };
+  }
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+    const rows = db.prepare('SELECT site_id, site_root FROM site_registry ORDER BY created_at ASC, site_id ASC').all() as unknown as SiteRegistryRow[];
+    const items = rows.flatMap((row) => {
+      const siteId = typeof row.site_id === 'string' ? row.site_id.trim() : '';
+      const root = typeof row.site_root === 'string' ? row.site_root.trim() : '';
+      if (!siteId || !root) return [];
+      const known = KNOWN_SITES.find((site) => comparableSiteRoot(site.root) === comparableSiteRoot(root));
+      return [{
+        site_id: siteId,
+        root,
+        config_path: siteConfigPathForRoot(root),
+        surfaces: known?.surfaces ?? [],
+        local_surface_allowlist: known?.local_surface_allowlist,
+        surface_overrides: known?.surface_overrides,
+      } satisfies SiteDef];
+    });
+    return { status: 'ready', path, items };
+  } catch (error) {
+    return {
+      status: 'unavailable',
+      path,
+      items: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
+  }
+}
+
 const CARRIERS: CarrierDef[] = [
   {
     carrier_id: 'opencode-andrey', kind: 'opencode', config_path: 'C:/Users/Andrey/.config/opencode/opencode.jsonc', surfaces: [],
     site_bindings: [{
-      site_id: 'narada-andrey',
+      site_id: 'andrey-user',
       surfaces: [
         'agent-context',
         'task-lifecycle',
@@ -420,7 +516,7 @@ const CARRIERS: CarrierDef[] = [
         'mcp-loader',
         'artifacts',
       ],
-      prefix: 'narada-andrey',
+      prefix: 'narada-site-andrey-user',
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
@@ -431,7 +527,7 @@ const CARRIERS: CarrierDef[] = [
   {
     carrier_id: 'kimi-andrey', kind: 'kimi', config_path: 'C:/Users/Andrey/.kimi-code/mcp.json', surfaces: [],
     site_bindings: [{
-      site_id: 'narada-andrey',
+      site_id: 'andrey-user',
       surfaces: [
         'agent-context',
         'task-lifecycle',
@@ -456,7 +552,7 @@ const CARRIERS: CarrierDef[] = [
         'mcp-loader',
         'artifacts',
       ],
-      prefix: 'narada-andrey',
+      prefix: 'narada-site-andrey-user',
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
@@ -467,7 +563,7 @@ const CARRIERS: CarrierDef[] = [
   {
     carrier_id: 'codex-andrey', kind: 'codex', config_path: 'C:/Users/Andrey/.codex/config.toml', surfaces: [],
     site_bindings: [{
-      site_id: 'narada-andrey',
+      site_id: 'andrey-user',
       surfaces: [
         'agent-context',
         'task-lifecycle',
@@ -492,7 +588,7 @@ const CARRIERS: CarrierDef[] = [
         'mcp-loader',
         'artifacts',
       ],
-      prefix: 'narada-andrey',
+      prefix: 'narada-site-andrey-user',
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
@@ -710,7 +806,7 @@ export function listTools() {
         properties: {
           carrier_id: { type: 'string', description: 'Carrier identifier, e.g. codex-andrey.' },
           surface_id: { type: 'string', description: 'Surface identifier, e.g. scheduler.' },
-          site_id: { type: 'string', description: 'Site context for arg interpolation, e.g. narada-sonar. Defaults to narada-andrey.' },
+          site_id: { type: 'string', description: 'Site context for arg interpolation, e.g. sonar. Defaults to andrey-user.' },
         },
         required: ['carrier_id', 'surface_id'],
         additionalProperties: false,
@@ -939,15 +1035,23 @@ function lookupSurface(surfaceId: string): SurfaceDef {
 }
 
 function lookupSite(siteId: string): SiteDef {
-  const site = KNOWN_SITES.find((s) => s.site_id === siteId);
-  if (!site) throw diagnosticError('registrar_unknown_site', `registrar_unknown_site:${siteId}`, { known: KNOWN_SITES.map((s) => s.site_id) });
-  return site;
+  assertCanonicalSiteId(siteId);
+  const catalog = readSiteRegistryCatalog();
+  const direct = catalog.items.find((site) => site.site_id === siteId);
+  if (direct) return direct;
+  const known = [...catalog.items.map((site) => site.site_id), ...KNOWN_SITES.map((site) => site.site_id)];
+  throw diagnosticError('registrar_unknown_site', `registrar_unknown_site:${siteId}`, { known: uniqueStrings(known) });
 }
 
 function lookupCarrier(carrierId: string): CarrierDef {
   const carrier = CARRIERS.find((c) => c.carrier_id === carrierId);
   if (!carrier) throw diagnosticError('registrar_unknown_carrier', `registrar_unknown_carrier:${carrierId}`, { known: CARRIERS.map((c) => c.carrier_id) });
   return carrier;
+}
+
+function siteCatalogForOperations(): SiteDef[] {
+  const catalog = readSiteRegistryCatalog();
+  return catalog.status === 'ready' ? catalog.items : KNOWN_SITES;
 }
 
 type SitePathInterpolation = {
@@ -1528,6 +1632,18 @@ function codexCarrierAvailableTools(server: MaterializedServer): string[] {
   return [];
 }
 
+function writeFileAtomic(path: string, content: string): void {
+  const dir = resolve(path, '..');
+  mkdirSync(dir, { recursive: true });
+  const temporaryPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(temporaryPath, content, 'utf8');
+  try {
+    renameSync(temporaryPath, path);
+  } finally {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+  }
+}
+
 function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
@@ -1541,9 +1657,7 @@ function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
   }
   const outputPath = optionalString(args.output_path);
   if (outputPath) {
-    const dir = resolve(outputPath, '..');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(outputPath, result.content, 'utf8');
+    writeFileAtomic(outputPath, result.content);
   }
   return { status: 'materialized', carrier_id: carrierId, kind: carrier.kind, output_path: outputPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scopes: injectionSummary };
 }
@@ -1565,9 +1679,7 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
     const backupPath = `${configPath}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     writeFileSync(backupPath, existingContent, 'utf8');
   }
-  const dir = resolve(configPath, '..');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath, result.content, 'utf8');
+  writeFileAtomic(configPath, result.content);
   writeSiteAllowedRootsConfig(carrier);
   const site_surface_registries = writeSiteSurfaceRegistriesForCarrier(carrier);
   return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scope_counts: injectionSummary.counts, site_surface_registries };
@@ -1903,6 +2015,9 @@ export function checkSiteRegistryConformance(
 ): JsonRecord {
   const violations: JsonRecord[] = [];
   const surfaceResults: JsonRecord[] = [];
+  const observedServerKeys = new Set(Object.keys(observedToolsInput));
+  const observationCoverage = observedServerKeys.size === 0 ? 'none' : 'partial';
+  const unobservedServerNames: string[] = [];
   const rawRegistrySurfaces = Array.isArray(registry.surfaces) ? registry.surfaces : [];
   const registrySurfaces = rawRegistrySurfaces.map((entry) => asRecord(entry));
   const registryByServer = new Map<string, JsonRecord>();
@@ -1994,9 +2109,15 @@ export function checkSiteRegistryConformance(
 
     if (!actualSurface) add('materialized_registry', 'registry_surface_missing');
     if (!catalog) add('registrar_catalog', 'catalog_surface_missing');
-    if (liveTools === null) add('live_surface', 'live_tool_observation_missing');
-    if (liveReadOnlyTools === null) add('live_surface', 'live_read_only_observation_missing');
-    if (liveMutatingTools === null) add('live_surface', 'live_mutating_observation_missing');
+    const surfaceWasRequested = observedServerKeys.size === 0 || observedServerKeys.has(server.server_key)
+      || observedServerKeys.has(server.surface_id ?? '') || observedServerKeys.has(String(actualSurface?.catalog_surface_id ?? ''));
+    if (!surfaceWasRequested) {
+      unobservedServerNames.push(server.server_key);
+    } else {
+      if (liveTools === null) add('live_surface', 'live_tool_observation_missing');
+      if (liveReadOnlyTools === null) add('live_surface', 'live_read_only_observation_missing');
+      if (liveMutatingTools === null) add('live_surface', 'live_mutating_observation_missing');
+    }
     const duplicateFabricTools = duplicateStrings(rawFabricTools);
     if (duplicateFabricTools.length > 0) add('site_fabric', 'fabric_tools_duplicate', { duplicate_tools: duplicateFabricTools });
     if (liveTools !== null) {
@@ -2090,12 +2211,17 @@ export function checkSiteRegistryConformance(
 
   return {
     schema: 'narada.registrar.site_registry_conformance_check.v1',
-    status: violations.length === 0 ? 'ok' : 'drift',
+    status: violations.length > 0 ? 'drift' : unobservedServerNames.length > 0 ? 'incomplete' : 'ok',
     site_id: site.site_id,
     site_root: site.root,
     registry_path: materializedSurfaceRegistryPathForRoot(site.root),
     checked_surface_count: fabricServers.length,
     observed_surface_count: Object.keys(observedToolsInput).length,
+    observation_coverage: {
+      status: observedServerKeys.size === 0 ? 'missing' : unobservedServerNames.length > 0 ? observationCoverage : 'complete',
+      observed_server_names: [...observedServerKeys].sort(),
+      unobserved_server_names: unobservedServerNames.sort(),
+    },
     violation_count: violations.length,
     violations,
     surfaces: surfaceResults,
@@ -2275,9 +2401,9 @@ function materializedSurfaceRegistryPathForRoot(siteRoot: string): string {
 
 function knownSiteIdForRoot(siteRoot: string): string | null {
   const requested = portablePath(siteRoot);
-  const match = KNOWN_SITES.find((site) => {
+  const match = siteCatalogForOperations().find((site) => {
     const siteRoot = portablePath(site.root);
-    const controlRoot = portablePath(siteMcpControlRoot(site));
+    const controlRoot = portablePath(siteCapabilityRoot(site));
     return requested === siteRoot || requested === controlRoot;
   });
   return match?.site_id ?? null;
@@ -2376,7 +2502,24 @@ function registrarSiteOutputReaderClosureCheck(args: JsonRecord): JsonRecord {
 }
 
 function registrarSiteList(_args: JsonRecord): JsonRecord {
-  return { items: KNOWN_SITES, count: KNOWN_SITES.length };
+  const catalog = readSiteRegistryCatalog();
+  if (catalog.status === 'ready') {
+    return {
+      items: catalog.items,
+      count: catalog.items.length,
+      catalog_source: 'user_site_site_registry',
+      registry_path: catalog.path,
+      compatibility_fallback_used: false,
+    };
+  }
+  return {
+    items: KNOWN_SITES,
+    count: KNOWN_SITES.length,
+    catalog_source: 'legacy_compatibility_catalog',
+    registry_path: catalog.path,
+    compatibility_fallback_used: true,
+    catalog_error: catalog.error ?? 'registry_unavailable',
+  };
 }
 
 function registrarSiteSurfaces(args: JsonRecord): JsonRecord {
@@ -2393,8 +2536,7 @@ function registrarSiteSurfaces(args: JsonRecord): JsonRecord {
       const servers = asRecord(cfg.mcpServers);
       for (const surfaceId of SURFACES.map((s) => s.id)) {
         const canonicalKey = siteSurfaceServerKey(siteId, surfaceId);
-        const legacyKey = legacySiteSurfaceServerKey(siteId, surfaceId);
-        if ((servers[canonicalKey] || servers[legacyKey]) && !allFound.includes(surfaceId)) allFound.push(surfaceId);
+        if (servers[canonicalKey] && !allFound.includes(surfaceId)) allFound.push(surfaceId);
       }
     } catch { /* skip */ }
   }
@@ -2406,11 +2548,9 @@ export function siteSurfaceServerKey(siteId: string, surfaceId: string): string 
 }
 
 function siteSurfacePrefix(siteId: string): string {
-  return siteId.startsWith('narada-') ? siteId : `narada-${siteId}`;
-}
-
-function legacySiteSurfaceServerKey(siteId: string, surfaceId: string): string {
-  return `${siteId.replace('narada-', '')}-${surfaceId}`;
+  // User Site uses an explicit kind boundary so its key cannot resemble a retired alias.
+  if (siteId === 'andrey-user') return 'narada-site-andrey-user';
+  return siteId.startsWith('narada-') ? siteId : 'narada-' + siteId;
 }
 
 export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileName: string; serverKey: string; config: JsonRecord } {
@@ -2492,14 +2632,13 @@ function registrarSiteUnbind(args: JsonRecord): JsonRecord {
   if (!existsSync(configDir)) return { status: 'not_found', site_id: siteId, surface_id: surfaceId };
   const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
-  const legacyServerKey = legacySiteSurfaceServerKey(siteId, surfaceId);
   let removed = 0;
   for (const file of files) {
     try {
       const content = readFileSync(join(configDir, file), 'utf8');
       const cfg = JSON.parse(content);
       const servers = asRecord(cfg.mcpServers);
-      if (servers[serverKey] || servers[legacyServerKey]) {
+      if (servers[serverKey]) {
         unlinkSync(join(configDir, file));
         removed++;
         return { status: 'unbound', site_id: siteId, surface_id: surfaceId, file };
@@ -2519,7 +2658,7 @@ function registrarSurfaceUsage(args: JsonRecord): JsonRecord {
   const matchingSites: { site_id: string; via: 'shared' | 'local' }[] = [];
   const matchingCarriers: { carrier_id: string; kind: CarrierDef['kind']; via: 'shared' | 'local'; site_id: string }[] = [];
 
-  for (const site of KNOWN_SITES) {
+  for (const site of siteCatalogForOperations()) {
     if (!isLocal) {
       const fabricSurfaceIds = new Set(discoverSiteMcpFabric(site).map((server) => server.surface_id ?? fabricSurfaceId(server.server_key, site)));
       if (site.surfaces.includes(surfaceId) || fabricSurfaceIds.has(surfaceId)) {
@@ -2576,6 +2715,7 @@ type SiteMcpFabricServer = {
   surface_id?: string;
   narada_scope: NaradaScopeMetadata;
   source_file: string;
+  projection_kind: 'site_fabric' | 'carrier_projection';
 };
 
 function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string } {
@@ -2594,6 +2734,10 @@ function portablePath(path: string): string {
   return resolve(path).replace(/\\/g, '/');
 }
 
+function surfaceRequiresSiteRoot(surfaceId: string): boolean {
+  return ['agent-context', 'task-lifecycle', 'site-inbox', 'site-loop', 'mailbox', 'graph-mail', 'delegated-task'].includes(surfaceId);
+}
+
 function siteMcpControlRoot(site: SiteDef): string {
   if (site.root.replace(/\\/g, '/').endsWith('/.narada')) return site.root;
   if (existsSync(join(site.root, '.ai', 'mcp'))) return site.root;
@@ -2602,10 +2746,33 @@ function siteMcpControlRoot(site: SiteDef): string {
   return site.root;
 }
 
+function siteCapabilityRoot(site: SiteDef): string {
+  const normalizedRoot = resolve(site.root);
+  return normalizedRoot.replace(/\\/g, '/').endsWith('/.narada')
+    ? normalizedRoot
+    : join(normalizedRoot, '.narada');
+}
+
 function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
   const controlRoot = siteMcpControlRoot(site);
   const configDir = join(controlRoot, '.ai', 'mcp');
   if (!existsSync(configDir)) return [];
+  return discoverMcpConfigDirectory(site, controlRoot, configDir, 'site_fabric');
+}
+
+function discoverSiteCarrierProjections(site: SiteDef): SiteMcpFabricServer[] {
+  const controlRoot = siteMcpControlRoot(site);
+  const configDir = join(controlRoot, '.ai', 'mcp', 'carriers');
+  if (!existsSync(configDir)) return [];
+  return discoverMcpConfigDirectory(site, controlRoot, configDir, 'carrier_projection');
+}
+
+function discoverMcpConfigDirectory(
+  site: SiteDef,
+  controlRoot: string,
+  configDir: string,
+  projectionKind: SiteMcpFabricServer['projection_kind'],
+): SiteMcpFabricServer[] {
   const servers: SiteMcpFabricServer[] = [];
   for (const file of readdirSync(configDir)) {
     if (!file.endsWith('.json')) continue;
@@ -2650,10 +2817,8 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
         args.shift(); // tsx
         entrypoint = args.shift() ?? '';
       }
-      // Resolve {site_root} placeholders
-      entrypoint = entrypoint.replace(/\{site_root\}/g, controlRoot);
-      const resolvedArgs = args.map((a) => a.replace(/\{site_root\}/g, controlRoot));
-      const unwrapped = unwrapRuntimeProxyLaunch(entrypoint, resolvedArgs);
+      // Materialized fabric is executable data, never a template. Validation reports any token verbatim.
+      const unwrapped = unwrapRuntimeProxyLaunch(entrypoint, args);
       servers.push({
         server_key: serverKey,
         command: Array.isArray(command) ? String(command[0] ?? 'node') : String(command),
@@ -2663,7 +2828,8 @@ function discoverSiteMcpFabric(site: SiteDef): SiteMcpFabricServer[] {
         uses_runtime_proxy: unwrapped.usesRuntimeProxy,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
         narada_scope: readNaradaScope(server, surfaceId, controlRoot, site.site_id),
-        source_file: file,
+        source_file: projectionKind === 'carrier_projection' ? `carriers/${file}` : file,
+        projection_kind: projectionKind,
       });
     }
   }
@@ -2695,6 +2861,13 @@ function catalogSurfaceAlias(surfaceId: string): SurfaceDef | undefined {
   return undefined;
 }
 
+function catalogSurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SurfaceDef | undefined {
+  const entrypointOwner = SURFACES.find((surface) => portablePath(surface.entrypoint) === portablePath(server.entrypoint));
+  if (entrypointOwner) return entrypointOwner;
+  const declaredSurfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
+  return catalogSurface(declaredSurfaceId) ?? catalogSurfaceAlias(declaredSurfaceId);
+}
+
 type SiteSurfaceRegistrySurface = {
   surface_id: string;
   display_name: string;
@@ -2712,7 +2885,7 @@ type SiteSurfaceRegistrySurface = {
 
 function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface {
   const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
-  const catalog = catalogSurface(surfaceId) ?? catalogSurfaceAlias(surfaceId);
+  const catalog = catalogSurfaceForFabricServer(site, server);
   const registeredTools = uniqueStrings(catalog?.tools ?? readConfiguredServerTools(site, server));
   const toolContract = surfaceToolContract(catalog?.id ?? surfaceId, registeredTools);
   return {
@@ -2763,7 +2936,6 @@ export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
   const servers = discoverSiteMcpFabric(site);
   const surfaces = servers
     .map((server) => registrySurfaceForFabricServer(site, server))
-    .filter((surface) => surface.registered_live_tools.length > 0)
     .sort((a, b) => a.server_name.localeCompare(b.server_name));
   return {
     schema: 'narada.site.capabilities.mcp_surfaces.v1',
@@ -2781,7 +2953,7 @@ export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
 
 function writeSiteSurfaceRegistry(site: SiteDef): JsonRecord {
   const registry = buildSiteSurfaceRegistry(site);
-  const dir = join(siteMcpControlRoot(site), 'capabilities');
+  const dir = join(siteCapabilityRoot(site), 'capabilities');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'mcp-surfaces.json');
   writeFileSync(path, JSON.stringify(registry, null, 2) + '\n', 'utf8');
@@ -2807,7 +2979,7 @@ function registrarSiteSurfaceRegistrySync(args: JsonRecord): JsonRecord {
     return {
       status: 'dry_run',
       site_id: siteId,
-      path: join(siteMcpControlRoot(site), 'capabilities', 'mcp-surfaces.json'),
+      path: join(siteCapabilityRoot(site), 'capabilities', 'mcp-surfaces.json'),
       registry,
     };
   }
@@ -2815,7 +2987,7 @@ function registrarSiteSurfaceRegistrySync(args: JsonRecord): JsonRecord {
 }
 
 export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRecord {
-  const siteId = site.site_id;
+  const siteId = assertCanonicalSiteId(site.site_id);
   const findings: ValidationFinding[] = [];
 
   function add(severity: ValidationFinding['severity'], code: string, message: string, detail: JsonRecord = {}) {
@@ -2823,15 +2995,18 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
   }
 
   const servers = discoverSiteMcpFabric(site);
+  const carrierProjections = discoverSiteCarrierProjections(site);
 
   if (servers.length === 0) {
     add('warning', 'registrar_site_fabric_empty', `No MCP servers found in ${join(site.root, '.ai', 'mcp')}`, { site_id: siteId });
   }
 
   const seenKeys = new Set<string>();
+  const seenCanonicalSurfaces = new Map<string, SiteMcpFabricServer>();
   const presentSurfaceIds = new Set<string>();
   for (const server of servers) {
     const surfaceId = fabricSurfaceId(server.server_key, site);
+    const canonicalSurface = catalogSurfaceForFabricServer(site, server);
     presentSurfaceIds.add(server.surface_id ?? surfaceId);
     const scopeDetail = scopeFindingDetail(server.narada_scope);
     if (seenKeys.has(server.server_key)) {
@@ -2839,6 +3014,37 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     } else {
       seenKeys.add(server.server_key);
       if (includeOk) { add('info', 'registrar_site_fabric_server_key_ok', `Server key '${server.server_key}' found`, { site_id: siteId, server_key: server.server_key, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail }); }
+    }
+
+    if (canonicalSurface) {
+      const previous = seenCanonicalSurfaces.get(canonicalSurface.id);
+      if (previous) {
+        add('error', 'registrar_site_fabric_duplicate_canonical_surface', `Multiple Site fabric entries claim canonical surface '${canonicalSurface.id}'`, {
+          site_id: siteId,
+          canonical_surface_id: canonicalSurface.id,
+          server_key: server.server_key,
+          source_file: server.source_file,
+          conflicting_server_key: previous.server_key,
+          conflicting_source_file: previous.source_file,
+          remediation: `Remove the superseded projection from ${join(siteMcpControlRoot(site), '.ai', 'mcp')} and rematerialize from authoritative Site registration.`,
+          ...scopeDetail,
+        });
+      } else {
+        seenCanonicalSurfaces.set(canonicalSurface.id, server);
+      }
+    }
+
+    const unresolvedTemplates = [server.entrypoint, ...server.args].filter((value) => /\{[^}]+\}/.test(value));
+    if (unresolvedTemplates.length > 0) {
+      add('error', 'registrar_site_fabric_unresolved_template', 'Surface ' + server.server_key + ' contains unresolved materialization tokens', {
+        site_id: siteId,
+        server_key: server.server_key,
+        surface_id: surfaceId,
+        source_file: server.source_file,
+        unresolved_values: unresolvedTemplates,
+        remediation: 'Regenerate the Site fabric from registrar materialization; do not defer placeholder expansion to the loader.',
+        ...scopeDetail,
+      });
     }
 
     // Entrypoint existence
@@ -2883,13 +3089,44 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     }
 
     // Site-root requirement for site-aware surfaces
-    if (['agent-context', 'task-lifecycle', 'site-inbox', 'site-loop', 'mailbox', 'graph-mail', 'surface-feedback', 'delegated-task'].includes(surfaceId)) {
+    if (surfaceRequiresSiteRoot(surfaceId)) {
       const hasSiteRoot = server.args.some((a) => a === '--site-root');
       if (!hasSiteRoot) {
-        add('warning', 'registrar_site_fabric_missing_site_root', `Surface '${surfaceId}' on '${server.server_key}' is missing --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
+        add('error', 'registrar_site_fabric_missing_site_root', `Surface '${surfaceId}' on '${server.server_key}' is missing --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       } else if (includeOk) {
         add('info', 'registrar_site_fabric_site_root_ok', `Surface '${surfaceId}' on '${server.server_key}' has --site-root`, { site_id: siteId, server_key: server.server_key, surface_id: surfaceId, source_file: server.source_file, ...scopeDetail });
       }
+    }
+  }
+
+  for (const server of carrierProjections) {
+    const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
+    const authoritative = catalogSurfaceForFabricServer(site, server) ?? null;
+    const detail = {
+      site_id: siteId,
+      server_key: server.server_key,
+      surface_id: surfaceId,
+      source_file: server.source_file,
+      projection_kind: server.projection_kind,
+    };
+    if (!authoritative) {
+      add('error', 'registrar_carrier_projection_unknown_surface', `Carrier projection '${server.server_key}' has no authoritative surface definition`, detail);
+      continue;
+    }
+    const actualEntrypoint = portablePath(server.entrypoint);
+    const expectedEntrypoint = portablePath(authoritative.entrypoint);
+    if (actualEntrypoint !== expectedEntrypoint) {
+      add('error', 'registrar_carrier_projection_entrypoint_drift', `Carrier projection '${server.server_key}' does not use the authoritative '${surfaceId}' entrypoint`, {
+        ...detail,
+        entrypoint: actualEntrypoint,
+        expected_entrypoint: expectedEntrypoint,
+        authoritative_package: authoritative.package,
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_carrier_projection_entrypoint_ok', `Carrier projection '${server.server_key}' uses the authoritative '${surfaceId}' entrypoint`, detail);
+    }
+    if (surfaceRequiresSiteRoot(surfaceId) && !server.args.includes('--site-root')) {
+      add('error', 'registrar_carrier_projection_missing_site_root', `Carrier projection '${server.server_key}' is missing required --site-root`, detail);
     }
   }
 
@@ -2913,6 +3150,7 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     status: errors > 0 ? 'invalid' : warnings > 0 ? 'valid_with_warnings' : 'valid',
     site_id: siteId,
     server_count: servers.length,
+    carrier_projection_count: carrierProjections.length,
     errors,
     warnings,
     findings,
@@ -2924,9 +3162,8 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const carrier = lookupCarrier(carrierId);
   const surface = lookupSurface(surfaceId);
-  const defaultSiteId = optionalString(args.site_id) ?? 'narada-andrey';
-  const site = KNOWN_SITES.find((s) => s.site_id === defaultSiteId);
-  const siteRoot = site ? site.root : defaultSiteId;
+  const defaultSiteId = optionalString(args.site_id) ?? 'andrey-user';
+  const siteRoot = lookupSite(defaultSiteId).root;
 
   const resolvedArgs = interpolateArgs(surface.args, defaultSiteId, siteRoot);
   const resolvedEntrypoint = interpolateArg(surface.entrypoint, defaultSiteId, siteRoot);
@@ -2950,10 +3187,10 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
     case 'opencode':
       throw diagnosticError('registrar_single_surface_bind_unsupported_for_opencode_aggregate', 'registrar_single_surface_bind_unsupported_for_opencode_aggregate');
     case 'kimi':
-      result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
+      result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId);
       break;
     case 'codex':
-      result = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs);
+      result = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId);
       break;
     default:
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
@@ -2996,15 +3233,15 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   return result;
 }
 
-function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
+function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
   const mcp = asRecord(cfg.mcpServers);
-  const serverKey = `narada-andrey-${surfaceId}`;
+  const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey') }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, siteId), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, siteId) }, surfaceId);
   mcp[serverKey] = {
     transport: 'stdio',
     command: launch.command,
@@ -3019,20 +3256,20 @@ function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
   const mcp = asRecord(cfg.mcpServers);
-  const serverKey = `narada-andrey-${surfaceId}`;
+  const serverKey = siteSurfaceServerKey('andrey-user', surfaceId);
   if (!mcp[serverKey]) return { status: 'not_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId };
   delete mcp[serverKey];
   writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
   return { status: 'unbound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
 }
 
-function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[]): JsonRecord {
+function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   let content = readFileSync(configPath, 'utf8');
   const sectionKey = `[mcp_servers.${surfaceId}]`;
   if (content.includes(sectionKey)) return { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey'), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, 'narada-andrey') }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, siteId), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, siteId) }, surfaceId);
   content += `\n${sectionKey}\ncommand = "${launch.command}"\nargs = ${JSON.stringify(launch.args)}\n`;
   writeFileSync(configPath, content, 'utf8');
   return { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
@@ -3081,7 +3318,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   lookupSurface(surfaceId);
   if (target === 'all_sites' || target === 'all') {
-    for (const site of KNOWN_SITES) {
+    for (const site of siteCatalogForOperations()) {
       try { results.push(registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId, allow_sidecar: args.allow_sidecar === true })); }
       catch (e) { results.push({ site_id: site.site_id, surface_id: surfaceId, error: e instanceof Error ? e.message : String(e) }); }
     }
