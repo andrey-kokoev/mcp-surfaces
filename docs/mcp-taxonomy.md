@@ -58,3 +58,13 @@ These are Narada-owned infrastructure surfaces that can feel generic because the
 must not provide ambient cross-site filesystem reads. Cross-site transfer belongs
 to an explicitly authorized User Site or artifact/export surface; see the
 transport contract in `docs/mcp-surfaces-target-shape.md`.
+
+## UI Boundary
+
+`mcp-surfaces` is UI-neutral. MCP packages may expose affordance documents and
+validation contracts, but they must not depend on Narada renderer packages,
+Vue/React/Svelte runtimes, Tailwind runtime packages, or stylesheet modules.
+The repository-owned guard is `pnpm test:ui-boundary`, and it runs as the
+first step of the root `pnpm test` command. It scans package manifests,
+source imports, and source stylesheet files. Narada-side UI tests must not be
+treated as enforcement of this cross-repository boundary.
