@@ -19,7 +19,34 @@ const forbiddenRendererPackages = [
   'vue',
 ];
 
-for (const packageRoot of walkDirectories(packagesRoot)) {
+const forbiddenRendererPackagePrefixes = [
+  '@angular/',
+  '@chakra-ui/',
+  '@headlessui/',
+  '@mui/',
+  '@preact/',
+  '@radix-ui/',
+  '@solidjs/',
+  '@sveltejs/',
+  '@vitejs/',
+  '@vue/',
+];
+
+const ignoredDirectoryNames = new Set([
+  '.ai',
+  '.cache',
+  '.git',
+  '.tmp',
+  '.tmp-tests',
+  'coverage',
+  'dist',
+  'node_modules',
+  'sessions',
+  'target',
+  'test-results',
+]);
+
+for (const packageRoot of [repositoryRoot, ...walkPackageRoots(packagesRoot)]) {
   const manifestPath = join(packageRoot, 'package.json');
   if (statSafe(manifestPath)?.isFile()) {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -57,17 +84,20 @@ for (const packageRoot of walkDirectories(packagesRoot)) {
 console.log('mcp-surfaces UI-neutral boundary ok');
 
 function isForbiddenRendererPackage(specifier) {
-  return forbiddenRendererPackages.some((packageName) => specifier === packageName || specifier.startsWith(packageName + '/'));
+  return forbiddenRendererPackages.some((packageName) => specifier === packageName || specifier.startsWith(packageName + '/'))
+    || forbiddenRendererPackagePrefixes.some((prefix) => specifier.startsWith(prefix));
 }
 
-function* walkDirectories(directory) {
+function* walkPackageRoots(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.name === 'dist' || entry.name === 'node_modules' || entry.name === 'coverage') continue;
+    if (ignoredDirectoryNames.has(entry.name)) continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'src') continue;
-      yield path;
-      yield* walkDirectories(path);
+      if (statSafe(join(path, 'package.json'))?.isFile()) {
+        yield path;
+        continue;
+      }
+      yield* walkPackageRoots(path);
     }
   }
 }
