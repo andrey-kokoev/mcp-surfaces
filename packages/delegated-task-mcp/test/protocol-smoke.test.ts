@@ -26,6 +26,9 @@ child.stderr.on('data', (chunk) => {
 try {
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
   child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'delegated/unknown', params: {} })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'delegated_task_not_real', arguments: {} } })}\n`);
+  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'delegated_task_validate', arguments: { objective: 'Invalid protocol graph', workflow: { steps: [{ id: 'a', kind: 'worker', depends_on: ['missing'], if: 'all(step:a:completed)' }] }, acceptance: { residual_risk_policy: 'invalid-policy' } } } })}\n`);
   child.stdin.end();
 
   const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
@@ -37,6 +40,13 @@ try {
   assert.ok((init.result as Record<string, any>).capabilities.tools);
 
   const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
+  const unsupportedMethodResponse = responses.find((message) => message.id === 3);
+  assert.equal(unsupportedMethodResponse.error.data.code, 'unsupported_mcp_method');
+  const unknownToolResponse = responses.find((message) => message.id === 4);
+  assert.equal(unknownToolResponse.error.data.code, 'unknown_tool');
+  const invalidValidationResponse = responses.find((message) => message.id === 5);
+  assert.equal(invalidValidationResponse.result.structuredContent.status, 'rejected');
+  assert.equal(invalidValidationResponse.result.structuredContent.diagnostics.some((item: Record<string, unknown>) => item.code === 'unknown_dependency'), true);
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), [
     'delegated_task_guidance',
     'delegated_task_policy_inspect',

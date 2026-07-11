@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statS
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { callWorkerTool, createWorkerPolicy, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
+import { callWorkerTool, createWorkerPolicy, providerRuntimeMetadataFromRegistry, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
 
 const SERVER_NAME = 'delegated-task-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -139,6 +139,7 @@ export function createServerState(options: JsonRecord = {}): State {
     policy: createWorkerPolicy({ runRoot: resolve(siteControlRoot(taskRoot), 'runtime', 'worker-delegation'), ...providerPolicyDefaults, ...workerPolicyOptions, allowedRoots }),
     env: stateEnv,
     activeRunCount: 0,
+    providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata,
   };
   const policy = rec(options.policy);
   const allowedWorkflowKinds = stringList(policy.allowed_workflow_kinds ?? options.allowedWorkflowKinds, DEFAULT_WORKFLOW_KINDS);
@@ -1652,8 +1653,7 @@ function validateStepOutputSchema(step: WorkflowStep, output: JsonRecord): JsonR
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const workOrderConstraints = workOrderWorkerConstraints(task.workflow);
   const constraints = { ...task.constraints, ...workOrderConstraints, ...step.constraints };
-  const acceptanceTools = acceptanceItems(task.acceptance.required_tools).map((item) => opt(item.name ?? item.target ?? item.value)).filter((tool): tool is string => Boolean(tool));
-  const requiredMcpTools = uniqueStrings([...stringList(constraints.required_mcp_tools), ...stringList(task.acceptance.required_mcp_tools), ...acceptanceTools]);
+  const requiredMcpTools = uniqueStrings([...stringList(constraints.required_mcp_tools), ...stringList(task.acceptance.required_mcp_tools)]);
   if (requiredMcpTools.length > 0) constraints.required_mcp_tools = requiredMcpTools;
   const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
   const workerConstraints: JsonRecord = { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true || constraints.exit_interview === true };
@@ -2669,11 +2669,11 @@ function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.Proce
     if (primaryBaseUrlEnv && baseUrl && !targetEnv[primaryBaseUrlEnv]) targetEnv[primaryBaseUrlEnv] = baseUrl;
   }
 }
-function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): JsonRecord {
+function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): JsonRecord & { providerRuntimeMetadata: ReturnType<typeof providerRuntimeMetadataFromRegistry> } {
   const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
-  if (!registryPath || !existsSync(registryPath)) return {};
+  if (!registryPath || !existsSync(registryPath)) return { providerRuntimeMetadata: {} };
   let registry: JsonRecord;
-  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return {}; }
+  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return { providerRuntimeMetadata: {} }; }
   const providers = rec(registry.providers);
   const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
   const providerCognitionDefaults: JsonRecord = {};
@@ -2685,6 +2685,7 @@ function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessE
     ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
     ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
     ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
+    providerRuntimeMetadata: providerRuntimeMetadataFromRegistry(registry),
   };
 }
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {

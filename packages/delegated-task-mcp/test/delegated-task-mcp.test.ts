@@ -28,6 +28,7 @@ try {
     default_provider: 'test',
     providers: {
       test: {
+        base_url: 'test://provider',
         default_model: 'test-medium',
         available_models: ['test-low', 'test-medium', 'test-high'],
         cognition_defaults: {
@@ -176,6 +177,9 @@ try {
   else process.env.DELEGATED_TASK_TEST_SECRET = originalDelegatedTaskSecret;
   if (originalMoonshotApiKey === undefined) delete process.env.MOONSHOT_API_KEY;
   else process.env.MOONSHOT_API_KEY = originalMoonshotApiKey;
+
+  assert.equal(state.workerState.providerRuntimeMetadata.test.baseUrl, 'test://provider');
+  assert.equal(state.workerState.providerRuntimeMetadata.test.defaultModel, 'test-medium');
 
   const policy = await callTool(state, 'delegated_task_policy_inspect', {});
   const policyView = policy.result.structuredContent as Record<string, any>;
@@ -617,6 +621,7 @@ try {
       focused_tests: [{ command: 'pnpm test:delegated-task', status: 'passed' }],
       verification_budget: { max_attempts: 10, max_commands: 10 },
       required_tools: [{ name: 'structured-command' }],
+      required_mcp_tools: ['structured-command'],
       forbidden_patterns: [{ pattern: 'forbidden-never' }],
       review_quorum: { min_passed: 1, max_failed: 0 },
       residual_risk_policy: 'none_allowed',
@@ -1411,7 +1416,8 @@ try {
   const beforeMappedWorkerCalls = workerCalls.length;
   const mappedWorkerRun = await callTool(state, 'delegated_task_run', {
     objective: 'Map delegated task worker convenience constraints',
-    constraints: { authority: 'read', cwd: root, site_root: siteRoot, provider: 'deepseek-api', runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1 },
+    constraints: { authority: 'read', cwd: root, site_root: siteRoot, provider: 'deepseek-api', cognition: 'high', runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true, max_concurrency: 1, required_mcp_tools: ['constraint-mcp-tool'] },
+    acceptance: { required_tools: ['structured-command'], required_mcp_tools: ['acceptance-mcp-tool'] },
     workflow: { steps: [{ id: 'mapped-worker', kind: 'research', instruction: 'Inspect mapped worker args' }] },
     execution: { wait_for_completion: true, resumable: false, max_concurrency: 1 },
   });
@@ -1426,6 +1432,9 @@ try {
   assert.equal(mappedConstraints.max_concurrency, undefined);
   assert.equal(mappedConstraints.site_root, siteRoot);
   assert.equal(mappedConstraints.provider, 'deepseek-api');
+  assert.equal(mappedConstraints.cognition, 'high');
+  assert.deepEqual(mappedConstraints.required_mcp_tools, ['constraint-mcp-tool', 'acceptance-mcp-tool']);
+  assert.equal(mappedConstraints.required_mcp_tools.includes('structured-command'), false);
   assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
 
   const launchFailureRun = await callTool(state, 'delegated_task_run', {
