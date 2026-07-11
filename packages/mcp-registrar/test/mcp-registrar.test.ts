@@ -997,6 +997,7 @@ try {
       assert.match(content, /\[mcp_servers\.narada-site-andrey-user-local-filesystem\][\s\S]*?approval_mode = "approve"/);
       assert.match(content, /\[mcp_servers\.narada-site-andrey-user-site-loop\]/);
       assert.doesNotMatch(content, /\[mcp_servers\.narada-site-andrey-user-site-loop\][\s\S]*?startup_timeout_sec/);
+      assert.match(content, /\[mcp_servers\.narada-site-andrey-user-calendar\][\s\S]*?startup_timeout_sec = 60/);
       assert.match(content, /Generated carrier availability metadata\. Narada MCP surfaces own policy\./);
       assert.match(content, /\[mcp_servers\.narada-site-andrey-user-local-filesystem\.tools\.fs_apply_patch\]\s+approval_mode = "approve"/);
       assert.match(content, /\[mcp_servers\.narada-site-andrey-user-structured-command\.tools\.structured_command_execute\]\s+approval_mode = "approve"/);

@@ -47,6 +47,7 @@ type SurfaceDef = {
   restart_owner?: McpRestartOwner;
   env_vars?: string[];
   sops_dir?: string;
+  codex_startup_timeout_sec?: number;
 };
 
 type SurfaceScopeMetadata = {
@@ -235,6 +236,7 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}'],
     tools: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
+    codex_startup_timeout_sec: 60,
     output_reader_closure: {
       calendar_list: 'calendar_output_show',
       calendar_event_query: 'calendar_output_show',
@@ -1617,6 +1619,10 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
     lines.push(`command = "${launch.command}"`);
     lines.push(`args = ${JSON.stringify(launch.args)}`);
     lines.push('approval_mode = "approve"');
+    const startupTimeoutSec = server.surface?.codex_startup_timeout_sec;
+    if (startupTimeoutSec !== undefined) {
+      lines.push(`startup_timeout_sec = ${startupTimeoutSec}`);
+    }
     if (overridden.env_vars) {
       lines.push(`env_vars = ${JSON.stringify(overridden.env_vars)}`);
     }
@@ -1633,6 +1639,7 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
       command: launch.command,
       args: launch.args,
       approval_mode: 'approve',
+      ...(startupTimeoutSec === undefined ? {} : { startup_timeout_sec: startupTimeoutSec }),
     };
   }
   const structured = { trust_projects: trustProjects, mcpServers };
