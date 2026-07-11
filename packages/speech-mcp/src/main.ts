@@ -3,13 +3,14 @@ import { buildGuidanceResult } from './guidance.js';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import { unlinkSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
 import { parseArgs } from './cli.js';
-import { CAPTURE_TRANSCRIPTION_PROVIDERS, DEFAULT_LISTEN_DURATION_SECONDS, LISTEN_PROVIDERS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION } from './constants.js';
+import { DEFAULT_LISTEN_DURATION_SECONDS, PROTOCOL_VERSION, SERVER_NAME, SERVER_VERSION } from './constants.js';
 import { diagnosticError, errorDiagnostic } from './diagnostics.js';
 import { buildCaptureTranscribeAdapterArgs } from './listen-adapter.js';
 import { listenAdapterReadiness, listenPolicy, speechListenStart, speechListenStatus, speechListenStop } from './listen-sessions.js';
 import { drainJsonLines, drainJsonRpcFrames, writeJsonRpcResponse, type JsonRecord } from './protocol.js';
-import { resolveOpenAiApiKey } from './secrets.js';
+import { resolveProviderApiKey } from './secrets.js';
 import { createServerState, type SpeechState } from './state.js';
 import { listTools } from './tool-list.js';
 import { compactMonitorResult, openaiTranscribeAudio, transcriptFromMonitorResult } from './transcription.js';
@@ -19,7 +20,7 @@ import { integer, optionalString, renderResult, requiredString } from './values.
 export { parseArgs } from './cli.js';
 export { buildCaptureTranscribeAdapterArgs, buildListenAdapterArgs } from './listen-adapter.js';
 export { listTools } from './tool-list.js';
-export { resolveOpenAiApiKey } from './secrets.js';
+export { resolveOpenAiApiKey, resolveProviderApiKey } from './secrets.js';
 export { createServerState } from './state.js';
 export { compactMonitorResult, transcriptFromMonitorResult } from './transcription.js';
 
@@ -32,6 +33,23 @@ export async function handleRequest(request: JsonRecord, state: SpeechState) {
     const diagnostic = errorDiagnostic(error);
     return { jsonrpc: '2.0', id: request.id ?? null, error: { code: -32000, message: diagnostic.message, data: diagnostic } };
   }
+}
+
+function rejectLegacyCaptureArgs(args: JsonRecord, prompt = false): void {
+  const names = prompt ? ['provider', 'model', 'api_key', 'tts_provider', 'tts_model', 'voice'] : ['provider', 'model', 'api_key'];
+  const legacy = names.find((name) => args[name] !== undefined);
+  if (legacy) throw diagnosticError('speech_legacy_selection_argument', `speech_legacy_selection_argument:${legacy}`, { argument: legacy, remediation: prompt ? 'Use tts_selection and transcription_selection objects; credentials are resolved by policy.' : 'Use selection:{provider,model}; credentials are resolved by policy.' });
+}
+
+function publicSelection(selection: ResolvedCapabilitySelection): JsonRecord {
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    capability: selection.capability,
+    adapter: selection.adapter,
+    ...(selection.voice ? { voice: selection.voice } : {}),
+    status: selection.status,
+  };
 }
 
 export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
@@ -56,7 +74,7 @@ function dispatchMethod(method: string, params: JsonRecord, state: SpeechState) 
     case 'initialize':
       return { protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: SERVER_NAME, version: SERVER_VERSION } };
     case 'tools/list':
-      return { tools: listTools() };
+      return { tools: listTools(state) };
     case 'tools/call':
       return callTool(params, state);
     default:
@@ -70,7 +88,7 @@ async function callTool(params: JsonRecord, state: SpeechState) {
   const args = asRecord(params.arguments);
   let result: JsonRecord;
   switch (name) {
-    case 'speech_guidance': result = buildGuidanceResult(args); break;
+    case 'speech_guidance': result = buildGuidanceResult(args, state); break;
     case 'speech_speak': result = await speechSpeak(args, state); break;
     case 'speech_voices': result = speechVoices(args, state); break;
     case 'speech_listen_status': result = speechListenStatus(state); break;
@@ -84,30 +102,24 @@ async function callTool(params: JsonRecord, state: SpeechState) {
 }
 
 async function speechCaptureTranscribe(args: JsonRecord, state: SpeechState): Promise<JsonRecord> {
-  const provider = optionalString(args.provider) ?? 'remote_transcription';
-  if (!CAPTURE_TRANSCRIPTION_PROVIDERS.includes(provider as typeof CAPTURE_TRANSCRIPTION_PROVIDERS[number])) {
-    throw diagnosticError('speech_capture_invalid_provider', `speech_capture_invalid_provider:${provider}`, {
-      allowed: CAPTURE_TRANSCRIPTION_PROVIDERS,
-      listen_session_providers: LISTEN_PROVIDERS,
-      remediation: 'Use provider=remote_transcription for transcript-returning capture, or speech_listen_start with provider=local_sapi for local voice-intent monitoring.',
-    });
-  }
-  if (!state.allowRemoteAudioEgress) {
+  rejectLegacyCaptureArgs(args);
+  const selection = resolveCapabilitySelection({ registry: state.providerRegistry, capability: 'transcription', selection: args.selection, sitePolicy: state.capabilityPolicy });
+  if (selection.adapter === 'openai-transcription' && !state.allowRemoteAudioEgress) {
     throw diagnosticError('speech_remote_audio_egress_not_admitted', 'speech_remote_audio_egress_not_admitted', {
       remediation: 'Set speech MCP policy allowRemoteAudioEgress/NARADA_SPEECH_ALLOW_REMOTE_AUDIO_EGRESS only after explicit operator admission for remote microphone audio egress.',
       policy: listenPolicy(state),
+      resolved_selection: publicSelection(selection),
     });
   }
   const adapter = listenAdapterReadiness(state);
   if (!adapter.ready) {
     throw diagnosticError('speech_listen_adapter_missing', 'speech_listen_adapter_missing', { adapter, remediation: adapter.remediation });
   }
-  const model = optionalString(args.model) ?? state.openAiTranscriptionModel;
   const durationSeconds = integer(args.duration_seconds, DEFAULT_LISTEN_DURATION_SECONDS, 1, state.maxListenDurationSeconds);
   playListenCue(state, 'start');
   const commandArgs = buildCaptureTranscribeAdapterArgs(state.listenAdapterPath as string, args, durationSeconds, Boolean(args.calibrate));
   const result = nodeSpawnSync('powershell.exe', commandArgs, {
-    env: { ...process.env, NARADA_SPEECH_OPENAI_TRANSCRIPTION_MODEL: model },
+    env: { ...process.env },
     encoding: 'utf8',
     timeout: (durationSeconds + 90) * 1000,
     windowsHide: true,
@@ -129,6 +141,8 @@ async function speechCaptureTranscribe(args: JsonRecord, state: SpeechState): Pr
       schema: 'narada.speech.capture_calibration.v1',
       status: 'calibrated',
       provider: 'local_audio',
+      resolved_selection: publicSelection(selection),
+      selection_source: selection.source,
       duration_seconds: durationSeconds,
       calibration: monitor,
       monitor: compactMonitorResult(monitor),
@@ -138,28 +152,52 @@ async function speechCaptureTranscribe(args: JsonRecord, state: SpeechState): Pr
       },
     };
   }
+  if (selection.adapter === 'sapi') {
+    const transcript = transcriptFromMonitorResult(monitor);
+    if (!transcript.present) {
+      throw diagnosticError('speech_local_transcription_unavailable', 'speech_local_transcription_unavailable', { resolved_selection: publicSelection(selection), monitor: compactMonitorResult(monitor), remediation: 'Configure the local SAPI recognition adapter to return a transcript, or explicitly select a registry transcription provider that returns retained audio for remote transcription.' });
+    }
+    return {
+      schema: 'narada.speech.capture_transcribe.v1',
+      status: 'transcribed',
+      provider: selection.provider,
+      adapter: selection.adapter,
+      model: selection.model,
+      resolved_selection: publicSelection(selection),
+      selection_source: selection.source,
+      duration_seconds: durationSeconds,
+      transcript,
+      monitor: compactMonitorResult(monitor),
+      privacy: { remote_audio_egress: 'not_used', raw_audio_retained: false },
+    };
+  }
+  if (selection.adapter !== 'openai-transcription') {
+    throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${selection.provider}`, { adapter: selection.adapter });
+  }
   const audioPath = optionalString(monitor.retained_audio_path);
   if (!audioPath) {
     throw diagnosticError('speech_capture_no_audio', 'speech_capture_no_audio', { monitor: compactMonitorResult(monitor) });
   }
-  const apiKey = resolveOpenAiApiKey(args, state);
-  if (!apiKey) throw diagnosticError('speech_openai_no_key', 'speech_openai_no_key: provide api_key or set OPENAI_API_KEY');
+  const apiKey = resolveProviderApiKey(state, selection.provider);
+  if (!apiKey) throw diagnosticError('speech_provider_no_key', `speech_provider_no_key:${selection.provider}`, { provider: selection.provider, remediation: 'Configure the provider secret through the governed secret store or an admitted provider environment variable.' });
   const inputWav = optionalString(args.input_wav);
   try {
-    const transcription = await openaiTranscribeAudio(apiKey, audioPath, model);
+    const transcription = await openaiTranscribeAudio(apiKey, audioPath, selection.model);
     return {
       schema: 'narada.speech.capture_transcribe.v1',
       status: 'transcribed',
-      provider: 'openai',
-      adapter: 'openai-transcriptions',
-      model,
+      provider: selection.provider,
+      adapter: selection.adapter,
+      model: selection.model,
+      resolved_selection: publicSelection(selection),
+      selection_source: selection.source,
       duration_seconds: durationSeconds,
       transcript: transcription.transcript,
       audio: transcription.audio,
       monitor: compactMonitorResult(monitor),
       privacy: {
         remote_audio_egress: 'admitted',
-        remote_audio_provider: 'openai',
+        remote_audio_provider: selection.provider,
         raw_audio_retained: Boolean(args.retain_audio),
       },
     };
@@ -172,14 +210,12 @@ async function speechCaptureTranscribe(args: JsonRecord, state: SpeechState): Pr
 
 async function speechPromptCaptureResponse(args: JsonRecord, state: SpeechState): Promise<JsonRecord> {
   const text = requiredString(args.text, 'speech_requires_text');
+  rejectLegacyCaptureArgs(args, true);
   const spoken = await speechSpeak({
     text,
-    provider: optionalString(args.tts_provider) ?? 'openai_api',
-    model: optionalString(args.tts_model) ?? 'tts-1',
-    voice: optionalString(args.voice) ?? 'nova',
+    selection: args.tts_selection,
     rate: args.rate,
     speed: args.speed,
-    api_key: args.api_key,
     speaker_agent_id: args.speaker_agent_id,
     announce_speaker: args.announce_speaker,
   }, state);
@@ -187,17 +223,15 @@ async function speechPromptCaptureResponse(args: JsonRecord, state: SpeechState)
   let capture: JsonRecord | null = null;
   try {
     capture = await speechCaptureTranscribe({
-      provider: 'remote_transcription',
+      selection: args.transcription_selection,
       duration_seconds: args.duration_seconds,
-      model: args.model,
-      api_key: args.api_key,
       device: args.device,
       retain_audio: args.retain_audio,
     }, state);
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
     const code = String(diagnostic.code ?? 'speech_error');
-    if (code !== 'speech_capture_no_audio' && code !== 'speech_openai_transcription_empty') throw error;
+    if (code !== 'speech_capture_no_audio' && code !== 'speech_local_transcription_unavailable' && code !== 'speech_openai_transcription_empty' && code !== 'speech_capture_no_transcript') throw error;
     return {
       schema: 'narada.speech.prompt_capture_response.v1',
       status: 'no_response',

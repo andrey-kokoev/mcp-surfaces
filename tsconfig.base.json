@@ -13,7 +13,9 @@
       "@narada2/mcp-telemetry": ["packages/shared/mcp-telemetry/src/main.ts"],
       "@narada2/mcp-telemetry/*": ["packages/shared/mcp-telemetry/src/*.ts"],
       "@narada2/mcp-affordances": ["packages/shared/mcp-affordances/src/main.ts"],
-      "@narada2/mcp-affordances/*": ["packages/shared/mcp-affordances/src/*.ts"]
+      "@narada2/mcp-affordances/*": ["packages/shared/mcp-affordances/src/*.ts"],
+      "@narada2/provider-registry": ["packages/shared/provider-registry/src/main.ts"],
+      "@narada2/provider-registry/*": ["packages/shared/provider-registry/src/*.ts"]
     },
     "strict": false,
     "forceConsistentCasingInFileNames": true,

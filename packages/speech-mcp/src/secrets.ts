@@ -1,41 +1,21 @@
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { JsonRecord } from './protocol.js';
-import { firstString, optionalString } from './values.js';
+import type { SpeechState } from './state.js';
+import { firstString } from './values.js';
 
-export function resolveOpenAiApiKey(args: JsonRecord, state: { options: JsonRecord }, env: NodeJS.ProcessEnv = process.env): string | null {
-  const explicit = optionalString(args.api_key);
-  if (explicit) return explicit;
-  const envKey = optionalString(env.OPENAI_API_KEY);
-  if (envKey) return envKey;
-  const secretRef = openAiSecretRef(state, env) ?? 'narada/provider/openai-api/api-key';
-  return lookupPowerShellSecret(secretRef, env, state.options);
-}
-
-function openAiSecretRef(state: { options: JsonRecord }, env: NodeJS.ProcessEnv): string | null {
-  const registryPath = providerRegistryPath(state, env);
-  if (!registryPath || !existsSync(registryPath)) return null;
-  try {
-    const registry = asRecord(JSON.parse(readFileSync(registryPath, 'utf8')));
-    const provider = asRecord(asRecord(registry.providers)['openai-api']);
-    const requirement = asRecord(provider.credential_requirement);
-    const secretRef = optionalString(requirement.secret_ref) ?? optionalString(provider.credential_secret_ref);
-    const envNames = Array.isArray(requirement.env_names) ? requirement.env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
-    if (envNames.length > 0 && !envNames.includes('OPENAI_API_KEY')) return null;
-    return secretRef;
-  } catch {
-    return null;
+export function resolveProviderApiKey(state: SpeechState, providerId: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  const provider = state.providerRegistry.providers[providerId];
+  if (!provider || provider.credential_requirement.kind === 'none') return null;
+  const envNames = provider.credential_requirement.env_names ?? [];
+  for (const envName of envNames) {
+    const envKey = String(env[envName] ?? '').trim();
+    if (envKey) return envKey;
   }
+  return lookupPowerShellSecret(provider.credential_requirement.secret_ref, env, state.options);
 }
 
-function providerRegistryPath(state: { options: JsonRecord }, env: NodeJS.ProcessEnv): string | null {
-  const explicit = firstString(state.options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);
-  if (explicit) return resolve(explicit);
-  const candidates = [
-    'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
-  ];
-  return candidates.map((candidate) => resolve(candidate)).find((candidate) => existsSync(candidate)) ?? null;
+export function resolveOpenAiApiKey(state: SpeechState, providerId = 'openai-api', env: NodeJS.ProcessEnv = process.env): string | null {
+  return resolveProviderApiKey(state, providerId, env);
 }
 
 function lookupPowerShellSecret(secretRef: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
@@ -66,7 +46,3 @@ $secret = Get-Secret -Name $name -AsPlainText -ErrorAction SilentlyContinue
 if ($null -eq $secret -or [string]::IsNullOrWhiteSpace([string]$secret)) { exit 2 }
 [Console]::Out.Write([string]$secret)
 `;
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}

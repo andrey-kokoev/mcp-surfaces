@@ -19,8 +19,11 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/speech-mcp.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/provider-registry": "workspace:*"
+  },
   "files": [
-    "dist/"
+    "dist/",
+    "config/"
   ]
 }

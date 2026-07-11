@@ -1,6 +1,8 @@
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { loadProviderRegistrySync, type CapabilityPolicy, type ProviderRegistry } from '@narada2/provider-registry';
 import { MAX_LISTEN_DURATION_SECONDS, MAX_TEXT_LENGTH } from './constants.js';
+import { diagnosticError } from './diagnostics.js';
 import { resolveListenAdapterPath } from './listen-adapter.js';
 import type { JsonRecord } from './protocol.js';
 import { integer, optionalString } from './values.js';
@@ -20,9 +22,10 @@ export type SpeechState = {
   listenAudioCues: boolean;
   maxListenDurationSeconds: number;
   maxTextLength: number;
-  openAiTranscriptionModel: string;
   options: JsonRecord;
-  provider: string;
+  providerRegistryPath: string;
+  providerRegistry: ProviderRegistry;
+  capabilityPolicy: CapabilityPolicy;
 };
 
 export type ListenSession = {
@@ -34,6 +37,13 @@ export type ListenSession = {
 };
 
 export function createServerState(options: JsonRecord = {}): SpeechState {
+  if (options.provider !== undefined || options.openAiTranscriptionModel !== undefined) {
+    throw diagnosticError('speech_legacy_configuration_rejected', 'speech_legacy_configuration_rejected: use providerRegistryPath and capabilityPolicy with selection objects');
+  }
+  const providerRegistryPath = optionalString(options.providerRegistryPath) ?? optionalString(process.env.NARADA_PROVIDER_REGISTRY_PATH);
+  if (!providerRegistryPath) {
+    throw diagnosticError('speech_provider_registry_path_required', 'speech_provider_registry_path_required: pass --provider-registry-path or NARADA_PROVIDER_REGISTRY_PATH');
+  }
   return {
     activeListenSessions: new Map(),
     announceSpeaker: booleanOption(options.announceSpeaker, process.env.NARADA_SPEECH_ANNOUNCE_SPEAKER, true),
@@ -47,10 +57,15 @@ export function createServerState(options: JsonRecord = {}): SpeechState {
     listenAudioCues: booleanOption(options.listenAudioCues, process.env.NARADA_SPEECH_LISTEN_AUDIO_CUES, true),
     maxListenDurationSeconds: integer(options.maxListenDurationSeconds, MAX_LISTEN_DURATION_SECONDS, 1, MAX_LISTEN_DURATION_SECONDS),
     maxTextLength: Number(options.maxTextLength ?? MAX_TEXT_LENGTH),
-    openAiTranscriptionModel: optionalString(options.openAiTranscriptionModel) ?? optionalString(process.env.NARADA_SPEECH_OPENAI_TRANSCRIPTION_MODEL) ?? 'gpt-4o-transcribe',
     options,
-    provider: String(options.provider ?? 'openai_api'),
+    providerRegistryPath: resolve(providerRegistryPath),
+    providerRegistry: loadProviderRegistrySync(resolve(providerRegistryPath)),
+    capabilityPolicy: (isRecord(options.capabilityPolicy) ? options.capabilityPolicy : {}) as CapabilityPolicy,
   };
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function booleanOption(...values: unknown[]): boolean {

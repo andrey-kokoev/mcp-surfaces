@@ -1,0 +1,26 @@
+{
+  "name": "@narada2/provider-registry",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Typed, policy-neutral provider/model capability registry loading and resolution.",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/provider-registry.test.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

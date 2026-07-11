@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { DEFAULT_LISTEN_DURATION_SECONDS, LISTEN_PROVIDERS } from './constants.js';
+import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
+import { DEFAULT_LISTEN_DURATION_SECONDS } from './constants.js';
 import { diagnosticError } from './diagnostics.js';
 import { buildListenAdapterArgs } from './listen-adapter.js';
 import type { JsonRecord } from './protocol.js';
@@ -25,14 +26,13 @@ export function speechListenStatus(state: SpeechState): JsonRecord {
 }
 
 export function speechListenStart(args: JsonRecord, state: SpeechState, playListenCue: ListenCue): JsonRecord {
-  const provider = optionalString(args.provider) ?? 'local_sapi';
-  if (!LISTEN_PROVIDERS.includes(provider as typeof LISTEN_PROVIDERS[number])) {
-    throw diagnosticError('speech_listen_invalid_provider', `speech_listen_invalid_provider:${provider}`, { allowed: LISTEN_PROVIDERS });
-  }
-  if (provider === 'remote_transcription' && !state.allowRemoteAudioEgress) {
+  rejectLegacySelectionArgs(args);
+  const selection = resolveCapabilitySelection({ registry: state.providerRegistry, capability: 'transcription', selection: args.selection, sitePolicy: state.capabilityPolicy });
+  if (selection.adapter === 'openai-transcription' && !state.allowRemoteAudioEgress) {
     throw diagnosticError('speech_remote_audio_egress_not_admitted', 'speech_remote_audio_egress_not_admitted', {
       remediation: 'Set speech MCP policy allowRemoteAudioEgress/NARADA_SPEECH_ALLOW_REMOTE_AUDIO_EGRESS only after explicit operator admission for remote microphone audio egress.',
       policy: listenPolicy(state),
+      resolved_selection: publicSelection(selection),
     });
   }
   const adapter = listenAdapterReadiness(state);
@@ -43,16 +43,16 @@ export function speechListenStart(args: JsonRecord, state: SpeechState, playList
   const sessionId = optionalString(args.session_id) ?? `listen-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   if (state.activeListenSessions.has(sessionId)) throw diagnosticError('speech_listen_session_exists', `speech_listen_session_exists:${sessionId}`, { session_id: sessionId });
   playListenCue(state, 'start');
-  const child = spawn('powershell.exe', buildListenAdapterArgs(state.listenAdapterPath as string, provider, durationSeconds, sessionId, Boolean(args.calibrate)), {
+  const child = spawn('powershell.exe', buildListenAdapterArgs(state.listenAdapterPath as string, selection.adapter, durationSeconds, sessionId, Boolean(args.calibrate)), {
     stdio: 'ignore',
     windowsHide: true,
   });
-  const session: ListenSession = { child, durationSeconds, provider, sessionId, startedAt: new Date().toISOString() };
+  const session: ListenSession = { child, durationSeconds, provider: selection.provider, sessionId, startedAt: new Date().toISOString() };
   state.activeListenSessions.set(sessionId, session);
   const timeout = setTimeout(() => stopListenSession(state, sessionId, playListenCue), durationSeconds * 1000 + 1000);
   child.once('error', () => { clearTimeout(timeout); finishListenSession(state, sessionId, playListenCue); });
   child.once('close', () => { clearTimeout(timeout); finishListenSession(state, sessionId, playListenCue); });
-  return { status: 'started', session_id: sessionId, provider, duration_seconds: durationSeconds, calibrate: Boolean(args.calibrate), bounded: true, audio_cues: state.listenAudioCues, stop_tool: 'speech_listen_stop' };
+  return { status: 'started', session_id: sessionId, provider: selection.provider, resolved_selection: publicSelection(selection), selection_source: selection.source, duration_seconds: durationSeconds, calibrate: Boolean(args.calibrate), bounded: true, audio_cues: state.listenAudioCues, stop_tool: 'speech_listen_stop' };
 }
 
 export function speechListenStop(args: JsonRecord, state: SpeechState, playListenCue: ListenCue): JsonRecord {
@@ -74,15 +74,39 @@ export function listenAdapterReadiness(state: SpeechState): JsonRecord {
 }
 
 export function listenPolicy(state: SpeechState): JsonRecord {
+  const catalog = listCapabilityCatalog(state.providerRegistry, 'transcription');
+  let defaultSelection: JsonRecord | null = null;
+  try {
+    defaultSelection = publicSelection(resolveCapabilitySelection({ registry: state.providerRegistry, capability: 'transcription', sitePolicy: state.capabilityPolicy }));
+  } catch {
+    // The caller receives the fail-closed resolution error when it attempts capture.
+  }
+  const allowedProviders = Array.from(new Set(catalog.map((item) => String(item.provider))));
   return {
-    default_provider: 'local_sapi',
-    allowed_providers: state.allowRemoteAudioEgress ? LISTEN_PROVIDERS.slice() : ['local_sapi'],
+    default_selection: defaultSelection,
+    allowed_providers: state.allowRemoteAudioEgress ? allowedProviders : allowedProviders.filter((provider) => catalog.some((item) => item.provider === provider && item.adapter !== 'openai-transcription')),
+    catalog,
     audio_cues: state.listenAudioCues,
     announce_speaker_default: state.announceSpeaker,
     remote_audio_egress: state.allowRemoteAudioEgress ? 'admitted' : 'forbidden_without_explicit_policy',
-    openai_transcription_model: state.openAiTranscriptionModel,
     max_duration_seconds: state.maxListenDurationSeconds,
   };
+}
+
+function publicSelection(selection: ResolvedCapabilitySelection): JsonRecord {
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    capability: selection.capability,
+    adapter: selection.adapter,
+    ...(selection.voice ? { voice: selection.voice } : {}),
+    status: selection.status,
+  };
+}
+
+function rejectLegacySelectionArgs(args: JsonRecord): void {
+  const legacy = ['provider', 'model', 'voice'].find((name) => args[name] !== undefined);
+  if (legacy) throw diagnosticError('speech_legacy_selection_argument', `speech_legacy_selection_argument:${legacy}`, { argument: legacy, remediation: 'Use selection:{provider,model}; canonical ids are loaded from the provider registry.' });
 }
 
 function stopListenSession(state: SpeechState, sessionId: string, playListenCue: ListenCue): boolean {

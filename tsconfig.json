@@ -1,9 +1,11 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/shared/execution-contract" },
     { "path": "./packages/shared/mcp-transport" },
     { "path": "./packages/shared/mcp-telemetry" },
     { "path": "./packages/shared/mcp-affordances" },
+    { "path": "./packages/shared/provider-registry" },
     { "path": "./packages/shared/mcp-runtime-proxy" },
     { "path": "./packages/local-filesystem-mcp" },
     { "path": "./packages/structured-command-mcp" },

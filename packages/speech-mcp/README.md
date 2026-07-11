@@ -6,7 +6,7 @@ Host-level speech MCP surface for text-to-speech, bounded microphone capture, tr
 
 - `speech_speak` speaks text through Windows SAPI or OpenAI TTS.
 - `speech_voices` lists available SAPI voices or known OpenAI voices.
-- `speech_capture_transcribe` captures bounded microphone audio or reads an input WAV and returns a first-class transcript result. Its capture provider is `remote_transcription` only.
+- `speech_capture_transcribe` captures bounded microphone audio or reads an input WAV and returns a first-class transcript result through the registry-resolved transcription provider.
 - `speech_prompt_capture_response` speaks a prompt, captures a bounded spoken response, and returns a transcript or `no_response`.
 - `speech_listen_status` reports adapter readiness, policy, audio cue posture, and active listen sessions.
 - `speech_listen_start` starts a bounded local voice-intent listen session. Providers are `local_sapi` by default or `remote_transcription` when policy admits remote audio egress.
@@ -14,25 +14,17 @@ Host-level speech MCP surface for text-to-speech, bounded microphone capture, tr
 
 ## Provider Contract
 
-TTS providers are `sapi` and `openai_api`. The default TTS provider is `openai_api`, with OpenAI model `tts-1` and voice `nova`.
+Speech provider ids, models, voices, adapters, credentials, and capability defaults are loaded from the explicit v2 provider registry passed with `--provider-registry-path` or `NARADA_PROVIDER_REGISTRY_PATH`. The registrar supplies the package registry at `config/provider-registry.v2.json`; its TTS and transcription defaults are local SAPI.
 
 `speech_speak` can also retain generated speech as a WAV file for NARS artifact projection. Pass `output_path` to choose the retained file path, or `retain_audio: true` to retain to a temporary WAV path. Explicit `output_path` values are admitted only under the OS temp directory, `NARADA_SITE_ROOT`, `NARADA_WORKSPACE_ROOT`, or `NARADA_SPEECH_OUTPUT_ROOT`. Retention is additive: the tool still performs host-side audible playback, and the returned `retained_audio.path` can be registered as a NARS `audio` artifact by the caller.
 
-Listen-session providers are `local_sapi` and `remote_transcription`. `local_sapi` is for local voice-intent monitoring through the host adapter. It is not a transcript-returning capture provider.
-
-Transcript-returning capture uses `remote_transcription`. The schema for `speech_capture_transcribe` intentionally exposes only `remote_transcription` so callers do not treat `local_sapi` as valid for first-class transcript capture.
+Listen sessions and transcript capture resolve provider-rooted selections from the registry. Local SAPI is the default; remote transcription remains policy-gated and is not selected implicitly.
 
 ## Policy And Credentials
 
 Remote transcription sends bounded microphone audio to OpenAI and is blocked unless remote audio egress is explicitly admitted with `--allow-remote-audio-egress`, `NARADA_SPEECH_ALLOW_REMOTE_AUDIO_EGRESS=true`, or equivalent server options.
 
-OpenAI credentials resolve in this order:
-
-1. Tool argument `api_key`.
-2. `OPENAI_API_KEY` from the MCP server environment.
-3. Admitted provider secret lookup, unless `NARADA_PROVIDER_SECRET_STORE=disabled`.
-
-The default transcription model is `gpt-4o-transcribe`; it can be overridden with `--openai-transcription-model` or `NARADA_SPEECH_OPENAI_TRANSCRIPTION_MODEL`.
+Provider credentials resolve from the selected registry provider's admitted environment names or governed secret reference. Tool-level API-key arguments and legacy model/provider flags are rejected.
 
 ## Adapter Requirements
 

@@ -4,7 +4,7 @@ import type { JsonRecord } from './protocol.js';
 
 export function buildListenAdapterArgs(adapterPath: string, provider: string, durationSeconds: number, _sessionId: string, calibrate: boolean): string[] {
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', adapterPath, '-DurationSeconds', String(durationSeconds)];
-  if (provider === 'remote_transcription') args.push('-RecognitionAdapter', 'openai-transcriptions');
+  if (provider === 'openai-transcription') args.push('-RecognitionAdapter', 'openai-transcriptions');
   if (calibrate) args.push('-Calibrate');
   args.push('-DisableDebugAudioCues');
   return args;

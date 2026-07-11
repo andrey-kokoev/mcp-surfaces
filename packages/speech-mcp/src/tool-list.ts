@@ -1,26 +1,25 @@
+import { listCapabilityCatalog, type Capability } from '@narada2/provider-registry';
 import { guidanceToolDefinition } from './guidance.js';
-import { CAPTURE_TRANSCRIPTION_PROVIDERS, LISTEN_PROVIDERS, MAX_LISTEN_DURATION_SECONDS, OPENAI_MODELS, OPENAI_TRANSCRIPTION_MODELS, PROVIDERS } from './constants.js';
+import { MAX_LISTEN_DURATION_SECONDS } from './constants.js';
+import type { SpeechState } from './state.js';
 
-export function listTools() {
+export function listTools(state?: SpeechState) {
   return [
     guidanceToolDefinition(),
     {
       name: 'speech_speak',
-      description: 'Speak text through the configured TTS provider (SAPI or OpenAI TTS).',
+      description: 'Speak text through the registry-resolved TTS provider. Selection is provider-rooted and defaults come from site policy or the loaded registry.',
       inputSchema: {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'Text to speak. Max 1000 characters.' },
-          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to openai_api.' },
-          voice: { type: 'string', description: 'Optional voice name for SAPI, e.g. Microsoft Zira.' },
+          selection: selectionSchema('tts', state, true),
           rate: { type: 'integer', minimum: -10, maximum: 10, description: 'Speech rate for SAPI. -10 slow to 10 fast. Default 0.' },
-          api_key: { type: 'string', description: 'OpenAI API key. Falls back to OPENAI_API_KEY env var.' },
-          model: { type: 'string', enum: OPENAI_MODELS, description: 'OpenAI TTS model. Defaults to tts-1.' },
-          speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'OpenAI speech speed. 0.25 to 4.0. Default 1.0.' },
+          speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'Provider-specific speech speed when supported. Default 1.0.' },
           speaker_agent_id: { type: 'string', description: 'Agent identity to announce before the spoken text. Defaults to NARADA_AGENT_ID when speaker announcements are enabled.' },
-          announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this call. Defaults to true at the server level.' },
-          output_path: { type: 'string', description: 'Optional local WAV path to retain the generated speech audio for NARS artifact registration.' },
-          retain_audio: { type: 'boolean', default: false, description: 'Retain generated speech audio as a WAV file. Uses output_path when provided, otherwise a temp path.' },
+          announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this call.' },
+          output_path: { type: 'string', description: 'Optional admitted local WAV path to retain generated speech audio.' },
+          retain_audio: { type: 'boolean', default: false, description: 'Retain generated speech audio as a WAV file.' },
         },
         required: ['text'],
         additionalProperties: false,
@@ -30,12 +29,10 @@ export function listTools() {
     },
     {
       name: 'speech_voices',
-      description: 'List available voices for a TTS provider. SAPI returns installed Windows voices; openai_api returns known OpenAI voices.',
+      description: 'List available voices for the registry-resolved TTS provider. Local providers return installed voices; remote providers return registry voices.',
       inputSchema: {
         type: 'object',
-        properties: {
-          provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider. Defaults to openai_api.' },
-        },
+        properties: { selection: selectionSchema('tts', state, false) },
         additionalProperties: false,
       },
       annotations: { title: 'speech_voices', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -43,21 +40,19 @@ export function listTools() {
     },
     {
       name: 'speech_listen_status',
-      description: 'Report readiness for governed microphone listening / voice command recognition and show active bounded listening sessions.',
+      description: 'Report readiness for governed microphone listening and show active bounded listening sessions.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       annotations: { title: 'speech_listen_status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
       name: 'speech_capture_transcribe',
-      description: 'Capture bounded microphone audio and return a first-class transcript result. Remote transcription requires explicit policy admission.',
+      description: 'Capture bounded microphone audio and return a transcript using the registry-resolved transcription provider. Remote egress remains policy-gated.',
       inputSchema: {
         type: 'object',
         properties: {
           duration_seconds: { type: 'integer', minimum: 1, maximum: MAX_LISTEN_DURATION_SECONDS, description: 'Maximum capture duration. Defaults to 30 seconds and is capped by server policy.' },
-          provider: { type: 'string', enum: CAPTURE_TRANSCRIPTION_PROVIDERS, description: 'Transcript-returning capture provider. Defaults to remote_transcription; local_sapi is only valid for speech_listen_start voice-intent sessions.' },
-          model: { type: 'string', enum: OPENAI_TRANSCRIPTION_MODELS, description: 'OpenAI transcription model. Defaults to policy value.' },
-          api_key: { type: 'string', description: 'OpenAI API key. Falls back to OPENAI_API_KEY env var or admitted secret lookup.' },
+          selection: selectionSchema('transcription', state, false),
           device: { type: 'string', description: 'Optional microphone device id/name passed to the local capture adapter.' },
           input_wav: { type: 'string', description: 'Optional local WAV path for deterministic transcription tests instead of live microphone capture.' },
           self_test_synthetic: { type: 'boolean', description: 'Use the adapter synthetic VAD fixture instead of live microphone capture.' },
@@ -71,24 +66,21 @@ export function listTools() {
     },
     {
       name: 'speech_prompt_capture_response',
-      description: 'Speak a prompt, wait for a bounded spoken response, and return transcript or no_response.',
+      description: 'Speak a prompt, wait for a bounded spoken response, and return transcript or no_response. TTS and transcription selections resolve independently.',
       inputSchema: {
         type: 'object',
         properties: {
           text: { type: 'string', description: 'Prompt to speak to the operator. Max 1000 characters.' },
-          tts_provider: { type: 'string', enum: PROVIDERS, description: 'TTS provider for the prompt. Defaults to openai_api.' },
-          tts_model: { type: 'string', enum: OPENAI_MODELS, description: 'OpenAI TTS model. Defaults to tts-1.' },
-          voice: { type: 'string', description: 'TTS voice. Defaults to nova for OpenAI TTS.' },
+          tts_selection: selectionSchema('tts', state, true),
+          transcription_selection: selectionSchema('transcription', state, false),
           rate: { type: 'integer', minimum: -10, maximum: 10, description: 'Speech rate for SAPI. -10 slow to 10 fast. Default 0.' },
-          speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'OpenAI speech speed. 0.25 to 4.0. Default 1.0.' },
+          speed: { type: 'number', minimum: 0.25, maximum: 4.0, description: 'Provider-specific speech speed when supported. Default 1.0.' },
           duration_seconds: { type: 'integer', minimum: 1, maximum: MAX_LISTEN_DURATION_SECONDS, description: 'Maximum response capture duration. Defaults to 30 seconds.' },
-          model: { type: 'string', enum: OPENAI_TRANSCRIPTION_MODELS, description: 'OpenAI transcription model. Defaults to policy value.' },
-          api_key: { type: 'string', description: 'OpenAI API key. Falls back to OPENAI_API_KEY env var or admitted secret lookup.' },
-          device: { type: 'string', description: 'Optional microphone device id/name passed to the local capture adapter. Defaults to auto for live capture.' },
+          device: { type: 'string', description: 'Optional microphone device id/name passed to the local capture adapter.' },
           retain_audio: { type: 'boolean', default: false, description: 'Retain bounded utterance WAV in adapter runtime storage when true.' },
           no_response_min_speech_ms: { type: 'integer', minimum: 0, description: 'Treat shorter detected speech segments as no_response. Defaults to 300 ms.' },
-          speaker_agent_id: { type: 'string', description: 'Agent identity to announce before the prompt. Defaults to NARADA_AGENT_ID when speaker announcements are enabled.' },
-          announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this prompt. Defaults to true at the server level.' },
+          speaker_agent_id: { type: 'string', description: 'Agent identity to announce before the prompt.' },
+          announce_speaker: { type: 'boolean', description: 'Override server speaker announcement policy for this prompt.' },
         },
         required: ['text'],
         additionalProperties: false,
@@ -98,12 +90,12 @@ export function listTools() {
     },
     {
       name: 'speech_listen_start',
-      description: 'Start a bounded microphone listening session through the configured local voice-intent adapter. Remote transcription requires explicit policy admission.',
+      description: 'Start a bounded microphone listening session through the registry-resolved transcription provider. Remote audio egress requires explicit policy admission.',
       inputSchema: {
         type: 'object',
         properties: {
           duration_seconds: { type: 'integer', minimum: 1, maximum: MAX_LISTEN_DURATION_SECONDS, description: 'Maximum capture duration. Defaults to 30 seconds and is capped by server policy.' },
-          provider: { type: 'string', enum: LISTEN_PROVIDERS, description: 'Recognition provider. Defaults to local_sapi. remote_transcription requires policy admission.' },
+          selection: selectionSchema('transcription', state, false),
           calibrate: { type: 'boolean', description: 'Ask the adapter to perform calibration/readiness checks before capture when supported.' },
           session_id: { type: 'string', description: 'Optional caller-provided session id. Generated when omitted.' },
         },
@@ -117,13 +109,26 @@ export function listTools() {
       description: 'Stop one active microphone listening session, or all sessions when session_id is omitted.',
       inputSchema: {
         type: 'object',
-        properties: {
-          session_id: { type: 'string', description: 'Listening session id to stop. Omit to stop all active sessions.' },
-        },
+        properties: { session_id: { type: 'string', description: 'Listening session id to stop. Omit to stop all active sessions.' } },
         additionalProperties: false,
       },
       annotations: { title: 'speech_listen_stop', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
   ];
+}
+
+function selectionSchema(capability: Capability, state: SpeechState | undefined, includeVoice: boolean): Record<string, unknown> {
+  return {
+    type: 'object',
+    description: `Optional provider-rooted ${capability} selection. Omit fields to use site policy, then registry defaults.`,
+    properties: {
+      provider: { type: 'string', description: 'Canonical provider id from the loaded registry.' },
+      model: { type: 'string', description: 'Model id within the selected provider.' },
+      ...(includeVoice ? { voice: { type: 'string', description: 'Voice id from the selected provider/model registry record.' } } : {}),
+    },
+    additionalProperties: false,
+    'x-narada-capability': capability,
+    'x-narada-registry-catalog': state ? listCapabilityCatalog(state.providerRegistry, capability) : [],
+  };
 }

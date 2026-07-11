@@ -123,6 +123,7 @@ type CarrierDef = {
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
+const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
 
 const GIT_TOOLS = ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
 const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
@@ -352,7 +353,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'speech', package: 'speech-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: [],
+    args: ['--provider-registry-path', SPEECH_PROVIDER_REGISTRY_PATH],
     tools: ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     injection_scope: 'host',
     default_injection: 'all_carrier_sessions',

@@ -187,6 +187,7 @@ try {
   assert.equal((speech.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
   assert.equal((speech.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.equal(speech.default_injection, 'all_carrier_sessions');
+  assert.deepEqual(speech.args, ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
   assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
   const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
@@ -691,6 +692,8 @@ try {
   const materializedConfig = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
   const materializedFilesystem = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
   assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
+  const materializedSpeechConfig = materializedConfig.mcpServers['narada-site-andrey-user-speech'];
+  assert.deepEqual(materializedSpeechConfig.args.slice(-2), ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
   for (const carrierId of ['codex-andrey', 'kimi-andrey', 'opencode-andrey']) {
     const generatedPath = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
     view(await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: generatedPath }));
@@ -775,7 +778,7 @@ try {
       package: 'speech-mcp',
       entrypoint: 'D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js',
       kind: 'mcp_surface',
-      args: [],
+      args: ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
       tools: ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     },
   );
@@ -856,7 +859,7 @@ try {
       'staccato-speech': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js'],
+        args: ['D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js', '--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json'],
         narada_scope: {
           injection_scope: 'host',
           authority_locus: { kind: 'host' },

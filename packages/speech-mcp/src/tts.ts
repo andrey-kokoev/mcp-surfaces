@@ -4,8 +4,9 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
+import { listCapabilityCatalog, resolveCapabilitySelection, type ResolvedCapabilitySelection } from '@narada2/provider-registry';
 import { withAudibleOutput } from './audible-output.js';
-import { OPENAI_TTS_URL, OPENAI_VOICES, PROVIDERS } from './constants.js';
+import { OPENAI_TTS_URL } from './constants.js';
 import { diagnosticError } from './diagnostics.js';
 import type { JsonRecord } from './protocol.js';
 import { resolveOpenAiApiKey } from './secrets.js';
@@ -14,16 +15,33 @@ import { clamp, firstString, integer, optionalString, requiredString } from './v
 
 export async function speechSpeak(args: JsonRecord, state: SpeechState): Promise<JsonRecord> {
   const text = requiredString(args.text, 'speech_requires_text').slice(0, state.maxTextLength);
-  const provider = optionalString(args.provider) ?? state.provider;
-  if (!PROVIDERS.includes(provider as typeof PROVIDERS[number])) throw diagnosticError('speech_invalid_provider', `speech_invalid_provider:${provider}`, { allowed: PROVIDERS });
+  rejectLegacySelectionArgs(args, 'speech_speak');
+  const selection = resolveCapabilitySelection({ registry: state.providerRegistry, capability: 'tts', selection: args.selection, sitePolicy: state.capabilityPolicy });
+  const provider = selection.provider;
   const speakerAnnouncement = resolveSpeakerAnnouncement(args, state);
   const spokenText = speakerAnnouncement.announced ? `${speakerAnnouncement.prefix_text} ${text}` : text;
-  return await withAudibleOutput(state, { kind: 'speech_speak', provider, text_length: text.length, spoken_text_length: spokenText.length, speaker_announcement: speakerAnnouncement }, async () => {
+  return await withAudibleOutput(state, { kind: 'speech_speak', provider, resolved_selection: publicSelection(selection), text_length: text.length, spoken_text_length: spokenText.length, speaker_announcement: speakerAnnouncement }, async () => {
     const spoken = state.audibleOutputForTest
-      ? await state.audibleOutputForTest({ kind: 'speech_speak', provider, text: spokenText, requested_text: text, speaker_announcement: speakerAnnouncement })
-      : await speechSpeakUnqueued(args, state, text, provider, speakerAnnouncement);
-    return { ...spoken, requested_text_length: text.length, spoken_text_length: spokenText.length, speaker_announcement: speakerAnnouncement };
+      ? await state.audibleOutputForTest({ kind: 'speech_speak', provider, text: spokenText, requested_text: text, resolved_selection: publicSelection(selection), speaker_announcement: speakerAnnouncement })
+      : await speechSpeakUnqueued(args, state, text, selection, speakerAnnouncement);
+    return { ...spoken, resolved_selection: publicSelection(selection), selection_source: selection.source, selection_warnings: selection.warnings, requested_text_length: text.length, spoken_text_length: spokenText.length, speaker_announcement: speakerAnnouncement };
   });
+}
+
+function rejectLegacySelectionArgs(args: JsonRecord, tool: string): void {
+  const legacy = ['provider', 'model', 'voice', 'api_key'].find((name) => args[name] !== undefined);
+  if (legacy) throw diagnosticError('speech_legacy_selection_argument', `speech_legacy_selection_argument:${legacy}`, { tool, argument: legacy, remediation: 'Use selection:{provider,model,voice}; credentials are resolved by policy.' });
+}
+
+function publicSelection(selection: ResolvedCapabilitySelection): JsonRecord {
+  return {
+    provider: selection.provider,
+    model: selection.model,
+    capability: selection.capability,
+    adapter: selection.adapter,
+    ...(selection.voice ? { voice: selection.voice } : {}),
+    status: selection.status,
+  };
 }
 
 function retainedSpeechAudioPath(args: JsonRecord): string | null {
@@ -70,10 +88,10 @@ function resolveSpeakerAnnouncement(args: JsonRecord, state: SpeechState): JsonR
   };
 }
 
-async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: string, provider: string, speakerAnnouncement: JsonRecord): Promise<JsonRecord> {
-  const speakerAnnouncementAudio = speakerAnnouncement.announced ? await playSpeakerAnnouncement(args, state, provider, speakerAnnouncement) : null;
-  if (provider === 'sapi') {
-    const voice = optionalString(args.voice);
+async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: string, selection: ResolvedCapabilitySelection, speakerAnnouncement: JsonRecord): Promise<JsonRecord> {
+  const speakerAnnouncementAudio = speakerAnnouncement.announced ? await playSpeakerAnnouncement(args, state, selection, speakerAnnouncement) : null;
+  if (selection.adapter === 'sapi') {
+    const voice = selection.voice ?? null;
     const rate = clamp(integer(args.rate, 0, -10, 10), -10, 10);
     const retainedAudioPath = retainedSpeechAudioPath(args);
     const spoken = retainedAudioPath
@@ -81,42 +99,44 @@ async function speechSpeakUnqueued(args: JsonRecord, state: SpeechState, text: s
       : sapiSpeak(text, voice, rate);
     return { ...spoken, speaker_announcement_audio: speakerAnnouncementAudio };
   }
-  if (provider === 'openai_api') {
-    const apiKey = resolveOpenAiApiKey(args, state);
-    if (!apiKey) throw diagnosticError('speech_openai_no_key', 'speech_openai_no_key: provide api_key or set OPENAI_API_KEY');
-    const voice = optionalString(args.voice) ?? 'nova';
-    const model = optionalString(args.model) ?? 'tts-1';
+  if (selection.adapter === 'openai-tts') {
+    const apiKey = resolveOpenAiApiKey(state, selection.provider);
+    if (!apiKey) throw diagnosticError('speech_provider_no_key', `speech_provider_no_key:${selection.provider}`, { provider: selection.provider, remediation: 'Configure the provider secret through the governed secret store or an admitted provider environment variable.' });
+    const voice = selection.voice;
+    if (!voice) throw diagnosticError('speech_provider_voice_required', `speech_provider_voice_required:${selection.provider}/${selection.model}`);
+    const model = selection.model;
     const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0;
     return { ...await openaiSpeak(apiKey, text, voice, model, speed, retainedSpeechAudioPath(args)), speaker_announcement_audio: speakerAnnouncementAudio };
   }
-  throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${provider}`);
+  throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${selection.provider}`, { adapter: selection.adapter });
 }
 
-async function playSpeakerAnnouncement(args: JsonRecord, state: SpeechState, provider: string, speakerAnnouncement: JsonRecord): Promise<JsonRecord> {
+async function playSpeakerAnnouncement(args: JsonRecord, state: SpeechState, selection: ResolvedCapabilitySelection, speakerAnnouncement: JsonRecord): Promise<JsonRecord> {
   const prefixText = requiredString(speakerAnnouncement.prefix_text, 'speech_speaker_announcement_prefix_missing');
   mkdirSync(state.announcementCacheDir, { recursive: true });
-  if (provider === 'sapi') {
-    const voice = optionalString(args.voice);
+  if (selection.adapter === 'sapi') {
+    const voice = selection.voice ?? null;
     const rate = clamp(integer(args.rate, 0, -10, 10), -10, 10);
-    const cache = announcementCachePath(state, { provider, voice: voice ?? 'default', rate, prefix_text: prefixText });
+    const cache = announcementCachePath(state, { provider: selection.provider, model: selection.model, voice: voice ?? 'default', rate, prefix_text: prefixText });
     const cacheHit = existsSync(cache.path);
     if (!cacheHit) sapiWriteSpeechWav(prefixText, voice, rate, cache.path);
     await playWavFile(cache.path);
-    return { status: 'played', provider, cache_status: cacheHit ? 'hit' : 'miss', cache_key: cache.key, path: cache.path, voice: voice ?? 'default', rate, prefix_text: prefixText };
+    return { status: 'played', provider: selection.provider, model: selection.model, cache_status: cacheHit ? 'hit' : 'miss', cache_key: cache.key, path: cache.path, voice: voice ?? 'default', rate, prefix_text: prefixText };
   }
-  if (provider === 'openai_api') {
-    const apiKey = resolveOpenAiApiKey(args, state);
-    if (!apiKey) throw diagnosticError('speech_openai_no_key', 'speech_openai_no_key: provide api_key or set OPENAI_API_KEY');
-    const voice = optionalString(args.voice) ?? 'nova';
-    const model = optionalString(args.model) ?? 'tts-1';
+  if (selection.adapter === 'openai-tts') {
+    const apiKey = resolveOpenAiApiKey(state, selection.provider);
+    if (!apiKey) throw diagnosticError('speech_provider_no_key', `speech_provider_no_key:${selection.provider}`, { provider: selection.provider });
+    const voice = selection.voice;
+    if (!voice) throw diagnosticError('speech_provider_voice_required', `speech_provider_voice_required:${selection.provider}/${selection.model}`);
+    const model = selection.model;
     const speed = typeof args.speed === 'number' && Number.isFinite(args.speed) ? args.speed : 1.0;
-    const cache = announcementCachePath(state, { provider, voice, model, speed, prefix_text: prefixText });
+    const cache = announcementCachePath(state, { provider: selection.provider, voice, model, speed, prefix_text: prefixText });
     const cacheHit = existsSync(cache.path);
     if (!cacheHit) await openaiWriteSpeechWav(apiKey, prefixText, voice, model, speed, cache.path);
     await playWavFile(cache.path);
-    return { status: 'played', provider, cache_status: cacheHit ? 'hit' : 'miss', cache_key: cache.key, path: cache.path, voice, model, speed, prefix_text: prefixText };
+    return { status: 'played', provider: selection.provider, cache_status: cacheHit ? 'hit' : 'miss', cache_key: cache.key, path: cache.path, voice, model, speed, prefix_text: prefixText };
   }
-  throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${provider}`);
+  throw diagnosticError('speech_provider_not_implemented', `speech_provider_not_implemented:${selection.provider}`, { adapter: selection.adapter });
 }
 
 function announcementCachePath(state: SpeechState, parts: JsonRecord): { key: string; path: string } {
@@ -158,7 +178,7 @@ function openaiSpeak(apiKey: string, text: string, voice: string, model: string,
   return openaiWriteSpeechWav(apiKey, text, voice, model, speed, wavPath).then(async () => {
     try {
       await playWavFile(wavPath);
-      return { status: 'spoken', provider: 'openai_api', text_length: text.length, voice, model, speed, ...(retainedAudioPath ? { retained_audio: { path: retainedAudioPath, content_type: 'audio/wav' } } : {}) };
+      return { status: 'spoken', provider: 'openai-api', text_length: text.length, voice, model, speed, ...(retainedAudioPath ? { retained_audio: { path: retainedAudioPath, content_type: 'audio/wav' } } : {}) };
     } finally {
       if (!retainedAudioPath) try { unlinkSync(wavPath); } catch { /* stale */ }
     }
@@ -227,15 +247,18 @@ function playWavFile(wavPath: string): Promise<void> {
   });
 }
 
-export function speechVoices(args: JsonRecord, _state: SpeechState): JsonRecord {
-  const provider = optionalString(args.provider) ?? 'openai_api';
-  if (provider === 'openai_api') {
-    return { status: 'ok', provider: 'openai_api', voices: OPENAI_VOICES.slice(), count: OPENAI_VOICES.length };
+export function speechVoices(args: JsonRecord, state: SpeechState): JsonRecord {
+  rejectLegacySelectionArgs(args, 'speech_voices');
+  const selection = resolveCapabilitySelection({ registry: state.providerRegistry, capability: 'tts', selection: args.selection, sitePolicy: state.capabilityPolicy });
+  if (selection.adapter === 'openai-tts') {
+    const catalog = listCapabilityCatalog(state.providerRegistry, 'tts').find((item) => item.provider === selection.provider && item.model === selection.model);
+    const voices = Array.isArray(catalog?.voices) ? catalog.voices : [];
+    return { status: 'ok', provider: selection.provider, model: selection.model, resolved_selection: publicSelection(selection), selection_source: selection.source, voices, count: voices.length };
   }
   const result = execPowershell('Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }');
   if (result.exitCode !== 0) throw diagnosticError('speech_sapi_failed', `speech_sapi_failed:${result.exitCode}`, { stderr: result.stderr });
   const voices = result.stdout.trim().split(/\r?\n/).filter(Boolean);
-  return { status: 'ok', provider: 'sapi', voices, count: voices.length };
+  return { status: 'ok', provider: selection.provider, model: selection.model, resolved_selection: publicSelection(selection), selection_source: selection.source, voices, count: voices.length };
 }
 
 export function playListenCue(state: SpeechState, phase: 'start' | 'end'): void {

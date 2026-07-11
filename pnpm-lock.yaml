@@ -50,6 +50,9 @@ importers:
 
   packages/delegated-task-mcp:
     dependencies:
+      '@narada2/execution-contract':
+        specifier: workspace:*
+        version: link:../shared/execution-contract
       '@narada2/worker-delegation-mcp':
         specifier: workspace:*
         version: link:../worker-delegation-mcp
@@ -125,6 +128,8 @@ importers:
 
   packages/scheduler-mcp: {}
 
+  packages/shared/execution-contract: {}
+
   packages/shared/mcp-affordances: {}
 
   packages/shared/mcp-runtime-proxy: {}
@@ -132,6 +137,12 @@ importers:
   packages/shared/mcp-telemetry: {}
 
   packages/shared/mcp-transport:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
+  packages/shared/provider-registry:
     dependencies:
       zod:
         specifier: ^4.4.3
@@ -184,7 +195,11 @@ importers:
         specifier: ^4.0.9
         version: 4.0.9
 
-  packages/speech-mcp: {}
+  packages/speech-mcp:
+    dependencies:
+      '@narada2/provider-registry':
+        specifier: workspace:*
+        version: link:../shared/provider-registry
 
   packages/structured-command-mcp:
     dependencies:
@@ -196,6 +211,9 @@ importers:
 
   packages/task-lifecycle-mcp:
     dependencies:
+      '@narada2/execution-contract':
+        specifier: workspace:*
+        version: link:../shared/execution-contract
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport

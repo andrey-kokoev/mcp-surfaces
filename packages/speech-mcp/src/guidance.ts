@@ -1,3 +1,6 @@
+import { listCapabilityCatalog } from '@narada2/provider-registry';
+import type { SpeechState } from './state.js';
+
 export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & { name: string; description: string; inputSchema: GuidanceRecord; annotations: GuidanceRecord; outputSchema: GuidanceRecord };
 
@@ -5,7 +8,7 @@ const SURFACE_ID = "speech";
 const GUIDANCE_TOOL = "speech_guidance";
 const PURPOSE = "Host-level TTS, bounded capture, transcription, and prompt-response speech workflows.";
 
-export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
+export function buildGuidanceResult(args: GuidanceRecord = {}, state?: SpeechState): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
   const tool = typeof args.tool === 'string' && args.tool.trim() ? args.tool.trim() : null;
   return {
@@ -15,9 +18,22 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
+    provider_registry: state ? {
+      path: state.providerRegistryPath,
+      schema: 'narada.provider_registry.v2',
+      defaults: state.providerRegistry.defaults,
+      capabilities: {
+        tts: listCapabilityCatalog(state.providerRegistry, 'tts'),
+        transcription: listCapabilityCatalog(state.providerRegistry, 'transcription'),
+        llm: listCapabilityCatalog(state.providerRegistry, 'llm'),
+      },
+      precedence: ['request.selection', 'site_policy', 'registry.defaults'],
+      result_fields: ['resolved_selection', 'selection_source', 'selection_warnings'],
+    } : { status: 'unavailable', remediation: 'Start the speech surface with an explicit --provider-registry-path.' },
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
+      'Use registry-backed selection objects for provider/model/voice choices; do not send legacy flat provider, model, voice, or api_key fields.',
       'Use bounded list/search/query tools for discovery, then show/read/detail tools before acting on a specific object.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.'
     ],
