@@ -53,6 +53,10 @@ importers:
       '@narada2/worker-delegation-mcp':
         specifier: workspace:*
         version: link:../worker-delegation-mcp
+    devDependencies:
+      c8:
+        specifier: ^11.0.0
+        version: 11.0.0
 
   packages/git-mcp:
     dependencies:
@@ -127,7 +131,11 @@ importers:
 
   packages/shared/mcp-telemetry: {}
 
-  packages/shared/mcp-transport: {}
+  packages/shared/mcp-transport:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/site-coherence-mcp:
     dependencies:

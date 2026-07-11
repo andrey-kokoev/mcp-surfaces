@@ -20,9 +20,8 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       inputSchema: objectSchema({
         ref: { type: 'string', description: 'Materialized output ref, e.g. mcp_output:<id>. Alias: output_ref.' },
         output_ref: { type: 'string', description: 'Alias for ref.' },
-        target_site_root: { type: 'string', description: 'Optional target site root for cross-site materialized output readback.' },
         offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
-        limit: { type: 'integer', default: 10000, description: 'Maximum output characters to return.' },
+        limit: { type: 'integer', default: 10000, minimum: 1, maximum: 20000, description: 'Maximum output characters to return; the transport hard-caps this value.' },
       }),
     },
     {

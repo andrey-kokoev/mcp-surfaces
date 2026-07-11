@@ -186,7 +186,7 @@ function gitOutputShow(args: Record<string, unknown>, state: GitMcpState) {
       output_scope: {
         reader_tool: 'git_output_show',
         server_output_root: state.outputRoot,
-        target_site_root: typeof args.target_site_root === 'string' && args.target_site_root.trim() ? resolve(args.target_site_root) : null,
+        scope: 'bound_server_output_root',
       },
     };
   } catch (error) {
@@ -194,21 +194,12 @@ function gitOutputShow(args: Record<string, unknown>, state: GitMcpState) {
     throw diagnosticError('git_output_ref_scope_unreadable', message, {
       output_root: state.outputRoot,
       requested_ref: args.ref ?? args.output_ref ?? null,
-      target_site_root: typeof args.target_site_root === 'string' && args.target_site_root.trim() ? resolve(args.target_site_root) : null,
-      remediation: 'Use the same Git MCP server/output root that created the output_ref, or pass target_site_root when the materialized output belongs to another site root that is allowed by this reader.',
+      remediation: 'Use the same Git MCP server/output root that created the output_ref; cross-site filesystem roots are not accepted by the shared transport reader.',
     });
   }
 }
 
 function toolResult(value: unknown, state: GitMcpState, toolName: string) {
-  const text = renderToolResultText(value);
-  if (asRecord(value).schema === 'narada.mcp_output_page.v1') {
-    return { content: [assistantTextContent(text)], structuredContent: value };
-  }
-  const structuredText = JSON.stringify(value, null, 2);
-  if (utf8ByteLength(text) <= INLINE_RESULT_BYTE_LIMIT && utf8ByteLength(structuredText) <= INLINE_RESULT_BYTE_LIMIT) {
-    return { content: [assistantTextContent(text)], structuredContent: value };
-  }
   return buildOutputRefToolContent({
     siteRoot: state.outputRoot,
     toolName,

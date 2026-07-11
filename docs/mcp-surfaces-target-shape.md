@@ -41,6 +41,48 @@ See `mcp-output-refusal-conventions.md` for the cross-surface output reference,
 payload reference, and refusal conventions that support these invariants without
 forcing all surfaces into one domain schema.
 
+## Shared Transport Contract
+
+`@narada2/mcp-transport` is a reusable substrate, but each instance is bound to
+one site authority scope. The transport package may materialize and read payload
+or output references for that bound scope; it must not turn local filesystem
+reachability into cross-site authority.
+
+The target contract is:
+
+- A server constructs one explicit transport scope containing the bound site
+  root, managed payload/output roots, and separate storage and inline-response
+  limits. Tool calls do not supply replacement roots or arbitrary managed
+  directories.
+- Output pages are always bounded by a hard serialized-response budget. Stored
+  output size, page size, and inline envelope size are distinct limits. Invalid
+  page sizes, including zero, are refused rather than silently expanded or
+  treated as complete.
+- Pagination uses a validated cursor or another explicitly Unicode-safe position
+  model. A page reports a continuation whenever content remains. Tool content,
+  `structuredContent`, and resource readback use the same bounded page contract.
+- Payload and output revisions are immutable under concurrent writers. Creation
+  is exclusive/atomic; identical retries are idempotent, while conflicting
+  content for an existing revision is refused. Recorded byte sizes equal the
+  actual UTF-8 bytes stored.
+- All successful result paths use one bounded result builder. Inline and
+  materialized responses preserve the same structured envelope and deterministic
+  rendered text; no helper may bypass the response budget.
+
+### Cross-Site Boundary
+
+The shared transport contract does not expose a raw `target_site_root` or any
+equivalent path-based cross-site reader. Cross-site data movement, when needed,
+belongs to an explicitly authorized User Site or artifact/export surface. That
+surface identifies the source site, establishes the authority basis, records the
+handoff, and gives the receiving site an owned bounded copy or explicit
+capability. A local transport reader must never infer that authority from a
+second path being readable on the same machine.
+
+These rules are implementation acceptance criteria for transport changes. The
+package README summarizes them; this section is the canonical package-level
+target and should be used to derive implementation tasks and regression tests.
+
 ## Boundary Rules By Package Family
 
 - `mcp-transport` owns generic payload and output-reference mechanics only. It must not acquire task lifecycle, mail, git, or worker domain behavior.
@@ -157,3 +199,5 @@ These candidates are intentionally phrased as task payload material. Before crea
 - Surfaces: `local-filesystem-mcp`, `structured-command-mcp`, `git-mcp`, `worker-delegation-mcp`, `task-lifecycle-mcp`.
 - Public behavior: document and test common output/ref/refusal conventions without forcing all surfaces into one domain schema.
 - Tests: package-local tests for touched surfaces plus root `pnpm test` if shared transport helpers change.
+
+The reference implementation uses Zod at the transport boundary for scope, page, and argument-shape validation. Validation is part of the authority boundary, not an optional convenience for individual surfaces. Compatibility entry points may accept legacy root fields temporarily, but an explicit scope and legacy overrides are mutually exclusive.

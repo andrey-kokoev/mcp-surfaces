@@ -24,6 +24,7 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.git.workflow_record.v1') return renderWorkflowRecord(record);
   if (record.schema === 'narada.git.diff.v1') return renderPatchResult('git_diff', record, 'diff');
   if (record.schema === 'narada.git.add.v1') return renderMutation('git_add', record);
+  if (record.schema === 'narada.git.unstage.v1') return renderMutation('git_unstage', record);
   if (record.schema === 'narada.git.commit.v1') return renderMutation('git_commit', record);
   if (record.schema === 'narada.git.push.v1') return renderMutation('git_push', record);
   if (record.schema === 'narada.git.log.v1') return renderLog(record);

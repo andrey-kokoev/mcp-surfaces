@@ -121,8 +121,12 @@ const policy = await rpc({
 }, state);
 assert.equal(policy.result?.structuredContent.mode, 'write');
 assert.equal(policy.result?.structuredContent.max_output_bytes, 2 * 1024 * 1024);
-assert.match(policy.result?.content[0].text, /git_policy: ok/);
-assert.match(policy.result?.content[0].text, /mode: write/);
+const policyDocument = JSON.parse(policy.result?.content[0].text ?? '{}') as {
+  schema?: string;
+  mode?: string;
+};
+assert.equal(policyDocument.schema, 'narada.git.policy.v1');
+assert.equal(policyDocument.mode, 'write');
 
 let status = await gitStatus({ working_directory: repo }, state);
 assert.equal(status.clean, true);
@@ -197,9 +201,16 @@ const stagedDiff = await gitDiff({ working_directory: repo, scope: 'staged' }, s
 assert.match(stagedDiff.diff, /README\.md/);
 assert.match(stagedDiff.diff, /\+hello/);
 
-const unstageResult = await gitUnstage({ working_directory: repo, paths: ['README.md'] }, state);
-assert.deepEqual((unstageResult.post_status as any).staged, []);
-assert.deepEqual((unstageResult.post_status as any).unstaged, []);
+const unstageResponse = await rpc({
+  jsonrpc: '2.0',
+  id: 27,
+  method: 'tools/call',
+  params: { name: 'git_unstage', arguments: { working_directory: repo, paths: ['README.md'] } },
+}, state);
+assert.equal(unstageResponse.error, undefined);
+assert.equal(unstageResponse.result?.structuredContent.schema, 'narada.git.unstage.v1');
+assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).staged, []);
+assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).unstaged, []);
 await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 
 const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit' }, state);
@@ -348,9 +359,6 @@ const statusCall = await rpc({
   method: 'tools/call',
   params: { name: 'git_status', arguments: { working_directory: repo } },
 }, state);
-assert.match(statusCall.result?.content[0].text, /git_status: ok/);
-assert.match(statusCall.result?.content[0].text, /clean: false/);
-assert.match(statusCall.result?.content[0].text, /untracked: 2/);
 assert.equal(statusCall.result?.structuredContent.clean, false);
 
 const outside = await rpc({
@@ -399,8 +407,6 @@ const commitCall = await rpc({
   method: 'tools/call',
   params: { name: 'git_commit', arguments: { working_directory: repo, message: 'Summary commit' } },
 }, state);
-assert.match(commitCall.result?.content[0].text, /git_commit: ok/);
-assert.match(commitCall.result?.content[0].text, /committed_files: 1/);
 assert.match(commitCall.result?.content[0].text, /summary\.txt/);
 
 const pushCall = await rpc({
@@ -409,9 +415,6 @@ const pushCall = await rpc({
   method: 'tools/call',
   params: { name: 'git_push', arguments: { working_directory: repo, remote: 'origin', branch: currentBranch(repo) } },
 }, state);
-assert.match(pushCall.result?.content[0].text, /git_push: ok/);
-assert.match(pushCall.result?.content[0].text, /effective_remote: origin/);
-assert.match(pushCall.result?.content[0].text, /effective_branch: main/);
 
 writeFileSync(join(repo, 'RENAMED.md'), `${'changed\n'.repeat(2_300_000)}`, 'utf8');
 const materialized = await rpc({
@@ -443,12 +446,12 @@ assert.equal(largeInlineDiff.result?.structuredContent.schema, 'narada.producer_
 assert.equal(largeInlineDiff.result?.structuredContent.result_materialized, true);
 assert.equal(largeInlineDiff.result?.structuredContent.reader_tool, 'git_output_show');
 assert.match(String(largeInlineDiff.result?.structuredContent.output_ref), /^mcp_output:/);
-assert.match(String(largeInlineDiff.result?.structuredContent.remediation), /original tool's own next_offset/);
+assert.match(String(largeInlineDiff.result?.structuredContent.remediation), /bounded produced JSON pages/);
 const shownLargeInlineDiff = await rpc({
   jsonrpc: '2.0',
   id: 72,
   method: 'tools/call',
-  params: { name: 'git_output_show', arguments: { ref: largeInlineDiff.result?.structuredContent.output_ref, limit: 30000 } },
+  params: { name: 'git_output_show', arguments: { ref: largeInlineDiff.result?.structuredContent.output_ref, limit: 20000 } },
 }, state);
 assert.equal(shownLargeInlineDiff.result?.structuredContent.schema, 'narada.mcp_output_page.v1');
 assert.equal(shownLargeInlineDiff.result?.structuredContent.output_scope.reader_tool, 'git_output_show');
@@ -460,11 +463,19 @@ const missingOutputRef = await rpc({
   jsonrpc: '2.0',
   id: 73,
   method: 'tools/call',
-  params: { name: 'git_output_show', arguments: { ref: 'mcp_output:missing', target_site_root: join(root, 'other-site') } },
+  params: { name: 'git_output_show', arguments: { ref: 'mcp_output:missing' } },
 }, state);
 assert.equal(missingOutputRef.error?.data.code, 'git_output_ref_scope_unreadable');
 assert.equal(missingOutputRef.error?.data.details.output_root, root);
 assert.match(missingOutputRef.error?.data.details.remediation, /same Git MCP server/);
+const foreignRootAttempt = await rpc({
+  jsonrpc: '2.0',
+  id: 74,
+  method: 'tools/call',
+  params: { name: 'git_output_show', arguments: { ref: 'mcp_output:missing', target_site_root: join(root, 'other-site') } },
+}, state);
+assert.equal(foreignRootAttempt.error?.data.code, 'git_output_ref_scope_unreadable');
+assert.match(foreignRootAttempt.error?.data.message, /target_site_root_not_supported/);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });

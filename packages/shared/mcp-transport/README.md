@@ -13,6 +13,11 @@ This package is not an MCP server. It provides reusable helpers used by MCP surf
 
 Domain packages should keep their own schemas and admission rules. This package only handles transport mechanics.
 
+The canonical package-level target is documented in
+`docs/mcp-surfaces-target-shape.md`. In particular, a transport instance is
+bound to one site authority scope. It must not treat a caller-supplied site
+root as authority or provide ambient cross-site output access.
+
 ## Payload Refs
 
 Payload helpers support two inbound forms for tools that explicitly allow them:
@@ -42,7 +47,16 @@ Materialized results are addressed as:
 mcp_output:<id>
 ```
 
-Separate generic output-reader tools are not exposed. Surfaces that produce large output should provide their own paging arguments on the producing tool, or expose MCP resources when resource readback is explicitly part of that surface.
+Output readers, when exposed by a surface, must remain bound to the same
+transport scope that materialized the output. They must use bounded paging and
+must not accept a raw `target_site_root` or equivalent path override. Cross-site
+transfer belongs to an explicitly authorized User Site or artifact/export
+surface, not to this package.
+
+The default output page is 10,000 characters and the hard request maximum is
+20,000 characters. The serialized inline response is bounded separately from
+stored output, and MCP resource reads return bounded pages rather than the full
+materialized record.
 
 ## Exports
 
@@ -56,10 +70,19 @@ Primary helper areas:
 - enforce inline payload limits.
 - write materialized output refs.
 - list/read output resources.
-- render compact, deterministic MCP text content while preserving `structuredContent` as the authoritative payload.
+- render compact, deterministic MCP text content while preserving
+  `structuredContent` as the authoritative payload.
 
 ## Verification
 
 ```powershell
 pnpm --filter @narada2/mcp-transport test
 ```
+
+## Runtime Contract
+
+Construct a `McpTransportScope` once per MCP server with `createTransportScope` and pass that scope to payload/output helpers. The scope resolves the site root and managed directories, validates byte limits with Zod, and is immutable for the lifetime of the request path. Legacy root arguments remain only as a compatibility boundary for existing callers; they cannot be combined with an explicit scope.
+
+Output hashes use generic canonical JSON for integrity, while rendered output preserves the producer's field order. The shared package must not encode domain-specific field priorities. Output/resource pages are bounded and resource listing is paged; callers must continue from `next_offset` rather than requesting an unbounded listing.
+
+Immutable records are published through an fsynced temporary file and an exclusive hard-link publish. A competing writer either observes the complete immutable record or receives the existing-file conflict; it must never observe a destination that is still being written.

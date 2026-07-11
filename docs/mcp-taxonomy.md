@@ -53,3 +53,8 @@ These are Narada-owned infrastructure surfaces that can feel generic because the
 - Treat generic surfaces as reusable substrate unless a package doc says otherwise.
 - Treat Narada-specific surfaces as control-plane or site-owned surfaces unless a package doc explicitly says they are portable.
 - When in doubt, follow the package README and the injection-scope doctrine in `docs/mcp-injection-scopes.md`.
+
+`@narada2/mcp-transport` is generic substrate with a single bound site scope. It
+must not provide ambient cross-site filesystem reads. Cross-site transfer belongs
+to an explicitly authorized User Site or artifact/export surface; see the
+transport contract in `docs/mcp-surfaces-target-shape.md`.

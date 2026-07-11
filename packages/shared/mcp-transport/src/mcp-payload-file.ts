@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 
 const DEFAULT_MAX_BYTES = 256 * 1024;
 const DEFAULT_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
@@ -10,6 +11,12 @@ const DEFAULT_WORKSPACE_DIR = 'workspace';
 export const DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT = 20_000;
 export const DEFAULT_INLINE_OUTPUT_CHAR_LIMIT = 2_000;
 export const DEFAULT_OUTPUT_SHOW_CHAR_LIMIT = 10_000;
+export const MAX_OUTPUT_SHOW_CHAR_LIMIT = 20_000;
+const MAX_OUTPUT_PAGE_BYTES = 12 * 1024;
+const MAX_INLINE_RESPONSE_BYTES = 32 * 1024;
+const MIN_INLINE_OUTPUT_CHAR_LIMIT = 512;
+const DEFAULT_RESOURCE_PAGE_LIMIT = 100;
+const MAX_RESOURCE_PAGE_LIMIT = 1_000;
 const REF_PATTERN = /^mcp_payload:([A-Za-z0-9][A-Za-z0-9_-]{2,63})@v([1-9][0-9]*)$/;
 const OUTPUT_REF_PATTERN = /^mcp_output:([A-Za-z0-9][A-Za-z0-9_-]{2,63})$/;
 const DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS = new Set([
@@ -27,7 +34,6 @@ const DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS = new Set([
   'identity_name',
   'surface_id',
   'hwnd',
-  'target_site_root',
 ]);
 const DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS = new Set([
   'payload',
@@ -42,16 +48,155 @@ const DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS = new Set([
   'scope',
 ]);
 
+export type McpTransportScope = Readonly<{
+  siteRoot: string;
+  payloadDir: string;
+  outputDir: string;
+  maxPayloadBytes: number;
+  maxOutputBytes: number;
+}>;
+
+type TransportScopeOptions = {
+  scope?: McpTransportScope;
+  siteRoot?: string;
+  payloadDir?: string;
+  outputDir?: string;
+  maxBytes?: number;
+  maxPayloadBytes?: number;
+  maxOutputBytes?: number;
+};
+
+type PayloadResolutionOptions = TransportScopeOptions & {
+  toolName: string;
+  args: unknown;
+  allowedTools: string[];
+  payloadRefMode?: string;
+};
+
+type PayloadWorkspaceOptions = TransportScopeOptions & {
+  args?: unknown;
+};
+
+type PayloadPruneOptions = TransportScopeOptions & {
+  payloadIdPrefix: string;
+  maxEntries: number;
+  maxAgeMs: number;
+  now?: number;
+};
+
+type OutputCreateOptions = TransportScopeOptions & {
+  toolName: string;
+  value: unknown;
+  fullText: string;
+  inlineLimit: number;
+  createdBy: string | null;
+};
+
+type OutputReadOptions = TransportScopeOptions & {
+  ref: string;
+};
+
+type PayloadReadOptions = TransportScopeOptions & {
+  ref: string;
+};
+
+type RevisionWriteOptions = TransportScopeOptions & {
+  record: Record<string, unknown>;
+};
+
+type OutputBuilderOptions = TransportScopeOptions & {
+  toolName?: string;
+  value?: unknown;
+  isError?: boolean;
+  limit?: number;
+  outputPageLimit?: number;
+  createdBy?: string | null;
+  readerTool?: string;
+};
+
+type OutputShowOptions = TransportScopeOptions & {
+  args?: unknown;
+};
+
+type OutputResourceListOptions = TransportScopeOptions & {
+  cursor?: unknown;
+  offset?: unknown;
+  limit?: unknown;
+};
+
+type OutputResourceReadOptions = TransportScopeOptions & {
+  uri?: unknown;
+};
+
+const transportScopeInputSchema = z.object({
+  siteRoot: z.string().trim().min(1),
+  payloadDir: z.string().trim().min(1).optional(),
+  outputDir: z.string().trim().min(1).optional(),
+  maxPayloadBytes: z.number().int().positive().optional(),
+  maxOutputBytes: z.number().int().positive().optional(),
+}).strict();
+
+const transportScopeSchema = z.object({
+  siteRoot: z.string().min(1),
+  payloadDir: z.string().min(1),
+  outputDir: z.string().min(1),
+  maxPayloadBytes: z.number().int().positive(),
+  maxOutputBytes: z.number().int().positive(),
+}).strict();
+
+export function createTransportScope(input: unknown): McpTransportScope {
+  const parsed = transportScopeInputSchema.parse(input ?? {});
+  const siteRoot = resolveSiteRoot(parsed.siteRoot);
+  const payloadDir = resolveManagedDirectory(siteRoot, parsed.payloadDir ?? DEFAULT_PAYLOAD_DIR, 'payload_directory');
+  const outputDir = resolveManagedDirectory(siteRoot, parsed.outputDir ?? DEFAULT_OUTPUT_DIR, 'output_directory');
+  return Object.freeze({
+    siteRoot,
+    payloadDir,
+    outputDir,
+    maxPayloadBytes: parsed.maxPayloadBytes ?? DEFAULT_MAX_BYTES,
+    maxOutputBytes: parsed.maxOutputBytes ?? DEFAULT_OUTPUT_MAX_BYTES,
+  });
+}
+
+function resolveTransportScope({ scope, siteRoot, payloadDir, outputDir, maxBytes, maxPayloadBytes, maxOutputBytes }: TransportScopeOptions = {}): McpTransportScope {
+  if (scope !== undefined) {
+    const parsed = transportScopeSchema.parse(scope);
+    const validated = createTransportScope({
+      siteRoot: parsed.siteRoot,
+      payloadDir: parsed.payloadDir,
+      outputDir: parsed.outputDir,
+      maxPayloadBytes: parsed.maxPayloadBytes,
+      maxOutputBytes: parsed.maxOutputBytes,
+    });
+    if (siteRoot !== undefined || payloadDir !== undefined || outputDir !== undefined || maxBytes !== undefined || maxPayloadBytes !== undefined || maxOutputBytes !== undefined) {
+      throw new Error('transport_scope_cannot_be_combined_with_legacy_scope_overrides');
+    }
+    return validated;
+  }
+  return createTransportScope({
+    siteRoot: siteRoot ?? process.cwd(),
+    payloadDir,
+    outputDir,
+    maxPayloadBytes: maxPayloadBytes ?? maxBytes,
+    maxOutputBytes,
+  });
+}
+
 export function resolveToolPayloadArgs({
+  scope,
   siteRoot,
   toolName,
   args,
   allowedTools,
-  maxBytes = DEFAULT_MAX_BYTES,
-  payloadDir = DEFAULT_PAYLOAD_DIR,
+  maxBytes,
+  payloadDir,
   payloadRefMode = 'replace_args',
-}) {
-  const input = asRecord(args);
+}: PayloadResolutionOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
+  const input = parseArgumentRecord(args);
   const payloadPath = typeof input.payload_path === 'string' && input.payload_path.trim().length > 0
     ? input.payload_path.trim()
     : null;
@@ -65,7 +210,7 @@ export function resolveToolPayloadArgs({
   }
 
   if (payloadRef) {
-    const revision = readPayloadRevision({ siteRoot, ref: payloadRef, maxBytes, payloadDir });
+    const revision = readPayloadRevision({ scope: transportScope, ref: payloadRef });
     const resolvedArgs = resolvePayloadRefArgs({ input, payload: revision.payload, payloadRefMode });
     return {
       args: resolvedArgs,
@@ -82,8 +227,8 @@ export function resolveToolPayloadArgs({
     };
   }
 
-  const root = resolve(siteRoot);
-  const allowedRoot = resolve(root, payloadDir);
+  const root = resolveSiteRoot(siteRoot);
+  const allowedRoot = resolveManagedDirectory(root, payloadDir, 'payload_directory');
   const absolutePath = resolve(root, payloadPath);
   if (!isPathInside(absolutePath, allowedRoot)) {
     throw new Error(`payload_path_outside_allowed_staging: ${normalizePath(relative(root, absolutePath))}`);
@@ -121,19 +266,23 @@ export function resolveToolPayloadArgs({
 }
 
 export function prunePayloadWorkspaces({
+  scope,
   siteRoot,
   payloadIdPrefix,
   maxEntries,
   maxAgeMs,
-  payloadDir = DEFAULT_PAYLOAD_DIR,
+  payloadDir,
   now = Date.now(),
-}) {
+}: PayloadPruneOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir });
+  siteRoot = transportScope.siteRoot;
+  payloadDir = transportScope.payloadDir;
   if (typeof payloadIdPrefix !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(payloadIdPrefix)) {
     throw new Error('payload_prune_prefix_invalid');
   }
   if (!Number.isInteger(maxEntries) || maxEntries < 1) throw new Error('payload_prune_max_entries_invalid');
   if (!Number.isFinite(maxAgeMs) || maxAgeMs < 0) throw new Error('payload_prune_max_age_ms_invalid');
-  const workspaceRoot = resolve(siteRoot, payloadDir, DEFAULT_WORKSPACE_DIR);
+  const workspaceRoot = resolve(resolveManagedDirectory(siteRoot, payloadDir, 'payload_directory'), DEFAULT_WORKSPACE_DIR);
   if (!existsSync(workspaceRoot)) {
     return {
       status: 'ok',
@@ -224,7 +373,7 @@ export function enforceInlinePayloadLimit({
   objectPayloadFields = DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS,
   allowPayloadCreation = false,
 }: Record<string, unknown> = {}) {
-  const input = asRecord(args);
+  const input = parseArgumentRecord(args);
   const currentToolName = typeof toolName === 'string' ? toolName : '';
   const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT;
   const exemptFieldSet = exemptFields instanceof Set ? exemptFields : DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS;
@@ -306,8 +455,12 @@ function isPayloadWorkspaceTool(toolName) {
   return ['mcp_payload_create', 'mcp_payload_derive'].includes(toolName);
 }
 
-export function payloadCreate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
-  const input = asRecord(args);
+export function payloadCreate({ scope, siteRoot, args, maxBytes, payloadDir }: PayloadWorkspaceOptions & { payloadId?: string } = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
+  const input = parseArgumentRecord(args);
   const payload = payloadObjectFromArgs(input, {
     objectField: 'payload',
     jsonField: 'payload_json',
@@ -330,23 +483,35 @@ export function payloadCreate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, pa
     source: { kind: 'create' },
     maxBytes,
   });
-  writeRevision({ siteRoot, payloadDir, record: revision, overwrite: false });
-  return publicRevisionResult({ status: 'created', record: revision, ref });
+  const written = writeRevision({ scope: transportScope, record: revision });
+  return publicRevisionResult({ status: written.status === 'existing' ? 'existing' : 'created', record: written.record, ref: written.record.ref });
 }
 
-export function payloadShow({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
-  const revision = readPayloadRevision({ siteRoot, ref: requireRef(args, 'payload_show_requires_ref'), maxBytes, payloadDir });
+export function payloadShow({ scope, siteRoot, args, maxBytes, payloadDir }: PayloadWorkspaceOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
+  const revision = readPayloadRevision({ scope: transportScope, ref: requireRef(args, 'payload_show_requires_ref') });
   return publicRevisionResult({ status: 'ok', record: revision.record, includePayload: true });
 }
 
-export function payloadValidate({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
-  const revision = readPayloadRevision({ siteRoot, ref: requireRef(args, 'payload_validate_requires_ref'), maxBytes, payloadDir });
+export function payloadValidate({ scope, siteRoot, args, maxBytes, payloadDir }: PayloadWorkspaceOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
+  const revision = readPayloadRevision({ scope: transportScope, ref: requireRef(args, 'payload_validate_requires_ref') });
   return publicRevisionResult({ status: 'valid', record: revision.record });
 }
 
-export function payloadDerive({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
-  const input = asRecord(args);
-  const source = readPayloadRevision({ siteRoot, ref: requireRef(input, 'payload_derive_requires_source_ref', 'source_ref'), maxBytes, payloadDir });
+export function payloadDerive({ scope, siteRoot, args, maxBytes, payloadDir }: PayloadWorkspaceOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
+  const input = parseArgumentRecord(args);
+  const source = readPayloadRevision({ scope: transportScope, ref: requireRef(input, 'payload_derive_requires_source_ref', 'source_ref') });
   const overlay = payloadObjectFromArgs(input, {
     objectField: 'overlay',
     jsonField: 'overlay_json',
@@ -367,11 +532,12 @@ export function payloadDerive({ siteRoot, args, maxBytes = DEFAULT_MAX_BYTES, pa
     source: { kind: 'derive', source_ref: source.ref, overlay_sha256: sha256(stableJson(overlay)) },
     maxBytes,
   });
-  writeRevision({ siteRoot, payloadDir, record, overwrite: false });
-  return publicRevisionResult({ status: 'derived', record, ref, sourceRef: source.ref });
+  const written = writeRevision({ scope: transportScope, record });
+  return publicRevisionResult({ status: written.status === 'existing' ? 'existing' : 'derived', record: written.record, ref: written.record.ref, sourceRef: source.ref });
 }
 
 export function buildOutputRefToolContent({
+  scope,
   siteRoot,
   toolName,
   value,
@@ -379,66 +545,50 @@ export function buildOutputRefToolContent({
   limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
   createdBy = process.env.NARADA_AGENT_ID || null,
   readerTool = 'mcp_output_show',
-}: Record<string, unknown> = {}) {
-  const outputSiteRoot = typeof siteRoot === 'string' ? siteRoot : process.cwd();
+}: OutputBuilderOptions = {}): any {
+  const transportScope = resolveTransportScope({ scope, siteRoot });
+  const outputSiteRoot = transportScope.siteRoot;
   const outputToolName = typeof toolName === 'string' ? toolName : 'unknown_tool';
-  const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_OUTPUT_CHAR_LIMIT;
+  const inlineLimit = normalizeInlineOutputLimit(limit);
   const outputCreatedBy = typeof createdBy === 'string' ? createdBy : null;
   const valueRecord = isPlainObject(value) ? value as Record<string, unknown> : {};
   if (isOutputLocator(value)) {
-    return { content: [assistantTextContent(JSON.stringify(value))], ...(isError ? { isError: true } : {}) };
+    const text = JSON.stringify(value);
+    if (!fitsToolResponse(text, value)) throw new Error('output_locator_response_exceeds_transport_budget');
+    return { content: [assistantTextContent(text)], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
   if (isOutputShowResult(value)) {
-    return { content: [assistantTextContent(JSON.stringify(value, null, 2))], structuredContent: value, ...(isError ? { isError: true } : {}) };
+    const text = JSON.stringify(value, null, 2);
+    if (!fitsToolResponse(text, value)) throw new Error('output_page_response_exceeds_transport_budget');
+    return { content: [assistantTextContent(text)], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
 
-  const fullText = JSON.stringify(value, null, 2);
-  if (fullText.length <= inlineLimit) {
-    return { content: [assistantTextContent(fullText)], ...(isError ? { isError: true } : {}) };
+  const fullText = presentationJson(value);
+  if (fullText.length <= inlineLimit && fitsToolResponse(fullText, value)) {
+    return { content: [assistantTextContent(fullText)], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
 
   const payloadRef = typeof valueRecord.ref === 'string' && valueRecord.ref.startsWith('mcp_payload:') ? valueRecord.ref : null;
-  const materialized = outputCreate({ siteRoot: outputSiteRoot, toolName: outputToolName, value, fullText, inlineLimit, createdBy: outputCreatedBy });
+  const materialized = outputCreate({ scope: transportScope, toolName: outputToolName, value, fullText, inlineLimit, createdBy: outputCreatedBy });
   const outputRef = String(materialized.ref ?? '');
   const outputReaderTool = typeof readerTool === 'string' && readerTool.trim().length > 0 ? readerTool.trim() : null;
-  const outputText = fullText.slice(0, inlineLimit);
-  const nextOffset = outputText.length < fullText.length ? outputText.length : null;
-  const envelope = {
-    schema: 'narada.producer_output_page.v1',
-    status: outputStatus(value, isError),
-    truncated: true,
-    ...(payloadRef ? { payload_ref: payloadRef } : {}),
-    output_ref: outputRef,
-    ref: outputRef,
-    result_materialized: true,
-    tool_name: outputToolName,
-    offset: 0,
-    limit: inlineLimit,
-    next_offset: nextOffset,
-    transport_offset: 0,
-    transport_limit: inlineLimit,
-    transport_next_offset: nextOffset,
-    output_text: outputText,
-    output_truncated: nextOffset !== null,
-    reader_tool: outputReaderTool,
-    site_root: outputSiteRoot,
-    read_command: outputReaderTool ? `${outputReaderTool}({ "ref": "${outputRef}", "offset": 0, "limit": ${DEFAULT_OUTPUT_SHOW_CHAR_LIMIT} })` : null,
-    remediation: outputReaderTool
-      ? `Use ${outputReaderTool} with output_ref/ref=${outputRef} to read the full produced JSON output; use transport_next_offset only for transport-envelope text, and use the original tool's own next_offset for domain paging after reading the materialized result.`
-      : 'Use the output_ref resource to read the full produced JSON output; separate reader tools are not exposed for this surface.',
-    inline_limit: inlineLimit,
-    full_output_char_length: fullText.length,
-  };
-  return {
-    content: [
-      assistantTextContent(fitInlineJson(envelope, inlineLimit)),
-    ],
-    structuredContent: envelope,
-    ...(isError ? { isError: true } : {}),
-  };
+  const envelope = buildOutputPageEnvelope({
+    fullText,
+    value,
+    outputRef,
+    payloadRef,
+    outputToolName,
+    outputReaderTool,
+    outputSiteRoot,
+    inlineLimit,
+    isError,
+  });
+  const contentText = fitInlineJson(envelope, inlineLimit);
+  return { content: [assistantTextContent(contentText)], structuredContent: envelope, ...(isError ? { isError: true } : {}) };
 }
 
 export function buildBoundedToolResult({
+  scope,
   siteRoot,
   toolName,
   value,
@@ -446,18 +596,19 @@ export function buildBoundedToolResult({
   limit = DEFAULT_INLINE_OUTPUT_CHAR_LIMIT,
   outputPageLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT,
   readerTool = 'mcp_output_show',
-}: Record<string, unknown> = {}): any {
-  const fullText = JSON.stringify(value, null, 2);
-  const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_OUTPUT_CHAR_LIMIT;
+}: OutputBuilderOptions = {}): any {
+  const transportScope = resolveTransportScope({ scope, siteRoot });
+  const fullText = presentationJson(value);
+  const inlineLimit = normalizeBoundedOutputLimit(limit);
   const pageLimit = typeof outputPageLimit === 'number' ? outputPageLimit : DEFAULT_OUTPUT_SHOW_CHAR_LIMIT;
-  if (isOutputShowResult(value) && fullText.length <= pageLimit) {
+  if (isOutputShowResult(value) && fitsToolResponse(fullText, value)) {
     return { content: [assistantTextContent(fullText)], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
-  if (fullText.length <= inlineLimit) {
+  if (fullText.length <= inlineLimit && fitsToolResponse(fullText, value)) {
     return { content: [assistantTextContent(fullText)], structuredContent: value, ...(isError ? { isError: true } : {}) };
   }
   return buildOutputRefToolContent({
-    siteRoot,
+    scope: transportScope,
     toolName,
     value,
     isError,
@@ -470,23 +621,99 @@ function assistantTextContent(text: string): any {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-export function outputShow({ siteRoot, args, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
-  const input = asRecord(args);
-  const effectiveSiteRoot = typeof input.target_site_root === 'string' && input.target_site_root.trim().length > 0
-    ? resolve(input.target_site_root.trim())
-    : siteRoot;
-  const record = readOutputRecord({ siteRoot: effectiveSiteRoot, ref: requireOutputRef(input, 'output_show_requires_ref'), maxBytes, outputDir });
+function buildOutputPageEnvelope({ fullText, value, outputRef, payloadRef, outputToolName, outputReaderTool, outputSiteRoot, inlineLimit, isError }) {
+  let preview = takeUtf8Page(fullText, 0, Math.min(inlineLimit, MAX_OUTPUT_SHOW_CHAR_LIMIT), MAX_OUTPUT_PAGE_BYTES).chunk;
+  while (true) {
+    const nextOffset = preview.length < fullText.length ? preview.length : null;
+    const envelope = {
+      schema: 'narada.producer_output_page.v1',
+      status: outputStatus(value, isError),
+      truncated: true,
+      ...(payloadRef ? { payload_ref: payloadRef } : {}),
+      output_ref: outputRef,
+      ref: outputRef,
+      result_materialized: true,
+      tool_name: outputToolName,
+      offset: 0,
+      limit: inlineLimit,
+      next_offset: nextOffset,
+      transport_offset: 0,
+      transport_limit: inlineLimit,
+      transport_next_offset: nextOffset,
+      output_text: preview,
+      output_truncated: nextOffset !== null,
+      reader_tool: outputReaderTool,
+      site_root: outputSiteRoot,
+      read_command: outputReaderTool ? `${outputReaderTool}({ "ref": "${outputRef}", "offset": 0, "limit": ${DEFAULT_OUTPUT_SHOW_CHAR_LIMIT} })` : null,
+      remediation: outputReaderTool
+        ? `Use ${outputReaderTool} with output_ref/ref=${outputRef} to read the bounded produced JSON pages; continue with the returned next_offset.`
+        : 'Use the output_ref resource to read bounded pages of the produced JSON output.',
+      inline_limit: inlineLimit,
+      full_output_char_length: fullText.length,
+    };
+    const contentText = JSON.stringify(envelope);
+    if (contentText.length <= inlineLimit && fitsToolResponse(contentText, envelope)) return envelope;
+    if (preview.length === 0) throw new Error('inline_output_envelope_limit_too_small');
+    preview = takeUtf8Page(fullText, 0, Math.max(0, Math.floor(preview.length * 0.75)), MAX_OUTPUT_PAGE_BYTES).chunk;
+  }
+}
+
+function fitsToolResponse(contentText, structuredContent) {
+  return Buffer.byteLength(contentText, 'utf8') + Buffer.byteLength(JSON.stringify(structuredContent), 'utf8') <= MAX_INLINE_RESPONSE_BYTES;
+}
+
+function normalizeInlineOutputLimit(value) {
+  const candidate = value === undefined || value === null
+    ? DEFAULT_INLINE_OUTPUT_CHAR_LIMIT
+    : value;
+  const parsed = z.number().finite().int().safeParse(candidate);
+  if (!parsed.success || parsed.data < MIN_INLINE_OUTPUT_CHAR_LIMIT) {
+    throw new Error(`inline_output_limit_must_be_integer_at_least_${MIN_INLINE_OUTPUT_CHAR_LIMIT}`);
+  }
+  if (parsed.data > MAX_OUTPUT_SHOW_CHAR_LIMIT) {
+    throw new Error(`inline_output_limit_exceeds_transport_maximum: ${parsed.data} > ${MAX_OUTPUT_SHOW_CHAR_LIMIT}`);
+  }
+  return parsed.data;
+}
+
+function normalizeBoundedOutputLimit(value) {
+  const candidate = value === undefined || value === null ? DEFAULT_INLINE_OUTPUT_CHAR_LIMIT : value;
+  const parsed = z.number().finite().safeParse(candidate);
+  return normalizeInlineOutputLimit(parsed.success ? Math.min(parsed.data, MAX_OUTPUT_SHOW_CHAR_LIMIT) : candidate);
+}
+
+function fitInlineJson(value, limit) {
+  const text = JSON.stringify(value);
+  if (text.length > normalizeInlineOutputLimit(limit) || Buffer.byteLength(text, 'utf8') > MAX_INLINE_RESPONSE_BYTES) {
+    throw new Error('inline_output_envelope_exceeds_transport_budget');
+  }
+  return text;
+}
+
+export function outputShow({ scope, siteRoot, args, maxBytes, outputDir }: OutputShowOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxOutputBytes;
+  outputDir = transportScope.outputDir;
+  const input = parseArgumentRecord(args);
+  if (Object.prototype.hasOwnProperty.call(input, 'target_site_root')) {
+    throw new Error('output_target_site_root_not_supported: output refs are bound to the current MCP site scope');
+  }
+  const record = readOutputRecord({ scope: transportScope, ref: requireOutputRef(input, 'output_show_requires_ref') });
   return publicOutputShowRecord(record, {
     outputLimit: normalizeOutputShowLimit(input.limit ?? input.output_limit),
     offset: normalizeOutputShowOffset(input.offset),
   });
 }
 
-export function listOutputResources({ siteRoot, outputDir = DEFAULT_OUTPUT_DIR }: any = {}) {
-  const root = typeof siteRoot === 'string' ? siteRoot : process.cwd();
-  const dir = resolve(root, outputDir, DEFAULT_WORKSPACE_DIR);
-  if (!existsSync(dir)) return { resources: [] };
-  const resources = readdirSync(dir)
+export function listOutputResources({ scope, siteRoot, outputDir, cursor, offset, limit }: OutputResourceListOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir });
+  siteRoot = transportScope.siteRoot;
+  outputDir = transportScope.outputDir;
+  const page = normalizeResourcePage({ cursor, offset, limit });
+  const dir = resolve(outputDir, DEFAULT_WORKSPACE_DIR);
+  if (!existsSync(dir)) return { resources: [], ...page, next_offset: null, nextCursor: null, has_more: false };
+  const allResources = readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
     .sort()
     .map((name) => {
@@ -500,18 +727,34 @@ export function listOutputResources({ siteRoot, outputDir = DEFAULT_OUTPUT_DIR }
         mimeType: 'application/json',
       };
     });
-  return { resources };
+  const resources = allResources.slice(page.offset, page.offset + page.limit);
+  const nextOffset = page.offset + resources.length < allResources.length ? page.offset + resources.length : null;
+  return {
+    resources,
+    ...page,
+    next_offset: nextOffset,
+    nextCursor: nextOffset === null ? null : String(nextOffset),
+    has_more: nextOffset !== null,
+  };
 }
 
-export function readOutputResource({ siteRoot, uri, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }: any = {}) {
+export function readOutputResource({ scope, siteRoot, uri, maxBytes, outputDir }: OutputResourceReadOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxOutputBytes;
+  outputDir = transportScope.outputDir;
   const ref = outputRefFromResourceUri(String(uri ?? ''));
-  const record = readOutputRecord({ siteRoot, ref, maxBytes, outputDir });
+  const record = readOutputRecord({ scope: transportScope, ref });
+  const page = publicOutputShowRecord(record, {
+    outputLimit: DEFAULT_OUTPUT_SHOW_CHAR_LIMIT,
+    offset: 0,
+  });
   return {
     contents: [
       {
         uri,
         mimeType: 'application/json',
-        text: JSON.stringify(record.full_output, null, 2),
+        text: JSON.stringify(page, null, 2),
       },
     ],
   };
@@ -536,9 +779,8 @@ export function listOutputTools() {
         properties: {
           ref: { type: 'string', description: 'Materialized output ref, e.g. mcp_output:<id>. Alias: output_ref.' },
           output_ref: { type: 'string', description: 'Alias for ref.' },
-          target_site_root: { type: 'string', description: 'Optional target site root for cross-site materialized output readback.' },
           offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
-          limit: { type: 'integer', default: DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, description: 'Maximum output characters to return.' },
+          limit: { type: 'integer', default: DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, minimum: 1, maximum: MAX_OUTPUT_SHOW_CHAR_LIMIT, description: 'Maximum output characters to return; the transport hard-caps this value.' },
         },
         required: [],
         additionalProperties: false,
@@ -547,7 +789,13 @@ export function listOutputTools() {
   ];
 }
 
-function outputCreate({ siteRoot, toolName, value, fullText, inlineLimit, createdBy, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
+function outputCreate({ scope, siteRoot, toolName, value, fullText, inlineLimit, createdBy, maxBytes, outputDir }: OutputCreateOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxOutputBytes;
+  outputDir = transportScope.outputDir;
+  const normalizedToolName = toolName.trim().length > 0 ? z.string().trim().max(200).parse(toolName) : null;
+  const normalizedCreatedBy = createdBy === null ? null : z.string().trim().max(200).parse(createdBy);
   const outputId = randomOutputId();
   const createdAt = new Date().toISOString();
   const ref = buildOutputRef(outputId);
@@ -555,27 +803,36 @@ function outputCreate({ siteRoot, toolName, value, fullText, inlineLimit, create
     schema: 'narada.mcp_output_ref.v1',
     ref,
     output_id: outputId,
-    tool_name: typeof toolName === 'string' && toolName.trim().length > 0 ? toolName.trim() : null,
+    tool_name: normalizedToolName,
     created_at: createdAt,
-    created_by: createdBy,
+    created_by: normalizedCreatedBy,
     content_type: 'application/json',
     inline_char_limit: inlineLimit,
     full_output_char_length: fullText.length,
     truncated: true,
-    sha256: sha256(fullText),
+    sha256: sha256(stableJson(value)),
     max_bytes: maxBytes,
     full_output: value,
   };
-  const serialized = `${stableJson(record)}\n`;
+  const serialized = `${JSON.stringify(record)}\n`;
   const byteSize = Buffer.byteLength(serialized, 'utf8');
   if (byteSize > maxBytes) throw new Error(`mcp_output_too_large: ${byteSize} > ${maxBytes}`);
   const path = outputPath({ siteRoot, outputDir, outputId });
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, serialized, 'utf8');
+  try {
+    writeImmutableFile(path, serialized);
+  } catch (error) {
+    if (isNodeErrorCode(error, 'EEXIST')) throw new Error(`mcp_output_ref_collision: ${ref}`);
+    throw error;
+  }
   return { ...publicOutputRecord(record), byte_size: byteSize };
 }
 
-function readOutputRecord({ siteRoot, ref, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, outputDir = DEFAULT_OUTPUT_DIR }) {
+function readOutputRecord({ scope, siteRoot, ref, maxBytes, outputDir }: OutputReadOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxOutputBytes;
+  outputDir = transportScope.outputDir;
   const parsed = parseOutputRef(ref);
   const path = outputPath({ siteRoot, outputDir, outputId: parsed.outputId });
   let stat;
@@ -595,7 +852,10 @@ function readOutputRecord({ siteRoot, ref, maxBytes = DEFAULT_OUTPUT_MAX_BYTES, 
   if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`output_ref_record_must_be_object: ${ref}`);
   if (record.schema !== 'narada.mcp_output_ref.v1') throw new Error(`output_ref_schema_unsupported: ${record.schema}`);
   if (record.ref !== ref || record.output_id !== parsed.outputId) throw new Error(`output_ref_metadata_mismatch: ${ref}`);
-  return { ...record, byte_size: stat.size, output_path: normalizePath(relative(resolve(siteRoot), path)) };
+  const fullText = presentationJson(record.full_output);
+  if (record.full_output_char_length !== fullText.length) throw new Error(`output_ref_length_mismatch: ${ref}`);
+  if (record.sha256 !== sha256(stableJson(record.full_output))) throw new Error(`output_ref_sha256_mismatch: ${ref}`);
+  return { ...record, byte_size: stat.size, output_path: normalizePath(relative(resolveSiteRoot(siteRoot), path)) };
 }
 
 function publicOutputRecord(record) {
@@ -612,9 +872,10 @@ function publicOutputRecord(record) {
 }
 
 function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, offset = 0 } = {}) {
-  const outputText = JSON.stringify(record.full_output, null, 2);
-  const chunk = outputText.slice(offset, offset + outputLimit);
-  const outputTruncated = outputLimit > 0 && offset + chunk.length < outputText.length;
+  const outputText = presentationJson(record.full_output);
+  const page = takeUtf8Page(outputText, offset, outputLimit, MAX_OUTPUT_PAGE_BYTES);
+  const chunk = page.chunk;
+  const outputTruncated = page.end < outputText.length;
   return {
     schema: 'narada.mcp_output_page.v1',
     status: 'ok',
@@ -626,7 +887,7 @@ function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR
     path: record.output_path ?? normalizePath(`${DEFAULT_OUTPUT_DIR}/${DEFAULT_WORKSPACE_DIR}/${record.output_id}.json`),
     offset,
     limit: outputLimit,
-    next_offset: outputTruncated ? offset + chunk.length : null,
+    next_offset: outputTruncated ? page.end : null,
     output_limit: outputLimit,
     output_truncated: outputTruncated,
     output_text: chunk,
@@ -655,21 +916,36 @@ function isOutputShowResult(value) {
 }
 
 function normalizeOutputShowLimit(value) {
-  if (value === undefined || value === null || value === '') return DEFAULT_OUTPUT_SHOW_CHAR_LIMIT;
-  const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 0) {
-    throw new Error('output_limit_must_be_non_negative_integer');
+  if (value === undefined || value === null) return DEFAULT_OUTPUT_SHOW_CHAR_LIMIT;
+  const parsed = z.number().finite().int().safeParse(value);
+  if (!parsed.success || parsed.data < 1) {
+    throw new Error('output_limit_must_be_positive_integer');
   }
-  return Math.min(numeric, DEFAULT_OUTPUT_MAX_BYTES);
+  if (parsed.data > MAX_OUTPUT_SHOW_CHAR_LIMIT) {
+    throw new Error(`output_limit_exceeds_transport_maximum: ${parsed.data} > ${MAX_OUTPUT_SHOW_CHAR_LIMIT}`);
+  }
+  return parsed.data;
 }
 
 function normalizeOutputShowOffset(value) {
-  if (value === undefined || value === null || value === '') return 0;
-  const numeric = Number(value);
-  if (!Number.isInteger(numeric) || numeric < 0) {
+  if (value === undefined || value === null) return 0;
+  const parsed = z.number().finite().int().safeParse(value);
+  if (!parsed.success || parsed.data < 0) {
     throw new Error('offset_must_be_non_negative_integer');
   }
-  return numeric;
+  return parsed.data;
+}
+
+function normalizeResourcePage({ cursor, offset, limit }: { cursor?: unknown; offset?: unknown; limit?: unknown } = {}) {
+  if (cursor !== undefined && cursor !== null && cursor !== '') {
+    if (offset !== undefined && offset !== null && offset !== '') throw new Error('resource_page_cursor_and_offset_are_mutually_exclusive');
+    const cursorValue = z.string().regex(/^\d+$/).parse(cursor);
+    offset = Number(cursorValue);
+  }
+  return z.object({
+    offset: z.number().finite().int().min(0).default(0),
+    limit: z.number().finite().int().min(1).max(MAX_RESOURCE_PAGE_LIMIT).default(DEFAULT_RESOURCE_PAGE_LIMIT),
+  }).parse({ offset, limit });
 }
 
 function parseOutputRef(ref) {
@@ -693,7 +969,47 @@ function requireOutputRef(args, message, field = 'ref') {
 }
 
 function outputPath({ siteRoot, outputDir, outputId }) {
-  return resolve(siteRoot, outputDir, DEFAULT_WORKSPACE_DIR, `${outputId}.json`);
+  return resolve(resolveManagedDirectory(siteRoot, outputDir, 'output_directory'), DEFAULT_WORKSPACE_DIR, `${outputId}.json`);
+}
+
+function resolveSiteRoot(siteRoot) {
+  return resolve(typeof siteRoot === 'string' && siteRoot.trim().length > 0 ? siteRoot : process.cwd());
+}
+
+function resolveManagedDirectory(siteRoot, directory, label) {
+  const root = resolveSiteRoot(siteRoot);
+  const candidate = resolve(root, String(directory ?? ''));
+  if (!isPathInside(candidate, root)) throw new Error(`${label}_outside_site_root: ${normalizePath(String(directory ?? ''))}`);
+  return candidate;
+}
+
+function takeUtf8Page(text, offset, maxChars, maxBytes) {
+  if (offset > text.length) return { chunk: '', end: text.length };
+  if (offset < text.length && isLowSurrogate(text.charCodeAt(offset))) {
+    throw new Error('output_offset_splits_unicode_scalar');
+  }
+  let end = safeCodePointEnd(text, Math.min(text.length, offset + maxChars));
+  while (end > offset && Buffer.byteLength(text.slice(offset, end), 'utf8') > maxBytes) {
+    end = safeCodePointEnd(text, end - 1);
+  }
+  return { chunk: text.slice(offset, end), end };
+}
+
+function safeCodePointEnd(text, end) {
+  if (end > 0 && isHighSurrogate(text.charCodeAt(end - 1))) return end - 1;
+  return end;
+}
+
+function isHighSurrogate(value) {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value) {
+  return value >= 0xdc00 && value <= 0xdfff;
+}
+
+function isNodeErrorCode(error, code) {
+  return Boolean(error && typeof error === 'object' && error.code === code);
 }
 
 function buildOutputRef(outputId) {
@@ -709,68 +1025,6 @@ function outputStatus(value, isError) {
     return value.status;
   }
   return isError ? 'error' : 'ok';
-}
-
-function fitInlineJson(value, limit) {
-  let text = JSON.stringify(value);
-  if (text.length <= limit) return text;
-  if (value.schema === 'narada.producer_output_page.v1') {
-    const outputRef = value.output_ref ?? value.ref;
-    const payloadRef = value.payload_ref ?? (typeof value.ref === 'string' && value.ref.startsWith('mcp_payload:') ? value.ref : undefined);
-    const outputText = String(value.output_text ?? '');
-    const minimalPage = {
-      schema: value.schema,
-      status: value.status,
-      truncated: true,
-      output_ref: outputRef,
-      ref: outputRef,
-      ...(payloadRef ? { payload_ref: payloadRef } : {}),
-      tool_name: value.tool_name,
-      offset: value.offset,
-      limit: value.limit,
-      next_offset: value.next_offset,
-      output_truncated: value.output_truncated,
-      full_output_char_length: value.full_output_char_length,
-      reader_tool: value.reader_tool,
-    };
-    const withPreview = { ...minimalPage, output_text: outputText };
-    text = JSON.stringify(withPreview);
-    if (text.length <= limit) return text;
-    const emptyPreviewLength = JSON.stringify({ ...minimalPage, output_text: '' }).length;
-    const previewLimit = Math.max(0, limit - emptyPreviewLength - 16);
-    if (previewLimit > 0) {
-      text = JSON.stringify({ ...minimalPage, output_text: outputText.slice(0, previewLimit) });
-      if (text.length <= limit) return text;
-    }
-    text = JSON.stringify(minimalPage);
-    if (text.length <= limit) return text;
-    const irreduciblePage = {
-      schema: value.schema,
-      status: value.status,
-      truncated: true,
-      output_ref: outputRef,
-      reader_tool: value.reader_tool,
-      full_output_char_length: value.full_output_char_length,
-    };
-    text = JSON.stringify(irreduciblePage);
-    if (text.length <= limit) return text;
-    return JSON.stringify({ output_ref: outputRef, reader_tool: value.reader_tool, truncated: true });
-  }
-  const outputRef = value.output_ref ?? value.ref;
-  const payloadRef = value.payload_ref ?? (typeof value.ref === 'string' && value.ref.startsWith('mcp_payload:') ? value.ref : undefined);
-  const minimal = {
-    truncated: true,
-    output_ref: outputRef,
-    reader_tool: value.reader_tool,
-    site_root: value.site_root,
-    ...(payloadRef ? { payload_ref: payloadRef } : {}),
-  };
-  text = JSON.stringify(minimal);
-  if (text.length <= limit) return text;
-  if (payloadRef) {
-    return JSON.stringify({ output_ref: outputRef, payload_ref: payloadRef, truncated: true });
-  }
-  return JSON.stringify({ output_ref: outputRef, site_root: value.site_root, truncated: true });
 }
 
 export function listPayloadTools() {
@@ -857,6 +1111,12 @@ function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function parseArgumentRecord(value): Record<string, unknown> {
+  const parsed = z.record(z.string(), z.unknown()).safeParse(value ?? {});
+  if (!parsed.success) throw new Error('tool_arguments_must_be_object');
+  return parsed.data;
+}
+
 function asPayloadObject(value, message) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
   return value;
@@ -885,7 +1145,11 @@ function parsePayloadJsonObject(value, message) {
   return asPayloadObject(parsed, message);
 }
 
-function readPayloadRevision({ siteRoot, ref, maxBytes = DEFAULT_MAX_BYTES, payloadDir = DEFAULT_PAYLOAD_DIR }) {
+function readPayloadRevision({ scope, siteRoot, ref, maxBytes, payloadDir }: PayloadReadOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir, maxBytes });
+  siteRoot = transportScope.siteRoot;
+  maxBytes = transportScope.maxPayloadBytes;
+  payloadDir = transportScope.payloadDir;
   const parsed = parsePayloadRef(ref);
   const path = revisionPath({ siteRoot, payloadDir, payloadId: parsed.payloadId, revision: parsed.revision });
   let stat;
@@ -913,11 +1177,29 @@ function readPayloadRevision({ siteRoot, ref, maxBytes = DEFAULT_MAX_BYTES, payl
   };
 }
 
-function writeRevision({ siteRoot, payloadDir, record, overwrite }) {
+function writeRevision({ scope, siteRoot, payloadDir, record }: RevisionWriteOptions) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, payloadDir });
+  siteRoot = transportScope.siteRoot;
+  payloadDir = transportScope.payloadDir;
   const path = revisionPath({ siteRoot, payloadDir, payloadId: record.payload_id, revision: record.revision });
-  if (!overwrite && existsSync(path)) throw new Error(`payload_revision_already_exists: ${record.ref}`);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${stableJson(record)}\n`, 'utf8');
+  const serialized = `${stableJson(record)}\n`;
+  try {
+    writeImmutableFile(path, serialized);
+    return { status: 'created', record };
+  } catch (error) {
+    if (!isNodeErrorCode(error, 'EEXIST')) throw error;
+    let existing;
+    try {
+      existing = JSON.parse(readFileSync(path, 'utf8'));
+    } catch {
+      throw new Error(`payload_revision_conflict: existing revision is unreadable: ${record.ref}`);
+    }
+    if (existing?.ref === record.ref && existing?.sha256 === record.sha256 && existing?.byte_size === record.byte_size) {
+      return { status: 'existing', record: existing };
+    }
+    throw new Error(`payload_revision_conflict: immutable revision already contains different content: ${record.ref}`);
+  }
 }
 
 function buildRevisionRecord({ payloadId, revision, payload, createdAt, createdBy, source, maxBytes }) {
@@ -950,6 +1232,8 @@ function validateRevisionRecord(record, parsed, statSize, maxBytes) {
   asPayloadObject(record.payload, 'payload_ref_payload_must_be_object');
   if (statSize > maxBytes || record.byte_size > maxBytes) throw new Error(`payload_ref_too_large: ${statSize} > ${maxBytes}`);
   const payloadJson = stableJson(record.payload);
+  const payloadByteSize = Buffer.byteLength(payloadJson, 'utf8');
+  if (record.byte_size !== payloadByteSize) throw new Error(`payload_ref_byte_size_mismatch: ${parsed.ref}`);
   if (sha256(payloadJson) !== record.sha256) throw new Error(`payload_ref_sha256_mismatch: ${parsed.ref}`);
 }
 
@@ -970,7 +1254,7 @@ function requireRef(args, message, field = 'ref') {
 }
 
 function revisionPath({ siteRoot, payloadDir, payloadId, revision }) {
-  return resolve(siteRoot, payloadDir, DEFAULT_WORKSPACE_DIR, payloadId, `v${revision}.json`);
+  return resolve(resolveManagedDirectory(siteRoot, payloadDir, 'payload_directory'), DEFAULT_WORKSPACE_DIR, payloadId, `v${revision}.json`);
 }
 
 function buildPayloadRef(payloadId, revision) {
@@ -1021,13 +1305,40 @@ function publicRevisionResult({ status, record, includePayload = false, ref = re
 }
 
 function stableJson(value) {
-  return JSON.stringify(sortJson(value));
+  return JSON.stringify(sortJson(value)) ?? 'null';
+}
+
+function presentationJson(value) {
+  return JSON.stringify(value, null, 2) ?? 'null';
+}
+
+function writeImmutableFile(path, serialized) {
+  const tempPath = `${path}.${randomUUID()}.tmp`;
+  let descriptor = null;
+  try {
+    descriptor = openSync(tempPath, 'wx');
+    const buffer = Buffer.from(serialized, 'utf8');
+    let offset = 0;
+    while (offset < buffer.length) offset += writeSync(descriptor, buffer, offset, buffer.length - offset);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = null;
+    linkSync(tempPath, path);
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
+    try {
+      unlinkSync(tempPath);
+    } catch (error) {
+      if (!isNodeErrorCode(error, 'ENOENT')) throw error;
+    }
+  }
 }
 
 function sortJson(value) {
   if (Array.isArray(value)) return value.map(sortJson);
   if (!isPlainObject(value)) return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortJson(value[key])]));
+  const keys = Object.keys(value).sort((left, right) => left.localeCompare(right));
+  return Object.fromEntries(keys.map((key) => [key, sortJson(value[key])]));
 }
 
 function sha256(value) {

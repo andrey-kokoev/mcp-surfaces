@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   buildBoundedToolResult,
   buildOutputRefToolContent,
+  createTransportScope,
   enforceInlinePayloadLimit,
   listPayloadTools,
   listOutputResources,
@@ -49,6 +50,12 @@ assert.doesNotThrow(() => enforceInlinePayloadLimit({
 }));
 
 assert.equal(listOutputTools()[0].name, 'mcp_output_show');
+assert.equal('target_site_root' in listOutputTools()[0].inputSchema.properties, false);
+assert.equal(listOutputTools()[0].inputSchema.properties.limit.maximum, 20_000);
+assert.throws(
+  () => buildOutputRefToolContent({ value: { status: 'ok' }, limit: 30_000 }),
+  /inline_output_limit_exceeds_transport_maximum/
+);
 
 const payloadTools = listPayloadTools();
 const payloadTool = (name: string) => payloadTools.find((tool) => tool.name === name);
@@ -80,6 +87,17 @@ try {
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-transport-'));
 try {
+  const scope = createTransportScope({ siteRoot: tempRoot });
+  assert.equal(Object.isFrozen(scope), true);
+  assert.equal(scope.siteRoot, tempRoot);
+  assert.throws(
+    () => buildOutputRefToolContent({ scope, siteRoot: tempRoot, value: { status: 'ok' } }),
+    /transport_scope_cannot_be_combined_with_legacy_scope_overrides/
+  );
+  assert.throws(
+    () => createTransportScope({ siteRoot: tempRoot, outputDir: '../outside' }),
+    /output_directory_outside_site_root/
+  );
   const longValue = { status: 'ok', output: 'x'.repeat(5_000) };
   const longResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
@@ -106,6 +124,12 @@ try {
   assert.match(String(structuredEnvelope.read_command), /mcp_output_show/);
   assert.equal(longResult.content.length, 1);
   assert.equal(longResult.content[0].type, 'text');
+  assert.deepEqual((buildOutputRefToolContent({ value: { status: 'ok', compact: true } }) as { structuredContent: Record<string, unknown> }).structuredContent, { status: 'ok', compact: true });
+  assert.equal(
+    Buffer.byteLength(longResult.content[0].text, 'utf8')
+      + Buffer.byteLength(JSON.stringify((longResult as { structuredContent: Record<string, unknown> }).structuredContent), 'utf8') <= 32 * 1024,
+    true
+  );
 
   const boundedSmall = buildBoundedToolResult({
     siteRoot: tempRoot,
@@ -135,6 +159,41 @@ try {
   assert.equal(shownLongResult.schema, 'narada.mcp_output_page.v1');
   assert.equal(shownLongResult.output_text.length, 10);
   assert.equal(shownLongResult.next_offset, 10);
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, limit: 0 } }),
+    /output_limit_must_be_positive_integer/
+  );
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, limit: 30_000 } }),
+    /output_limit_exceeds_transport_maximum/
+  );
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, limit: '10' } }),
+    /output_limit_must_be_positive_integer/
+  );
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, offset: '1' } }),
+    /offset_must_be_non_negative_integer/
+  );
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, args: { ref: structuredEnvelope.output_ref, target_site_root: tempRoot } }),
+    /output_target_site_root_not_supported/
+  );
+  assert.throws(
+    () => outputShow({ siteRoot: tempRoot, outputDir: '../outside', args: { ref: structuredEnvelope.output_ref } }),
+    /output_directory_outside_site_root/
+  );
+
+  const unicodeResult = buildOutputRefToolContent({
+    siteRoot: tempRoot,
+    toolName: 'unicode_tool',
+    value: { output: '😀'.repeat(10_000) },
+  });
+  const unicodeEnvelope = (unicodeResult as { structuredContent: Record<string, unknown> }).structuredContent;
+  const unicodePage = outputShow({ siteRoot: tempRoot, args: { ref: unicodeEnvelope.output_ref, limit: 20_000 } });
+  const unicodeLastCodeUnit = unicodePage.output_text.charCodeAt(unicodePage.output_text.length - 1);
+  assert.equal(unicodeLastCodeUnit >= 0xd800 && unicodeLastCodeUnit <= 0xdbff, false);
+  assert.equal(unicodePage.output_truncated, true);
 
   const bulkyResult = buildOutputRefToolContent({
     siteRoot: tempRoot,
@@ -149,6 +208,15 @@ try {
 
   const resources = listOutputResources({ siteRoot: tempRoot }).resources;
   assert.equal(resources.length >= 2, true);
+const firstResourcePage = listOutputResources({ scope, offset: 0, limit: 1 });
+assert.throws(() => listOutputResources({ scope, offset: '0' }));
+assert.throws(() => listOutputResources({ scope, limit: '1' }));
+assert.equal(firstResourcePage.resources.length, 1);
+  assert.equal(firstResourcePage.has_more, true);
+  assert.equal(firstResourcePage.nextCursor, String(firstResourcePage.next_offset));
+  const secondResourcePage = listOutputResources({ scope, cursor: firstResourcePage.nextCursor, limit: 1 });
+  assert.equal(secondResourcePage.resources.length, 1);
+  assert.notEqual(secondResourcePage.resources[0].uri, firstResourcePage.resources[0].uri);
 
   const wrappedFirstPage = buildOutputRefToolContent({
     siteRoot: tempRoot,
@@ -156,13 +224,18 @@ try {
     value: structuredEnvelope,
   });
   const wrappedFirstPageStructuredContent = (wrappedFirstPage as { structuredContent: Record<string, unknown> }).structuredContent;
-  assert.equal(wrappedFirstPageStructuredContent.next_offset, 2000);
+  assert.equal(typeof wrappedFirstPageStructuredContent.next_offset, 'number');
+  assert.equal((wrappedFirstPageStructuredContent.next_offset as number) > 0, true);
+  assert.equal((wrappedFirstPageStructuredContent.next_offset as number) <= 2_000, true);
   assert.equal(wrappedFirstPageStructuredContent.output_truncated, true);
 
   assert.throws(
     () => readOutputResource({ siteRoot: tempRoot, uri: 'mcp-output:mcp_output%3Amissing' }),
     /output_ref_not_found/
   );
+  const resourcePage = JSON.parse(readOutputResource({ siteRoot: tempRoot, uri: `mcp-output:${encodeURIComponent(String(structuredEnvelope.output_ref))}` }).contents[0].text);
+  assert.equal(resourcePage.schema, 'narada.mcp_output_page.v1');
+  assert.equal(typeof resourcePage.output_text, 'string');
 
   assert.throws(
     () => payloadCreate({ siteRoot: tempRoot, args: { payload: {} } }),
@@ -170,6 +243,18 @@ try {
   );
   const emptyPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: {}, allow_empty: true, payload_id: 'empty_payload_ok' } });
   assert.equal(emptyPayload.status, 'created');
+  const repeatedPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { stable: true }, payload_id: 'immutable_retry_ok' } });
+  const repeatedPayloadRetry = payloadCreate({ siteRoot: tempRoot, args: { payload: { stable: true }, payload_id: 'immutable_retry_ok' } });
+  assert.equal(repeatedPayloadRetry.status, 'existing');
+  assert.equal(repeatedPayloadRetry.ref, repeatedPayload.ref);
+  assert.throws(
+    () => payloadCreate({ siteRoot: tempRoot, args: { payload: { stable: false }, payload_id: 'immutable_retry_ok' } }),
+    /payload_revision_conflict/
+  );
+  assert.throws(
+    () => payloadCreate({ siteRoot: tempRoot, payloadDir: '../outside', args: { payload: { blocked: true } } }),
+    /payload_directory_outside_site_root/
+  );
 
   const createdPayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { summary: 'x'.repeat(5_000) } } });
   const createdPayloadResult = buildOutputRefToolContent({
@@ -235,7 +320,7 @@ try {
     inline_char_limit: 1,
     full_output_char_length: fullText.length,
     truncated: true,
-    sha256: createHash('sha256').update(fullText).digest('hex'),
+    sha256: createHash('sha256').update(JSON.stringify({ nested: { value: 42 }, status: 'ok' })).digest('hex'),
     max_bytes: 10_000,
     full_output: fullOutput,
   };

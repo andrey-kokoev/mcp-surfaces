@@ -40,7 +40,10 @@ const responses = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSO
 assert.equal(responses.some((message) => message.method === 'notifications/progress'), true);
 const policyResponse = responses.find((message) => message.id === 2);
 assert.equal(policyResponse.result.structuredContent.mode, 'read');
-assert.match(policyResponse.result.content[0].text, /git_policy: ok/);
+const policyDocument = JSON.parse(policyResponse.result.content[0].text) as {
+  schema?: string;
+};
+assert.equal(policyDocument.schema, 'narada.git.policy.v1');
 const completionResponse = responses.find((message) => message.id === 3);
 assert.equal(completionResponse.result.completion.values.includes(root), true);
 
