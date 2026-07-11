@@ -2889,18 +2889,58 @@ function catalogSurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServe
 
 type SiteSurfaceRegistrySurface = {
   surface_id: string;
+  surface_type: string;
   display_name: string;
   server_name: string;
+  runtime_binding: {
+    runtime_kind: 'node-stdio';
+    entrypoint: string;
+    owner_site_id: string;
+    transport: {
+      type: 'stdio';
+      command: string;
+      args: string[];
+    };
+  };
   authority_boundary: JsonRecord;
   client_config: JsonRecord;
   tool_contract: {
+    exposed_tools: string[];
+    semantic_operations: string[];
+    deprecated_aliases: Record<string, string>;
     read_only_tools: string[];
     mutating_tools: string[];
     refused_tools: string[];
   };
   registered_live_tools: string[];
   catalog_surface_id: string;
+  evidence: JsonRecord;
 };
+
+function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface['runtime_binding'] {
+  const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
+  const transportArgs = server.uses_runtime_proxy
+    ? [
+      server.launch_entrypoint,
+      '--surface-id',
+      surfaceId,
+      '--entrypoint',
+      server.entrypoint,
+      '--',
+      ...server.args,
+    ]
+    : [server.entrypoint, ...server.args];
+  return {
+    runtime_kind: 'node-stdio',
+    entrypoint: server.entrypoint,
+    owner_site_id: site.site_id,
+    transport: {
+      type: 'stdio',
+      command: server.command,
+      args: transportArgs,
+    },
+  };
+}
 
 function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface {
   const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
@@ -2909,8 +2949,10 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
   const toolContract = surfaceToolContract(catalog?.id ?? surfaceId, registeredTools);
   return {
     surface_id: `${server.server_key}.local`,
+    surface_type: catalog?.kind ?? 'mcp_surface',
     display_name: server.server_key,
     server_name: server.server_key,
+    runtime_binding: runtimeBindingForFabricServer(site, server),
     authority_boundary: {
       posture: 'registrar_generated_runtime_surface_registry',
       grants_tool_authority: true,
@@ -2924,6 +2966,11 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
     tool_contract: toolContract,
     registered_live_tools: registeredTools,
     catalog_surface_id: catalog?.id ?? surfaceId,
+    evidence: {
+      source: 'site_mcp_fabric',
+      path: `.ai/mcp/${server.source_file}`,
+      projection_kind: server.projection_kind,
+    },
   };
 }
 
@@ -2945,6 +2992,9 @@ function surfaceToolContract(surfaceId: string, registeredTools: string[]): Site
     .filter((tool) => registeredTools.includes(tool));
   const classified = new Set([...readOnlyTools, ...refusedTools]);
   return {
+    exposed_tools: [...registeredTools],
+    semantic_operations: [],
+    deprecated_aliases: {},
     read_only_tools: readOnlyTools,
     mutating_tools: registeredTools.filter((tool) => !classified.has(tool)),
     refused_tools: refusedTools,
@@ -2958,6 +3008,7 @@ export function buildSiteSurfaceRegistry(site: SiteDef): JsonRecord {
     .sort((a, b) => a.server_name.localeCompare(b.server_name));
   return {
     schema: 'narada.site.capabilities.mcp_surfaces.v1',
+    artifact_role: 'site_capability_surface_registry_not_mcp_client_config',
     site_id: site.site_id,
     generated_by: 'mcp-registrar',
     generated_at: new Date().toISOString(),

@@ -1048,9 +1048,27 @@ try {
     },
   }, null, 2), 'utf8');
   const surfaceRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  assert.equal(surfaceRegistry.artifact_role, 'site_capability_surface_registry_not_mcp_client_config');
   assertOutputReaderClosure(surfaceRegistry, 'aggregate surface registry');
   const inboxRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-inbox');
   assert.ok(inboxRegistry);
+  assert.equal(inboxRegistry.surface_type, 'mcp_surface');
+  assert.equal(inboxRegistry.runtime_binding.runtime_kind, 'node-stdio');
+  assert.equal(inboxRegistry.runtime_binding.owner_site_id, 'narada-sonar');
+  assert.equal(inboxRegistry.runtime_binding.transport.command, 'node');
+  assert.deepEqual(inboxRegistry.runtime_binding.transport.args, [
+    'D:/code/mcp-surfaces/packages/site-inbox-mcp/dist/src/main.js',
+    '--site-root',
+    aggregateSiteRoot,
+  ]);
+  assert.deepEqual(inboxRegistry.tool_contract.semantic_operations, []);
+  assert.deepEqual(inboxRegistry.tool_contract.deprecated_aliases, {});
+  assert.deepEqual(inboxRegistry.tool_contract.exposed_tools, inboxRegistry.registered_live_tools);
+  assert.deepEqual(inboxRegistry.evidence, {
+    source: 'site_mcp_fabric',
+    path: '.ai/mcp/narada-sonar-inbox-mcp.json',
+    projection_kind: 'site_fabric',
+  });
   assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
   assert.ok((inboxRegistry.registered_live_tools as string[]).includes('inbox_acknowledge'));
   assert.ok((inboxRegistry.tool_contract.mutating_tools as string[]).includes('inbox_acknowledge'));
