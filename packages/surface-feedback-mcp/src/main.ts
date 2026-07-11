@@ -1172,14 +1172,26 @@ function feedbackUpdateStatusBatch(args: JsonRecord, state: FeedbackState): Json
       const taskRef = optionalString(update.task_ref);
       const taskStatus = optionalString(update.task_status);
       const resolutionNote = taskRef ? `${baseNote} Task: ${taskRef}` : baseNote;
-      const existing = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+      const existing = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
       if (!existing) throw feedbackNotFound(feedbackId, state);
+      assertMutationAuthority(existing, state);
       const now = nowIso();
       if (taskRef || taskStatus) {
         state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, task_ref = COALESCE(?, task_ref), task_status = COALESCE(?, task_status), updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, taskRef, taskStatus, now, feedbackId);
       } else {
         state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
       }
+      recordFeedbackEvent(state, {
+        feedback_id: feedbackId,
+        event_type: 'status_updated',
+        actor_principal: resolvedBy,
+        status,
+        task_ref: taskRef,
+        task_status: taskStatus,
+        note: resolutionNote,
+        details: { previous_status: existing.status, batch_index: index },
+        created_at: now,
+      });
       const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
       succeeded.push({ feedback_id: feedbackId, status, task_ref: optionalString(updated.task_ref) ?? taskRef, task_status: optionalString(updated.task_status) ?? taskStatus, feedback: hydrateFeedback(updated) });
     } catch (error) {
@@ -1381,7 +1393,12 @@ function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
   const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
   if (!row) throw feedbackNotFound(feedbackId, state);
   if (!isVisible(row, callerSiteId, owned)) throw diagnosticError('feedback_not_visible', `feedback_not_visible:${feedbackId}`);
-  return { ...hydrateFeedback(row), store: storeIdentity(state) };
+  return {
+    ...hydrateFeedback(row),
+    audit_events: feedbackEventHistory(state, feedbackId),
+    task_handoff: buildTaskHandoffReadback(readFeedbackTaskHandoff(state, feedbackId)),
+    store: storeIdentity(state),
+  };
 }
 
 function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -1496,10 +1513,14 @@ function renderResult(result: JsonRecord): string {
     `canonical_feedback_root: ${result.canonical_feedback_root}`,
     `db_path: ${result.db_path}`,
     `task_lifecycle_root: ${result.task_lifecycle_root}`,
+    `task_lifecycle_root_source: ${result.task_lifecycle_root_source}`,
+    `task_lifecycle_root_ready: ${result.task_lifecycle_root_ready}`,
     `task_lifecycle_integration: ${result.task_lifecycle_integration}`,
+    `authority_configured: ${asRecord(result.authority).configured ?? false}`,
+    `authority_site_id: ${asRecord(result.authority).site_id ?? 'unconfigured'}`,
     `total_feedback_entries: ${result.total_feedback_entries}`,
-    result.diagnostic ? `diagnostic: ${result.diagnostic}` : null,
-    result.remediation ? `remediation: ${result.remediation}` : null,
+    ...(Array.isArray(result.diagnostics) ? result.diagnostics.map((item) => `diagnostic: ${item}`) : []),
+    ...(Array.isArray(result.remediation) ? result.remediation.map((item) => `remediation: ${item}`) : []),
   ]);
   if (result.schema === 'narada.surface_feedback.actionable_queue.v1') return compactLines([
     `actionable feedback: ${result.count ?? 0} of ${result.total_count ?? 0}`,
@@ -1617,6 +1638,11 @@ function parseArgs(argv: string[]) {
     else if (arg === '--output-root') options.outputRoot = argv[++i];
     else if (arg === '--canonical-feedback-root') options.canonicalFeedbackRoot = argv[++i];
     else if (arg === '--task-lifecycle-root') options.taskLifecycleRoot = argv[++i];
+    else if (arg === '--site-id') options.authoritySiteId = argv[++i];
+    else if (arg === '--owned-surface-id') {
+      const owned = Array.isArray(options.authorityOwnedSurfaceIds) ? options.authorityOwnedSurfaceIds as unknown[] : [];
+      options.authorityOwnedSurfaceIds = [...owned, argv[++i]];
+    }
   }
   return options;
 }
