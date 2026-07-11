@@ -1787,7 +1787,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           next_action: evidencePreflight.next_action,
         });
       }
-      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => closeTaskService({ cwd: siteRoot, taskNumber, agent: agentId, mode, noContinuationNeeded }));
+      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => closeTaskService({ cwd: siteRoot, taskNumber, by: agentId, mode, noContinuationNeeded }));
       const payload = result.result || result;
       const isBlocked = result.exitCode !== 0 || payload.close_action === 'blocked';
       if (!isBlocked) {

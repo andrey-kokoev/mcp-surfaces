@@ -1181,6 +1181,15 @@ function taskLifecycleRestart(args) {
       watchedPaths,
       expectedTools: taskLifecycleTools().map((tool) => tool.name),
       registeredTools: taskLifecycleTools().map((tool) => tool.name),
+      liveProcessEvidence: {
+        pid: process.pid,
+        booted_at: SERVER_BOOTED_AT,
+        carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+        parent_carrier_session_ref: process.env.NARADA_PARENT_CARRIER_SESSION_REF?.trim() || null,
+        evidence_source: process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
+          ? 'one_shot_verifier'
+          : 'live_mcp_process_self_observation',
+      },
       acknowledgedBy: process.env.NARADA_AGENT_ID ?? null,
       reason: stringField(args, 'reason') ?? 'task_lifecycle_restart acknowledged after external restart',
       note: 'Task-lifecycle MCP external restart acknowledged; restart request marker cleared.',
@@ -3536,7 +3545,10 @@ async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<
   const timeoutMs = timeoutSeconds * 1000;
 
   return new Promise((res, rej) => {
-    const proc = spawn(process.execPath, [fullServerPath, '--site-root', cwd], { cwd });
+    const proc = spawn(process.execPath, [fullServerPath, '--site-root', cwd], {
+      cwd,
+      env: { ...process.env, NARADA_MCP_ONE_SHOT_VERIFIER: '1' },
+    });
     let out = '';
     let err = '';
     let settled = false;

@@ -450,6 +450,7 @@ export function acknowledgeMcpRestartRequest({
   watchedPaths = [],
   expectedTools = [],
   registeredTools = [],
+  liveProcessEvidence = {},
   note,
 }) {
   const acknowledgedAt = new Date().toISOString();
@@ -463,6 +464,7 @@ export function acknowledgeMcpRestartRequest({
     sourceEvidence,
     expectedTools,
     registeredTools,
+    liveProcessEvidence,
   });
   if (acknowledgementGate.status !== 'acknowledgeable') {
     return {
@@ -554,6 +556,7 @@ function reconcileMcpRuntimeRegistryAfterAcknowledgement({
   const instance = instances[index];
   const acknowledgedAt = baselinePayload.acknowledged_at;
   const bootEvidence = acknowledgementGate.post_restart_process_identity ?? {};
+  const liveSelfObserved = bootEvidence.evidence_source === 'live_mcp_process_self_observation';
   const reconciliation = {
     schema: 'narada.mcp.restart_registry_reconciliation.v0',
     status: 'restart_acknowledged_baseline_refreshed',
@@ -568,7 +571,7 @@ function reconcileMcpRuntimeRegistryAfterAcknowledgement({
     evidence_refs: [
       'restart_request_marker_present',
       'post_request_boot_evidence',
-      'carrier_session_lineage_present',
+      liveSelfObserved ? 'live_process_self_observation' : 'carrier_session_lineage_present',
       'tool_readiness_verified',
     ],
   };
@@ -596,6 +599,13 @@ function reconcileMcpRuntimeRegistryAfterAcknowledgement({
       source_newer_than_baseline: false,
       source_digest_changed: false,
       freshness_basis: 'source_digest',
+    },
+    process_identity_evidence: {
+      ...(instance.process_identity_evidence ?? {}),
+      pid: bootEvidence.pid ?? instance.process_identity_evidence?.pid ?? null,
+      booted_at: bootEvidence.booted_at ?? instance.process_identity_evidence?.booted_at ?? null,
+      evidence_source: bootEvidence.evidence_source ?? instance.process_identity_evidence?.evidence_source ?? null,
+      recorded_at: acknowledgedAt,
     },
     baseline: {
       ...(instance.baseline ?? {}),
@@ -666,6 +676,7 @@ export function validateMcpRestartAcknowledgement({
   sourceEvidence,
   expectedTools = [],
   registeredTools = [],
+  liveProcessEvidence = {},
 }: TaskLifecyclePayload = {}) {
   const restartRequestRecord = asPayload(restartRequest);
   const pcSiteRootString = String(pcSiteRoot);
@@ -688,13 +699,26 @@ export function validateMcpRestartAcknowledgement({
     };
   }
 
+  const requestedProcess = asPayload(restartRequestRecord.requested_process);
+  const liveProcess = asPayload(liveProcessEvidence);
+  const liveBootedAtRaw = liveProcess.booted_at ?? null;
+  const liveBootedAt = Date.parse(String(liveBootedAtRaw ?? ''));
+  const requestedPid = Number(requestedProcess.pid);
+  const livePid = Number(liveProcess.pid);
+  const liveProcessReplaced = Number.isFinite(livePid)
+    && (!Number.isFinite(requestedPid) || livePid !== requestedPid);
+  const liveSelfObservation = liveProcess.evidence_source === 'live_mcp_process_self_observation'
+    && Number.isFinite(liveBootedAt)
+    && liveBootedAt > requestedAt
+    && liveProcessReplaced;
+
   const registryPath = join(resolve(pcSiteRootString), 'runtime', 'mcp-runtime-instances.json');
   const registry = asPayload(readJsonFile(registryPath));
   const instances = Array.isArray(registry?.instances) ? registry.instances : [];
   const instance = instances.map(asPayload).find((entry) => entry.surface_id === targetSurface
     || entry.server_entrypoint === targetEntrypoint
     || entry.server_entry_point === targetEntrypoint);
-  if (!instance) {
+  if (!instance && !liveSelfObservation) {
     return {
       status: 'rejected',
       reason: 'post_restart_runtime_observation_missing',
@@ -703,8 +727,10 @@ export function validateMcpRestartAcknowledgement({
     };
   }
 
-  const processEvidence = asPayload(instance.process_identity_evidence);
-  const bootedAtRaw = processEvidence.booted_at ?? instance.booted_at ?? null;
+  const processEvidence = liveSelfObservation
+    ? liveProcess
+    : asPayload(instance?.process_identity_evidence);
+  const bootedAtRaw = processEvidence.booted_at ?? instance?.booted_at ?? null;
   const bootedAt = Date.parse(String(bootedAtRaw ?? ''));
   if (!Number.isFinite(bootedAt) || bootedAt <= requestedAt) {
     return {
@@ -713,14 +739,18 @@ export function validateMcpRestartAcknowledgement({
       detail: 'Target MCP child boot evidence must be newer than the restart request.',
       requested_at: restartRequestRecord.requested_at,
       observed_booted_at: bootedAtRaw,
-      observed_pid: processEvidence.pid ?? instance.pid ?? null,
+      observed_pid: processEvidence.pid ?? instance?.pid ?? null,
     };
   }
 
-  const binding = asPayload(instance.carrier_session_binding);
-  const carrierSessionId = instance.carrier_session_id ?? processEvidence.carrier_session_id ?? null;
+  const binding = liveSelfObservation
+    ? asPayload(processEvidence.carrier_session_binding)
+    : asPayload(instance?.carrier_session_binding);
+  const carrierSessionId = liveSelfObservation
+    ? processEvidence.carrier_session_id ?? null
+    : instance?.carrier_session_id ?? processEvidence.carrier_session_id ?? null;
   const bindingStatus = String(binding.status ?? (carrierSessionId ? 'bound_to_parent_carrier_session' : 'legacy_unbound'));
-  if (!carrierSessionId || ['legacy_unbound', 'terminal_missing_embodiment_authority'].includes(bindingStatus)) {
+  if (!liveSelfObservation && (!carrierSessionId || ['legacy_unbound', 'terminal_missing_embodiment_authority'].includes(bindingStatus))) {
     return {
       status: 'rejected',
       reason: 'carrier_session_lineage_missing',
@@ -730,21 +760,21 @@ export function validateMcpRestartAcknowledgement({
     };
   }
 
-  const sourceFreshness = asPayload(instance.source_freshness);
+  const sourceFreshness = asPayload(instance?.source_freshness);
   const sourceEvidenceRecord = asPayload(sourceEvidence);
-  const instanceSource = asPayload(instance.source);
-  const instanceBaseline = asPayload(instance.baseline);
+  const instanceSource = asPayload(instance?.source);
+  const instanceBaseline = asPayload(instance?.baseline);
   const sourceDigestComparison = compareSourceDigest({
     sourceEvidence: sourceEvidenceRecord,
-    baseline: instance.baseline ?? instance.source_baseline ?? {},
+    baseline: instance?.baseline ?? instance?.source_baseline ?? {},
   });
   const sourceNewerThanBaseline = sourceFreshness.source_newer_than_baseline
-    ?? instance.source_newer_than_baseline
+    ?? instance?.source_newer_than_baseline
     ?? (typeof instanceSource.current_max_mtime === 'number' && Number.isFinite(instanceSource.current_max_mtime)
       && typeof instanceBaseline.baseline_mtime === 'number' && Number.isFinite(instanceBaseline.baseline_mtime)
       ? instanceSource.current_max_mtime > instanceBaseline.baseline_mtime
       : null);
-  const pendingRestart = sourceFreshness.pending_restart ?? instance.pending_restart ?? null;
+  const pendingRestart = sourceFreshness.pending_restart ?? instance?.pending_restart ?? null;
 
   const missingExpectedTools = expectedToolNames.filter((name) => !registeredToolNames.includes(name));
   if (expectedToolNames.length > 0 && missingExpectedTools.length > 0) {
@@ -765,12 +795,19 @@ export function validateMcpRestartAcknowledgement({
     target_surface: targetSurface,
     target_entrypoint: targetEntrypoint,
     post_restart_process_identity: {
-      pid: processEvidence.pid ?? instance.pid ?? null,
+      pid: processEvidence.pid ?? instance?.pid ?? null,
       booted_at: bootedAtRaw,
+      evidence_source: liveSelfObservation
+        ? 'live_mcp_process_self_observation'
+        : processEvidence.evidence_source ?? 'pc_runtime_registry',
     },
     carrier_session_id: carrierSessionId,
-    parent_carrier_session_ref: instance.parent_carrier_session_ref ?? binding.parent_carrier_session_ref ?? null,
-    carrier_session_binding: binding,
+    parent_carrier_session_ref: liveSelfObservation
+      ? processEvidence.parent_carrier_session_ref ?? null
+      : instance?.parent_carrier_session_ref ?? binding.parent_carrier_session_ref ?? null,
+    carrier_session_binding: liveSelfObservation && !carrierSessionId
+      ? { status: 'not_required_for_live_process_self_observation' }
+      : binding,
     source_freshness: {
       source_newer_than_baseline: sourceNewerThanBaseline,
       source_digest: sourceEvidenceRecord.source_digest ?? null,

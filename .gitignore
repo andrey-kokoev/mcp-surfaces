@@ -11,3 +11,8 @@ packages/shared/*/dist/
 packages/*/.tmp-tests/
 packages/*/sessions/
 executions/
+/.tmp-tests/
+/codex-home/
+/packages/shared/provider-registry/src/*.d.ts
+/packages/shared/provider-registry/src/*.js
+/packages/shared/provider-registry/src/*.js.map

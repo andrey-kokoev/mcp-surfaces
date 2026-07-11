@@ -3235,6 +3235,48 @@ try {
   assert.equal(supersededShowPayload.current_execution_evidence.status, 'superseded');
   assert.equal(supersededShowPayload.current_execution_evidence.supersession.supersedes_report_id, payloadRefFinishPayload.report_id);
 
+  const closeEvidenceAdmissionResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 2431,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_admit_evidence',
+      arguments: { task_number: 9303, agent_id: 'scoped.builder' },
+    },
+  }, scopedRuntime);
+  const closeEvidenceAdmissionPayload = await responsePayload(closeEvidenceAdmissionResponse, scopedRuntime, 2432);
+  assert.equal(closeEvidenceAdmissionPayload.status, 'admitted', JSON.stringify(closeEvidenceAdmissionPayload));
+
+  const closeWithActorResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 244,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_close',
+      arguments: {
+        task_number: 9303,
+        agent_id: 'scoped.builder',
+        mode: 'operator_direct',
+        no_continuation_needed: 'Bounded MCP adapter regression task.',
+      },
+    },
+  }, scopedRuntime);
+  const closeWithActorPayload = await responsePayload(closeWithActorResponse, scopedRuntime, 245);
+  assert.equal(closeWithActorPayload.status, 'success', JSON.stringify(closeWithActorPayload));
+  assert.equal(closeWithActorPayload.closed_by, 'scoped.builder');
+  assert.equal(closeWithActorPayload.closure_mode, 'operator_direct');
+  const closedWithActorShowResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 246,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_show', arguments: { task_number: 9303 } },
+  }, scopedRuntime);
+  const closedWithActorShowPayload = await responsePayload(closedWithActorShowResponse, scopedRuntime, 247);
+  assert.equal(closedWithActorShowPayload.lifecycle.status, 'closed');
+  assert.equal(closedWithActorShowPayload.lifecycle.closed_by, 'scoped.builder');
+  assert.equal(closedWithActorShowPayload.lifecycle.closure_mode, 'operator_direct');
+  assert.ok(closedWithActorShowPayload.lifecycle.closed_at);
+
   const followUpPreflightResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 23,
