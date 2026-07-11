@@ -360,6 +360,38 @@ function ensureDownstreamDependencyOutcomeContracts() {
   }
 }
 
+function reconcileTaskLifecycleRestartAfterBoot() {
+  const requestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  if (!existsSync(requestPath)) return;
+  const evidenceSource = process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
+    ? 'one_shot_verifier'
+    : 'live_mcp_process_self_observation';
+  const result = acknowledgeMcpRestartRequest({
+    siteRoot,
+    serverName: SERVER_NAME,
+    targetSurface: 'task-lifecycle-mcp.local',
+    targetEntrypoint: 'tools/task-lifecycle/task-mcp-server.js',
+    restartRequestPath: requestPath,
+    baselinePath: join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json'),
+    watchedPaths: ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'],
+    expectedTools: taskLifecycleTools().map((tool) => tool.name),
+    registeredTools: taskLifecycleTools().map((tool) => tool.name),
+    liveProcessEvidence: {
+      pid: process.pid,
+      booted_at: SERVER_BOOTED_AT,
+      carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID?.trim() || null,
+      parent_carrier_session_ref: process.env.NARADA_PARENT_CARRIER_SESSION_REF?.trim() || null,
+      evidence_source: evidenceSource,
+    },
+    acknowledgedBy: process.env.NARADA_AGENT_ID ?? null,
+    reason: 'Task-lifecycle MCP startup proved a post-request child replacement.',
+    note: 'Task-lifecycle MCP restart reconciled automatically from live child boot evidence.',
+  });
+  if (result.status === 'restart_acknowledgement_rejected' && evidenceSource !== 'one_shot_verifier') {
+    runtimeStderr.write(`Task-lifecycle restart marker remains pending: ${result.reason ?? 'acknowledgement_rejected'}\n`);
+  }
+}
+
 function parseJsonStringArray(value: unknown): string[] {
   if (typeof value !== 'string') return [];
   try {
@@ -651,6 +683,7 @@ export function configureTaskLifecycleMcpRuntime({
   taskLifecycleHandlerRegistry = null;
   setTaskLifecycleReadModelContext({ siteRoot, store });
   recordTaskLifecycleRuntimeObservation();
+  reconcileTaskLifecycleRestartAfterBoot();
   return { status: 'configured', siteRoot };
 }
 
