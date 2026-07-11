@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerState, handleRequest } from '../src/main.js';
+import { closeServerState, createServerState, handleRequest } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'surface-feedback-mcp-behavior-'));
 let state: any;
 
 try {
-  state = createServerState({ feedbackRoot: root, canonicalFeedbackRoot: root });
+  mkdirSync(join(root, '.ai'), { recursive: true });
+  state = createServerState({
+    feedbackRoot: root,
+    canonicalFeedbackRoot: root,
+    taskLifecycleRoot: root,
+    authoritySiteId: 'andrey-user',
+    authorityOwnedSurfaceIds: ['sop', 'delegated-task', 'surface-feedback', 'task-lifecycle'],
+  });
 
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -29,6 +36,9 @@ try {
   assert.equal(view(doctor).uses_canonical_store, true);
   assert.equal(view(doctor).feedback_root, root);
   assert.equal(view(doctor).canonical_feedback_root, root);
+  assert.equal(view(doctor).task_lifecycle_root_ready, true);
+  assert.equal(view(doctor).task_lifecycle_integration, 'isolated_stdio_process');
+  assert.equal(view(doctor).authority.site_id, 'andrey-user');
   assert.match(view(doctor).db_path, /surface-feedback\.db$/);
 
   const liveProofTemplate = await call('surface_feedback_live_proof_template', {
@@ -45,14 +55,19 @@ try {
   assert.ok(liveProofData.live_proof_contract.negative_controls.revocation_or_refusal_proof);
   assert.ok(liveProofData.live_proof_contract.test_alignment.unit_tests_specify_deployed_transport);
 
-  const noncanonicalState = createServerState({ feedbackRoot: join(root, 'site-local'), canonicalFeedbackRoot: root });
+  const noncanonicalState = createServerState({
+    feedbackRoot: join(root, 'site-local'),
+    canonicalFeedbackRoot: root,
+    taskLifecycleRoot: root,
+    authoritySiteId: 'andrey-user',
+  });
   const noncanonicalDoctor = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'surface_feedback_doctor', arguments: {} } }, noncanonicalState) as Record<string, any>;
   assert.equal(view(noncanonicalDoctor).status, 'warning');
   assert.equal(view(noncanonicalDoctor).storage_posture, 'noncanonical_feedback_root');
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);
-  assert.match(view(noncanonicalDoctor).diagnostic, /Cross-site feedback may be invisible/);
-  assert.match(view(noncanonicalDoctor).remediation, /--feedback-root/);
-  noncanonicalState.db.close();
+  assert.ok(view(noncanonicalDoctor).diagnostics.some((item: string) => /noncanonical/.test(item)));
+  assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--feedback-root/.test(item)));
+  closeServerState(noncanonicalState);
 
   const sub = await call('surface_feedback_submit', {
     surface_id: 'sop',
@@ -77,6 +92,8 @@ try {
   assert.equal(updateData.status, 'closed');
   assert.equal(updateData.resolved_by, 'andrey-user.test');
   assert.equal(updateData.resolution_note, 'Covered by behavior test.');
+  const updateReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
+  assert.deepEqual(view(updateReadback).audit_events.map((event: any) => event.event_type), ['submitted', 'status_updated']);
 
   // --- update_status: converted_to_task ---
   const converted = await call('surface_feedback_submit', {
@@ -134,6 +151,7 @@ try {
   const handoffState = createServerState({
     feedbackRoot: handoffRoot,
     canonicalFeedbackRoot: handoffRoot,
+    authoritySiteId: 'andrey-user',
     taskLifecycleRequest: async (request: any) => {
       handoffRequests.push(request);
       const name = request.params?.name;
@@ -147,6 +165,7 @@ try {
       }
       if (name === 'task_lifecycle_create') {
         if (failHandoffTaskCreation) throw new Error('simulated_task_create_failure');
+        const taskNumber = nextHandoffTaskNumber++;
         return {
           jsonrpc: '2.0',
           id: request.id,
@@ -154,8 +173,8 @@ try {
             structuredContent: {
               schema: 'narada.task.create.v0',
               status: 'created',
-              task_number: nextHandoffTaskNumber,
-              task_id: `20260711-${nextHandoffTaskNumber}-feedback-handoff-test`,
+              task_number: taskNumber,
+              task_id: `20260711-${taskNumber}-feedback-handoff-test`,
               task_status: 'opened',
             },
           },
@@ -176,7 +195,6 @@ try {
     failHandoffTaskCreation = true;
     const failedConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: view(failedSource).feedback_id,
-      caller_site_id: 'andrey-user',
       resolved_by: 'handoff-test',
     });
     assert.equal(errorCode(failedConversion), 'feedback_task_create_failed');
@@ -185,9 +203,20 @@ try {
     assert.equal(view(failedReadback).status, 'submitted');
     assert.equal(view(failedReadback).task_ref, null);
     assert.equal(view(failedReadback).task_status, null);
+    assert.equal(view(failedReadback).task_handoff.status, 'failed');
+    assert.equal(view(failedReadback).task_handoff.payload_ref, 'mcp_payload:test-handoff@v1');
     assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
 
     failHandoffTaskCreation = false;
+    handoffCalls.length = 0;
+    const recoveredConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: view(failedSource).feedback_id,
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(view(recoveredConversion).status, 'recovered');
+    assert.equal(view(recoveredConversion).task_ref, 'task #1982');
+    assert.deepEqual(handoffCalls, ['task_lifecycle_create']);
+
     handoffCalls.length = 0;
     const successSource = await callWith(handoffState, 'surface_feedback_submit', {
       surface_id: 'surface-feedback',
@@ -200,34 +229,147 @@ try {
     const successFeedbackId = view(successSource).feedback_id;
     const successConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: successFeedbackId,
-      caller_site_id: 'andrey-user',
       resolved_by: 'handoff-test',
     });
     const successData = view(successConversion);
     assert.equal(successData.schema, 'narada.surface_feedback.convert_to_task.v1');
     assert.equal(successData.status, 'converted');
-    assert.equal(successData.task_ref, 'task #1982');
-    assert.equal(successData.task_number, 1982);
+    assert.equal(successData.task_ref, 'task #1983');
+    assert.equal(successData.task_number, 1983);
     assert.equal(successData.task_status, 'opened');
     assert.equal(successData.next_action.surface_id, 'task-lifecycle');
     assert.equal(successData.next_action.tool, 'task_lifecycle_show');
-    assert.deepEqual(successData.next_action.arguments, { task_number: 1982 });
+    assert.deepEqual(successData.next_action.arguments, { task_number: 1983 });
     assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
     assert.equal(handoffRequests[handoffRequests.length - 2].params.arguments.payload.idempotency_key, `surface-feedback:${successFeedbackId}`);
 
     const handoffReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: successFeedbackId });
     assert.equal(view(handoffReadback).status, 'converted_to_task');
-    assert.equal(view(handoffReadback).task_ref, 'task #1982');
+    assert.equal(view(handoffReadback).task_ref, 'task #1983');
     assert.equal(view(handoffReadback).task_status, 'opened');
     handoffCalls.length = 0;
     const duplicateConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: successFeedbackId,
-      caller_site_id: 'andrey-user',
       resolved_by: 'handoff-test',
     });
     assert.equal(view(duplicateConversion).status, 'already_linked');
-    assert.equal(view(duplicateConversion).task_ref, 'task #1982');
+    assert.equal(view(duplicateConversion).task_ref, 'task #1983');
     assert.deepEqual(handoffCalls, []);
+
+    const linkFailureSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'bug',
+      summary: 'Recover a created task after link persistence failure',
+    });
+    const linkFailureId = view(linkFailureSource).feedback_id;
+    handoffState.db.exec(`CREATE TRIGGER simulate_feedback_link_failure BEFORE UPDATE OF task_ref ON feedback_entries WHEN OLD.feedback_id = '${linkFailureId}' BEGIN SELECT RAISE(ABORT, 'simulated_link_failure'); END`);
+    handoffCalls.length = 0;
+    const linkFailure = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: linkFailureId,
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(errorCode(linkFailure), 'feedback_task_link_failed');
+    assert.equal(linkFailure.error.data.handoff_status, 'task_created');
+    assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
+    const failedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId });
+    assert.equal(view(failedLinkReadback).status, 'submitted');
+    assert.equal(view(failedLinkReadback).task_handoff.status, 'task_created');
+    assert.equal(view(failedLinkReadback).task_handoff.task_ref, 'task #1984');
+    handoffState.db.exec('DROP TRIGGER simulate_feedback_link_failure');
+    handoffCalls.length = 0;
+    const repairedLink = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: linkFailureId,
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(view(repairedLink).status, 'recovered');
+    assert.equal(view(repairedLink).task_ref, 'task #1984');
+    assert.deepEqual(handoffCalls, []);
+    const repairedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId });
+    assert.deepEqual(
+      view(repairedLinkReadback).audit_events.map((event: any) => event.event_type),
+      ['submitted', 'task_handoff_reserved', 'task_payload_created', 'task_created', 'task_link_failed', 'task_handoff_resumed', 'task_linked'],
+    );
+
+    const contentionSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'observation',
+      summary: 'An active handoff lease excludes concurrent conversion',
+    });
+    const contentionId = view(contentionSource).feedback_id;
+    const leaseNow = new Date().toISOString();
+    const leaseExpiry = new Date(Date.now() + 60_000).toISOString();
+    handoffState.db.prepare('INSERT INTO feedback_task_handoffs (feedback_id, idempotency_key, status, payload_ref, attempt_count, lease_owner, lease_expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      contentionId,
+      `surface-feedback:${contentionId}`,
+      'payload_created',
+      'mcp_payload:contention@v1',
+      1,
+      'other-converter',
+      leaseExpiry,
+      leaseNow,
+      leaseNow,
+    );
+    handoffCalls.length = 0;
+    const contention = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: contentionId,
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(errorCode(contention), 'feedback_task_handoff_in_progress');
+    assert.deepEqual(handoffCalls, []);
+
+    const sharedRaceSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'bug',
+      summary: 'Only one server process acquires a shared handoff lease',
+    });
+    const sharedRaceId = view(sharedRaceSource).feedback_id;
+    const competingState = createServerState({
+      feedbackRoot: handoffRoot,
+      canonicalFeedbackRoot: handoffRoot,
+      authoritySiteId: 'andrey-user',
+      taskLifecycleRequest: async () => { throw new Error('competing_server_must_not_reach_task_lifecycle'); },
+    });
+    try {
+      handoffCalls.length = 0;
+      const [raceWinner, raceLoser] = await Promise.all([
+        callWith(handoffState, 'surface_feedback_convert_to_task', { feedback_id: sharedRaceId, resolved_by: 'handoff-test' }),
+        callWith(competingState, 'surface_feedback_convert_to_task', { feedback_id: sharedRaceId, resolved_by: 'handoff-test' }),
+      ]);
+      assert.equal(view(raceWinner).status, 'converted');
+      assert.equal(errorCode(raceLoser), 'feedback_task_handoff_in_progress');
+      assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
+    } finally {
+      closeServerState(competingState);
+    }
+
+    const fallbackSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'observation',
+      summary: 'A task id requires search rather than numeric show',
+    });
+    const fallbackId = view(fallbackSource).feedback_id;
+    await callWith(handoffState, 'surface_feedback_update_status', {
+      feedback_id: fallbackId,
+      status: 'converted_to_task',
+      resolved_by: 'handoff-test',
+      resolution_note: 'Linked by external reconciliation.',
+      task_ref: '20260711-feedback-task-id',
+      task_status: 'opened',
+    });
+    const fallbackConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: fallbackId,
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(view(fallbackConversion).next_action.tool, 'task_lifecycle_search');
+    assert.deepEqual(view(fallbackConversion).next_action.arguments, { query: '20260711-feedback-task-id', limit: 5 });
 
     const privateSource = await callWith(handoffState, 'surface_feedback_submit', {
       surface_id: 'surface-feedback',
@@ -238,18 +380,48 @@ try {
     });
     const blockedConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: view(privateSource).feedback_id,
-      caller_site_id: 'andrey-user',
       resolved_by: 'handoff-test',
     });
     assert.equal(errorCode(blockedConversion), 'feedback_not_visible');
     const missingConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: 'sfb_missing_convert',
-      caller_site_id: 'andrey-user',
       resolved_by: 'handoff-test',
     });
     assert.equal(errorCode(missingConversion), 'feedback_not_found');
+    const spoofedAuthority = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: successFeedbackId,
+      resolved_by: 'handoff-test',
+      caller_site_id: 'narada-sonar',
+    });
+    assert.equal(errorCode(spoofedAuthority), 'feedback_authority_must_be_server_bound');
   } finally {
-    handoffState.db.close();
+    closeServerState(handoffState);
+  }
+
+  const invalidTaskRoot = join(root, 'invalid-task-root');
+  mkdirSync(invalidTaskRoot, { recursive: true });
+  const invalidRootState = createServerState({
+    feedbackRoot: invalidTaskRoot,
+    canonicalFeedbackRoot: invalidTaskRoot,
+    taskLifecycleRoot: invalidTaskRoot,
+    authoritySiteId: 'andrey-user',
+  });
+  try {
+    const invalidRootSource = await callWith(invalidRootState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'root-test',
+      kind: 'bug',
+      summary: 'Invalid task lifecycle root is diagnosed before child startup',
+    });
+    const invalidRootConversion = await callWith(invalidRootState, 'surface_feedback_convert_to_task', {
+      feedback_id: view(invalidRootSource).feedback_id,
+      resolved_by: 'root-test',
+    });
+    assert.equal(errorCode(invalidRootConversion), 'feedback_task_lifecycle_root_invalid');
+    assert.match(invalidRootConversion.error.data.remediation, /--task-lifecycle-root/);
+  } finally {
+    closeServerState(invalidRootState);
   }
 
   const batchA = await call('surface_feedback_submit', {
@@ -388,7 +560,11 @@ try {
 
   // --- import: repair explicit feedback IDs from a site-local split-brain store ---
   const siteLocalRoot = join(root, 'split-brain-site');
-  const siteLocalState = createServerState({ feedbackRoot: siteLocalRoot, canonicalFeedbackRoot: root });
+  const siteLocalState = createServerState({
+    feedbackRoot: siteLocalRoot,
+    canonicalFeedbackRoot: root,
+    authoritySiteId: 'narada-staccato',
+  });
   try {
     const siteLocalSubmit = await callWith(siteLocalState, 'surface_feedback_submit', {
       surface_id: 'surface-feedback',
@@ -438,7 +614,7 @@ try {
     assert.equal(view(duplicateImport).skipped_count, 1);
     assert.equal(view(duplicateImport).skipped[0].reason, 'already_exists');
   } finally {
-    siteLocalState.db.close();
+    closeServerState(siteLocalState);
   }
 
   // --- stats: no scope ---
@@ -471,6 +647,6 @@ try {
 
   console.log('surface-feedback-mcp behavior ok');
 } finally {
-  if (state) state.db.close();
+  if (state) closeServerState(state);
   rmSync(root, { recursive: true, force: true });
 }

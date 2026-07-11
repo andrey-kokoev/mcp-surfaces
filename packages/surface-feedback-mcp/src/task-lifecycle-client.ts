@@ -17,16 +17,18 @@ export type TaskLifecycleProcessClient = {
 
 const require = createRequire(import.meta.url);
 
-function taskLifecycleEntrypoint(): string {
+function defaultTaskLifecycleEntrypoint(): string {
   return require.resolve('@narada2/task-lifecycle-mcp/task-lifecycle-mcp-server');
 }
 
 export function createTaskLifecycleProcessClient({
   siteRoot,
+  entrypoint = defaultTaskLifecycleEntrypoint(),
   env = process.env,
   requestTimeoutMs = 120_000,
 }: {
   siteRoot: string;
+  entrypoint?: string;
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
 }): TaskLifecycleProcessClient {
@@ -44,13 +46,15 @@ export function createTaskLifecycleProcessClient({
     }
   };
 
-  const processError = (reason: string, error?: unknown) => {
+  const processError = (source: ChildProcessWithoutNullStreams | null, reason: string, error?: unknown) => {
     const suffix = stderrTail ? ` stderr=${stderrTail.slice(-2000)}` : '';
     const detail = error instanceof Error ? ` ${error.message}` : error ? ` ${String(error)}` : '';
     const failure = new Error(`${reason}${detail}${suffix}`);
-    child = null;
-    stdoutBuffer = '';
-    rejectPending(failure);
+    if (source === null || child === source) {
+      child = null;
+      stdoutBuffer = '';
+      rejectPending(failure);
+    }
     return failure;
   };
 
@@ -64,7 +68,11 @@ export function createTaskLifecycleProcessClient({
       try {
         response = JSON.parse(line) as JsonRecord;
       } catch (error) {
-        processError('task_lifecycle_invalid_stdout', error);
+        const current = child;
+        processError(current, 'task_lifecycle_invalid_stdout', error);
+        if (current && !current.killed) {
+          try { current.kill(); } catch { /* process exit will finish cleanup */ }
+        }
         continue;
       }
       const id = String(response.id ?? '');
@@ -79,7 +87,7 @@ export function createTaskLifecycleProcessClient({
   const ensureChild = (): ChildProcessWithoutNullStreams => {
     if (child && !child.killed) return child;
     if (closed) throw new Error('task_lifecycle_client_closed');
-    const spawned = spawn(process.execPath, [taskLifecycleEntrypoint(), '--site-root', siteRoot], {
+    const spawned = spawn(process.execPath, [entrypoint, '--site-root', siteRoot], {
       cwd: siteRoot,
       env: { ...env, NARADA_SITE_ROOT: siteRoot },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -93,10 +101,10 @@ export function createTaskLifecycleProcessClient({
     spawned.stderr.on('data', (chunk: string) => {
       stderrTail = `${stderrTail}${chunk}`.slice(-4000);
     });
-    spawned.once('error', (error) => processError('task_lifecycle_process_error', error));
+    spawned.once('error', (error) => processError(spawned, 'task_lifecycle_process_error', error));
     spawned.once('exit', (code, signal) => {
       if (closed) return;
-      processError(`task_lifecycle_process_exit:${code ?? 'null'}:${signal ?? 'null'}`);
+      processError(spawned, `task_lifecycle_process_exit:${code ?? 'null'}:${signal ?? 'null'}`);
     });
     return spawned;
   };
@@ -113,7 +121,7 @@ export function createTaskLifecycleProcessClient({
     return new Promise<JsonRecord>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        const failure = processError(`task_lifecycle_request_timeout:${id}`);
+        const failure = processError(spawned, `task_lifecycle_request_timeout:${id}`);
         reject(failure);
         try { spawned.kill(); } catch { /* process exit will finish cleanup */ }
       }, requestTimeoutMs);
@@ -123,7 +131,7 @@ export function createTaskLifecycleProcessClient({
       } catch (error) {
         pending.delete(id);
         clearTimeout(timer);
-        reject(processError('task_lifecycle_stdin_error', error));
+        reject(processError(spawned, 'task_lifecycle_stdin_error', error));
       }
     });
   };

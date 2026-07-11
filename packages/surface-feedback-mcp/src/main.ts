@@ -627,6 +627,14 @@ async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Pr
       });
       payloadRef = requiredString(payloadResult.ref ?? payloadResult.payload_ref, 'feedback_task_payload_ref_missing', { feedback_id: feedbackId });
       markHandoffPayloadCreated(state, feedbackId, leaseOwner, payloadRef);
+      recordFeedbackEvent(state, {
+        feedback_id: feedbackId,
+        event_type: 'task_payload_created',
+        actor_principal: resolvedBy,
+        status: String(row.status),
+        note: 'Persisted task creation payload for feedback handoff.',
+        details: { payload_ref: payloadRef, idempotency_key: idempotencyKey },
+      });
     }
     if (!taskRef) {
       const taskResult = await callTaskLifecycle(state, 'task_lifecycle_create', { payload_ref: payloadRef });
@@ -702,6 +710,16 @@ async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Pr
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
     markHandoffLinkFailure(state, feedbackId, leaseOwner, diagnostic);
+    recordFeedbackEvent(state, {
+      feedback_id: feedbackId,
+      event_type: 'task_link_failed',
+      actor_principal: resolvedBy,
+      status: String(row.status),
+      task_ref: taskRef,
+      task_status: taskStatus,
+      note: optionalString(diagnostic.message) ?? 'Feedback task link failed.',
+      details: { code: diagnostic.code, payload_ref: payloadRef },
+    });
     throw diagnosticError('feedback_task_link_failed', diagnostic.message, {
       feedback_id: feedbackId,
       task_ref: taskRef,
@@ -737,7 +755,7 @@ function claimFeedbackTaskHandoff(
   const leaseExpiresAt = new Date(Date.now() + HANDOFF_LEASE_MS).toISOString();
   let existing = readFeedbackTaskHandoff(state, feedbackId);
   if (existing && String(existing.status) === 'linked') return existing;
-  if (existing && String(existing.status) === 'pending') {
+  if (existing && String(existing.status) !== 'linked') {
     const leaseExpiry = Date.parse(String(existing.lease_expires_at ?? ''));
     if (Number.isFinite(leaseExpiry) && leaseExpiry > Date.now()) {
       throw diagnosticError('feedback_task_handoff_in_progress', `feedback_task_handoff_in_progress:${feedbackId}`, {
@@ -774,8 +792,8 @@ function claimFeedbackTaskHandoff(
       : optionalString(existing.payload_ref)
         ? 'payload_created'
         : 'pending';
-    state.db.prepare(
-      'UPDATE feedback_task_handoffs SET status = ?, requested_note = COALESCE(requested_note, ?), requested_title = COALESCE(requested_title, ?), attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at = ?, last_error_code = NULL, last_error_message = NULL, last_error_details = NULL, updated_at = ? WHERE feedback_id = ?'
+    const reclaim = state.db.prepare(
+      'UPDATE feedback_task_handoffs SET status = ?, requested_note = COALESCE(requested_note, ?), requested_title = COALESCE(requested_title, ?), attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at = ?, last_error_code = NULL, last_error_message = NULL, last_error_details = NULL, updated_at = ? WHERE feedback_id = ? AND status <> ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)'
     ).run(
       resumeStatus,
       optionalString(args.resolution_note),
@@ -784,7 +802,18 @@ function claimFeedbackTaskHandoff(
       leaseExpiresAt,
       now,
       feedbackId,
-    );
+      'linked',
+      now,
+    ) as unknown as { changes?: number };
+    if (Number(reclaim.changes ?? 0) !== 1) {
+      const current = readFeedbackTaskHandoff(state, feedbackId);
+      if (current && String(current.status) === 'linked') return current;
+      throw diagnosticError('feedback_task_handoff_in_progress', `feedback_task_handoff_in_progress:${feedbackId}`, {
+        feedback_id: feedbackId,
+        lease_expires_at: current?.lease_expires_at ?? null,
+        retryable: true,
+      });
+    }
   }
   recordFeedbackEvent(state, {
     feedback_id: feedbackId,
@@ -827,15 +856,21 @@ function markHandoffTaskCreated(state: FeedbackState, feedbackId: string, leaseO
 }
 
 function markHandoffFailure(state: FeedbackState, feedbackId: string, leaseOwner: string, payloadRef: string | null, diagnostic: JsonRecord): void {
-  state.db.prepare(
+  const result = state.db.prepare(
     'UPDATE feedback_task_handoffs SET status = ?, payload_ref = COALESCE(?, payload_ref), lease_owner = NULL, lease_expires_at = NULL, last_error_code = ?, last_error_message = ?, last_error_details = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
-  ).run('failed', payloadRef, diagnostic.code, diagnostic.message, JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+  ).run('failed', payloadRef, optionalString(diagnostic.code), optionalString(diagnostic.message), JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+  if (Number((result as unknown as { changes?: number }).changes ?? 0) !== 1) {
+    throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
+  }
 }
 
 function markHandoffLinkFailure(state: FeedbackState, feedbackId: string, leaseOwner: string, diagnostic: JsonRecord): void {
-  state.db.prepare(
+  const result = state.db.prepare(
     'UPDATE feedback_task_handoffs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, last_error_code = ?, last_error_message = ?, last_error_details = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
-  ).run('task_created', diagnostic.code, diagnostic.message, JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+  ).run('task_created', optionalString(diagnostic.code), optionalString(diagnostic.message), JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+  if (Number((result as unknown as { changes?: number }).changes ?? 0) !== 1) {
+    throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
+  }
 }
 
 function linkFeedbackTaskHandoff(state: FeedbackState, link: JsonRecord): void {
@@ -855,19 +890,19 @@ function linkFeedbackTaskHandoff(state: FeedbackState, link: JsonRecord): void {
     }
     state.db.prepare(
       'UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, task_ref = ?, task_status = ?, updated_at = ? WHERE feedback_id = ?'
-    ).run('converted_to_task', link.resolved_by, link.resolution_note, taskRef, link.task_status, nowIso(), feedbackId);
+    ).run('converted_to_task', String(link.resolved_by), String(link.resolution_note), taskRef, optionalString(link.task_status), nowIso(), feedbackId);
     const handoffUpdate = state.db.prepare(
       'UPDATE feedback_task_handoffs SET status = ?, payload_ref = COALESCE(?, payload_ref), task_ref = ?, task_number = ?, task_id = ?, task_status = ?, lease_owner = NULL, lease_expires_at = NULL, last_error_code = NULL, last_error_message = NULL, last_error_details = NULL, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
     ).run(
       'linked',
-      link.payload_ref,
+      optionalString(link.payload_ref),
       taskRef,
-      link.task_number,
-      link.task_id,
-      link.task_status,
+      numberValue(link.task_number),
+      optionalString(link.task_id),
+      optionalString(link.task_status),
       nowIso(),
       feedbackId,
-      link.lease_owner,
+      String(link.lease_owner),
     ) as unknown as { changes?: number };
     if (Number(handoffUpdate.changes ?? 0) !== 1) throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
     recordFeedbackEvent(state, {
@@ -1149,12 +1184,12 @@ function requireTaskLifecycleRootReady(state: FeedbackState): void {
     remediation: 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.',
   });
 }
-}
 
 function taskNumberFromRef(taskRef: string): number | null {
   const text = String(taskRef).trim();
-  const match = /(?:task\s*#|^)(\d+)(?:$|\D)/i.exec(text);
-  return match ? Number(match[1]) : null;
+  const taskMatch = /^task\s*#(\d+)$/i.exec(text);
+  if (taskMatch) return Number(taskMatch[1]);
+  return /^\d+$/.test(text) ? Number(text) : null;
 }
 
 function feedbackUpdateStatusBatch(args: JsonRecord, state: FeedbackState): JsonRecord {

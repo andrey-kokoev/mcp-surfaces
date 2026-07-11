@@ -34,7 +34,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { intent: 'First use', call: 'surface_feedback_guidance({})' },
       { intent: 'Tool-specific help', call: "surface_feedback_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "surface_feedback_guidance({ workflow: \"<workflow_name>\" })" },
-      { intent: 'Feedback to task', call: 'surface_feedback_convert_to_task({ feedback_id, caller_site_id, resolved_by })' }
+      { intent: 'Feedback to task', call: 'surface_feedback_convert_to_task({ feedback_id, resolved_by })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
@@ -46,7 +46,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
-      'If task creation succeeds but feedback linking fails, use the returned task reference with surface_feedback_update_status and preserve the diagnostic as repair evidence.',
+      'If conversion fails after reserving a handoff, retry surface_feedback_convert_to_task with the same feedback_id. The durable handoff resumes from its recorded payload or task reference without intentionally creating another task.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {
@@ -63,6 +63,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
       'Task lifecycle state in actionable queue results is an optional feedback projection; it is not a replacement for authoritative task-lifecycle readback.',
       'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
+      'Mutation authority is bound when the server starts; callers must not supply caller_site_id or owned_surface_ids to mutation tools.',
       'The owning MCP surface remains authoritative for state and enforcement.'
     ]
   };
