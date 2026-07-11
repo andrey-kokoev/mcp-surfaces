@@ -7,7 +7,7 @@ import { guidanceToolDefinition } from './guidance.js';
  *
  * This is the minimum checkpoint/hydration slice admitted from the
  * agent-context checkpointing lift package. It intentionally avoids importing
- * narada-andrey runtime state or broad User Site surfaces.
+ * andrey-user runtime state or broad User Site surfaces.
  */
 
 import { randomUUID } from 'node:crypto';

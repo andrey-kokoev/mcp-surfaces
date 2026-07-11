@@ -439,7 +439,8 @@ function toAgentRecord(agent: JsonRecord, config: JsonRecord, configPath: string
   const siteRoot = text(agent.SiteRoot ?? config.SiteRoot) || naradaRoot;
   const workspaceRoot = text(agent.WorkspaceRoot ?? config.WorkspaceRoot);
   const launcher = text(agent.Launcher ?? config.Launcher);
-  const launcherPath = text(agent.LauncherPath ?? config.LauncherPath) || (launcher ? join(naradaRoot, launcher) : join(naradaRoot, 'narada-andrey.ps1'));
+  const launcherPath = text(agent.LauncherPath ?? config.LauncherPath) || (launcher ? join(naradaRoot, launcher) : '');
+  if (!launcherPath) throw diagnosticError('launcher_path_missing', `launcher_path_missing:${agentId}`);
   const runtime = text(agent.Runtime ?? config.Runtime) || 'codex';
   const profile = text(agent.Profile ?? config.Profile);
   const mcpScope = text(agent.McpScope ?? config.McpScope) || 'all';

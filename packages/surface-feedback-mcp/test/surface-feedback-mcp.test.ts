@@ -57,7 +57,7 @@ try {
   const sub = await call('surface_feedback_submit', {
     surface_id: 'sop',
     submitter_site_id: 'narada-sonar',
-    submitter_principal: 'narada-andrey.Kevin',
+    submitter_principal: 'andrey-user.Kevin',
     kind: 'improvement',
     summary: 'Add agent step kind',
     details: 'SOP should support agent executor with blocking for agent-performed steps.',
@@ -70,18 +70,18 @@ try {
   const update = await call('surface_feedback_update_status', {
     feedback_id: subData.feedback_id,
     status: 'closed',
-    resolved_by: 'narada-andrey.test',
+    resolved_by: 'andrey-user.test',
     resolution_note: 'Covered by behavior test.',
   });
   const updateData = view(update).feedback as Record<string, any>;
   assert.equal(updateData.status, 'closed');
-  assert.equal(updateData.resolved_by, 'narada-andrey.test');
+  assert.equal(updateData.resolved_by, 'andrey-user.test');
   assert.equal(updateData.resolution_note, 'Covered by behavior test.');
 
   // --- update_status: converted_to_task ---
   const converted = await call('surface_feedback_submit', {
     surface_id: 'delegated-task',
-    submitter_site_id: 'narada-andrey',
+    submitter_site_id: 'andrey-user',
     submitter_principal: 'test-agent',
     kind: 'bug',
     summary: 'Test converted_to_task status',
@@ -91,7 +91,7 @@ try {
   const convertUpdate = await call('surface_feedback_update_status', {
     feedback_id: convertedId,
     status: 'converted_to_task',
-    resolved_by: 'narada-andrey.test',
+    resolved_by: 'andrey-user.test',
     resolution_note: 'Task #999 created to address this feedback.',
   });
   const convertData = view(convertUpdate).feedback as Record<string, any>;
@@ -100,7 +100,7 @@ try {
 
   const batchA = await call('surface_feedback_submit', {
     surface_id: 'surface-feedback',
-    submitter_site_id: 'narada-andrey',
+    submitter_site_id: 'andrey-user',
     submitter_principal: 'test-agent',
     kind: 'improvement',
     summary: 'Batch convert first item',
@@ -108,17 +108,17 @@ try {
   });
   const batchB = await call('surface_feedback_submit', {
     surface_id: 'task-lifecycle',
-    submitter_site_id: 'narada-andrey',
+    submitter_site_id: 'andrey-user',
     submitter_principal: 'test-agent',
     kind: 'gap',
     summary: 'Batch convert second item',
     details: 'Second batch item.',
   });
   const batchUpdate = await call('surface_feedback_update_status_batch', {
-    resolved_by: 'narada-andrey.batch-test',
+    resolved_by: 'andrey-user.batch-test',
     updates: [
       { feedback_id: view(batchA).feedback_id, status: 'converted_to_task', task_ref: 'task #1276', resolution_note: 'Created task from feedback.' },
-      { feedback_id: view(batchB).feedback_id, status: 'routed', resolution_note: 'Routed for follow-up.', resolved_by: 'narada-andrey.router' },
+      { feedback_id: view(batchB).feedback_id, status: 'routed', resolution_note: 'Routed for follow-up.', resolved_by: 'andrey-user.router' },
       { feedback_id: 'sfb_missing_batch', status: 'converted_to_task', task_ref: 'task #9999', resolution_note: 'Missing item should not block successful updates.' },
     ],
   });
@@ -128,14 +128,14 @@ try {
   assert.equal(batchData.failed_count, 1);
   assert.equal(batchData.updates[0].task_ref, 'task #1276');
   assert.match(batchData.updates[0].feedback.resolution_note, /Task: task #1276/);
-  assert.equal(batchData.updates[1].feedback.resolved_by, 'narada-andrey.router');
+  assert.equal(batchData.updates[1].feedback.resolved_by, 'andrey-user.router');
   assert.equal(batchData.failures[0].code, 'feedback_not_found');
 
   // --- invalid status still rejected ---
   const invalidStatus = await call('surface_feedback_update_status', {
     feedback_id: convertedId,
     status: 'in_progress',
-    resolved_by: 'narada-andrey.test',
+    resolved_by: 'andrey-user.test',
     resolution_note: 'Should be rejected.',
   });
   assert.equal(errorCode(invalidStatus), 'feedback_invalid_status');
@@ -151,7 +151,7 @@ try {
 
   await call('surface_feedback_submit', {
     surface_id: 'sop',
-    submitter_site_id: 'narada-andrey',
+    submitter_site_id: 'andrey-user',
     submitter_principal: 'andrey',
     kind: 'gap',
     summary: 'SOP missing retry step kind',
@@ -161,7 +161,7 @@ try {
   await call('surface_feedback_submit', {
     surface_id: 'filesystem',
     submitter_site_id: 'narada-sonar',
-    submitter_principal: 'narada-andrey.Kevin',
+    submitter_principal: 'andrey-user.Kevin',
     kind: 'observation',
     summary: 'Read file output ref truncated on large files',
     details: '',
@@ -196,10 +196,10 @@ try {
 
   // --- visibility: caller with owned surfaces sees own + maintained surface feedback ---
   const listAndreyMaintainer = await call('surface_feedback_list', {
-    caller_site_id: 'narada-andrey',
+    caller_site_id: 'andrey-user',
     owned_surface_ids: ['sop'],
   });
-  assert.equal(view(listAndreyMaintainer).count, 5); // narada-andrey's own submissions overlap with sop surface ownership
+  assert.equal(view(listAndreyMaintainer).count, 5); // andrey-user's own submissions overlap with sop surface ownership
 
   // --- visibility: different site with no owned surfaces sees nothing ---
   const listStranger = await call('surface_feedback_list', { caller_site_id: 'narada-revolution' });
@@ -215,7 +215,7 @@ try {
   // --- show: visible via owned surface ---
   const showSop = await call('surface_feedback_show', {
     feedback_id: subData.feedback_id,
-    caller_site_id: 'narada-andrey',
+    caller_site_id: 'andrey-user',
     owned_surface_ids: ['sop'],
   });
   assert.equal(view(showSop).feedback_id, subData.feedback_id);
@@ -295,7 +295,7 @@ try {
 
   // --- stats: scoped with owned surfaces ---
   const statsAndrey = await call('surface_feedback_stats', {
-    caller_site_id: 'narada-andrey',
+    caller_site_id: 'andrey-user',
     owned_surface_ids: ['sop'],
   });
   assert.equal(view(statsAndrey).total, 5); // overlaps: own submissions are also sop surface entries

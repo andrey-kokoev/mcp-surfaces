@@ -41,7 +41,7 @@ steps:
       site_id and surface_id. Sites to consider:
       - narada-sonar (production operator surface)
       - narada-proper (production site)
-      - narada-andrey (PC-local surface)
+      - andrey-user (PC-local surface)
       - Other sites as determined by operator.
       If binding sop-mcp itself, the registrar will automatically
       include --sops-dir for all surface-owned SOP directories.

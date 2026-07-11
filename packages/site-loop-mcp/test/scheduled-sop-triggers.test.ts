@@ -7,7 +7,7 @@ import { operatingLayerAlertSignals } from '../src/site-loop/site-loop-engine.js
 
 const root = mkdtempSync(join(tmpdir(), 'site-loop-scheduled-sop-'));
 const config = {
-  loop_id: 'narada-andrey.maintenance',
+  loop_id: 'andrey-user.maintenance',
   scheduled_sops: [{
     id: 'provider-model-catalog-audit',
     sop_id: 'provider-model-catalog-reconciliation',
@@ -16,7 +16,7 @@ const config = {
     interval_days: 14,
     anchor_at: '2026-07-10T00:00:00.000Z',
     target_role: 'operator',
-    preferred_agent_id: 'narada-andrey.operator',
+    preferred_agent_id: 'andrey-user.operator',
     mutation_posture: 'proposal_only',
   }],
 };

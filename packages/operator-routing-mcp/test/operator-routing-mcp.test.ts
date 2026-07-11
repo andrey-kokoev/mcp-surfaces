@@ -16,7 +16,7 @@ try {
   assert.ok(names.includes('operator_route_doctor'));
   assert.ok(names.includes('operator_route_request'));
   assert.deepEqual(listTools().map((tool) => tool.name), ['operator_routing_guidance', 'operator_route_doctor', 'operator_route_request']);
-  const route = operatorRouteRequest({ transcript: 'route this to codex', target_runtime: 'codex', target_identity: 'narada-codex.resident', allow_inbox_fallback: true, speaker_agent_id: 'narada-andrey.resident' }, state);
+  const route = operatorRouteRequest({ transcript: 'route this to codex', target_runtime: 'codex', target_identity: 'narada-codex.resident', allow_inbox_fallback: true, speaker_agent_id: 'andrey-user.resident' }, state);
   assert.equal(route.status, 'drafted_for_site_inbox');
   assert.equal((route.spoken_acknowledgement as Record<string, unknown>).model, 'tts-1');
   assert.equal((route.spoken_acknowledgement as Record<string, unknown>).voice, 'nova');
