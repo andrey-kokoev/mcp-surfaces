@@ -10,6 +10,10 @@ export type ResolvedWorkerConfig = WorkerResolvedExecutionPolicy;
 
 export type Invocation = { command: string; argv: string[]; cwd: string; environment: Record<string, string> };
 
+const MAX_CONSECUTIVE_PROVIDER_RECONNECT_ERRORS = 5;
+const PROVIDER_RECONNECT_ERROR_PATTERN = /\b(?:reconnect(?:ing|ed)?|stream disconnected|error sending request|failed to connect|websocket|socket|network)\b/i;
+const DEFINITIVE_PROVIDER_ERROR_PATTERN = /\b(?:invalid[_ ]request(?:_error)?|authentication(?:_error)?|unauthorized|api key|rate[_ ]limit|quota|model not available|forbidden|\b401\b|\b403\b|\b429\b)\b/i;
+
 export function runtimeName(): 'codex' {
   return 'codex';
 }
@@ -102,6 +106,15 @@ export async function runCodexInvocation(options: {
     let cancelled = false;
     let eventError: string | null = null;
     let runtimeError: string | null = null;
+    let runtimeFailure: string | null = null;
+    let consecutiveProviderReconnectErrors = 0;
+
+    const stopForRuntimeFailure = (message: string) => {
+      if (settled || runtimeFailure) return;
+      runtimeFailure = message;
+      runtimeError = message;
+      try { child.kill(); } catch { /* ignore */ }
+    };
 
     const timer = setTimeout(() => {
       cancelled = true;
@@ -129,7 +142,21 @@ export async function runCodexInvocation(options: {
         try {
           const parsed = JSON.parse(line);
           workerSessionId ||= findSessionId(parsed);
-          runtimeError ||= findRuntimeError(parsed);
+          const eventRuntimeError = findRuntimeError(parsed);
+          if (!eventRuntimeError) {
+            consecutiveProviderReconnectErrors = 0;
+            continue;
+          }
+          if (PROVIDER_RECONNECT_ERROR_PATTERN.test(eventRuntimeError)) {
+            consecutiveProviderReconnectErrors += 1;
+            if (consecutiveProviderReconnectErrors >= MAX_CONSECUTIVE_PROVIDER_RECONNECT_ERRORS) {
+              stopForRuntimeFailure(`provider reconnect failure after ${consecutiveProviderReconnectErrors} consecutive errors: ${eventRuntimeError}`);
+            }
+            continue;
+          }
+          consecutiveProviderReconnectErrors = 0;
+          runtimeError ||= eventRuntimeError;
+          if (DEFINITIVE_PROVIDER_ERROR_PATTERN.test(eventRuntimeError)) stopForRuntimeFailure(eventRuntimeError);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           eventError ||= `invalid json event: ${message}`;
@@ -145,7 +172,7 @@ export async function runCodexInvocation(options: {
       events.end();
       diagnostics.end();
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
-      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: workerSessionId, error: error.message, event_error: eventError, runtime_error: runtimeError });
+      resolvePromise({ exit_code: null, signal: null, cancelled: false, worker_session_id: workerSessionId, error: runtimeFailure ?? error.message, event_error: eventError, runtime_error: runtimeError });
     });
     child.on('close', (code, signal) => {
       if (settled) return;
@@ -156,7 +183,7 @@ export async function runCodexInvocation(options: {
       diagnostics.end();
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
       if (stdoutBuffer.trim()) eventError ||= 'unterminated json event';
-      resolvePromise({ exit_code: code, signal, cancelled, worker_session_id: workerSessionId, error: null, event_error: eventError, runtime_error: runtimeError });
+      resolvePromise({ exit_code: code, signal, cancelled, worker_session_id: workerSessionId, error: runtimeFailure, event_error: eventError, runtime_error: runtimeError });
     });
     if (child.stdin) child.stdin.end(options.prompt, 'utf8');
   });
@@ -206,4 +233,3 @@ function findSessionId(value: unknown): string | null {
   }
   return null;
 }
-

@@ -40,6 +40,7 @@ export function listTools(): WorkerToolDefinition[] {
       site_root: { type: 'string', description: 'Explicit Narada Site root for narada-agent-runtime-server workers. Defaults to nearest Site marker above cwd.' },
       provider: { type: 'string', description: 'Explicit NARS intelligence provider projected as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' },
       instruction: { type: 'string' },
+      required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Exact MCP tool names to project for narada-agent-runtime-server workers. Other runtimes report the request as unprojectable.' },
       resumable: { type: 'boolean' },
       wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
       exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
@@ -289,6 +290,8 @@ function workerConfigResolveOutputSchema(): Record<string, unknown> {
     dry_run: { type: 'boolean', const: true },
     requested_mode: { type: 'string', enum: ['audit_only', 'plan_only', 'implement', 'implement_and_verify'] },
     resume_worker_session_id: nullableStringSchema(),
+    launchable: { type: 'boolean' },
+    launchability: { type: 'object', additionalProperties: true },
     resolved_worker_config: { type: 'object', additionalProperties: true },
     invocation: { type: 'object', additionalProperties: true },
     preflight: { type: 'array', items: objectSchema({ name: { type: 'string' }, status: { type: 'string', enum: ['ok', 'warning', 'blocked'] }, message: { type: 'string' } }, ['name', 'status', 'message']) },
@@ -298,7 +301,7 @@ function workerConfigResolveOutputSchema(): Record<string, unknown> {
     runtime_availability: { type: 'object', additionalProperties: true },
     config_resolution: { type: 'object', additionalProperties: true },
     warnings: stringArraySchema(),
-  }, ['schema', 'status', 'dry_run', 'requested_mode', 'resolved_worker_config', 'invocation', 'preflight', 'runtime_availability', 'config_resolution', 'warnings']);
+  }, ['schema', 'status', 'dry_run', 'requested_mode', 'resume_worker_session_id', 'launchable', 'launchability', 'resolved_worker_config', 'invocation', 'preflight', 'runtime_availability', 'config_resolution', 'warnings']);
 }
 
 function workerPolicyOutputSchema(): Record<string, unknown> {

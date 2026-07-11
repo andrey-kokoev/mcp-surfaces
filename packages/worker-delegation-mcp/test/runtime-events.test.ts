@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentRuntimeEventTracker, extractSessionEventEvidence } from '../src/runtime-events.js';
+import { AgentRuntimeEventTracker, extractSessionEventEvidence, normalizeActivityKind } from '../src/runtime-events.js';
 
 const root = mkdtempSync(join(tmpdir(), 'worker-runtime-events-'));
 
@@ -44,3 +44,4 @@ assert.equal(sessionCoreFailureTracker.runtimeError, 'API error 401: invalid key
 assert.deepEqual(sessionCoreFailureTracker.evidence().terminal_events, ['carrier_turn_failed']);
 assert.deepEqual(runtimeEventEvidence.terminal_events, ['turn_complete']);
 assert.deepEqual(runtimeEventEvidence.mutation_admission, { carrier_mutation_admitted: false, delegated_mutation_admitted: true });
+assert.equal(normalizeActivityKind('assistant_message', '{"edits_performed":false,"changes":[]}'), 'assistant_message');

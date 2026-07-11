@@ -84,6 +84,7 @@ export type WorkerEditToolInput = {
   site_root?: string;
   provider?: string;
   instruction: string;
+  required_mcp_tools?: string[];
   resumable?: boolean;
   wait_for_completion?: boolean;
   exit_interview?: boolean;
@@ -110,6 +111,7 @@ export type WorkerResolvedExecutionPolicy = {
   provider_source?: string;
   provider_env_key?: string;
   provider_runtime_binding?: Record<string, unknown>;
+  required_mcp_tools?: string[];
   worker_mcp_projection?: Record<string, unknown>;
   sandbox: SandboxMode;
   model: string | null;

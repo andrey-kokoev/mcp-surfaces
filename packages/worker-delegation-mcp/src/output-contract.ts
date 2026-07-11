@@ -227,7 +227,11 @@ function normalizeWorkerOutput(value: unknown, options: { strict: boolean }): Wo
 
 function verificationInput(value: unknown, options: { strict: boolean }): unknown[] | null {
   if (Array.isArray(value)) return value;
-  if (!options.strict && value && typeof value === 'object') return [value];
+  if (!options.strict && value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.checks)) return record.checks;
+    return [record];
+  }
   return options.strict ? null : [];
 }
 
@@ -268,10 +272,15 @@ function asVerification(value: unknown, options: { strict: boolean }): WorkerVer
   const tool = Object.hasOwn(record, 'tool') ? record.tool : null;
   const command = Object.hasOwn(record, 'command') ? record.command : null;
   if (!nullableString(tool) || !nullableString(command)) return null;
-  if (typeof record.status !== 'string' || typeof record.summary !== 'string') return null;
+  const summary = typeof record.summary === 'string'
+    ? record.summary
+    : !options.strict && typeof record.name === 'string'
+      ? record.name
+      : null;
+  if (typeof record.status !== 'string' || summary === null) return null;
   const commandClassification = verificationCommandClassification(record.command_classification);
   if (record.command_classification !== undefined && commandClassification === null) return null;
-  return { tool, command, status: record.status, summary: record.summary, command_classification: commandClassification ?? inferredCommandClassification(command) };
+  return { tool, command, status: record.status, summary, command_classification: commandClassification ?? inferredCommandClassification(command) };
 }
 
 function verificationCommandClassification(value: unknown): WorkerVerificationCommandClassification | null {

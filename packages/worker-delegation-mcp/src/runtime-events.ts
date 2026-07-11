@@ -238,6 +238,7 @@ export function latestEventText(value: unknown): string | null {
 }
 
 export function normalizeActivityKind(type: string | null, preview: string | null): string {
+  if (type === 'assistant_message' || type === 'agent_message') return 'assistant_message';
   const text = `${type ?? ''} ${preview ?? ''}`.toLowerCase();
   if (/command|exec|shell|structured_command/.test(text)) return 'command';
   if (/apply_patch|edit|write|modified|file_change/.test(text)) return 'file_edit';

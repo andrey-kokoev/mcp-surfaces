@@ -15,7 +15,8 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && pnpm run build:postcompile",
+    "build:postcompile": "node ./dist/src/implementation-identity-manifest.js",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/run-tests.js",
     "test:coverage": "pnpm build && c8 --all --src=dist/src --include=dist/src/**/*.js --temp-directory=.tmp/c8 --reporter=text --check-coverage --statements=88 --lines=88 --branches=76 --functions=93 node dist/test/run-tests.js",

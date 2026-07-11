@@ -414,6 +414,7 @@ export function classifyRuntimeError(text: string): string | null {
   if (lower.includes('rate_limit') || lower.includes('rate limit') || lower.includes('429')) return 'provider_rate_limited';
   if (lower.includes('unauthorized') || lower.includes('authentication') || lower.includes('api key') || lower.includes('401') || lower.includes('403')) return 'provider_auth';
   if (lower.includes('invalid_request') || lower.includes('invalid request') || lower.includes('function name is invalid') || lower.includes('400')) return 'provider_invalid_request';
+  if (lower.includes('stream disconnected') || lower.includes('error sending request') || lower.includes('failed to connect') || lower.includes('websocket') || lower.includes('socket') || lower.includes('network')) return 'provider_network';
   if (lower.includes('not inside a trusted directory') || lower.includes('--skip-git-repo-check')) return 'codex_untrusted_directory';
   if (lower.includes('permission denied') || lower.includes('access is denied')) return 'permission_denied';
   if (lower.includes('command not found') || lower.includes('not recognized as')) return 'runtime_command_unavailable';

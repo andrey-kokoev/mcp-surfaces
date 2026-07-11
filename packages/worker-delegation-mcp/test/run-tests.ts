@@ -6,6 +6,7 @@ const testRoot = dirname(fileURLToPath(import.meta.url));
 const testFiles = [
   'cognition-defaults.test.js',
   'provider-runtime-binding.test.js',
+  'implementation-identity.test.js',
   'output-contract.test.js',
   'runtime-events.test.js',
   'diagnostics.test.js',
@@ -14,6 +15,7 @@ const testFiles = [
   'batch-handler.test.js',
   'dashboard-handler.test.js',
   'prompt.test.js',
+  'worker-projection.test.js',
   'worker-delegation-mcp.test.js',
   'protocol-smoke.test.js',
 ];

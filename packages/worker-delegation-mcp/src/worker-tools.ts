@@ -5,7 +5,7 @@ import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partial
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, runCodexInvocation, type Invocation, type ResolvedWorkerConfig } from './codex-adapter.js';
 import { outputContractForMode, outputContractForRequest, parseLastMessage, resultStatus, workerOutputState, type WorkerOutput } from './output-contract.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationIdentity } from './policy.js';
+import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationIdentity } from './policy.js';
 import { publicCognitionDefaults, updateCognitionDefault } from './cognition-defaults.js';
 import { projectWorkerProviderRuntimeEnvironment, redactWorkerProviderRuntimeBinding, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
@@ -19,7 +19,7 @@ import { dashboardApiEndpoints, dashboardMode, dashboardPendingJoinGates, dashbo
 import { workerEditRunArgs } from './tool-handlers/edit.js';
 import { includeRunByStatus, isTerminalRunStatus, modeWithInference, runListItem, runSortKey, runWaitPayload } from './tool-handlers/status.js';
 import type { WorkerMcpState } from './state.js';
-import type { WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
+import type { WorkerCognitionDefaults, WorkerPolicy, PrimitiveConfigValue, WorkerRuntimeId } from './policy.js';
 import type { SupportedRuntime, WorkerConstraintOverrides, WorkerConstraintRequest, WorkerDelegationMode, WorkerExecutorRequest, WorkerPreflightCheck, WorkerPreflightPath, WorkerRunMetadata, WorkerRunToolInput } from './worker-types.js';
 import type { RunRecordPaths } from './run-record.js';
 
@@ -58,6 +58,24 @@ function optionalBoolean(value: unknown, field: string): boolean {
   throw diagnosticError('worker_invalid_tool_input', 'worker_boolean_required', { field, value_type: Array.isArray(value) ? 'array' : typeof value });
 }
 
+function resolveCognitionProvider(runtime: WorkerRuntimeId, request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState) {
+  const effectiveCognitionDefault = runtime === 'narada-agent-runtime-server' && !request.constraints.provider
+    ? state.cognitionDefaults?.effectiveDefaults[cognition] ?? null
+    : null;
+  if (runtime === 'codex') {
+    return {
+      effectiveCognitionDefault: null,
+      providerResolution: { provider: CODEX_SUBSCRIPTION_PROVIDER, source: 'codex_runtime_default' },
+    };
+  }
+  return {
+    effectiveCognitionDefault,
+    providerResolution: effectiveCognitionDefault
+      ? { provider: effectiveCognitionDefault.provider, source: effectiveCognitionDefault.source === 'site_runtime_override' ? 'site_cognition_default' : 'registry_default' }
+      : resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy),
+  };
+}
+
 function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   if (args.config_overrides !== undefined) throw diagnosticError('worker_raw_config_overrides_not_allowed');
   const resumeSessionId = args.worker_session_id === undefined || args.worker_session_id === null || args.worker_session_id === ''
@@ -74,12 +92,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
-  const effectiveCognitionDefault = runtime === 'narada-agent-runtime-server' && !request.constraints.provider ? state.cognitionDefaults?.effectiveDefaults[cognition] ?? null : null;
-  const providerResolution = runtime === 'narada-agent-runtime-server'
-    ? effectiveCognitionDefault
-      ? { provider: effectiveCognitionDefault.provider, source: effectiveCognitionDefault.source === 'site_runtime_override' ? 'site_cognition_default' : 'registry_default' }
-      : resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy)
-    : { provider: null, source: 'not_applicable' };
+  const { effectiveCognitionDefault, providerResolution } = resolveCognitionProvider(runtime, request, cognition, state);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
   applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
@@ -91,7 +104,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
   const outputContract = outputContractForRequest(request, requestedMode);
   const environment = environmentForWorker(state.env);
+  delete environment.NARADA_WORKER_MCP_CONFIG;
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
+  const launchability = mcpToolLaunchability(request.constraints.required_mcp_tools ?? [], runtime);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true, requiredMcpTools: request.constraints.required_mcp_tools ?? [] });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   if (promptBytes > state.policy.maxPromptBytes) throw diagnosticError('worker_prompt_too_large', 'worker_prompt_too_large', { prompt_byte_length: promptBytes, max_prompt_bytes: state.policy.maxPromptBytes });
@@ -147,6 +162,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       provider_source: providerResolution.source,
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       provider_runtime_binding: redactWorkerProviderRuntimeBinding(providerRuntimeBinding),
+      required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
       model: providerRuntimeBinding.model,
@@ -183,6 +199,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       command_args: codexRuntime.commandArgs,
       argv,
       cwd,
+      provider: providerResolution.provider,
+      provider_source: providerResolution.source,
+      required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -199,8 +218,9 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     };
     invocation = codexBuildInvocation(resolvedWorkerConfig, environment);
   }
+  assertExplicitCognitionTuple(resolvedWorkerConfig);
 
-  const configResolution = configResolutionMetadata({ requestedOverrides, resolvedConfigInput, runtime, cognition, provider: providerResolution.provider, policy: state.policy, cognitionDefaultSource: runtime === 'narada-agent-runtime-server' && providerResolution.provider ? state.cognitionDefaults?.sources[providerResolution.provider]?.[cognition] ?? 'provider_registry' : 'generic_cognition_default' });
+  const configResolution = configResolutionMetadata({ requestedOverrides, resolvedConfigInput, runtime, cognition, provider: providerResolution.provider, policy: state.policy, cognitionDefaultSource: providerResolution.provider ? state.cognitionDefaults?.sources[providerResolution.provider]?.[cognition] ?? 'provider_registry' : 'generic_cognition_default' });
   const warnings = [
     'dry_run_paths_are_placeholders: invocation argv uses <dry-run> paths and does not create run artifacts',
     ...(configResolution.model_source === 'runtime_default_opaque' ? ['model_delegated_to_runtime_default: concrete model is not knowable before launching this runtime'] : []),
@@ -213,6 +233,12 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     dry_run: true,
     requested_mode: requestedMode,
     resume_worker_session_id: resumeSessionId,
+    launchable: runtimeAvailability.available && launchability.launchable,
+    launchability: {
+      ...launchability,
+      runtime_available: runtimeAvailability.available,
+      effective_launchable: runtimeAvailability.available && launchability.launchable,
+    },
     resolved_worker_config: resolvedWorkerConfig,
     invocation: invocationArtifact(invocation, resolvedWorkerConfig),
     preflight,
@@ -307,12 +333,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
-  const effectiveCognitionDefault = runtime === 'narada-agent-runtime-server' && !request.constraints.provider ? state.cognitionDefaults?.effectiveDefaults[cognition] ?? null : null;
-  const providerResolution = runtime === 'narada-agent-runtime-server'
-    ? effectiveCognitionDefault
-      ? { provider: effectiveCognitionDefault.provider, source: effectiveCognitionDefault.source === 'site_runtime_override' ? 'site_cognition_default' : 'registry_default' }
-      : resolveNaradaAgentRuntimeProvider(request.constraints.provider, state.policy)
-    : { provider: null, source: 'not_applicable' };
+  const { effectiveCognitionDefault, providerResolution } = resolveCognitionProvider(runtime, request, cognition, state);
   const cwd = resolveWorkingDirectory(request.constraints.cwd, state.policy);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
   applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
@@ -327,6 +348,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 
   // Runtime availability preflight: fail fast with a clear remediation if the selected runtime is not runnable.
   const environment = environmentForWorker(state.env);
+  delete environment.NARADA_WORKER_MCP_CONFIG;
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
   if (!runtimeAvailability.available) {
     throw diagnosticError('worker_runtime_unavailable', `worker_runtime_unavailable:${runtime}`, {
@@ -393,6 +415,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       provider_source: providerResolution.source,
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       provider_runtime_binding: redactWorkerProviderRuntimeBinding(providerRuntimeBinding),
+      required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
       model: providerRuntimeBinding.model,
@@ -430,6 +453,9 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       command_args: codexRuntime.commandArgs,
       argv,
       cwd,
+      provider: providerResolution.provider,
+      provider_source: providerResolution.source,
+      required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       sandbox,
       model: resolvedConfigInput.model,
       reasoning_effort: resolvedConfigInput.reasoning_effort,
@@ -447,6 +473,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     resolvedWorkerConfig = baseConfig;
     invocation = codexBuildInvocation(baseConfig, environment);
   }
+  assertExplicitCognitionTuple(resolvedWorkerConfig);
   const executorRequest: WorkerExecutorRequest = {
     schema: 'narada.worker.executor_request.v1',
     run_id: runRecord.runId,
@@ -1074,8 +1101,38 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
   state.activeRunCount = Math.max(0, state.activeRunCount - 1);
 }
 
+function cognitionDefaultsForLaunch(cognition: ResolvedWorkerConfig['cognition'], policy: WorkerPolicy, runtime: WorkerRuntimeId, provider: string | null): WorkerCognitionDefaults {
+  if (runtime === 'codex') {
+    return provider
+      ? policy.providerCognitionDefaults[provider]?.[cognition] ?? { model: null, reasoningEffort: null }
+      : { model: null, reasoningEffort: null };
+  }
+  return defaultConfigForCognition(cognition, policy, provider);
+}
+
+function assertExplicitCognitionTuple(config: ResolvedWorkerConfig): void {
+  const missingFields = [
+    config.provider ? null : 'provider',
+    config.model ? null : 'model',
+    config.reasoning_effort ? null : 'reasoning_effort',
+  ].filter((field): field is string => field !== null);
+  if (missingFields.length === 0) return;
+  throw diagnosticError('worker_cognition_defaults_unresolved', 'worker_cognition_defaults_unresolved', {
+    runtime: config.runtime,
+    cognition: config.cognition,
+    provider: config.provider ?? null,
+    field: missingFields[0],
+    missing_fields: missingFields,
+    resolved: {
+      provider: config.provider ?? null,
+      model: config.model,
+      reasoning_effort: config.reasoning_effort,
+    },
+  });
+}
+
 function applyCognitionDefaults(request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState, runtime: WorkerRuntimeId = 'codex', provider: string | null = null): void {
-  const defaults = defaultConfigForCognition(cognition, state.policy, runtime === 'narada-agent-runtime-server' ? provider : null);
+  const defaults = cognitionDefaultsForLaunch(cognition, state.policy, runtime, provider);
   if (!defaults.model && !defaults.reasoningEffort) return;
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
@@ -1107,7 +1164,7 @@ function configResolutionMetadata(options: {
   cognitionDefaultSource: string;
 }): Record<string, unknown> {
   const config = options.requestedOverrides.config ?? {};
-  const cognitionDefaults = defaultConfigForCognition(options.cognition, options.policy, options.runtime === 'narada-agent-runtime-server' ? options.provider : null);
+  const cognitionDefaults = cognitionDefaultsForLaunch(options.cognition, options.policy, options.runtime, options.provider);
   return {
     model_source: configValueSource({
       explicit: options.requestedOverrides.model !== undefined || config.model !== undefined,
@@ -1139,7 +1196,14 @@ function configValueSource(options: { explicit: boolean; hasResolvedValue: boole
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {
   if (request.constraints.authority === undefined) request.constraints.authority = inherited.authority;
   if (request.constraints.cognition === undefined) request.constraints.cognition = inherited.cognition;
-  if (request.constraints.provider === undefined && inherited.provider) request.constraints.provider = inherited.provider;
+  if (request.constraints.provider === undefined && inherited.provider && inherited.runtime === 'narada-agent-runtime-server') request.constraints.provider = inherited.provider;
+  if (request.constraints.required_mcp_tools === undefined) {
+    const projection = asRecord(inherited.worker_mcp_projection);
+    const inheritedTools = inherited.required_mcp_tools ?? projection.mcp_tool_allowlist;
+    if (Array.isArray(inheritedTools)) {
+      request.constraints.required_mcp_tools = inheritedTools.filter((tool): tool is string => typeof tool === 'string' && Boolean(tool.trim()));
+    }
+  }
   const overrides = { ...(request.constraints.overrides ?? {}) };
   const config = { ...(overrides.config ?? {}) };
   if (overrides.runtime === undefined) overrides.runtime = inherited.runtime;
@@ -1320,6 +1384,34 @@ function mcpToolVerification(requestedTools: string[], runtime: SupportedRuntime
   };
 }
 
+function mcpToolLaunchability(requestedTools: string[], runtime: SupportedRuntime | null): Record<string, unknown> & { launchable: boolean } {
+  if (requestedTools.length === 0) {
+    return {
+      launchable: true,
+      code: null,
+      reason: null,
+      requested_mcp_tools: [],
+      supported_runtime: 'narada-agent-runtime-server',
+    };
+  }
+  if (runtime === 'narada-agent-runtime-server') {
+    return {
+      launchable: true,
+      code: null,
+      reason: null,
+      requested_mcp_tools: requestedTools,
+      supported_runtime: 'narada-agent-runtime-server',
+    };
+  }
+  return {
+    launchable: false,
+    code: 'worker_required_mcp_tools_unprojectable',
+    reason: 'Codex runtime cannot project requested MCP tools',
+    requested_mcp_tools: requestedTools,
+    supported_runtime: 'narada-agent-runtime-server',
+  };
+}
+
 function ensureRequiredMcpToolsProjectable(requestedTools: string[], runtime: SupportedRuntime | null): void {
   if (requestedTools.length === 0) return;
   if (runtime === 'narada-agent-runtime-server') return;
@@ -1372,8 +1464,8 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   if (testBudget) constraints.test_budget = testBudget;
   const preflightPaths = normalizePreflightPaths(constraintsInput.preflight_paths ?? args.preflight_paths);
   if (preflightPaths.length > 0) constraints.preflight_paths = preflightPaths;
-  const requiredMcpTools = normalizeStringList(constraintsInput.required_mcp_tools ?? args.required_mcp_tools, 'worker_invalid_required_mcp_tools');
-  if (requiredMcpTools.length > 0) constraints.required_mcp_tools = requiredMcpTools;
+  const requiredMcpToolsInput = constraintsInput.required_mcp_tools !== undefined ? constraintsInput.required_mcp_tools : args.required_mcp_tools;
+  if (requiredMcpToolsInput !== undefined) constraints.required_mcp_tools = normalizeStringList(requiredMcpToolsInput, 'worker_invalid_required_mcp_tools');
   const overrides: NonNullable<WorkerConstraintRequest['overrides']> = {};
   copyString(overrides, 'runtime', overridesInput.runtime ?? constraintsInput.runtime ?? args.runtime);
   copyString(overrides, 'sandbox', overridesInput.sandbox ?? constraintsInput.sandbox ?? args.sandbox);

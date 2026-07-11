@@ -51,6 +51,23 @@ assert.equal(looseWorkerOutput?.verification[0].command, null);
 assert.equal(looseWorkerOutput?.verification[0].summary, 'loose verification object accepted');
 assert.equal(looseWorkerOutput?.verification[0].command_classification, 'not_applicable');
 
+const structuredVerificationWorkerOutput = parseWorkerOutputJson(JSON.stringify({
+  summary: 'structured verification output accepted',
+  verification: {
+    checks: [{ name: 'fs_stat existence proof', status: 'passed', command_classification: 'focused' }],
+    summary: 'One bounded read-only fs_stat call.',
+  },
+  verification_budget_respected: true,
+}));
+assert.equal(structuredVerificationWorkerOutput?.verification_budget_respected, true);
+assert.deepEqual(structuredVerificationWorkerOutput?.verification, [{
+  tool: null,
+  command: null,
+  status: 'passed',
+  summary: 'fs_stat existence proof',
+  command_classification: 'focused',
+}]);
+
 const plainWorkerOutput = workerOutputFromAgentMessage('plain assistant fallback');
 assert.equal(plainWorkerOutput.summary, 'plain assistant fallback');
 assert.equal(plainWorkerOutput.edits_performed, false);

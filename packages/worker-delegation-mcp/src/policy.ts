@@ -1,20 +1,13 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
+import { createWorkerImplementationIdentityReader } from './implementation-identity.js';
 
-const IMPLEMENTATION_IDENTITY = Object.freeze({
-  surface_id: 'worker-delegation-mcp',
-  package_name: '@narada2/worker-delegation-mcp',
-  implementation_version: '2026-06-24.runtime-evidence-v1',
-  source_module: 'packages/worker-delegation-mcp/src',
-  stale_server_risk: {
-    status: 'possible_after_source_or_materialization_change',
-    remediation: 'Restart or rematerialize the worker-delegation MCP server when live argv/artifacts disagree with current source or tests.',
-  },
-});
+const readWorkerImplementationIdentity = createWorkerImplementationIdentityReader();
 
 export const NARADA_SITE_ROOT_MARKERS = ['.narada/', '.ai/mcp/'] as const;
 export const NARADA_AGENT_RUNTIME_SITE_REMEDIATION = 'Run narada-agent-runtime-server workers from inside a Narada Site root containing .narada/ or .ai/mcp/, add one of those markers, or pass constraints.site_root pointing at that Site root.';
+export const CODEX_SUBSCRIPTION_PROVIDER = 'codex-subscription' as const;
 
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type PrimitiveConfigValue = string | number | boolean;
@@ -170,7 +163,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
 }
 
 export function workerImplementationIdentity(): Record<string, unknown> {
-  return { ...IMPLEMENTATION_IDENTITY, stale_server_risk: { ...IMPLEMENTATION_IDENTITY.stale_server_risk } };
+  return readWorkerImplementationIdentity();
 }
 
 function naradaSiteRootMarker(path: string): string | null {

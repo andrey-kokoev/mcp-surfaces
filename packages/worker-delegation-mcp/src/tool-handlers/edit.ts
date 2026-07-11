@@ -12,6 +12,7 @@ export function workerEditRunArgs(args: Record<string, unknown>): Record<string,
       ...(editInput.provider !== undefined ? { provider: editInput.provider } : {}),
       authority: 'write',
       cognition: 'low',
+      ...(editInput.required_mcp_tools !== undefined ? { required_mcp_tools: editInput.required_mcp_tools } : {}),
       ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
       ...(editInput.wait_for_completion !== undefined ? { wait_for_completion: editInput.wait_for_completion } : {}),
       ...(editInput.exit_interview !== undefined ? { exit_interview: editInput.exit_interview } : {}),
@@ -28,6 +29,7 @@ function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEdit
   };
   if (args.site_root !== undefined && args.site_root !== null && String(args.site_root).trim()) editInput.site_root = String(args.site_root).trim();
   if (args.provider !== undefined && args.provider !== null && String(args.provider).trim()) editInput.provider = String(args.provider).trim();
+  if (args.required_mcp_tools !== undefined) editInput.required_mcp_tools = normalizeStringList(args.required_mcp_tools);
   if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);
   if (args.wait_for_completion !== undefined) editInput.wait_for_completion = Boolean(args.wait_for_completion);
   if (args.exit_interview !== undefined) editInput.exit_interview = Boolean(args.exit_interview);
@@ -75,6 +77,12 @@ function requiredNonEmptyString(value: unknown, code: string): string {
   const text = String(value ?? '').trim();
   if (!text) throw diagnosticError(code);
   return text;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw diagnosticError('worker_invalid_required_mcp_tools', 'worker_invalid_required_mcp_tools');
+  return value.map((item) => requiredNonEmptyString(item, 'worker_invalid_required_mcp_tools'));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

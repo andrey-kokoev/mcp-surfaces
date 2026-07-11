@@ -39,6 +39,9 @@ child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'completion/complete', params: { argument: { name: 'cwd' } } })}\n`);
 child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'worker_operator_affordances', arguments: {} } })}\n`);
 await waitForResponseId(() => outputText, 5);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 6, method: 'worker/unknown', params: {} })}\n`);
+child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_not_real', arguments: {} } })}\n`);
+await waitForResponseId(() => outputText, 7);
 child.stdin.end();
 
 const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
@@ -59,6 +62,12 @@ assert.equal(validateAffordanceDocument(affordancesResponse.result.structuredCon
 assert.equal(affordancesResponse.result.structuredContent.surface_id, 'worker-delegation');
 assert.equal(affordancesResponse.result.structuredContent.actions.some((action) => action.id === 'refresh_dashboard'), true);
 assert.equal(affordancesResponse.result.structuredContent.actions.some((action) => action.id === 'reap_stale_run' && action.destructive === true), true);
+const unsupportedMethodResponse = responses.find((message) => message.id === 6);
+assert.equal(unsupportedMethodResponse.error.data.code, 'worker_unknown_tool');
+assert.equal(unsupportedMethodResponse.error.data.details.method, 'worker/unknown');
+const unknownToolResponse = responses.find((message) => message.id === 7);
+assert.equal(unknownToolResponse.error.data.code, 'worker_unknown_tool');
+assert.equal(unknownToolResponse.error.data.details.tool_name, 'worker_not_real');
 
 const legacyRoot = mkdtempSync(join(testTempRoot(), 'worker-delegation-proxy-legacy-'));
 mkdirSync(join(legacyRoot, '.narada'), { recursive: true });

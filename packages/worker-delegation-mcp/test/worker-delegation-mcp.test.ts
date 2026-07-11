@@ -23,6 +23,8 @@ const auditLogDir = join(root, 'audit');
 const fakeCodexScript = join(root, 'exec.cjs');
 const fakeCodexErrorScript = join(root, 'exec-error-with-output.cjs');
 const fakeCodexHangScript = join(root, 'exec-hang.cjs');
+const fakeCodexPersistentReconnectScript = join(root, 'exec-persistent-reconnect.cjs');
+const fakeCodexTransientReconnectScript = join(root, 'exec-transient-reconnect.cjs');
 const fakeCodexPrestartFailureScript = join(root, 'exec-prestart-failure.cjs');
 const fakeAgentRuntimeServerScript = join(root, 'agent-runtime-server.cjs');
 const platformRootCase = process.platform === 'win32' ? root.toUpperCase() : root;
@@ -88,6 +90,43 @@ process.stdin.on('end', () => {
 writeFileSync(fakeCodexHangScript, `
 process.stdin.resume();
 process.stdin.on('end', () => { setInterval(() => {}, 1000); });
+`, 'utf8');
+writeFileSync(fakeCodexPersistentReconnectScript, `
+process.stdin.resume();
+process.stdin.on('end', () => {
+  let attempt = 0;
+  const timer = setInterval(() => {
+    attempt += 1;
+    process.stdout.write(JSON.stringify({ type: 'error', message: \`Reconnecting... \${attempt}/5 (stream disconnected: os error 10013)\` }) + '\\n');
+    if (attempt >= 5) {
+      clearInterval(timer);
+      setInterval(() => {}, 1000);
+    }
+  }, 10);
+});
+`, 'utf8');
+writeFileSync(fakeCodexTransientReconnectScript, `
+const fs = require('fs');
+const args = process.argv.slice(2);
+const lastMessagePath = args[args.indexOf('-o') + 1];
+process.stdin.resume();
+process.stdin.on('end', () => {
+  process.stdout.write(JSON.stringify({ type: 'error', message: 'Reconnecting... 1/5 (transient stream disconnected)' }) + '\\n');
+  process.stdout.write(JSON.stringify({ thread_id: 'thread-transient-recovered' }) + '\\n');
+  fs.writeFileSync(lastMessagePath, JSON.stringify({
+    summary: 'transient provider recovered',
+    deliverables: [],
+    open_questions: [],
+    next_actions: [],
+    edits_performed: false,
+    target_state_changed: false,
+    changes: [],
+    verification: [],
+    verification_budget_respected: true,
+    broad_unrelated_failures: [],
+    exit_interview: null
+  }));
+});
 `, 'utf8');
 writeFileSync(fakeCodexPrestartFailureScript, `
 process.stdin.resume();
@@ -204,7 +243,12 @@ process.stdin.on('data', (chunk) => {
   }
 });
 `, 'utf8');
-const rpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
+const rawRpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
+const rpc = async (request: Record<string, unknown>, state: ReturnType<typeof createServerState>): Promise<RpcResponse> => {
+  const response = await rawRpc(request, state);
+  const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params as Record<string, unknown> : {};
+  return params.name !== 'worker_policy_inspect' ? await materializeOutputRefResponse(response, state) : response;
+};
 const rpcWithContext = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>, context: { abortSignal?: AbortSignal }) => Promise<RpcResponse>;
 const state = createServerState({
   allowedRoot: root,
@@ -380,6 +424,13 @@ process.env.NARADA_WORKER_DEFAULT_RUNTIME = 'codex';
 assert.equal(createServerState({ allowedRoot: root }).policy.defaultRuntime, 'codex');
 delete process.env.NARADA_WORKER_DEFAULT_RUNTIME;
 
+const codexCatalogDefaults = state.policy.providerCognitionDefaults['codex-subscription'];
+assert.ok(codexCatalogDefaults);
+for (const cognition of ['low', 'medium', 'high'] as const) {
+  assert.equal(typeof codexCatalogDefaults[cognition].model, 'string');
+  assert.equal(typeof codexCatalogDefaults[cognition].reasoningEffort, 'string');
+}
+
 const configPreview = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'inspect repository shape' },
   constraints: { cwd: root, authority: 'read', cognition: 'high', required_mcp_tools: ['mcp__narada_andrey_local_filesystem'], verification_budget: { focus: 'focused', max_commands: 1, stop_on_first_failure: true }, test_budget: { focus: 'focused', max_minutes: 2, broad_commands_allowed: false } },
@@ -390,9 +441,11 @@ assert.equal(configPreview.result?.structuredContent.requested_mode, 'audit_only
 assert.equal(configPreview.result?.structuredContent.resolved_worker_config.runtime, 'codex');
 assert.equal(configPreview.result?.structuredContent.implementation_identity.surface_id, 'worker-delegation-mcp');
 assert.equal(configPreview.result?.structuredContent.resolved_worker_config.implementation_identity.surface_id, 'worker-delegation-mcp');
-assert.equal(configPreview.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(configPreview.result?.structuredContent.config_resolution.model_source, 'runtime_default_opaque');
-assert.equal(configPreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'runtime_default_opaque');
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.high.model);
+assert.equal(configPreview.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.high.reasoningEffort);
+assert.equal(configPreview.result?.structuredContent.config_resolution.model_source, 'cognition_default');
+assert.equal(configPreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'cognition_default');
 assert.equal(configPreview.result?.structuredContent.runtime_availability.available, true);
 assert.deepEqual(configPreview.result?.structuredContent.requested_mcp_tools, ['mcp__narada_andrey_local_filesystem']);
 assert.equal(configPreview.result?.structuredContent.mcp_tool_verification.runtime_can_project, false);
@@ -405,7 +458,7 @@ assert.deepEqual(configPreview.result?.structuredContent.output_contract.test_bu
 assert.equal(configPreview.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), false);
 assert.equal(JSON.stringify(configPreview.result?.structuredContent).includes('kimi-secret-must-not-leak'), false);
 assert.match(configPreview.result?.structuredContent.invocation.argv.join(' '), /<dry-run>\/worker_output\.schema\.json/);
-assert.match(configPreview.result?.structuredContent.warnings.join('\n'), /model_delegated_to_runtime_default/);
+assert.doesNotMatch(configPreview.result?.structuredContent.warnings.join('\n'), /model_delegated_to_runtime_default|reasoning_effort_delegated_to_runtime_default/);
 assert.match(configPreview.result?.content[0].text, /"schema": "narada\.worker\.config_resolve\.v1"/);
 
 const requiredToolsBlocked = await rpc({
@@ -799,7 +852,7 @@ assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'compl
 assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 
 const managedCancellationState = createServerState({ allowedRoot: root, runRoot: join(root, 'managed-cancellation'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexHangScript] });
-const managedCancellationStart = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'managed cancellation run' }, constraints: { cwd: root, authority: 'read' } } } }, managedCancellationState);
+const managedCancellationStart = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'managed cancellation run' }, constraints: { cwd: root } } } }, managedCancellationState);
 assert.equal(managedCancellationStart.result?.structuredContent.status, 'running');
 const managedCancellationRunId = String(managedCancellationStart.result?.structuredContent.run_id);
 const managedCancellationStatus = await rpc({ jsonrpc: '2.0', id: 502, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: managedCancellationRunId } } }, managedCancellationState);
@@ -1260,7 +1313,7 @@ assert.equal(activeDashboard.result?.structuredContent.mode, 'all_active');
 assert.equal(activeDashboard.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), false);
 assert.equal(activeDashboard.result?.structuredContent.counts.terminal, 0);
 const batchRun = await rpc({ jsonrpc: '2.0', id: 52311, method: 'tools/call', params: { name: 'worker_run_batch', arguments: { requests: [
-  { intent: { instruction: 'batch one' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
+                { intent: { instruction: 'batch one' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
   { intent: { instruction: 'batch two' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['local-filesystem.fs_read_file'], overrides: { runtime: 'narada-agent-runtime-server' } } },
 ] } } }, state);
 assert.equal(batchRun.result?.structuredContent.schema, 'narada.worker.run_batch.v1');
@@ -1623,8 +1676,9 @@ const readAuthority = await rpc({
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(readAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 const mediumCognition = await rpc({
   jsonrpc: '2.0',
   id: 541,
@@ -1634,8 +1688,9 @@ const mediumCognition = await rpc({
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.authority, 'read');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.cognition, 'medium');
 assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.sandbox, 'read-only');
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.medium.model);
+assert.equal(mediumCognition.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.medium.reasoningEffort);
 const writeAuthority = await rpc({
   jsonrpc: '2.0',
   id: 55,
@@ -1652,8 +1707,9 @@ const commandAuthority = await rpc({
 }, state);
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.authority, 'command');
 assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(commandAuthority.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 
 const editRun = await rpc({
   jsonrpc: '2.0',
@@ -1665,8 +1721,9 @@ assert.equal(editRun.result?.structuredContent.status, 'completed');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.authority, 'write');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.cognition, 'low');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.sandbox, 'workspace-write');
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
 assert.equal(editRun.result?.structuredContent.resolved_worker_config.model, 'gpt-edit-test');
-assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(editRun.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 assert.equal(editRun.result?.structuredContent.requested_mode, 'implement');
 assert.equal(editRun.result?.structuredContent.edits_performed, true);
 assert.equal(editRun.result?.structuredContent.target_state_changed, true);
@@ -1680,7 +1737,7 @@ assert.equal(editRequest.constraints.authority, 'write');
 assert.equal(editRequest.constraints.cognition, 'low');
 assert.equal(editRequest.constraints.resumable, undefined);
 assert.equal(editRequest.constraints.overrides.model, 'gpt-edit-test');
-assert.equal(editRequest.constraints.overrides.reasoning_effort, undefined);
+assert.equal(editRequest.constraints.overrides.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 
 const defaultEditRun = await rpc({
   jsonrpc: '2.0',
@@ -1688,10 +1745,22 @@ const defaultEditRun = await rpc({
   method: 'tools/call',
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'default edit shortcut', wait_for_completion: true } },
 }, state);
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(defaultEditRun.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 
-const customLowCognitionState = createServerState({ allowedRoot: root, runRoot: join(root, 'low-cognition-defaults'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], cognitionLowModel: 'gpt-low-default', cognitionLowReasoningEffort: 'minimal' });
+const customLowCognitionState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'low-cognition-defaults'),
+  defaultRuntime: 'codex',
+  codexCommand: process.execPath,
+  codexCommandArgs: [fakeCodexScript],
+  providerCognitionDefaults: {
+    'codex-subscription': {
+      low: { model: 'gpt-low-default', reasoning_effort: 'minimal' },
+    },
+  },
+});
 const customLowCognition = await rpc({
   jsonrpc: '2.0',
   id: 562,
@@ -1710,6 +1779,53 @@ const callerEditOverride = await rpc({
 assert.equal(callerEditOverride.result?.structuredContent.resolved_worker_config.model, 'gpt-low-default');
 assert.equal(callerEditOverride.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 
+const explicitTuplePreview = await rpc({
+  jsonrpc: '2.0',
+  id: 5631,
+  method: 'tools/call',
+  params: {
+    name: 'worker_config_resolve',
+    arguments: {
+      intent: { instruction: 'explicit cognition tuple' },
+      constraints: {
+        cwd: root,
+        authority: 'read',
+        cognition: 'high',
+        overrides: { model: 'gpt-explicit', reasoning_effort: 'max' },
+      },
+    },
+  },
+}, state);
+assert.equal(explicitTuplePreview.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(explicitTuplePreview.result?.structuredContent.resolved_worker_config.model, 'gpt-explicit');
+assert.equal(explicitTuplePreview.result?.structuredContent.resolved_worker_config.reasoning_effort, 'max');
+assert.equal(explicitTuplePreview.result?.structuredContent.config_resolution.model_source, 'request_override');
+assert.equal(explicitTuplePreview.result?.structuredContent.config_resolution.reasoning_effort_source, 'request_override');
+assert.match(explicitTuplePreview.result?.structuredContent.invocation.argv.join(' '), /model="gpt-explicit"/);
+assert.match(explicitTuplePreview.result?.structuredContent.invocation.argv.join(' '), /model_reasoning_effort="max"/);
+
+const unresolvedCognitionState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'unresolved-cognition-defaults'),
+  defaultRuntime: 'codex',
+  codexCommand: process.execPath,
+  codexCommandArgs: [fakeCodexScript],
+});
+unresolvedCognitionState.policy.providerCognitionDefaults['codex-subscription'].low = { model: null, reasoningEffort: null };
+const unresolvedCognition = await rpc({
+  jsonrpc: '2.0',
+  id: 5632,
+  method: 'tools/call',
+  params: {
+    name: 'worker_run',
+    arguments: { intent: { instruction: 'unresolved cognition tuple' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
+  },
+}, unresolvedCognitionState);
+assert.equal(unresolvedCognition.error?.data.code, 'worker_cognition_defaults_unresolved');
+assert.equal(unresolvedCognition.error?.data.details.field, 'model');
+assert.deepEqual(unresolvedCognition.error?.data.details.missing_fields, ['model', 'reasoning_effort']);
+assert.equal(unresolvedCognitionState.activeRunCount, 0);
+
 const resumableEdit = await rpc({
   jsonrpc: '2.0',
   id: 564,
@@ -1717,14 +1833,17 @@ const resumableEdit = await rpc({
   params: { name: 'worker_edit', arguments: { cwd: root, instruction: 'resumable edit inheritance', resumable: true, wait_for_completion: true } },
 }, state);
 assert.equal(resumableEdit.result?.structuredContent.worker_session_id, 'thread-created');
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 assert.equal(resumableEdit.result?.structuredContent.resolved_worker_config.ephemeral, false);
 const editSessionRecord = JSON.parse(readFileSync(join(runRoot, 'sessions', `${encodeURIComponent('thread-created')}.json`), 'utf8'));
 assert.equal(editSessionRecord.origin_tool, 'worker_edit');
 assert.equal(editSessionRecord.resolved_worker_config.authority, 'write');
 assert.equal(editSessionRecord.resolved_worker_config.cognition, 'low');
-assert.equal(editSessionRecord.resolved_worker_config.model, null);
+assert.equal(editSessionRecord.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(editSessionRecord.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(editSessionRecord.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 const restartedState = createServerState({ allowedRoot: root, runRoot, auditLogDir, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] }, { PATH: process.env.PATH });
 const resumedEdit = await rpc({
   jsonrpc: '2.0',
@@ -1735,8 +1854,9 @@ const resumedEdit = await rpc({
 assert.equal(resumedEdit.result?.structuredContent.status, 'completed');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.authority, 'write');
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.cognition, 'low');
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, null);
-assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, null);
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.provider, 'codex-subscription');
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.model, codexCatalogDefaults.low.model);
+assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.reasoning_effort, codexCatalogDefaults.low.reasoningEffort);
 assert.equal(resumedEdit.result?.structuredContent.resolved_worker_config.argv.includes('--ephemeral'), false);
 
 const resumableRun = await rpc({
@@ -1925,6 +2045,53 @@ const runtimeError = await rpc({
 assert.equal(runtimeError.error?.data.code, 'worker_runtime_failed');
 assert.equal(runtimeError.error?.data.details.error, 'model not available for account');
 
+const persistentReconnectState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'persistent-reconnect'),
+  maxRunMs: 2000,
+  defaultRuntime: 'codex',
+  codexCommand: process.execPath,
+  codexCommandArgs: [fakeCodexPersistentReconnectScript],
+});
+const persistentReconnectStartedAt = Date.now();
+const persistentReconnect = await rpc({
+  jsonrpc: '2.0',
+  id: 6321,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'persistent provider reconnect failure' }, constraints: { cwd: root, wait_for_completion: true } } },
+}, persistentReconnectState);
+assert.equal(persistentReconnect.error?.data.code, 'worker_runtime_failed');
+assert.match(String(persistentReconnect.error?.data.details.error), /provider reconnect failure/);
+const persistentReconnectRunId = String(persistentReconnect.error?.data.details.run_id);
+const persistentReconnectStatus = await rpc({
+  jsonrpc: '2.0',
+  id: 6322,
+  method: 'tools/call',
+  params: { name: 'worker_run_status', arguments: { run_id: persistentReconnectRunId } },
+}, persistentReconnectState);
+assert.equal(persistentReconnectStatus.result?.structuredContent.status, 'failed');
+assert.ok(Number(persistentReconnectStatus.result?.structuredContent.timing.duration_ms) < 2000);
+assert.equal(persistentReconnectStatus.result?.structuredContent.error_classification, 'provider_network');
+assert.match(String(persistentReconnectStatus.result?.structuredContent.runtime_diagnostics.provider_error), /os error 10013/);
+assert.ok(Date.now() - persistentReconnectStartedAt < 2000);
+
+const transientReconnectState = createServerState({
+  allowedRoot: root,
+  runRoot: join(root, 'transient-reconnect'),
+  maxRunMs: 2000,
+  defaultRuntime: 'codex',
+  codexCommand: process.execPath,
+  codexCommandArgs: [fakeCodexTransientReconnectScript],
+});
+const transientReconnect = await rpc({
+  jsonrpc: '2.0',
+  id: 6323,
+  method: 'tools/call',
+  params: { name: 'worker_run', arguments: { intent: { instruction: 'transient provider reconnect recovery' }, constraints: { cwd: root, wait_for_completion: true } } },
+}, transientReconnectState);
+assert.equal(transientReconnect.result?.structuredContent.status, 'completed');
+assert.equal(transientReconnect.result?.structuredContent.summary, 'transient provider recovered');
+
 const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript] });
 const prestartFailure = await rpc({
   jsonrpc: '2.0',
@@ -1942,7 +2109,7 @@ const prestartList = await rpc({ jsonrpc: '2.0', id: 633, method: 'tools/call', 
 assert.match(prestartList.result?.structuredContent.runs[0].error_preview, /Not inside a trusted directory/);
 assert.equal(prestartList.result?.structuredContent.runs[0].error_classification, 'codex_untrusted_directory');
 
-const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 120, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 1000, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
 const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
 assert.equal(materialized.result?.structuredContent.schema, 'narada.producer_output_page.v1');
 assert.equal(materialized.result?.structuredContent.result_materialized, true);
@@ -1997,4 +2164,35 @@ function testTempRoot(): string {
   const root = join(process.cwd(), '.tmp-tests');
   mkdirSync(root, { recursive: true });
   return root;
+}
+
+async function materializeOutputRefResponse(response: RpcResponse, state: ReturnType<typeof createServerState>): Promise<RpcResponse> {
+  const envelope = response.result?.structuredContent;
+  if (envelope?.schema !== 'narada.producer_output_page.v1' || typeof envelope.output_ref !== 'string') return response;
+  let offset = 0;
+  let outputText = '';
+  while (true) {
+    const pageResponse = await rawRpc({
+      jsonrpc: '2.0',
+      id: `output-readback-${offset}`,
+      method: 'tools/call',
+      params: { name: 'worker_output_show', arguments: { ref: envelope.output_ref, offset, limit: 20000 } },
+    }, state);
+    const page = pageResponse.result?.structuredContent;
+    if (page?.schema !== 'narada.mcp_output_page.v1' || typeof page.output_text !== 'string') {
+      throw new Error(`worker_config_resolve_output_readback_invalid:${JSON.stringify(pageResponse)}`);
+    }
+    outputText += page.output_text;
+    if (page.next_offset === null || page.next_offset === undefined) break;
+    offset = Number(page.next_offset);
+  }
+  const structuredContent = JSON.parse(outputText) as Record<string, any>;
+  return {
+    ...response,
+    result: {
+      ...response.result,
+      content: [{ type: 'text', text: outputText }],
+      structuredContent,
+    },
+  };
 }
