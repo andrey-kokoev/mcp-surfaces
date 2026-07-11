@@ -34,7 +34,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { intent: 'First use', call: 'surface_feedback_guidance({})' },
       { intent: 'Tool-specific help', call: "surface_feedback_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "surface_feedback_guidance({ workflow: \"<workflow_name>\" })" },
-      { intent: 'Feedback to task', call: 'surface_feedback_convert_to_task({ feedback_id, resolved_by })' }
+      { intent: 'Feedback to task', call: 'surface_feedback_convert_to_task({ feedback_id })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
@@ -64,6 +64,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Task lifecycle state in actionable queue results is an optional feedback projection; it is not a replacement for authoritative task-lifecycle readback.',
       'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
       'Mutation authority is bound when the server starts; callers must not supply caller_site_id or owned_surface_ids to mutation tools.',
+      'Mutation audit identity is derived from server authority; caller-supplied resolved_by compatibility fields are ignored.',
       'The owning MCP surface remains authoritative for state and enforcement.'
     ]
   };

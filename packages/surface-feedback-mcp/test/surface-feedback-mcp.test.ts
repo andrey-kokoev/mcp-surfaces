@@ -36,7 +36,8 @@ try {
   assert.equal(view(doctor).uses_canonical_store, true);
   assert.equal(view(doctor).feedback_root, root);
   assert.equal(view(doctor).canonical_feedback_root, root);
-  assert.equal(view(doctor).task_lifecycle_root_ready, true);
+  assert.equal(view(doctor).task_lifecycle_root_configured, true);
+  assert.equal(view(doctor).task_lifecycle_health, 'unverified');
   assert.equal(view(doctor).task_lifecycle_integration, 'isolated_stdio_process');
   assert.equal(view(doctor).authority.site_id, 'andrey-user');
   assert.match(view(doctor).db_path, /surface-feedback\.db$/);
@@ -55,6 +56,18 @@ try {
   assert.ok(liveProofData.live_proof_contract.negative_controls.revocation_or_refusal_proof);
   assert.ok(liveProofData.live_proof_contract.test_alignment.unit_tests_specify_deployed_transport);
 
+  state.db.exec("CREATE TRIGGER reject_submitted_audit BEFORE INSERT ON feedback_events WHEN NEW.event_type = 'submitted' BEGIN SELECT RAISE(ABORT, 'simulated_submitted_audit_failure'); END");
+  const atomicSubmitFailure = await call('surface_feedback_submit', {
+    surface_id: 'sop',
+    submitter_site_id: 'andrey-user',
+    submitter_principal: 'atomic-test',
+    kind: 'bug',
+    summary: 'This submission must roll back with its audit event',
+  });
+  assert.equal(errorCode(atomicSubmitFailure), 'surface_feedback_error');
+  assert.equal(Number((state.db.prepare("SELECT COUNT(*) AS count FROM feedback_entries WHERE summary = 'This submission must roll back with its audit event'").get() as any).count), 0);
+  state.db.exec('DROP TRIGGER reject_submitted_audit');
+
   const noncanonicalState = createServerState({
     feedbackRoot: join(root, 'site-local'),
     canonicalFeedbackRoot: root,
@@ -67,7 +80,7 @@ try {
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);
   assert.ok(view(noncanonicalDoctor).diagnostics.some((item: string) => /noncanonical/.test(item)));
   assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--feedback-root/.test(item)));
-  closeServerState(noncanonicalState);
+  await closeServerState(noncanonicalState);
 
   const sub = await call('surface_feedback_submit', {
     surface_id: 'sop',
@@ -82,6 +95,19 @@ try {
   assert.ok(subData.feedback_id);
   assert.equal(subData.surface_id, 'sop');
 
+  state.db.exec("CREATE TRIGGER reject_status_audit BEFORE INSERT ON feedback_events WHEN NEW.event_type = 'status_updated' BEGIN SELECT RAISE(ABORT, 'simulated_status_audit_failure'); END");
+  const atomicStatusFailure = await call('surface_feedback_update_status', {
+    feedback_id: subData.feedback_id,
+    status: 'closed',
+    resolved_by: 'spoofed-principal',
+    resolution_note: 'This projection must roll back.',
+  });
+  assert.equal(errorCode(atomicStatusFailure), 'surface_feedback_error');
+  const atomicStatusReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
+  assert.equal(view(atomicStatusReadback).status, 'submitted');
+  assert.equal(view(atomicStatusReadback).audit_events.length, 1);
+  state.db.exec('DROP TRIGGER reject_status_audit');
+
   const update = await call('surface_feedback_update_status', {
     feedback_id: subData.feedback_id,
     status: 'closed',
@@ -90,10 +116,11 @@ try {
   });
   const updateData = view(update).feedback as Record<string, any>;
   assert.equal(updateData.status, 'closed');
-  assert.equal(updateData.resolved_by, 'andrey-user.test');
+  assert.equal(updateData.resolved_by, 'surface-feedback@andrey-user');
   assert.equal(updateData.resolution_note, 'Covered by behavior test.');
   const updateReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
   assert.deepEqual(view(updateReadback).audit_events.map((event: any) => event.event_type), ['submitted', 'status_updated']);
+  assert.equal(view(updateReadback).audit_events[1].actor_principal, 'surface-feedback@andrey-user');
 
   // --- update_status: converted_to_task ---
   const converted = await call('surface_feedback_submit', {
@@ -197,7 +224,7 @@ try {
       feedback_id: view(failedSource).feedback_id,
       resolved_by: 'handoff-test',
     });
-    assert.equal(errorCode(failedConversion), 'feedback_task_create_failed');
+    assert.equal(errorCode(failedConversion), 'feedback_task_handoff_failed');
     assert.equal(failedConversion.error.data.stage, 'task_lifecycle_create');
     const failedReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: view(failedSource).feedback_id });
     assert.equal(view(failedReadback).status, 'submitted');
@@ -292,6 +319,28 @@ try {
       ['submitted', 'task_handoff_reserved', 'task_payload_created', 'task_created', 'task_link_failed', 'task_handoff_resumed', 'task_linked'],
     );
 
+    const postCreateSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'bug',
+      summary: 'Preserve returned task identity when local audit persistence fails',
+    });
+    const postCreateId = view(postCreateSource).feedback_id;
+    handoffState.db.exec("CREATE TRIGGER reject_task_created_audit BEFORE INSERT ON feedback_events WHEN NEW.event_type = 'task_created' BEGIN SELECT RAISE(ABORT, 'simulated_task_created_audit_failure'); END");
+    const postCreateFailure = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: postCreateId,
+      resolved_by: 'spoofed-handoff-principal',
+    });
+    assert.equal(errorCode(postCreateFailure), 'feedback_task_post_create_persist_failed');
+    assert.equal(postCreateFailure.error.data.stage, 'task_audit_persist');
+    assert.equal(postCreateFailure.error.data.task_ref, 'task #1985');
+    handoffState.db.exec('DROP TRIGGER reject_task_created_audit');
+    const postCreateReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: postCreateId });
+    assert.equal(view(postCreateReadback).task_handoff.status, 'task_created');
+    assert.equal(view(postCreateReadback).task_handoff.task_ref, 'task #1985');
+    assert.equal(view(postCreateReadback).task_handoff.last_error_code, 'surface_feedback_error');
+
     const contentionSource = await callWith(handoffState, 'surface_feedback_submit', {
       surface_id: 'surface-feedback',
       submitter_site_id: 'andrey-user',
@@ -345,7 +394,7 @@ try {
       assert.equal(errorCode(raceLoser), 'feedback_task_handoff_in_progress');
       assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
     } finally {
-      closeServerState(competingState);
+      await closeServerState(competingState);
     }
 
     const fallbackSource = await callWith(handoffState, 'surface_feedback_submit', {
@@ -395,7 +444,53 @@ try {
     });
     assert.equal(errorCode(spoofedAuthority), 'feedback_authority_must_be_server_bound');
   } finally {
-    closeServerState(handoffState);
+    await closeServerState(handoffState);
+  }
+
+  const heartbeatRoot = join(root, 'heartbeat-handoff');
+  const heartbeatAdapter = async (request: any) => {
+    const name = request.params?.name;
+    if (name === 'mcp_payload_create') {
+      return { jsonrpc: '2.0', id: request.id, result: { structuredContent: { status: 'created', ref: 'mcp_payload:heartbeat@v1' } } };
+    }
+    if (name === 'task_lifecycle_create') {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return { jsonrpc: '2.0', id: request.id, result: { structuredContent: { status: 'created', task_number: 77, task_id: 'heartbeat-task', task_status: 'opened' } } };
+    }
+    throw new Error(`unexpected_heartbeat_tool:${name}`);
+  };
+  const heartbeatState = createServerState({
+    feedbackRoot: heartbeatRoot,
+    canonicalFeedbackRoot: heartbeatRoot,
+    authoritySiteId: 'andrey-user',
+    taskLifecycleRequest: heartbeatAdapter,
+    handoffLeaseMs: 80,
+    handoffLeaseRenewMs: 20,
+  });
+  const heartbeatCompetitor = createServerState({
+    feedbackRoot: heartbeatRoot,
+    canonicalFeedbackRoot: heartbeatRoot,
+    authoritySiteId: 'andrey-user',
+    taskLifecycleRequest: async () => { throw new Error('renewed_lease_must_exclude_competitor'); },
+    handoffLeaseMs: 80,
+    handoffLeaseRenewMs: 20,
+  });
+  try {
+    const heartbeatSource = await callWith(heartbeatState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'heartbeat-test',
+      kind: 'bug',
+      summary: 'Lease remains owned during a long lifecycle request',
+    });
+    const heartbeatId = view(heartbeatSource).feedback_id;
+    const activeConversion = callWith(heartbeatState, 'surface_feedback_convert_to_task', { feedback_id: heartbeatId });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const excludedCompetitor = await callWith(heartbeatCompetitor, 'surface_feedback_convert_to_task', { feedback_id: heartbeatId });
+    assert.equal(errorCode(excludedCompetitor), 'feedback_task_handoff_in_progress');
+    assert.equal(view(await activeConversion).status, 'converted');
+  } finally {
+    await Promise.all([closeServerState(heartbeatState), closeServerState(heartbeatCompetitor)]);
   }
 
   const invalidTaskRoot = join(root, 'invalid-task-root');
@@ -421,7 +516,35 @@ try {
     assert.equal(errorCode(invalidRootConversion), 'feedback_task_lifecycle_root_invalid');
     assert.match(invalidRootConversion.error.data.remediation, /--task-lifecycle-root/);
   } finally {
-    closeServerState(invalidRootState);
+    await closeServerState(invalidRootState);
+  }
+
+  const unhealthyRoot = join(root, 'unhealthy-task-child');
+  mkdirSync(join(unhealthyRoot, '.ai'), { recursive: true });
+  const unhealthyState = createServerState({
+    feedbackRoot: unhealthyRoot,
+    canonicalFeedbackRoot: unhealthyRoot,
+    taskLifecycleRoot: unhealthyRoot,
+    authoritySiteId: 'andrey-user',
+    taskLifecycleRequest: async () => { throw new Error('simulated_task_lifecycle_startup_failure'); },
+  });
+  try {
+    assert.equal(view(await callWith(unhealthyState, 'surface_feedback_doctor', {})).task_lifecycle_health, 'unverified');
+    const unhealthySource = await callWith(unhealthyState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'health-test',
+      kind: 'bug',
+      summary: 'Observed child failure changes health without changing root configuration validity',
+    });
+    await callWith(unhealthyState, 'surface_feedback_convert_to_task', { feedback_id: view(unhealthySource).feedback_id });
+    const unhealthyDoctor = view(await callWith(unhealthyState, 'surface_feedback_doctor', {}));
+    assert.equal(unhealthyDoctor.task_lifecycle_root_configured, true);
+    assert.equal(unhealthyDoctor.task_lifecycle_health, 'unhealthy');
+    assert.match(unhealthyDoctor.task_lifecycle_health_error, /simulated_task_lifecycle_startup_failure/);
+    assert.equal(unhealthyDoctor.status, 'warning');
+  } finally {
+    await closeServerState(unhealthyState);
   }
 
   const batchA = await call('surface_feedback_submit', {
@@ -454,7 +577,7 @@ try {
   assert.equal(batchData.failed_count, 1);
   assert.equal(batchData.updates[0].task_ref, 'task #1276');
   assert.match(batchData.updates[0].feedback.resolution_note, /Task: task #1276/);
-  assert.equal(batchData.updates[1].feedback.resolved_by, 'andrey-user.router');
+    assert.equal(batchData.updates[1].feedback.resolved_by, 'surface-feedback@andrey-user');
   assert.equal(batchData.failures[0].code, 'feedback_not_found');
 
   // --- invalid status still rejected ---
@@ -614,7 +737,7 @@ try {
     assert.equal(view(duplicateImport).skipped_count, 1);
     assert.equal(view(duplicateImport).skipped[0].reason, 'already_exists');
   } finally {
-    closeServerState(siteLocalState);
+    await closeServerState(siteLocalState);
   }
 
   // --- stats: no scope ---
@@ -647,6 +770,6 @@ try {
 
   console.log('surface-feedback-mcp behavior ok');
 } finally {
-  if (state) closeServerState(state);
+  if (state) await closeServerState(state);
   rmSync(root, { recursive: true, force: true });
 }

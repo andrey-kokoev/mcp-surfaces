@@ -11,6 +11,7 @@ try {
   writeFileSync(serverPath, `
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
 const countPath = process.env.FAKE_COUNT_PATH;
 let count = 0;
 try { count = Number(readFileSync(countPath, 'utf8')); } catch {}
@@ -25,11 +26,19 @@ lines.on('line', (line) => {
     return;
   }
   if (count === 1 && mode === 'timeout') return;
+  if (count === 1 && mode === 'stale') {
+    spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('stale-not-json\\\\n'), 360)"], { stdio: ['ignore', process.stdout, process.stderr] });
+    return;
+  }
+  if (count === 2 && mode === 'stale') {
+    setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { structuredContent: { status: 'ok', process_count: count } } }) + '\\n'), 150);
+    return;
+  }
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { structuredContent: { status: 'ok', process_count: count } } }) + '\\n');
 });
 `, 'utf8');
 
-  for (const mode of ['invalid', 'timeout'] as const) {
+  for (const mode of ['invalid', 'timeout', 'stale'] as const) {
     const countPath = join(root, `${mode}.count`);
     const client = createTaskLifecycleProcessClient({
       siteRoot: root,
@@ -39,7 +48,7 @@ lines.on('line', (line) => {
         FAKE_COUNT_PATH: countPath,
         FAKE_MODE: mode,
       },
-      requestTimeoutMs: 75,
+      requestTimeoutMs: mode === 'stale' ? 300 : 75,
     });
     try {
       await assert.rejects(
@@ -51,8 +60,7 @@ lines.on('line', (line) => {
       assert.equal((response.result as any).structuredContent.process_count, 2);
       assert.equal(Number(readFileSync(countPath, 'utf8')), 2);
     } finally {
-      client.close();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await client.close();
     }
   }
 

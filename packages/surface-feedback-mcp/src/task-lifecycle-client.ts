@@ -12,7 +12,7 @@ type PendingRequest = {
 
 export type TaskLifecycleProcessClient = {
   request(request: JsonRecord): Promise<JsonRecord>;
-  close(): void;
+  close(): Promise<void>;
 };
 
 const require = createRequire(import.meta.url);
@@ -33,10 +33,9 @@ export function createTaskLifecycleProcessClient({
   requestTimeoutMs?: number;
 }): TaskLifecycleProcessClient {
   let child: ChildProcessWithoutNullStreams | null = null;
-  let stdoutBuffer = '';
-  let stderrTail = '';
   let closed = false;
   const pending = new Map<string, PendingRequest>();
+  const liveChildren = new Set<ChildProcessWithoutNullStreams>();
 
   const rejectPending = (error: Error) => {
     for (const [id, request] of pending) {
@@ -46,32 +45,30 @@ export function createTaskLifecycleProcessClient({
     }
   };
 
-  const processError = (source: ChildProcessWithoutNullStreams | null, reason: string, error?: unknown) => {
+  const processError = (source: ChildProcessWithoutNullStreams | null, stderrTail: string, reason: string, error?: unknown) => {
     const suffix = stderrTail ? ` stderr=${stderrTail.slice(-2000)}` : '';
     const detail = error instanceof Error ? ` ${error.message}` : error ? ` ${String(error)}` : '';
     const failure = new Error(`${reason}${detail}${suffix}`);
     if (source === null || child === source) {
       child = null;
-      stdoutBuffer = '';
       rejectPending(failure);
     }
     return failure;
   };
 
-  const handleStdout = (chunk: string) => {
-    stdoutBuffer += chunk;
-    const lines = stdoutBuffer.split(/\r?\n/);
-    stdoutBuffer = lines.pop() ?? '';
+  const handleStdout = (source: ChildProcessWithoutNullStreams, buffer: string, stderrTail: string, chunk: string): string => {
+    if (child !== source) return buffer;
+    const lines = `${buffer}${chunk}`.split(/\r?\n/);
+    const remaining = lines.pop() ?? '';
     for (const line of lines) {
       if (!line.trim()) continue;
       let response: JsonRecord;
       try {
         response = JSON.parse(line) as JsonRecord;
       } catch (error) {
-        const current = child;
-        processError(current, 'task_lifecycle_invalid_stdout', error);
-        if (current && !current.killed) {
-          try { current.kill(); } catch { /* process exit will finish cleanup */ }
+        processError(source, stderrTail, 'task_lifecycle_invalid_stdout', error);
+        if (!source.killed) {
+          try { source.kill(); } catch { /* process exit will finish cleanup */ }
         }
         continue;
       }
@@ -82,6 +79,7 @@ export function createTaskLifecycleProcessClient({
       clearTimeout(request.timer);
       request.resolve(response);
     }
+    return remaining;
   };
 
   const ensureChild = (): ChildProcessWithoutNullStreams => {
@@ -93,18 +91,22 @@ export function createTaskLifecycleProcessClient({
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     child = spawned;
-    stdoutBuffer = '';
-    stderrTail = '';
+    liveChildren.add(spawned);
+    let stdoutBuffer = '';
+    let stderrTail = '';
     spawned.stdout.setEncoding('utf8');
     spawned.stderr.setEncoding('utf8');
-    spawned.stdout.on('data', handleStdout);
+    spawned.stdout.on('data', (chunk: string) => {
+      stdoutBuffer = handleStdout(spawned, stdoutBuffer, stderrTail, chunk);
+    });
     spawned.stderr.on('data', (chunk: string) => {
       stderrTail = `${stderrTail}${chunk}`.slice(-4000);
     });
-    spawned.once('error', (error) => processError(spawned, 'task_lifecycle_process_error', error));
+    spawned.once('error', (error) => processError(spawned, stderrTail, 'task_lifecycle_process_error', error));
     spawned.once('exit', (code, signal) => {
+      liveChildren.delete(spawned);
       if (closed) return;
-      processError(spawned, `task_lifecycle_process_exit:${code ?? 'null'}:${signal ?? 'null'}`);
+      processError(spawned, stderrTail, `task_lifecycle_process_exit:${code ?? 'null'}:${signal ?? 'null'}`);
     });
     return spawned;
   };
@@ -121,7 +123,7 @@ export function createTaskLifecycleProcessClient({
     return new Promise<JsonRecord>((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        const failure = processError(spawned, `task_lifecycle_request_timeout:${id}`);
+        const failure = processError(spawned, '', `task_lifecycle_request_timeout:${id}`);
         reject(failure);
         try { spawned.kill(); } catch { /* process exit will finish cleanup */ }
       }, requestTimeoutMs);
@@ -131,20 +133,43 @@ export function createTaskLifecycleProcessClient({
       } catch (error) {
         pending.delete(id);
         clearTimeout(timer);
-        reject(processError(spawned, 'task_lifecycle_stdin_error', error));
+        reject(processError(spawned, '', 'task_lifecycle_stdin_error', error));
       }
     });
   };
 
-  const close = () => {
+  const close = async () => {
     if (closed) return;
     closed = true;
     rejectPending(new Error('task_lifecycle_client_closed'));
-    const current = child;
     child = null;
-    if (current && !current.killed) {
-      try { current.kill(); } catch { /* already exited */ }
-    }
+    const terminate = (processToStop: ChildProcessWithoutNullStreams) => new Promise<void>((resolve) => {
+        if (processToStop.exitCode !== null || processToStop.signalCode !== null) {
+          liveChildren.delete(processToStop);
+          resolve();
+          return;
+        }
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          liveChildren.delete(processToStop);
+          resolve();
+        };
+        processToStop.once('exit', finish);
+        const timer = setTimeout(() => {
+          try { processToStop.kill('SIGKILL'); } catch { /* already exited */ }
+          finish();
+        }, 2_000);
+        timer.unref?.();
+        try {
+          if (!processToStop.killed && !processToStop.kill()) finish();
+        } catch {
+          finish();
+        }
+      });
+    await Promise.all([...liveChildren].map(terminate));
   };
 
   return { request, close };

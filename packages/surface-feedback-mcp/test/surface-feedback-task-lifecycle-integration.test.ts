@@ -45,6 +45,8 @@ try {
   })));
   assert.deepEqual(conversions.map((response) => view(response).task_number), [1, 1]);
   assert.deepEqual(conversions.map((response) => view(response).status), ['converted', 'converted']);
+  const doctors = await Promise.all(states.map((state) => call(state, 'surface_feedback_doctor', {})));
+  assert.deepEqual(doctors.map((response) => view(response).task_lifecycle_health), ['healthy', 'healthy']);
 
   const duplicates = await Promise.all(states.map((state, index) => call(state, 'surface_feedback_convert_to_task', {
     feedback_id: view(submissions[index]).feedback_id,
@@ -55,6 +57,6 @@ try {
 
   console.log('surface-feedback isolated task-lifecycle integration ok');
 } finally {
-  for (const state of states) closeServerState(state);
+  await Promise.all(states.map((state) => closeServerState(state)));
   rmSync(parent, { recursive: true, force: true });
 }
