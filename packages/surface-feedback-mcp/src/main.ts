@@ -962,15 +962,29 @@ function buildTaskDefinition(row: JsonRecord, args: JsonRecord, idempotencyKey: 
 }
 
 function buildTaskConversionResult(
-  status: 'converted' | 'already_linked',
+  status: 'converted' | 'recovered' | 'already_linked',
   row: JsonRecord,
   taskRef: string,
   taskNumber: number | null,
   taskStatus: string | null,
   taskId: string | null,
   payloadRef: string | null,
+  handoff: JsonRecord | null,
 ): JsonRecord {
   const resolvedTaskNumber = taskNumber ?? taskNumberFromRef(taskRef);
+  const nextAction = resolvedTaskNumber !== null
+    ? {
+      surface_id: 'task-lifecycle',
+      tool: 'task_lifecycle_show',
+      arguments: { task_number: resolvedTaskNumber },
+      reason: 'Inspect the authoritative task lifecycle state; task execution remains outside surface-feedback.',
+    }
+    : {
+      surface_id: 'task-lifecycle',
+      tool: 'task_lifecycle_search',
+      arguments: { query: taskId ?? taskRef, limit: 5 },
+      reason: 'Resolve the task number from the authoritative task registry before using task_lifecycle_show.',
+    };
   return {
     schema: 'narada.surface_feedback.convert_to_task.v1',
     status,
@@ -981,18 +995,160 @@ function buildTaskConversionResult(
     task_status: taskStatus,
     feedback: hydrateFeedback(row),
     task_creation: {
-      status: status === 'converted' ? 'created_or_recovered' : 'already_linked',
+      status: status === 'already_linked' ? 'already_linked' : 'created_or_recovered',
       payload_ref: payloadRef,
+      idempotency_key: handoff?.idempotency_key ?? `surface-feedback:${String(row.feedback_id)}`,
     },
-    next_action: {
-      surface_id: 'task-lifecycle',
-      tool: 'task_lifecycle_show',
-      arguments: resolvedTaskNumber !== null
-        ? { task_number: resolvedTaskNumber }
-        : { task_id: taskId ?? taskRef },
-      reason: 'Inspect the authoritative task lifecycle state; task execution remains outside surface-feedback.',
-    },
+    handoff: handoff ? {
+      status: handoff.status,
+      attempt_count: Number(handoff.attempt_count ?? 0),
+      last_error_code: optionalString(handoff.last_error_code),
+      updated_at: optionalString(handoff.updated_at),
+    } : null,
+    next_action: nextAction,
   };
+}
+
+function buildTaskHandoffReadback(row: JsonRecord | null): JsonRecord | null {
+  if (!row) return null;
+  return {
+    status: String(row.status),
+    idempotency_key: String(row.idempotency_key),
+    payload_ref: optionalString(row.payload_ref),
+    task_ref: optionalString(row.task_ref),
+    task_number: numberValue(row.task_number),
+    task_id: optionalString(row.task_id),
+    task_status: optionalString(row.task_status),
+    attempt_count: Number(row.attempt_count ?? 0),
+    lease_expires_at: optionalString(row.lease_expires_at),
+    last_error_code: optionalString(row.last_error_code),
+    last_error_message: optionalString(row.last_error_message),
+    updated_at: optionalString(row.updated_at),
+  };
+}
+
+function recordFeedbackEvent(state: FeedbackState, event: JsonRecord): void {
+  const createdAt = optionalString(event.created_at) ?? nowIso();
+  state.db.prepare(
+    'INSERT INTO feedback_events (event_id, feedback_id, event_type, actor_principal, status, task_ref, task_status, note, details_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    `sfe_${randomUUID().slice(0, 16)}`,
+    requiredString(event.feedback_id, 'feedback_event_requires_feedback_id'),
+    requiredString(event.event_type, 'feedback_event_requires_type'),
+    requiredString(event.actor_principal, 'feedback_event_requires_actor'),
+    optionalString(event.status),
+    optionalString(event.task_ref),
+    optionalString(event.task_status),
+    optionalString(event.note),
+    JSON.stringify(asRecord(event.details)),
+    createdAt,
+  );
+}
+
+function feedbackEventHistory(state: FeedbackState, feedbackId: string): JsonRecord[] {
+  const rows = state.db.prepare(
+    'SELECT * FROM feedback_events WHERE feedback_id = ? ORDER BY created_at ASC, event_id ASC'
+  ).all(feedbackId) as JsonRecord[];
+  return rows.map((row) => ({
+    event_id: String(row.event_id),
+    event_type: String(row.event_type),
+    actor_principal: String(row.actor_principal),
+    status: optionalString(row.status),
+    task_ref: optionalString(row.task_ref),
+    task_status: optionalString(row.task_status),
+    note: optionalString(row.note),
+    details: parseJsonRecord(row.details_json),
+    created_at: String(row.created_at),
+  }));
+}
+
+function parseJsonRecord(value: unknown): JsonRecord {
+  try {
+    return asRecord(JSON.parse(String(value ?? '{}')));
+  } catch {
+    return {};
+  }
+}
+
+function resolveAuthority(options: JsonRecord): { siteId: string | null; ownedSurfaceIds: string[]; source: AuthoritySource } {
+  const configured = asRecord(options.authority);
+  const siteId = optionalString(
+    configured.site_id
+      ?? options.authoritySiteId
+      ?? options.siteId
+      ?? process.env.NARADA_SITE_ID
+  );
+  const ownedSurfaceIds = stringList(
+    configured.owned_surface_ids
+      ?? options.authorityOwnedSurfaceIds
+      ?? options.ownedSurfaceIds
+      ?? process.env.NARADA_OWNED_SURFACE_IDS
+  );
+  return {
+    siteId,
+    ownedSurfaceIds,
+    source: siteId ? 'server_config' : 'unconfigured',
+  };
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
+  const text = optionalString(value);
+  if (!text) return [];
+  if (text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return [...new Set(parsed.map((item) => String(item).trim()).filter(Boolean))];
+    } catch {
+      return [];
+    }
+  }
+  return [...new Set(text.split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
+function rejectClientAuthorityOverrides(args: JsonRecord): void {
+  if (args.caller_site_id !== undefined || args.owned_surface_ids !== undefined || args.idempotency_key !== undefined) {
+    throw diagnosticError('feedback_authority_must_be_server_bound', 'feedback_authority_must_be_server_bound', {
+      forbidden_fields: ['caller_site_id', 'owned_surface_ids', 'idempotency_key'],
+    });
+  }
+}
+
+function assertMutationAuthority(row: JsonRecord, state: FeedbackState): void {
+  if (!state.authoritySiteId) {
+    throw diagnosticError('feedback_authority_unconfigured', 'feedback_authority_unconfigured', {
+      remediation: 'Configure NARADA_SITE_ID or --site-id; configure owned surfaces at server startup.',
+    });
+  }
+  if (!isVisible(row, state.authoritySiteId, state.authorityOwnedSurfaceIds)) {
+    throw diagnosticError('feedback_not_visible', `feedback_not_visible:${String(row.feedback_id)}`, {
+      feedback_id: row.feedback_id,
+      authority_site_id: state.authoritySiteId,
+    });
+  }
+}
+
+function taskLifecycleRootPosture(state: FeedbackState): JsonRecord {
+  const rootExists = existsSync(state.taskLifecycleRoot);
+  const aiDirectoryExists = existsSync(resolve(state.taskLifecycleRoot, '.ai'));
+  return {
+    ready: rootExists && aiDirectoryExists,
+    root_exists: rootExists,
+    ai_directory_exists: aiDirectoryExists,
+  };
+}
+
+function requireTaskLifecycleRootReady(state: FeedbackState): void {
+  if (!state.taskLifecycleClient) return;
+  const posture = taskLifecycleRootPosture(state);
+  if (posture.ready === true) return;
+  throw diagnosticError('feedback_task_lifecycle_root_invalid', 'feedback_task_lifecycle_root_invalid', {
+    task_lifecycle_root: state.taskLifecycleRoot,
+    task_lifecycle_root_source: state.taskLifecycleRootSource,
+    diagnostics: posture,
+    remediation: 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.',
+  });
+}
 }
 
 function taskNumberFromRef(taskRef: string): number | null {
