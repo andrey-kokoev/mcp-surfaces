@@ -16,6 +16,8 @@ node <installed-package>/dist/src/main.js --mode read --allowed-root <your-works
 
 ## Carrier Wiring Examples
 
+Carrier-native config files are host/user-site bootstrap profiles. A naked carrier launch receives host-level MCP surfaces, User Site MCP surfaces, and any Local Site MCP surfaces the operator has explicitly selected for that carrier profile. Local Site surfaces are never inferred from the current directory or from an unchosen Site; Narada launch/session materialization is the authority that binds them.
+
 The registrar emits carrier-specific config, not one universal file.
 
 ### Codex
@@ -23,7 +25,7 @@ The registrar emits carrier-specific config, not one universal file.
 Generated shape:
 
 ```toml
-[mcp_servers.narada-andrey-local-filesystem]
+[mcp_servers.narada-andrey-user-local-filesystem]
 command = "node"
 args = ["<installed-package>/dist/src/main.js", "--mode", "read", "--allowed-root", "<your-workspace-root>"]
 approval_mode = "approve"
@@ -37,7 +39,7 @@ Generated shape:
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "narada-andrey-local-filesystem": {
+    "narada-andrey-user-local-filesystem": {
       "type": "local",
       "command": ["node", "<installed-package>/dist/src/main.js", "--mode", "read", "--allowed-root", "<your-workspace-root>"],
       "enabled": true
@@ -53,7 +55,7 @@ Generated shape:
 ```json
 {
   "mcpServers": {
-    "narada-andrey-local-filesystem": {
+    "narada-andrey-user-local-filesystem": {
       "transport": "stdio",
       "command": "node",
       "args": ["<installed-package>/dist/src/main.js", "--mode", "read", "--allowed-root", "<your-workspace-root>"],

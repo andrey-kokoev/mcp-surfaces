@@ -11,6 +11,12 @@ type RequestLifecycleEvent = {
   event: string;
   detail?: JsonRecord;
 };
+type StartupTrace = {
+  path: string | null;
+  startedAt: string;
+  completed: boolean;
+  events: RequestLifecycleEvent[];
+};
 type PendingRequest = {
   id: string | number;
   method: string;
@@ -39,6 +45,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
 const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
 const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
 const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1';
+const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 
 function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
@@ -65,6 +72,62 @@ function parseArgs(argv: string[]): ProxyOptions {
   };
 }
 
+function createStartupTrace(
+  options: ProxyOptions,
+  child: ReturnType<typeof spawn>,
+  childIdentity: JsonRecord,
+): StartupTrace {
+  const trace: StartupTrace = {
+    path: options.diagnosticsDir
+      ? join(options.diagnosticsDir, `startup-${safeSegment(options.surfaceId ?? basename(options.entrypoint))}.json`)
+      : null,
+    startedAt: new Date().toISOString(),
+    completed: false,
+    events: [],
+  };
+  recordStartupTrace(trace, options, child, childIdentity, 'proxy_started', {
+    proxy_pid: process.pid,
+    child_pid: child.pid ?? null,
+  });
+  return trace;
+}
+
+function recordStartupTrace(
+  trace: StartupTrace,
+  options: ProxyOptions,
+  child: ReturnType<typeof spawn>,
+  childIdentity: JsonRecord,
+  event: string,
+  detail?: JsonRecord,
+  completed = false,
+): void {
+  trace.events.push({ at: new Date().toISOString(), event, ...(detail ? { detail } : {}) });
+  if (completed) trace.completed = true;
+  if (!trace.path) return;
+  try {
+    mkdirSync(dirname(trace.path), { recursive: true });
+    writeFileSync(trace.path, JSON.stringify({
+      schema: STARTUP_TRACE_SCHEMA,
+      surface_id: options.surfaceId,
+      entrypoint: options.entrypoint,
+      child_args: options.childArgs,
+      started_at: trace.startedAt,
+      updated_at: new Date().toISOString(),
+      completed: trace.completed,
+      proxy_pid: process.pid,
+      child_pid: child.pid ?? null,
+      child_identity: childIdentity,
+      events: trace.events,
+    }, null, 2) + '\n', 'utf8');
+  } catch {
+    // Startup tracing must never prevent the proxy from serving MCP traffic.
+  }
+}
+
+function startsWithJsonRpcFrame(buffer: string): boolean {
+  return /^\s*Content-Length:\s*\d+\r?\n/i.test(buffer);
+}
+
 export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   const options = parseArgs(argv);
   if (!existsSync(options.entrypoint)) {
@@ -88,6 +151,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     shell: false,
     windowsHide: true,
   });
+  const startupTrace = createStartupTrace(options, child, childIdentity);
 
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
@@ -95,11 +159,17 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk) => {
     parentBuffer += chunk;
-    const drained = parentBuffer.includes('Content-Length:') ? drainJsonRpcFrames(parentBuffer) : drainJsonLines(parentBuffer);
+    const drained = startsWithJsonRpcFrame(parentBuffer) ? drainJsonRpcFrames(parentBuffer) : drainJsonLines(parentBuffer);
     parentBuffer = drained.remaining;
     if (drained.requests.length > 0) parentFramed = drained.framed;
     for (const request of drained.requests) {
       if (!child.stdin.destroyed) writeJsonRpcMessageToStream(child.stdin, request, false);
+      if (request.method === 'initialize' || request.method === 'tools/list') {
+        recordStartupTrace(startupTrace, options, child, childIdentity, 'request_forwarded', {
+          method: request.method,
+          request_id: request.id ?? null,
+        });
+      }
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
         const timeoutTimer = setTimeout(() => {
@@ -165,7 +235,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   child.stdout.on('data', (chunk) => {
     stdoutTail = tail(`${stdoutTail}${chunk}`, STDOUT_TAIL_LIMIT);
     childBuffer += chunk;
-    const drained = childBuffer.includes('Content-Length:') ? drainJsonRpcFrames(childBuffer) : drainJsonLines(childBuffer);
+    const drained = startsWithJsonRpcFrame(childBuffer) ? drainJsonRpcFrames(childBuffer) : drainJsonLines(childBuffer);
     childBuffer = drained.remaining;
     for (const response of drained.requests) {
       observeChildMessage(response, pending);
@@ -176,6 +246,12 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
         if (request) {
           responseFramed = request.framed;
           recordLifecycle(request, 'child_response');
+          if (request.method === 'initialize' || request.method === 'tools/list') {
+            recordStartupTrace(startupTrace, options, child, childIdentity, 'child_response', {
+              method: request.method,
+              request_id: request.id,
+            }, request.method === 'tools/list');
+          }
           clearTimeout(request.timeoutTimer);
         }
         pending.delete(id);
@@ -191,6 +267,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   child.on('error', (error) => {
+    recordStartupTrace(startupTrace, options, child, childIdentity, 'child_error', { message: error.message });
     stderrTail = tail(`${stderrTail}${error.message}\n`, STDERR_TAIL_LIMIT);
     flushPendingErrors(pending, options, {
       code: 'child_spawn_error',
@@ -203,6 +280,12 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   child.on('close', (code, signal) => {
+    if (!startupTrace.completed) {
+      recordStartupTrace(startupTrace, options, child, childIdentity, 'child_closed_before_tools_list', {
+        exit_code: code,
+        signal,
+      });
+    }
     childClosed = true;
     process.stdin.pause();
     if (pending.size > 0) {

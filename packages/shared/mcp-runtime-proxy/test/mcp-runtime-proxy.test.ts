@@ -80,8 +80,14 @@ try {
   assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
   assert.equal(typeof timeoutResponse.error.data.forensic_artifact_path, 'string');
   assert.match(timeoutResponse.error.data.forensic_artifact_path, /silent-surface/);
-  const artifacts = readdirSync(diagnosticsDir).filter((file) => file.endsWith('.json'));
+  const artifacts = readdirSync(diagnosticsDir).filter((file) => file.endsWith('.json') && !file.startsWith('startup-'));
   assert.equal(artifacts.length, 1);
+  const startupTrace = JSON.parse(readFileSync(join(diagnosticsDir, 'startup-silent-surface.json'), 'utf8'));
+  assert.equal(startupTrace.schema, 'narada.mcp_runtime_proxy.startup_trace.v1');
+  assert.equal(startupTrace.surface_id, 'silent-surface');
+  assert.equal(startupTrace.completed, false);
+  assert.ok(startupTrace.events.some((event: { event: string }) => event.event === 'proxy_started'));
+  assert.ok(startupTrace.events.some((event: { event: string }) => event.event === 'child_closed_before_tools_list'));
   const artifact = JSON.parse(readFileSync(join(diagnosticsDir, artifacts[0]), 'utf8'));
   assert.equal(artifact.schema, 'narada.mcp_runtime_proxy.forensic_artifact.v1');
   assert.equal(artifact.event, 'proxy_child_request_timeout');
@@ -99,6 +105,32 @@ try {
   assert.equal(artifact.diagnostic.code, 'child_request_timeout');
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'proxy_timeout'));
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'child_termination_requested'));
+
+  const contentLengthChildEntrypoint = join(root, 'json-line-content-length-child.mjs');
+  writeFileSync(contentLengthChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { const request = JSON.parse(chunk.trim()); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'Content-Length: is data, not framing' }] } }) + String.fromCharCode(10)); });", 'utf8');
+  const contentLengthProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'json-line-content-length-surface',
+    '--entrypoint',
+    contentLengthChildEntrypoint,
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let contentLengthStdout = '';
+  contentLengthProxy.stdout.setEncoding('utf8');
+  const contentLengthResponse = new Promise<{ result: { content: Array<{ text: string }> } }>((resolve, reject) => {
+    contentLengthProxy.stdout.on('data', (chunk) => {
+      contentLengthStdout += chunk;
+      if (contentLengthStdout.includes('Content-Length: is data')) {
+        resolve(JSON.parse(contentLengthStdout.trim()) as { result: { content: Array<{ text: string }> } });
+        contentLengthProxy.kill();
+      }
+    });
+    contentLengthProxy.once('error', reject);
+  });
+  contentLengthProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'content_length_probe', arguments: {} } })}\n`);
+  const contentLengthResponseValue = await contentLengthResponse;
+  assert.equal(contentLengthResponseValue.result.content[0].text, 'Content-Length: is data, not framing');
 
   const framedChildEntrypoint = join(root, 'framed-child.mjs');
   writeFileSync(framedChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.once('data', (chunk) => { const request = JSON.parse(chunk.trim()); const body = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'framed-child', version: '1' } } }); process.stdout.write('Content-Length: ' + Buffer.byteLength(body, 'utf8') + '\\r\\n\\r\\n' + body); setTimeout(() => process.exit(0), 20); });\n", 'utf8');
