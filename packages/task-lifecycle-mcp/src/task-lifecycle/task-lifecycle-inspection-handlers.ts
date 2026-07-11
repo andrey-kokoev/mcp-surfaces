@@ -42,6 +42,7 @@ export function createTaskLifecycleInspectionHandlers({
       const routing = getTaskRouting(store, lifecycle.task_id);
       const assignment = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(lifecycle.task_id);
       const observations = store.db.prepare('SELECT * FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
+      const currentExecutionEvidence = readCurrentExecutionEvidence(store, lifecycle.task_id);
       const reviewRows = store.db.prepare('SELECT * FROM task_reviews WHERE task_id = ? ORDER BY reviewed_at DESC').all(lifecycle.task_id);
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
       const reviews = reviewRows.map((review) => ({
@@ -77,6 +78,7 @@ export function createTaskLifecycleInspectionHandlers({
         active_assignment: assignment ?? null,
         assignment_intents: assignmentIntents,
         observations: observations ?? [],
+        current_execution_evidence: currentExecutionEvidence,
         legacy_review_rows: reviews ?? [],
         review_authority: reviewAuthority,
         dependencies_blocking_this_task: dependencyReadback.dependencies_blocking_this_task,
@@ -100,6 +102,7 @@ export function createTaskLifecycleInspectionHandlers({
       const obligations = store.listDirectedObligationsForTask(lifecycle.task_id, null);
       const reports = store.db.prepare('SELECT report_id, agent_id, submitted_at as reported_at FROM task_reports WHERE task_id = ?').all(lifecycle.task_id);
       const observations = store.db.prepare('SELECT * FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
+      const currentExecutionEvidence = readCurrentExecutionEvidence(store, lifecycle.task_id);
       const reviewRows = store.db.prepare('SELECT * FROM task_reviews WHERE task_id = ? ORDER BY reviewed_at DESC').all(lifecycle.task_id);
       const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle });
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
@@ -146,6 +149,7 @@ export function createTaskLifecycleInspectionHandlers({
         reports: reports || [],
         observations: observations || [],
         observation_artifact_count: observations.length,
+        current_execution_evidence: currentExecutionEvidence,
         legacy_review_rows: reviews || [],
         review_authority: reviewAuthority,
         dependencies_blocking_this_task: dependencyReadback.dependencies_blocking_this_task,
@@ -508,6 +512,32 @@ function parseJsonStringArray(value) {
   } catch {
     return [];
   }
+}
+
+function readCurrentExecutionEvidence(store, taskId) {
+  const row = store.db.prepare(`
+    SELECT artifact_id, artifact_uri, agent_id, admitted_view_json, created_at
+    FROM observation_artifacts
+    WHERE task_id = ? AND artifact_type = 'evidence_supersession'
+    ORDER BY created_at DESC, artifact_id DESC
+    LIMIT 1
+  `).get(taskId);
+  if (!row) return { status: 'original_completion_evidence_current' };
+  let supersession = null;
+  try {
+    const parsed = JSON.parse(row.admitted_view_json ?? '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) supersession = parsed;
+  } catch {
+    // Preserve the durable artifact metadata even when an old row cannot be parsed.
+  }
+  return {
+    status: 'superseded',
+    artifact_id: row.artifact_id,
+    artifact_uri: row.artifact_uri,
+    agent_id: row.agent_id,
+    created_at: row.created_at,
+    supersession,
+  };
 }
 
 function summarizeObligationForInspection({ obligation, lifecycle }) {

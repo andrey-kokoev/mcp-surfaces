@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_submit_observation",
+  "task_lifecycle_evidence_supersede",
   "task_lifecycle_bridge_poll",
   "task_lifecycle_inbox_target",
   "task_lifecycle_set_routing",
@@ -59,6 +60,83 @@ export function createTaskLifecycleOperationsHandlers(context) {
         created_at: new Date().toISOString(),
       });
       return jsonToolResult({ status: 'submitted', artifact_id: artifactId, artifact_uri: artifactUri });
+    }
+
+    case 'task_lifecycle_evidence_supersede': {
+      const taskNumber = numberField(args, 'task_number');
+      const agentId = stringField(args, 'agent_id');
+      const supersedesReportId = stringField(args, 'supersedes_report_id');
+      const artifactUri = stringField(args, 'artifact_uri');
+      const summary = stringField(args, 'summary');
+      const verificationSummary = stringField(args, 'verification_summary');
+      const noFilesChanged = booleanField(args, 'no_files_changed') ?? false;
+      const changedFiles = args.changed_files === undefined
+        ? []
+        : Array.isArray(args.changed_files)
+          && args.changed_files.length > 0
+          && args.changed_files.every((value) => typeof value === 'string' && value.trim())
+          ? args.changed_files
+          : null;
+      if (!taskNumber) throw new Error('task_number_required');
+      if (!agentId) throw new Error('agent_id_required');
+      if (!supersedesReportId) throw new Error('supersedes_report_id_required');
+      if (!artifactUri) throw new Error('artifact_uri_required');
+      if (!summary) throw new Error('summary_required');
+      if (!verificationSummary) throw new Error('verification_summary_required');
+      if (changedFiles === null) throw new Error('changed_files_must_be_nonempty_string_array');
+      if (noFilesChanged === (changedFiles.length > 0)) throw new Error('exactly_one_of_changed_files_or_no_files_changed_required');
+      enforceSessionIdentity(agentId);
+      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+      if (lifecycle.status !== 'in_review') {
+        return jsonToolResult({
+          status: 'blocked',
+          reason: 'evidence_supersession_requires_in_review',
+          task_number: taskNumber,
+          current_status: lifecycle.status,
+          remediation: 'Use task_lifecycle_finish for active work or task_lifecycle_reopen for closed/confirmed work before submitting replacement evidence.',
+        }, true);
+      }
+      const report = store.db.prepare('SELECT report_id FROM task_reports WHERE task_id = ? AND report_id = ?').get(lifecycle.task_id, supersedesReportId);
+      if (!report) {
+        return jsonToolResult({
+          status: 'blocked',
+          reason: 'superseded_report_not_found_for_task',
+          task_number: taskNumber,
+          supersedes_report_id: supersedesReportId,
+        }, true);
+      }
+      const artifactId = randomUUID();
+      const supersession = {
+        schema: 'narada.task.evidence_supersession.v1',
+        task_number: taskNumber,
+        supersedes_report_id: supersedesReportId,
+        summary,
+        changed_files: changedFiles,
+        no_files_changed: noFilesChanged,
+        verification_summary: verificationSummary,
+        submitted_at: new Date().toISOString(),
+      };
+      store.upsertObservationArtifact({
+        artifact_id: artifactId,
+        artifact_type: 'evidence_supersession',
+        source_operator: 'task_lifecycle_evidence_supersede',
+        task_id: lifecycle.task_id,
+        task_number: taskNumber,
+        agent_id: agentId,
+        artifact_uri: artifactUri,
+        digest: artifactId.slice(0, 16),
+        admitted_view_json: JSON.stringify(supersession),
+        created_at: supersession.submitted_at,
+      });
+      return jsonToolResult({
+        status: 'superseded',
+        task_number: taskNumber,
+        artifact_id: artifactId,
+        artifact_uri: artifactUri,
+        current_execution_evidence: supersession,
+        reviewer_action: 'Review current_execution_evidence instead of the superseded report; this does not close or confirm the task.',
+      });
     }
 
     case 'task_lifecycle_bridge_poll': {

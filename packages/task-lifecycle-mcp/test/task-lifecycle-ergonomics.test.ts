@@ -2988,6 +2988,64 @@ try {
   const observationAuditPayload = await responsePayload(observationAuditResponse, scopedRuntime, 237);
   assert.ok(observationAuditPayload.events.some((event: Record<string, unknown>) => event.event_type === 'observation' && event.task === '9303'));
 
+  const supersedeToolsResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 238,
+    method: 'tools/list',
+    params: {},
+  }, scopedRuntime);
+  assert.equal(
+    supersedeToolsResponse.result.tools.some((tool: { name: string }) => tool.name === 'task_lifecycle_evidence_supersede'),
+    true,
+  );
+  const emptyChangedFilesSupersedeResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 239,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_evidence_supersede',
+      arguments: {
+        task_number: 9303,
+        agent_id: 'scoped.builder',
+        supersedes_report_id: payloadRefFinishPayload.report_id,
+        artifact_uri: 'artifact://task-9303/invalid-evidence-supersession',
+        summary: 'Invalid empty changed-files evidence.',
+        verification_summary: 'Focused task-lifecycle regression passed.',
+        changed_files: [],
+        no_files_changed: true,
+      },
+    },
+  }, scopedRuntime);
+  assert.match(emptyChangedFilesSupersedeResponse.error?.message ?? '', /changed_files_must_be_nonempty_string_array/);
+  const supersedeEvidenceResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 240,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_evidence_supersede',
+      arguments: {
+        task_number: 9303,
+        agent_id: 'scoped.builder',
+        supersedes_report_id: payloadRefFinishPayload.report_id,
+        artifact_uri: 'artifact://task-9303/evidence-supersession',
+        summary: 'Replacement evidence after implementation review.',
+        verification_summary: 'Focused task-lifecycle regression passed.',
+        changed_files: ['packages/example.ts'],
+      },
+    },
+  }, scopedRuntime);
+  const supersedeEvidencePayload = await responsePayload(supersedeEvidenceResponse, scopedRuntime, 241);
+  assert.equal(supersedeEvidencePayload.status, 'superseded');
+  const supersededShowResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 242,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_show', arguments: { task_number: 9303 } },
+  }, scopedRuntime);
+  const supersededShowPayload = await responsePayload(supersededShowResponse, scopedRuntime, 243);
+  assert.equal(supersededShowPayload.current_execution_evidence.status, 'superseded');
+  assert.equal(supersededShowPayload.current_execution_evidence.supersession.supersedes_report_id, payloadRefFinishPayload.report_id);
+
   const followUpPreflightResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 23,
