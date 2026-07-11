@@ -8,6 +8,7 @@
   },
   "references": [
     { "path": "../shared/mcp-affordances" },
+    { "path": "../shared/mcp-runtime-proxy" },
     { "path": "../shared/mcp-transport" }
   ],
   "include": ["src/**/*.ts", "test/**/*.ts"]

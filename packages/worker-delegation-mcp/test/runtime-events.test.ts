@@ -32,5 +32,15 @@ writeFileSync(runtimeEventsPath, [
 const runtimeEventEvidence = extractSessionEventEvidence(runtimeEventsPath);
 assert.equal(runtimeEventEvidence.prompt_admission, 'conversation_send_frame_seen');
 assert.equal(runtimeEventEvidence.assistant_message_seen, true);
+const sessionCoreTracker = new AgentRuntimeEventTracker();
+sessionCoreTracker.handleEvent({ event: 'assistant_message', content: '{"summary":"ok"}' });
+sessionCoreTracker.handleEvent({ event: 'carrier_turn_completed' });
+assert.equal(sessionCoreTracker.turnCompleted, true);
+assert.deepEqual(sessionCoreTracker.evidence().terminal_events, ['carrier_turn_completed']);
+const sessionCoreFailureTracker = new AgentRuntimeEventTracker();
+sessionCoreFailureTracker.handleEvent({ event: 'carrier_turn_failed', error: 'API error 401: invalid key' });
+assert.equal(sessionCoreFailureTracker.turnCompleted, true);
+assert.equal(sessionCoreFailureTracker.runtimeError, 'API error 401: invalid key');
+assert.deepEqual(sessionCoreFailureTracker.evidence().terminal_events, ['carrier_turn_failed']);
 assert.deepEqual(runtimeEventEvidence.terminal_events, ['turn_complete']);
 assert.deepEqual(runtimeEventEvidence.mutation_admission, { carrier_mutation_admitted: false, delegated_mutation_admitted: true });

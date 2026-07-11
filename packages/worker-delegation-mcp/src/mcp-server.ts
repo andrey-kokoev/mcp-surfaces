@@ -4,6 +4,7 @@ import { loadCognitionDefaultsState, type ProviderCognitionDefaults } from './co
 import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
+import { providerRuntimeMetadataFromRegistry, type WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
 import type { WorkerMcpState } from './state.js';
 import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { spawnSync } from 'node:child_process';
@@ -73,13 +74,14 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
     siteRoot,
     providerModels: providerPolicyDefaults.providerModels,
     registryDefaults: providerPolicyDefaults.policyOptions.providerCognitionDefaults as ProviderCognitionDefaults ?? {},
+    defaultProvider: typeof providerPolicyDefaults.policyOptions.defaultNaradaAgentRuntimeProvider === 'string' ? providerPolicyDefaults.policyOptions.defaultNaradaAgentRuntimeProvider : null,
   });
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const baseOptions = { ...providerPolicyDefaults.policyOptions, providerCognitionDefaults: loadedCognitionDefaults.defaults, ...options };
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
-  return { policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  return { policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -426,14 +428,14 @@ function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv,
   }
 }
 
-function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): { policyOptions: Record<string, unknown>; providerModels: Record<string, string[]> } {
+function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): { policyOptions: Record<string, unknown>; providerModels: Record<string, string[]>; providerRuntimeMetadata: Record<string, WorkerProviderRuntimeMetadata> } {
   const registryPath = providerRegistryPath(siteRoot, env, options);
-  if (!registryPath || !existsSync(registryPath)) return { policyOptions: {}, providerModels: {} };
+  if (!registryPath || !existsSync(registryPath)) return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {} };
   let registry: Record<string, unknown>;
   try {
     registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
   } catch {
-    return { policyOptions: {}, providerModels: {} };
+    return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {} };
   }
   const providers = asRecord(registry.providers);
   const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
@@ -450,7 +452,7 @@ function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, op
     ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
     ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
     ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
-  }, providerModels };
+  }, providerModels, providerRuntimeMetadata: providerRuntimeMetadataFromRegistry(registry) };
 }
 
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {

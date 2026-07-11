@@ -19,7 +19,7 @@ export function listTools(): WorkerToolDefinition[] {
     { name: 'worker_operator_affordances', description: 'Return UI-neutral operator affordances for rendering worker run dashboards, launch controls, artifact refs, and recovery actions.', inputSchema: objectSchema({}) },
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
     { name: 'worker_cognition_defaults_inspect', description: 'Inspect provider-scoped low, medium, and high cognition defaults, their sources, precedence, version, and audit location.', inputSchema: objectSchema({}) },
-    { name: 'worker_cognition_defaults_update', description: 'Update one provider cognition tier for future new runs. The model must be listed in that provider registry catalog; resumed sessions retain their resolved settings unless explicitly overridden.', inputSchema: objectSchema({
+    { name: 'worker_cognition_defaults_update', description: 'Atomically set the effective provider, model, and reasoning effort for one cognition tier used by future provider-unspecified runs. The model must be listed in that provider registry catalog; resumed sessions retain their resolved settings unless explicitly overridden.', inputSchema: objectSchema({
       provider: { type: 'string' },
       cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
       model: { type: 'string' },

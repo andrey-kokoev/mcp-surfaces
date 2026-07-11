@@ -80,15 +80,6 @@ const ENV_KEYS = [
   'LOCALAPPDATA',
   'CODEX_HOME',
   'CODEX_CONFIG_DIR',
-  'CODEX_MODEL',
-  'OPENAI_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'DEEPSEEK_API_BASE_URL',
-  'KIMI_API_KEY',
-  'KIMI_CODE_API_KEY',
-  'MOONSHOT_API_KEY',
-  'NARADA_AI_MODEL',
-  'NARADA_AI_THINKING',
   'NARADA_WORKER_MCP_CONFIG',
 ];
 const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
@@ -267,7 +258,9 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       required_markers: [...NARADA_SITE_ROOT_MARKERS],
       site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
       workspace_root: 'worker cwd inside the resolved Site root',
-      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+      provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
+      provider_alias_posture: 'selected_provider_aliases_only',
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
       allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
       remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
@@ -308,7 +301,9 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         site_bound: true,
         site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
         site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
-        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_MODEL', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+        provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
+        provider_alias_posture: 'selected_provider_aliases_only',
         provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
         allowed_providers: policy.allowedNaradaAgentRuntimeProviders,
         site_root_required_remediation: NARADA_AGENT_RUNTIME_SITE_REMEDIATION,
@@ -543,7 +538,7 @@ function cognitionDefault(level: WorkerCognition, cognition: Record<string, unkn
   const pascal = `${level[0].toUpperCase()}${level.slice(1)}`;
   return {
     model: stringOrNull(options[`cognition${pascal}Model`] ?? config.model ?? defaultModel),
-    reasoningEffort: stringOrNull(options[`cognition${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? defaultReasoningEffort),
+    reasoningEffort: stringOrNull(options[`cognition${pascal}ReasoningEffort`] ?? config.reasoning_effort ?? config.reasoningEffort ?? defaultReasoningEffort),
   };
 }
 

@@ -56,13 +56,13 @@ export class AgentRuntimeEventTracker {
         }
       }
     }
-    if (eventName === 'turn_failed') {
-      this.terminalEvents.add('turn_failed');
-      this.runtimeError = eventErrorMessage(record) ?? this.runtimeError ?? 'turn_failed';
+    if (eventName === 'turn_failed' || eventName === 'carrier_turn_failed' || eventName === 'session_control_rejected') {
+      this.terminalEvents.add(eventName);
+      this.runtimeError = eventErrorMessage(record) ?? this.runtimeError ?? eventName;
       this.turnCompleted = true;
     }
-    if (eventName === 'turn_complete') {
-      this.terminalEvents.add('turn_complete');
+    if (eventName === 'turn_complete' || eventName === 'carrier_turn_completed') {
+      this.terminalEvents.add(eventName);
       this.turnCompleted = true;
     }
     if (eventName === 'session_closed') this.terminalEvents.add('session_closed');
@@ -164,7 +164,7 @@ export function extractSessionEventEvidence(eventsPath: string): Record<string, 
       if (record.method === 'conversation.send') promptSent = true;
       if (type === 'turn_started') turnStarted = true;
       if (type === 'assistant_message') assistantSeen = true;
-      if (type === 'turn_complete' || type === 'turn_failed' || type === 'session_closed') terminalEvents.add(type);
+      if (type === 'turn_complete' || type === 'carrier_turn_completed' || type === 'input_event_completed' || type === 'turn_failed' || type === 'carrier_turn_failed' || type === 'session_control_rejected' || type === 'session_closed') terminalEvents.add(type);
       const admission = extractMutationAdmission(record);
       if (typeof admission.carrier_mutation_admitted === 'boolean') carrierMutationAdmitted = admission.carrier_mutation_admitted;
       if (typeof admission.delegated_mutation_admitted === 'boolean') delegatedMutationAdmitted = admission.delegated_mutation_admitted;
