@@ -424,12 +424,18 @@ function taskLifecyclePayloadSchemas() {
         acceptance_criteria: ['string criteria item'],
         preferred_role: '<optional role>',
         target_role: '<optional role>',
+        idempotency_key: '<stable retry key; omitted values derive from payload_ref>',
+        execution_binding: {
+          workspace_root: '<absolute workspace root; defaults to this Site root>',
+          executor_kind: 'manual | operator | worker_delegation | delegated_task | site_loop',
+          correlation_key: '<stable result correlation key; defaults to idempotency_key>',
+        },
       },
       examples: [
         { payload: { title: 'Fix thing', required_work: ['Inspect failure.', 'Patch narrowly.'], non_goals: ['No unrelated refactor.'], acceptance_criteria: ['Focused test passes.'] } },
       ],
       payload_ref_required: true,
-      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'preferred_role', 'target_role'],
+      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'preferred_role', 'target_role', 'idempotency_key', 'execution_binding'],
       normalized_fields: { required_work: 'string[] joins with newline after trimming empty entries', non_goals: 'string[] joins with newline after trimming empty entries' },
     },
     task_lifecycle_admit_evidence: {

@@ -75,6 +75,7 @@ import { createTaskLifecycleInspectionHandlers } from './task-lifecycle-inspecti
 import { createTaskLifecycleEvidenceReviewHandlers } from './task-lifecycle-evidence-review-handlers.js';
 import { createTaskLifecycleOperationsHandlers } from './task-lifecycle-operations-handlers.js';
 import { createTaskLifecycleCreateRecurringHandlers } from './task-lifecycle-create-recurring-handlers.js';
+import { ensureTaskExecutionTables } from './task-execution-state.js';
 import { readTaskLifecycleSitePolicy } from './task-lifecycle-site-policy.js';
 import {
   buildStateAwareFinishBlockerRemediation as buildStateAwareFinishBlockerRemediationCore,
@@ -127,6 +128,7 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_set_routing',
   'task_lifecycle_dependency_declare',
   'task_lifecycle_dependency_disposition_record',
+  'task_lifecycle_compatibility_reconcile',
   'task_lifecycle_recurring_create',
   'task_lifecycle_recurring_run_due',
   'task_lifecycle_recurring_suspend',
@@ -175,6 +177,18 @@ const TOOL_ALIASES = TASK_LIFECYCLE_TOOL_ALIASES;
 function taskLifecycleTools() {
   return [
     ...taskLifecycleDomainTools().map(patchLocalToolDefinition),
+    {
+      name: 'task_lifecycle_compatibility_reconcile',
+      description: 'Bounded, idempotent reconciliation of historical compatibility review records. Materializes missing task projections, repairs closure evidence from admitted outcomes, and releases stale assignments without creating new review outcomes.',
+      inputSchema: objectSchema({
+        agent_id: stringSchema('Agent id performing the reconciliation.'),
+        task_numbers: { type: 'array', items: { type: 'number' }, description: 'Optional explicit task numbers to reconcile; maximum 100. Omit to scan at most limit legacy-review records.' },
+        limit: numberSchema('Maximum legacy compatibility records to inspect when task_numbers is omitted; defaults to 25 and is capped at 100.'),
+        dry_run: { type: 'boolean', description: 'Plan the bounded reconciliation without mutating SQLite or task projections.' },
+      }, ['agent_id']),
+      annotations: { title: 'task_lifecycle_compatibility_reconcile', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
     {
       name: 'task_lifecycle_guidance',
       description: 'Show canonical operating guidance for task lifecycle workflows: ordinary work, blocked work, payloads, review/dependency state, and truthful closeout reporting.',
@@ -313,6 +327,47 @@ function taskLifecycleTools() {
     },
     ...listPayloadTools(),
   ];
+}
+
+function ensureDownstreamDependencyOutcomeContracts() {
+  if (!store) return;
+  const dependencies = store.db.prepare(`
+    SELECT dependency_id, required_task_id, satisfying_outcomes_json, created_by, created_at
+    FROM task_dependencies
+    WHERE kind = 'downstream_work'
+  `).all() as Array<Record<string, unknown>>;
+  for (const dependency of dependencies) {
+    const requiredTaskId = String(dependency.required_task_id);
+    const contractId = `contract-downstream_work-${requiredTaskId}`;
+    const latestContract = store.getLatestTaskOutcomeContract?.(requiredTaskId);
+    const existingDownstreamContract = store.listTaskOutcomeContracts?.(requiredTaskId)
+      .some((contract) => contract.contract_id === contractId) ?? false;
+    if (existingDownstreamContract || latestContract?.outcome_type === 'completion') continue;
+    const satisfyingOutcomes = parseJsonStringArray(dependency.satisfying_outcomes_json);
+    const allowedOutcomes = [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])];
+    store.upsertTaskOutcomeContract({
+      contract_id: contractId,
+      task_id: requiredTaskId,
+      outcome_type: 'completion',
+      allowed_outcomes_json: JSON.stringify(allowedOutcomes),
+      satisfying_outcomes_json: JSON.stringify(satisfyingOutcomes.length > 0 ? satisfyingOutcomes : ['completed']),
+      blocking_outcomes_json: JSON.stringify(['blocked', 'failed']),
+      required_fields_json: JSON.stringify(['summary']),
+      capability_requirement: null,
+      created_by: String(dependency.created_by || 'task-lifecycle-migration'),
+      created_at: new Date().toISOString(),
+    });
+  }
+}
+
+function parseJsonStringArray(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()) : [];
+  } catch {
+    return [];
+  }
 }
 
 function ensureRecurringTaskTables(taskStore) {
@@ -586,6 +641,8 @@ export function configureTaskLifecycleMcpRuntime({
   siteRoot = resolve(String(options.siteRoot ?? cwd));
   try {
     store = openTaskLifecycleStore(siteRoot);
+    ensureTaskExecutionTables(store);
+    ensureDownstreamDependencyOutcomeContracts();
   } catch (error) {
     throw new Error(`Failed to open task lifecycle store: ${error.message}`);
   }
@@ -608,6 +665,8 @@ function refreshStore() {
     // closing a handle immediately invalidates helpers still holding it, so
     // refresh must be non-destructive.
     store = openTaskLifecycleStore(siteRoot);
+    ensureTaskExecutionTables(store);
+    ensureDownstreamDependencyOutcomeContracts();
     return true;
   } catch (error) {
     runtimeStderr.write(`Failed to refresh task lifecycle store: ${error.message}\n`);
@@ -1592,10 +1651,18 @@ async function taskLifecycleDependencyDeclare(args) {
     created_by: agentId,
     created_at: now,
   };
-  store.upsertTaskDependency(dependency);
-
   let outcomeContract = null;
-  const outcomeContractInput = objectField(args, 'outcome_contract');
+  let outcomeContractInput = objectField(args, 'outcome_contract');
+  if (!outcomeContractInput && kind === 'downstream_work') {
+    outcomeContractInput = {
+      outcome_type: 'completion',
+      allowed_outcomes: [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])],
+      satisfying_outcomes: satisfyingOutcomes,
+      blocking_outcomes: ['blocked', 'failed'],
+      required_fields: ['summary'],
+      capability_requirement: null,
+    };
+  }
   if (outcomeContractInput) {
     const outcomeType = nonEmptyString(outcomeContractInput.outcome_type) ?? kind;
     const allowedOutcomes = Array.isArray(outcomeContractInput.allowed_outcomes)
@@ -1620,18 +1687,21 @@ async function taskLifecycleDependencyDeclare(args) {
       satisfying_outcomes_json: JSON.stringify(contractSatisfyingOutcomes),
       blocking_outcomes_json: JSON.stringify(blockingOutcomes),
       required_fields_json: JSON.stringify(requiredFields),
-      capability_requirement: nonEmptyString(outcomeContractInput.capability_requirement) ?? kind,
+      capability_requirement: nonEmptyString(outcomeContractInput.capability_requirement) ?? (kind === 'downstream_work' ? null : kind),
       created_by: agentId,
       created_at: now,
     };
-    store.upsertTaskOutcomeContract(outcomeContract);
   }
 
-  const parentDependencyWaitStatus = await markParentAwaitingDependencies({
-    parentLifecycle,
-    parentTaskNumber,
-    updatedBy: agentId,
-    updatedAt: now,
+  const parentDependencyWaitStatus = await withStoreSavepoint(store, async () => {
+    store.upsertTaskDependency(dependency);
+    if (outcomeContract) store.upsertTaskOutcomeContract(outcomeContract);
+    return markParentAwaitingDependencies({
+      parentLifecycle,
+      parentTaskNumber,
+      updatedBy: agentId,
+      updatedAt: now,
+    });
   });
   return jsonToolResult({
     schema: 'narada.task.mcp.dependency_declare.v0',
@@ -1643,6 +1713,20 @@ async function taskLifecycleDependencyDeclare(args) {
     outcome_contract: outcomeContract,
     dependency_satisfaction: evaluateTaskDependencySatisfaction(store, parentLifecycle.task_id),
   });
+}
+
+async function withStoreSavepoint<T>(taskStore, action: () => Promise<T>): Promise<T> {
+  const name = `narada_task_mutation_${randomUUID().replaceAll('-', '')}`;
+  taskStore.db.exec(`SAVEPOINT ${name}`);
+  try {
+    const result = await action();
+    taskStore.db.exec(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    try { taskStore.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original error */ }
+    try { taskStore.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original error */ }
+    throw error;
+  }
 }
 
 function taskLifecycleDependencyDispositionRecord(args) {

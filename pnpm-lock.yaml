@@ -207,7 +207,11 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
 
-  packages/surface-feedback-mcp: {}
+  packages/surface-feedback-mcp:
+    dependencies:
+      '@narada2/task-lifecycle-mcp':
+        specifier: workspace:*
+        version: link:../task-lifecycle-mcp
 
   packages/task-lifecycle-mcp:
     dependencies:

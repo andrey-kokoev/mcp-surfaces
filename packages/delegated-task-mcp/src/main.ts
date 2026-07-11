@@ -7,6 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { callWorkerTool, createWorkerPolicy, providerRuntimeMetadataFromRegistry, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
+import { executionBindingSchema, executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
 
 const SERVER_NAME = 'delegated-task-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -70,7 +71,9 @@ type Task = {
   acceptance: JsonRecord;
   result_policy: JsonRecord;
   execution: JsonRecord;
+  execution_binding: ExecutionBinding;
   idempotency_key: string | null;
+  request_fingerprint: string;
   created_at: string;
   updated_at: string;
   cancelled_at: string | null;
@@ -120,6 +123,54 @@ function siteControlRoot(siteRoot: string): string {
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
+function assertExecutionBindingScope(binding: ExecutionBinding, constraints: JsonRecord, state: State): void {
+  if (!pathWithinAnyRoot(binding.workspace_root, state.allowedRoots)) {
+    throw diag('delegated_task_execution_binding_workspace_outside_allowed_roots', 'delegated_task_execution_binding_workspace_outside_allowed_roots', { workspace_root: binding.workspace_root, allowed_roots: state.allowedRoots });
+  }
+  if (binding.repository_root && !pathWithinAnyRoot(binding.repository_root, state.allowedRoots)) {
+    throw diag('delegated_task_execution_binding_repository_outside_allowed_roots', 'delegated_task_execution_binding_repository_outside_allowed_roots', { repository_root: binding.repository_root, allowed_roots: state.allowedRoots });
+  }
+  if (binding.site_root && resolve(binding.site_root) !== resolve(state.siteRoot)) {
+    throw diag('delegated_task_execution_binding_site_root_mismatch', 'delegated_task_execution_binding_site_root_mismatch', { binding_site_root: binding.site_root, current_site_root: state.siteRoot });
+  }
+  const requestedCwd = opt(constraints.cwd);
+  if (requestedCwd && (!isAbsolute(requestedCwd) || resolve(requestedCwd) !== binding.workspace_root)) {
+    throw diag('delegated_task_execution_binding_cwd_mismatch', 'delegated_task_execution_binding_cwd_mismatch', { constraint_cwd: requestedCwd, binding_workspace_root: binding.workspace_root });
+  }
+}
+
+function pathWithinAnyRoot(path: string, roots: string[]): boolean {
+  return roots.some((root) => resolve(path) === resolve(root) || inside(resolve(path), resolve(root)));
+}
+
+function externalDependencyStatus(task: Task, state: State): JsonRecord {
+  const external = rec(task.result).external_dependencies;
+  const dependencyIds = uniqueStrings(stringList(rec(external).depends_on_task_ids));
+  if (dependencyIds.length === 0) return { schema: 'narada.delegated_task.external_dependency_status.v1', status: 'satisfied', dependency_count: 0, blocking: [] };
+  const blocking: JsonRecord[] = [];
+  for (const dependencyId of dependencyIds) {
+    if (dependencyId === task.task_id) {
+      blocking.push({ task_id: dependencyId, status: 'invalid', reason: 'self_dependency' });
+      continue;
+    }
+    const dependencyPath = taskPaths(state, dependencyId).taskPath;
+    if (!existsSync(dependencyPath)) {
+      blocking.push({ task_id: dependencyId, status: 'missing', reason: 'dependency_task_not_found' });
+      continue;
+    }
+    const dependency = readTask(state, dependencyId);
+    if (dependency.status !== 'completed') {
+      blocking.push({ task_id: dependencyId, status: dependency.status, reason: dependency.status === 'failed' || dependency.status === 'cancelled' ? 'dependency_terminal_failure' : 'dependency_not_completed' });
+    }
+  }
+  return {
+    schema: 'narada.delegated_task.external_dependency_status.v1',
+    status: blocking.length === 0 ? 'satisfied' : 'waiting',
+    dependency_count: dependencyIds.length,
+    blocking,
+  };
+}
+
 export function createServerState(options: JsonRecord = {}): State {
   const taskRoot = resolve(String(options.taskRoot ?? options.outputRoot ?? process.cwd()));
   const siteRoot = resolve(String(options.siteRoot ?? taskRoot));
@@ -156,8 +207,8 @@ export function listTools() {
     guidanceToolDefinition(),
     tool('delegated_task_policy_inspect', 'Inspect delegated task orchestration policy and defaults.', {}, [], true, false, true),
     tool('delegated_task_template_catalog', 'List built-in delegated workflow templates, milestones, and worker delegation contracts.', { template_id: { type: 'string' } }, [], true, false, true),
-    tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema() }, [], true, false, true),
-    tool('delegated_task_run', 'Create and optionally start a durable delegated workflow task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema(), idempotency_key: { type: 'string' } }, [], false, false, false),
+    tool('delegated_task_validate', 'Validate delegated task input without creating or running a task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), execution_binding: executionBindingSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema() }, [], true, false, true),
+    tool('delegated_task_run', 'Create and optionally start a durable delegated workflow task.', { objective: { type: 'string' }, intent: intentSchema(), constraints: constraintsSchema(), workflow: workflowSchema(), acceptance: acceptanceSchema(), result_policy: resultPolicySchema(), execution: executionSchema(), execution_binding: executionBindingSchema(), depends_on_task_ids: { type: 'array', items: { type: 'string' } }, import_task_outputs: { type: 'array', items: { type: 'string' } }, import_worker_refs: { type: 'array', items: { type: 'string' } }, source_task_ref: sourceTaskRefSchema(), idempotency_key: { type: 'string' } }, [], false, false, false),
     tool('delegated_task_status', 'Return compact delegated task status. Set refresh=true to refresh running workers and schedule any newly ready steps once.', { task_id: { type: 'string' }, refresh: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
     tool('delegated_task_advance', 'Explicitly advance a delegated task by refreshing workers and scheduling ready pending steps once.', { task_id: { type: 'string' }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], false, false, false),
     tool('delegated_task_wait', 'Wait for a delegated task to advance toward terminal status.', { task_id: { type: 'string' }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 30000 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, include_diagnostics: { type: 'boolean', default: false } }, ['task_id'], true, false, true),
@@ -186,9 +237,37 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
   const idempotencyKey = opt(args.idempotency_key);
   const taskId = idempotencyKey ? `task_${hash(idempotencyKey).slice(0, 16)}` : `task_${stamp()}_${randomUUID().slice(0, 8)}`;
   const paths = taskPaths(state, taskId);
-  if (existsSync(paths.taskPath)) return runResult(await advanceTask(readTask(state, taskId), state), paths, false);
+  if (existsSync(paths.taskPath) && args.objective === undefined && args.intent === undefined) {
+    return runResult(await advanceTask(readTask(state, taskId), state), paths, false);
+  }
   const taskIntent = normalizeIntent(args);
   const execution = normalizeExecution(args.execution);
+  const constraints = rec(args.constraints);
+  const executionBinding = normalizeExecutionBinding(args.execution_binding, {
+    workspace_root: opt(constraints.cwd) ?? state.allowedRoots[0],
+    executor_kind: 'delegated_task',
+    site_root: opt(constraints.site_root) ?? state.siteRoot,
+    correlation_key: idempotencyKey ?? taskId,
+  });
+  assertExecutionBindingScope(executionBinding, constraints, state);
+  const requestFingerprint = executionRequestFingerprint({
+    objective: taskIntent,
+    constraints,
+    workflow: args.workflow,
+    acceptance: args.acceptance,
+    result_policy: args.result_policy,
+    execution,
+    execution_binding: executionBinding,
+    external_dependencies: externalDependencies(args),
+  });
+  if (existsSync(paths.taskPath)) {
+    const existingTask = readTask(state, taskId);
+    if (idempotencyKey && existingTask.request_fingerprint !== requestFingerprint) {
+      throw diag('delegated_task_idempotency_conflict', 'delegated_task_idempotency_conflict', { task_id: taskId, idempotency_key: idempotencyKey, existing_request_fingerprint: existingTask.request_fingerprint ?? null, request_fingerprint: requestFingerprint });
+    }
+    const replayed = execution.start === false ? existingTask : await advanceTask(existingTask, state);
+    return runResult(replayed, paths, false);
+  }
   const workflow = normalizeWorkflow(args.workflow, state);
   const sourceRef = rec(externalDependencies(args).source_task_ref);
   const replacementDepth = replacementDepthForSource(state, sourceRef);
@@ -201,17 +280,19 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
     ...newTaskOwnership(state),
     status: 'accepted_for_execution',
     objective: taskIntent.objective,
-    constraints: rec(args.constraints),
+    constraints,
     workflow,
     acceptance: normalizeAcceptance(args.acceptance, workflow),
     result_policy: normalizeResultPolicy(args.result_policy),
     execution,
+    execution_binding: executionBinding,
     idempotency_key: idempotencyKey,
+    request_fingerprint: requestFingerprint,
     created_at: now(),
     updated_at: now(),
     cancelled_at: null,
     summary: null,
-    result: { ...handoff(), external_dependencies: externalDependencies(args), replacement_depth: replacementDepth },
+    result: { ...handoff(), external_dependencies: externalDependencies(args), external_dependency_status: 'pending', execution_binding: executionBinding, request_fingerprint: requestFingerprint, replacement_depth: replacementDepth },
   };
   task.result = { ...task.result, step_states: initialStepStates(task.workflow), progress: progressSummary(task) };
   const validation = validateTaskShape({ ...args, acceptance: task.acceptance, execution, result_policy: task.result_policy }, state, false);
@@ -229,7 +310,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
   const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), completion_posture: completionPosture(task.status, task.result), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), completion_posture: completionPosture(task.status, task.result), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export async function delegatedTaskAdvance(args: JsonRecord, state: State): Promise<JsonRecord> {
@@ -466,6 +547,16 @@ async function refreshTaskStatus(task: Task, state: State): Promise<Task> {
 async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
   const stepStates = stepStateMap(task);
   await refreshRunningSteps(task, state, stepStates);
+  const externalDependencyPosture = externalDependencyStatus(task, state);
+  const previousExternalDependencyPosture = rec(task.result).external_dependency_status;
+  task.result = { ...rec(task.result), external_dependency_status: externalDependencyPosture };
+  if (externalDependencyPosture.status !== 'satisfied') {
+    if (JSON.stringify(previousExternalDependencyPosture) !== JSON.stringify(externalDependencyPosture)) {
+      appendEvent(state, task.task_id, 'task_blocked_on_external_dependencies', externalDependencyPosture);
+    }
+    writeTask(state, task);
+    return task;
+  }
   let progressMade = false;
   const workflow = workflowSteps(task.workflow);
   const readyWorkerSteps: Array<{ step: WorkflowStep; stepState: StepState }> = [];
@@ -944,11 +1035,11 @@ function milestoneSchema(): JsonRecord { return { type: 'object', properties: { 
 function authorityGateSchema(): JsonRecord { return { type: 'object', properties: { operation: { type: 'string', enum: ['commit', 'push'] }, mode: { type: 'string', enum: ['disallowed', 'requires_explicit_authority', 'allowed'] }, reason: { type: 'string' }, required_authority: { type: 'string', enum: ['write', 'command'] } }, additionalProperties: false }; }
 function authorityGatesSchema(): JsonRecord { return { type: 'object', properties: { commit: authorityGateSchema(), push: authorityGateSchema() }, additionalProperties: false }; }
 function repairPolicySchema(): JsonRecord { return { type: 'object', properties: { strategy: { type: 'string', enum: ['retry_same_step', 'named_repair_step'] }, repair_step_id: { type: 'string' }, require_review_after_repair: { type: 'boolean' } }, additionalProperties: false }; }
-function acceptanceSchema(): JsonRecord { return { type: 'object', properties: { required_files: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, contains: { type: 'string' } }, required: ['path'], additionalProperties: false }] } }, required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, focused_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, verification_budget: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1 }, max_commands: { type: 'integer', minimum: 1 } }, additionalProperties: false }, required_tools: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, required: ['name'], additionalProperties: false }] }, description: 'Required tool capabilities. Names are also provisioned to worker-delegation as required_mcp_tools.' }, required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Explicit MCP tool capabilities to provision to worker-delegation.' }, forbidden_patterns: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { pattern: { type: 'string' }, scope: { type: 'string' } }, required: ['pattern'], additionalProperties: false }] } }, review_questions: { type: 'array', items: { type: 'string' } }, review_quorum: { type: 'object', properties: { min_passed: { type: 'integer', minimum: 0 }, max_failed: { type: 'integer', minimum: 0 } }, additionalProperties: false }, residual_risk_policy: { type: 'string', enum: ['allow', 'none_allowed'] } }, additionalProperties: false }; }
+function acceptanceSchema(): JsonRecord { return { type: 'object', properties: { required_files: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { path: { type: 'string' }, contains: { type: 'string' } }, required: ['path'], additionalProperties: false }] } }, required_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, focused_tests: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { command: { type: 'string' }, name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, additionalProperties: false }] } }, verification_budget: { type: 'object', properties: { max_attempts: { type: 'integer', minimum: 1 }, max_commands: { type: 'integer', minimum: 1 } }, additionalProperties: false }, required_tools: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { name: { type: 'string' }, status: { type: 'string', enum: ['passed', 'pending', 'failed'] } }, required: ['name'], additionalProperties: false }] }, description: 'Required domain capabilities or work affordances. These are not exact MCP tool names and are never projected as required_mcp_tools.' }, required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Explicit exact MCP tool names to provision to worker-delegation.' }, forbidden_patterns: { type: 'array', items: { oneOf: [{ type: 'string' }, { type: 'object', properties: { pattern: { type: 'string' }, scope: { type: 'string' } }, required: ['pattern'], additionalProperties: false }] } }, review_questions: { type: 'array', items: { type: 'string' } }, review_quorum: { type: 'object', properties: { min_passed: { type: 'integer', minimum: 0 }, max_failed: { type: 'integer', minimum: 0 } }, additionalProperties: false }, residual_risk_policy: { type: 'string', enum: ['allow', 'none_allowed'] } }, additionalProperties: false }; }
 function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
 function executionSchema(): JsonRecord { return { type: 'object', properties: { start: { type: 'boolean', default: true }, wait_for_completion: { type: 'boolean', default: false }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 0 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, resumable: { type: 'boolean', default: true }, exit_interview: { type: 'boolean', default: false }, max_concurrency: { type: 'integer', minimum: 1, maximum: 32, default: 10 }, max_retries: { type: 'integer', minimum: 0, maximum: 10, default: 0 } }, additionalProperties: false }; }
 
-function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { const requestStatus = created ? 'accepted_for_execution' : 'existing'; const status = task.status === 'failed' || task.status === 'cancelled' ? task.status : requestStatus; return { schema: 'narada.delegated_task.run.v1', status, request_status: requestStatus, execution_status: task.status, task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), completion_posture: completionPosture(task.status, task.result), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, worker_refs: rec(task.result).worker_refs ?? [] }; }
+function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { const requestStatus = created ? 'accepted_for_execution' : 'existing'; const status = task.status === 'failed' || task.status === 'cancelled' ? task.status : requestStatus; return { schema: 'narada.delegated_task.run.v1', status, request_status: requestStatus, execution_status: task.status, task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, completion_posture: completionPosture(task.status, task.result), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', worker_refs: rec(task.result).worker_refs ?? [] }; }
 function handoff(): JsonRecord { return { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', changed_files: [], verification: [], residual_risks: [], observed_incoherencies: [], exit_interviews: [], exit_interview_count: 0, exit_interview_feedback: exitInterviewFeedbackSummary([]), worker_refs: [], worker_ref_count: 0, summary: null }; }
 function normalizeIntent(args: JsonRecord): { objective: string; instructions: string | null; behavior: string | null; mode: string | null } { const intent = rec(args.intent); return { objective: required(intent.objective ?? args.objective, 'delegated_task_requires_objective'), instructions: opt(intent.instructions), behavior: opt(intent.behavior), mode: opt(intent.mode) }; }
 function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): JsonRecord {
@@ -1655,7 +1746,9 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
   const constraints = { ...task.constraints, ...workOrderConstraints, ...step.constraints };
   const requiredMcpTools = uniqueStrings([...stringList(constraints.required_mcp_tools), ...stringList(task.acceptance.required_mcp_tools)]);
   if (requiredMcpTools.length > 0) constraints.required_mcp_tools = requiredMcpTools;
-  const cwd = opt(constraints.cwd) ?? state.allowedRoots[0];
+  const cwd = task.execution_binding.workspace_root;
+  constraints.cwd = cwd;
+  if (task.execution_binding.site_root) constraints.site_root = task.execution_binding.site_root;
   const workerConstraints: JsonRecord = { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true || constraints.exit_interview === true };
   const overrides = { ...rec(workerConstraints.overrides) };
   for (const key of ['runtime', 'model', 'reasoning_effort', 'sandbox', 'skip_git_repo_check']) {
@@ -1685,7 +1778,7 @@ function workOrderWorkerConstraints(workflow: JsonRecord): JsonRecord {
     exit_interview_policy: Object.keys(rec(workOrder.exit_interview_policy)).length > 0 ? rec(workOrder.exit_interview_policy) : undefined,
   }).filter(([, value]) => value !== undefined && (!Array.isArray(value) || value.length > 0)));
 }
-function workerInstruction(task: Task, step: WorkflowStep): string { const external = rec(task.result.external_dependencies); return [`Delegated task objective: ${task.objective}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, step.title ? `Step title: ${step.title}` : null, step.label ? `Step label: ${step.label}` : null, `Step kind: ${step.kind}`, step.agent_slot ? `Agent slot: ${step.agent_slot}` : null, step.resume_from ? `Resume from step: ${step.resume_from}` : null, opt(step.session_affinity.mode) !== 'none' ? `Session affinity: ${JSON.stringify(step.session_affinity)}` : null, step.write_set.length > 0 ? `Step write_set: ${JSON.stringify(step.write_set)}` : null, Object.keys(step.output_schema).length > 0 ? `Expected output schema: ${JSON.stringify(step.output_schema)}` : null, Object.keys(external).length > 0 ? `External dependency imports: ${JSON.stringify(external)}` : null, Object.keys(rec(task.workflow.work_order)).length > 0 ? `Work order: ${JSON.stringify(task.workflow.work_order)}` : null, `Acceptance: ${JSON.stringify(task.acceptance)}`, step.kind === 'review' ? 'Review output contract: include review_verdict as one of accepted, rejected, or accepted_with_findings.' : null, 'Return a concise result with changes, verification, residual risks, observed incoherencies, and any structured outputs requested by the expected output schema.'].filter((line): line is string => Boolean(line)).join('\n'); }
+function workerInstruction(task: Task, step: WorkflowStep): string { const external = rec(task.result.external_dependencies); return [`Delegated task objective: ${task.objective}`, `Execution binding: ${JSON.stringify(task.execution_binding)}`, step.instruction ? `Step instruction: ${step.instruction}` : null, `Step id: ${step.id}`, step.title ? `Step title: ${step.title}` : null, step.label ? `Step label: ${step.label}` : null, `Step kind: ${step.kind}`, step.agent_slot ? `Agent slot: ${step.agent_slot}` : null, step.resume_from ? `Resume from step: ${step.resume_from}` : null, opt(step.session_affinity.mode) !== 'none' ? `Session affinity: ${JSON.stringify(step.session_affinity)}` : null, step.write_set.length > 0 ? `Step write_set: ${JSON.stringify(step.write_set)}` : null, Object.keys(step.output_schema).length > 0 ? `Expected output schema: ${JSON.stringify(step.output_schema)}` : null, Object.keys(external).length > 0 ? `External dependency imports: ${JSON.stringify(external)}` : null, Object.keys(rec(task.workflow.work_order)).length > 0 ? `Work order: ${JSON.stringify(task.workflow.work_order)}` : null, `Acceptance: ${JSON.stringify(task.acceptance)}`, step.kind === 'review' ? 'Review output contract: include review_verdict as one of accepted, rejected, or accepted_with_findings.' : null, 'Return a concise result with changes, verification, residual risks, observed incoherencies, and any structured outputs requested by the expected output schema.'].filter((line): line is string => Boolean(line)).join('\n'); }
 function progressSummary(task: Task, states = stepStateMap(task)): JsonRecord {
   const counts = stepStatusCounts(task, states);
   const runningSteps = Object.values(states).filter((step) => step.status === 'running');

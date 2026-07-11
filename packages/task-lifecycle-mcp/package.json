@@ -35,6 +35,7 @@
     "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/syntax-check-all.js && node --disable-warning=ExperimentalWarning dist/test/import-boundary.test.js && node --disable-warning=ExperimentalWarning dist/test/handler-coverage.test.js && node --disable-warning=ExperimentalWarning dist/test/stdio-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/inbox-bridge.test.js && node --disable-warning=ExperimentalWarning dist/test/disposition-closeout-review-routing.test.js && node --disable-warning=ExperimentalWarning dist/test/blocking-review-finding-disposition.test.js && node --disable-warning=ExperimentalWarning dist/test/task-lifecycle-ergonomics.test.js"
   },
   "dependencies": {
+    "@narada2/execution-contract": "workspace:*",
     "@narada2/mcp-transport": "workspace:*",
     "@narada2/task-governance-core": "workspace:*"
   },

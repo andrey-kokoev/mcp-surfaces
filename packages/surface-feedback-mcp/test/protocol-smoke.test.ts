@@ -29,13 +29,20 @@ try {
   assert.equal((init.result as Record<string, any>).serverInfo.name, 'surface-feedback-mcp');
 
   const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
-  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_live_proof_template', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats']);
+  assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_live_proof_template', 'surface_feedback_update_status', 'surface_feedback_convert_to_task', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats']);
 
   const subTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_submit');
   assert.equal(subTool.annotations.readOnlyHint, false);
 
+  const convertTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_convert_to_task');
+  assert.equal(convertTool.annotations.readOnlyHint, false);
+  assert.equal(convertTool.annotations.idempotentHint, true);
+
   const listTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_list');
   assert.equal(listTool.annotations.readOnlyHint, true);
+
+  const queueTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_actionable_queue');
+  assert.equal(queueTool.annotations.readOnlyHint, true);
 
   console.log('surface-feedback-mcp protocol smoke ok');
 } finally {

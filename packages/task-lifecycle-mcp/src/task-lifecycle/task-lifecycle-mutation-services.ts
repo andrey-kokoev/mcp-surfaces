@@ -23,19 +23,35 @@ export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId 
   if (existing) return { status: 'already_claimed', assignment: existing, lifecycle };
 
   const assignmentId = `assign-${randomUUID()}`;
-  store.insertAssignment({
-    assignment_id: assignmentId,
-    task_id: lifecycle.task_id,
-    agent_id: agentId,
-    agent_identity_ref_json: taskAgentIdentityRefJson(agentId, { siteId: process.env.NARADA_SITE_ID ?? null }),
-    claimed_at: new Date().toISOString(),
-    released_at: null,
-    release_reason: null,
-    intent: 'primary',
+  withStoreSavepoint(store, () => {
+    store.insertAssignment({
+      assignment_id: assignmentId,
+      task_id: lifecycle.task_id,
+      agent_id: agentId,
+      agent_identity_ref_json: taskAgentIdentityRefJson(agentId, { siteId: process.env.NARADA_SITE_ID ?? null }),
+      claimed_at: new Date().toISOString(),
+      released_at: null,
+      release_reason: null,
+      intent: 'primary',
+    });
+    store.updateStatus(lifecycle.task_id, 'claimed', agentId, {});
   });
-  store.updateStatus(lifecycle.task_id, 'claimed', agentId, {});
   await writeTaskStatusProjection(siteRoot, taskNumber, 'claimed');
   return { status: 'claimed', assignment_id: assignmentId, task_number: taskNumber, lifecycle };
+}
+
+function withStoreSavepoint<T>(store, action: () => T): T {
+  const name = `narada_lifecycle_${randomUUID().replaceAll('-', '')}`;
+  store.db.exec(`SAVEPOINT ${name}`);
+  try {
+    const result = action();
+    store.db.exec(`RELEASE SAVEPOINT ${name}`);
+    return result;
+  } catch (error) {
+    try { store.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
+    try { store.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
+    throw error;
+  }
 }
 
 export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentId, reason }) {
@@ -55,13 +71,15 @@ export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentI
     };
   }
 
-  store.releaseAssignment(existing.assignment_id, reason ?? 'mcp_unclaim');
-  store.updateStatus(lifecycle.task_id, 'opened', agentId ?? existing.agent_id, {});
+  withStoreSavepoint(store, () => {
+    store.releaseAssignment(existing.assignment_id, reason ?? 'mcp_unclaim');
+    store.updateStatus(lifecycle.task_id, 'opened', agentId ?? existing.agent_id, {});
+  });
   await writeTaskStatusProjection(siteRoot, taskNumber, 'opened');
   return { status: 'unclaimed', task_number: taskNumber, previous_agent: existing.agent_id, task_id: lifecycle.task_id };
 }
 
-export async function transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus, resultStatus }) {
+export async function transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus, resultStatus, closureMode = 'transition', projectionMode = 'best_effort' }) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   if (!isValidTransition(lifecycle.status, toStatus)) {
@@ -75,12 +93,19 @@ export async function transitionLifecycleTask({ siteRoot, store, taskNumber, age
     };
   }
   const updates: Record<string, unknown> = { reason };
+  if (toStatus === 'closed') {
+    updates.closed_at = new Date().toISOString();
+    updates.closed_by = agentId;
+    updates.closure_mode = closureMode;
+  }
   if (toStatus === 'opened' && ['closed', 'confirmed'].includes(lifecycle.status)) {
     updates.reopened_at = new Date().toISOString();
     updates.reopened_by = agentId;
   }
-  store.updateStatus(lifecycle.task_id, toStatus, agentId, updates);
-  await writeTaskStatusProjection(siteRoot, taskNumber, toStatus);
+  withStoreSavepoint(store, () => {
+    store.updateStatus(lifecycle.task_id, toStatus, agentId, updates);
+  });
+  await writeTaskStatusProjection(siteRoot, taskNumber, toStatus, projectionMode === 'strict');
   return { status: resultStatus, task_number: taskNumber, task_id: lifecycle.task_id };
 }
 
@@ -111,9 +136,11 @@ export async function unDeferLifecycleTask({ siteRoot, store, taskNumber, agentI
     };
   }
 
-  store.updateStatus(lifecycle.task_id, nextStatus, agentId, {
-    reason,
-    un_defer_authority_basis_json: authorityBasis ? JSON.stringify(authorityBasis) : null,
+  withStoreSavepoint(store, () => {
+    store.updateStatus(lifecycle.task_id, nextStatus, agentId, {
+      reason,
+      un_defer_authority_basis_json: authorityBasis ? JSON.stringify(authorityBasis) : null,
+    });
   });
   await writeTaskStatusProjection(siteRoot, taskNumber, nextStatus);
   return {
@@ -157,12 +184,22 @@ export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }
     });
   }
   writeFileSync(taskPath, updatedContent, 'utf8');
-  const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: ['criteria_proof'] });
+  let admission;
+  try {
+    admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: ['criteria_proof'] });
+  } catch (error) {
+    writeFileSync(taskPath, body, 'utf8');
+    throw error;
+  }
+  if (admission.blockers.length > 0) {
+    writeFileSync(taskPath, body, 'utf8');
+  }
   return {
     status: admission.blockers.length === 0 ? 'proved' : 'proved_with_blockers',
     task_number: taskNumber,
     admission_id: admission.result.admission_id,
     blockers: admission.blockers,
+    criteria_projection_rolled_back: admission.blockers.length > 0,
     schema: 'narada.task.mcp.prove_criteria.v0',
   };
 }
@@ -171,14 +208,15 @@ function isOperatorDirectAuthority(value) {
   return value && typeof value === 'object' && value.kind === 'operator_direct_instruction' && typeof value.summary === 'string' && value.summary.trim().length > 0;
 }
 
-async function writeTaskStatusProjection(siteRoot, taskNumber, status) {
+async function writeTaskStatusProjection(siteRoot, taskNumber, status, throwOnError = false) {
   try {
     const taskFile = await findTaskFile(siteRoot, taskNumber);
     if (!taskFile) return;
     const { frontMatter, body } = await readTaskFile(taskFile.path);
     frontMatter.status = status;
     await writeTaskProjection(taskFile.path, frontMatter, body);
-  } catch {
+  } catch (error) {
     // Projection writes are compatibility updates; SQLite remains authoritative.
+    if (throwOnError) throw error;
   }
 }

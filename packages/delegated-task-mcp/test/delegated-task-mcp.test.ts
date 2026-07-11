@@ -453,6 +453,8 @@ try {
   assert.deepEqual(richWorkOrderView.workflow_preview.work_order.mutation_boundaries, ['read-only']);
   assert.equal(richWorkOrderView.workflow_preview.work_order.unrelated_failure_policy, 'residual_risk');
 
+  mkdirSync(join(root, 'tasks', 'task_upstream'), { recursive: true });
+  writeFileSync(join(root, 'tasks', 'task_upstream', 'task.json'), JSON.stringify({ task_id: 'task_upstream', status: 'completed' }), 'utf8');
   const richWorkerCallsBefore = workerCalls.length;
   const richRun = await callTool(state, 'delegated_task_run', {
     objective: 'Run rich dependency-aware DAG',

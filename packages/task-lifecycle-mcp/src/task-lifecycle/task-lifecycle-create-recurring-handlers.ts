@@ -1,7 +1,38 @@
+import { existsSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
+import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
+import {
+  bindTaskExecution,
+  ensureTaskExecutionTables,
+  getTaskCreationReservation,
+  markTaskCreationStatus,
+  reserveTaskCreation,
+  taskCreationPayloadFingerprint,
+} from './task-execution-state.js';
+
 type TaskLifecyclePayload = Record<string, unknown>;
 
 function asPayload(value: unknown): TaskLifecyclePayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
+}
+
+function assertExecutionBindingScope(binding: ExecutionBinding, siteRoot: string): void {
+  const currentSiteRoot = resolve(siteRoot);
+  if (binding.site_root && resolve(binding.site_root) !== currentSiteRoot) {
+    throw new Error('task_lifecycle_execution_binding_site_root_mismatch');
+  }
+  if (!pathWithinRoot(binding.workspace_root, currentSiteRoot)) {
+    throw new Error('task_lifecycle_execution_binding_workspace_outside_site_root');
+  }
+  if (binding.repository_root && !pathWithinRoot(binding.repository_root, currentSiteRoot)) {
+    throw new Error('task_lifecycle_execution_binding_repository_outside_site_root');
+  }
+}
+
+function pathWithinRoot(path: string, root: string): boolean {
+  const child = resolve(path);
+  const relativePath = relative(root, child);
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
 
 export const TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES = Object.freeze([
@@ -94,12 +125,48 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const acceptanceCriteria = Array.isArray(args.acceptance_criteria) && args.acceptance_criteria.length > 0
         ? args.acceptance_criteria
         : ['TBD'];
-
-      const taskNumber = (await allocateTaskNumbers(siteRoot, 1))[0];
+      ensureTaskExecutionTables(store);
+      const idempotencyKey = stringField(args, 'idempotency_key') || String(payloadSource.ref || '');
+      if (!idempotencyKey) throw new Error('task_lifecycle_create_idempotency_key_required');
+      const executionBinding = normalizeExecutionBinding(args.execution_binding, {
+        workspace_root: siteRoot,
+        executor_kind: 'manual',
+        site_root: siteRoot,
+        correlation_key: idempotencyKey,
+      });
+      assertExecutionBindingScope(executionBinding, siteRoot);
+      const payloadSha256 = taskCreationPayloadFingerprint(args, payloadSource.sha256);
+      const existingReservation = getTaskCreationReservation(store, idempotencyKey);
+      const taskNumberCandidate = existingReservation?.task_number ?? (await allocateTaskNumbers(siteRoot, 1))[0];
       const slug = slugify(title);
-      const taskId = `${todayYmd()}-${taskNumber}-${slug}`;
+      const taskIdCandidate = existingReservation?.task_id ?? `${todayYmd()}-${taskNumberCandidate}-${slug}`;
       const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
-      const filePath = join(tasksDir, `${taskId}.md`);
+      const filePathCandidate = existingReservation?.file_path ?? join(tasksDir, `${taskIdCandidate}.md`);
+      const reservationResult = reserveTaskCreation(store, {
+        idempotency_key: idempotencyKey,
+        payload_sha256: payloadSha256,
+        task_id: taskIdCandidate,
+        task_number: taskNumberCandidate,
+        file_path: filePathCandidate,
+        execution_binding_json: JSON.stringify(executionBinding),
+      });
+      const reservation = reservationResult.reservation;
+      const taskNumber = reservation.task_number;
+      const taskId = reservation.task_id;
+      const filePath = reservation.file_path;
+      if (reservation.status === 'created') {
+        return jsonToolResult(attachPayloadSource({
+          schema: 'narada.task.create.v0',
+          status: 'already_exists',
+          task_number: taskNumber,
+          task_id: taskId,
+          file_path: filePath,
+          title,
+          idempotency_key: idempotencyKey,
+          execution_binding: executionBinding,
+          recovered: false,
+        }, payloadSource));
+      }
 
       const body = renderTaskBodyFromSpec({
         spec: {
@@ -132,57 +199,71 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (payloadSource.sha256) {
         frontMatterLines.push(`creation_payload_sha256: ${payloadSource.sha256}`);
       }
+      frontMatterLines.push(`idempotency_key: ${idempotencyKey}`);
+      frontMatterLines.push(`execution_binding_json: ${JSON.stringify(executionBinding)}`);
       frontMatterLines.push('---');
 
       const fileContent = `${frontMatterLines.join('\n')}\n${body}`;
-      writeFileSync(filePath, fileContent, 'utf8');
+      if (!existsSync(filePath)) writeFileSync(filePath, fileContent, 'utf8');
 
       const now = new Date().toISOString();
-      store.upsertLifecycle({
-        task_id: taskId,
-        task_number: taskNumber,
-        status: 'opened',
-        governed_by: preferredRole || null,
-        closed_at: null,
-        closed_by: null,
-        reopened_at: null,
-        reopened_by: null,
-        continuation_packet_json: null,
-        updated_at: now,
-      });
-      store.upsertTaskSpec({
-        task_id: taskId,
-        task_number: taskNumber,
-        title,
-        chapter_markdown: null,
-        goal_markdown: goal,
-        context_markdown: context,
-        required_work_markdown: requiredWork,
-        non_goals_markdown: nonGoals,
-        acceptance_criteria_json: JSON.stringify(acceptanceCriteria),
-        dependencies_json: '[]',
-        updated_at: now,
-      });
-      ensureTaskRoutingTables(store);
-      if (preferredRole || targetRole) {
-        store.db.prepare(`
-          INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(task_id) DO UPDATE SET
-            preferred_role = excluded.preferred_role,
-            target_role = excluded.target_role,
-            preferred_agent_id = excluded.preferred_agent_id,
-            updated_at = excluded.updated_at
-        `).run(taskId, preferredRole, targetRole || preferredRole, null, now);
+      store.db.exec('BEGIN IMMEDIATE');
+      try {
+        store.upsertLifecycle({
+          task_id: taskId,
+          task_number: taskNumber,
+          status: 'opened',
+          governed_by: preferredRole || null,
+          closed_at: null,
+          closed_by: null,
+          reopened_at: null,
+          reopened_by: null,
+          continuation_packet_json: null,
+          updated_at: now,
+        });
+        store.upsertTaskSpec({
+          task_id: taskId,
+          task_number: taskNumber,
+          title,
+          chapter_markdown: null,
+          goal_markdown: goal,
+          context_markdown: context,
+          required_work_markdown: requiredWork,
+          non_goals_markdown: nonGoals,
+          acceptance_criteria_json: JSON.stringify(acceptanceCriteria),
+          dependencies_json: '[]',
+          updated_at: now,
+        });
+        bindTaskExecution(store, { task_id: taskId, task_number: taskNumber }, executionBinding);
+        ensureTaskRoutingTables(store);
+        if (preferredRole || targetRole) {
+          store.db.prepare(`
+            INSERT INTO narada_andrey_task_role_preferences (task_id, preferred_role, target_role, preferred_agent_id, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+              preferred_role = excluded.preferred_role,
+              target_role = excluded.target_role,
+              preferred_agent_id = excluded.preferred_agent_id,
+              updated_at = excluded.updated_at
+          `).run(taskId, preferredRole, targetRole || preferredRole, null, now);
+        }
+        markTaskCreationStatus(store, idempotencyKey, 'created');
+        store.db.exec('COMMIT');
+      } catch (error) {
+        try { store.db.exec('ROLLBACK'); } catch { /* preserve the original failure */ }
+        throw error;
       }
 
       return jsonToolResult(attachPayloadSource({
         schema: 'narada.task.create.v0',
-        status: 'created',
+        status: reservationResult.created ? 'created' : 'recovered',
         task_number: taskNumber,
         task_id: taskId,
         file_path: filePath,
         title,
+        idempotency_key: idempotencyKey,
+        execution_binding: executionBinding,
+        recovered: !reservationResult.created,
         target_role: targetRole || preferredRole,
         preferred_role: preferredRole,
         payload_ref: payloadSource.ref ?? null,

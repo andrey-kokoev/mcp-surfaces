@@ -26,7 +26,15 @@ export function createTaskLifecycleToolCaller({
       const createArgs = resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloadArgs });
       const locusGuard = guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env, locusGuardedMutationTools });
       if (locusGuard.status === 'refused') return jsonToolResult(locusGuard, true);
-      return await dispatchTool(canonicalName, createArgs.args, { payloadSource: createArgs.payloadSource });
+      const toolDef = taskLifecycleTools().find((tool) => tool.name === canonicalName);
+      return await dispatchWithStoreRecovery({
+        canonicalName,
+        args: createArgs.args,
+        payloadSource: createArgs.payloadSource,
+        toolDef,
+        dispatchTool,
+        refreshStore,
+      });
     }
 
     const tools = taskLifecycleTools();
@@ -58,20 +66,42 @@ export function createTaskLifecycleToolCaller({
     const locusGuard = guardLifecycleTargetLocus({ canonicalName, args: effectiveArgs, siteRoot, env, locusGuardedMutationTools });
     if (locusGuard.status === 'refused') return jsonToolResult(locusGuard, true);
 
-    try {
-      return await dispatchTool(canonicalName, effectiveArgs, { payloadSource: payloadResolution.payloadSource });
-    } catch (error) {
-      if (!isStoreError(error)) throw error;
-      const refreshed = refreshStore();
-      if (!refreshed) throw new Error(`store_unavailable: ${error instanceof Error ? error.message : String(error)}`);
-      try {
-        return await dispatchTool(canonicalName, effectiveArgs, { payloadSource: payloadResolution.payloadSource });
-      } catch (retryError) {
-        if (isStoreError(retryError)) throw new Error(`store_unavailable: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
-        throw retryError;
-      }
-    }
+    return await dispatchWithStoreRecovery({
+      canonicalName,
+      args: effectiveArgs,
+      payloadSource: payloadResolution.payloadSource,
+      toolDef,
+      dispatchTool,
+      refreshStore,
+    });
   };
+}
+
+async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, toolDef, dispatchTool, refreshStore }) {
+  try {
+    return await dispatchTool(canonicalName, args, { payloadSource });
+  } catch (error) {
+    if (!isStoreError(error)) throw error;
+    if (!isStoreRetrySafe({ canonicalName, args, toolDef })) {
+      throw new Error(`store_unavailable_after_attempt: mutation_not_retried; tool=${canonicalName}; retry_safe=false; inspect operation state before retrying`);
+    }
+    const refreshed = refreshStore();
+    if (!refreshed) throw new Error(`store_unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    try {
+      return await dispatchTool(canonicalName, args, { payloadSource });
+    } catch (retryError) {
+      if (isStoreError(retryError)) throw new Error(`store_unavailable: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+      throw retryError;
+    }
+  }
+}
+
+export function isStoreRetrySafe({ canonicalName, args, toolDef }) {
+  const annotations = toolDef?.annotations ?? {};
+  if (annotations.readOnlyHint === true || annotations.idempotentHint === true) return true;
+  const input = asRecord(args);
+  return typeof input.idempotency_key === 'string' && input.idempotency_key.trim().length > 0
+    || canonicalName === 'task_lifecycle_create' && typeof input.payload_ref === 'string' && input.payload_ref.trim().length > 0;
 }
 
 export function isStoreError(error) {
@@ -158,6 +188,8 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
     'acceptance_criteria',
     'preferred_role',
     'target_role',
+    'idempotency_key',
+    'execution_binding',
   ];
   const inlineFields = inlineTaskFields.filter((field) => Object.prototype.hasOwnProperty.call(input, field));
   if (inlineFields.length > 0) {
@@ -198,10 +230,13 @@ export function validateTaskCreatePayload(args) {
   if (args.acceptance_criteria !== undefined && (!Array.isArray(args.acceptance_criteria) || args.acceptance_criteria.some((item) => typeof item !== 'string'))) {
     throw new Error('task_lifecycle_create_payload_acceptance_criteria_must_be_string_array');
   }
-  for (const field of ['goal', 'context', 'required_work', 'non_goals', 'preferred_role', 'target_role']) {
+  for (const field of ['goal', 'context', 'required_work', 'non_goals', 'preferred_role', 'target_role', 'idempotency_key']) {
     if (args[field] !== undefined && args[field] !== null && typeof args[field] !== 'string') {
       throw new Error(`task_lifecycle_create_payload_${field}_must_be_string`);
     }
+  }
+  if (args.execution_binding !== undefined && (args.execution_binding === null || typeof args.execution_binding !== 'object' || Array.isArray(args.execution_binding))) {
+    throw new Error('task_lifecycle_create_payload_execution_binding_must_be_object');
   }
 }
 

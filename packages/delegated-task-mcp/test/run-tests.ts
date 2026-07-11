@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const testFiles = [
   'delegated-task-mcp.test.js',
+  'execution-boundary.test.js',
   'protocol-smoke.test.js',
 ];
 

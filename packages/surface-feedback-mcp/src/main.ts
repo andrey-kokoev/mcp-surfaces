@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
+import { createTaskLifecycleProcessClient, type TaskLifecycleProcessClient } from './task-lifecycle-client.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -13,13 +14,25 @@ const PROTOCOL_VERSION = '2024-11-05';
 
 const FEEDBACK_KINDS = ['bug', 'improvement', 'gap', 'observation'] as const;
 const FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task', 'closed'] as const;
+const ACTIONABLE_FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task'] as const;
+const HANDOFF_LEASE_MS = 120_000;
 
 type JsonRecord = Record<string, unknown>;
+type TaskLifecycleRequest = (request: JsonRecord) => Promise<JsonRecord>;
+type AuthoritySource = 'server_config' | 'unconfigured';
+type TaskLifecycleRootSource = 'option' | 'task_lifecycle_env' | 'site_root_env' | 'feedback_root_fallback';
 
 type FeedbackState = {
   feedbackRoot: string;
   dbPath: string;
   canonicalFeedbackRoot: string;
+  taskLifecycleRoot: string;
+  taskLifecycleRootSource: TaskLifecycleRootSource;
+  authoritySiteId: string | null;
+  authorityOwnedSurfaceIds: string[];
+  authoritySource: AuthoritySource;
+  taskLifecycleRequest: TaskLifecycleRequest;
+  taskLifecycleClient: TaskLifecycleProcessClient | null;
   db: DatabaseSync;
 };
 
@@ -40,11 +53,54 @@ const CREATE_TABLES = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS feedback_events (
+    event_id TEXT PRIMARY KEY,
+    feedback_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    actor_principal TEXT NOT NULL,
+    status TEXT,
+    task_ref TEXT,
+    task_status TEXT,
+    note TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS feedback_task_handoffs (
+    feedback_id TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL,
+    payload_ref TEXT,
+    task_ref TEXT,
+    task_number INTEGER,
+    task_id TEXT,
+    task_status TEXT,
+    requested_note TEXT,
+    requested_title TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    last_error_code TEXT,
+    last_error_message TEXT,
+    last_error_details TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  ) STRICT`,
 ];
 
 export function createServerState(options: JsonRecord = {}): FeedbackState {
   const feedbackRoot = resolve(String(options.feedbackRoot ?? options.outputRoot ?? process.cwd()));
   const canonicalFeedbackRoot = resolve(String(options.canonicalFeedbackRoot ?? process.env.NARADA_SURFACE_FEEDBACK_ROOT ?? DEFAULT_CANONICAL_FEEDBACK_ROOT));
+  const taskLifecycleRootOption = optionalString(options.taskLifecycleRoot);
+  const taskLifecycleRootEnv = optionalString(process.env.NARADA_TASK_LIFECYCLE_ROOT);
+  const siteRootEnv = optionalString(process.env.NARADA_SITE_ROOT);
+  const taskLifecycleRoot = resolve(taskLifecycleRootOption ?? taskLifecycleRootEnv ?? siteRootEnv ?? feedbackRoot);
+  const taskLifecycleRootSource: TaskLifecycleRootSource = taskLifecycleRootOption
+    ? 'option'
+    : taskLifecycleRootEnv
+      ? 'task_lifecycle_env'
+      : siteRootEnv
+        ? 'site_root_env'
+        : 'feedback_root_fallback';
   const dbPath = resolve(feedbackRoot, '.feedback', 'surface-feedback.db');
   const dbDir = resolve(dbPath, '..');
   mkdirSync(dbDir, { recursive: true });
@@ -53,13 +109,40 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
   for (const sql of CREATE_TABLES) db.exec(sql);
   ensureColumn(db, 'feedback_entries', 'resolution_note', 'TEXT');
   ensureColumn(db, 'feedback_entries', 'resolved_by', 'TEXT');
-  return { feedbackRoot, dbPath, canonicalFeedbackRoot, db };
+  ensureColumn(db, 'feedback_entries', 'task_ref', 'TEXT');
+  ensureColumn(db, 'feedback_entries', 'task_status', 'TEXT');
+  const authority = resolveAuthority(options);
+  const taskLifecycleClient = typeof options.taskLifecycleRequest === 'function'
+    ? null
+    : createTaskLifecycleProcessClient({ siteRoot: taskLifecycleRoot });
+  const taskLifecycleRequest = typeof options.taskLifecycleRequest === 'function'
+    ? options.taskLifecycleRequest as TaskLifecycleRequest
+    : taskLifecycleClient.request.bind(taskLifecycleClient);
+  return {
+    feedbackRoot,
+    dbPath,
+    canonicalFeedbackRoot,
+    taskLifecycleRoot,
+    taskLifecycleRootSource,
+    authoritySiteId: authority.siteId,
+    authorityOwnedSurfaceIds: authority.ownedSurfaceIds,
+    authoritySource: authority.source,
+    taskLifecycleRequest,
+    taskLifecycleClient,
+    db,
+  };
+}
+
+function legacyTaskRef(value: unknown): string | null {
+  const note = String(value ?? '');
+  const match = note.match(/(?:^|\s)Task:\s*(task\s+#\d+|\d{8}-\d+-[A-Za-z0-9._-]+)/i);
+  return match?.[1] ?? null;
 }
 
 export async function handleRequest(request: JsonRecord, state: FeedbackState) {
   if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = dispatchMethod(String(request.method), asRecord(request.params), state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -72,26 +155,35 @@ export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
-  for await (const chunk of process.stdin) {
-    buffer += chunk;
-    const drained = buffer.includes('Content-Length:') ? drainJsonRpcFrames(buffer) : drainJsonLines(buffer);
-    sawFramedInput ||= drained.framed;
-    buffer = drained.remaining;
-    for (const request of drained.requests) {
-      const response = await handleRequest(request, state);
-      if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+  try {
+    for await (const chunk of process.stdin) {
+      buffer += chunk;
+      const drained = buffer.includes('Content-Length:') ? drainJsonRpcFrames(buffer) : drainJsonLines(buffer);
+      sawFramedInput ||= drained.framed;
+      buffer = drained.remaining;
+      for (const request of drained.requests) {
+        const response = await handleRequest(request, state);
+        if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
+      }
     }
+  } finally {
+    closeServerState(state);
   }
 }
 
-function dispatchMethod(method: string, params: JsonRecord, state: FeedbackState) {
+export function closeServerState(state: FeedbackState): void {
+  state.taskLifecycleClient?.close();
+  state.db.close();
+}
+
+async function dispatchMethod(method: string, params: JsonRecord, state: FeedbackState) {
   switch (method) {
     case 'initialize':
       return { protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: { name: SERVER_NAME, version: SERVER_VERSION } };
     case 'tools/list':
       return { tools: listTools() };
     case 'tools/call':
-      return callTool(params, state);
+      return await callTool(params, state);
     default:
       throw diagnosticError('unsupported_mcp_method', `unsupported_mcp_method:${method}`);
   }
@@ -150,11 +242,30 @@ export function listTools() {
           status: { type: 'string', enum: FEEDBACK_STATUSES },
           resolved_by: { type: 'string', description: 'Principal updating the feedback status.' },
           resolution_note: { type: 'string', description: 'Reason, fix summary, route destination, or acknowledgement note.' },
+          task_ref: { type: 'string', description: 'Optional first-class linked task reference.' },
+          task_status: { type: 'string', description: 'Optional projected lifecycle state for the linked task.' },
         },
         required: ['feedback_id', 'status', 'resolved_by', 'resolution_note'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_update_status', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'surface_feedback_convert_to_task',
+      description: 'Create or recover one authoritative task-lifecycle handoff using server-bound site authority. The durable handoff is idempotent per feedback entry and this tool never executes the task.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          feedback_id: { type: 'string' },
+          resolved_by: { type: 'string', description: 'Principal recorded on the conversion.' },
+          resolution_note: { type: 'string', description: 'Optional conversion note recorded in the immutable feedback event log and latest projection.' },
+          task_title: { type: 'string', description: 'Optional task title. Defaults to a title derived from the feedback summary.' },
+        },
+        required: ['feedback_id', 'resolved_by'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_convert_to_task', readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -175,6 +286,7 @@ export function listTools() {
                 resolved_by: { type: 'string', description: 'Optional per-item principal override.' },
                 resolution_note: { type: 'string', description: 'Per-item resolution or route note.' },
                 task_ref: { type: 'string', description: 'Optional task reference, e.g. task #1276 or 20260623-1276-...' },
+                task_status: { type: 'string', description: 'Optional projected lifecycle state for the linked task.' },
               },
               required: ['feedback_id', 'status', 'resolution_note'],
               additionalProperties: false,
@@ -226,6 +338,27 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
+      name: 'surface_feedback_actionable_queue',
+      description: 'Return one bounded actionable feedback queue with visibility scoping, conversion linkage, and optional linked task lifecycle state.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          surface_id: { type: 'string', description: 'Optional filter by surface identifier.' },
+          submitter_site_id: { type: 'string', description: 'Optional filter by submitter site ID.' },
+          kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Optional filter by feedback kind.' },
+          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
+          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+          since: { type: 'string', description: 'ISO 8601 start date.' },
+          until: { type: 'string', description: 'ISO 8601 end date.' },
+          limit: { type: 'number', default: 50 },
+          offset: { type: 'number', default: 0 },
+        },
+        additionalProperties: false,
+      },
+      annotations: { title: 'surface_feedback_actionable_queue', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
       name: 'surface_feedback_show',
       description: 'Show one feedback entry by feedback_id, scoped by visibility when caller_site_id is provided.',
       inputSchema: {
@@ -259,7 +392,7 @@ export function listTools() {
   ];
 }
 
-function callTool(params: JsonRecord, state: FeedbackState) {
+async function callTool(params: JsonRecord, state: FeedbackState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
   let result: JsonRecord;
@@ -271,9 +404,11 @@ function callTool(params: JsonRecord, state: FeedbackState) {
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
     case 'surface_feedback_live_proof_template': result = feedbackLiveProofTemplate(args); break;
     case 'surface_feedback_update_status': result = feedbackUpdateStatus(args, state); break;
+    case 'surface_feedback_convert_to_task': result = await feedbackConvertToTask(args, state); break;
     case 'surface_feedback_update_status_batch': result = feedbackUpdateStatusBatch(args, state); break;
     case 'surface_feedback_import': result = feedbackImport(args, state); break;
     case 'surface_feedback_list': result = feedbackList(args, state); break;
+    case 'surface_feedback_actionable_queue': result = feedbackActionableQueue(args, state); break;
     case 'surface_feedback_show': result = feedbackShow(args, state); break;
     case 'surface_feedback_stats': result = feedbackStats(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
@@ -330,9 +465,12 @@ function feedbackLiveProofTemplate(args: JsonRecord): JsonRecord {
 function feedbackDoctor(state: FeedbackState): JsonRecord {
   const row = state.db.prepare('SELECT COUNT(*) AS count FROM feedback_entries').get() as JsonRecord;
   const usesCanonicalStore = samePath(state.feedbackRoot, state.canonicalFeedbackRoot);
+  const taskRoot = taskLifecycleRootPosture(state);
+  const authorityConfigured = Boolean(state.authoritySiteId);
+  const status = usesCanonicalStore && taskRoot.ready && authorityConfigured ? 'ok' : 'warning';
   return {
     schema: 'narada.surface_feedback.doctor.v1',
-    status: usesCanonicalStore ? 'ok' : 'warning',
+    status,
     server_name: SERVER_NAME,
     server_version: SERVER_VERSION,
     protocol_version: PROTOCOL_VERSION,
@@ -341,9 +479,28 @@ function feedbackDoctor(state: FeedbackState): JsonRecord {
     canonical_feedback_root: state.canonicalFeedbackRoot,
     uses_canonical_store: usesCanonicalStore,
     db_path: state.dbPath,
+    task_lifecycle_root: state.taskLifecycleRoot,
+    task_lifecycle_root_source: state.taskLifecycleRootSource,
+    task_lifecycle_root_ready: taskRoot.ready,
+    task_lifecycle_root_diagnostics: taskRoot,
+    task_lifecycle_integration: state.taskLifecycleClient ? 'isolated_stdio_process' : 'injected_request_adapter',
+    authority: {
+      configured: authorityConfigured,
+      source: state.authoritySource,
+      site_id: state.authoritySiteId,
+      owned_surface_ids: state.authorityOwnedSurfaceIds,
+    },
     total_feedback_entries: Number(row.count ?? 0),
-    diagnostic: usesCanonicalStore ? null : 'This server is writing feedback to a site-local/noncanonical store. Cross-site feedback may be invisible to maintainers using the canonical mcp-surfaces store.',
-    remediation: usesCanonicalStore ? null : `Configure this surface with --feedback-root ${state.canonicalFeedbackRoot}`,
+    diagnostics: [
+      usesCanonicalStore ? null : 'The feedback store is noncanonical; cross-site feedback may be invisible.',
+      taskRoot.ready ? null : 'The task-lifecycle root is not a valid Site root with an .ai directory.',
+      authorityConfigured ? null : 'Server-bound mutation authority is not configured.',
+    ].filter(Boolean),
+    remediation: [
+      usesCanonicalStore ? null : `Configure --feedback-root ${state.canonicalFeedbackRoot}.`,
+      taskRoot.ready ? null : 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.',
+      authorityConfigured ? null : 'Configure --site-id/NARADA_SITE_ID and optional --owned-surface-id values.',
+    ].filter(Boolean),
   };
 }
 
@@ -360,6 +517,15 @@ function feedbackSubmit(args: JsonRecord, state: FeedbackState): JsonRecord {
   state.db.prepare(
     'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(feedbackId, surfaceId, siteId, principal, kind, summary, details, 'submitted', now, now);
+  recordFeedbackEvent(state, {
+    feedback_id: feedbackId,
+    event_type: 'submitted',
+    actor_principal: principal,
+    status: 'submitted',
+    note: summary,
+    details: { submitter_site_id: siteId, surface_id: surfaceId, kind },
+    created_at: now,
+  });
   return { status: 'submitted', feedback_id: feedbackId, surface_id: surfaceId, submitter_site_id: siteId, kind, summary, created_at: now };
 }
 
@@ -369,12 +535,470 @@ function feedbackUpdateStatus(args: JsonRecord, state: FeedbackState): JsonRecor
   if (!FEEDBACK_STATUSES.includes(status as typeof FEEDBACK_STATUSES[number])) throw diagnosticError('feedback_invalid_status', `feedback_invalid_status:${status}`, { allowed: FEEDBACK_STATUSES });
   const resolvedBy = requiredString(args.resolved_by, 'feedback_requires_resolved_by');
   const resolutionNote = requiredString(args.resolution_note, 'feedback_requires_resolution_note');
-  const existing = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+  const taskRef = optionalString(args.task_ref);
+  const taskStatus = optionalString(args.task_status);
+  const existing = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
   if (!existing) throw feedbackNotFound(feedbackId, state);
+  assertMutationAuthority(existing, state);
   const now = nowIso();
-  state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+  if (taskRef || taskStatus) {
+    state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, task_ref = COALESCE(?, task_ref), task_status = COALESCE(?, task_status), updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, taskRef, taskStatus, now, feedbackId);
+  } else {
+    state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+  }
+  recordFeedbackEvent(state, {
+    feedback_id: feedbackId,
+    event_type: 'status_updated',
+    actor_principal: resolvedBy,
+    status,
+    task_ref: taskRef,
+    task_status: taskStatus,
+    note: resolutionNote,
+    details: { previous_status: existing.status, previous_resolution_note: existing.resolution_note ?? null },
+    created_at: now,
+  });
   const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
   return { status: 'updated', feedback: hydrateFeedback(updated) };
+}
+
+async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Promise<JsonRecord> {
+  const feedbackId = requiredString(args.feedback_id, 'feedback_requires_feedback_id');
+  const resolvedBy = requiredString(args.resolved_by, 'feedback_requires_resolved_by');
+  rejectClientAuthorityOverrides(args);
+  const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+  if (!row) throw feedbackNotFound(feedbackId, state);
+  assertMutationAuthority(row, state);
+  requireTaskLifecycleRootReady(state);
+
+  const existingTaskRef = optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note);
+  if (existingTaskRef) {
+    if (String(row.status) !== 'converted_to_task') {
+      throw diagnosticError('feedback_task_link_conflict', `feedback_task_link_conflict:${feedbackId}`, {
+        feedback_id: feedbackId,
+        status: row.status,
+        task_ref: existingTaskRef,
+      });
+    }
+    const linkedHandoff = ensureLinkedHandoffForExisting(state, row, existingTaskRef);
+    return buildTaskConversionResult(
+      'already_linked',
+      row,
+      existingTaskRef,
+      numberValue(linkedHandoff.task_number),
+      optionalString(row.task_status),
+      optionalString(linkedHandoff.task_id),
+      optionalString(linkedHandoff.payload_ref),
+      linkedHandoff,
+    );
+  }
+
+  const idempotencyKey = `surface-feedback:${feedbackId}`;
+  let handoff = claimFeedbackTaskHandoff(state, row, args, resolvedBy, idempotencyKey);
+  if (String(handoff.status) === 'linked' && optionalString(handoff.task_ref)) {
+    const current = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
+    return buildTaskConversionResult(
+      'already_linked',
+      current,
+      String(handoff.task_ref),
+      numberValue(handoff.task_number),
+      optionalString(handoff.task_status),
+      optionalString(handoff.task_id),
+      optionalString(handoff.payload_ref),
+      handoff,
+    );
+  }
+
+  const leaseOwner = requiredString(handoff.lease_owner, 'feedback_handoff_lease_missing', { feedback_id: feedbackId });
+  let payloadRef = optionalString(handoff.payload_ref);
+  let taskRef = optionalString(handoff.task_ref);
+  let taskNumber = numberValue(handoff.task_number);
+  let taskId = optionalString(handoff.task_id);
+  let taskStatus = optionalString(handoff.task_status);
+  try {
+    if (!payloadRef) {
+      const taskDefinition = buildTaskDefinition(row, {
+        ...args,
+        task_title: optionalString(handoff.requested_title) ?? args.task_title,
+      }, idempotencyKey);
+      const payloadResult = await callTaskLifecycle(state, 'mcp_payload_create', {
+        payload_id: `surface-feedback-${feedbackId}-task`,
+        payload: taskDefinition,
+        created_by: resolvedBy,
+      });
+      payloadRef = requiredString(payloadResult.ref ?? payloadResult.payload_ref, 'feedback_task_payload_ref_missing', { feedback_id: feedbackId });
+      markHandoffPayloadCreated(state, feedbackId, leaseOwner, payloadRef);
+    }
+    if (!taskRef) {
+      const taskResult = await callTaskLifecycle(state, 'task_lifecycle_create', { payload_ref: payloadRef });
+      taskNumber = numberValue(taskResult.task_number);
+      taskId = optionalString(taskResult.task_id);
+      taskRef = taskNumber !== null ? `task #${taskNumber}` : taskId;
+      if (!taskRef) {
+        throw diagnosticError('feedback_task_create_result_invalid', `feedback_task_create_result_invalid:${feedbackId}`, {
+          feedback_id: feedbackId,
+          payload_ref: payloadRef,
+          task_result: taskResult,
+        });
+      }
+      taskStatus = optionalString(taskResult.task_status) ?? 'opened';
+      markHandoffTaskCreated(state, feedbackId, leaseOwner, {
+        payload_ref: payloadRef,
+        task_ref: taskRef,
+        task_number: taskNumber,
+        task_id: taskId,
+        task_status: taskStatus,
+      });
+      recordFeedbackEvent(state, {
+        feedback_id: feedbackId,
+        event_type: 'task_created',
+        actor_principal: resolvedBy,
+        status: String(row.status),
+        task_ref: taskRef,
+        task_status: taskStatus,
+        note: `Task created for feedback; durable link pending.`,
+        details: { payload_ref: payloadRef, idempotency_key: idempotencyKey },
+      });
+    }
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    markHandoffFailure(state, feedbackId, leaseOwner, payloadRef, diagnostic);
+    recordFeedbackEvent(state, {
+      feedback_id: feedbackId,
+      event_type: 'task_handoff_failed',
+      actor_principal: resolvedBy,
+      status: String(row.status),
+      task_ref: taskRef,
+      task_status: taskStatus,
+      note: diagnostic.message,
+      details: { stage: payloadRef ? 'task_lifecycle_create' : 'mcp_payload_create', code: diagnostic.code },
+    });
+    throw diagnosticError('feedback_task_create_failed', diagnostic.message, {
+      feedback_id: feedbackId,
+      stage: payloadRef ? 'task_lifecycle_create' : 'mcp_payload_create',
+      payload_ref: payloadRef,
+      handoff_status: 'failed',
+      retryable: true,
+      task_lifecycle_code: diagnostic.code,
+      task_lifecycle_details: diagnostic.details,
+      next_action: { tool: 'surface_feedback_convert_to_task', arguments: { feedback_id: feedbackId, resolved_by: resolvedBy } },
+    });
+  }
+
+  if (!taskRef) throw diagnosticError('feedback_handoff_task_ref_missing', `feedback_handoff_task_ref_missing:${feedbackId}`);
+  const suppliedNote = optionalString(handoff.requested_note) ?? optionalString(args.resolution_note) ?? `Created ${taskRef} from feedback via surface_feedback_convert_to_task.`;
+  try {
+    linkFeedbackTaskHandoff(state, {
+      feedback_id: feedbackId,
+      lease_owner: leaseOwner,
+      resolved_by: resolvedBy,
+      resolution_note: suppliedNote,
+      task_ref: taskRef,
+      task_number: taskNumber,
+      task_id: taskId,
+      task_status: taskStatus,
+      payload_ref: payloadRef,
+      prior_resolution_note: row.resolution_note ?? null,
+    });
+  } catch (error) {
+    const diagnostic = errorDiagnostic(error);
+    markHandoffLinkFailure(state, feedbackId, leaseOwner, diagnostic);
+    throw diagnosticError('feedback_task_link_failed', diagnostic.message, {
+      feedback_id: feedbackId,
+      task_ref: taskRef,
+      task_number: taskNumber,
+      task_id: taskId,
+      task_status: taskStatus,
+      payload_ref: payloadRef,
+      handoff_status: 'task_created',
+      retryable: true,
+      next_action: {
+        tool: 'surface_feedback_convert_to_task',
+        arguments: { feedback_id: feedbackId, resolved_by: resolvedBy },
+      },
+    });
+  }
+
+  const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
+  handoff = readFeedbackTaskHandoff(state, feedbackId) ?? handoff;
+  const resultStatus = Number(handoff.attempt_count ?? 1) > 1 ? 'recovered' : 'converted';
+  return buildTaskConversionResult(resultStatus, updated, taskRef, taskNumber, taskStatus, taskId, payloadRef, handoff);
+}
+
+function claimFeedbackTaskHandoff(
+  state: FeedbackState,
+  row: JsonRecord,
+  args: JsonRecord,
+  resolvedBy: string,
+  idempotencyKey: string,
+): JsonRecord {
+  const feedbackId = String(row.feedback_id);
+  const now = nowIso();
+  const leaseOwner = randomUUID();
+  const leaseExpiresAt = new Date(Date.now() + HANDOFF_LEASE_MS).toISOString();
+  let existing = readFeedbackTaskHandoff(state, feedbackId);
+  if (existing && String(existing.status) === 'linked') return existing;
+  if (existing && String(existing.status) === 'pending') {
+    const leaseExpiry = Date.parse(String(existing.lease_expires_at ?? ''));
+    if (Number.isFinite(leaseExpiry) && leaseExpiry > Date.now()) {
+      throw diagnosticError('feedback_task_handoff_in_progress', `feedback_task_handoff_in_progress:${feedbackId}`, {
+        feedback_id: feedbackId,
+        lease_expires_at: existing.lease_expires_at,
+        retryable: true,
+      });
+    }
+  }
+  if (!existing) {
+    try {
+      state.db.prepare(
+        'INSERT INTO feedback_task_handoffs (feedback_id, idempotency_key, status, requested_note, requested_title, attempt_count, lease_owner, lease_expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        feedbackId,
+        idempotencyKey,
+        'pending',
+        optionalString(args.resolution_note),
+        optionalString(args.task_title),
+        1,
+        leaseOwner,
+        leaseExpiresAt,
+        now,
+        now,
+      );
+    } catch {
+      existing = readFeedbackTaskHandoff(state, feedbackId);
+      if (!existing) throw diagnosticError('feedback_task_handoff_reservation_failed', `feedback_task_handoff_reservation_failed:${feedbackId}`);
+      return claimFeedbackTaskHandoff(state, row, args, resolvedBy, idempotencyKey);
+    }
+  } else {
+    const resumeStatus = optionalString(existing.task_ref)
+      ? 'task_created'
+      : optionalString(existing.payload_ref)
+        ? 'payload_created'
+        : 'pending';
+    state.db.prepare(
+      'UPDATE feedback_task_handoffs SET status = ?, requested_note = COALESCE(requested_note, ?), requested_title = COALESCE(requested_title, ?), attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at = ?, last_error_code = NULL, last_error_message = NULL, last_error_details = NULL, updated_at = ? WHERE feedback_id = ?'
+    ).run(
+      resumeStatus,
+      optionalString(args.resolution_note),
+      optionalString(args.task_title),
+      leaseOwner,
+      leaseExpiresAt,
+      now,
+      feedbackId,
+    );
+  }
+  recordFeedbackEvent(state, {
+    feedback_id: feedbackId,
+    event_type: existing ? 'task_handoff_resumed' : 'task_handoff_reserved',
+    actor_principal: resolvedBy,
+    status: String(row.status),
+    note: existing ? 'Resumed durable feedback-to-task handoff.' : 'Reserved durable feedback-to-task handoff.',
+    details: { idempotency_key: idempotencyKey, lease_expires_at: leaseExpiresAt },
+    created_at: now,
+  });
+  return readFeedbackTaskHandoff(state, feedbackId) as JsonRecord;
+}
+
+function readFeedbackTaskHandoff(state: FeedbackState, feedbackId: string): JsonRecord | null {
+  return state.db.prepare('SELECT * FROM feedback_task_handoffs WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined ?? null;
+}
+
+function markHandoffPayloadCreated(state: FeedbackState, feedbackId: string, leaseOwner: string, payloadRef: string): void {
+  const result = state.db.prepare(
+    'UPDATE feedback_task_handoffs SET status = ?, payload_ref = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
+  ).run('payload_created', payloadRef, nowIso(), feedbackId, leaseOwner) as unknown as { changes?: number };
+  if (Number(result.changes ?? 0) !== 1) throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
+}
+
+function markHandoffTaskCreated(state: FeedbackState, feedbackId: string, leaseOwner: string, task: JsonRecord): void {
+  const result = state.db.prepare(
+    'UPDATE feedback_task_handoffs SET status = ?, payload_ref = ?, task_ref = ?, task_number = ?, task_id = ?, task_status = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
+  ).run(
+    'task_created',
+    optionalString(task.payload_ref),
+    requiredString(task.task_ref, 'feedback_handoff_task_ref_missing'),
+    numberValue(task.task_number),
+    optionalString(task.task_id),
+    optionalString(task.task_status),
+    nowIso(),
+    feedbackId,
+    leaseOwner,
+  ) as unknown as { changes?: number };
+  if (Number(result.changes ?? 0) !== 1) throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
+}
+
+function markHandoffFailure(state: FeedbackState, feedbackId: string, leaseOwner: string, payloadRef: string | null, diagnostic: JsonRecord): void {
+  state.db.prepare(
+    'UPDATE feedback_task_handoffs SET status = ?, payload_ref = COALESCE(?, payload_ref), lease_owner = NULL, lease_expires_at = NULL, last_error_code = ?, last_error_message = ?, last_error_details = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
+  ).run('failed', payloadRef, diagnostic.code, diagnostic.message, JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+}
+
+function markHandoffLinkFailure(state: FeedbackState, feedbackId: string, leaseOwner: string, diagnostic: JsonRecord): void {
+  state.db.prepare(
+    'UPDATE feedback_task_handoffs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, last_error_code = ?, last_error_message = ?, last_error_details = ?, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
+  ).run('task_created', diagnostic.code, diagnostic.message, JSON.stringify(diagnostic.details ?? {}), nowIso(), feedbackId, leaseOwner);
+}
+
+function linkFeedbackTaskHandoff(state: FeedbackState, link: JsonRecord): void {
+  const feedbackId = requiredString(link.feedback_id, 'feedback_requires_feedback_id');
+  const taskRef = requiredString(link.task_ref, 'feedback_handoff_task_ref_missing');
+  state.db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+    if (!current) throw feedbackNotFound(feedbackId, state);
+    const currentTaskRef = optionalString(current.task_ref) ?? legacyTaskRef(current.resolution_note);
+    if (currentTaskRef && currentTaskRef !== taskRef) {
+      throw diagnosticError('feedback_task_link_conflict', `feedback_task_link_conflict:${feedbackId}`, {
+        feedback_id: feedbackId,
+        existing_task_ref: currentTaskRef,
+        requested_task_ref: taskRef,
+      });
+    }
+    state.db.prepare(
+      'UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, task_ref = ?, task_status = ?, updated_at = ? WHERE feedback_id = ?'
+    ).run('converted_to_task', link.resolved_by, link.resolution_note, taskRef, link.task_status, nowIso(), feedbackId);
+    const handoffUpdate = state.db.prepare(
+      'UPDATE feedback_task_handoffs SET status = ?, payload_ref = COALESCE(?, payload_ref), task_ref = ?, task_number = ?, task_id = ?, task_status = ?, lease_owner = NULL, lease_expires_at = NULL, last_error_code = NULL, last_error_message = NULL, last_error_details = NULL, updated_at = ? WHERE feedback_id = ? AND lease_owner = ?'
+    ).run(
+      'linked',
+      link.payload_ref,
+      taskRef,
+      link.task_number,
+      link.task_id,
+      link.task_status,
+      nowIso(),
+      feedbackId,
+      link.lease_owner,
+    ) as unknown as { changes?: number };
+    if (Number(handoffUpdate.changes ?? 0) !== 1) throw diagnosticError('feedback_handoff_lease_lost', `feedback_handoff_lease_lost:${feedbackId}`);
+    recordFeedbackEvent(state, {
+      feedback_id: feedbackId,
+      event_type: 'task_linked',
+      actor_principal: String(link.resolved_by),
+      status: 'converted_to_task',
+      task_ref: taskRef,
+      task_status: optionalString(link.task_status),
+      note: String(link.resolution_note),
+      details: {
+        payload_ref: link.payload_ref ?? null,
+        prior_resolution_note: link.prior_resolution_note ?? null,
+      },
+    });
+    state.db.exec('COMMIT');
+  } catch (error) {
+    state.db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function ensureLinkedHandoffForExisting(state: FeedbackState, row: JsonRecord, taskRef: string): JsonRecord {
+  const feedbackId = String(row.feedback_id);
+  const existing = readFeedbackTaskHandoff(state, feedbackId);
+  if (existing) return existing;
+  const now = nowIso();
+  state.db.prepare(
+    'INSERT INTO feedback_task_handoffs (feedback_id, idempotency_key, status, task_ref, task_number, task_status, attempt_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(feedbackId, `surface-feedback:${feedbackId}`, 'linked', taskRef, taskNumberFromRef(taskRef), optionalString(row.task_status), 0, now, now);
+  return readFeedbackTaskHandoff(state, feedbackId) as JsonRecord;
+}
+
+async function callTaskLifecycle(state: FeedbackState, name: string, args: JsonRecord): Promise<JsonRecord> {
+  const response = await state.taskLifecycleRequest({
+    jsonrpc: '2.0',
+    id: randomUUID(),
+    method: 'tools/call',
+    params: { name, arguments: args },
+  });
+  const error = asRecord(response.error);
+  if (Object.keys(error).length > 0) {
+    throw diagnosticError('task_lifecycle_request_failed', String(error.message ?? `task_lifecycle_request_failed:${name}`), {
+      tool: name,
+      response_error: error,
+    });
+  }
+  const result = asRecord(response.result);
+  if (result.isError === true) {
+    throw diagnosticError('task_lifecycle_tool_refused', `task_lifecycle_tool_refused:${name}`, {
+      tool: name,
+      structured_content: result.structuredContent ?? null,
+    });
+  }
+  const structured = asRecord(result.structuredContent);
+  if (Object.keys(structured).length === 0) {
+    throw diagnosticError('task_lifecycle_result_missing', `task_lifecycle_result_missing:${name}`, { tool: name, result });
+  }
+  return structured;
+}
+
+function buildTaskDefinition(row: JsonRecord, args: JsonRecord, idempotencyKey: string): JsonRecord {
+  const feedbackId = String(row.feedback_id);
+  const summary = String(row.summary);
+  const title = (optionalString(args.task_title) ?? `Address feedback: ${summary}`).slice(0, 160);
+  const details = optionalString(row.details);
+  const priorNote = optionalString(row.resolution_note);
+  return {
+    title,
+    goal: `Address feedback ${feedbackId} for ${String(row.surface_id)}: ${summary}`,
+    context: [
+      `Source feedback: ${feedbackId}`,
+      `Surface: ${String(row.surface_id)}`,
+      `Submitter site: ${String(row.submitter_site_id)}`,
+      details ? `Details: ${details}` : null,
+      priorNote ? `Prior resolution note: ${priorNote}` : null,
+    ].filter(Boolean).join('\n'),
+    required_work: [
+      `Inspect the reported behavior for feedback ${feedbackId}.`,
+      'Implement the smallest coherent fix within the owning MCP surface boundary.',
+      'Add focused tests for the success and relevant failure paths.',
+      'Record verification evidence through task-lifecycle before closeout.',
+    ].join('\n'),
+    non_goals: 'Do not execute the task from surface-feedback; task execution and lifecycle state remain owned by task-lifecycle and worker surfaces.',
+    acceptance_criteria: [
+      `The concern described by feedback ${feedbackId} is addressed or an exact blocker is recorded.`,
+      'Focused tests cover the changed behavior and relevant error paths.',
+      'The task lifecycle record contains truthful changed-file and verification evidence.',
+    ],
+    idempotency_key: idempotencyKey,
+  };
+}
+
+function buildTaskConversionResult(
+  status: 'converted' | 'already_linked',
+  row: JsonRecord,
+  taskRef: string,
+  taskNumber: number | null,
+  taskStatus: string | null,
+  taskId: string | null,
+  payloadRef: string | null,
+): JsonRecord {
+  const resolvedTaskNumber = taskNumber ?? taskNumberFromRef(taskRef);
+  return {
+    schema: 'narada.surface_feedback.convert_to_task.v1',
+    status,
+    feedback_id: String(row.feedback_id),
+    task_ref: taskRef,
+    task_number: resolvedTaskNumber,
+    task_id: taskId,
+    task_status: taskStatus,
+    feedback: hydrateFeedback(row),
+    task_creation: {
+      status: status === 'converted' ? 'created_or_recovered' : 'already_linked',
+      payload_ref: payloadRef,
+    },
+    next_action: {
+      surface_id: 'task-lifecycle',
+      tool: 'task_lifecycle_show',
+      arguments: resolvedTaskNumber !== null
+        ? { task_number: resolvedTaskNumber }
+        : { task_id: taskId ?? taskRef },
+      reason: 'Inspect the authoritative task lifecycle state; task execution remains outside surface-feedback.',
+    },
+  };
+}
+
+function taskNumberFromRef(taskRef: string): number | null {
+  const text = String(taskRef).trim();
+  const match = /(?:task\s*#|^)(\d+)(?:$|\D)/i.exec(text);
+  return match ? Number(match[1]) : null;
 }
 
 function feedbackUpdateStatusBatch(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -390,13 +1014,18 @@ function feedbackUpdateStatusBatch(args: JsonRecord, state: FeedbackState): Json
       const resolvedBy = optionalString(update.resolved_by) ?? defaultResolvedBy;
       const baseNote = requiredString(update.resolution_note, 'feedback_requires_resolution_note', { feedback_id: feedbackId, index });
       const taskRef = optionalString(update.task_ref);
+      const taskStatus = optionalString(update.task_status);
       const resolutionNote = taskRef ? `${baseNote} Task: ${taskRef}` : baseNote;
       const existing = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
       if (!existing) throw feedbackNotFound(feedbackId, state);
       const now = nowIso();
-      state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+      if (taskRef || taskStatus) {
+        state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, task_ref = COALESCE(?, task_ref), task_status = COALESCE(?, task_status), updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, taskRef, taskStatus, now, feedbackId);
+      } else {
+        state.db.prepare('UPDATE feedback_entries SET status = ?, resolved_by = ?, resolution_note = ?, updated_at = ? WHERE feedback_id = ?').run(status, resolvedBy, resolutionNote, now, feedbackId);
+      }
       const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
-      succeeded.push({ feedback_id: feedbackId, status, task_ref: taskRef, feedback: hydrateFeedback(updated) });
+      succeeded.push({ feedback_id: feedbackId, status, task_ref: optionalString(updated.task_ref) ?? taskRef, task_status: optionalString(updated.task_status) ?? taskStatus, feedback: hydrateFeedback(updated) });
     } catch (error) {
       const diagnostic = errorDiagnostic(error);
       failed.push({ index, feedback_id: optionalString(update.feedback_id), code: diagnostic.code, message: diagnostic.message, details: diagnostic.details });
@@ -436,7 +1065,7 @@ function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
     }
     const targetSelect = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?');
     const insert = state.db.prepare(
-      'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, task_ref, task_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     state.db.exec('BEGIN');
     try {
@@ -457,6 +1086,8 @@ function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
           String(row.status ?? 'submitted'),
           optionalString(row.resolution_note),
           optionalString(row.resolved_by),
+          optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+          optionalString(row.task_status),
           String(row.created_at),
           String(row.updated_at)
         );
@@ -527,6 +1158,64 @@ function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   params.push(limit, offset);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
   return { store: storeIdentity(state), items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
+}
+
+function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRecord {
+  const limit = clamp(integer(args.limit, 50, 1, 200), 1, 200);
+  const offset = Math.max(0, integer(args.offset, 0, 0, 10000));
+  const surfaceId = optionalString(args.surface_id);
+  const siteId = optionalString(args.submitter_site_id);
+  const kind = optionalString(args.kind);
+  const callerSiteId = optionalString(args.caller_site_id);
+  const owned = ownedSurfaceIds(args);
+  const since = optionalString(args.since);
+  const until = optionalString(args.until);
+  const vis = visibilityClause(callerSiteId, owned);
+  const statusPlaceholders = ACTIONABLE_FEEDBACK_STATUSES.map(() => '?').join(', ');
+  let fromWhere = `FROM feedback_entries WHERE status IN (${statusPlaceholders})`;
+  const params: (string | number)[] = [...ACTIONABLE_FEEDBACK_STATUSES];
+  if (surfaceId) { fromWhere += ' AND surface_id = ?'; params.push(surfaceId); }
+  if (siteId) { fromWhere += ' AND submitter_site_id = ?'; params.push(siteId); }
+  if (kind) { fromWhere += ' AND kind = ?'; params.push(kind); }
+  if (since) { fromWhere += ' AND created_at >= ?'; params.push(since); }
+  if (until) { fromWhere += ' AND created_at <= ?'; params.push(until); }
+  fromWhere += vis.sql;
+  params.push(...vis.params);
+  const countRow = state.db.prepare(`SELECT COUNT(*) AS total ${fromWhere}`).get(...params) as JsonRecord;
+  const rows = state.db.prepare(`SELECT * ${fromWhere} ORDER BY updated_at DESC, created_at DESC, feedback_id ASC LIMIT ? OFFSET ?`).all(...params, limit, offset) as JsonRecord[];
+  const totalCount = Number(countRow.total ?? 0);
+  const items = rows.map((row) => {
+    const feedback = hydrateFeedback(row);
+    const taskRef = optionalString(feedback.task_ref);
+    const taskStatus = optionalString(feedback.task_status);
+    return {
+      ...feedback,
+      actionability: feedback.status === 'converted_to_task' ? 'task_follow_up' : 'feedback_action_required',
+      task_link: taskRef ? {
+        task_ref: taskRef,
+        lifecycle_state: taskStatus,
+        lifecycle_state_source: taskStatus ? 'feedback_projection' : 'unavailable',
+      } : {
+        task_ref: null,
+        lifecycle_state: null,
+        lifecycle_state_source: 'unlinked',
+      },
+    };
+  });
+  const nextOffset = offset + items.length < totalCount ? offset + items.length : null;
+  return {
+    schema: 'narada.surface_feedback.actionable_queue.v1',
+    status: 'ok',
+    store: storeIdentity(state),
+    actionable_statuses: [...ACTIONABLE_FEEDBACK_STATUSES],
+    items,
+    count: items.length,
+    total_count: totalCount,
+    limit,
+    offset,
+    has_more: nextOffset !== null,
+    next_offset: nextOffset,
+  };
 }
 
 function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -625,6 +1314,8 @@ function hydrateFeedback(row: JsonRecord): JsonRecord {
     status: String(row.status),
     resolution_note: optionalString(row.resolution_note),
     resolved_by: optionalString(row.resolved_by),
+    task_ref: optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+    task_status: optionalString(row.task_status),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -648,9 +1339,20 @@ function renderResult(result: JsonRecord): string {
     `feedback_root: ${result.feedback_root}`,
     `canonical_feedback_root: ${result.canonical_feedback_root}`,
     `db_path: ${result.db_path}`,
+    `task_lifecycle_root: ${result.task_lifecycle_root}`,
+    `task_lifecycle_integration: ${result.task_lifecycle_integration}`,
     `total_feedback_entries: ${result.total_feedback_entries}`,
     result.diagnostic ? `diagnostic: ${result.diagnostic}` : null,
     result.remediation ? `remediation: ${result.remediation}` : null,
+  ]);
+  if (result.schema === 'narada.surface_feedback.actionable_queue.v1') return compactLines([
+    `actionable feedback: ${result.count ?? 0} of ${result.total_count ?? 0}`,
+    `has_more: ${result.has_more ?? false}`,
+    ...(result.next_offset !== null && result.next_offset !== undefined ? [`next_offset: ${result.next_offset}`] : []),
+    ...((result.items as JsonRecord[]).map((item) => {
+      const link = item.task_link as JsonRecord;
+      return `  ${item.feedback_id} [${item.status}] ${String(item.summary ?? '').slice(0, 80)}${link?.task_ref ? ` -> ${link.task_ref} (${link.lifecycle_state ?? 'state unavailable'})` : ''}`;
+    })),
   ]);
   if (result.items !== undefined) {
     const items = result.items as JsonRecord[];
@@ -669,6 +1371,11 @@ function requiredString(value: unknown, code: string, details: JsonRecord = {}):
 function optionalString(value: unknown): string | null {
   const text = String(value ?? '').trim();
   return text || null;
+}
+
+function numberValue(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(String(value ?? '').trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function integer(value: unknown, fallback: number, min: number, max: number): number {
@@ -753,6 +1460,7 @@ function parseArgs(argv: string[]) {
     if (arg === '--feedback-root') options.feedbackRoot = argv[++i];
     else if (arg === '--output-root') options.outputRoot = argv[++i];
     else if (arg === '--canonical-feedback-root') options.canonicalFeedbackRoot = argv[++i];
+    else if (arg === '--task-lifecycle-root') options.taskLifecycleRoot = argv[++i];
   }
   return options;
 }

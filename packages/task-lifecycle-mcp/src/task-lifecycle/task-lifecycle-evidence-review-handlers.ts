@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { isAbsolute, relative } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
+import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
@@ -27,6 +28,205 @@ function siteRelativePath(siteRoot: string, filePath: string): string {
 
 function siteRelativeChangedFiles(siteRoot: string, files: string[]): string[] {
   return files.map((file) => siteRelativePath(siteRoot, file)).filter((file) => file && !file.startsWith('..'));
+}
+
+function markdownSectionHasContent(body: string, heading: string): boolean {
+  const headingIndex = body.indexOf(`## ${heading}`);
+  if (headingIndex < 0) return false;
+  const contentStart = body.indexOf('\n', headingIndex);
+  if (contentStart < 0) return false;
+  const nextHeading = body.indexOf('\n## ', contentStart + 1);
+  const content = body.slice(contentStart + 1, nextHeading < 0 ? body.length : nextHeading);
+  return content.trim().length > 0;
+}
+
+function appendMarkdownSection(body: string, heading: string, content: string): string {
+  const separator = body.endsWith('\n') ? '\n' : '\n\n';
+  return `${body}${separator}## ${heading}\n\n${content.trim()}\n`;
+}
+
+function repairCompatibilityAcceptanceSection(body: string): string {
+  const headingIndex = body.indexOf('## Acceptance Criteria');
+  if (headingIndex < 0) return appendMarkdownSection(body, 'Acceptance Criteria', '- [x] The compatibility review outcome is represented by the authoritative task outcome contract.');
+  const contentStart = body.indexOf('\n', headingIndex);
+  if (contentStart < 0) return appendMarkdownSection(body, 'Acceptance Criteria', '- [x] The compatibility review outcome is represented by the authoritative task outcome contract.');
+  const nextHeading = body.indexOf('\n## ', contentStart + 1);
+  const sectionEnd = nextHeading < 0 ? body.length : nextHeading;
+  const section = body.slice(contentStart + 1, sectionEnd);
+  const repaired = section.split('\n').map((line) => line.includes('- [ ]') ? line.replace('- [ ]', '- [x]') : line).join('\n');
+  const hasCheckedCriterion = repaired.split('\n').some((line) => line.includes('- [x]') || line.includes('- [X]'));
+  const finalSection = hasCheckedCriterion
+    ? repaired
+    : `${repaired.trimEnd()}\n\n- [x] The compatibility review outcome is represented by the authoritative task outcome contract.\n`;
+  return `${body.slice(0, contentStart + 1)}${finalSection}${body.slice(sectionEnd)}`;
+}
+
+function compatibilityReviewTaskPath(siteRoot: string, taskId: string): string {
+  return join(siteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`);
+}
+
+type CompatibilityProjectionSnapshot = {
+  path: string;
+  existed: boolean;
+  content: string | null;
+};
+
+function captureCompatibilityProjectionSnapshot(siteRoot: string, taskId: string): CompatibilityProjectionSnapshot {
+  const path = compatibilityReviewTaskPath(siteRoot, taskId);
+  return {
+    path,
+    existed: existsSync(path),
+    content: existsSync(path) ? readFileSync(path, 'utf8') : null,
+  };
+}
+
+function restoreCompatibilityProjectionSnapshot(snapshot: CompatibilityProjectionSnapshot): void {
+  if (snapshot.existed) {
+    writeFileSync(snapshot.path, snapshot.content ?? '', 'utf8');
+    return;
+  }
+  if (existsSync(snapshot.path)) unlinkSync(snapshot.path);
+}
+
+function withStoreSavepoint<T>(store, action: () => Promise<T> | T): Promise<T> {
+  const name = `narada_compatibility_${randomUUID().replaceAll('-', '')}`;
+  store.db.exec(`SAVEPOINT ${name}`);
+  return Promise.resolve()
+    .then(action)
+    .then((result) => {
+      store.db.exec(`RELEASE SAVEPOINT ${name}`);
+      return result;
+    }, (error) => {
+      try { store.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
+      try { store.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
+      throw error;
+    });
+}
+
+class CompatibilityReviewTransactionError extends Error {
+  readonly payload: Record<string, unknown>;
+
+  constructor(payload: Record<string, unknown>) {
+    super(String(payload.error ?? 'compatibility_review_migration_failed'));
+    this.payload = payload;
+  }
+}
+
+function updateMarkdownFrontMatterFields(path: string, fields: Record<string, string>): void {
+  if (!existsSync(path)) return;
+  const before = readFileSync(path, 'utf8');
+  const match = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(before);
+  if (!match) return;
+  let frontMatter = match[2];
+  for (const [key, value] of Object.entries(fields)) {
+    const pattern = new RegExp(`^${key}:.*$`, 'm');
+    const line = `${key}: ${value}`;
+    frontMatter = pattern.test(frontMatter)
+      ? frontMatter.replace(pattern, line)
+      : `${frontMatter}\n${line}`;
+  }
+  writeFileSync(path, `${match[1]}${frontMatter}${match[3]}${before.slice(match[0].length)}`, 'utf8');
+}
+
+function ensureCompatibilityReviewTaskProjection({ siteRoot, store, reviewTask, parentLifecycle, agentId, outcomeContract }) {
+  const now = new Date().toISOString();
+  const generatedSpec = {
+    title: `Compatibility review for task #${parentLifecycle.task_number}`,
+    chapter: null,
+    goal: 'Represent the compatibility review outcome as a durable review dependency record.',
+    context: `Generated by task_lifecycle_review for parent task #${parentLifecycle.task_number}. The authoritative review decision is the task outcome contract ${outcomeContract.contract_id}.`,
+    required_work: 'Preserve the accepted or rejected compatibility review outcome and its dependency relationship for authoritative readback.',
+    non_goals: 'Do not reinterpret this compatibility record as ordinary implementation work.',
+    acceptance_criteria: ['The compatibility review outcome is represented by the authoritative task outcome contract.'],
+  };
+  const existingSpec = store.getTaskSpec?.(reviewTask.task_id) ?? store.getTaskSpecByNumber?.(reviewTask.task_number) ?? null;
+  const renderSpec = existingSpec
+    ? {
+        title: existingSpec.title ?? generatedSpec.title,
+        chapter: existingSpec.chapter_markdown ?? null,
+        goal: existingSpec.goal_markdown ?? generatedSpec.goal,
+        context: existingSpec.context_markdown ?? generatedSpec.context,
+        required_work: existingSpec.required_work_markdown ?? generatedSpec.required_work,
+        non_goals: existingSpec.non_goals_markdown ?? generatedSpec.non_goals,
+        acceptance_criteria: parseStringArrayJson(existingSpec.acceptance_criteria_json).length > 0
+          ? parseStringArrayJson(existingSpec.acceptance_criteria_json)
+          : generatedSpec.acceptance_criteria,
+      }
+    : generatedSpec;
+  const taskDirectory = join(siteRoot, '.ai', 'do-not-open', 'tasks');
+  mkdirSync(taskDirectory, { recursive: true });
+  const taskPath = compatibilityReviewTaskPath(siteRoot, reviewTask.task_id);
+  const taskFileExisted = existsSync(taskPath);
+  let createdFile = false;
+  if (taskFileExisted) {
+    const before = readFileSync(taskPath, 'utf8');
+    const declaredNumberLine = before.split('\n').find((line) => {
+      const trimmed = line.trim();
+      return trimmed.startsWith('number:') || trimmed.startsWith('task_number:');
+    });
+    const declaredNumber = declaredNumberLine ? Number(declaredNumberLine.slice(declaredNumberLine.indexOf(':') + 1).trim()) : null;
+    if (Number.isInteger(declaredNumber) && declaredNumber !== reviewTask.task_number) {
+      throw new Error(`compatibility_review_task_file_number_mismatch: expected ${reviewTask.task_number}, found ${declaredNumber}`);
+    }
+    let repaired = before;
+    if (!markdownSectionHasContent(repaired, 'Execution Notes')) {
+      repaired = appendMarkdownSection(repaired, 'Execution Notes', [
+        `Compatibility review outcome materialized by ${agentId}.`,
+        'This is a generated review dependency record; its outcome contract is authoritative.',
+      ].join('\n'));
+    }
+    if (!markdownSectionHasContent(repaired, 'Verification')) {
+      repaired = appendMarkdownSection(repaired, 'Verification', `The review outcome contract ${outcomeContract.contract_id} is persisted for authoritative dependency readback.`);
+    }
+    repaired = repairCompatibilityAcceptanceSection(repaired);
+    if (repaired !== before) writeFileSync(taskPath, repaired, 'utf8');
+  } else {
+    const body = repairCompatibilityAcceptanceSection(renderTaskBodyFromSpec({
+      spec: renderSpec,
+      executionNotes: [
+        `Compatibility review outcome materialized by ${agentId}.`,
+        'This is a generated review dependency record; its outcome contract is authoritative.',
+      ].join('\n'),
+      verification: `The review outcome contract ${outcomeContract.contract_id} is persisted for authoritative dependency readback.`,
+    }));
+    const frontMatter = [
+      '---',
+      `number: ${reviewTask.task_number}`,
+      'governed_by: review',
+      'status: opened',
+      'compatibility_record: true',
+      '---',
+    ].join('\n');
+    writeFileSync(taskPath, `${frontMatter}\n${body}\n\n## Changed Files\n\nNo files changed; compatibility review outcome only.\n`, 'utf8');
+    createdFile = true;
+  }
+  if (!existingSpec) {
+    try {
+      store.upsertTaskSpec({
+        task_id: reviewTask.task_id,
+        task_number: reviewTask.task_number,
+        title: generatedSpec.title,
+        chapter_markdown: null,
+        goal_markdown: generatedSpec.goal,
+        context_markdown: generatedSpec.context,
+        required_work_markdown: generatedSpec.required_work,
+        non_goals_markdown: generatedSpec.non_goals,
+        acceptance_criteria_json: JSON.stringify(generatedSpec.acceptance_criteria),
+        dependencies_json: '[]',
+        updated_at: now,
+      });
+    } catch (error) {
+      if (createdFile) unlinkSync(taskPath);
+      throw error;
+    }
+  }
+  return {
+    status: taskFileExisted ? 'preserved_or_repaired' : 'materialized',
+    path: siteRelativePath(siteRoot, taskPath),
+    task_number: reviewTask.task_number,
+    task_id: reviewTask.task_id,
+    record_kind: 'compatibility_review_task',
+  };
 }
 
 async function backfillReviewOutcomeEvidence({ siteRoot, store, taskNumber, agentId, outcome, summary, findings, outcomeContract, findTaskFile, replaceTaskSection, proveTaskCriteria }) {
@@ -459,7 +659,8 @@ export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_defer",
   "task_lifecycle_un_defer",
   "task_lifecycle_reopen",
-  "task_lifecycle_review"
+  "task_lifecycle_review",
+  "task_lifecycle_compatibility_reconcile"
 ]);
 
 export function createTaskLifecycleEvidenceReviewHandlers(context) {
@@ -515,19 +716,84 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     markParentAwaitingDependencies,
   } = context;
 
-  async function admitReviewMigrationOutcome({ taskNumber, agentId, verdict, summary, findings, structuralReviewInfo, effectiveSingleOperatorReview, conflictPolicyAuthorization }) {
+  async function admitReviewMigrationOutcome(options) {
+    let projectionSnapshot: CompatibilityProjectionSnapshot | null = null;
+    let preallocatedReviewTaskNumber: number | undefined;
+    const parentLifecycle = store.getLifecycleByNumber(options.taskNumber);
+    const existingDependency = parentLifecycle
+      ? (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? []).find((candidate) => candidate.kind === 'review')
+      : null;
+    const existingRequiredLifecycle = existingDependency ? store.getLifecycle?.(existingDependency.required_task_id) : undefined;
+    if (parentLifecycle && (!existingDependency || !existingRequiredLifecycle)) {
+      const maxTaskRow = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
+      const maxTaskNumber = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : options.taskNumber;
+      store.ensureTaskNumberFloor?.(maxTaskNumber);
+      // Task-number allocation owns its own SQLite transaction. Reserve the number
+      // before opening the compatibility savepoint; a failed migration may leave a
+      // harmless sequence gap, but never an orphaned task record.
+      preallocatedReviewTaskNumber = store.allocateTaskNumber();
+    }
+    try {
+      return await withStoreSavepoint(store, async () => {
+        const result = await admitReviewMigrationOutcomeUnsafe({
+          ...options,
+          preallocatedReviewTaskNumber,
+          captureProjectionSnapshot: (taskId: string) => {
+            if (!projectionSnapshot) projectionSnapshot = captureCompatibilityProjectionSnapshot(siteRoot, taskId);
+          },
+        });
+        if (!result) {
+          throw new CompatibilityReviewTransactionError({
+            status: 'error',
+            error: 'compatibility_review_migration_not_admitted',
+            remediation: 'The compatibility review requires an existing review dependency and outcome contract, or a valid generated compatibility record.',
+          });
+        }
+        const resultRecord = asRecord(result);
+        if (resultRecord?.status === 'error') throw new CompatibilityReviewTransactionError(resultRecord);
+        return result;
+      });
+    } catch (error) {
+      let payload = error instanceof CompatibilityReviewTransactionError
+        ? error.payload
+        : {
+            status: 'error',
+            error: 'compatibility_review_migration_failed',
+            message: error instanceof Error ? error.message : String(error),
+          };
+      if (projectionSnapshot) {
+        try {
+          restoreCompatibilityProjectionSnapshot(projectionSnapshot);
+          payload = { ...payload, rollback: { sqlite: 'rolled_back', projection: 'restored' } };
+        } catch (restoreError) {
+          payload = {
+            ...payload,
+            rollback: {
+              sqlite: 'rolled_back',
+              projection: 'restore_failed',
+              restore_error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+            },
+          };
+        }
+      } else {
+        payload = { ...payload, rollback: { sqlite: 'rolled_back', projection: 'unchanged' } };
+      }
+      return payload;
+    }
+  }
+
+  async function admitReviewMigrationOutcomeUnsafe({ taskNumber, agentId, verdict, summary, findings, structuralReviewInfo, effectiveSingleOperatorReview, conflictPolicyAuthorization, captureProjectionSnapshot, preallocatedReviewTaskNumber }) {
     const parentLifecycle = store.getLifecycleByNumber(taskNumber);
     if (!parentLifecycle) return null;
+    const normalizedOutcome = verdict === 'needs_changes' ? 'rejected' : verdict;
+    if (!['accepted', 'accepted_with_notes', 'rejected'].includes(normalizedOutcome)) return null;
     let dependency = (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? [])
       .find((candidate) => candidate.kind === 'review');
     let requiredLifecycle = dependency ? store.getLifecycle?.(dependency.required_task_id) : undefined;
     const now = new Date().toISOString();
 
     if (!dependency || !requiredLifecycle) {
-      const maxTaskRow = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
-      const maxTaskNumber = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : taskNumber;
-      store.ensureTaskNumberFloor?.(maxTaskNumber);
-      const reviewTaskNumber = store.allocateTaskNumber();
+      const reviewTaskNumber = preallocatedReviewTaskNumber ?? store.allocateTaskNumber();
       const safeParentId = parentLifecycle.task_id.replace(/[^A-Za-z0-9._-]+/g, '-');
       const reviewTaskId = `${now.slice(0, 10).replace(/-/g, '')}-${reviewTaskNumber}-legacy-review-${safeParentId}`;
       const dependencyId = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
@@ -535,11 +801,11 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       requiredLifecycle = {
         task_id: reviewTaskId,
         task_number: reviewTaskNumber,
-        status: 'closed',
+        status: 'opened',
         governed_by: 'review',
-        closed_at: now,
-        closed_by: agentId,
-        closure_mode: 'peer_reviewed',
+        closed_at: null,
+        closed_by: null,
+        closure_mode: null,
         reopened_at: null,
         reopened_by: null,
         continuation_packet_json: null,
@@ -573,9 +839,17 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
 
     const contract = store.getLatestTaskOutcomeContract?.(requiredLifecycle.task_id);
     if (!contract) return null;
-    const normalizedOutcome = verdict === 'needs_changes' ? 'rejected' : verdict;
     const allowedOutcomes = parseStringArrayJson(contract.allowed_outcomes_json);
     if (!allowedOutcomes.includes(normalizedOutcome)) return null;
+    captureProjectionSnapshot?.(requiredLifecycle.task_id);
+    const reviewTaskProjection = ensureCompatibilityReviewTaskProjection({
+      siteRoot,
+      store,
+      reviewTask: requiredLifecycle,
+      parentLifecycle,
+      agentId,
+      outcomeContract: contract,
+    });
     const outcomeId = `outcome_${randomUUID()}`;
     const authorityBasis = conflictPolicyAuthorization
       ? {
@@ -612,6 +886,42 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     for (const evaluation of conflictPolicy.evaluations) {
       store.upsertTaskConflictPolicyEvidence(evaluation.evidence);
     }
+    let closedReviewLifecycle = store.getLifecycle?.(requiredLifecycle.task_id) ?? requiredLifecycle;
+    if (closedReviewLifecycle.status !== 'closed') {
+      const transition = await transitionLifecycleTask({
+        siteRoot,
+        store,
+        taskNumber: requiredLifecycle.task_number,
+        agentId,
+        reason: 'compatibility_review_outcome_admitted',
+        toStatus: 'closed',
+        resultStatus: 'closed',
+        closureMode: 'peer_reviewed',
+        projectionMode: 'strict',
+      });
+      if (transition.status === 'error') {
+        return {
+          status: 'error',
+          error: 'compatibility_review_lifecycle_transition_failed',
+          task_number: requiredLifecycle.task_number,
+          task_id: requiredLifecycle.task_id,
+          task_outcome: taskOutcome,
+          transition,
+        };
+      }
+      const activeReviewAssignment = store.getActiveAssignment?.(requiredLifecycle.task_id);
+      if (activeReviewAssignment) store.releaseAssignment(activeReviewAssignment.assignment_id, 'compatibility_review_outcome_admitted');
+      closedReviewLifecycle = store.getLifecycle?.(requiredLifecycle.task_id) ?? null;
+    }
+    if (!closedReviewLifecycle || closedReviewLifecycle.status !== 'closed' || !closedReviewLifecycle.closed_at || !closedReviewLifecycle.closed_by) {
+      return {
+        status: 'error',
+        error: 'compatibility_review_closure_evidence_missing',
+        task_number: requiredLifecycle.task_number,
+        task_id: requiredLifecycle.task_id,
+        task_outcome: taskOutcome,
+      };
+    }
     const parentDependencyWaitStatus = typeof markParentAwaitingDependencies === 'function'
       ? await markParentAwaitingDependencies({
         parentLifecycle,
@@ -624,12 +934,167 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     return {
       schema: 'narada.task.review_compatibility_dependency_outcome.v0',
       dependency,
-      review_task: requiredLifecycle,
+      review_task: closedReviewLifecycle,
+      review_task_projection: reviewTaskProjection,
       parent_dependency_wait_status: parentDependencyWaitStatus,
       outcome_contract: contract,
       task_outcome: taskOutcome,
       conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation) => evaluation.evidence),
       dependency_satisfaction: dependencySatisfaction.dependency_satisfaction ?? null,
+    };
+  }
+
+  function compatibilityReviewCandidates(taskNumbers: unknown, limit: number) {
+    const requested = Array.isArray(taskNumbers)
+      ? [...new Set(taskNumbers.filter((value): value is number => Number.isInteger(value) && value > 0))]
+      : [];
+    if (requested.length > 100) throw new Error('task_numbers_limit_exceeded: maximum 100 explicit task numbers');
+    if (requested.length > 0) {
+      return requested
+        .map((taskNumber) => store.getLifecycleByNumber(taskNumber))
+        .filter(Boolean);
+    }
+    const boundedLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 25));
+    const rows = store.db.prepare(`
+      SELECT task_id, task_number, status, governed_by, closed_at, closed_by,
+             reopened_at, reopened_by, continuation_packet_json, closure_mode,
+             updated_at
+      FROM task_lifecycle
+      WHERE governed_by = 'review' AND task_id LIKE '%-legacy-review-%'
+      ORDER BY task_number ASC
+      LIMIT ?
+    `).all(boundedLimit) as Array<Record<string, unknown>>;
+    return rows.map((row) => store.getLifecycleByNumber(Number(row.task_number))).filter(Boolean);
+  }
+
+  async function reconcileCompatibilityReviews({ agentId, taskNumbers, limit = 25, dryRun = false }) {
+    enforceSessionIdentity(agentId);
+    const candidates = compatibilityReviewCandidates(taskNumbers, limit);
+    const results: Array<Record<string, unknown>> = [];
+    for (const lifecycle of candidates) {
+      const reviewDependencies = store.listTaskDependenciesForRequired?.(lifecycle.task_id) ?? [];
+      const dependency = reviewDependencies.find((candidate) => candidate.kind === 'review') ?? null;
+      const parentLifecycle = dependency ? store.getLifecycle?.(dependency.parent_task_id) ?? null : null;
+      const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
+      const latestOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
+      const taskPath = compatibilityReviewTaskPath(siteRoot, lifecycle.task_id);
+      const hasFile = existsSync(taskPath);
+      const hasSpec = Boolean(store.getTaskSpec?.(lifecycle.task_id) ?? store.getTaskSpecByNumber?.(lifecycle.task_number));
+      const closureComplete = lifecycle.status === 'closed'
+        && Boolean(lifecycle.closed_at && lifecycle.closed_by && lifecycle.closure_mode);
+      const activeAssignment = store.getActiveAssignment?.(lifecycle.task_id) ?? null;
+      const actions: string[] = [];
+      if (!hasFile || !hasSpec) actions.push('materialize_projection');
+      if (latestOutcome && lifecycle.status !== 'closed') actions.push('close_from_admitted_outcome');
+      if (lifecycle.status === 'closed' && !closureComplete && latestOutcome) actions.push('repair_closure_evidence');
+      if (lifecycle.status === 'closed' && activeAssignment) actions.push('release_closed_assignment');
+
+      if (!dependency || !parentLifecycle || !outcomeContract) {
+        results.push({
+          task_number: lifecycle.task_number,
+          task_id: lifecycle.task_id,
+          status: 'blocked',
+          reason: !dependency ? 'review_dependency_missing' : !parentLifecycle ? 'review_parent_missing' : 'review_outcome_contract_missing',
+          actions,
+        });
+        continue;
+      }
+      if (!latestOutcome && lifecycle.status !== 'closed') {
+        results.push({
+          task_number: lifecycle.task_number,
+          task_id: lifecycle.task_id,
+          status: 'blocked',
+          reason: 'admitted_review_outcome_missing',
+          actions,
+        });
+        continue;
+      }
+      if (dryRun) {
+        results.push({
+          task_number: lifecycle.task_number,
+          task_id: lifecycle.task_id,
+          status: actions.length > 0 ? 'planned' : 'coherent',
+          actions,
+          latest_outcome: latestOutcome?.outcome ?? null,
+          has_file: hasFile,
+          has_spec: hasSpec,
+          closure_complete: closureComplete,
+        });
+        continue;
+      }
+
+      if (!hasFile || !hasSpec) {
+        ensureCompatibilityReviewTaskProjection({
+          siteRoot,
+          store,
+          reviewTask: lifecycle,
+          parentLifecycle,
+          agentId,
+          outcomeContract,
+        });
+      }
+      let updatedLifecycle = store.getLifecycle?.(lifecycle.task_id) ?? lifecycle;
+      if (latestOutcome && updatedLifecycle.status !== 'closed') {
+        const transition = await transitionLifecycleTask({
+          siteRoot,
+          store,
+          taskNumber: updatedLifecycle.task_number,
+          agentId,
+          reason: 'compatibility_review_reconciliation',
+          toStatus: 'closed',
+          resultStatus: 'closed',
+          closureMode: 'peer_reviewed',
+          projectionMode: 'strict',
+        });
+        if (transition.status === 'error') {
+          results.push({ task_number: lifecycle.task_number, task_id: lifecycle.task_id, status: 'error', error: 'compatibility_review_reconciliation_transition_failed', transition });
+          continue;
+        }
+        updatedLifecycle = store.getLifecycle?.(lifecycle.task_id) ?? updatedLifecycle;
+      } else if (latestOutcome && !closureComplete) {
+        const closedAt = updatedLifecycle.closed_at ?? latestOutcome.admitted_at ?? new Date().toISOString();
+        const closedBy = updatedLifecycle.closed_by ?? agentId;
+        const closureMode = updatedLifecycle.closure_mode ?? 'peer_reviewed';
+        store.updateStatus(updatedLifecycle.task_id, 'closed', closedBy, {
+          closed_at: closedAt,
+          closed_by: closedBy,
+          governed_by: 'review',
+          closure_mode: closureMode,
+        });
+        updateMarkdownFrontMatterFields(compatibilityReviewTaskPath(siteRoot, updatedLifecycle.task_id), {
+          status: 'closed',
+          closed_at: closedAt,
+          closed_by: closedBy,
+          governed_by: 'review',
+          closure_mode: closureMode,
+        });
+        updatedLifecycle = store.getLifecycle?.(lifecycle.task_id) ?? updatedLifecycle;
+      }
+      if (updatedLifecycle.status === 'closed') {
+        const closedAssignment = store.getActiveAssignment?.(updatedLifecycle.task_id);
+        if (closedAssignment) store.releaseAssignment(closedAssignment.assignment_id, 'compatibility_review_reconciliation');
+      }
+      const finalLifecycle = store.getLifecycle?.(lifecycle.task_id) ?? updatedLifecycle;
+      const finalHasFile = existsSync(taskPath);
+      const finalHasSpec = Boolean(store.getTaskSpec?.(lifecycle.task_id) ?? store.getTaskSpecByNumber?.(lifecycle.task_number));
+      results.push({
+        task_number: lifecycle.task_number,
+        task_id: lifecycle.task_id,
+        status: finalHasFile && finalHasSpec && finalLifecycle.status === 'closed' && Boolean(finalLifecycle.closed_at && finalLifecycle.closed_by && finalLifecycle.closure_mode)
+          ? 'reconciled'
+          : 'incomplete',
+        actions,
+        lifecycle: finalLifecycle,
+        has_file: finalHasFile,
+        has_spec: finalHasSpec,
+      });
+    }
+    return {
+      schema: 'narada.task.compatibility_review_reconciliation.v0',
+      status: results.some((result) => result.status === 'error' || result.status === 'blocked' || result.status === 'incomplete') ? 'attention_needed' : 'ok',
+      dry_run: dryRun,
+      selected_count: candidates.length,
+      results,
     };
   }
 
@@ -1379,6 +1844,10 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (defer && lifecycle.status !== 'deferred') {
         lifecycleTransition = await transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus: 'deferred', resultStatus: 'deferred' });
       }
+      const lifecycleStatus = store.getLifecycleByNumber(taskNumber)?.status ?? lifecycle.status;
+      const recoveryNextAction = defer
+        ? `After the blocker is resolved, call task_lifecycle_un_defer first; it will restore ${activeAssignment ? 'claimed' : 'opened'} state, then ${activeAssignment ? 'call task_lifecycle_continue' : 'claim the task before continuing'}.`
+        : `After the blocker is resolved, ${activeAssignment ? 'call task_lifecycle_continue' : 'claim the task'} before resuming work.`;
       return jsonToolResult({
         status: 'blocked_reported',
         schema: 'narada.task.mcp.blocked_report.v0',
@@ -1386,11 +1855,13 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         task_id: lifecycle.task_id,
         report_id: reportId,
         report_status: 'blocked',
-        lifecycle_status: store.getLifecycleByNumber(taskNumber)?.status ?? lifecycle.status,
+        lifecycle_status: lifecycleStatus,
         lifecycle_transition: lifecycleTransition,
         blockers,
         reason,
-        next_action: nextAction ?? 'Resolve blockers, then continue or finish with completion evidence.',
+        operator_next_action: nextAction ?? null,
+        next_action: [nextAction, recoveryNextAction].filter(Boolean).join(' Then '),
+        recovery_next_action: recoveryNextAction,
       }, false);
     }
 
@@ -1415,6 +1886,15 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       enforceSessionIdentity(agentId);
       const serviceResult = await transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus: 'opened', resultStatus: 'reopened' });
       return jsonToolResult(serviceResult, serviceResult.status === 'error');
+    }
+
+    case 'task_lifecycle_compatibility_reconcile': {
+      const agentId = stringField(args, 'agent_id');
+      if (!agentId) throw new Error('agent_id_required');
+      const taskNumbers = Array.isArray(args.task_numbers) ? args.task_numbers : undefined;
+      const limit = numberField(args, 'limit') ?? 25;
+      const dryRun = booleanField(args, 'dry_run') === true;
+      return jsonToolResult(await reconcileCompatibilityReviews({ agentId, taskNumbers, limit, dryRun }));
     }
 
     case 'task_lifecycle_review': {
@@ -1592,6 +2072,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           agent_id: agentId,
           remediation: 'Use task_lifecycle_submit_work with reviewer to create a review-contract dependency, or finish the existing dependency task with task_lifecycle_finish outcome arguments.',
         }, true);
+      }
+      if (asRecord(migrationOutcome)?.status === 'error') {
+        return jsonToolResult(migrationOutcome, true);
       }
       const payload: TaskLifecyclePayload = {
         status: 'success',

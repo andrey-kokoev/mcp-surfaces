@@ -19,7 +19,9 @@
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/surface-feedback-mcp.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/task-lifecycle-mcp": "workspace:*"
+  },
   "files": [
     "dist/"
   ]

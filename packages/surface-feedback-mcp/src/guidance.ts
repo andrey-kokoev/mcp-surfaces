@@ -24,14 +24,17 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
+      { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for one bounded queue of submitted, acknowledged, routed, and converted feedback; it includes task links and projected task state when available.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
+      { step: 'convert', guidance: 'Use surface_feedback_convert_to_task for one visible feedback entry when a governed task handoff is intended; it creates and links through task-lifecycle and returns the next authoritative action.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
     examples: [
       { intent: 'First use', call: 'surface_feedback_guidance({})' },
       { intent: 'Tool-specific help', call: "surface_feedback_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "surface_feedback_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Workflow-specific help', call: "surface_feedback_guidance({ workflow: \"<workflow_name>\" })" },
+      { intent: 'Feedback to task', call: 'surface_feedback_convert_to_task({ feedback_id, caller_site_id, resolved_by })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
@@ -43,6 +46,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
+      'If task creation succeeds but feedback linking fails, use the returned task reference with surface_feedback_update_status and preserve the diagnostic as repair evidence.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {
@@ -57,6 +61,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     boundaries: [
       'Guidance is read-only model-facing operating advice.',
       'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
+      'Task lifecycle state in actionable queue results is an optional feedback projection; it is not a replacement for authoritative task-lifecycle readback.',
+      'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
       'The owning MCP surface remains authoritative for state and enforcement.'
     ]
   };

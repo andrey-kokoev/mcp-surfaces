@@ -1,0 +1,19 @@
+{
+  "name": "@narada2/execution-contract",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/execution-contract.test.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "files": ["dist/", "README.md"]
+}

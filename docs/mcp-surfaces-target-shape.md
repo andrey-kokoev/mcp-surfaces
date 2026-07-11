@@ -83,6 +83,35 @@ These rules are implementation acceptance criteria for transport changes. The
 package README summarizes them; this section is the canonical package-level
 target and should be used to derive implementation tasks and regression tests.
 
+## Execution Boundary Contract
+
+Task and delegated-task surfaces must make the transition from intent to
+execution explicit. The shared `@narada2/execution-contract` package provides
+the typed `ExecutionBinding` and request fingerprint primitives; the owning
+surface remains responsible for policy and durable state.
+
+- A binding records the absolute workspace root, executor kind/profile/id,
+  optional repository and Site roots, and a stable correlation key.
+- The owning surface validates the binding before persistence and passes the
+  bound workspace to the executor. A path is a target-locus fact, not an
+  authorization grant.
+- An idempotency key identifies one request. Repeating it with the same
+  canonical request is a read/replay or explicit continuation; reusing it with
+  a different request is a typed conflict.
+- A store or transport failure must not blindly retry a mutation after an
+  attempt may have committed. Automatic retry requires an authoritative
+  idempotency contract or read-only/idempotent tool metadata; otherwise the
+  surface reports that the caller must inspect operation state.
+- External task dependencies are durable gates. A dependent task remains in a
+  waiting posture until every referenced task has a completed outcome; missing,
+  failed, cancelled, or self-referential dependencies are reported explicitly.
+- Recovery output must describe the actual lifecycle state and the next valid
+  action. It must not tell an operator to continue a task that is still
+  deferred, blocked, or awaiting review.
+
+These invariants are tested by the execution-contract package, delegated-task
+execution-boundary tests, and task-lifecycle handler/recovery tests.
+
 ## Boundary Rules By Package Family
 
 - `mcp-transport` owns generic payload and output-reference mechanics only. It must not acquire task lifecycle, mail, git, or worker domain behavior.

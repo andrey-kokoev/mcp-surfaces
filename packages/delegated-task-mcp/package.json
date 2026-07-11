@@ -23,6 +23,7 @@
     "test:live:provider": "pnpm build && node dist/test/live-worker-integration.test.js --provider"
   },
   "dependencies": {
+    "@narada2/execution-contract": "workspace:*",
     "@narada2/worker-delegation-mcp": "workspace:*"
   },
   "files": [

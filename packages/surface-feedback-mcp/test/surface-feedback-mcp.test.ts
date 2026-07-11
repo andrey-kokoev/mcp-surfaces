@@ -93,10 +93,164 @@ try {
     status: 'converted_to_task',
     resolved_by: 'andrey-user.test',
     resolution_note: 'Task #999 created to address this feedback.',
+    task_ref: 'task #999',
+    task_status: 'in_review',
   });
   const convertData = view(convertUpdate).feedback as Record<string, any>;
   assert.equal(convertData.status, 'converted_to_task');
   assert.equal(convertData.resolution_note, 'Task #999 created to address this feedback.');
+  assert.equal(convertData.task_ref, 'task #999');
+  assert.equal(convertData.task_status, 'in_review');
+
+  const actionableQueue = await call('surface_feedback_actionable_queue', {
+    caller_site_id: 'andrey-user',
+    limit: 10,
+  });
+  const actionableData = view(actionableQueue);
+  assert.equal(actionableData.schema, 'narada.surface_feedback.actionable_queue.v1');
+  assert.equal(actionableData.total_count, 1);
+  assert.equal(actionableData.count, 1);
+  assert.equal(actionableData.has_more, false);
+  assert.equal(actionableData.items[0].feedback_id, convertedId);
+  assert.equal(actionableData.items[0].actionability, 'task_follow_up');
+  assert.deepEqual(actionableData.items[0].task_link, {
+    task_ref: 'task #999',
+    lifecycle_state: 'in_review',
+    lifecycle_state_source: 'feedback_projection',
+  });
+
+  const actionableStranger = await call('surface_feedback_actionable_queue', {
+    caller_site_id: 'narada-revolution',
+    limit: 10,
+  });
+  assert.equal(view(actionableStranger).total_count, 0);
+
+  // --- convert_to_task: success, duplicate, visibility, and task-create failure ---
+  const handoffRoot = join(root, 'handoff');
+  const handoffCalls: string[] = [];
+  const handoffRequests: any[] = [];
+  let failHandoffTaskCreation = false;
+  let nextHandoffTaskNumber = 1982;
+  const handoffState = createServerState({
+    feedbackRoot: handoffRoot,
+    canonicalFeedbackRoot: handoffRoot,
+    taskLifecycleRequest: async (request: any) => {
+      handoffRequests.push(request);
+      const name = request.params?.name;
+      handoffCalls.push(name);
+      if (name === 'mcp_payload_create') {
+        return {
+          jsonrpc: '2.0',
+          id: request.id,
+          result: { structuredContent: { status: 'created', ref: 'mcp_payload:test-handoff@v1' } },
+        };
+      }
+      if (name === 'task_lifecycle_create') {
+        if (failHandoffTaskCreation) throw new Error('simulated_task_create_failure');
+        return {
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            structuredContent: {
+              schema: 'narada.task.create.v0',
+              status: 'created',
+              task_number: nextHandoffTaskNumber,
+              task_id: `20260711-${nextHandoffTaskNumber}-feedback-handoff-test`,
+              task_status: 'opened',
+            },
+          },
+        };
+      }
+      throw new Error(`unexpected_task_lifecycle_tool:${name}`);
+    },
+  });
+  try {
+    const failedSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'gap',
+      summary: 'Task creation failure remains unlinked',
+      details: 'The feedback must remain truthful when task creation fails.',
+    });
+    failHandoffTaskCreation = true;
+    const failedConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: view(failedSource).feedback_id,
+      caller_site_id: 'andrey-user',
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(errorCode(failedConversion), 'feedback_task_create_failed');
+    assert.equal(failedConversion.error.data.stage, 'task_lifecycle_create');
+    const failedReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: view(failedSource).feedback_id });
+    assert.equal(view(failedReadback).status, 'submitted');
+    assert.equal(view(failedReadback).task_ref, null);
+    assert.equal(view(failedReadback).task_status, null);
+    assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
+
+    failHandoffTaskCreation = false;
+    handoffCalls.length = 0;
+    const successSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'andrey-user',
+      submitter_principal: 'handoff-test',
+      kind: 'improvement',
+      summary: 'Create one linked task from feedback',
+      details: 'The successful conversion should return a lifecycle next action.',
+    });
+    const successFeedbackId = view(successSource).feedback_id;
+    const successConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: successFeedbackId,
+      caller_site_id: 'andrey-user',
+      resolved_by: 'handoff-test',
+    });
+    const successData = view(successConversion);
+    assert.equal(successData.schema, 'narada.surface_feedback.convert_to_task.v1');
+    assert.equal(successData.status, 'converted');
+    assert.equal(successData.task_ref, 'task #1982');
+    assert.equal(successData.task_number, 1982);
+    assert.equal(successData.task_status, 'opened');
+    assert.equal(successData.next_action.surface_id, 'task-lifecycle');
+    assert.equal(successData.next_action.tool, 'task_lifecycle_show');
+    assert.deepEqual(successData.next_action.arguments, { task_number: 1982 });
+    assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
+    assert.equal(handoffRequests[handoffRequests.length - 2].params.arguments.payload.idempotency_key, `surface-feedback:${successFeedbackId}`);
+
+    const handoffReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: successFeedbackId });
+    assert.equal(view(handoffReadback).status, 'converted_to_task');
+    assert.equal(view(handoffReadback).task_ref, 'task #1982');
+    assert.equal(view(handoffReadback).task_status, 'opened');
+    handoffCalls.length = 0;
+    const duplicateConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: successFeedbackId,
+      caller_site_id: 'andrey-user',
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(view(duplicateConversion).status, 'already_linked');
+    assert.equal(view(duplicateConversion).task_ref, 'task #1982');
+    assert.deepEqual(handoffCalls, []);
+
+    const privateSource = await callWith(handoffState, 'surface_feedback_submit', {
+      surface_id: 'surface-feedback',
+      submitter_site_id: 'narada-sonar',
+      submitter_principal: 'handoff-test',
+      kind: 'bug',
+      summary: 'Inaccessible feedback must not convert',
+    });
+    const blockedConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: view(privateSource).feedback_id,
+      caller_site_id: 'andrey-user',
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(errorCode(blockedConversion), 'feedback_not_visible');
+    const missingConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+      feedback_id: 'sfb_missing_convert',
+      caller_site_id: 'andrey-user',
+      resolved_by: 'handoff-test',
+    });
+    assert.equal(errorCode(missingConversion), 'feedback_not_found');
+  } finally {
+    handoffState.db.close();
+  }
 
   const batchA = await call('surface_feedback_submit', {
     surface_id: 'surface-feedback',
@@ -245,6 +399,15 @@ try {
       details: 'Submitted through a site-local store before canonical feedback root was configured.',
     });
     const localFeedbackId = view(siteLocalSubmit).feedback_id;
+    const localLinkUpdate = await callWith(siteLocalState, 'surface_feedback_update_status', {
+      feedback_id: localFeedbackId,
+      status: 'converted_to_task',
+      resolved_by: 'staccato.test',
+      resolution_note: 'Linked from site-local feedback.',
+      task_ref: 'task #88',
+      task_status: 'claimed',
+    });
+    assert.equal(view(localLinkUpdate).feedback.task_ref, 'task #88');
     const missingBeforeImport = await call('surface_feedback_show', { feedback_id: localFeedbackId });
     assert.equal(errorCode(missingBeforeImport), 'feedback_not_found');
 
@@ -263,6 +426,8 @@ try {
 
     const importedShow = await call('surface_feedback_show', { feedback_id: localFeedbackId });
     assert.equal(view(importedShow).summary, 'Local feedback is invisible to maintainers');
+    assert.equal(view(importedShow).task_ref, 'task #88');
+    assert.equal(view(importedShow).task_status, 'claimed');
     assert.equal(view(importedShow).store.uses_canonical_store, true);
 
     const duplicateImport = await call('surface_feedback_import', {

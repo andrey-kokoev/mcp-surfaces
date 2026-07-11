@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -146,6 +146,25 @@ try {
   writeTask(9212, disabledReviewTaskId, 'in_review');
   const legacyFinishOnlyReviewTaskId = '20260604-9224-legacy-finish-only-review';
   writeTask(9224, legacyFinishOnlyReviewTaskId, 'in_review');
+  const invalidCompatibilityParentTaskId = '20260604-9230-invalid-compatibility-review';
+  writeTask(9230, invalidCompatibilityParentTaskId, 'in_review');
+  const existingCompatibilityParentTaskId = '20260604-9231-existing-compatibility-parent';
+  writeTask(9231, existingCompatibilityParentTaskId, 'in_review');
+  const existingCompatibilityReviewTaskId = '20260604-9232-existing-compatibility-review';
+  writeTask(9232, existingCompatibilityReviewTaskId, 'opened');
+  writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', `${existingCompatibilityReviewTaskId}.md`), `---
+number: 9232
+governed_by: review
+status: opened
+compatibility_record: true
+---
+
+# Existing compatibility projection
+
+## Acceptance Criteria
+
+- [ ] Existing criterion must be repaired.
+`, 'utf8');
   const blockingDependencyParentTaskId = '20260604-9213-blocking-dependency-parent';
   writeTask(9213, blockingDependencyParentTaskId, 'in_review');
   const blockingDependencyReviewTaskId = '20260604-9214-blocking-dependency-review';
@@ -271,6 +290,69 @@ try {
         updated_at: '2026-06-04T00:00:00Z',
       });
     }
+    for (const [taskId, taskNumber] of [[invalidCompatibilityParentTaskId, 9230], [existingCompatibilityParentTaskId, 9231]] as const) {
+      store.upsertLifecycle({
+        task_id: taskId,
+        task_number: taskNumber,
+        status: 'in_review',
+        governed_by: 'builder',
+        closed_at: null,
+        closed_by: null,
+        closure_mode: null,
+        reopened_at: null,
+        reopened_by: null,
+        continuation_packet_json: null,
+        updated_at: '2026-06-04T00:00:00Z',
+      });
+    }
+    store.upsertLifecycle({
+      task_id: existingCompatibilityReviewTaskId,
+      task_number: 9232,
+      status: 'opened',
+      governed_by: 'review',
+      closed_at: null,
+      closed_by: null,
+      closure_mode: null,
+      reopened_at: null,
+      reopened_by: null,
+      continuation_packet_json: null,
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertTaskSpec({
+      task_id: existingCompatibilityReviewTaskId,
+      task_number: 9232,
+      title: 'Preserved compatibility task spec',
+      chapter_markdown: 'Preserved chapter.',
+      goal_markdown: 'Preserved goal.',
+      context_markdown: 'Preserved context.',
+      required_work_markdown: 'Preserved required work.',
+      non_goals_markdown: 'Preserved non-goals.',
+      acceptance_criteria_json: JSON.stringify(['Preserved criterion.']),
+      dependencies_json: JSON.stringify(['preserved-dependency']),
+      updated_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertTaskDependency({
+      dependency_id: 'dep-existing-compatibility-9231-9232',
+      parent_task_id: existingCompatibilityParentTaskId,
+      required_task_id: existingCompatibilityReviewTaskId,
+      kind: 'review',
+      satisfying_outcomes_json: JSON.stringify(['accepted', 'accepted_with_notes']),
+      status: 'open',
+      created_by: 'test',
+      created_at: '2026-06-04T00:00:00Z',
+    });
+    store.upsertTaskOutcomeContract({
+      contract_id: 'contract-existing-compatibility-9232',
+      task_id: existingCompatibilityReviewTaskId,
+      outcome_type: 'review',
+      allowed_outcomes_json: JSON.stringify(['accepted', 'accepted_with_notes', 'rejected']),
+      satisfying_outcomes_json: JSON.stringify(['accepted', 'accepted_with_notes']),
+      blocking_outcomes_json: JSON.stringify(['rejected']),
+      required_fields_json: JSON.stringify(['summary']),
+      capability_requirement: 'review',
+      created_by: 'test',
+      created_at: '2026-06-04T00:00:00Z',
+    });
     store.upsertLifecycle({
       task_id: blockingDependencyParentTaskId,
       task_number: 9213,
@@ -952,6 +1034,59 @@ try {
   assert.ok(Array.isArray(unauthorizedReviewPayload.eligible_alternative_agents));
   assert.ok(unauthorizedReviewPayload.eligible_alternative_agents.some((r) => r.agent_id === 'smart-scheduling.architect'));
 
+  // Invalid compatibility outcomes must not allocate or materialize a dependency node.
+  const reviewInvariantStore = openTaskLifecycleStore(siteRoot);
+  const invalidCompatibilityMaxTaskNumber = (reviewInvariantStore.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get() as { max_task_number: number }).max_task_number;
+  const invalidCompatibilityResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 30005,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_review',
+      arguments: {
+        task_number: 9230,
+        agent_id: 'smart-scheduling.architect',
+        verdict: 'not-a-review-outcome',
+      },
+    },
+  }, architectRuntime);
+  const invalidCompatibilityPayload = await responsePayload(invalidCompatibilityResponse, architectRuntime, 30006);
+  assert.equal(invalidCompatibilityPayload.status, 'error');
+  assert.equal(invalidCompatibilityPayload.schema, 'narada.task.mcp.validation_error.v0');
+  assert.equal(invalidCompatibilityPayload.validation_errors[0].field, 'verdict');
+  assert.equal(reviewInvariantStore.listTaskDependenciesForParent(invalidCompatibilityParentTaskId).length, 0);
+  assert.equal((reviewInvariantStore.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get() as { max_task_number: number }).max_task_number, invalidCompatibilityMaxTaskNumber);
+
+  // Existing compatibility projections preserve their authoritative spec and repair only missing evidence.
+  const existingCompatibilityResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 30007,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_review',
+      arguments: {
+        task_number: 9231,
+        agent_id: 'smart-scheduling.architect',
+        verdict: 'accepted',
+        auto_accept_single_operator: true,
+      },
+    },
+  }, architectRuntime);
+  const existingCompatibilityPayload = await responsePayload(existingCompatibilityResponse, architectRuntime, 30008);
+  const existingOutcome = existingCompatibilityPayload.review_compatibility_dependency_outcome;
+  assert.equal(existingCompatibilityPayload.status, 'success');
+  assert.equal(existingOutcome.review_task.task_number, 9232);
+  assert.equal(existingOutcome.review_task_projection.status, 'preserved_or_repaired');
+  assert.equal(reviewInvariantStore.getTaskSpecByNumber(9232).title, 'Preserved compatibility task spec');
+  assert.equal(reviewInvariantStore.getTaskSpecByNumber(9232).dependencies_json, JSON.stringify(['preserved-dependency']));
+  const repairedExistingCompatibilityFile = readFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', `${existingCompatibilityReviewTaskId}.md`), 'utf8');
+  assert.match(repairedExistingCompatibilityFile, /# Existing compatibility projection/);
+  assert.match(repairedExistingCompatibilityFile, /## Execution Notes/);
+  assert.match(repairedExistingCompatibilityFile, /## Verification/);
+  assert.match(repairedExistingCompatibilityFile, /- \[x\] Existing criterion must be repaired\./);
+  assert.doesNotMatch(repairedExistingCompatibilityFile, /- \[ \] Existing criterion/);
+  reviewInvariantStore.db.close();
+
   // 3. Review compatibility by the sole reviewer admits a dependency outcome in one call.
   const autoAcceptResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -981,6 +1116,60 @@ try {
   assert.equal(autoAcceptPayload.review_compatibility_dependency_outcome.parent_dependency_wait_status.new_status, 'awaiting_dependencies');
   assert.equal(autoAcceptPayload.review_compatibility_dependency_outcome.dependency_satisfaction.all_satisfied, true);
   assert.equal(autoAcceptPayload.review_compatibility_dependency_outcome.conflict_policy_evidence[0].annotation_recorded, true);
+  const compatibilityReviewTaskNumber = autoAcceptPayload.review_compatibility_dependency_outcome.review_task.task_number;
+  assert.equal(autoAcceptPayload.review_compatibility_dependency_outcome.review_task_projection.status, 'materialized');
+  assert.equal(autoAcceptPayload.review_compatibility_dependency_outcome.review_task_projection.record_kind, 'compatibility_review_task');
+  const compatibilityReviewInspectResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 600,
+    method: 'tools/call',
+    params: { name: 'task_lifecycle_inspect', arguments: { task_number: compatibilityReviewTaskNumber } },
+  }, architectRuntime);
+  const compatibilityReviewInspect = await responsePayload(compatibilityReviewInspectResponse, architectRuntime, 6001);
+  assert.equal(compatibilityReviewInspect.lifecycle.status, 'closed');
+  assert.equal(compatibilityReviewInspect.evidence.verdict, 'complete');
+  assert.equal(compatibilityReviewInspect.evidence.has_execution_notes, true);
+  assert.equal(compatibilityReviewInspect.evidence.has_verification, true);
+  assert.equal(compatibilityReviewInspect.evidence.all_criteria_checked, true);
+  assert.equal(compatibilityReviewInspect.evidence_preflight.status, 'ready');
+  assert.equal(compatibilityReviewInspect.evidence_preflight.blockers.length, 0);
+  assert.equal(compatibilityReviewInspect.lifecycle.closed_at !== null, true);
+  assert.equal(compatibilityReviewInspect.lifecycle.closed_by, 'smart-scheduling.architect');
+  assert.equal(compatibilityReviewInspect.lifecycle.closure_mode, 'peer_reviewed');
+
+  const reconciliationStore = openTaskLifecycleStore(siteRoot);
+  try {
+    reconciliationStore.db.prepare('DELETE FROM task_specs WHERE task_id = ?').run(compatibilityReviewInspect.task_id);
+  } finally {
+    reconciliationStore.db.close();
+  }
+  rmSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', `${compatibilityReviewInspect.task_id}.md`), { force: true });
+  const reconciliationDryRunResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 603,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_compatibility_reconcile',
+      arguments: { agent_id: 'smart-scheduling.architect', task_numbers: [compatibilityReviewTaskNumber], dry_run: true },
+    },
+  }, architectRuntime);
+  const reconciliationDryRun = await responsePayload(reconciliationDryRunResponse, architectRuntime, 604);
+  assert.equal(reconciliationDryRun.status, 'ok');
+  assert.equal(reconciliationDryRun.results[0].status, 'planned');
+  assert.equal(existsSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', `${compatibilityReviewInspect.task_id}.md`)), false);
+  const reconciliationResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 605,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_compatibility_reconcile',
+      arguments: { agent_id: 'smart-scheduling.architect', task_numbers: [compatibilityReviewTaskNumber] },
+    },
+  }, architectRuntime);
+  const reconciliationPayload = await responsePayload(reconciliationResponse, architectRuntime, 606);
+  assert.equal(reconciliationPayload.status, 'ok', JSON.stringify(reconciliationPayload));
+  assert.equal(reconciliationPayload.results[0].status, 'reconciled');
+  assert.equal(existsSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', `${compatibilityReviewInspect.task_id}.md`)), true);
   const migratedReviewShowResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 601,
