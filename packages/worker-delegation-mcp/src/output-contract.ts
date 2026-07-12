@@ -7,7 +7,7 @@ export type WorkerVerificationCommandClassification = 'focused' | 'broad' | 'not
 export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string; command_classification: WorkerVerificationCommandClassification };
 export type WorkerBroadUnrelatedFailure = { command: string | null; status: string; summary: string };
 export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null };
+export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null; review_verdict: string | null; acceptance_verdict: string | null; verdict: string | null };
 export type WorkerOutputParseResult =
   | { ok: true; data: WorkerOutput }
   | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
@@ -62,6 +62,9 @@ export function workerOutputFromAgentMessage(message: string): WorkerOutput {
     verification_budget_respected: null,
     broad_unrelated_failures: [],
     exit_interview: null,
+    review_verdict: null,
+    acceptance_verdict: null,
+    verdict: null,
   };
 }
 
@@ -89,7 +92,7 @@ export function workerOutputSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -113,6 +116,9 @@ export function workerOutputSchema(): Record<string, unknown> {
         },
         additionalProperties: false,
       },
+      review_verdict: { type: ['string', 'null'] },
+      acceptance_verdict: { type: ['string', 'null'] },
+      verdict: { type: ['string', 'null'] },
     },
   };
 }
@@ -207,6 +213,14 @@ function normalizeWorkerOutput(value: unknown, options: { strict: boolean }): Wo
   if (broadUnrelatedFailures.length !== broadUnrelatedFailuresRaw.length) return { ok: false, reason: 'invalid_shape', message: 'broad_unrelated_failures entries must have nullable string command plus string status and summary' };
   const exitInterview = record.exit_interview === undefined || record.exit_interview === null ? null : asExitInterview(record.exit_interview);
   if (record.exit_interview !== undefined && record.exit_interview !== null && !exitInterview) return { ok: false, reason: 'invalid_shape', message: 'exit_interview must be null or include ergonomics_feedback, friction_points, missing_affordances, observed_incoherencies, and suggested_improvements' };
+  const optionalString = (key: string): string | null | undefined => {
+    if (record[key] === undefined || record[key] === null) return null;
+    return typeof record[key] === 'string' ? record[key] as string : undefined;
+  };
+  const reviewVerdict = optionalString('review_verdict');
+  const acceptanceVerdict = optionalString('acceptance_verdict');
+  const verdict = optionalString('verdict');
+  if (reviewVerdict === undefined || acceptanceVerdict === undefined || verdict === undefined) return { ok: false, reason: 'invalid_shape', message: 'review_verdict, acceptance_verdict, and verdict must be strings or null' };
   return {
     ok: true,
     data: {
@@ -221,6 +235,9 @@ function normalizeWorkerOutput(value: unknown, options: { strict: boolean }): Wo
       verification_budget_respected: verificationBudgetRespected,
       broad_unrelated_failures: broadUnrelatedFailures,
       exit_interview: exitInterview,
+      review_verdict: reviewVerdict,
+      acceptance_verdict: acceptanceVerdict,
+      verdict,
     },
   };
 }

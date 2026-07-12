@@ -97,6 +97,31 @@ Common flags:
 - `--max-parallel-runs <count>`: maximum simultaneous worker runs, default `10`; enforced for `worker_run`, `worker_edit`, and `worker_resume`.
 - `--max-run-ms <ms>`, `--max-prompt-bytes <bytes>`, `--max-output-bytes <bytes>`: set limits.
 
+## E2E Coverage
+
+The package has two explicit real-boundary delegation proofs:
+
+- `test/real-carrier-e2e.test.ts` is the controlled L4 proof. It starts the
+  built worker-delegation MCP child, uses the production
+  `narada-agent-runtime-server` carrier, calls a bounded local HTTP provider
+  fixture, and verifies provider requests, lifecycle events, durable run
+  artifacts, and cleanup.
+- Narada's
+  `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` is the
+  controlled L5 proof. It starts the real launcher, carrier, Site-local MCP
+  fabric, `nars-session-mcp`, delegated-task MCP, and worker carrier, then
+  verifies durable task and worker evidence.
+
+Run the L4 proof with:
+
+```powershell
+pnpm --filter @narada2/worker-delegation-mcp test:e2e:carrier
+```
+
+The L4/L5 proofs use a bounded local provider fixture. They prove the local
+production topology and carrier protocol, not live external-provider account
+authority.
+
 Provider registry cognition defaults are provider-specific. For `narada-agent-runtime-server`, resolution precedence is:
 
 1. Request override: `constraints.overrides.model`, `constraints.overrides.reasoning_effort`, or admitted config keys.

@@ -68,6 +68,16 @@ assert.deepEqual(structuredVerificationWorkerOutput?.verification, [{
   command_classification: 'focused',
 }]);
 
+const reviewedWorkerOutput = parseWorkerOutputJson(JSON.stringify({
+  summary: 'review output accepted',
+  review_verdict: 'accepted',
+  acceptance_verdict: 'passed',
+  verdict: 'accepted',
+}));
+assert.equal(reviewedWorkerOutput?.review_verdict, 'accepted');
+assert.equal(reviewedWorkerOutput?.acceptance_verdict, 'passed');
+assert.equal(reviewedWorkerOutput?.verdict, 'accepted');
+
 const plainWorkerOutput = workerOutputFromAgentMessage('plain assistant fallback');
 assert.equal(plainWorkerOutput.summary, 'plain assistant fallback');
 assert.equal(plainWorkerOutput.edits_performed, false);

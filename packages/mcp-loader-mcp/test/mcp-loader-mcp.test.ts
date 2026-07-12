@@ -214,7 +214,8 @@ try {
   const feedbackArgs = feedbackAttach?.args as string[];
   assert.equal(feedbackArgs[feedbackArgs.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
   assert.equal(feedbackArgs.includes(root), false);
-  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: feedbackAttach?.connection_id } }, 8);
+  const feedbackDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: feedbackAttach?.connection_id } }, 8);
+  assert.equal(feedbackDetach?.termination?.status, 'terminated');
 
   const fabricAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable' } }, 18);
   assert.equal(fabricAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
@@ -222,7 +223,8 @@ try {
   assert.deepEqual(fabricAttach?.args, ['--site-root', root, '--marker', 'fabric']);
   const fabricCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { n: 0 } } }, 19);
   assert.deepEqual(fabricCall?.result?.structuredContent?.child_args, ['--site-root', root, '--marker', 'fabric']);
-  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
+  const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
+  assert.equal(fabricDetach?.termination?.status, 'terminated');
 
   const restartableAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable', entrypoint: restartableEntrypoint } }, 11);
   assert.equal(restartableAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
@@ -240,12 +242,14 @@ try {
   assert.notEqual(restart?.connection_id, oldConnectionId);
   assert.equal(restart?.previous_connection?.status, 'live');
   assert.equal(restart?.replacement_connection?.status, 'live');
+  assert.equal(restart?.termination?.status, 'terminated');
   const oldCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: oldConnectionId, tool_name: 'echo', arguments: {} } }, 15);
   assert.equal(oldCall?.data?.code, 'connection_not_found');
   const replacementCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: restart?.connection_id, tool_name: 'echo', arguments: { n: 2 } } }, 16);
   assert.equal(replacementCall?.schema, 'narada.mcp_loader.tool_result.v1');
   assert.notEqual(replacementCall?.result?.structuredContent?.pid, firstPid);
-  await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: restart?.connection_id } }, 17);
+  const replacementDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: restart?.connection_id } }, 17);
+  assert.equal(replacementDetach?.termination?.status, 'terminated');
 
   console.log('mcp-loader-mcp behavior ok');
 } finally {

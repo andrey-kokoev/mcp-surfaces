@@ -21,6 +21,7 @@
     "test": "pnpm build && node dist/test/run-tests.js",
     "test:e2e:edit": "pnpm --filter @narada2/local-filesystem-mcp build && pnpm build && node dist/test/live-edit-e2e.test.js",
     "test:e2e:site-fabric": "pnpm --filter @narada2/local-filesystem-mcp build && pnpm --filter @narada2/mcp-loader-mcp build && pnpm build && node dist/test/site-fabric-provider-e2e.test.js",
+    "test:e2e:carrier": "pnpm build && node dist/test/real-carrier-e2e.test.js",
     "test:coverage": "pnpm build && c8 --all --src=dist/src --include=dist/src/**/*.js --temp-directory=.tmp/c8 --reporter=text --check-coverage --statements=88 --lines=88 --branches=76 --functions=93 node dist/test/run-tests.js",
     "test:coverage:cognition": "pnpm build && c8 --all --src=dist/src --include=dist/src/cognition-defaults.js --temp-directory=.tmp/c8-cognition --reporter=text --check-coverage --statements=96 --lines=96 --branches=77 --functions=100 node dist/test/cognition-defaults.test.js"
   },

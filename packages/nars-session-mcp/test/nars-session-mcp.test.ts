@@ -197,9 +197,13 @@ function fakeNarsWebSocket(socket: Socket) {
     }
     if (request.method === 'carrier.input.deliver') {
       socket.write(serverFrame({
-        event: 'input_event_queued',
-        request_id: request.id,
-        payload: { input_event_id: input.event_id, queue_state: 'queued_for_turn_boundary' },
+        event: 'session_event',
+        payload: {
+          event: 'input_event_queued',
+          request_id: request.id,
+          input_event_id: input.event_id,
+          queue_state: 'queued_for_turn_boundary',
+        },
       }));
     }
   });

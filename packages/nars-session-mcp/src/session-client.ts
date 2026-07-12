@@ -558,6 +558,10 @@ function isErrorMessage(message: JsonRecord) {
 }
 
 function eventNameOf(message: JsonRecord) {
+  if (message.event === 'session_event') {
+    const payload = asRecord(message.payload);
+    if (payload.event || payload.event_kind || payload.type) return eventNameOf(payload);
+  }
   return String(message.event ?? message.event_kind ?? message.type ?? '');
 }
 

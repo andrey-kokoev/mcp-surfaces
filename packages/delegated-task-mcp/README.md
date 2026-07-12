@@ -92,6 +92,8 @@ Cancellation marks the delegated task cancelled and annotates running child work
 
 The live worker integration test is separate from deterministic tests. It skips with a diagnostic when the local Codex runtime is unavailable, and passes when a real worker can be launched through `worker-delegation-mcp`.
 
+The Site-fabric E2E test (`test/site-fabric-worker-e2e.test.ts`) is the bounded local production-boundary proof. It starts the built `mcp-loader-mcp` child, attaches the built delegated-task surface from generated Site fabric, runs a task through a real worker-runtime child, and verifies MCP admission, policy binding, durable task/event records, worker artifacts, review acceptance, and child cleanup. It uses a deterministic controlled runtime authority. The controlled L5 launcher proof lives in Narada at `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs`; it crosses the real launcher, local NARS carrier, Site fabric, `nars-session-mcp`, delegated-task surface, worker carrier, and durable evidence boundary. Neither proof claims live external-provider account authority.
+
 ## Condition Language
 
 Step transitions and gate conditions use a small expression language (not arbitrary code). Malformed expressions are rejected by `delegated_task_validate` before workers launch.
@@ -129,4 +131,5 @@ Step transitions and gate conditions use a small expression language (not arbitr
 ```powershell
 pnpm --filter @narada2/delegated-task-mcp test
 pnpm --filter @narada2/delegated-task-mcp test:live
+pnpm --filter @narada2/delegated-task-mcp test:e2e:site-fabric
 ```

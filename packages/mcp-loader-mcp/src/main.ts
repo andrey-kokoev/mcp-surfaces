@@ -621,15 +621,16 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
   };
 }
 
-function detachConnection(args: JsonRecord, state: LoaderState): JsonRecord {
+async function detachConnection(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
   const connection = getConnection(args, state);
-  terminateConnection(connection);
+  const termination = await terminateConnection(connection);
   state.connections.delete(connection.connectionId);
   return {
     schema: 'narada.mcp_loader.detached.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
     status: 'detached',
+    termination,
   };
 }
 
@@ -637,7 +638,7 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
   const connection = getConnection(args, state);
   const previous = connectionStatusFields(connection);
   const previousConnectionId = connection.connectionId;
-  terminateConnection(connection);
+  const termination = await terminateConnection(connection);
   state.connections.delete(previousConnectionId);
   const replacement = await openConnection({
     state,
@@ -659,6 +660,7 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
     surface_id: replacement.surfaceId,
     entrypoint: replacement.entrypoint,
     args: replacement.args,
+    termination,
     server_info: replacement.serverInfo,
     tools: replacement.toolSnapshot,
   };
@@ -960,16 +962,43 @@ function cleanupConnection(connection: ChildConnection) {
   connection.pending.clear();
 }
 
-function terminateConnection(connection: ChildConnection) {
+async function terminateConnection(connection: ChildConnection): Promise<JsonRecord> {
   connection.detached = true;
   connection.detachedAt = new Date().toISOString();
   const proc = connection.process;
-  if (!proc.killed && proc.exitCode === null) {
-    proc.kill('SIGTERM');
-    setTimeout(() => {
-      if (!proc.killed && proc.exitCode === null) proc.kill('SIGKILL');
-    }, 5000);
+  if (proc.exitCode !== null || proc.signalCode !== null) return { status: 'already_exited', exit_code: proc.exitCode, signal: proc.signalCode, forced: false };
+  const graceful = await signalAndWaitForChild(proc, 'SIGTERM', 5000);
+  if (graceful) return { status: 'terminated', exit_code: proc.exitCode, signal: proc.signalCode, forced: false };
+  const forced = await signalAndWaitForChild(proc, 'SIGKILL', 1000);
+  return { status: forced ? 'terminated' : 'termination_timeout', exit_code: proc.exitCode, signal: proc.signalCode, forced: true };
+}
+
+async function signalAndWaitForChild(proc: ChildProcess, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return true;
+  const close = waitForChildClose(proc, timeoutMs);
+  try {
+    proc.kill(signal);
+  } catch {
+    // The close wait still observes a concurrent natural exit.
   }
+  return close;
+}
+
+function waitForChildClose(proc: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    const finish = (closed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      proc.off('close', onClose);
+      resolvePromise(closed);
+    };
+    const onClose = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    proc.once('close', onClose);
+  });
 }
 
 function connectionStatusFields(connection: ChildConnection): JsonRecord {

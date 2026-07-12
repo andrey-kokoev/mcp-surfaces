@@ -53,8 +53,8 @@ Each debt item should name the missing level explicitly.
 | Surface | Existing test | Honest classification | What it does not prove |
 | --- | --- | --- | --- |
 | `site-loop-mcp` | `test/site-loop-live-e2e.test.ts` | L1, isolated temporary Site | Production scheduler, resident carrier, real Site registry, and unattended recovery |
-| `delegated-task-mcp` | `test/live-worker-integration.test.ts` | L1-style orchestration test; deterministic path injects a worker failure | Real worker runtime by default; provider path is opt-in and environment-dependent |
-| `worker-delegation-mcp` | [`test/live-edit-e2e.test.ts`](../packages/worker-delegation-mcp/test/live-edit-e2e.test.ts), [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) | L1-L3 edit proof plus L2 loader admission and provider/model/thinking binding through a controlled provider registry and real worker runtime child | External provider service/carrier behavior; the provider test deliberately uses a no-credential fixture authority |
+| `delegated-task-mcp` | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts), `test/live-worker-integration.test.ts`, Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` | L1-L3 Site-fabric delegation proof plus L5 launcher-to-carrier workflow through the actual launcher, NARS carrier, `nars-session-mcp`, delegated-task child, worker carrier, and controlled provider; verifies task/event persistence, review acceptance, binding evidence, negative admission, durable worker artifacts, and cleanup | External provider service behavior remains separate; both controlled tests use a bounded local HTTP provider fixture |
+| `worker-delegation-mcp` | [`test/live-edit-e2e.test.ts`](../packages/worker-delegation-mcp/test/live-edit-e2e.test.ts), [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts), [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) | L1-L3 edit and Site-fabric proofs plus L4 real `narada-agent-runtime-server` carrier execution through the built MCP child; verifies provider request, model/reasoning binding, lifecycle events, durable run artifacts, refusal, and cleanup | External provider service behavior; the L4 test deliberately uses a bounded local HTTP fixture authority |
 | `surface-feedback-mcp` | `test/surface-feedback-task-lifecycle-integration.test.ts` | In-process multi-Site integration test | Real MCP child transport and real registrar/loader fabric |
 | `task-lifecycle-mcp` | `stdio-smoke.test.ts`, `protocol-smoke.test.ts`, `inbox-bridge.test.ts` and review regressions | L1-adjacent and domain integration | A carrier-launched Site session and real external delivery |
 | all other surfaces | Package tests and protocol smoke tests | Unit, contract, or protocol coverage | Real child-process Site-bound workflows unless listed below |
@@ -70,6 +70,14 @@ binding and projection through the admitted worker runtime. External provider
 or carrier execution is a separate L4/L5 concern and is not claimed by this
 controlled fixture.
 
+Controlled L4/L5 coverage is now present for delegation. The worker L4 test
+uses the production `narada-agent-runtime-server` carrier with a bounded local
+HTTP provider fixture. The Narada Agent Web UI L5 test starts the real launcher,
+carrier, Site-local MCP fabric, `nars-session-mcp`, delegated-task surface, and
+worker carrier, then verifies durable task and worker artifacts. These tests
+prove the local production topology and carrier protocol; they do not claim
+live external-provider authority.
+
 | Priority | Surface | Missing real boundary | Required proof | Status |
 | --- | --- | --- | --- | --- |
 | P0 | `site-loop-mcp` | Production Site Loop operation | Start the configured supervisor or sanctioned scheduler path, run one bounded pass, prove resident delivery, durable run outcome, recovery state, and cleanup | missing |
@@ -77,8 +85,9 @@ controlled fixture.
 | P0 | `mcp-registrar` | Registry-to-live-surface conformance | Generate a Site fabric, load every declared surface through the loader, compare tools/list with admission metadata, and fail on drift | partial |
 | P0 | `mcp-loader-mcp` | Runtime attachment workflow | Attach a declared surface from generated Site fabric, call it through the proxy, inspect child health, replace it, and detach it | partial |
 | P0 | `launcher-mcp` | Launcher-to-carrier inheritance | Start a carrier through the launcher, verify selected Site/User Site MCP inheritance, process ownership, hidden child posture, and clean teardown | missing |
-| P0 | `delegated-task-mcp` | Real worker runtime | Run a bounded delegated task through the admitted worker surface with a real worker runtime, then verify result, evidence, and cleanup | partial |
-| P0 | `worker-delegation-mcp` | Provider and cognition binding | [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) launches the Site-fabric-admitted worker child, runs all three controlled cognition profiles, reads bounded producer output, and asserts resolved provider/model/thinking, policy binding, result metadata, edit proof, refusal, and cleanup | complete |
+| P0 | `delegated-task-mcp` | Real worker runtime and launcher workflow | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts) proves the L1-L3 Site-fabric boundary; Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` proves the L5 launcher/carrier/Site-fabric/delegated-task/worker/artifact workflow with a controlled provider | complete |
+| P0 | `worker-delegation-mcp` | Provider/cognition binding and real carrier | [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) proves controlled provider binding; [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) proves L4 execution through the production NARS carrier and durable artifacts | complete |
+| P0 | `worker-delegation-mcp` | External provider authority | Run the L4 carrier proof against an explicitly admitted external provider account or controlled tenant and retain bounded provider evidence without weakening credential or mutation policy | missing |
 | P1 | `local-filesystem-mcp` | Real governed filesystem child | Start the surface through Site fabric, exercise read/write/reader boundaries, timeout behavior, allowed roots, and refusal evidence | missing |
 | P1 | `structured-command-mcp` | Real command policy boundary | Start the child, run admitted argv commands, verify bounded stdout/stderr paging, timeout behavior, refusal classification, and no shell escape | missing |
 | P1 | `git-mcp` | Real repository publication path | Use a disposable repository and verify status/diff/add/commit/push policy through the MCP child, including refusal and cleanup | missing |

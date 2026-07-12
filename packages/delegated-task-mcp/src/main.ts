@@ -185,7 +185,16 @@ export function createServerState(options: JsonRecord = {}): State {
   if (!allowedRoots.some((root) => taskRoot === root || inside(taskRoot, root))) {
     throw diag('delegated_task_root_outside_allowed_roots', 'delegated_task_root_outside_allowed_roots', { task_root: taskRoot, allowed_roots: allowedRoots });
   }
-  const workerPolicyOptions = rec(options.workerPolicy);
+  const configuredWorkerPolicy = typeof options.workerPolicyConfig === 'string'
+    ? options.workerPolicyConfig
+    : typeof rec(options.workerPolicy).config === 'string' ? String(rec(options.workerPolicy).config) : null;
+  if (configuredWorkerPolicy && !pathWithinAnyRoot(configuredWorkerPolicy, allowedRoots)) {
+    throw diag('delegated_task_worker_policy_config_outside_allowed_roots', 'delegated_task_worker_policy_config_outside_allowed_roots', { config_path: configuredWorkerPolicy, allowed_roots: allowedRoots });
+  }
+  const workerPolicyOptions = {
+    ...rec(options.workerPolicy),
+    ...(configuredWorkerPolicy ? { config: resolve(configuredWorkerPolicy) } : {}),
+  };
   const workerState: WorkerMcpState = {
     policy: createWorkerPolicy({ runRoot: resolve(siteControlRoot(taskRoot), 'runtime', 'worker-delegation'), ...providerPolicyDefaults, ...workerPolicyOptions, allowedRoots }),
     env: stateEnv,
@@ -2819,7 +2828,7 @@ function render(result: JsonRecord): string { return [`delegated_task: ${result.
 function drainJsonLines(buffer: string) { const lines = buffer.split(/\r?\n/); return { framed: false, remaining: lines.pop() ?? '', requests: lines.filter((line) => line.trim()).map((line) => rec(JSON.parse(line))) }; }
 function drainJsonRpcFrames(buffer: string) { const requests: JsonRecord[] = []; let remaining = buffer; while (true) { const headerEnd = remaining.indexOf('\r\n\r\n'); if (headerEnd < 0) break; const match = /Content-Length:\s*(\d+)/i.exec(remaining.slice(0, headerEnd)); if (!match) break; const start = headerEnd + 4; const end = start + Number(match[1]); if (remaining.length < end) break; requests.push(rec(JSON.parse(remaining.slice(start, end)))); remaining = remaining.slice(end); } return { framed: true, remaining, requests }; }
 function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolean }) { const body = JSON.stringify(response); if (framed) process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`); else process.stdout.write(`${body}\n`); }
-function parseArgs(argv: string[]) { const options: JsonRecord = {}; const allowedRoots: string[] = []; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--task-root') options.taskRoot = argv[++i]; else if (arg === '--output-root') options.outputRoot = argv[++i]; else if (arg === '--site-root') options.siteRoot = argv[++i]; else if (arg === '--site-id') options.siteId = argv[++i]; else if (arg === '--allowed-root') allowedRoots.push(argv[++i]); else throw new Error(`unknown_argument:${arg}`); } if (allowedRoots.length) options.allowedRoots = allowedRoots; return options; }
+function parseArgs(argv: string[]) { const options: JsonRecord = {}; const allowedRoots: string[] = []; for (let i = 0; i < argv.length; i += 1) { const arg = argv[i]; if (arg === '--task-root') options.taskRoot = argv[++i]; else if (arg === '--output-root') options.outputRoot = argv[++i]; else if (arg === '--site-root') options.siteRoot = argv[++i]; else if (arg === '--site-id') options.siteId = argv[++i]; else if (arg === '--allowed-root') allowedRoots.push(argv[++i]); else if (arg === '--worker-policy-config') { const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('missing value for --worker-policy-config'); options.workerPolicyConfig = value; } else throw new Error(`unknown_argument:${arg}`); } if (allowedRoots.length) options.allowedRoots = allowedRoots; return options; }
 function sleep(ms: number): Promise<void> { return new Promise((resolveDelay) => setTimeout(resolveDelay, ms)); }
 
 export async function runStdioServer(options: JsonRecord = {}): Promise<void> { const state = createServerState(options); let buffer = ''; let framed = false; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) { buffer += chunk; const drained = /^Content-Length:/i.test(buffer) ? drainJsonRpcFrames(buffer) : drainJsonLines(buffer); framed ||= drained.framed; buffer = drained.remaining; for (const request of drained.requests) { const response = await handleRequest(request, state); if (response) writeJsonRpcResponse(response, { framed }); } } }
