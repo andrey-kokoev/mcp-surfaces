@@ -62,6 +62,11 @@ process.stdin.on('data', (chunk) => {
       args: [restartableEntrypoint, '--site-root', root, '--marker', 'fabric'],
       tools: ['echo'],
     },
+    'absolute-node': {
+      command: process.execPath,
+      args: [restartableEntrypoint, '--site-root', root, '--marker', 'absolute'],
+      tools: ['echo'],
+    },
     'restartable-drift': {
       command: 'node',
       args: [restartableEntrypoint, '--site-root', root, '--marker', 'drift'],
@@ -260,6 +265,13 @@ try {
   assert.deepEqual(fabricCall?.result?.structuredContent?.child_args, ['--site-root', root, '--marker', 'fabric']);
   const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
   assert.equal(fabricDetach?.termination?.status, 'terminated');
+
+  const absoluteNodeAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'absolute-node' } }, 33);
+  assert.equal(absoluteNodeAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  assert.equal(absoluteNodeAttach?.entrypoint, restartableEntrypoint.replace(/\\/g, '/'));
+  assert.deepEqual(absoluteNodeAttach?.args, ['--site-root', root, '--marker', 'absolute']);
+  const absoluteNodeDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: absoluteNodeAttach?.connection_id } }, 34);
+  assert.equal(absoluteNodeDetach?.termination?.status, 'terminated');
 
   const restartableAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable', entrypoint: restartableEntrypoint } }, 11);
   assert.equal(restartableAttach?.schema, 'narada.mcp_loader.surface_attached.v1');

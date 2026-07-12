@@ -733,6 +733,11 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
 }
 
 function extractNodeEntrypoint(command: string, args: string[]): string | null {
+  const normalizedCommand = normalizePath(command.trim());
+  const commandBaseName = normalizedCommand.slice(normalizedCommand.lastIndexOf('/') + 1).toLowerCase();
+  if (commandBaseName === 'node' || commandBaseName === 'node.exe' || commandBaseName === 'node.cmd') {
+    return args.find((arg) => /\.m?js$/i.test(arg) || /\.cjs$/i.test(arg)) ?? null;
+  }
   const commandEntrypoint = command.replace(/^node\s+--import\s+tsx\s+/i, '').replace(/^node\s+/i, '').trim();
   if (commandEntrypoint && commandEntrypoint !== 'node') return commandEntrypoint;
   return args.find((arg) => /\.m?js$/i.test(arg) || /\.cjs$/i.test(arg)) ?? null;
