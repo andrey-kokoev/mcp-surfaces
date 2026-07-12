@@ -25,5 +25,8 @@
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  }
 }

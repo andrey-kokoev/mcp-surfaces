@@ -17,10 +17,13 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/artifacts-mcp.test.js"
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/artifacts-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-artifacts-e2e.test.js"
   },
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  }
 }

@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js"
   },
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*"
@@ -30,5 +30,8 @@
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  }
 }

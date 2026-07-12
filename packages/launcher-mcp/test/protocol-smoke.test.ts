@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { createServerState, handleRequest } from '../src/main.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
-type JsonRpcTestResponse = { error?: { message: string }; result: { serverInfo: { name: string }; tools: Array<{ name: string; annotations: { readOnlyHint: boolean } }> } };
-const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => Promise<JsonRpcTestResponse>;
+const root = mkdtempSync(join(tmpdir(), 'launcher-mcp-protocol-'));
+const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--narada-root', root], { label: 'launcher-mcp protocol smoke' });
 
-const state = createServerState({ naradaRoot: 'C:/Users/Andrey/Narada' });
-const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }, state);
-assert.equal(init.error, undefined);
-assert.equal(init.result.serverInfo.name, 'launcher-mcp');
-
-const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
-assert.equal(tools.error, undefined);
-assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
+try {
+const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'launcher-mcp' });
+const tools = protocol.tools.tools as Array<{ name: string; annotations: { readOnlyHint: boolean } }>;
+assert.deepEqual(tools.map((tool) => tool.name), [
   'launcher_guidance',
   'launcher_doctor',
   'launcher_options_list',
@@ -20,6 +21,10 @@ assert.deepEqual(tools.result.tools.map((tool) => tool.name), [
   'launcher_option_matrix',
   'launcher_coherence_check',
 ]);
-assert.equal(tools.result.tools.every((tool) => tool.annotations.readOnlyHint), true);
+assert.equal(tools.every((tool) => tool.annotations.readOnlyHint), true);
+} finally {
+  await server.close();
+  rmSync(root, { recursive: true, force: true });
+}
 
 console.log('launcher-mcp protocol smoke ok');

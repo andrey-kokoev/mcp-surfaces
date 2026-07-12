@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict';
-import { createServerState, handleRequest } from '../src/main.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
-const state = createServerState({ siteRoot: 'D:/tmp/operator-routing-mcp-smoke' });
-const init = handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }, state);
-assert.equal(init?.result.serverInfo.name, 'operator-routing-mcp');
-const listed = handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
-assert.equal((listed?.result.tools as Array<Record<string, unknown>>).length, 3);
-assert.ok((listed?.result.tools as Array<Record<string, unknown>>).some((tool) => tool.name === 'operator_routing_guidance'));
-assert.ok((listed?.result.tools as Array<Record<string, unknown>>).some((tool) => tool.name === 'operator_route_doctor'));
-assert.ok((listed?.result.tools as Array<Record<string, unknown>>).some((tool) => tool.name === 'operator_route_request'));
+const root = mkdtempSync(join(tmpdir(), 'operator-routing-mcp-protocol-'));
+const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', root], { label: 'operator-routing-mcp protocol smoke' });
+
+try {
+  const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'operator-routing-mcp' });
+  assert.deepEqual(protocol.toolNames, ['operator_routing_guidance', 'operator_route_doctor', 'operator_route_request']);
+} finally {
+  await server.close();
+  rmSync(root, { recursive: true, force: true });
+}
 
 console.log('operator-routing-mcp protocol smoke ok');

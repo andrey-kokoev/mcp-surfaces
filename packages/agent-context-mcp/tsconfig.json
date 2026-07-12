@@ -10,6 +10,7 @@
     "test/**/*.ts"
   ],
   "references": [
+    { "path": "../shared/mcp-e2e-harness" },
     { "path": "../shared/mcp-transport" }
   ]
 }

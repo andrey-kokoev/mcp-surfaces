@@ -8,7 +8,8 @@
   },
   "references": [
     { "path": "../shared/mcp-transport" },
-    { "path": "../shared/execution-contract" }
+    { "path": "../shared/execution-contract" },
+    { "path": "../shared/mcp-e2e-harness" }
   ],
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

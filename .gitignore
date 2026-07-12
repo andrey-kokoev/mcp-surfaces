@@ -16,3 +16,6 @@ executions/
 /packages/shared/provider-registry/src/*.d.ts
 /packages/shared/provider-registry/src/*.js
 /packages/shared/provider-registry/src/*.js.map
+/packages/shared/*/src/*.d.ts
+/packages/shared/*/src/*.js
+/packages/shared/*/src/*.js.map

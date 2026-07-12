@@ -7,5 +7,8 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
-  "references": [{ "path": "../shared/mcp-telemetry" }]
+  "references": [
+    { "path": "../shared/mcp-e2e-harness" },
+    { "path": "../shared/mcp-telemetry" }
+  ]
 }

@@ -34,8 +34,16 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
-  packages/artifacts-mcp: {}
+  packages/artifacts-mcp:
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/calendar-mcp:
     dependencies:
@@ -45,6 +53,10 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/cloudflare-carrier-mcp: {}
 
@@ -69,6 +81,10 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/graph-mail-mcp:
     dependencies:
@@ -78,24 +94,40 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/launcher-mcp:
     dependencies:
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/local-filesystem-mcp:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/mailbox-mcp:
     dependencies:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/mcp-loader-mcp:
     dependencies:
@@ -115,6 +147,10 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/nars-session-mcp:
     dependencies:
@@ -125,7 +161,11 @@ importers:
         specifier: workspace:*
         version: link:../../../narada/packages/site-paths
 
-  packages/operator-routing-mcp: {}
+  packages/operator-routing-mcp:
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/runtime-introspection-mcp:
     dependencies:
@@ -172,6 +212,10 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/site-lifecycle-mcp: {}
 
@@ -230,6 +274,10 @@ importers:
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/surface-feedback-mcp:
     dependencies:
@@ -252,6 +300,10 @@ importers:
       '@narada2/task-governance-core':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/worker-delegation-mcp:
     dependencies:
