@@ -1,52 +1,25 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { asRecord, runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'delegated-task-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--task-root', root, '--allowed-root', root], {
-  stdio: ['pipe', 'pipe', 'pipe'],
-  windowsHide: true,
-});
-
-let stdout = '';
-let stderr = '';
-child.stdout.setEncoding('utf8');
-child.stderr.setEncoding('utf8');
-child.stdout.on('data', (chunk) => {
-  stdout += chunk;
-});
-child.stderr.on('data', (chunk) => {
-  stderr += chunk;
-});
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--task-root', root, '--allowed-root', root], { label: 'delegated-task-mcp protocol smoke' });
 
 try {
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'delegated/unknown', params: {} })}\n`);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'delegated_task_not_real', arguments: {} } })}\n`);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'delegated_task_validate', arguments: { objective: 'Invalid protocol graph', workflow: { steps: [{ id: 'a', kind: 'worker', depends_on: ['missing'], if: 'all(step:a:completed)' }] }, acceptance: { residual_risk_policy: 'invalid-policy' } } } })}\n`);
-  child.stdin.end();
-
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
-  assert.equal(exitCode, 0, stderr);
-
-  const responses = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  const init = responses.find((message) => message.id === 1);
-  assert.equal((init.result as Record<string, any>).serverInfo.name, 'delegated-task-mcp');
-  assert.ok((init.result as Record<string, any>).capabilities.tools);
-
-  const tools = (responses.find((message) => message.id === 2).result as Record<string, any>).tools;
-  const unsupportedMethodResponse = responses.find((message) => message.id === 3);
-  assert.equal(unsupportedMethodResponse.error.data.code, 'unsupported_mcp_method');
-  const unknownToolResponse = responses.find((message) => message.id === 4);
-  assert.equal(unknownToolResponse.error.data.code, 'unknown_tool');
-  const invalidValidationResponse = responses.find((message) => message.id === 5);
-  assert.equal(invalidValidationResponse.result.structuredContent.status, 'rejected');
-  assert.equal(invalidValidationResponse.result.structuredContent.diagnostics.some((item: Record<string, unknown>) => item.code === 'unknown_dependency'), true);
+  const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'delegated-task-mcp' });
+  const tools = protocol.tools.tools as Record<string, any>[];
+  const unsupportedMethodResponse = await server.client.request(3, 'delegated/unknown', {});
+  assert.equal(asRecord(asRecord(unsupportedMethodResponse.error).data).code, 'unsupported_mcp_method');
+  const unknownToolResponse = await server.client.request(4, 'tools/call', { name: 'delegated_task_not_real', arguments: {} });
+  assert.equal(asRecord(asRecord(unknownToolResponse.error).data).code, 'unknown_tool');
+  const invalidValidationResponse = await server.client.request(5, 'tools/call', { name: 'delegated_task_validate', arguments: { objective: 'Invalid protocol graph', workflow: { steps: [{ id: 'a', kind: 'worker', depends_on: ['missing'], if: 'all(step:a:completed)' }] }, acceptance: { residual_risk_policy: 'invalid-policy' } } });
+  const invalidValidation = asRecord(asRecord(invalidValidationResponse.result).structuredContent);
+  assert.equal(invalidValidation.status, 'rejected');
+  assert.equal(Array.isArray(invalidValidation.diagnostics) && invalidValidation.diagnostics.some((item) => asRecord(item).code === 'unknown_dependency'), true);
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), [
     'delegated_task_guidance',
     'delegated_task_policy_inspect',
@@ -133,5 +106,6 @@ try {
 
   console.log('delegated-task-mcp protocol smoke ok');
 } finally {
+  await server.close();
   rmSync(root, { recursive: true, force: true });
 }

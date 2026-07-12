@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
+  readMcpOutputText,
   readJsonLines,
   removeTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   structured,
   tomlPath,
@@ -126,8 +128,7 @@ async function main(): Promise<void> {
     worker = workerHandle.child;
     client = workerHandle.client;
 
-    const initialized = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
-    assert.equal(initialized.error, undefined, JSON.stringify(initialized));
+    await runMcpProtocolSmoke(client, { expectedServerName: 'worker-delegation-mcp', toolsListId: 99 });
     const response = await client.request(2, 'tools/call', {
       name: 'worker_run',
       arguments: {
@@ -156,19 +157,15 @@ async function main(): Promise<void> {
     if (firstPage.schema === 'narada.producer_output_page.v1') {
       const outputRef = String(firstPage.output_ref ?? '');
       assert.ok(outputRef, JSON.stringify(firstPage));
-      let outputText = String(firstPage.output_text ?? '');
-      let nextOffset = firstPage.next_offset === null || firstPage.next_offset === undefined ? null : Number(firstPage.next_offset);
-      for (let pageNumber = 0; nextOffset !== null; pageNumber += 1) {
-        assert.equal(pageNumber < 8, true, 'worker output pagination exceeded the bounded page count');
+      const output = await readMcpOutputText(firstPage, async ({ offset, limit, pageNumber }) => {
         const page = structured(await client.request(10 + pageNumber, 'tools/call', {
           name: 'worker_output_show',
-          arguments: { ref: outputRef, offset: nextOffset, limit: 20000 },
+          arguments: { ref: outputRef, offset, limit },
         }));
         assert.equal(['narada.producer_output_page.v1', 'narada.mcp_output_page.v1'].includes(String(page.schema)), true, JSON.stringify(page));
-        outputText += String(page.output_text ?? '');
-        nextOffset = page.next_offset === null || page.next_offset === undefined ? null : Number(page.next_offset);
-      }
-      run = JSON.parse(outputText) as JsonRecord;
+        return page;
+      });
+      run = JSON.parse(output.text) as JsonRecord;
     }
     assert.equal(run.schema, 'narada.worker.run.v1', JSON.stringify(run));
     assert.equal(run.status, 'completed', JSON.stringify(run));

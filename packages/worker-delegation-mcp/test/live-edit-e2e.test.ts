@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
+  readMcpOutputText,
   removeTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -145,9 +147,7 @@ try {
   });
   const client = worker.client;
   try {
-    const initialize = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
-    assert.equal(initialize.error, undefined);
-    assert.equal(asRecord(initialize.result).serverInfo && asRecord(asRecord(initialize.result).serverInfo).name, 'worker-delegation-mcp');
+    await runMcpProtocolSmoke(client, { expectedServerName: 'worker-delegation-mcp', toolsListId: 99 });
     const result = await client.request(2, 'tools/call', {
       name: 'worker_edit',
       arguments: {
@@ -169,22 +169,17 @@ try {
     const resultEnvelope = asRecord(asRecord(result.result).structuredContent);
     assert.equal(resultEnvelope.schema, 'narada.producer_output_page.v1');
     assert.equal(typeof resultEnvelope.output_ref, 'string');
-    let outputText = '';
-    let outputOffset = 0;
-    for (let pageNumber = 0; pageNumber < 8; pageNumber += 1) {
+    const output = await readMcpOutputText({ output_text: '', next_offset: 0 }, async ({ offset, limit, pageNumber }) => {
       const pageResponse = await client.request(10 + pageNumber, 'tools/call', {
         name: 'worker_output_show',
-        arguments: { ref: resultEnvelope.output_ref, offset: outputOffset, limit: 20000 },
+        arguments: { ref: resultEnvelope.output_ref, offset, limit },
       });
       assert.equal(pageResponse.error, undefined, JSON.stringify(pageResponse));
       const page = asRecord(asRecord(pageResponse.result).structuredContent);
       assert.equal(page.schema, 'narada.mcp_output_page.v1');
-      outputText += String(page.output_text ?? '');
-      if (page.next_offset === null || page.next_offset === undefined) break;
-      outputOffset = Number(page.next_offset);
-      assert.equal(pageNumber < 7, true, 'worker output readback exceeded the bounded page count');
-    }
-    const structured = JSON.parse(outputText) as JsonRecord;
+      return page;
+    }, { initialReadOffset: 0 });
+    const structured = JSON.parse(output.text) as JsonRecord;
     assert.equal(structured.status, 'completed');
     assert.equal(structured.edits_performed, true, JSON.stringify(structured));
     assert.equal(structured.target_state_changed, true, JSON.stringify(structured));
@@ -201,4 +196,3 @@ try {
 } finally {
   removeTemporaryE2eRoot(root);
 }
-

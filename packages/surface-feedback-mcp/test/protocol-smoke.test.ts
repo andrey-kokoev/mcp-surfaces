@@ -1,34 +1,17 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'surface-feedback-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--feedback-root', root], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-
-let stdout = '';
-let stderr = '';
-child.stdout.setEncoding('utf8');
-child.stderr.setEncoding('utf8');
-child.stdout.on('data', (chunk) => { stdout += chunk; });
-child.stderr.on('data', (chunk) => { stderr += chunk; });
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--feedback-root', root], { label: 'surface-feedback-mcp protocol smoke' });
 
 try {
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })}\n`);
-  child.stdin.end();
-
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
-  assert.equal(exitCode, 0, stderr);
-
-  const responses = stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
-  const init = responses.find((m) => m.id === 1);
-  assert.equal((init.result as Record<string, any>).serverInfo.name, 'surface-feedback-mcp');
-
-  const tools = (responses.find((m) => m.id === 2).result as Record<string, any>).tools;
+  const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'surface-feedback-mcp' });
+  const tools = protocol.tools.tools as Record<string, any>[];
   assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_live_proof_template', 'surface_feedback_update_status', 'surface_feedback_convert_to_task', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats']);
 
   const subTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_submit');
@@ -46,5 +29,6 @@ try {
 
   console.log('surface-feedback-mcp protocol smoke ok');
 } finally {
+  await server.close();
   rmSync(root, { recursive: true, force: true });
 }

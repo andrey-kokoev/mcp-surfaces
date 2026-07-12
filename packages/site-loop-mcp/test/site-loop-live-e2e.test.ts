@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   spawnContentLengthMcpServer,
   type JsonRecord,
   type JsonRpcResponse,
@@ -68,17 +69,11 @@ function contentText(label: string, response: JsonRpcResponse): JsonRecord {
 }
 
 try {
-  const init = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
-  assert.equal(init.error, undefined);
-  assert.equal((init.result?.serverInfo as JsonRecord | undefined)?.name, 'narada-site-loop-mcp');
-
-  const tools = await client.request(2, 'tools/list', {});
-  assert.equal(tools.error, undefined);
-  const toolList = Array.isArray(tools.result?.tools) ? tools.result.tools : [];
-  const names = toolList.map((tool) => String((tool as JsonRecord).name ?? ''));
-  for (const requiredTool of ['site_loop_doctor', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_config_validate', 'site_loop_status']) {
-    assert.equal(names.includes(requiredTool), true, 'missing ' + requiredTool);
-  }
+  await runMcpProtocolSmoke(client, {
+    expectedServerName: 'narada-site-loop-mcp',
+    requiredTools: ['site_loop_doctor', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_config_validate', 'site_loop_status'],
+    toolsListId: 99,
+  });
 
   const configValidation = contentText('site_loop_config_validate', await client.request(3, 'tools/call', { name: 'site_loop_config_validate', arguments: {} }));
   assert.equal(configValidation.status, 'ok');

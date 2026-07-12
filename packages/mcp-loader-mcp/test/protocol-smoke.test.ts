@@ -1,25 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServerState } from '../src/main.js';
+import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-
-let stdout = '';
-let stderr = '';
-child.stdout.setEncoding('utf8');
-child.stderr.setEncoding('utf8');
-child.stdout.on('data', (chunk) => { stdout += chunk; });
-child.stderr.on('data', (chunk) => { stderr += chunk; });
-
-function rpc(method: string, params: Record<string, unknown>, id: number) {
-  return `${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`;
-}
+const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--allowed-site-root', root], { label: 'mcp-loader-mcp protocol smoke' });
 
 try {
   const defaultState = createServerState();
@@ -29,20 +18,8 @@ try {
     assert.ok(defaultState.policy.allowedEntrypointPrefixes.includes(resolve(userProfile, 'Narada', 'tools').replace(/\\/g, '/')));
   }
 
-  child.stdin.write(rpc('initialize', { protocolVersion: '2024-11-05' }, 1));
-  child.stdin.write(rpc('tools/list', {}, 2));
-  child.stdin.end();
-
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
-  assert.equal(exitCode, 0, stderr);
-
-  const responses = stdout.trim().split(/\r?\n/).filter(Boolean).map((line: string) => JSON.parse(line));
-  const init = responses.find((m: { id: number }) => m.id === 1);
-  const serverInfo = ((init as { result: Record<string, unknown> }).result as Record<string, unknown>).serverInfo as Record<string, unknown>;
-  assert.equal(serverInfo.name, 'mcp-loader-mcp');
-
-  const toolsResponse = responses.find((m: { id: number }) => m.id === 2) as { result: Record<string, unknown> };
-  const tools = toolsResponse.result.tools as { name: string; annotations: { readOnlyHint: boolean } }[];
+  const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'mcp-loader-mcp' });
+  const tools = protocol.tools.tools as { name: string; annotations: { readOnlyHint: boolean } }[];
   assert.deepEqual(tools.map((t) => t.name), [
     'mcp_loader_policy_inspect',
     'mcp_loader_list_site_surfaces',
@@ -78,5 +55,6 @@ try {
 
   console.log('mcp-loader-mcp protocol smoke ok');
 } finally {
+  await server.close();
   rmSync(root, { recursive: true, force: true });
 }

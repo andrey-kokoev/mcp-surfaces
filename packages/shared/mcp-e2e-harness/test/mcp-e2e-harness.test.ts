@@ -4,7 +4,9 @@ import {
   asRecord,
   createJsonlClient,
   createTemporaryE2eRoot,
+  readMcpOutputText,
   removeTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   spawnContentLengthMcpServer,
   spawnJsonlMcpServer,
   structured,
@@ -54,6 +56,38 @@ assert.equal(structured(framedResponse).schema, 'framed.fixture.v1');
 assert.equal(structured(framedResponse).method, 'initialize');
 await framedFixture.close();
 
+const protocolFixture = spawnJsonlMcpServer(process.execPath, [
+  '-e',
+  [
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => { for (const line of chunk.split(/\\r?\\n/).filter(Boolean)) { const request = JSON.parse(line); if (request.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { serverInfo: { name: 'protocol-fixture' }, capabilities: { tools: {} } } }) + '\\n'); if (request.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'fixture_tool' }] } }) + '\\n'); } });",
+  ].join('\n'),
+], { label: 'mcp-e2e-harness-protocol-fixture', timeoutMs: 2_000 });
+const protocol = await runMcpProtocolSmoke(protocolFixture.client, {
+  expectedServerName: 'protocol-fixture',
+  requiredTools: ['fixture_tool'],
+});
+assert.deepEqual(protocol.toolNames, ['fixture_tool']);
+await protocolFixture.close();
+
+const output = await readMcpOutputText(
+  { output_text: '{"status":"', next_offset: 4 },
+  async ({ offset }) => offset === 4
+    ? { output_text: 'completed"}', next_offset: null }
+    : {},
+  { pageSize: 4 },
+);
+assert.equal(output.text, '{"status":"completed"}');
+assert.equal(output.pages, 2);
+await assert.rejects(
+  () => readMcpOutputText(
+    { output_text: '', next_offset: 0 },
+    async () => ({ output_text: '', next_offset: 0 }),
+    { initialReadOffset: 0 },
+  ),
+  /offset did not advance/,
+);
+
 assert.deepEqual(asRecord({ value: 1 }), { value: 1 });
 assert.deepEqual(asRecord(null), {});
 assert.equal(tomlPath('C:\\tmp\\value\"x'), 'C:/tmp/value\\"x');
@@ -72,5 +106,5 @@ console.log(JSON.stringify({
   schema: 'narada.mcp.e2e.result.v1',
   test_id: 'mcp-e2e-harness',
   status: 'passed',
-  shared_mechanics: ['jsonl_transport', 'content_length_transport', 'bounded_child_cleanup', 'temporary_root', 'result_normalization'],
+  shared_mechanics: ['jsonl_transport', 'content_length_transport', 'protocol_smoke', 'bounded_output_readback', 'bounded_child_cleanup', 'temporary_root', 'result_normalization'],
 }));

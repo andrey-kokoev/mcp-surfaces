@@ -22,6 +22,9 @@
   "dependencies": {
     "@narada2/mcp-transport": "workspace:*"
   },
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  },
   "files": [
     "dist/"
   ]

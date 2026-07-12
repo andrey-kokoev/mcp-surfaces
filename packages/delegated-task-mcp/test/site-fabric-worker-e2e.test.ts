@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   removeTemporaryE2eRoot,
   spawnJsonlMcpServer,
   structured,
@@ -159,8 +160,7 @@ async function main(): Promise<void> {
       label: 'mcp-loader',
     });
     loaderClient = loader.client;
-    const initialize = await loaderClient.request(1, 'initialize', { protocolVersion: '2024-11-05' });
-    assert.equal(initialize.error, undefined, JSON.stringify(initialize));
+    await runMcpProtocolSmoke(loaderClient, { expectedServerName: 'mcp-loader-mcp', toolsListId: 99 });
 
     const surfaces = structured(await loaderClient.request(2, 'tools/call', {
       name: 'mcp_loader_list_site_surfaces',

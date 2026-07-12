@@ -102,6 +102,10 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/mcp-registrar:
     dependencies:
@@ -129,7 +133,11 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
 
-  packages/scheduler-mcp: {}
+  packages/scheduler-mcp:
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/shared/execution-contract: {}
 
@@ -200,6 +208,9 @@ importers:
         specifier: ^4.2.0
         version: 4.2.0
     devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -209,6 +220,10 @@ importers:
       '@narada2/provider-registry':
         specifier: workspace:*
         version: link:../shared/provider-registry
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/structured-command-mcp:
     dependencies:
@@ -221,6 +236,10 @@ importers:
       '@narada2/task-lifecycle-mcp':
         specifier: workspace:*
         version: link:../task-lifecycle-mcp
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/task-lifecycle-mcp:
     dependencies:

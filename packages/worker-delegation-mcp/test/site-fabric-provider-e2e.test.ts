@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
+  readMcpOutputText,
   removeTemporaryE2eRoot,
+  runMcpProtocolSmoke,
   spawnJsonlMcpServer,
   structured,
   tomlPath,
@@ -194,8 +196,7 @@ async function main(): Promise<void> {
       label: 'mcp-loader',
     });
     loaderClient = loader.client;
-    const initialize = await loaderClient.request(1, 'initialize', { protocolVersion: '2024-11-05' });
-    assert.equal(initialize.error, undefined, JSON.stringify(initialize));
+    await runMcpProtocolSmoke(loaderClient, { expectedServerName: 'mcp-loader-mcp', toolsListId: 99 });
 
     const surfaces = structured(await loaderClient.request(2, 'tools/call', {
       name: 'mcp_loader_list_site_surfaces',
@@ -356,17 +357,11 @@ async function callAttached(client: JsonlMcpClient, connectionId: string, id: nu
 async function readProducedJson(client: JsonlMcpClient, connectionId: string, producerPage: JsonRecord, firstPageId: number): Promise<JsonRecord> {
   const outputRef = String(producerPage.output_ref ?? producerPage.ref ?? '');
   assert.ok(outputRef);
-  let outputText = '';
-  let offset = 0;
-  for (let pageNumber = 0; pageNumber < 8; pageNumber += 1) {
-    const pageResult = await callAttached(client, connectionId, firstPageId + pageNumber, 'worker_output_show', { ref: outputRef, offset, limit: 20000 });
+  const output = await readMcpOutputText({ output_text: '', next_offset: 0 }, async ({ offset, limit, pageNumber }) => {
+    const pageResult = await callAttached(client, connectionId, firstPageId + pageNumber, 'worker_output_show', { ref: outputRef, offset, limit });
     const page = asRecord(pageResult.structuredContent);
     assert.equal(page.schema, 'narada.mcp_output_page.v1');
-    outputText += String(page.output_text ?? '');
-    if (page.next_offset === null || page.next_offset === undefined) break;
-    offset = Number(page.next_offset);
-    assert.equal(pageNumber < 7, true, 'worker output readback exceeded the bounded page count');
-  }
-  return JSON.parse(outputText) as JsonRecord;
+    return page;
+  }, { initialReadOffset: 0 });
+  return JSON.parse(output.text) as JsonRecord;
 }
-

@@ -16,6 +16,95 @@ export type JsonlMcpClient = {
   close: () => Promise<void>;
 };
 
+export type McpProtocolSmokeOptions = {
+  initializeParams?: JsonRecord;
+  expectedServerName?: string;
+  requiredTools?: readonly string[];
+  initializeId?: number | string;
+  toolsListId?: number | string;
+};
+
+export type McpProtocolSmokeResult = {
+  initialize: JsonRecord;
+  tools: JsonRecord;
+  toolNames: string[];
+};
+
+export async function runMcpProtocolSmoke(
+  client: JsonlMcpClient,
+  options: McpProtocolSmokeOptions = {},
+): Promise<McpProtocolSmokeResult> {
+  const initializeId = options.initializeId ?? 1;
+  const toolsListId = options.toolsListId ?? 2;
+  const initialize = rpcResult(
+    await client.request(initializeId, 'initialize', options.initializeParams ?? { protocolVersion: '2024-11-05' }),
+    'initialize',
+  );
+  const serverInfo = asRecord(initialize.serverInfo);
+  if (options.expectedServerName !== undefined && serverInfo.name !== options.expectedServerName) {
+    throw new Error(`MCP initialize server name mismatch: expected ${options.expectedServerName}, got ${String(serverInfo.name)}`);
+  }
+  const tools = rpcResult(await client.request(toolsListId, 'tools/list', {}), 'tools/list');
+  if (!Array.isArray(tools.tools)) throw new Error('MCP tools/list returned no tools array');
+  const toolEntries = tools.tools;
+  const toolNames = toolEntries.map((tool) => String(asRecord(tool).name));
+  for (const requiredTool of options.requiredTools ?? []) {
+    if (!toolNames.includes(requiredTool)) throw new Error(`MCP tools/list is missing required tool: ${requiredTool}`);
+  }
+  return { initialize, tools, toolNames };
+}
+
+export type OutputPageReader = (request: {
+  offset: number;
+  limit: number;
+  pageNumber: number;
+}) => Promise<JsonRecord>;
+
+export type ReadMcpOutputTextOptions = {
+  pageSize?: number;
+  maxPages?: number;
+  maxTextChars?: number;
+  initialReadOffset?: number;
+};
+
+export type ReadMcpOutputTextResult = {
+  text: string;
+  pages: number;
+  lastPage: JsonRecord;
+};
+
+export async function readMcpOutputText(
+  firstPage: JsonRecord,
+  readPage: OutputPageReader,
+  options: ReadMcpOutputTextOptions = {},
+): Promise<ReadMcpOutputTextResult> {
+  const pageSize = boundedPositiveInteger(options.pageSize, 20_000, 20_000);
+  const maxPages = boundedPositiveInteger(options.maxPages, 9, 100);
+  const maxTextChars = boundedPositiveInteger(options.maxTextChars, 200_000, 2_000_000);
+  let text = String(firstPage.output_text ?? '');
+  if (text.length > maxTextChars) throw new Error(`MCP output readback exceeded the bounded character count (${maxTextChars})`);
+  let pages = 1;
+  let lastPage = firstPage;
+  let nextOffset = options.initialReadOffset !== undefined
+    ? requireNonNegativeOffset(options.initialReadOffset, 'initialReadOffset')
+    : nextOutputOffset(firstPage.next_offset, 0);
+  while (nextOffset !== null) {
+    if (pages >= maxPages) throw new Error(`MCP output readback exceeded the bounded page count (${maxPages})`);
+    const page = await readPage({ offset: nextOffset, limit: pageSize, pageNumber: pages });
+    const pageText = String(page.output_text ?? '');
+    text += pageText;
+    if (text.length > maxTextChars) throw new Error(`MCP output readback exceeded the bounded character count (${maxTextChars})`);
+    pages += 1;
+    lastPage = page;
+    const followingOffset = nextOutputOffset(page.next_offset, nextOffset);
+    if (followingOffset !== null && followingOffset <= nextOffset) {
+      throw new Error(`MCP output readback offset did not advance: ${nextOffset} -> ${followingOffset}`);
+    }
+    nextOffset = followingOffset;
+  }
+  return { text, pages, lastPage };
+}
+
 export type JsonlMcpClientOptions = {
   timeoutMs?: number;
   closeTimeoutMs?: number;
@@ -339,6 +428,32 @@ export function writeE2eResultArtifact(path: string, result: JsonRecord): void {
 
 function positiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? Math.min(value, maximum)
+    : fallback;
+}
+
+function rpcResult(response: JsonRpcResponse, operation: string): JsonRecord {
+  if (response.error) throw new Error(`MCP ${operation} failed: ${JSON.stringify(response.error)}`);
+  if (!response.result) throw new Error(`MCP ${operation} returned no result`);
+  return response.result;
+}
+
+function nextOutputOffset(value: unknown, previousOffset: number): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`MCP output readback returned an invalid next_offset: ${String(value)}`);
+  }
+  if (value <= previousOffset) throw new Error(`MCP output readback offset did not advance: ${previousOffset} -> ${value}`);
+  return value;
+}
+
+function requireNonNegativeOffset(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`MCP output readback ${name} is invalid: ${String(value)}`);
+  return value;
 }
 
 function safeSegment(value: string): string {
