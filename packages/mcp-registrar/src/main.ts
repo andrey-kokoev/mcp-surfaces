@@ -26,7 +26,17 @@ type JsonRecord = Record<string, unknown>;
 
 type McpInjectionScope = 'host' | 'user_site' | 'local_site';
 type McpRestartOwner = McpInjectionScope;
-type McpDefaultInjection = 'all_site_bound_sessions' | 'all_carrier_sessions';
+type McpRuntimeKind = 'nars';
+type McpDefaultInjection = 'all_site_bound_sessions' | 'all_carrier_sessions' | 'runtime_selected_sessions';
+
+type McpSurfaceProjection = {
+  id: string;
+  injection_scope: McpInjectionScope;
+  default_injection?: McpDefaultInjection;
+  restart_owner?: McpRestartOwner;
+  runtime_requirements?: McpRuntimeKind[];
+  env_vars?: string[];
+};
 
 type McpAuthorityLocus =
   | { kind: 'host' }
@@ -42,6 +52,7 @@ type SurfaceDef = {
   tools: string[];
   output_reader_closure?: Record<string, string>;
   output_reader_policy_note?: string;
+  projections?: McpSurfaceProjection[];
   injection_scope?: McpInjectionScope;
   default_injection?: McpDefaultInjection;
   restart_owner?: McpRestartOwner;
@@ -86,6 +97,7 @@ type SiteBinding = {
   site_id: string;
   surfaces: 'all' | string[];
   prefix: string;
+  runtime_kind?: McpRuntimeKind;
   extra_allowed_roots?: string[];
 };
 
@@ -103,6 +115,7 @@ type MaterializedServer = {
   command?: string;
   args: string[];
   surface?: SurfaceDef;
+  projection?: McpSurfaceProjection;
   local?: SiteLocalSurface;
   env_vars?: string[];
   enabled?: boolean;
@@ -384,8 +397,22 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: [],
     tools: NARS_SESSION_TOOLS,
-    injection_scope: 'local_site',
-    default_injection: 'all_site_bound_sessions',
+    projections: [
+      {
+        id: 'user-site-operator',
+        injection_scope: 'user_site',
+        default_injection: 'all_site_bound_sessions',
+        restart_owner: 'user_site',
+        runtime_requirements: [],
+      },
+      {
+        id: 'local-site-nars-runtime',
+        injection_scope: 'local_site',
+        default_injection: 'runtime_selected_sessions',
+        restart_owner: 'local_site',
+        runtime_requirements: ['nars'],
+      },
+    ],
     env_vars: ['NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_SESSION_ALLOW_STEER'],
   },
   {
@@ -667,8 +694,8 @@ export function siteBindSidecarRefusal(site: SiteDef, surfaceId: string, options
   };
 }
 
-function naradaScopeMetadata(surfaceId: string, siteRoot = '{site_root}', boundIntoSite?: string): NaradaScopeMetadata {
-  const metadata = surfaceScopeMetadata(surfaceId, siteRoot);
+function naradaScopeMetadata(surfaceId: string, siteRoot = '{site_root}', boundIntoSite?: string, projectionId?: string): NaradaScopeMetadata {
+  const metadata = surfaceScopeMetadata(surfaceId, siteRoot, projectionId);
   return {
     ...metadata,
     ...(boundIntoSite ? { bound_into_site: boundIntoSite } : {}),
@@ -785,6 +812,8 @@ export function listTools() {
         properties: {
           site_id: { type: 'string', description: 'Site identifier, e.g. narada-sonar.' },
           surface_id: { type: 'string', description: 'Surface identifier, e.g. scheduler.' },
+          projection_id: { type: 'string', description: 'Explicit surface projection identifier when the surface has more than one authority/runtime projection.' },
+          runtime_kind: { type: 'string', enum: ['nars'], description: 'Explicit selected runtime kind. Required when selecting a runtime-affined projection without naming projection_id.' },
           allow_sidecar: { type: 'boolean', description: 'Allow creating a compatibility sidecar even when an authoritative aggregate MCP fabric exists.' },
           allow_disabled_sidecar: { type: 'boolean', description: 'Allow binding a surface explicitly disabled by site override; intended only for compatibility repair.' },
         },
@@ -821,6 +850,7 @@ export function listTools() {
         properties: {
           carrier_id: { type: 'string', description: 'Carrier identifier, e.g. codex-andrey.' },
           surface_id: { type: 'string', description: 'Surface identifier, e.g. scheduler.' },
+          projection_id: { type: 'string', description: 'Explicit surface projection identifier when the surface has more than one authority/runtime projection.' },
           site_id: { type: 'string', description: 'Site context for arg interpolation, e.g. sonar. Defaults to andrey-user.' },
         },
         required: ['carrier_id', 'surface_id'],
@@ -848,6 +878,8 @@ export function listTools() {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Surface identifier. Required unless target is all_surfaces_to_carriers or all_surfaces_to_all_carriers.' },
+          projection_id: { type: 'string', description: 'Explicit projection identifier for the selected surface.' },
+          runtime_kind: { type: 'string', enum: ['nars'], description: 'Explicit selected runtime kind for site materialization.' },
           target: { type: 'string', enum: ['all_sites', 'all_carriers', 'all', 'all_surfaces_to_carriers', 'all_surfaces_to_all_carriers'], description: 'all_sites/all_carriers/all: bind one surface. all_surfaces_to_carriers: bind all surfaces to a specific carrier. all_surfaces_to_all_carriers: bind all surfaces to all carriers.' },
           carrier_id: { type: 'string', description: 'Required when target is all_surfaces_to_carriers.' },
           site_filter: { type: 'string', description: 'Optional prefix filter for site IDs, e.g. narada-.' },
@@ -1166,12 +1198,106 @@ function catalogSurface(surfaceId: string): SurfaceDef | undefined {
   return SURFACES.find((surface) => surface.id === surfaceId);
 }
 
-function injectionScopeForSurface(surfaceId: string): McpInjectionScope {
-  return catalogSurface(surfaceId)?.injection_scope ?? 'local_site';
+function surfaceProjections(surface: SurfaceDef): McpSurfaceProjection[] {
+  if (surface.projections && surface.projections.length > 0) return surface.projections;
+  return [{
+    id: 'default',
+    injection_scope: surface.injection_scope ?? 'local_site',
+    default_injection: surface.default_injection,
+    restart_owner: surface.restart_owner,
+  }];
 }
 
-function restartOwnerForSurface(surfaceId: string, injectionScope: McpInjectionScope): McpRestartOwner {
-  return catalogSurface(surfaceId)?.restart_owner ?? injectionScope;
+function projectionSupportsRuntime(projection: McpSurfaceProjection, runtimeKind: McpRuntimeKind | undefined): boolean {
+  const requirements = projection.runtime_requirements ?? [];
+  return requirements.length === 0 || (runtimeKind !== undefined && requirements.includes(runtimeKind));
+}
+
+function selectSurfaceProjection(
+  surfaceId: string,
+  projectionId?: string,
+  runtimeKind?: McpRuntimeKind,
+  options: { requireExplicit?: boolean } = {},
+): { surface: SurfaceDef; projection: McpSurfaceProjection } {
+  const surface = catalogSurface(surfaceId);
+  if (!surface) throw diagnosticError('registrar_unknown_surface', `registrar_unknown_surface:${surfaceId}`);
+  const projections = surfaceProjections(surface);
+  if (projectionId) {
+    const projection = projections.find((candidate) => candidate.id === projectionId);
+    if (!projection) {
+      throw diagnosticError('registrar_unknown_surface_projection', `registrar_unknown_surface_projection:${surfaceId}:${projectionId}`, {
+        surface_id: surfaceId,
+        projection_id: projectionId,
+        known_projection_ids: projections.map((candidate) => candidate.id),
+      });
+    }
+    if (runtimeKind !== undefined && !projectionSupportsRuntime(projection, runtimeKind)) {
+      throw diagnosticError('registrar_surface_projection_runtime_mismatch', `registrar_surface_projection_runtime_mismatch:${surfaceId}:${projectionId}:${runtimeKind}`, {
+        surface_id: surfaceId,
+        projection_id: projectionId,
+        runtime_kind: runtimeKind,
+        runtime_requirements: projection.runtime_requirements ?? [],
+      });
+    }
+    return { surface, projection };
+  }
+
+  if (runtimeKind !== undefined) {
+    const runtimeMatches = projections.filter((projection) => (projection.runtime_requirements ?? []).includes(runtimeKind));
+    if (runtimeMatches.length === 1) return { surface, projection: runtimeMatches[0] };
+    if (runtimeMatches.length > 1) {
+      throw diagnosticError('registrar_surface_projection_ambiguous_runtime', `registrar_surface_projection_ambiguous_runtime:${surfaceId}:${runtimeKind}`, {
+        surface_id: surfaceId,
+        runtime_kind: runtimeKind,
+        projection_ids: runtimeMatches.map((projection) => projection.id),
+      });
+    }
+    const neutralMatches = projections.filter((projection) => (projection.runtime_requirements ?? []).length === 0);
+    if (neutralMatches.length === 1) return { surface, projection: neutralMatches[0] };
+    if (neutralMatches.length > 1) {
+      throw diagnosticError('registrar_surface_projection_ambiguous_runtime', `registrar_surface_projection_ambiguous_runtime:${surfaceId}:${runtimeKind}`, {
+        surface_id: surfaceId,
+        runtime_kind: runtimeKind,
+        projection_ids: neutralMatches.map((projection) => projection.id),
+        reason: 'multiple_runtime_neutral_projections',
+      });
+    }
+  }
+
+  if (!options.requireExplicit) {
+    const defaults = projections.filter((projection) => projection.default_injection === 'all_site_bound_sessions' || projection.default_injection === 'all_carrier_sessions');
+    if (defaults.length === 1) return { surface, projection: defaults[0] };
+    if (projections.length === 1) return { surface, projection: projections[0] };
+  }
+
+  throw diagnosticError('registrar_surface_projection_required', `registrar_surface_projection_required:${surfaceId}`, {
+    surface_id: surfaceId,
+    projection_ids: projections.map((projection) => projection.id),
+    runtime_kind: runtimeKind ?? null,
+    remediation: 'Select an explicit projection_id or provide a runtime kind that uniquely selects one.',
+  });
+}
+
+function projectionMetadata(surfaceId: string, projectionId?: string, runtimeKind?: McpRuntimeKind): JsonRecord {
+  const { projection } = selectSurfaceProjection(surfaceId, projectionId, runtimeKind);
+  return {
+    surface_id: surfaceId,
+    projection_id: projection.id,
+    injection_scope: projection.injection_scope,
+    ...(projection.default_injection ? { default_injection: projection.default_injection } : {}),
+    runtime_requirements: projection.runtime_requirements ?? [],
+    ...(runtimeKind ? { runtime_kind: runtimeKind } : {}),
+  };
+}
+
+function injectionScopeForSurface(surfaceId: string, projectionId?: string): McpInjectionScope {
+  if (!catalogSurface(surfaceId)) return 'local_site';
+  return selectSurfaceProjection(surfaceId, projectionId).projection.injection_scope;
+}
+
+function restartOwnerForSurface(surfaceId: string, injectionScope: McpInjectionScope, projectionId?: string): McpRestartOwner {
+  if (!catalogSurface(surfaceId)) return injectionScope;
+  return selectSurfaceProjection(surfaceId, projectionId).projection.restart_owner ?? injectionScope;
 }
 
 function locusForScope(scope: McpInjectionScope, siteRoot: string): McpAuthorityLocus {
@@ -1180,14 +1306,14 @@ function locusForScope(scope: McpInjectionScope, siteRoot: string): McpAuthority
   return { kind: 'local_site', site_root: siteRoot };
 }
 
-function surfaceScopeMetadata(surfaceId: string, siteRoot = '{site_root}'): SurfaceScopeMetadata {
-  const injectionScope = injectionScopeForSurface(surfaceId);
+function surfaceScopeMetadata(surfaceId: string, siteRoot = '{site_root}', projectionId?: string): SurfaceScopeMetadata {
+  const injectionScope = injectionScopeForSurface(surfaceId, projectionId);
   const locus = locusForScope(injectionScope, siteRoot);
   return {
     injection_scope: injectionScope,
     authority_locus: locus,
     mutation_locus: locus,
-    restart_owner: restartOwnerForSurface(surfaceId, injectionScope),
+    restart_owner: restartOwnerForSurface(surfaceId, injectionScope, projectionId),
   };
 }
 
@@ -1295,11 +1421,13 @@ function writeSiteSurfaceRegistriesForCarrier(carrier: CarrierDef): JsonRecord[]
 
 function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId: string, extraRoots: string[]): { key: string; server: MaterializedServer } {
   const surface = lookupSurface(surfaceId);
+  const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
+  const projection = selected.projection;
   const resolvedArgs = resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots);
   const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
-  const naradaScope = naradaScopeMetadata(surfaceId, site.root, site.site_id);
+  const naradaScope = naradaScopeMetadata(surfaceId, site.root, site.site_id, projection.id);
   return {
     key: serverKey,
     server: {
@@ -1307,6 +1435,8 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
       entrypoint: resolvedEntrypoint,
       args: resolvedArgs,
       surface,
+      projection,
+      env_vars: uniqueStrings([...(surface.env_vars ?? []), ...(projection.env_vars ?? [])]),
       ...naradaScope,
       narada_scope: naradaScope,
     },
@@ -1350,11 +1480,31 @@ function materializeLocalSurface(binding: SiteBinding, site: SiteDef, local: Sit
   };
 }
 
+function automaticProjectionForBinding(surface: SurfaceDef, binding: SiteBinding): McpSurfaceProjection | null {
+  const projections = surfaceProjections(surface);
+  if (binding.runtime_kind !== undefined) {
+    const runtimeMatches = projections.filter((projection) => (projection.runtime_requirements ?? []).includes(binding.runtime_kind as McpRuntimeKind));
+    if (runtimeMatches.length === 1) return runtimeMatches[0];
+    if (runtimeMatches.length > 1) return null;
+  }
+  const defaults = projections.filter((projection) => projection.default_injection === 'all_site_bound_sessions' || projection.default_injection === 'all_carrier_sessions');
+  return defaults.length === 1 ? defaults[0] : null;
+}
+
 export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
-  const explicit = binding.surfaces === 'all' ? SURFACES.map((surface) => surface.id) : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
+  const explicit = binding.surfaces === 'all'
+    ? SURFACES.filter((surface) => {
+      try {
+        selectSurfaceProjection(surface.id, undefined, binding.runtime_kind);
+        return true;
+      } catch {
+        return false;
+      }
+    }).map((surface) => surface.id)
+    : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
   const ids = new Set(explicit);
   for (const surface of SURFACES) {
-    if (surface.default_injection === 'all_site_bound_sessions' || surface.default_injection === 'all_carrier_sessions') ids.add(surface.id);
+    if (automaticProjectionForBinding(surface, binding)) ids.add(surface.id);
   }
   return Array.from(ids);
 }
@@ -1403,6 +1553,8 @@ function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
     return {
       server_key: serverKey,
       surface_id: surfaceId,
+      projection_id: server.kind === 'shared' ? (server.projection as McpSurfaceProjection | undefined)?.id ?? null : null,
+      runtime_requirements: server.kind === 'shared' ? (server.projection as McpSurfaceProjection | undefined)?.runtime_requirements ?? [] : [],
       injection_scope: server.injection_scope,
       authority_locus: server.authority_locus,
       restart_owner: server.restart_owner,
@@ -1952,11 +2104,16 @@ function parseCodexToml(content: string): JsonRecord {
 
 function registrarSurfaceList(_args: JsonRecord): JsonRecord {
   return {
-    items: SURFACES.map((surface) => ({
-      ...surface,
-      ...surfaceScopeMetadata(surface.id),
-      narada_scope: naradaScopeMetadata(surface.id),
-    })),
+    items: SURFACES.map((surface) => {
+      const projections = surfaceProjections(surface);
+      const scope = projections.length === 1
+        ? {
+          ...surfaceScopeMetadata(surface.id, '{site_root}', projections[0].id),
+          narada_scope: naradaScopeMetadata(surface.id, '{site_root}', undefined, projections[0].id),
+        }
+        : {};
+      return { ...surface, projections, ...scope };
+    }),
     count: SURFACES.length,
   };
 }
@@ -2573,17 +2730,21 @@ function siteSurfacePrefix(siteId: string): string {
   return siteId.startsWith('narada-') ? siteId : 'narada-' + siteId;
 }
 
-export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileName: string; serverKey: string; config: JsonRecord } {
+export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef, projectionId?: string, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
   const siteId = site.site_id;
   const surfaceId = surface.id;
+  const selected = selectSurfaceProjection(surfaceId, projectionId, runtimeKind, {
+    requireExplicit: Boolean(surface.projections && surface.projections.length > 1) && projectionId === undefined && runtimeKind === undefined,
+  });
+  const projection = selected.projection;
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
   const workspaceRoot = siteWorkspaceRoot(site);
   const paths = sitePathInterpolation(site.root, workspaceRoot);
   const resolvedArgs = surface.args.map((arg) => interpolateArg(arg, siteId, paths));
   const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
-  const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root);
-  const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId);
+  const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root, projection.id);
+  const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId, projection.id);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const launch = carrierLaunchCommand({
     kind: 'shared',
@@ -2609,6 +2770,8 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef): { fileN
           tools: surface.tools,
           env_vars: uniqueStrings(['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT', ...(surface.env_vars ?? [])]),
           surface_id: surfaceId,
+          projection_id: projection.id,
+          surface_projection: projectionMetadata(surfaceId, projection.id, runtimeKind),
           authority_posture: scopeMetadata.injection_scope === 'local_site' ? 'site_local_mcp_surface' : `${scopeMetadata.injection_scope}_injected_mcp_surface`,
           ...scopeMetadata,
           bound_into_site: siteId,
@@ -2632,16 +2795,18 @@ function siteWorkspaceRoot(site: SiteDef): string {
 function registrarSiteBind(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
+  const projectionId = optionalString(args.projection_id);
+  const runtimeKind = optionalRuntimeKind(args.runtime_kind);
   const site = lookupSite(siteId);
   const surface = lookupSurface(surfaceId);
   const configDir = join(site.root, '.ai', 'mcp');
   const sidecarRefusal = siteBindSidecarRefusal(site, surfaceId, args);
   if (sidecarRefusal) return sidecarRefusal;
   mkdirSync(configDir, { recursive: true });
-  const { fileName, serverKey, config } = buildSiteBindConfig(site, surface);
+  const { fileName, serverKey, config } = buildSiteBindConfig(site, surface, projectionId, runtimeKind);
   const filePath = join(configDir, fileName);
   writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-  return { status: 'bound', site_id: siteId, surface_id: surfaceId, file: fileName, server_key: serverKey };
+  return { status: 'bound', site_id: siteId, surface_id: surfaceId, projection_id: asRecord(asRecord(asRecord(config.mcpServers)[serverKey]).surface_projection).projection_id, file: fileName, server_key: serverKey };
 }
 
 function registrarSiteUnbind(args: JsonRecord): JsonRecord {
@@ -2733,6 +2898,9 @@ type SiteMcpFabricServer = {
   launch_entrypoint: string;
   uses_runtime_proxy: boolean;
   surface_id?: string;
+  projection_id?: string;
+  runtime_kind?: McpRuntimeKind;
+  runtime_requirements?: McpRuntimeKind[];
   narada_scope: NaradaScopeMetadata;
   source_file: string;
   projection_kind: 'site_fabric' | 'carrier_projection';
@@ -2813,6 +2981,7 @@ function discoverMcpConfigDirectory(
     for (const [serverKey, rawServer] of Object.entries(mcpServers)) {
       const server = asRecord(rawServer);
       const surfaceId = fabricSurfaceId(serverKey, site);
+      const surfaceProjection = asRecord(server.surface_projection);
       let command = server.command ?? 'node';
       let args: string[] = [];
       if (Array.isArray(command)) {
@@ -2847,6 +3016,11 @@ function discoverMcpConfigDirectory(
         launch_entrypoint: unwrapped.launchEntrypoint,
         uses_runtime_proxy: unwrapped.usesRuntimeProxy,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
+        projection_id: optionalString(server.projection_id) ?? optionalString(surfaceProjection.projection_id) ?? undefined,
+        runtime_kind: surfaceProjection.runtime_kind === 'nars' ? 'nars' : undefined,
+        runtime_requirements: Array.isArray(surfaceProjection.runtime_requirements)
+          ? surfaceProjection.runtime_requirements.filter((value): value is McpRuntimeKind => value === 'nars')
+          : undefined,
         narada_scope: readNaradaScope(server, surfaceId, controlRoot, site.site_id),
         source_file: projectionKind === 'carrier_projection' ? `carriers/${file}` : file,
         projection_kind: projectionKind,
@@ -2882,14 +3056,15 @@ function catalogSurfaceAlias(surfaceId: string): SurfaceDef | undefined {
 }
 
 function catalogSurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SurfaceDef | undefined {
-  const entrypointOwner = SURFACES.find((surface) => portablePath(surface.entrypoint) === portablePath(server.entrypoint));
-  if (entrypointOwner) return entrypointOwner;
   const declaredSurfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
-  return catalogSurface(declaredSurfaceId) ?? catalogSurfaceAlias(declaredSurfaceId);
+  const declaredSurface = catalogSurface(declaredSurfaceId) ?? catalogSurfaceAlias(declaredSurfaceId);
+  if (declaredSurface) return declaredSurface;
+  return SURFACES.find((surface) => portablePath(surface.entrypoint) === portablePath(server.entrypoint));
 }
 
 type SiteSurfaceRegistrySurface = {
   surface_id: string;
+  surface_projection: JsonRecord;
   surface_type: string;
   display_name: string;
   server_name: string;
@@ -2946,10 +3121,19 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
 function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface {
   const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
   const catalog = catalogSurfaceForFabricServer(site, server);
+  const surfaceProjection = catalog
+    ? projectionMetadata(catalog.id, server.projection_id, server.runtime_kind)
+    : {
+      surface_id: surfaceId,
+      projection_id: server.projection_id ?? 'unknown',
+      runtime_requirements: server.runtime_requirements ?? [],
+      ...(server.runtime_kind ? { runtime_kind: server.runtime_kind } : {}),
+    };
   const registeredTools = uniqueStrings(catalog?.tools ?? readConfiguredServerTools(site, server));
   const toolContract = surfaceToolContract(catalog?.id ?? surfaceId, registeredTools);
   return {
     surface_id: `${server.server_key}.local`,
+    surface_projection: surfaceProjection,
     surface_type: catalog?.kind ?? 'mcp_surface',
     display_name: server.server_key,
     server_name: server.server_key,
@@ -3202,17 +3386,20 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
   }
 
   for (const surface of SURFACES) {
-    if (surface.injection_scope !== 'local_site' || surface.default_injection !== 'all_site_bound_sessions') continue;
-    if (presentSurfaceIds.has(surface.id)) continue;
-    add('error', 'registrar_site_fabric_missing_default_surface', `Default local Site surface '${surface.id}' is missing from runtime-authoritative Site MCP fabric`, {
-      site_id: siteId,
-      surface_id: surface.id,
-      default_injection: surface.default_injection,
-      injection_scope: surface.injection_scope,
-      expected_server_key: siteSurfaceServerKey(siteId, surface.id),
-      required_repair_locus: { kind: 'local_site', site_root: site.root },
-      remediation: `Materialize '${surface.id}' into ${join(site.root, '.ai', 'mcp')} before launching Site-bound NARS/agent sessions.`,
-    });
+    for (const projection of surfaceProjections(surface)) {
+      if (projection.injection_scope !== 'local_site' || projection.default_injection !== 'all_site_bound_sessions') continue;
+      if (presentSurfaceIds.has(surface.id)) continue;
+      add('error', 'registrar_site_fabric_missing_default_surface', `Default local Site surface '${surface.id}' is missing from runtime-authoritative Site MCP fabric`, {
+        site_id: siteId,
+        surface_id: surface.id,
+        projection_id: projection.id,
+        default_injection: projection.default_injection,
+        injection_scope: projection.injection_scope,
+        expected_server_key: siteSurfaceServerKey(siteId, surface.id),
+        required_repair_locus: { kind: 'local_site', site_root: site.root },
+        remediation: `Materialize '${surface.id}' with projection '${projection.id}' into ${join(site.root, '.ai', 'mcp')} before launching Site-bound sessions.`,
+      });
+    }
   }
 
   const errors = findings.filter((f) => f.severity === 'error').length;
@@ -3231,9 +3418,13 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
 function registrarCarrierBind(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
+  const projectionId = optionalString(args.projection_id);
   const carrier = lookupCarrier(carrierId);
   const surface = lookupSurface(surfaceId);
   const defaultSiteId = optionalString(args.site_id) ?? 'andrey-user';
+  const binding = carrier.site_bindings.find((candidate) => candidate.site_id === defaultSiteId);
+  const selected = selectSurfaceProjection(surfaceId, projectionId, binding?.runtime_kind);
+  const projection = selected.projection;
   const siteRoot = lookupSite(defaultSiteId).root;
 
   const resolvedArgs = interpolateArgs(surface.args, defaultSiteId, siteRoot);
@@ -3248,6 +3439,7 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
       ...applied,
       status: 'applied',
       surface_id: surfaceId,
+      projection_id: projection.id,
       server_keys: aggregateServerKeys,
       binding_model: 'aggregate_carrier_config',
     };
@@ -3258,10 +3450,10 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
     case 'opencode':
       throw diagnosticError('registrar_single_surface_bind_unsupported_for_opencode_aggregate', 'registrar_single_surface_bind_unsupported_for_opencode_aggregate');
     case 'kimi':
-      result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId);
+      result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
       break;
     case 'codex':
-      result = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId);
+      result = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
       break;
     default:
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
@@ -3304,7 +3496,7 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   return result;
 }
 
-function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string): JsonRecord {
+function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
@@ -3312,7 +3504,7 @@ function kimiBind(configPath: string, surfaceId: string, entrypoint: string, res
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, siteId), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, siteId) }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId);
   mcp[serverKey] = {
     transport: 'stdio',
     command: launch.command,
@@ -3334,13 +3526,13 @@ function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
   return { status: 'unbound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
 }
 
-function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string): JsonRecord {
+function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): JsonRecord {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   let content = readFileSync(configPath, 'utf8');
   const sectionKey = `[mcp_servers.${surfaceId}]`;
   if (content.includes(sectionKey)) return { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, ...naradaScopeMetadata(surfaceId, entrypoint, siteId), narada_scope: naradaScopeMetadata(surfaceId, entrypoint, siteId) }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId);
   content += `\n${sectionKey}\ncommand = "${launch.command}"\nargs = ${JSON.stringify(launch.args)}\n`;
   writeFileSync(configPath, content, 'utf8');
   return { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
@@ -3370,7 +3562,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
     const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id_for_target');
     lookupCarrier(carrierId);
     for (const surface of SURFACES) {
-      try { results.push(registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id })); }
+      try { results.push(registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrierId, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
     }
     return { target, carrier_id: carrierId, results, count: results.length };
@@ -3379,7 +3571,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
   if (target === 'all_surfaces_to_all_carriers') {
     for (const carrier of CARRIERS) {
       for (const surface of SURFACES) {
-        try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id })); }
+        try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id, projection_id: args.projection_id })); }
         catch (e) { results.push({ carrier_id: carrier.carrier_id, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
       }
     }
@@ -3390,13 +3582,13 @@ function registrarSync(args: JsonRecord): JsonRecord {
   lookupSurface(surfaceId);
   if (target === 'all_sites' || target === 'all') {
     for (const site of siteCatalogForOperations()) {
-      try { results.push(registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId, allow_sidecar: args.allow_sidecar === true })); }
+      try { results.push(registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId, projection_id: args.projection_id, runtime_kind: args.runtime_kind, allow_sidecar: args.allow_sidecar === true })); }
       catch (e) { results.push({ site_id: site.site_id, surface_id: surfaceId, error: e instanceof Error ? e.message : String(e) }); }
     }
   }
   if (target === 'all_carriers' || target === 'all') {
     for (const carrier of CARRIERS) {
-      try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surfaceId })); }
+      try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surfaceId, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrier.carrier_id, surface_id: surfaceId, error: e instanceof Error ? e.message : String(e) }); }
     }
   }
@@ -3418,6 +3610,15 @@ function requiredString(value: unknown, code: string, details: JsonRecord = {}):
 function optionalString(value: unknown): string | null {
   const text = String(value ?? '').trim();
   return text || null;
+}
+
+function optionalRuntimeKind(value: unknown): McpRuntimeKind | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === 'nars') return 'nars';
+  throw diagnosticError('registrar_unknown_runtime_kind', `registrar_unknown_runtime_kind:${String(value)}`, {
+    runtime_kind: value,
+    admitted_runtime_kinds: ['nars'],
+  });
 }
 
 function asRecord(value: unknown): JsonRecord {

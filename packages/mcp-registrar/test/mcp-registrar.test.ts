@@ -200,11 +200,67 @@ try {
   assert.equal(artifacts.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(artifacts.env_vars, ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL']);
   assert.ok(artifacts.tools.includes('artifact_register_file'));
+  const narsSession = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'nars-session');
+  assert.ok(narsSession);
+  assert.equal(narsSession.injection_scope, undefined);
+  assert.deepEqual((narsSession.projections as Array<Record<string, any>>).map((projection) => ({
+    id: projection.id,
+    injection_scope: projection.injection_scope,
+    default_injection: projection.default_injection,
+    runtime_requirements: projection.runtime_requirements,
+  })), [
+    {
+      id: 'user-site-operator',
+      injection_scope: 'user_site',
+      default_injection: 'all_site_bound_sessions',
+      runtime_requirements: [],
+    },
+    {
+      id: 'local-site-nars-runtime',
+      injection_scope: 'local_site',
+      default_injection: 'runtime_selected_sessions',
+      runtime_requirements: ['nars'],
+    },
+  ]);
+  const fixtureSite = {
+    site_id: 'fixture-site',
+    root,
+    config_path: join(root, 'config.json'),
+    surfaces: [],
+  };
+  assert.throws(
+    () => buildSiteBindConfig(fixtureSite, narsSession as any),
+    /registrar_surface_projection_required:nars-session/,
+  );
+  const operatorProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator');
+  const operatorProjectionServer = (operatorProjectionConfig.config.mcpServers as Record<string, any>)[operatorProjectionConfig.serverKey];
+  assert.equal(operatorProjectionServer.surface_projection.projection_id, 'user-site-operator');
+  assert.equal(operatorProjectionServer.surface_projection.injection_scope, 'user_site');
+  const narsProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'local-site-nars-runtime');
+  const narsProjectionServer = (narsProjectionConfig.config.mcpServers as Record<string, any>)[narsProjectionConfig.serverKey];
+  assert.equal(narsProjectionServer.surface_projection.projection_id, 'local-site-nars-runtime');
+  assert.equal(narsProjectionServer.surface_projection.injection_scope, 'local_site');
+  assert.deepEqual(narsProjectionServer.surface_projection.runtime_requirements, ['nars']);
+  const narsRuntimeSelectedConfig = buildSiteBindConfig(fixtureSite, narsSession as any, undefined, 'nars');
+  const narsRuntimeSelectedServer = (narsRuntimeSelectedConfig.config.mcpServers as Record<string, any>)[narsRuntimeSelectedConfig.serverKey];
+  assert.equal(narsRuntimeSelectedServer.surface_projection.projection_id, 'local-site-nars-runtime');
+  assert.equal(narsRuntimeSelectedServer.surface_projection.runtime_kind, 'nars');
+  const neutralRuntimeConfig = buildSiteBindConfig(fixtureSite, artifacts as any, undefined, 'nars');
+  const neutralRuntimeServer = (neutralRuntimeConfig.config.mcpServers as Record<string, any>)[neutralRuntimeConfig.serverKey];
+  assert.equal(neutralRuntimeServer.surface_projection.projection_id, 'default');
+  assert.equal(neutralRuntimeServer.surface_projection.runtime_kind, 'nars');
+  const explicitNeutralProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator', 'nars');
+  const explicitNeutralProjectionServer = (explicitNeutralProjectionConfig.config.mcpServers as Record<string, any>)[explicitNeutralProjectionConfig.serverKey];
+  assert.equal(explicitNeutralProjectionServer.surface_projection.projection_id, 'user-site-operator');
+  assert.equal(explicitNeutralProjectionServer.surface_projection.runtime_kind, 'nars');
   const sharedSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] });
   assert.ok(sharedSurfaceIds.includes('speech'));
   assert.ok(sharedSurfaceIds.includes('operator-routing'));
   assert.ok(sharedSurfaceIds.includes('artifacts'));
+  assert.ok(sharedSurfaceIds.includes('nars-session'));
   assert.equal(sharedSurfaceIds.filter((surfaceId) => surfaceId === 'speech').length, 1);
+  const narsRuntimeSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', runtime_kind: 'nars', surfaces: ['agent-context'] });
+  assert.ok(narsRuntimeSurfaceIds.includes('nars-session'));
   const registrar = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
   assert.ok(registrar);
   assert.equal(registrar.injection_scope, 'user_site');
@@ -1050,6 +1106,12 @@ try {
       },
     },
   }, null, 2), 'utf8');
+  const narsBindConfig = buildSiteBindConfig(
+    { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
+    narsSession as any,
+    'local-site-nars-runtime',
+  );
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', narsBindConfig.fileName), JSON.stringify(narsBindConfig.config, null, 2), 'utf8');
   const surfaceRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
   assert.equal(surfaceRegistry.artifact_role, 'site_capability_surface_registry_not_mcp_client_config');
   assertOutputReaderClosure(surfaceRegistry, 'aggregate surface registry');
@@ -1075,6 +1137,12 @@ try {
   assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
   assert.ok((inboxRegistry.registered_live_tools as string[]).includes('inbox_acknowledge'));
   assert.ok((inboxRegistry.tool_contract.mutating_tools as string[]).includes('inbox_acknowledge'));
+  const narsRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-nars-session');
+  assert.ok(narsRegistry);
+  assert.equal(narsRegistry.catalog_surface_id, 'nars-session');
+  assert.equal(narsRegistry.surface_projection.projection_id, 'local-site-nars-runtime');
+  assert.equal(narsRegistry.surface_projection.injection_scope, 'local_site');
+  assert.deepEqual(narsRegistry.surface_projection.runtime_requirements, ['nars']);
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-mailbox-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',
     mcpServers: {

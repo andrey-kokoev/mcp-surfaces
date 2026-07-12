@@ -26,6 +26,12 @@ agent-source posture. `NARADA_SITE_ID` and `NARADA_CARRIER_SESSION_ID` provide
 additional binding provenance. `steer` requires explicit
 `NARADA_NARS_SESSION_ALLOW_STEER=1`.
 
+Registrar materializes this package through explicit projections rather than
+duplicating the adapter: `user-site-operator` for User Site operator access,
+or `local-site-nars-runtime` when the selected runtime kind is `nars`. The
+runtime projection is selected by `runtime_requirements: ["nars"]`; it is not
+inferred from a server name or working directory.
+
 Session paths are resolved through `@narada2/site-paths`; the adapter does not
 construct `.narada` or `crew/nars-sessions` paths itself.
 

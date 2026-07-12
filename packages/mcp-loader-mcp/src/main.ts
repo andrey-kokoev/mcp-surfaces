@@ -23,6 +23,8 @@ const SITE_TOOL_OBSERVATION_MAX_ENTRIES = 32;
 const SITE_TOOL_OBSERVATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const REJECTED_SITE_IDS = new Set(['narada-andrey', 'narada-user-site']);
 
+type McpRuntimeKind = string;
+
 function assertSupportedSiteId(siteId: string, source: string): string {
   if (REJECTED_SITE_IDS.has(siteId)) {
     throw diagnosticError(
@@ -57,6 +59,7 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
   const servers = asRecord(readSiteFabric(siteRoot).mcpServers);
   const requestedSurfaceIds = stringArray(args.surface_ids);
   const surfaceIds = requestedSurfaceIds ?? Object.keys(servers).sort();
+  const runtimeKind = optionalRuntimeKind(args.runtime_kind);
   const includeOk = args.include_ok === true;
   const findings: JsonRecord[] = [];
   const observedToolsBySurface: Record<string, string[]> = {};
@@ -65,17 +68,32 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
   const observedUnclassifiedToolsBySurface: Record<string, string[]> = {};
 
   for (const surfaceId of surfaceIds) {
-    const server = asRecord(servers[surfaceId]);
-    if (!servers[surfaceId]) {
+    const matchedServer = findSiteServer(servers, surfaceId);
+    const server = matchedServer?.server ?? null;
+    if (!server) {
       findings.push({ surface_id: surfaceId, status: 'surface_not_declared', declared_tools: [], observed_tools: [] });
       continue;
     }
     const rawDeclaredTools = stringArray(server.tools) ?? [];
     const declaredTools = [...new Set(rawDeclaredTools)].sort();
     const duplicateDeclaredTools = duplicateStrings(rawDeclaredTools);
+    const runtimeRequirements = surfaceRuntimeRequirements(server);
+    if (!runtimeRequirementsMatch(runtimeRequirements, runtimeKind)) {
+      findings.push({
+        surface_id: surfaceId,
+        status: 'runtime_not_selected',
+        declared_count: declaredTools.length,
+        observed_count: 0,
+        declared_tools: declaredTools,
+        observed_tools: [],
+        runtime_kind: runtimeKind,
+        runtime_requirements: runtimeRequirements,
+      });
+      continue;
+    }
     let connectionId: string | null = null;
     try {
-      const attached = await attachSurface({ site_root: siteRoot, surface_id: surfaceId }, state);
+      const attached = await attachSurface({ site_root: siteRoot, surface_id: surfaceId, runtime_kind: runtimeKind }, state);
       connectionId = requiredString(attached.connection_id, 'attached_connection_id_missing');
       const connection = getConnection({ connection_id: connectionId }, state);
       const observedDefinitions = connection.toolSnapshot ?? [];
@@ -130,16 +148,18 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
     }
   }
 
-  const violationCount = findings.filter((finding) => finding.status !== 'ok').length;
+  const violationCount = findings.filter((finding) => finding.status !== 'ok' && finding.status !== 'runtime_not_selected').length;
   const observation = {
     schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
     status: violationCount === 0 ? 'ok' : 'drift',
     site_root: siteRoot,
     observed_at: new Date().toISOString(),
     requested_surface_ids: requestedSurfaceIds ?? null,
+    runtime_kind: runtimeKind,
     attempted_surface_ids: surfaceIds,
     observed_surface_ids: Object.keys(observedToolsBySurface).sort(),
     unobserved_surface_ids: surfaceIds.filter((surfaceId) => !Object.hasOwn(observedToolsBySurface, surfaceId)),
+    runtime_skipped_surface_ids: findings.filter((finding) => finding.status === 'runtime_not_selected').map((finding) => finding.surface_id),
     observation_coverage: requestedSurfaceIds ? 'partial' : 'complete',
     checked_surface_count: surfaceIds.length,
     violation_count: violationCount,
@@ -207,6 +227,8 @@ type ChildConnection = {
   connectionId: string;
   siteRoot: string;
   surfaceId: string;
+  runtimeKind: McpRuntimeKind | null;
+  runtimeRequirements: McpRuntimeKind[];
   entrypoint: string;
   args: string[];
   requestedEntrypoint: string | null;
@@ -302,11 +324,13 @@ export function listTools() {
     tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric declarations with fresh child tools/list responses and materialize an immutable observation_ref for Registrar conformance checks.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_ids: { type: 'array', items: { type: 'string' }, description: 'Optional surface ids to check. Defaults to every surface in the site fabric.' },
+      runtime_kind: { type: 'string', description: 'Explicit runtime context used to select runtime-affined projections. Omit to inspect only runtime-neutral surfaces.' },
       include_ok: { type: 'boolean', description: 'Include passing surface findings.' },
     }, ['site_root'], { readOnly: true }),
     tool('mcp_loader_attach_surface', 'Spawn and initialize a stdio MCP surface and return a connection id.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_id: { type: 'string', description: 'Surface identifier from the site fabric or shared surface registry.' },
+      runtime_kind: { type: 'string', description: 'Explicit runtime context required when the selected surface projection declares runtime_requirements.' },
       entrypoint: { type: 'string', description: 'Optional explicit entrypoint path; must be allowed by policy if provided.' },
       args: { type: 'array', items: { type: 'string' }, description: 'Optional additional args appended after resolved args.' },
     }, ['site_root', 'surface_id'], { readOnly: false }),
@@ -378,10 +402,12 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
   for (const [surfaceId, server] of Object.entries(servers)) {
     const rec = asRecord(server);
     surfaces.push({
-      surface_id: surfaceId,
+      surface_id: typeof rec.surface_id === 'string' ? rec.surface_id : surfaceId,
+      server_name: surfaceId,
       command: rec.command,
       args: rec.args,
       env_vars: rec.env ? Object.keys(asRecord(rec.env)) : [],
+      runtime_requirements: surfaceRuntimeRequirements(rec),
     });
   }
   return { schema: 'narada.mcp_loader.site_surfaces.v1', site_root: siteRoot, surfaces };
@@ -459,8 +485,10 @@ function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord
 async function attachSurface(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
   const siteRoot = normalizePath(requiredString(args.site_root, 'missing_site_root'));
   const surfaceId = requiredString(args.surface_id, 'missing_surface_id');
+  const runtimeKind = optionalRuntimeKind(args.runtime_kind);
   ensureSiteRootAllowed(siteRoot, state.policy);
   ensureSurfaceAllowed(surfaceId, siteRoot, state.policy);
+  const runtimeRequirements = ensureSurfaceRuntimeAllowed(surfaceId, siteRoot, runtimeKind);
 
   if (state.connections.size >= state.policy.maxConnections) {
     throw diagnosticError('max_connections_reached', `max_connections_reached:${state.connections.size}`);
@@ -479,6 +507,8 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
     state,
     siteRoot,
     surfaceId,
+    runtimeKind,
+    runtimeRequirements,
     entrypoint,
     resolvedArgs,
     requestedEntrypoint: explicitEntrypoint,
@@ -491,12 +521,14 @@ async function openConnection(input: {
   state: LoaderState;
   siteRoot: string;
   surfaceId: string;
+  runtimeKind: McpRuntimeKind | null;
+  runtimeRequirements: McpRuntimeKind[];
   entrypoint: string;
   resolvedArgs: string[];
   requestedEntrypoint: string | null;
   extraArgs: string[];
 }): Promise<ChildConnection> {
-  const { state, siteRoot, surfaceId, entrypoint, resolvedArgs, requestedEntrypoint, extraArgs } = input;
+  const { state, siteRoot, surfaceId, runtimeKind, runtimeRequirements, entrypoint, resolvedArgs, requestedEntrypoint, extraArgs } = input;
   const connectionId = randomUUID();
   const child = spawn(process.execPath, [entrypoint, ...resolvedArgs], {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -509,6 +541,8 @@ async function openConnection(input: {
     connectionId,
     siteRoot,
     surfaceId,
+    runtimeKind,
+    runtimeRequirements,
     entrypoint,
     args: resolvedArgs,
     requestedEntrypoint,
@@ -555,6 +589,8 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     connection_id: connection.connectionId,
     site_root: connection.siteRoot,
     surface_id: connection.surfaceId,
+    runtime_kind: connection.runtimeKind,
+    runtime_requirements: connection.runtimeRequirements,
     entrypoint: connection.entrypoint,
     args: connection.args,
     server_info: connection.serverInfo,
@@ -644,6 +680,8 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
     state,
     siteRoot: connection.siteRoot,
     surfaceId: connection.surfaceId,
+    runtimeKind: connection.runtimeKind,
+    runtimeRequirements: connection.runtimeRequirements,
     entrypoint: connection.entrypoint,
     resolvedArgs: connection.args,
     requestedEntrypoint: connection.requestedEntrypoint,
@@ -672,7 +710,7 @@ async function resolveSurfaceEntrypoint(siteRoot: string, surfaceId: string, exp
   }
   const fabric = readSiteFabric(siteRoot);
   const servers = asRecord(fabric.mcpServers);
-  const server = servers[surfaceId];
+  const server = findSiteServer(servers, surfaceId)?.server;
   if (server) {
     const rec = asRecord(server);
     const command = String(rec.command ?? '');
@@ -852,6 +890,25 @@ function readSiteFabric(siteRoot: string): JsonRecord {
   return readSiteFabricBundle(siteRoot).fabric;
 }
 
+function findSiteServer(servers: JsonRecord, requestedSurfaceId: string): { serverKey: string; server: JsonRecord } | null {
+  const direct = servers[requestedSurfaceId];
+  if (direct) return { serverKey: requestedSurfaceId, server: asRecord(direct) };
+  const matches: Array<{ serverKey: string; server: JsonRecord }> = [];
+  for (const [serverKey, rawServer] of Object.entries(servers)) {
+    const server = asRecord(rawServer);
+    if (server.surface_id === requestedSurfaceId) matches.push({ serverKey, server });
+  }
+  if (matches.length > 1) {
+    throw diagnosticError(
+      'surface_id_ambiguous',
+      `surface_id_ambiguous:${requestedSurfaceId}`,
+      { surface_id: requestedSurfaceId, server_names: matches.map((match) => match.serverKey).sort() },
+    );
+  }
+  if (matches.length === 1) return matches[0];
+  return null;
+}
+
 function buildChildEnv(siteRoot: string, policy: LoaderPolicy): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of policy.allowedEnvVars) {
@@ -873,11 +930,13 @@ function ensureSurfaceAllowed(surfaceId: string, siteRoot: string, policy: Loade
   if (policy.allowedSurfaceIds === 'site_fabric') {
     const fabric = readSiteFabric(siteRoot);
     const servers = asRecord(fabric.mcpServers);
-    if (servers[surfaceId]) return;
+    if (findSiteServer(servers, surfaceId)) return;
     if (SHARED_SURFACE_REGISTRY[surfaceId]) return;
     throw diagnosticError('surface_not_allowed', `surface_not_allowed:${surfaceId}`);
   }
   if (!policy.allowedSurfaceIds.includes(surfaceId)) {
+    const matched = findSiteServer(asRecord(readSiteFabric(siteRoot).mcpServers), surfaceId);
+    if (matched && policy.allowedSurfaceIds.includes(matched.serverKey)) return;
     throw diagnosticError('surface_not_allowed', `surface_not_allowed:${surfaceId}`);
   }
 }
@@ -1008,6 +1067,8 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     connection_id: connection.connectionId,
     site_root: connection.siteRoot,
     surface_id: connection.surfaceId,
+    runtime_kind: connection.runtimeKind,
+    runtime_requirements: connection.runtimeRequirements,
     entrypoint: connection.entrypoint,
     args: connection.args,
     status: live ? 'live' : 'closed',
@@ -1125,6 +1186,43 @@ function stringArray(value: unknown): string[] | null {
   if (!value) return null;
   if (Array.isArray(value)) return value.map((v) => String(v));
   return null;
+}
+
+function optionalRuntimeKind(value: unknown): McpRuntimeKind | null {
+  return optionalString(value);
+}
+
+function surfaceRuntimeRequirements(server: unknown): McpRuntimeKind[] {
+  const record = asRecord(server);
+  const projection = asRecord(record.surface_projection);
+  const rawRequirements = Array.isArray(projection.runtime_requirements)
+    ? projection.runtime_requirements
+    : record.runtime_requirements;
+  return (Array.isArray(rawRequirements) ? rawRequirements : [])
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+}
+
+function runtimeRequirementsMatch(requirements: McpRuntimeKind[], runtimeKind: McpRuntimeKind | null): boolean {
+  return requirements.length === 0 || (runtimeKind !== null && requirements.includes(runtimeKind));
+}
+
+function ensureSurfaceRuntimeAllowed(surfaceId: string, siteRoot: string, runtimeKind: McpRuntimeKind | null): McpRuntimeKind[] {
+  const servers = asRecord(readSiteFabric(siteRoot).mcpServers);
+  const requirements = surfaceRuntimeRequirements(findSiteServer(servers, surfaceId)?.server);
+  if (runtimeRequirementsMatch(requirements, runtimeKind)) return requirements;
+  if (runtimeKind === null) {
+    throw diagnosticError(
+      'surface_runtime_required',
+      `surface_runtime_required:${surfaceId}`,
+      { surface_id: surfaceId, runtime_requirements: requirements },
+    );
+  }
+  throw diagnosticError(
+    'surface_runtime_not_supported',
+    `surface_runtime_not_supported:${surfaceId}:${runtimeKind}`,
+    { surface_id: surfaceId, runtime_kind: runtimeKind, runtime_requirements: requirements },
+  );
 }
 
 function optionalString(value: unknown): string | null {

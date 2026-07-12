@@ -1,7 +1,7 @@
 # NARS Session MCP Target
 
 Status: implemented Narada-specific adapter target; runtime registration and
-site admission are still explicit deployment steps.
+site admission are explicit deployment steps.
 
 The canonical semantic contract is maintained in Narada proper:
 
@@ -86,6 +86,25 @@ Surface registration must explicitly declare:
 The default posture should be local-site, non-steering, agent-source delivery.
 Cross-site and interruptive delivery require explicit admission.
 
+## Explicit Projections
+
+The adapter has one package implementation and two registrar projections:
+
+| Projection | Scope | Selection | Purpose |
+|---|---|---|---|
+| `user-site-operator` | `user_site` | User Site binding/default | Operator-facing session discovery and governed input delivery |
+| `local-site-nars-runtime` | `local_site` | `runtime_kind: "nars"` or explicit `projection_id` | Site-bound agent access when the selected runtime is NARS |
+
+The Local Site projection declares `runtime_requirements: ["nars"]`. Runtime
+affinity selects availability only; it does not replace the adapter's caller,
+site, authority-epoch, or delivery-policy checks. A launcher must pass the
+runtime kind into site materialization, and the resulting config records
+`surface_projection.runtime_kind`. The carrier fabric loader then includes the
+projection only when the selected runtime kind satisfies its requirements. The
+registrar refuses ambiguous
+multi-projection materialization instead of selecting from a server name,
+current directory, or entrypoint path.
+
 ## Non-Goals
 
 This surface must not:
@@ -104,5 +123,6 @@ This surface must not:
 The package belongs in the Narada-specific section of the MCP taxonomy. Its
 protocol types and semantic fixtures belong in Narada's carrier-protocol
 package. The MCP package contains only the adapter, policy integration,
-bounded output, guidance, and adapter tests. Runtime registration and site
-admission remain deployment concerns rather than a second protocol authority.
+bounded output, guidance, and adapter tests. The registrar owns explicit
+projection metadata; Narada proper owns runtime/session authority and must
+materialize the NARS projection when the selected runtime is `nars`.

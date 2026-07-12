@@ -72,6 +72,15 @@ process.stdin.on('data', (chunk) => {
       args: [restartableEntrypoint, '--site-root', root, '--unclassified'],
       tools: ['echo'],
     },
+    'narada-sonar-nars-session': {
+      command: 'node',
+      args: [restartableEntrypoint, '--site-root', root, '--marker', 'nars'],
+      tools: ['echo'],
+      surface_id: 'nars-session',
+      surface_projection: {
+        runtime_requirements: ['nars'],
+      },
+    },
   },
 }), 'utf8');
 writeFileSync(join(aggregateRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
@@ -143,6 +152,7 @@ try {
   assert.equal(listResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
   const surfaces = listResult?.surfaces as { surface_id: string }[];
   assert.ok(surfaces.some((s) => s.surface_id === 'test-echo'), `expected test-echo in ${JSON.stringify(surfaces)}`);
+  assert.ok(surfaces.some((s) => s.surface_id === 'nars-session'), `expected canonical nars-session in ${JSON.stringify(surfaces)}`);
 
   const aggregateListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: aggregateRoot } }, 10);
   assert.equal(aggregateListResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
@@ -186,6 +196,31 @@ try {
   const inventoryUnclassified = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-unclassified'] } }, 25);
   assert.equal(inventoryUnclassified?.status, 'drift');
   assert.deepEqual(inventoryUnclassified?.findings?.[0]?.unclassified_observed_tools, ['echo']);
+
+  const runtimeNeutralInventory = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['nars-session'], include_ok: true } }, 27);
+  assert.equal(runtimeNeutralInventory?.status, 'ok');
+  assert.equal(runtimeNeutralInventory?.runtime_kind, null);
+  assert.deepEqual(runtimeNeutralInventory?.runtime_skipped_surface_ids, ['nars-session']);
+  assert.equal(runtimeNeutralInventory?.findings?.[0]?.status, 'runtime_not_selected');
+  assert.deepEqual(runtimeNeutralInventory?.findings?.[0]?.runtime_requirements, ['nars']);
+
+  const missingRuntimeAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'nars-session' } }, 28);
+  assert.equal(missingRuntimeAttach?.data?.code, 'surface_runtime_required');
+  const wrongRuntimeAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'nars-session', runtime_kind: 'codex' } }, 29);
+  assert.equal(wrongRuntimeAttach?.data?.code, 'surface_runtime_not_supported');
+
+  const narsAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'nars-session', runtime_kind: 'nars' } }, 30);
+  assert.equal(narsAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  assert.equal(narsAttach?.runtime_kind, 'nars');
+  assert.deepEqual(narsAttach?.runtime_requirements, ['nars']);
+  const narsDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: narsAttach?.connection_id } }, 31);
+  assert.equal(narsDetach?.termination?.status, 'terminated');
+
+  const narsInventory = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['nars-session'], runtime_kind: 'nars', include_ok: true } }, 32);
+  assert.equal(narsInventory?.status, 'ok');
+  assert.equal(narsInventory?.runtime_kind, 'nars');
+  assert.deepEqual(narsInventory?.runtime_skipped_surface_ids, []);
+  assert.deepEqual(narsInventory?.observed_tools?.['nars-session'], ['echo']);
 
   const diagnosticsResult = await call('tools/call', { name: 'mcp_loader_site_fabric_diagnostics', arguments: { site_root: root } }, 4);
   assert.equal(diagnosticsResult?.schema, 'narada.mcp_loader.site_fabric_diagnostics.v1');

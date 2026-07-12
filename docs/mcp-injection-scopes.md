@@ -133,6 +133,68 @@ type BoundMcpSurface = {
 };
 ```
 
+## Surface Projections And Runtime Affinity
+
+The package surface and its injected projection are separate concepts. A
+surface package identifies the adapter implementation and tool contract. A
+projection identifies one admitted authority boundary and, when needed, one
+runtime affinity. A package may expose more than one projection, but a bound
+session receives one explicitly selected projection for that package.
+
+The registrar projection shape is:
+
+```ts
+type McpRuntimeKind = "nars";
+
+type McpSurfaceProjection = {
+  id: string;
+  injection_scope: McpInjectionScope;
+  default_injection?:
+    | "all_site_bound_sessions"
+    | "all_carrier_sessions"
+    | "runtime_selected_sessions";
+  runtime_requirements?: McpRuntimeKind[];
+};
+
+type MaterializedSurfaceProjection = McpSurfaceProjection & {
+  projection_id: string;
+  runtime_kind?: McpRuntimeKind;
+};
+```
+
+Runtime affinity is an availability selector, not a permission grant. The
+surface still enforces caller identity, site authority, and mutation policy.
+The launcher must pass the selected runtime kind into materialization; the
+registrar must not infer it from a server name, current directory, or entrypoint
+path. If a surface has multiple compatible projections and neither a runtime
+kind nor an explicit `projection_id` selects exactly one, materialization must
+refuse rather than guess.
+
+When a runtime kind selects a projection, the materialized server config records
+that selection as `surface_projection.runtime_kind`. This is launch input
+provenance, not a permission grant; the carrier loader uses it only to filter
+runtime-affined surfaces for the selected runtime.
+
+Selection precedence is explicit: a projection whose `runtime_requirements`
+contains the selected runtime wins over runtime-neutral projections. If no
+runtime-specific projection matches, exactly one runtime-neutral projection may
+serve as the fallback; multiple neutral projections still require an explicit
+`projection_id`. The loader keeps runtime-neutral servers available to every
+runtime and skips only projections whose declared requirements are not
+satisfied.
+
+`nars-session-mcp` is the reference case:
+
+- `user-site-operator` is a User Site projection for operator-facing discovery
+  and governed input delivery.
+- `local-site-nars-runtime` is a Local Site projection with
+  `runtime_requirements: ["nars"]`. It is materialized when the launcher
+  explicitly selects the NARS runtime.
+
+Both projections use the same `@narada2/nars-session-mcp` entrypoint. The
+projection metadata, not a duplicated package or site-specific carrier profile,
+defines why that entrypoint is present in a session.
+
 For example, a Staccato session alias for speech should be understood as:
 
 ```ts
