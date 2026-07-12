@@ -101,26 +101,26 @@ Common flags:
 
 The package has two explicit real-boundary delegation proofs:
 
-- `test/real-carrier-e2e.test.ts` is the controlled L4 proof. It starts the
+- `test/real-carrier-e2e.test.ts` is the controlled B4 proof with A0 authority. It starts the
   built worker-delegation MCP child, uses the production
   `narada-agent-runtime-server` carrier, calls a bounded local HTTP provider
   fixture, and verifies provider requests, lifecycle events, durable run
   artifacts, and cleanup.
 - Narada's
   `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` is the
-  controlled L5 proof. It starts the real launcher, carrier, Site-local MCP
+  controlled W1 proof with A0 provider authority. It starts the real launcher, carrier, Site-local MCP
   fabric, `nars-session-mcp`, delegated-task MCP, and worker carrier, then
   verifies durable task and worker evidence.
 
-Run the L4 proof with:
+Run the B4 proof with:
 
 ```powershell
 pnpm --filter @narada2/worker-delegation-mcp test:e2e:carrier
 ```
 
-The L4/L5 proofs use a bounded local provider fixture. They prove the local
-production topology and carrier protocol, not live external-provider account
-authority.
+The B4/W1 proofs use a bounded local provider fixture (A0). They prove the
+local production topology and carrier protocol, not live external-provider
+account authority (A1/A2).
 
 Provider registry cognition defaults are provider-specific. For `narada-agent-runtime-server`, resolution precedence is:
 
