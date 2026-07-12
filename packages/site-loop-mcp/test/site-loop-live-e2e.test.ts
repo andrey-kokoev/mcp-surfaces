@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  createTemporaryE2eRoot,
+  removeTemporaryE2eRoot,
+  spawnContentLengthMcpServer,
+  type JsonRecord,
+  type JsonRpcResponse,
+} from '@narada2/mcp-e2e-harness';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 
-const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-mcp-live-e2e-'));
+const siteRoot = createTemporaryE2eRoot('site-loop-mcp-live-e2e');
 const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));
 
 mkdirSync(join(siteRoot, '.narada', 'capabilities'), { recursive: true });
@@ -40,122 +45,82 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
 const initializedLoopStore = openSiteLoopStore(siteRoot);
 initializedLoopStore.close();
 
-const proc = spawn(process.execPath, ['--no-warnings', serverPath, '--site-root', siteRoot], {
+const server = spawnContentLengthMcpServer(process.execPath, ['--no-warnings', serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
-  stdio: ['pipe', 'pipe', 'pipe'],
+  label: 'site-loop-mcp-live-e2e',
+  timeoutMs: 8_000,
+});
+const client = server.client;
+let stderr = '';
+server.child.stderr.setEncoding('utf8');
+server.child.stderr.on('data', (chunk) => {
+  stderr = (stderr + String(chunk)).slice(-4_000);
 });
 
-let stdout = '';
-let stderr = '';
-proc.stdout.setEncoding('utf8');
-proc.stderr.setEncoding('utf8');
-proc.stdout.on('data', (chunk) => { stdout += chunk; });
-proc.stderr.on('data', (chunk) => { stderr += chunk; });
-
-function writeMessage(message) {
-  const body = JSON.stringify(message);
-  proc.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\n\n${body}`);
-}
-
-function readOne() {
-  const crlfHeaderEnd = stdout.indexOf('\r\n\r\n');
-  const lfHeaderEnd = stdout.indexOf('\n\n');
-  const headerEnd = crlfHeaderEnd >= 0 ? crlfHeaderEnd : lfHeaderEnd;
-  if (headerEnd < 0) return null;
-  const separatorLength = crlfHeaderEnd >= 0 ? 4 : 2;
-  const header = stdout.slice(0, headerEnd);
-  const match = /Content-Length:\s*(\d+)/i.exec(header);
-  if (!match) throw new Error(`bad_header:${header}`);
-  const bodyStart = headerEnd + separatorLength;
-  const bodyEnd = bodyStart + Number(match[1]);
-  if (stdout.length < bodyEnd) return null;
-  const body = stdout.slice(bodyStart, bodyEnd);
-  stdout = stdout.slice(bodyEnd);
-  return JSON.parse(body);
-}
-
-async function waitFor(id) {
-  const deadline = Date.now() + 8000;
-  while (Date.now() < deadline) {
-    const message = readOne();
-    if (message?.id === id) return message;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error(`timeout:${id}; stderr=${stderr}`);
-}
-
-function callTool(id, name, args = {}) {
-  writeMessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
-  return waitFor(id);
-}
-
-function contentText(label, response) {
-  assert.equal(Array.isArray(response.result?.content), true, `${label}: ${JSON.stringify(response)}`);
-  assert.equal(response.result.content.length > 0, true, `${label}: ${JSON.stringify(response)}`);
-  assert.equal(response.result.content[0].type, 'text', `${label}: ${JSON.stringify(response)}`);
-  return JSON.parse(response.result.content[0].text);
+function contentText(label: string, response: JsonRpcResponse): JsonRecord {
+  assert.equal(response.error, undefined, label + ': ' + JSON.stringify(response));
+  const result = response.result ?? {};
+  const content = Array.isArray(result.content) ? result.content : [];
+  assert.equal(content.length > 0, true, label + ': ' + JSON.stringify(response));
+  const first = content[0];
+  assert.equal(first && typeof first === 'object' && !Array.isArray(first) && (first as JsonRecord).type, 'text', label + ': ' + JSON.stringify(response));
+  return JSON.parse(String((first as JsonRecord).text ?? '')) as JsonRecord;
 }
 
 try {
-  writeMessage({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
-  const init = await waitFor(1);
+  const init = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
   assert.equal(init.error, undefined);
-  assert.equal(init.result.serverInfo.name, 'narada-site-loop-mcp');
+  assert.equal((init.result?.serverInfo as JsonRecord | undefined)?.name, 'narada-site-loop-mcp');
 
-  writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
-  const tools = await waitFor(2);
+  const tools = await client.request(2, 'tools/list', {});
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool) => tool.name);
-  assert.equal(names.includes('site_loop_doctor'), true);
-  assert.equal(names.includes('site_docs_list'), true);
-  assert.equal(names.includes('site_docs_show'), true);
-  assert.equal(names.includes('site_test_list'), true);
-  assert.equal(names.includes('site_test_run'), true);
-  assert.equal(names.includes('site_loop_config_validate'), true);
-  assert.equal(names.includes('site_loop_status'), true);
+  const toolList = Array.isArray(tools.result?.tools) ? tools.result.tools : [];
+  const names = toolList.map((tool) => String((tool as JsonRecord).name ?? ''));
+  for (const requiredTool of ['site_loop_doctor', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_config_validate', 'site_loop_status']) {
+    assert.equal(names.includes(requiredTool), true, 'missing ' + requiredTool);
+  }
 
-  const configValidation = contentText('site_loop_config_validate', await callTool(3, 'site_loop_config_validate'));
+  const configValidation = contentText('site_loop_config_validate', await client.request(3, 'tools/call', { name: 'site_loop_config_validate', arguments: {} }));
   assert.equal(configValidation.status, 'ok');
   assert.equal(configValidation.loop_id, 'live.e2e.loop');
   assert.equal(configValidation.site_id, 'narada-live-e2e');
 
-  const doctor = contentText('site_loop_doctor', await callTool(4, 'site_loop_doctor'));
+  const doctor = contentText('site_loop_doctor', await client.request(4, 'tools/call', { name: 'site_loop_doctor', arguments: {} }));
   assert.equal(doctor.status, 'ok');
-  assert.equal(doctor.site_loop_config.status, 'ok');
-  assert.equal(doctor.site_loop_config.loop_id, 'live.e2e.loop');
+  assert.equal((doctor.site_loop_config as JsonRecord).status, 'ok');
+  assert.equal((doctor.site_loop_config as JsonRecord).loop_id, 'live.e2e.loop');
   assert.deepEqual(doctor.approved_tests, ['smoke_echo']);
 
-  const docsList = contentText('site_docs_list', await callTool(5, 'site_docs_list'));
+  const docsList = contentText('site_docs_list', await client.request(5, 'tools/call', { name: 'site_docs_list', arguments: {} }));
   assert.equal(docsList.status, 'ok');
-  assert.equal(docsList.docs.length, 2);
-  assert.equal(docsList.docs.some((doc) => doc.path === 'AGENTS.md'), true);
-  assert.equal(docsList.docs.some((doc) => doc.path === 'README.md'), true);
+  assert.equal(Array.isArray(docsList.docs) ? docsList.docs.length : 0, 2);
+  const docs = Array.isArray(docsList.docs) ? docsList.docs : [];
+  assert.equal(docs.some((doc) => (doc as JsonRecord).path === 'AGENTS.md'), true);
+  assert.equal(docs.some((doc) => (doc as JsonRecord).path === 'README.md'), true);
 
-  const docShow = contentText('site_docs_show', await callTool(6, 'site_docs_show', { path: 'AGENTS.md' }));
+  const docShow = contentText('site_docs_show', await client.request(6, 'tools/call', { name: 'site_docs_show', arguments: { path: 'AGENTS.md' } }));
   assert.equal(docShow.status, 'ok');
-  assert.match(docShow.content, /Live E2E/);
+  assert.match(String(docShow.content), /Live E2E/);
 
-  const testsList = contentText('site_test_list', await callTool(7, 'site_test_list'));
+  const testsList = contentText('site_test_list', await client.request(7, 'tools/call', { name: 'site_test_list', arguments: {} }));
   assert.equal(testsList.status, 'ok');
-  assert.equal(testsList.tests.length, 1);
-  assert.equal(testsList.tests[0].selector, 'smoke_echo');
+  const tests = Array.isArray(testsList.tests) ? testsList.tests : [];
+  assert.equal(tests.length, 1);
+  assert.equal((tests[0] as JsonRecord).selector, 'smoke_echo');
 
-  const testRun = contentText('site_test_run', await callTool(8, 'site_test_run', { selector: 'smoke_echo' }));
+  const testRun = contentText('site_test_run', await client.request(8, 'tools/call', { name: 'site_test_run', arguments: { selector: 'smoke_echo' } }));
   assert.equal(testRun.status, 'passed');
   assert.equal(testRun.selector, 'smoke_echo');
   assert.equal(testRun.exit_code, 0);
   assert.equal(testRun.stdout, 'live-e2e-ok');
 
-  const status = contentText('site_loop_status', await callTool(9, 'site_loop_status'));
+  const status = contentText('site_loop_status', await client.request(9, 'tools/call', { name: 'site_loop_status', arguments: {} }));
   assert.equal(status.loop_id, 'live.e2e.loop');
   assert.equal(status.schema, 'narada.site_operating_loop.status.v1');
-
-  assert.equal(stderr.trim(), '');
 } finally {
-  proc.stdin?.destroy();
-  proc.stdout?.destroy();
-  proc.stderr?.destroy();
-  proc.kill();
+  await server.close();
+  assert.equal(stderr.trim(), '');
+  assert.equal(removeTemporaryE2eRoot(siteRoot), true);
 }
 
 console.log('site-loop-mcp live e2e ok');

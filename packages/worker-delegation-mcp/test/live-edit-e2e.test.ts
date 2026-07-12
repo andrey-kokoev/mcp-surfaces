@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  asRecord,
+  createTemporaryE2eRoot,
+  removeTemporaryE2eRoot,
+  spawnJsonlMcpServer,
+  type JsonRecord,
+} from '@narada2/mcp-e2e-harness';
 
-type JsonRecord = Record<string, unknown>;
-type RpcResponse = { id?: number | string; result?: JsonRecord; error?: JsonRecord };
-
-const root = mkdtempSync(join(tmpdir(), 'worker-delegation-live-edit-e2e-'));
+const root = createTemporaryE2eRoot('worker-delegation-live-edit-e2e');
 const targetPath = join(root, 'worker-edit-target.txt');
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
@@ -127,7 +129,7 @@ writeFileSync(fixturePath, [
 
 try {
   assert.equal(existsSync(filesystemServerPath), true, 'build ' + filesystemServerPath + ' before running this E2E test');
-  const child = spawn(process.execPath, [
+  const worker = spawnJsonlMcpServer(process.execPath, [
     workerServerPath,
     '--site-root', root,
     '--allowed-root', root,
@@ -137,11 +139,11 @@ try {
     '--agent-runtime-server-command', process.execPath,
     '--agent-runtime-server-command-arg', fixturePath,
   ], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
     env: { ...process.env, NARADA_PROVIDER_SECRET_STORE: 'disabled' },
+    timeoutMs: 15000,
+    label: 'worker-delegation',
   });
-  const client = createJsonlClient(child);
+  const client = worker.client;
   try {
     const initialize = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
     assert.equal(initialize.error, undefined);
@@ -197,66 +199,6 @@ try {
     await client.close();
   }
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  removeTemporaryE2eRoot(root);
 }
 
-function createJsonlClient(child: ChildProcessWithoutNullStreams): { request: (id: number, method: string, params: JsonRecord) => Promise<RpcResponse>; close: () => Promise<void> } {
-  let buffer = '';
-  const pending = new Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => {
-    buffer += String(chunk);
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const message = JSON.parse(line) as RpcResponse;
-      const entry = message.id === undefined ? undefined : pending.get(String(message.id));
-      if (!entry) continue;
-      pending.delete(String(message.id));
-      clearTimeout(entry.timer);
-      entry.resolve(message);
-    }
-  });
-  const rejectAll = (error: Error) => {
-    for (const [id, entry] of pending) {
-      clearTimeout(entry.timer);
-      pending.delete(id);
-      entry.reject(error);
-    }
-  };
-  child.on('error', rejectAll);
-  child.on('close', (code) => {
-    if (code !== 0) rejectAll(new Error('worker-delegation MCP child exited with code ' + code));
-  });
-  return {
-    request(id, method, params) {
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(String(id));
-          reject(new Error('timed out waiting for worker-delegation response ' + id));
-        }, 15000);
-        pending.set(String(id), { resolve, reject, timer });
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-      });
-    },
-    async close() {
-      if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          child.kill();
-          resolve();
-        }, 2000);
-        child.once('close', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-    },
-  };
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}

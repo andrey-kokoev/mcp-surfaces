@@ -21,7 +21,7 @@
     "test:coverage": "pnpm build && c8 --all --src=dist/src --include=dist/src/**/*.js --temp-directory=.tmp/c8 --reporter=text --check-coverage --statements=90 --lines=90 --branches=74 --functions=95 node dist/test/run-tests.js",
     "test:live": "pnpm build && node dist/test/live-worker-integration.test.js",
     "test:live:provider": "pnpm build && node dist/test/live-worker-integration.test.js --provider",
-    "test:e2e:site-fabric": "pnpm --filter @narada2/worker-delegation-mcp build && pnpm --filter @narada2/mcp-loader-mcp build && pnpm build && node dist/test/site-fabric-worker-e2e.test.js"
+    "test:e2e:site-fabric": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/worker-delegation-mcp build && pnpm --filter @narada2/mcp-loader-mcp build && pnpm build && node dist/test/site-fabric-worker-e2e.test.js"
   },
   "dependencies": {
     "@narada2/execution-contract": "workspace:*",
@@ -34,6 +34,7 @@
     "task-graph.md"
   ],
   "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*",
     "c8": "^11.0.0"
   }
 }

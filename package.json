@@ -14,6 +14,7 @@
     "test:mcp-telemetry": "pnpm --filter @narada2/mcp-telemetry test",
     "test:mcp-affordances": "pnpm --filter @narada2/mcp-affordances test",
     "test:mcp-runtime-proxy": "pnpm --filter @narada2/mcp-runtime-proxy test",
+    "test:mcp-e2e-harness": "pnpm --filter @narada2/mcp-e2e-harness test",
     "test:structured-command": "pnpm --filter @narada2/structured-command-mcp test",
     "test:git": "pnpm --filter @narada2/git-mcp test",
     "test:delegated-task": "pnpm --filter @narada2/delegated-task-mcp test",

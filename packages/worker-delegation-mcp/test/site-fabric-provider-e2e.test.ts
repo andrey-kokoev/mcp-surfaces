@@ -1,16 +1,18 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-type JsonRecord = Record<string, unknown>;
-type RpcResponse = { id?: number | string; result?: JsonRecord; error?: JsonRecord };
-type JsonlClient = {
-  request: (id: number, method: string, params: JsonRecord) => Promise<RpcResponse>;
-  close: () => Promise<void>;
-};
+import {
+  asRecord,
+  createTemporaryE2eRoot,
+  removeTemporaryE2eRoot,
+  spawnJsonlMcpServer,
+  structured,
+  tomlPath,
+  writeE2eResultArtifact,
+  type JsonlMcpClient,
+  type JsonRecord,
+} from '@narada2/mcp-e2e-harness';
 
 const TEST_ID = 'worker-delegation-site-fabric-provider-e2e';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -18,7 +20,7 @@ const resultPath = join(packageRoot, '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const startedAt = new Date().toISOString();
 
 async function main(): Promise<void> {
-  const root = mkdtempSync(join(tmpdir(), `${TEST_ID}-`));
+  const root = createTemporaryE2eRoot(TEST_ID);
   const targetPath = join(root, 'worker-edit-target.txt');
   const runRoot = join(root, 'runs');
   const auditLogDir = join(root, 'audit');
@@ -30,7 +32,7 @@ async function main(): Promise<void> {
   const fabricPath = join(root, '.ai', 'mcp', 'config.json');
   let status: 'passed' | 'failed' | 'not_run' = 'failed';
   let failureReason: string | null = null;
-  let loaderClient: JsonlClient | null = null;
+  let loaderClient: JsonlMcpClient | null = null;
   let loaderConnectionId: string | null = null;
   let cleanupStatus: 'passed' | 'failed' = 'passed';
   const providerEvidence: JsonRecord[] = [];
@@ -187,12 +189,11 @@ async function main(): Promise<void> {
       },
     }, null, 2), 'utf8');
 
-    const loader = spawn(process.execPath, [loaderServerPath, '--allowed-site-root', root], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
+    const loader = spawnJsonlMcpServer(process.execPath, [loaderServerPath, '--allowed-site-root', root], {
       env: { ...process.env, NARADA_PROVIDER_SECRET_STORE: 'disabled' },
+      label: 'mcp-loader',
     });
-    loaderClient = createJsonlClient(loader);
+    loaderClient = loader.client;
     const initialize = await loaderClient.request(1, 'initialize', { protocolVersion: '2024-11-05' });
     assert.equal(initialize.error, undefined, JSON.stringify(initialize));
 
@@ -314,13 +315,13 @@ async function main(): Promise<void> {
         cleanupStatus = 'failed';
       }
     }
+    if (!removeTemporaryE2eRoot(root)) cleanupStatus = 'failed';
     if (cleanupStatus === 'failed') {
       status = 'failed';
       failureReason ??= 'cleanup_failed';
       process.exitCode = 1;
     }
-    mkdirSync(dirname(resultPath), { recursive: true });
-    writeFileSync(resultPath, JSON.stringify({
+    writeE2eResultArtifact(resultPath, {
       schema: 'narada.mcp.e2e.result.v1',
       test_id: TEST_ID,
       status,
@@ -333,14 +334,13 @@ async function main(): Promise<void> {
       operation: { delegated_edit: status === 'passed', output_reader_used: status === 'passed' },
       cleanup: { status: cleanupStatus, loader_connection_detached: loaderConnectionId !== null && cleanupStatus === 'passed' },
       failure_reason: failureReason,
-    }, null, 2), 'utf8');
-    rmSync(root, { recursive: true, force: true });
+    });
   }
 }
 
 void main().catch(() => { process.exitCode = 1; });
 
-async function callAttached(client: JsonlClient, connectionId: string, id: number, toolName: string, args: JsonRecord): Promise<JsonRecord> {
+async function callAttached(client: JsonlMcpClient, connectionId: string, id: number, toolName: string, args: JsonRecord): Promise<JsonRecord> {
   const response = await client.request(id, 'tools/call', {
     name: 'mcp_loader_call_tool',
     arguments: { connection_id: connectionId, tool_name: toolName, arguments: args },
@@ -353,7 +353,7 @@ async function callAttached(client: JsonlClient, connectionId: string, id: numbe
   return result;
 }
 
-async function readProducedJson(client: JsonlClient, connectionId: string, producerPage: JsonRecord, firstPageId: number): Promise<JsonRecord> {
+async function readProducedJson(client: JsonlMcpClient, connectionId: string, producerPage: JsonRecord, firstPageId: number): Promise<JsonRecord> {
   const outputRef = String(producerPage.output_ref ?? producerPage.ref ?? '');
   assert.ok(outputRef);
   let outputText = '';
@@ -370,61 +370,3 @@ async function readProducedJson(client: JsonlClient, connectionId: string, produ
   return JSON.parse(outputText) as JsonRecord;
 }
 
-function structured(response: RpcResponse): JsonRecord {
-  return asRecord(asRecord(response.result).structuredContent ?? response.result);
-}
-
-function createJsonlClient(child: ChildProcessWithoutNullStreams): JsonlClient {
-  let buffer = '';
-  const pending = new Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => {
-    buffer += String(chunk);
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const message = JSON.parse(line) as RpcResponse;
-      const entry = message.id === undefined ? undefined : pending.get(String(message.id));
-      if (!entry) continue;
-      pending.delete(String(message.id));
-      clearTimeout(entry.timer);
-      entry.resolve(message);
-    }
-  });
-  const rejectAll = (error: Error) => {
-    for (const [id, entry] of pending) {
-      clearTimeout(entry.timer);
-      pending.delete(id);
-      entry.reject(error);
-    }
-  };
-  child.on('error', rejectAll);
-  child.on('close', (code) => {
-    if (code !== 0) rejectAll(new Error(`mcp-loader child exited with code ${code}`));
-  });
-  return {
-    request(id, method, params) {
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(String(id));
-          reject(new Error(`timed out waiting for mcp-loader response ${id}`));
-        }, 30000);
-        pending.set(String(id), { resolve, reject, timer });
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-      });
-    },
-    async close() {
-      if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolvePromise) => {
-        const timer = setTimeout(() => { try { child.kill(); } catch {} resolvePromise(); }, 3000);
-        child.once('close', () => { clearTimeout(timer); resolvePromise(); });
-      });
-    },
-  };
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}

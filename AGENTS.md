@@ -12,6 +12,7 @@ Current packages:
 - `@narada2/mcp-telemetry`: shared optional MCP telemetry helpers.
 - `@narada2/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
 - `@narada2/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
+- `@narada2/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
 - `@narada2/execution-contract`: shared typed execution binding and request fingerprint contract.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
@@ -106,6 +107,7 @@ pnpm test
 pnpm test:ui-boundary
 pnpm test:mcp-transport
 pnpm test:mcp-telemetry
+pnpm test:mcp-e2e-harness
 pnpm test:mcp-runtime-proxy
 pnpm test:local-filesystem
 pnpm test:structured-command
@@ -153,6 +155,7 @@ Before handing off changes:
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
 - `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
 - `mcp-runtime-proxy` owns carrier-facing stdio proxy diagnostics for MCP startup. It must not authorize tools, mutate policy, or interpret surface domain behavior.
+- `mcp-e2e-harness` owns bounded child-process transport (JSONL and Content-Length), temporary roots, cleanup, and result artifacts for real MCP E2E tests. It must not create Site fabric, define surface policy, or encode domain assertions.
 - `execution-contract` owns shared execution binding and request fingerprint types only. It must not launch runtimes, authorize paths, or acquire task/domain behavior.
 - `nars-session-mcp` owns only the MCP adapter for concrete existing NARS sessions; NARS carrier protocol and session authority remain in Narada proper.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.

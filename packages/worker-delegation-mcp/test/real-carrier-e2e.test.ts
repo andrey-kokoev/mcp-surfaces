@@ -1,17 +1,21 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-type JsonRecord = Record<string, unknown>;
-type RpcResponse = { id?: number | string; result?: JsonRecord; error?: JsonRecord };
-type JsonlClient = {
-  request: (id: number, method: string, params: JsonRecord) => Promise<RpcResponse>;
-  close: () => Promise<void>;
-};
+import {
+  asRecord,
+  createTemporaryE2eRoot,
+  readJsonLines,
+  removeTemporaryE2eRoot,
+  spawnJsonlMcpServer,
+  structured,
+  tomlPath,
+  writeE2eResultArtifact,
+  type JsonlMcpClient,
+  type JsonRecord,
+} from '@narada2/mcp-e2e-harness';
 
 const TEST_ID = 'worker-delegation-real-carrier-e2e';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -20,7 +24,7 @@ const resultPath = join(packageRoot, '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const startedAt = new Date().toISOString();
 
 async function main(): Promise<void> {
-  const root = mkdtempSync(join(tmpdir(), `${TEST_ID}-`));
+  const root = createTemporaryE2eRoot(TEST_ID);
   const runRoot = join(root, '.ai', 'runtime', 'worker-delegation');
   const auditLogDir = join(root, '.ai', 'runtime', 'worker-audit');
   const policyPath = join(root, '.narada', 'worker-policy.toml');
@@ -29,7 +33,7 @@ async function main(): Promise<void> {
   const runtimeServerPath = process.env.NARADA_E2E_RUNTIME_SERVER_ENTRYPOINT
     ?? join(naradaRoot, 'packages', 'agent-runtime-server', 'bin', 'narada-agent-runtime-server.mjs');
   let worker: ChildProcessWithoutNullStreams | null = null;
-  let client: JsonlClient | null = null;
+  let client: JsonlMcpClient | null = null;
   let provider: ProviderFixture | null = null;
   let status: 'passed' | 'failed' | 'not_run' = 'failed';
   let failureReason: string | null = null;
@@ -94,7 +98,7 @@ async function main(): Promise<void> {
     ].join('\n'), 'utf8');
 
     provider = await startProviderFixture();
-    worker = spawn(process.execPath, [
+    const workerHandle = spawnJsonlMcpServer(process.execPath, [
       workerServerPath,
       '--site-root', root,
       '--allowed-root', root,
@@ -116,10 +120,11 @@ async function main(): Promise<void> {
         NARADA_AI_MODEL: 'real-carrier-e2e-fixture-model',
         NARADA_AI_THINKING: 'low',
       },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
+      timeoutMs: 60000,
+      label: 'worker-delegation',
     });
-    client = createJsonlClient(worker, 60000);
+    worker = workerHandle.child;
+    client = workerHandle.client;
 
     const initialized = await client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
     assert.equal(initialized.error, undefined, JSON.stringify(initialized));
@@ -177,7 +182,7 @@ async function main(): Promise<void> {
     assert.equal(lastMessage.acceptance_verdict, 'passed', JSON.stringify(lastMessage));
     assert.equal(provider.requests.length >= 1, true, 'real carrier did not call the provider boundary');
     assert.equal(provider.requests.every((request) => request.model === 'real-carrier-e2e-fixture-model'), true, JSON.stringify(provider.requests));
-    const runtimeEvents = readJsonl(join(runDir, 'events.jsonl'));
+    const runtimeEvents = readJsonLines(join(runDir, 'events.jsonl'));
     assert.equal(runtimeEvents.some((event) => event.event === 'session_started'), true, JSON.stringify(runtimeEvents));
     assert.equal(runtimeEvents.some((event) => event.event === 'turn_complete' || event.event === 'carrier_turn_completed'), true, JSON.stringify(runtimeEvents));
     status = 'passed';
@@ -209,14 +214,13 @@ async function main(): Promise<void> {
     if (provider) {
       try { await provider.close(); } catch { cleanupStatus = 'failed'; }
     }
-    if (!removeRoot(root)) cleanupStatus = 'failed';
+    if (!removeTemporaryE2eRoot(root)) cleanupStatus = 'failed';
     if (cleanupStatus === 'failed') {
       status = 'failed';
       failureReason ??= 'cleanup_failed';
       process.exitCode = 1;
     }
-    mkdirSync(dirname(resultPath), { recursive: true });
-    writeFileSync(resultPath, JSON.stringify({
+    writeE2eResultArtifact(resultPath, {
       schema: 'narada.mcp.e2e.result.v1',
       test_id: TEST_ID,
       status,
@@ -228,7 +232,7 @@ async function main(): Promise<void> {
       run_dir: runDir,
       cleanup: { status: cleanupStatus },
       failure_reason: failureReason,
-    }, null, 2), 'utf8');
+    });
   }
 }
 
@@ -308,85 +312,5 @@ function closeServer(server: Server): Promise<void> {
   return new Promise((resolvePromise) => server.close(() => resolvePromise()));
 }
 
-function createJsonlClient(child: ChildProcessWithoutNullStreams, timeoutMs: number): JsonlClient {
-  let buffer = '';
-  const pending = new Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (chunk) => {
-    buffer += String(chunk);
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const message = JSON.parse(line) as RpcResponse;
-      const entry = message.id === undefined ? undefined : pending.get(String(message.id));
-      if (!entry) continue;
-      pending.delete(String(message.id));
-      clearTimeout(entry.timer);
-      entry.resolve(message);
-    }
-  });
-  const rejectAll = (error: Error) => {
-    for (const [id, entry] of pending) {
-      pending.delete(id);
-      clearTimeout(entry.timer);
-      entry.reject(error);
-    }
-  };
-  child.on('error', rejectAll);
-  child.on('close', (code) => {
-    if (code !== 0) rejectAll(new Error(`worker delegation child exited with code ${code}`));
-  });
-  return {
-    request(id, method, params) {
-      return new Promise((resolvePromise, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(String(id));
-          reject(new Error(`timed out waiting for worker delegation response ${id}`));
-        }, timeoutMs);
-        pending.set(String(id), { resolve: resolvePromise, reject, timer });
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
-      });
-    },
-    async close() {
-      if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
-      if (child.exitCode !== null) return;
-      await new Promise<void>((resolvePromise) => {
-        const timer = setTimeout(() => { try { child.kill(); } catch { /* best effort */ } resolvePromise(); }, 3000);
-        child.once('close', () => { clearTimeout(timer); resolvePromise(); });
-      });
-    },
-  };
-}
-
-function structured(response: RpcResponse): JsonRecord {
-  assert.equal(response.error, undefined, JSON.stringify(response));
-  const result = asRecord(response.result);
-  return asRecord(result.structuredContent ?? result);
-}
-
-function asRecord(value: unknown): JsonRecord {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-}
-
-function readJsonl(path: string): JsonRecord[] {
-  return readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as JsonRecord);
-}
-
-function tomlPath(path: string): string {
-  return path.replaceAll('\\', '/').replaceAll('"', '\\"');
-}
-
-function removeRoot(root: string): boolean {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      rmSync(root, { recursive: true, force: true });
-      return true;
-    } catch {
-      if (attempt < 4) continue;
-    }
-  }
-  return false;
-}
 
 await main();

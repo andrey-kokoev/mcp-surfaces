@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/shared/mcp-e2e-harness" },
     { "path": "./packages/shared/execution-contract" },
     { "path": "./packages/shared/mcp-transport" },
     { "path": "./packages/shared/mcp-telemetry" },
