@@ -40,6 +40,7 @@ export type WorkerPolicy = {
   maxPromptBytes: number;
   maxOutputBytes: number;
   maxRunMs: number;
+  maxToolRounds: number;
   cognitionDefaults: Record<WorkerCognition, WorkerCognitionDefaults>;
   providerCognitionDefaults: Record<string, Record<WorkerCognition, WorkerCognitionDefaults>>;
   runtimes: {
@@ -62,6 +63,8 @@ type WorkerRuntimeConfig = {
 const DEFAULT_MAX_PROMPT_BYTES = 1_048_576;
 const DEFAULT_MAX_OUTPUT_BYTES = 2_097_152;
 const DEFAULT_MAX_RUN_MS = 1_800_000;
+const DEFAULT_MAX_TOOL_ROUNDS = 32;
+const MAX_MAX_TOOL_ROUNDS = 64;
 const DEFAULT_WORKER_RUNTIME: WorkerRuntimeId = 'narada-agent-runtime-server';
 const DEFAULT_WORKER_RUNTIME_ENV = 'NARADA_WORKER_DEFAULT_RUNTIME';
 const DEFAULT_NARADA_AGENT_RUNTIME_PROVIDERS = ['kimi-code-api', 'kimi-api', 'openai-api', 'anthropic-api', 'codex-subscription', 'deepseek-api'] as const;
@@ -139,6 +142,7 @@ export function createWorkerPolicy(options: Record<string, unknown> = {}): Worke
     maxPromptBytes: strictInteger(merged.maxPromptBytes ?? policy.max_prompt_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_PROMPT_BYTES, 'max_prompt_bytes'),
     maxOutputBytes: strictInteger(merged.maxOutputBytes ?? policy.max_output_bytes, 1, 50 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES, 'max_output_bytes'),
     maxRunMs: strictInteger(merged.maxRunMs ?? policy.max_run_ms, 1, 24 * 60 * 60 * 1000, DEFAULT_MAX_RUN_MS, 'max_run_ms'),
+    maxToolRounds: strictInteger(merged.maxToolRounds ?? policy.max_tool_rounds, 1, MAX_MAX_TOOL_ROUNDS, DEFAULT_MAX_TOOL_ROUNDS, 'max_tool_rounds'),
     cognitionDefaults: finalCognitionDefaults,
     providerCognitionDefaults: providerDefaults,
     runtimes: {
@@ -251,7 +255,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       required_markers: [...NARADA_SITE_ROOT_MARKERS],
       site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
       workspace_root: 'worker cwd inside the resolved Site root',
-      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
       provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
       provider_alias_posture: 'selected_provider_aliases_only',
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
@@ -262,6 +266,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     max_prompt_bytes: policy.maxPromptBytes,
     max_output_bytes: policy.maxOutputBytes,
     max_run_ms: policy.maxRunMs,
+    max_tool_rounds: policy.maxToolRounds,
     cognition_defaults: Object.fromEntries(Object.entries(policy.cognitionDefaults).map(([cognition, defaults]) => [cognition, {
       model: defaults.model,
       reasoning_effort: defaults.reasoningEffort,
@@ -294,7 +299,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         site_bound: true,
         site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
         site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
-        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
         provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
         provider_alias_posture: 'selected_provider_aliases_only',
         provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',

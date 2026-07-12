@@ -125,6 +125,7 @@ export type WorkerResolvedExecutionPolicy = {
   prompt_byte_length: number;
   max_output_bytes: number;
   max_run_ms: number;
+  max_tool_rounds: number;
   environment_keys: string[];
 };
 

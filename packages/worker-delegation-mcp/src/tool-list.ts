@@ -327,6 +327,7 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
     max_prompt_bytes: { type: 'integer' },
     max_output_bytes: { type: 'integer' },
     max_run_ms: { type: 'integer' },
+    max_tool_rounds: { type: 'integer' },
     cognition_defaults: { type: 'object', additionalProperties: true },
     runtimes: { type: 'object', additionalProperties: true },
   }, ['schema', 'status']);

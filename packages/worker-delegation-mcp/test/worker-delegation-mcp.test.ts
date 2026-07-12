@@ -146,32 +146,33 @@ process.stdin.on('data', (chunk) => {
   for (const line of lines) {
     if (!line.trim()) continue;
     const frame = JSON.parse(line);
-    if (frame.method === 'conversation.send') {
-      if (frame.params.message.includes('agent runtime provider failure')) {
+    if (frame.method === 'session.submit') {
+      const message = frame.params.content;
+      if (message.includes('agent runtime provider failure')) {
         process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-provider-failed' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'turn_failed', request_id: frame.id, turn_id: 'turn-provider-failed', error: 'API error 429: rate_limit_reached_error: quota exhausted' }) + '\\n');
         continue;
       }
-      if (frame.params.message.includes('agent runtime mcp tool fault')) {
+      if (message.includes('agent runtime mcp tool fault')) {
         process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-mcp-tool-fault' }) + String.fromCharCode(10));
         process.stderr.write('[agent-runtime-server] MCP runtime fault narada-mcp-surfaces-filesystem:fs_grep_search');
         setInterval(() => {}, 1000);
         continue;
       }
-      if (frame.params.message.includes('agent runtime no assistant message')) {
+      if (message.includes('agent runtime no assistant message')) {
         process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime-no-assistant', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-no-assistant' }) + '\\n');
         process.stderr.write('pre-assistant diagnostic detail from runtime\\n');
         process.exit(0);
       }
-      if (frame.params.message.includes('agent runtime terminal no assistant output')) {
+      if (message.includes('agent runtime terminal no assistant output')) {
         process.stdout.write(JSON.stringify({ event: 'session_started', session_id: 'carrier-worker-runtime-terminal-no-assistant', agent_id: 'worker.agent', mcp_operational_state: 'healthy' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'turn_started', request_id: frame.id, turn_id: 'turn-terminal-no-assistant' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-terminal-no-assistant', terminal_state: 'completed' }) + '\\n');
         process.stdout.write(JSON.stringify({ event: 'session_closed', request_id: frame.id, terminal_state: 'closed' }) + '\\n');
         process.exit(0);
       }
-      if (frame.params.message.includes('agent runtime assistant message field')) {
+      if (message.includes('agent runtime assistant message field')) {
         const output = {
           summary: 'agent runtime message-field output ok',
           deliverables: [],
@@ -190,7 +191,7 @@ process.stdin.on('data', (chunk) => {
         process.stdout.write(JSON.stringify({ event: 'turn_complete', request_id: frame.id, turn_id: 'turn-message-field', terminal_state: 'completed', delegated_mutation_admitted: true, carrier_mutation_admitted: true }) + '\\n');
         continue;
       }
-      if (frame.params.message.includes('server runtime loose output')) {
+      if (message.includes('server runtime loose output')) {
         const output = {
           summary: 'loose agent runtime worker ok',
           edits_performed: false,
@@ -213,7 +214,7 @@ process.stdin.on('data', (chunk) => {
       }
       const output = {
         summary: 'agent runtime worker ok',
-        deliverables: [{ path: 'server-result.txt', description: 'server runtime saw ' + (frame.params.message.includes('Intent') ? 'intent' : 'prompt') }],
+        deliverables: [{ path: 'server-result.txt', description: 'server runtime saw ' + (message.includes('Intent') ? 'intent' : 'prompt') }],
         open_questions: [],
         next_actions: ['done'],
         edits_performed: false,
@@ -386,13 +387,13 @@ assert.equal(policy.result?.structuredContent.runtimes.deepseek, undefined);
 assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'], undefined);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'deepseek-api', 'glm-api', 'openrouter-api', 'codex-subscription']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.match(policy.result?.structuredContent.nars_site_semantics.remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);

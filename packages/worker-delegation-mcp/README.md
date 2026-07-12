@@ -181,7 +181,7 @@ If a response is materialized, call `worker_output_show` with the returned `outp
 
 ## Narada Agent Runtime Server
 
-Override the runtime with `overrides.runtime: 'narada-agent-runtime-server'` on `worker_run` or `worker_edit`. This starts a Narada Agent Runtime Server in raw JSONL stdio mode, sends one `conversation.send` frame, records the server event stream in `events.jsonl`, and materializes the final `assistant_message` into the normal worker `last_message.json` contract.
+Override the runtime with `overrides.runtime: 'narada-agent-runtime-server'` on `worker_run` or `worker_edit`. This starts a Narada Agent Runtime Server in raw JSONL stdio mode, sends one `session.submit` frame, records the server event stream in `events.jsonl`, and materializes the final `assistant_message` into the normal worker `last_message.json` contract.
 
 This runtime is a carrier-server posture, not a direct model substrate. It projects `NARADA_SITE_ROOT` and `NARADA_WORKSPACE_ROOT` from the worker `cwd` when those variables are absent, so the child runtime has an explicit Site/workspace anchor. On Windows, npm/pnpm `.cmd` shims are unwrapped to `node <agent-runtime-server entrypoint>` before launch so the JSONL pipe is attached to the real server process; the resolved config records the configured command, while `worker_invocation.json` records the actual spawned command. Use this runtime for delegated work that benefits from Narada carrier semantics, Site MCP fabric, durable session evidence, later resume/handoff behavior, or non-Codex model providers.
 
@@ -273,4 +273,17 @@ Model overrides are intentionally absent from the edit shortcut example. `worker
 
 ```powershell
 pnpm --filter @narada2/worker-delegation-mcp test
+pnpm --filter @narada2/worker-delegation-mcp test:e2e:edit
+pnpm --filter @narada2/worker-delegation-mcp test:e2e:site-fabric
+```
+
+The E2E commands start the built worker, loader, and filesystem MCP children,
+materialize a temporary Site fabric, and write a bounded result artifact under
+`.tmp/e2e-results/`. The provider test uses a controlled no-credential fixture
+authority; it proves local provider/model/thinking binding, not external
+provider or carrier execution. The same checks are available from the repo
+root as:
+
+```powershell
+pnpm test:worker-delegation:e2e
 ```

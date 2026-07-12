@@ -31,6 +31,7 @@ export function buildInvocation(resolvedWorkerConfig: ResolvedWorkerConfig, envi
     ...environment,
     NARADA_SITE_ROOT: environment.NARADA_SITE_ROOT || naradaConfig.site_root || resolvedWorkerConfig.cwd,
     NARADA_WORKSPACE_ROOT: environment.NARADA_WORKSPACE_ROOT || naradaConfig.workspace_root || resolvedWorkerConfig.cwd,
+    NARADA_MAX_TOOL_ROUNDS: String(resolvedWorkerConfig.max_tool_rounds ?? 32),
   };
   const commandArgs = [...resolvedWorkerConfig.command_args];
   let command = resolvedWorkerConfig.command;
@@ -225,11 +226,10 @@ export async function runAgentRuntimeServerInvocation(options: {
     const requestId = `worker-conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     child.stdin?.write(`${JSON.stringify({
       id: requestId,
-      method: 'conversation.send',
+      method: 'session.submit',
       params: {
-        request_id: requestId,
-        message: options.prompt,
-        source: 'programmatic_operator',
+        content: options.prompt,
+        source: 'programmatic_worker',
         source_id: 'worker-delegation-mcp',
       },
     })}\n`);

@@ -132,6 +132,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
+    environment.NARADA_MAX_TOOL_ROUNDS = String(state.policy.maxToolRounds);
     if (!providerResolution.provider) throw diagnosticError('worker_provider_required', 'worker_provider_required');
     const providerRuntimeBinding = resolveWorkerProviderRuntimeBinding({
       provider: providerResolution.provider,
@@ -176,6 +177,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
+      max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
     invocation = agentRuntimeServerBuildInvocation(resolvedWorkerConfig, environment);
@@ -214,6 +216,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
+      max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
     invocation = codexBuildInvocation(resolvedWorkerConfig, environment);
@@ -385,6 +388,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
+    environment.NARADA_MAX_TOOL_ROUNDS = String(state.policy.maxToolRounds);
     if (!providerResolution.provider) throw diagnosticError('worker_provider_required', 'worker_provider_required');
     const providerRuntimeBinding = resolveWorkerProviderRuntimeBinding({
       provider: providerResolution.provider,
@@ -429,6 +433,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
+      max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
     resolvedWorkerConfig = baseConfig;
@@ -468,6 +473,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
       max_run_ms: state.policy.maxRunMs,
+      max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
     resolvedWorkerConfig = baseConfig;
