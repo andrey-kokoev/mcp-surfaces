@@ -141,8 +141,8 @@ const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/pr
 const GIT_TOOLS = ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
 const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
 const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
-const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_compatibility_reconcile', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref', 'task_lifecycle_evidence_preflight', 'task_lifecycle_dependency_declare', 'task_lifecycle_dependency_disposition_record'];
-const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
+const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_evidence_supersede', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_compatibility_reconcile', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref', 'task_lifecycle_evidence_preflight', 'task_lifecycle_dependency_declare', 'task_lifecycle_dependency_disposition_record'];
+const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_cognition_defaults_update', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
 const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
 const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
 const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'];
@@ -162,13 +162,13 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'site-lifecycle': ['site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
   'site-registry': ['site_registry_guidance', 'site_registry_doctor', 'site_registry_command_map', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan'],
   'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
-  'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
+  'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
   'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
   sop: ['sop_guidance', 'sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_status', 'sop_run_list', 'sop_run_events', 'sop_run_coverage_since'],
   scheduler: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
   'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
   'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'],
-  'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
+  'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
   launcher: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
   speech: ['speech_guidance', 'speech_voices', 'speech_listen_status'],
   'operator-routing': ['operator_route_doctor'],
@@ -336,6 +336,9 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--allowed-site-root', 'D:/code', '--allowed-site-root', USER_NARADA_ROOT, '--allowed-entrypoint-prefix', `${MCP_SURFACES_ROOT}/`, '--allowed-entrypoint-prefix', `${USER_NARADA_ROOT}/tools/`, '--allowed-entrypoint-prefix', '{site_root}/tools/'],
     tools: MCP_LOADER_TOOLS,
+    injection_scope: 'user_site',
+    default_injection: 'all_site_bound_sessions',
+    restart_owner: 'user_site',
   },
   {
     id: 'mcp-registrar', package: 'mcp-registrar',
@@ -351,7 +354,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--feedback-root', 'D:/code/mcp-surfaces'],
-    tools: ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
+    tools: ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_convert_to_task', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
     injection_scope: 'user_site',
   },
   {
@@ -1174,6 +1177,8 @@ function readSiteConfig(site: SiteDef): SiteLocalSurface[] {
       const surfaceId = String(rec.surface_id ?? '');
       if (!surfaceId) continue;
       if (site.local_surface_allowlist && !site.local_surface_allowlist.includes(surfaceId)) continue;
+      const catalogSurface = catalogSurfaceForLocalSurface(site, surfaceId);
+      if (catalogSurface && !surfaceProjections(catalogSurface).some((projection) => projection.injection_scope === 'local_site')) continue;
       surfaces.push({
         surface_id: surfaceId,
         kind: 'mcp_entrypoint',
@@ -1187,6 +1192,12 @@ function readSiteConfig(site: SiteDef): SiteLocalSurface[] {
   } catch {
     return [];
   }
+}
+
+function catalogSurfaceForLocalSurface(site: SiteDef, localSurfaceId: string): SurfaceDef | undefined {
+  const serverKey = localSurfaceId.replace(/\.local$/, '').replace(/-mcp$/, '');
+  const canonicalSurfaceId = fabricSurfaceId(serverKey, site);
+  return catalogSurface(canonicalSurfaceId) ?? catalogSurfaceAlias(canonicalSurfaceId);
 }
 
 function resolveEntrypoint(surface: SurfaceDef, siteId: string, siteRoot: string): string {

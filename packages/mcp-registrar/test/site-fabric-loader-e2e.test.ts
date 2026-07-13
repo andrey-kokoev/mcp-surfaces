@@ -52,7 +52,7 @@ try {
     arguments: { site_root: siteRoot },
   }));
   assert.equal(listed.schema, 'narada.mcp_loader.site_surfaces.v1');
-  assert.equal((listed.surfaces as JsonRecord[]).some((item) => item.surface_id === 'fixture-mailbox'), true);
+  assert.equal((listed.surfaces as JsonRecord[]).some((item) => item.surface_id === 'mailbox'), true);
 
   const attached = structured(await loader.client.request(2, 'tools/call', {
     name: 'mcp_loader_attach_surface',

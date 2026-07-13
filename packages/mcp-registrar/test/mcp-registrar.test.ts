@@ -274,6 +274,7 @@ try {
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_attachment_upload_file'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_reply_all_to_last_in_thread_draft_create'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_submit_work'));
+  assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_evidence_supersede'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_output_show'));
@@ -288,6 +289,8 @@ try {
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_output_show'));
   assert.ok((bySurface.get('calendar')?.tools as string[]).includes('calendar_output_show'));
   assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_dashboard_describe'));
+  assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_cognition_defaults_inspect'));
+  assert.ok((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_cognition_defaults_update'));
   assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), true);
   assert.ok((bySurface.get('delegated-task')?.tools as string[]).includes('delegated_task_result'));
   assert.ok((bySurface.get('agent-context')?.tools as string[]).includes('agent_context_list_sessions'));
@@ -296,7 +299,11 @@ try {
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_tool_inventory_check'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_status'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_restart'));
+  assert.equal(bySurface.get('mcp-loader')?.injection_scope, 'user_site');
+  assert.equal(bySurface.get('mcp-loader')?.default_injection, 'all_site_bound_sessions');
+  assert.equal(bySurface.get('mcp-loader')?.restart_owner, 'user_site');
   assert.ok((bySurface.get('surface-feedback')?.tools as string[]).includes('surface_feedback_import'));
+  assert.ok((bySurface.get('surface-feedback')?.tools as string[]).includes('surface_feedback_actionable_queue'));
 
   const localFilesystemEntrypoint = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
   const observedLocalFilesystemTools = await observeToolsList(localFilesystemEntrypoint, [
@@ -1178,6 +1185,39 @@ try {
   assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_output_show'));
   assert.equal((graphMailRegistry.tool_contract.refused_tools as string[]).includes('graph_mail_draft_send'), false);
   assert.equal((graphMailRegistry.tool_contract.mutating_tools as string[]).includes('graph_mail_draft_send'), true);
+
+  writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-surface-feedback-mcp.json'), JSON.stringify({
+    schema: 'narada.mcp.client_config.v0',
+    mcpServers: {
+      'narada-sonar-surface-feedback': {
+        transport: 'stdio',
+        command: 'node',
+        args: ['D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js', '--feedback-root', 'D:/code/mcp-surfaces'],
+        tools: [
+          'surface_feedback_guidance',
+          'surface_feedback_doctor',
+          'surface_feedback_submit',
+          'surface_feedback_update_status',
+          'surface_feedback_update_status_batch',
+          'surface_feedback_import',
+          'surface_feedback_list',
+          'surface_feedback_actionable_queue',
+          'surface_feedback_convert_to_task',
+          'surface_feedback_show',
+          'surface_feedback_stats',
+          'surface_feedback_live_proof_template',
+        ],
+      },
+    },
+  }, null, 2), 'utf8');
+  const feedbackRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const feedbackSurface = (feedbackRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'surface-feedback');
+  assert.ok(feedbackSurface);
+  assert.ok((feedbackSurface.registered_live_tools as string[]).includes('surface_feedback_actionable_queue'));
+  assert.ok((feedbackSurface.registered_live_tools as string[]).includes('surface_feedback_convert_to_task'));
+  assert.ok((feedbackSurface.tool_contract.read_only_tools as string[]).includes('surface_feedback_actionable_queue'));
+  assert.equal((feedbackSurface.tool_contract.read_only_tools as string[]).includes('surface_feedback_convert_to_task'), false);
+  assert.ok((feedbackSurface.tool_contract.mutating_tools as string[]).includes('surface_feedback_convert_to_task'));
 
   const nestedSiteRoot = join(root, 'nested-control-site');
   mkdirSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp'), { recursive: true });
