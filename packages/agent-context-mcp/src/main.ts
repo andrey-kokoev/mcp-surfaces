@@ -10,9 +10,9 @@ import { guidanceToolDefinition } from './guidance.js';
  * andrey-user runtime state or broad User Site surfaces.
  */
 
-import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import {
   buildBoundedToolResult,
   listOutputResources,
@@ -35,6 +35,7 @@ const siteRoot = resolve(args['site-root'] ?? process.cwd());
 const siteId = normalizeSiteId(args['site-id'] ?? process.env.NARADA_SITE_ID ?? deriveSiteId(siteRoot));
 const SERVER_NAME = `${siteId.replace(/[^a-z0-9_.-]/gi, '-')}-agent-context-mcp`;
 const dbPath = resolve(process.env.NARADA_AGENT_CONTEXT_DB || join(siteRoot, '.ai', 'state', 'agent-context.sqlite'));
+const MAX_CONTINUATION_BYTES = 256 * 1024;
 const startupTracePath = join(siteRoot, '.ai', 'tmp', 'agent-context-mcp-startup.log');
 const startupTraceEnabled = process.env.NARADA_AGENT_CONTEXT_MCP_TRACE === '1';
 
@@ -105,7 +106,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_checkpoint',
-    description: 'Write a durable site-local agent checkpoint.',
+    description: 'Write a durable site-local agent checkpoint, optionally linked to an exact portable continuation artifact.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -123,6 +124,17 @@ const TOOLS = [
         evidence_refs: { type: 'array', items: { type: 'string' } },
         worktree_state: { type: 'object' },
         tactical_resume_notes: { type: 'array', items: { type: 'string' } },
+        continuation_ref: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            schema: { type: 'string', const: 'narada.continuation.handoff.v1' },
+            path: { type: 'string' },
+            sha256: { type: 'string' },
+            created_at: { type: 'string' },
+          },
+          required: ['schema', 'path', 'sha256', 'created_at'],
+        },
       },
     },
   },
@@ -278,6 +290,58 @@ function pathWithin(root: string, candidate: string): boolean {
   );
 }
 
+function normalizeContinuationRef(value) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('continuation_ref_invalid: expected an object');
+  }
+
+  const schema = value.schema;
+  const path = value.path;
+  const sha256 = value.sha256;
+  const createdAt = value.created_at;
+  if (schema !== 'narada.continuation.handoff.v1') {
+    throw new Error('continuation_ref_schema_invalid');
+  }
+  if (typeof path !== 'string' || path.trim() === '' || path.includes('\0') || isAbsolute(path)) {
+    throw new Error('continuation_ref_path_must_be_site_relative');
+  }
+  if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(sha256)) {
+    throw new Error('continuation_ref_sha256_invalid');
+  }
+  if (typeof createdAt !== 'string' || Number.isNaN(Date.parse(createdAt))) {
+    throw new Error('continuation_ref_created_at_invalid');
+  }
+
+  const normalizedPath = path.replace(/\\/g, '/');
+  if (!pathWithin(siteRoot, resolve(siteRoot, normalizedPath))) {
+    throw new Error('continuation_ref_path_outside_site_root');
+  }
+
+  const artifactPath = resolve(siteRoot, normalizedPath);
+  let artifactBytes;
+  try {
+    const artifactStats = statSync(artifactPath);
+    if (!artifactStats.isFile()) throw new Error('not_a_file');
+    if (artifactStats.size > MAX_CONTINUATION_BYTES) throw new Error('too_large');
+    artifactBytes = readFileSync(artifactPath);
+  } catch (error) {
+    throw new Error(`continuation_ref_unreadable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const actualSha256 = createHash('sha256').update(artifactBytes).digest('hex');
+  if (actualSha256 !== sha256.toLowerCase()) {
+    throw new Error('continuation_ref_sha256_mismatch');
+  }
+
+  return {
+    schema,
+    path: normalizedPath,
+    sha256: sha256.toLowerCase(),
+    created_at: createdAt,
+  };
+}
+
 function processInputBuffer() {
   while (true) {
     if (inputBuffer.startsWith('{')) {
@@ -429,7 +493,7 @@ function promptGet(params) {
   if (name !== 'agent_context_startup') throw new Error(`unknown_prompt: ${name}`);
   return {
     description: 'Guidance for hydrating and checkpointing agent context.',
-    messages: [{ role: 'user', content: { type: 'text', text: 'Use agent_context_hydrate_current at startup, checkpoint meaningful state transitions, and rehydrate before resuming long-running work.' } }],
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use agent_context_hydrate_current at startup, checkpoint meaningful state transitions, and rehydrate before resuming long-running work. When a portable Markdown handoff exists, include its site-relative path, SHA-256, creation time, and schema as continuation_ref.' } }],
   };
 }
 
@@ -560,6 +624,7 @@ function checkpoint(toolArgs) {
   return withDb((db) => {
     const now = new Date().toISOString();
     const checkpointId = `chk_${randomUUID().replace(/-/g, '')}`;
+    const payload = checkpointPayload(toolArgs, agentId, now);
     const existing = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ?').get(agentId);
     if (existing) {
       db.prepare(`
@@ -586,7 +651,6 @@ function checkpoint(toolArgs) {
       db.prepare('DELETE FROM agent_checkpoints WHERE checkpoint_id = ?').run(existing.checkpoint_id);
     }
 
-    const payload = checkpointPayload(toolArgs, agentId, now);
     db.prepare(`
       INSERT INTO agent_checkpoints (
         checkpoint_id, agent_id, session_id, checkpoint_at,
@@ -615,6 +679,7 @@ function checkpoint(toolArgs) {
       checkpoint_at: now,
       db_path: dbPath,
       site_root: siteRoot,
+      continuation_ref: payload.continuation_ref ?? null,
     };
   });
 }
@@ -753,6 +818,7 @@ function checkpointPayload(toolArgs, agentId, checkpointAt) {
     evidence_refs: arrayValue(toolArgs.evidence_refs),
     worktree_state: toolArgs.worktree_state ?? null,
     tactical_resume_notes: arrayValue(toolArgs.tactical_resume_notes),
+    continuation_ref: normalizeContinuationRef(toolArgs.continuation_ref),
   };
 }
 
@@ -775,6 +841,7 @@ function rowToCheckpoint(row) {
     evidence_refs: payload.evidence_refs ?? [],
     worktree_state: payload.worktree_state ?? null,
     tactical_resume_notes: payload.tactical_resume_notes ?? [],
+    continuation_ref: payload.continuation_ref ?? null,
     payload,
   };
 }

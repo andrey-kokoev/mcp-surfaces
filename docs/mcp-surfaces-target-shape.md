@@ -37,6 +37,28 @@ Every surface should make these properties inspectable or mechanically enforced 
 - **No host-policy leakage**: Codex, OpenCode, `agent-cli`, and other MCP hosts may invoke the same surface, but host identity must not silently change policy.
 - **Explicit injection scope**: bound surfaces should distinguish session alias from authority locus, mutation locus, and restart owner. A host-injected or user-site-injected surface may be visible in a local site session without becoming local-site-owned. New producers should expose this as `narada_scope`; readers should prefer `narada_scope`, then fall back to legacy flattened fields, then catalog/default scope.
 
+## Checkpoint and Continuation Contract
+
+Agent-context checkpoint state remains the canonical operational state. A
+checkpoint may carry one exact reference to a portable continuation artifact;
+the artifact is a handoff projection, not a second authority or an independent
+state store.
+
+The reference has schema `narada.continuation.handoff.v1` and contains:
+
+- a site-relative artifact path;
+- the artifact SHA-256;
+- its creation timestamp;
+- the artifact schema identifier.
+
+The checkpoint surface verifies the artifact exists, is bounded, and matches
+the supplied SHA-256 before replacing the active checkpoint. It preserves the
+reference through history and rehydration, and refuses absolute or cross-site
+paths. A fresh agent reads the referenced handoff first, then
+verifies live state against Git, agent-context, task, and other authoritative
+surfaces. Continuation artifacts should be bounded snapshots; they must not be
+raw transcripts or diff-only state.
+
 See `mcp-output-refusal-conventions.md` for the cross-surface output reference,
 payload reference, and refusal conventions that support these invariants without
 forcing all surfaces into one domain schema.

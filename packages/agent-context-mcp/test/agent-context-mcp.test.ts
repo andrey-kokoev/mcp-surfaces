@@ -1,5 +1,6 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -111,6 +112,8 @@ try {
   assert.equal(names.includes('agent_context_hydrate_current'), true);
   assert.equal(names.includes('agent_context_startup_sequence'), true);
   assert.equal(names.includes('startup_sequence'), false);
+  const checkpointTool = tools.result.tools.find((tool) => tool.name === 'agent_context_checkpoint');
+  assert.equal(checkpointTool.inputSchema.properties.continuation_ref.properties.path.type, 'string');
   writeMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, '\n\n');
   const lfTools = await waitFor(3);
   assert.equal(lfTools.error, undefined);
@@ -123,17 +126,37 @@ try {
   const identity = JSON.parse(whoami.result.content[0].text);
   assert.equal(identity.identity, 'narada-revolution.resident');
   assert.equal(identity.role, 'resident');
-  writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', key_decisions: ['site-local checkpoint regression'] } } });
+  const continuationContent = '# Agent-context continuation test\n';
+  const continuationPath = join(siteRoot, '.ai', 'continuations', 'agent-context-test.md');
+  mkdirSync(join(siteRoot, '.ai', 'continuations'), { recursive: true });
+  writeFileSync(continuationPath, continuationContent, 'utf8');
+  const continuationRef = {
+    schema: 'narada.continuation.handoff.v1',
+    path: '.ai/continuations/agent-context-test.md',
+    sha256: createHash('sha256').update(continuationContent, 'utf8').digest('hex'),
+    created_at: '2026-07-13T00:00:00.000Z',
+  };
+  writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', key_decisions: ['site-local checkpoint regression'], continuation_ref: continuationRef } } });
   const checkpoint = await waitFor(6);
   assert.equal(checkpoint.error, undefined);
   const checkpointBody = JSON.parse(checkpoint.result.content[0].text);
   assert.equal(checkpointBody.status, 'checkpointed');
   assert.equal(checkpointBody.site_root, siteRoot);
-  writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident' } } });
-  const rehydrate = await waitFor(7);
+  assert.deepEqual(checkpointBody.continuation_ref, { ...continuationRef, sha256: continuationRef.sha256.toLowerCase() });
+  writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation_ref: { ...continuationRef, sha256: 'B'.repeat(64) } } } });
+  const invalidContinuation = await waitFor(7);
+  assert.equal(invalidContinuation.error.code, -32000);
+  assert.match(invalidContinuation.error.message, /continuation_ref_sha256_mismatch/);
+  writeMessage({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation_ref: { ...continuationRef, path: 'C:/outside.md' } } } });
+  const outsideContinuation = await waitFor(8);
+  assert.equal(outsideContinuation.error.code, -32000);
+  assert.match(outsideContinuation.error.message, /continuation_ref_path_must_be_site_relative/);
+  writeMessage({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const rehydrate = await waitFor(9);
   assert.equal(rehydrate.error, undefined);
   const rehydrateBody = JSON.parse(rehydrate.result.content[0].text);
   assert.equal(rehydrateBody.payload.site_id, 'narada.revolution');
+  assert.deepEqual(rehydrateBody.continuation_ref, { ...continuationRef, sha256: continuationRef.sha256.toLowerCase() });
   console.log('agent context MCP tests passed');
 } finally {
   proc.stdin?.destroy();
