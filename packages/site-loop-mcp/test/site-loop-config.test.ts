@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
-import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
+import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, renderResidentAgentCliCommand, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
 import { DEFAULT_SITE_LOOP_PHASE_PLAN, SITE_LOOP_ADAPTER_PHASE_PLAN, listSiteLoopRuns, runSiteLoop, siteLoopStatus } from '../src/site-loop/site-loop.js';
 import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
 import { getResidentStatus } from '../src/task-lifecycle/dispatch-directives.js';
@@ -89,7 +89,16 @@ writeFileSync(join(modernSiteRoot, '.ai', 'mcp', 'narada-modern-mcp.json'), JSON
     'narada-modern-task-lifecycle': {
       transport: 'stdio',
       command: 'node',
-      args: [join(modernTaskLifecyclePackageRoot, 'dist', 'src', 'task-lifecycle', 'task-mcp-server.js'), '--site-root', modernSiteRoot],
+      args: [
+        'D:/code/mcp-surfaces/packages/shared/mcp-runtime-proxy/dist/src/main.js',
+        '--surface-id',
+        'task-lifecycle',
+        '--entrypoint',
+        join(modernTaskLifecyclePackageRoot, 'dist', 'src', 'task-lifecycle', 'task-mcp-server.js'),
+        '--',
+        '--site-root',
+        modernSiteRoot,
+      ],
       surface_id: 'task-lifecycle',
     },
   },
@@ -103,6 +112,17 @@ function writeSiteLoopConfig(root, config) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify(config, null, 2), 'utf8');
 }
+
+const residentCommandRoot = mkdtempSync(join(tmpdir(), 'site-loop-resident-command-'));
+writeSiteLoopConfig(residentCommandRoot, {
+  schema: SITE_LOOP_CONFIG_SCHEMA,
+  loop_id: 'resident.command.loop',
+  site_id: 'narada-resident-command',
+  display_name: 'Resident command loop',
+  resident: { agent_id: 'operator', role: 'operator' },
+  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'resident-command' } },
+});
+assert.equal(renderResidentAgentCliCommand(residentCommandRoot), '.\\narada-site.ps1 agent-start -Agent operator -Runtime agent-cli -Exec');
 
 const phasePlanRoot = mkdtempSync(join(tmpdir(), 'site-loop-phase-plan-'));
 writeSiteLoopConfig(phasePlanRoot, {

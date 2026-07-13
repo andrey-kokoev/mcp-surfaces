@@ -83,6 +83,14 @@ function configForSite(siteRoot: string): SiteLoopConfig {
   return requireSiteLoopConfig(siteRoot);
 }
 
+function residentAgentCliCommand(siteRoot: string, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)): string {
+  return siteLoopConfig.commands.agent_cli_resident.replaceAll('{resident_agent_id}', siteLoopConfig.resident.agent_id);
+}
+
+export function renderResidentAgentCliCommand(siteRoot: string): string {
+  return residentAgentCliCommand(siteRoot);
+}
+
 function siteLoopConfigFromContext(candidate: unknown, siteRoot: unknown): SiteLoopConfig {
   const record = asRecord(candidate);
   const resident = asRecord(record.resident);
@@ -909,7 +917,7 @@ export function siteLoopOperatingLayerStatus(cwd, options: SiteLoopPayload = {})
     commands: {
       run_once: siteLoopConfig.commands.run_once,
       supervise: siteLoopConfig.commands.supervise,
-      agent_cli_resident: siteLoopConfig.commands.agent_cli_resident,
+      agent_cli_resident: residentAgentCliCommand(siteRoot, siteLoopConfig),
       live_fixture_proof: siteLoopConfig.commands.live_fixture_proof,
       mailbox_proof: siteLoopConfig.commands.mailbox_proof,
     },
@@ -1256,6 +1264,13 @@ function resolveSharedTaskLifecyclePackageRoot(siteRoot) {
   return null;
 }
 
+function taskLifecycleEntrypointFromArgs(rawArgs) {
+  const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+  const entrypointMarker = args.indexOf('--entrypoint');
+  if (entrypointMarker >= 0 && args[entrypointMarker + 1]) return args[entrypointMarker + 1];
+  return args[0] ?? null;
+}
+
 function taskLifecycleEntrypointsFromRegistration(siteRoot) {
   const registrationPath = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-registration.json');
   if (!existsSync(registrationPath)) return [];
@@ -1267,9 +1282,7 @@ function taskLifecycleEntrypointsFromRegistration(siteRoot) {
       if (!String(server?.name ?? '').includes('task-lifecycle')) continue;
       const entrypoint = typeof server?.entrypoint === 'string'
         ? server.entrypoint
-        : Array.isArray(server?.args) && typeof server.args[0] === 'string'
-          ? server.args[0]
-          : null;
+        : taskLifecycleEntrypointFromArgs(server?.args);
       if (entrypoint) entrypoints.push(entrypoint);
     }
     return entrypoints;
@@ -1290,9 +1303,11 @@ function taskLifecycleEntrypointsFromMcpFabric(siteRoot) {
         if (!String(serverName).includes('task-lifecycle') && String(server.surface_id ?? '') !== 'task-lifecycle') continue;
         const args = Array.isArray(server.args) ? server.args.map(String) : [];
         const command = server.command;
-        if (typeof server.entrypoint === 'string') entrypoints.push(server.entrypoint);
-        else if (args.length > 0) entrypoints.push(args[0]);
-        else if (Array.isArray(command) && command.length > 1) entrypoints.push(String(command[1]));
+        const entrypoint = typeof server.entrypoint === 'string'
+          ? server.entrypoint
+          : taskLifecycleEntrypointFromArgs(args)
+            ?? (Array.isArray(command) && command.length > 1 ? String(command[1]) : null);
+        if (entrypoint) entrypoints.push(entrypoint);
       }
     } catch {
       continue;
@@ -4684,7 +4699,7 @@ function retireResidentCarrier(siteRoot, carrierSessionId, { reason, at }: SiteL
 
 function residentAgentCliStartCommand(siteRoot) {
   const siteLoopConfig = configForSite(siteRoot);
-  return `pwsh -NoExit -Command "Set-Location -LiteralPath '${siteRoot}'; ${siteLoopConfig.commands.agent_cli_resident}"`;
+  return `pwsh -NoExit -Command "Set-Location -LiteralPath '${siteRoot}'; ${residentAgentCliCommand(siteRoot, siteLoopConfig)}"`;
 }
 
 function readCarrierRetirement(siteRoot, carrierSessionId) {

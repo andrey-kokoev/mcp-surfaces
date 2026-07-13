@@ -328,7 +328,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     projection_drift: 'not_available: task projection drift check is not configured; provide a typed MCP/site-loop check before enabling this readiness gate',
     run_once: 'pnpm cli -- loop run site.loop --once --ensure-resident',
     supervise: 'pnpm cli -- loop supervise site.loop --ensure-resident',
-    agent_cli_resident: '.\\narada-site.ps1 agent-start -Agent site.resident -Runtime agent-cli -Exec',
+    agent_cli_resident: '.\\narada-site.ps1 agent-start -Agent {resident_agent_id} -Runtime agent-cli -Exec',
     live_fixture_proof: 'pnpm cli -- resident e2e --ack-fixture --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
     mailbox_proof: 'pnpm cli -- resident e2e --mailbox-proof --controlled-mailbox-proof --controlled-mailbox-source <ref> --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
     background_agent_cli: 'pnpm cli -- resident summon --background --json',
