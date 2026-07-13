@@ -1,7 +1,7 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,6 +111,8 @@ try {
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('agent_context_hydrate_current'), true);
   assert.equal(names.includes('agent_context_startup_sequence'), true);
+  assert.equal(names.includes('agent_context_continuation_export'), true);
+  assert.equal(names.includes('agent_context_continuation_read'), true);
   assert.equal(names.includes('startup_sequence'), false);
   const checkpointTool = tools.result.tools.find((tool) => tool.name === 'agent_context_checkpoint');
   assert.equal(checkpointTool.inputSchema.properties.continuation_ref.properties.path.type, 'string');
@@ -197,6 +199,51 @@ try {
   const historyBody = JSON.parse(history.result.content[0].text);
   assert.equal(historyBody.status, 'ok');
   assert.deepEqual(historyBody.checkpoints[0].continuation, checkpointBody.continuation);
+  writeMessage({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'agent_context_continuation_export', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const exported = await waitFor(13);
+  assert.equal(exported.error, undefined);
+  const exportedBody = JSON.parse(exported.result.content[0].text);
+  assert.equal(exportedBody.status, 'exported');
+  assert.equal(exportedBody.continuation_ref.schema, 'narada.continuation.handoff.v1');
+  assert.match(exportedBody.continuation_ref.path, /^\.ai\/continuations\/narada-revolution\.resident-chk_[a-f0-9]+\.md$/);
+  assert.equal(exportedBody.artifact.wrote, true);
+  const exportedPath = join(siteRoot, ...exportedBody.continuation_ref.path.split('/'));
+  const exportedMarkdown = readFileSync(exportedPath, 'utf8');
+  assert.match(exportedMarkdown, /narada\.continuation\.handoff\.v1/);
+  assert.match(exportedMarkdown, new RegExp(exportedBody.continuation.content_hash));
+
+  writeMessage({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const consumed = await waitFor(14);
+  assert.equal(consumed.error, undefined);
+  const consumedBody = JSON.parse(consumed.result.content[0].text);
+  assert.equal(consumedBody.status, 'ok');
+  assert.equal(consumedBody.artifact.verified, true);
+  assert.deepEqual(consumedBody.continuation, exportedBody.continuation);
+  assert.equal(consumedBody.continuation_ref.sha256, exportedBody.continuation_ref.sha256);
+  assert.match(consumedBody.artifact.markdown, /This file is a bounded projection/);
+
+  writeMessage({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'agent_context_hydrate_current', arguments: {} } });
+  const hydrated = await waitFor(15);
+  assert.equal(hydrated.error, undefined);
+  let hydratedBody = JSON.parse(hydrated.result.content[0].text);
+  if (hydratedBody.output_ref) {
+    writeMessage({ jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: hydratedBody.output_ref, offset: 0, limit: 12000 } } });
+    const hydratedPage = await waitFor(16);
+    assert.equal(hydratedPage.error, undefined);
+    const hydratedPageBody = JSON.parse(hydratedPage.result.content[0].text);
+    hydratedBody = typeof hydratedPageBody.output_text === 'string'
+      ? JSON.parse(hydratedPageBody.output_text)
+      : hydratedPageBody;
+  }
+  assert.equal(hydratedBody.portable_continuation.status, 'ok');
+
+  writeFileSync(exportedPath, `${exportedMarkdown}\nmutated`, 'utf8');
+  writeMessage({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const stale = await waitFor(17);
+  assert.equal(stale.error, undefined);
+  const staleBody = JSON.parse(stale.result.content[0].text);
+  assert.equal(staleBody.status, 'stale');
+  assert.match(staleBody.reason, /continuation_ref_sha256_mismatch/);
   console.log('agent context MCP tests passed');
 } finally {
   proc.stdin?.destroy();

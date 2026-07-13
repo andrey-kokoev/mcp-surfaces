@@ -75,6 +75,21 @@ verifies live state against Git, agent-context, task, and other authoritative
 surfaces. Continuation artifacts should be bounded snapshots; they must not be
 raw transcripts or diff-only state.
 
+The automated projection workflow is:
+
+1. `agent_context_continuation_export` reads the latest canonical continuation
+   and writes a Markdown projection under `.ai/continuations`.
+2. The exporter computes the artifact SHA-256 and attaches the verified
+   `narada.continuation.handoff.v1` reference to the active checkpoint.
+3. `agent_context_continuation_read` or `agent_context_hydrate_current` verifies
+   the reference and, when canonical state exists, the embedded continuation
+   content hash.
+4. A missing, changed, or mismatched artifact is reported as stale; it does
+   not silently override live checkpoint, Git, task, or Site authority.
+
+The exporter’s default path is immutable per checkpoint. Explicit replacement
+is limited to the `.ai/continuations` subtree and requires `overwrite: true`.
+
 See `mcp-output-refusal-conventions.md` for the cross-surface output reference,
 payload reference, and refusal conventions that support these invariants without
 forcing all surfaces into one domain schema.

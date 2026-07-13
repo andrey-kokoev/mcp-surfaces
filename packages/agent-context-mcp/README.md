@@ -34,6 +34,8 @@ node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site --site
 - `agent_context_start_session`: validate roster identity and write a start event.
 - `agent_context_checkpoint`: write a durable checkpoint and, when needed, one bounded canonical continuation state.
 - `agent_context_rehydrate`: read latest checkpoint or checkpoint history for an agent.
+- `agent_context_continuation_export`: render the latest canonical continuation to a Site-local Markdown projection and attach its verified reference.
+- `agent_context_continuation_read`: verify and read the latest canonical continuation and its Markdown projection.
 - `agent_context_hydrate_current`: hydrate current session from identity, checkpoint, and session evidence.
 - `agent_context_startup_sequence`: canonical alias for `agent_context_hydrate_current`.
 - `agent_context_list_sessions`: list local agent start sessions.
@@ -45,6 +47,10 @@ Checkpoints can include active task context, files touched, key decisions, open 
 An optional `continuation` object uses schema `narada.continuation.v1` and is persisted inside the existing checkpoint payload. It is the canonical bounded state for fresh-session handoff: objective, current state, completed work, decisions, evidence references, blockers, next action, canonical sources, constraints, and resume mode. The surface derives `source_checkpoint_ref` and `content_hash`; it does not create a second persistence table. Keep the object below 64 KiB and never use it for raw transcripts or unbounded history.
 
 An optional `continuation_ref` links the checkpoint to a portable Markdown projection using schema `narada.continuation.handoff.v1`. The referenced artifact must be Site-relative, no larger than 256 KiB, and match its supplied SHA-256.
+
+Use `agent_context_continuation_export` after checkpointing to create a projection under `.ai/continuations`. The default filename is derived from the agent and checkpoint ID; an explicit path must remain under that directory and end in `.md`. Existing projections are reused when identical, refused when different unless `overwrite: true` is explicit, and never become a second authority.
+
+Use `agent_context_continuation_read` to verify the reference, artifact size, artifact SHA-256, and the embedded canonical continuation content hash. `agent_context_hydrate_current` includes the same result as `portable_continuation`; stale projections are reported with `status: stale` while live checkpoint hydration remains available.
 
 ## Agent Guidance
 

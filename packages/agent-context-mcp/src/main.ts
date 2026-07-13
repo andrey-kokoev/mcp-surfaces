@@ -11,8 +11,8 @@ import { guidanceToolDefinition } from './guidance.js';
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import {
   buildBoundedToolResult,
   listOutputResources,
@@ -170,6 +170,30 @@ const TOOLS = [
         agent_id: { type: 'string' },
         history: { type: 'boolean' },
         limit: { type: 'integer' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'agent_context_continuation_export',
+    description: 'Render the latest canonical continuation as a bounded Site-local Markdown projection and attach its verified reference.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string' },
+        path: { type: 'string', description: 'Optional Site-relative path under .ai/continuations ending in .md.' },
+        overwrite: { type: 'boolean', description: 'Allow replacing an existing projection at the explicit path.' },
+      },
+      required: ['agent_id'],
+    },
+  },
+  {
+    name: 'agent_context_continuation_read',
+    description: 'Read the latest continuation and verify its portable Markdown projection against the checkpoint reference and canonical content hash.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agent_id: { type: 'string' },
       },
       required: ['agent_id'],
     },
@@ -337,6 +361,118 @@ function normalizeContinuationTimestamp(value) {
     throw new Error('continuation_created_at_invalid');
   }
   return new Date(value).toISOString();
+}
+
+function normalizeContinuationExportPath(value, agentId, checkpointId) {
+  const defaultPath = `.ai/continuations/${safePathSegment(agentId)}-${checkpointId}.md`;
+  const path = value == null ? defaultPath : value;
+  if (typeof path !== 'string' || path.trim() === '' || path.includes('\0') || isAbsolute(path) || path.includes(':')) {
+    throw new Error('continuation_export_path_must_be_site_relative');
+  }
+  const normalizedPath = path.replace(/\\/g, '/');
+  if (!normalizedPath.toLowerCase().endsWith('.md')) {
+    throw new Error('continuation_export_path_must_be_markdown');
+  }
+  const exportRoot = resolve(siteRoot, '.ai', 'continuations');
+  const artifactPath = resolve(siteRoot, normalizedPath);
+  if (!pathWithin(exportRoot, artifactPath)) {
+    throw new Error('continuation_export_path_outside_export_root');
+  }
+  return relative(siteRoot, artifactPath).replace(/\\/g, '/');
+}
+
+function safePathSegment(value) {
+  const segment = String(value ?? '')
+    .replace(/[^a-z0-9_.-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return segment || 'agent';
+}
+
+function renderContinuationMarkdown({ agentId, checkpoint, continuation }) {
+  const lines = [
+    '<!-- narada.continuation.handoff.v1 -->',
+    `<!-- narada.continuation.content-hash: ${continuation.content_hash} -->`,
+    `<!-- narada.continuation.source-checkpoint-ref: ${continuation.source_checkpoint_ref} -->`,
+    '',
+    `# Continuation: ${markdownInline(continuation.objective)}`,
+    '',
+    '- **Schema:** `narada.continuation.v1`',
+    `- **Continuation ID:** \`${markdownInline(continuation.continuation_id)}\``,
+    `- **Agent:** \`${markdownInline(agentId)}\``,
+    `- **Checkpoint:** \`${markdownInline(checkpoint.checkpoint_id)}\``,
+    `- **Checkpointed:** ${markdownInline(checkpoint.checkpoint_at)}`,
+    `- **Created:** ${markdownInline(continuation.created_at)}`,
+    `- **Resume mode:** \`${markdownInline(continuation.resume_mode)}\``,
+    '',
+    '## Current state',
+    '',
+    markdownBlock(continuation.current_state),
+    '',
+    '## Next action',
+    '',
+    markdownBlock(continuation.next_action ?? 'No next action recorded.'),
+    '',
+  ];
+  appendMarkdownList(lines, 'Completed work', continuation.completed_work);
+  appendMarkdownList(lines, 'Decisions', continuation.decisions);
+  appendMarkdownList(lines, 'Evidence references', continuation.evidence_refs);
+  appendMarkdownList(lines, 'Open blockers', continuation.open_blockers);
+  appendMarkdownList(lines, 'Canonical sources', continuation.canonical_sources);
+  appendMarkdownList(lines, 'Constraints', continuation.constraints);
+  lines.push('> This file is a bounded projection of agent-context checkpoint state. Verify live Git, task, and agent-context state before acting.', '');
+  return lines.join('\n');
+}
+
+function appendMarkdownList(lines, title, values) {
+  lines.push(`## ${title}`, '');
+  if (!Array.isArray(values) || values.length === 0) {
+    lines.push('_None._', '');
+    return;
+  }
+  for (const value of values) lines.push(`- ${markdownInline(value)}`);
+  lines.push('');
+}
+
+function markdownInline(value) {
+  return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function markdownBlock(value) {
+  return String(value ?? '').replace(/\r\n/g, '\n').trim();
+}
+
+function writeContinuationArtifact(artifactPath, markdown, overwrite) {
+  mkdirSync(dirname(artifactPath), { recursive: true });
+  const bytes = Buffer.from(markdown, 'utf8');
+  if (existsSync(artifactPath)) {
+    const existing = readFileSync(artifactPath);
+    if (existing.equals(bytes)) return { bytes: bytes.length, wrote: false };
+    if (overwrite !== true) throw new Error('continuation_export_target_exists');
+    writeFileSync(artifactPath, bytes);
+    return { bytes: bytes.length, wrote: true };
+  }
+  writeFileSync(artifactPath, bytes, { flag: 'wx' });
+  return { bytes: bytes.length, wrote: true };
+}
+
+function continuationInput(value) {
+  if (!value) return null;
+  return {
+    schema: value.schema,
+    continuation_id: value.continuation_id,
+    objective: value.objective,
+    current_state: value.current_state,
+    completed_work: value.completed_work,
+    decisions: value.decisions,
+    evidence_refs: value.evidence_refs,
+    open_blockers: value.open_blockers,
+    next_action: value.next_action,
+    canonical_sources: value.canonical_sources,
+    constraints: value.constraints,
+    resume_mode: value.resume_mode,
+    created_at: value.created_at,
+  };
 }
 
 function genericToolOutputSchema() {
@@ -652,6 +788,10 @@ function callTool(name, toolArgs) {
       return checkpoint(toolArgs);
     case 'agent_context_rehydrate':
       return rehydrate(toolArgs);
+    case 'agent_context_continuation_export':
+      return continuationExport(toolArgs);
+    case 'agent_context_continuation_read':
+      return continuationRead(toolArgs);
     case 'agent_context_hydrate_current':
     case 'agent_context_startup_sequence':
       return hydrateCurrent(toolArgs);
@@ -843,6 +983,127 @@ function rehydrate(toolArgs) {
   });
 }
 
+function continuationExport(toolArgs) {
+  const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
+  if (!agentId) throw new Error('agent_id_required');
+  assertAgentContextIdentity(agentId);
+
+  return withDb((db) => {
+    const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
+    if (!row) return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
+
+    const checkpoint = rowToCheckpoint(row);
+    if (!checkpoint.continuation) {
+      return {
+        status: 'no_continuation',
+        agent_id: agentId,
+        checkpoint_id: checkpoint.checkpoint_id,
+        message: 'The latest checkpoint has no canonical continuation state.',
+      };
+    }
+
+    const relativePath = normalizeContinuationExportPath(toolArgs.path, agentId, checkpoint.checkpoint_id);
+    const artifactPath = resolve(siteRoot, relativePath);
+    const markdown = renderContinuationMarkdown({ agentId, checkpoint, continuation: checkpoint.continuation });
+    const writeResult = writeContinuationArtifact(artifactPath, markdown, toolArgs.overwrite === true);
+    const artifactBytes = readFileSync(artifactPath);
+    const reference = normalizeContinuationRef({
+      schema: 'narada.continuation.handoff.v1',
+      path: relativePath,
+      sha256: createHash('sha256').update(artifactBytes).digest('hex'),
+      created_at: new Date().toISOString(),
+    });
+    const nextPayload = { ...checkpoint.payload, continuation_ref: reference };
+    db.prepare('UPDATE agent_checkpoints SET payload_json = ? WHERE checkpoint_id = ?')
+      .run(JSON.stringify(nextPayload), checkpoint.checkpoint_id);
+
+    return {
+      status: 'exported',
+      site_id: siteId,
+      site_root: siteRoot,
+      agent_id: agentId,
+      checkpoint_id: checkpoint.checkpoint_id,
+      checkpoint_at: checkpoint.checkpoint_at,
+      continuation: checkpoint.continuation,
+      continuation_ref: reference,
+      artifact: {
+        path: relativePath,
+        bytes: artifactBytes.length,
+        wrote: writeResult.wrote,
+      },
+    };
+  });
+}
+
+function continuationRead(toolArgs) {
+  const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
+  if (!agentId) throw new Error('agent_id_required');
+  assertAgentContextIdentity(agentId);
+
+  return withDb((db) => {
+    const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
+    if (!row) return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
+
+    const checkpoint = rowToCheckpoint(row);
+    const base = {
+      site_id: siteId,
+      site_root: siteRoot,
+      agent_id: agentId,
+      checkpoint_id: checkpoint.checkpoint_id,
+      checkpoint_at: checkpoint.checkpoint_at,
+      continuation: checkpoint.continuation,
+      continuation_ref: checkpoint.continuation_ref,
+    };
+    if (!checkpoint.continuation_ref) {
+      return {
+        ...base,
+        status: checkpoint.continuation ? 'unlinked' : 'no_continuation',
+        message: checkpoint.continuation
+          ? 'Canonical continuation exists but has no portable Markdown reference.'
+          : 'The latest checkpoint has no canonical continuation state.',
+      };
+    }
+
+    try {
+      const reference = normalizeContinuationRef(checkpoint.continuation_ref);
+      const markdown = readFileSync(resolve(siteRoot, reference.path), 'utf8');
+      if (checkpoint.continuation) {
+        const handoffMarker = '<!-- narada.continuation.handoff.v1 -->';
+        const contentHashMarker = `<!-- narada.continuation.content-hash: ${checkpoint.continuation.content_hash} -->`;
+        if (!markdown.includes(handoffMarker) || !markdown.includes(contentHashMarker)) {
+          return {
+            ...base,
+            continuation_ref: reference,
+            status: 'stale',
+            reason: 'continuation_artifact_content_hash_mismatch',
+            artifact: { path: reference.path, verified: false },
+          };
+        }
+      }
+      return {
+        ...base,
+        continuation_ref: reference,
+        status: 'ok',
+        artifact: {
+          path: reference.path,
+          sha256: reference.sha256,
+          created_at: reference.created_at,
+          bytes: Buffer.byteLength(markdown, 'utf8'),
+          verified: true,
+          markdown,
+        },
+      };
+    } catch (error) {
+      return {
+        ...base,
+        status: 'stale',
+        reason: error instanceof Error ? error.message : String(error),
+        artifact: { path: checkpoint.continuation_ref.path, verified: false },
+      };
+    }
+  });
+}
+
 function whoami(toolArgs = {}) {
   return withDb((db) => {
     const envAgent = process.env.NARADA_AGENT_ID;
@@ -895,18 +1156,27 @@ function hydrateCurrent(toolArgs = {}) {
   if (!identity) return { status: 'blocked', reason: 'agent_identity_unresolved' };
   const resolved = whoami({ hint: identity });
   const checkpointResult = rehydrate({ agent_id: identity });
+  const portableContinuationBefore = continuationRead({ agent_id: identity });
   const hydratedAt = new Date().toISOString();
   let startupCheckpoint = null;
   if (toolArgs.checkpoint_startup === true) {
-    startupCheckpoint = checkpoint({
+    const startupArgs = {
       agent_id: identity,
       authority_basis: {
         kind: 'startup_hydration',
         summary: `Startup hydration checkpoint recorded at ${hydratedAt}.`,
       },
       tactical_resume_notes: [`Hydrated from site-local checkpoint state at ${hydratedAt}.`],
-    });
+    };
+    if (checkpointResult.status === 'ok' && checkpointResult.continuation) {
+      startupArgs.continuation = continuationInput(checkpointResult.continuation);
+    }
+    if (checkpointResult.status === 'ok' && checkpointResult.continuation_ref && portableContinuationBefore.status === 'ok') {
+      startupArgs.continuation_ref = checkpointResult.continuation_ref;
+    }
+    startupCheckpoint = checkpoint(startupArgs);
   }
+  const portableContinuation = continuationRead({ agent_id: identity });
   return {
     status: 'ok',
     site_id: siteId,
@@ -915,6 +1185,7 @@ function hydrateCurrent(toolArgs = {}) {
     whoami: resolved,
     checkpoint: checkpointResult,
     startup_checkpoint: startupCheckpoint,
+    portable_continuation: portableContinuation,
     next_required_action: checkpointResult.status === 'ok'
       ? checkpointResult.next_intended_action ?? null
       : null,
