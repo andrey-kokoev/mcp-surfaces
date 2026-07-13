@@ -122,7 +122,7 @@ writeSiteLoopConfig(residentCommandRoot, {
   resident: { agent_id: 'operator', role: 'operator' },
   refs: { ticket_projection: { kind: 'ticket_projection', ref: 'resident-command' } },
 });
-assert.equal(renderResidentAgentCliCommand(residentCommandRoot), '.\\narada-site.ps1 agent-start -Agent operator -Runtime agent-cli -Exec');
+assert.equal(renderResidentAgentCliCommand(residentCommandRoot), '.\\narada-site.ps1 agent-start -Agent operator -Carrier agent-cli -Runtime narada-agent-runtime-server -Exec');
 
 const phasePlanRoot = mkdtempSync(join(tmpdir(), 'site-loop-phase-plan-'));
 writeSiteLoopConfig(phasePlanRoot, {
