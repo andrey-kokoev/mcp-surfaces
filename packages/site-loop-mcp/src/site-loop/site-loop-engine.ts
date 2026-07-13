@@ -1189,7 +1189,7 @@ function coherenceBlocker(gate, readiness) {
 
 function productionRuntimeBlockCode(operating) {
   if (operating.production_status === 'production_ready') return null;
-  if (operating.resident?.primary_runtime_ready !== true) return 'blocked_by_no_primary_agent_cli';
+  if (operating.resident?.primary_runtime_ready !== true) return 'blocked_by_no_primary_resident_runtime';
   if (operating.resident?.proof_driver === true) return 'blocked_by_proof_driver_runtime';
   if (operating.latest_activity?.production_proof_fresh !== true) return 'blocked_by_no_fresh_production_proof';
   return 'blocked_by_unproven_production_runtime';

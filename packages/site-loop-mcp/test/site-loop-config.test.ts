@@ -8,7 +8,7 @@ import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, renderResidentAgentCliCommand, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
 import { DEFAULT_SITE_LOOP_PHASE_PLAN, SITE_LOOP_ADAPTER_PHASE_PLAN, listSiteLoopRuns, runSiteLoop, siteLoopStatus } from '../src/site-loop/site-loop.js';
 import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
-import { getResidentStatus } from '../src/task-lifecycle/dispatch-directives.js';
+import { findLatestResidentControlTarget, getResidentStatus } from '../src/task-lifecycle/dispatch-directives.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-'));
 const packageRoot = new URL('..', import.meta.url);
@@ -112,6 +112,35 @@ function writeSiteLoopConfig(root, config) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify(config, null, 2), 'utf8');
 }
+
+const residentTargetRoot = mkdtempSync(join(tmpdir(), 'site-loop-resident-target-'));
+writeSiteLoopConfig(residentTargetRoot, {
+  schema: SITE_LOOP_CONFIG_SCHEMA,
+  loop_id: 'resident.target.loop',
+  site_id: 'narada-resident-target',
+  display_name: 'Resident target loop',
+  resident: { agent_id: 'resident.target', role: 'resident' },
+  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'resident-target' } },
+});
+const residentTargetSessionId = 'carrier_resident_target_test';
+const residentTargetResultsRoot = join(residentTargetRoot, '.ai', 'runtime', 'agent-start-results');
+mkdirSync(residentTargetResultsRoot, { recursive: true });
+writeFileSync(join(residentTargetResultsRoot, 'evt-resident-target.result.json'), JSON.stringify({
+  identity: 'resident.target',
+  runtime: 'narada-agent-runtime-server',
+  carrier_session: { carrier_session_id: residentTargetSessionId },
+  nars_launch: {
+    control_path: join(residentTargetRoot, '.narada', 'crew', 'nars-sessions', residentTargetSessionId, 'control.jsonl'),
+  },
+}, null, 2), 'utf8');
+const residentTarget = findLatestResidentControlTarget(residentTargetRoot, 'resident.target', { requireLiveCarrier: false });
+const residentTargetRecord = residentTarget as Record<string, unknown>;
+assert.equal(DEFAULT_SITE_LOOP_CONFIG.resident_runtime.process_probe_patterns.includes('narada-agent-runtime-server'), true);
+assert.equal(residentTargetRecord.status, 'available');
+assert.equal(residentTargetRecord.runtime, 'narada-agent-runtime-server');
+assert.equal(residentTargetRecord.actual_runtime, 'narada-agent-runtime-server');
+assert.equal(residentTargetRecord.carrierSessionId, residentTargetSessionId);
+assert.equal(residentTargetRecord.preference, 'interactive_agent_cli');
 
 const residentCommandRoot = mkdtempSync(join(tmpdir(), 'site-loop-resident-command-'));
 writeSiteLoopConfig(residentCommandRoot, {

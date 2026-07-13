@@ -18,6 +18,20 @@ typed adapters, or governed tool boundaries.
 - loop status, health, run, attention, and control readback/mutation
 - bounded `site_loop_run_once` orchestration
 
+### Resident Target Selection
+
+Resident selection keeps the runtime host and carrier preference distinct.
+`resident_runtime.preferred_runtime` and `resident_launch.runtime` name the
+runtime host/substrate emitted in a launch result, such as
+`narada-agent-runtime-server`. `resident_runtime.preferred_preference` names
+the preferred carrier posture, such as `interactive_agent_cli`.
+
+For a launch expressed as `--Carrier agent-cli --Runtime
+narada-agent-runtime-server`, Site Loop must compare the result packet's
+runtime to `narada-agent-runtime-server` and its carrier preference to
+`interactive_agent_cli`. It must never compare the carrier kind `agent-cli`
+with the packet runtime and conclude that the resident is absent.
+
 Site identity, resident identity, refs, schema names, scheduler hints, recovery
 steps, docs, tests, and configured commands are site config. They must not be
 hardcoded as sonar-specific package behavior.
