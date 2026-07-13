@@ -16,6 +16,8 @@ Inventory results carry `runtime_kind` and `runtime_skipped_surface_ids`. A skip
 
 Attached child surfaces receive `NARADA_SITE_ROOT` set to the requested `site_root`. This is the authoritative Site binding for the child process; the loader does not let an ambient caller Site root override it.
 
+The loader also preserves a narrow, explicit carrier-context allowlist for child surfaces that need caller identity or session binding: `NARADA_AGENT_ID`, `NARADA_OPERATOR_ID`, `NARADA_NARS_SESSION_SOURCE_KIND`, `NARADA_CARRIER_SESSION_ID`, and `NARADA_SITE_ID`. These values identify the caller context; they do not grant authority or bypass the attached surface's own policy.
+
 Surface requests resolve by exact declared `surface_id` metadata or exact fabric server key. The loader does not derive one identifier from another by name parsing.
 
 The payload's declared creator and id namespace are lineage hints and accidental-misrouting guards, not cryptographic provenance or policy authority.

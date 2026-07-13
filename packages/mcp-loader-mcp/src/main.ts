@@ -207,6 +207,11 @@ const DEFAULT_ALLOWED_ENV_VARS = [
   'PATH',
   'PROCESSOR_ARCHITECTURE',
   'SystemRoot',
+  'NARADA_AGENT_ID',
+  'NARADA_OPERATOR_ID',
+  'NARADA_NARS_SESSION_SOURCE_KIND',
+  'NARADA_CARRIER_SESSION_ID',
+  'NARADA_SITE_ID',
 ];
 
 type JsonRecord = Record<string, unknown>;
