@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/launcher-mcp.test.js"
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/launcher-mcp.test.js",
+    "test:e2e:host": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/pc-host-launcher-lifecycle-e2e.test.js"
   },
   "dependencies": {
     "@narada2/mcp-telemetry": "workspace:*"

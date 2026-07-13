@@ -76,6 +76,7 @@ An `A0` proof does not claim `A1` or `A2` authority. A `W1` proof may compose
 | `sop-mcp` | [`test/site-fabric-sop-e2e.test.ts`](../packages/sop-mcp/test/site-fabric-sop-e2e.test.ts) | B1-B3 durable run, restart/resume, operator gate, and event history | Production Site Loop scheduling |
 | `artifacts-mcp` | [`test/site-fabric-artifacts-e2e.test.ts`](../packages/artifacts-mcp/test/site-fabric-artifacts-e2e.test.ts) | B1-B3 child registration/read/presentation through a controlled NARS HTTP authority | Real NARS carrier authority remains separate |
 | `operator-routing-mcp` | [`test/site-fabric-routing-e2e.test.ts`](../packages/operator-routing-mcp/test/site-fabric-routing-e2e.test.ts) | B1-B3 durable fallback envelope and route log with truthful unsupported-direct-delivery semantics | Runtime-specific message injection |
+| `launcher-mcp` | [`test/pc-host-launcher-lifecycle-e2e.test.ts`](../packages/launcher-mcp/test/pc-host-launcher-lifecycle-e2e.test.ts) | Opt-in PC-host B2-B4/W1 proof through the canonical launcher, NARS-session MCP, Site-local MCP inheritance, process ownership, hidden posture, restart, and descendant teardown; defaults to an explicit `not_run` artifact without host authority | Passed with explicit PC-host authority on 2026-07-13; default remains `not_run` |
 | all other surfaces | Package tests and protocol smoke tests | Unit, contract, or protocol coverage | Real child-process Site-bound workflows unless listed below |
 
 ## Debt Register
@@ -104,20 +105,35 @@ without hidden operator state.
 The objective is zero outstanding non-PC-host implementation debt, not an
 untruthful claim that unavailable authorities were exercised. The current
 register has 22 non-PC-host rows with `Debt status: complete`, including six
-external-authority rows whose `Authority result` is honestly `not_run`. Six
-PC-host authority rows remain explicitly excluded. Therefore the
-implementation-debt count is zero while external and PC-host authority gaps
-remain visible and non-passing.
+external-authority rows whose `Authority result` is honestly `not_run`. The
+launcher and Scheduler PC-host boundaries are separately proven; the remaining
+PC-host authority rows remain explicitly excluded. Therefore implementation
+debt is zero while external and remaining PC-host authority gaps remain visible
+and non-passing.
 
 ## PC-host Scope Exclusions
 
-This objective leaves PC-host authority untouched. The following boundaries are
-therefore explicitly excluded from the non-PC-host debt count: production Site
-Loop scheduling/resident delivery, launcher process ownership and teardown,
-Windows Task Scheduler authority, real NARS carrier/session authority, live
-host process introspection, and real NARS artifact authority. Their local
+The non-PC-host objective still excludes PC-host authority for boundaries not
+listed as passed below. The following remain explicitly excluded from that
+count: production Site Loop scheduling/resident delivery, standalone real NARS
+session control, live host process introspection outside the launcher lifecycle,
+and real NARS artifact authority. Their local
 child-process contracts remain useful evidence, but they do not claim host
 authority.
+
+The launcher lifecycle is the explicit PC-host exception: its opt-in test starts
+the canonical launcher twice, proves exact launch-session-to-session binding,
+waits for runtime health, verifies Site-local MCP inheritance and hidden process
+posture, closes each session, and confirms zero descendants plus temporary-root
+cleanup. The default invocation remains non-authoritative and records `not_run`.
+
+The Scheduler lifecycle is the second explicit PC-host exception: its opt-in
+test registers a uniquely scoped disposable Windows task through Scheduler MCP,
+executes it through the real Task Scheduler boundary, verifies the fixture's
+started/completed evidence and Scheduler result code, deletes the task, proves
+the task is absent, and removes the fixture command, process, MCP child, and
+temporary root. The default invocation remains non-authoritative and records
+`not_run`.
 
 The worker-delegation provider/cognition row below is complete only for local
 binding and projection through the admitted worker runtime. External provider
@@ -138,7 +154,7 @@ live external-provider authority.
 | P0 | `task-lifecycle-mcp` | Site-bound carrier lifecycle | [`test/site-fabric-lifecycle-e2e.test.ts`](../packages/task-lifecycle-mcp/test/site-fabric-lifecycle-e2e.test.ts) launches the actual child, claims/finishes/reviews a controlled task, and verifies SQLite plus Markdown closure evidence | complete | passed |
 | P0 | `mcp-registrar` | Registry-to-live-surface conformance | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts), [`test/site-fabric-catalog-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-catalog-e2e.test.ts), and `test/mcp-registrar.test.ts` prove live child handoff, the complete 26-entry catalog sweep, and drift checks | complete | passed |
 | P0 | `mcp-loader-mcp` | Runtime attachment workflow | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts) plus `test/mcp-loader-mcp.test.ts` attach/call/status/detach and replace/drift behavior through real children | complete | passed |
-| P0 | `launcher-mcp` | Launcher-to-carrier inheritance | Start a carrier through the launcher, verify selected Site/User Site MCP inheritance, process ownership, hidden child posture, and clean teardown | excluded_pc_host | excluded_pc_host |
+| P0 | `launcher-mcp` | Launcher-to-carrier inheritance | [`test/pc-host-launcher-lifecycle-e2e.test.ts`](../packages/launcher-mcp/test/pc-host-launcher-lifecycle-e2e.test.ts) starts the canonical launcher twice with explicit launch-session bindings, drives each session through `nars-session-mcp`, verifies Site-local MCP tool inheritance, runtime/MCP ownership evidence, hidden child posture, restart isolation, and descendant teardown; run only with `NARADA_E2E_PC_HOST_AUTHORITY=1` | complete | passed |
 | P0 | `delegated-task-mcp` | Real worker runtime and launcher workflow | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts) proves the B1-B3 Site-fabric boundary; Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` proves the W1 launcher/carrier/Site-fabric/delegated-task/worker/artifact workflow with a controlled provider (A0) | complete | passed |
 | P0 | `worker-delegation-mcp` | Provider/cognition binding and real carrier | [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) proves controlled provider binding; [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) proves B4 execution through the production NARS carrier and durable artifacts with a controlled provider (A0) | complete | passed |
 | P0 | `worker-delegation-mcp` | External provider authority | [`test/external-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/external-provider-e2e.test.ts) executes the real child and records the controlled provider prerequisites; the current authority result is `not_run` because no A1/A2 provider authority was supplied | complete | not_run |
@@ -150,7 +166,7 @@ live external-provider authority.
 | P0 | `graph-mail-mcp` | Real Graph delegated auth and mail lifecycle | [`test/site-fabric-graph-mail-e2e.test.ts`](../packages/graph-mail-mcp/test/site-fabric-graph-mail-e2e.test.ts) executes the real child, tools/list, doctor, and bounded lifecycle path; the current authority result is `not_run` because no controlled Graph authority was supplied | complete | not_run |
 | P1 | `calendar-mcp` | Real Graph calendar lifecycle | [`test/site-fabric-calendar-e2e.test.ts`](../packages/calendar-mcp/test/site-fabric-calendar-e2e.test.ts) executes the real child, tools/list, doctor, and bounded calendar path; the current authority result is `not_run` because no controlled Graph calendar authority was supplied | complete | not_run |
 | P1 | `speech-mcp` | Real remote speech path | [`test/site-fabric-speech-e2e.test.ts`](../packages/speech-mcp/test/site-fabric-speech-e2e.test.ts) executes the real child, registry, policy, and listen path; the current authority result is `not_run` because remote provider egress, credentials, and a controlled capture adapter were not supplied | complete | not_run |
-| P1 | `scheduler-mcp` | Real Windows Task Scheduler boundary | [`test/site-fabric-scheduler-e2e.test.ts`](../packages/scheduler-mcp/test/site-fabric-scheduler-e2e.test.ts), run by the explicit `test:e2e:host` script, registers/runs/inspects/history-reads/deletes one uniquely scoped disposable task | complete | excluded_pc_host |
+| P1 | `scheduler-mcp` | Real Windows Task Scheduler boundary | [`test/site-fabric-scheduler-e2e.test.ts`](../packages/scheduler-mcp/test/site-fabric-scheduler-e2e.test.ts), run with `--pc-host-authority` through `test:e2e:host`, registers/runs/inspects/history-reads/deletes one uniquely scoped disposable task and verifies action completion plus full cleanup | complete | passed |
 | P1 | `agent-context-mcp` | Real startup hydration | [`test/site-fabric-agent-context-e2e.test.ts`](../packages/agent-context-mcp/test/site-fabric-agent-context-e2e.test.ts) launches a Site-bound child, hydrates, persists checkpoints, reads bounded output pages, and verifies roster/root authority | complete | passed |
 | P1 | `sop-mcp` | Real SOP durable run | [`test/site-fabric-sop-e2e.test.ts`](../packages/sop-mcp/test/site-fabric-sop-e2e.test.ts) starts/advances a controlled run, restarts the child, resumes it, and verifies durable events and operator gates | complete | passed |
 | P1 | `surface-feedback-mcp` | Real feedback-to-task fabric | [`test/site-fabric-feedback-e2e.test.ts`](../packages/surface-feedback-mcp/test/site-fabric-feedback-e2e.test.ts) submits through a child, converts through its nested task-lifecycle child, retries idempotently, and reads durable task/handoff state | complete | passed |
@@ -169,6 +185,23 @@ The latest bounded non-PC-host execution manifest is [`20260712-non-pc-host-batc
 It links each newly added or strengthened test to its execution reference and
 package-local result artifact. The manifest records external authority gaps as
 `not_run`; it does not promote them to passing evidence.
+
+The PC-host launcher verification passed on 2026-07-13 with two launches and
+the explicit `--pc-host-authority` opt-in. Its result artifact is
+`packages/launcher-mcp/.tmp-tests/e2e-results/launcher-mcp-pc-host-lifecycle-e2e.json`
+(generated output is ignored). Both launches reported healthy runtime health,
+complete ownership evidence with no validation errors, one inherited fixture
+tool request, zero descendants after close, and successful temporary-root
+cleanup. The same test without the opt-in produced an explicit `not_run` result.
+
+The Scheduler PC-host verification passed on 2026-07-13 with the explicit
+`--pc-host-authority` opt-in. Its result artifact is
+`packages/scheduler-mcp/.tmp-tests/e2e-results/scheduler-mcp-pc-host-lifecycle-e2e.json`
+(generated output is ignored). The scheduled task returned history result `0`,
+the fixture recorded started and completed timestamps, and cleanup proved task
+absence, fixture-process exit, Scheduler MCP exit, command-file removal, and
+temporary-root removal. The default invocation produced an explicit `not_run`
+artifact with `cleanup.status=not_required`.
 
 ## Required Test Artifacts
 
@@ -192,9 +225,8 @@ not get silently promoted by a local fixture. PC-host authority remains
 excluded by scope.
 
 Host-authority tests are opt-in when they create or remove host state. The
-Scheduler proof is exposed as `pnpm --filter @narada2/scheduler-mcp run
-test:e2e:host`; the ordinary package test does not mutate Windows Task
-Scheduler. External-authority rows remain open until a controlled tenant,
+Scheduler proof is exposed as `pnpm run test:scheduler:e2e:host`; the ordinary
+package test does not mutate Windows Task Scheduler. External-authority rows remain open until a controlled tenant,
 provider account, carrier session, or production Site is explicitly supplied.
 A local HTTP fixture may prove the child/protocol contract, but it must not
 promote a Graph, speech, NARS, Cloudflare, or production Site claim to
