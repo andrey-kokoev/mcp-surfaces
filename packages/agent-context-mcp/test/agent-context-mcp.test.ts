@@ -114,6 +114,7 @@ try {
   assert.equal(names.includes('startup_sequence'), false);
   const checkpointTool = tools.result.tools.find((tool) => tool.name === 'agent_context_checkpoint');
   assert.equal(checkpointTool.inputSchema.properties.continuation_ref.properties.path.type, 'string');
+  assert.equal(checkpointTool.inputSchema.properties.continuation.properties.schema.const, 'narada.continuation.v1');
   writeMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, '\n\n');
   const lfTools = await waitFor(3);
   assert.equal(lfTools.error, undefined);
@@ -136,27 +137,66 @@ try {
     sha256: createHash('sha256').update(continuationContent, 'utf8').digest('hex'),
     created_at: '2026-07-13T00:00:00.000Z',
   };
-  writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', key_decisions: ['site-local checkpoint regression'], continuation_ref: continuationRef } } });
+  const continuation = {
+    schema: 'narada.continuation.v1',
+    continuation_id: 'continuation-test-1',
+    objective: 'Verify canonical continuation state survives checkpoint rehydration.',
+    current_state: 'The checkpoint contains one portable, bounded continuation envelope.',
+    completed_work: ['Added the first continuation envelope fixture.'],
+    decisions: ['Keep continuation state in checkpoint payload_json.'],
+    evidence_refs: ['test:agent-context-mcp'],
+    open_blockers: [],
+    next_action: 'Read the checkpoint back and verify its content hash.',
+    canonical_sources: ['AGENTS.md', 'packages/agent-context-mcp/src/main.ts'],
+    constraints: ['Do not create a second persistence table.'],
+    resume_mode: 'fresh_session',
+    created_at: '2026-07-13T00:00:00.000Z',
+  };
+  writeMessage({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', key_decisions: ['site-local checkpoint regression'], continuation, continuation_ref: continuationRef } } });
   const checkpoint = await waitFor(6);
   assert.equal(checkpoint.error, undefined);
   const checkpointBody = JSON.parse(checkpoint.result.content[0].text);
   assert.equal(checkpointBody.status, 'checkpointed');
   assert.equal(checkpointBody.site_root, siteRoot);
   assert.deepEqual(checkpointBody.continuation_ref, { ...continuationRef, sha256: continuationRef.sha256.toLowerCase() });
+  assert.equal(checkpointBody.continuation.schema, 'narada.continuation.v1');
+  assert.equal(checkpointBody.continuation.continuation_id, continuation.continuation_id);
+  assert.equal(checkpointBody.continuation.source_checkpoint_ref.startsWith('agent_context_checkpoint:chk_'), true);
+  const continuationForHash = { ...checkpointBody.continuation };
+  delete continuationForHash.content_hash;
+  delete continuationForHash.source_checkpoint_ref;
+  assert.equal(
+    checkpointBody.continuation.content_hash,
+    createHash('sha256').update(JSON.stringify(continuationForHash), 'utf8').digest('hex'),
+  );
   writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation_ref: { ...continuationRef, sha256: 'B'.repeat(64) } } } });
-  const invalidContinuation = await waitFor(7);
-  assert.equal(invalidContinuation.error.code, -32000);
-  assert.match(invalidContinuation.error.message, /continuation_ref_sha256_mismatch/);
+  const invalidContinuationRef = await waitFor(7);
+  assert.equal(invalidContinuationRef.error.code, -32000);
+  assert.match(invalidContinuationRef.error.message, /continuation_ref_sha256_mismatch/);
   writeMessage({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation_ref: { ...continuationRef, path: 'C:/outside.md' } } } });
   const outsideContinuation = await waitFor(8);
   assert.equal(outsideContinuation.error.code, -32000);
   assert.match(outsideContinuation.error.message, /continuation_ref_path_must_be_site_relative/);
-  writeMessage({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident' } } });
-  const rehydrate = await waitFor(9);
+  writeMessage({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation: { ...continuation, objective: '' } } } });
+  const invalidContinuation = await waitFor(9);
+  assert.equal(invalidContinuation.error.code, -32000);
+  assert.match(invalidContinuation.error.message, /continuation_objective_invalid/);
+  writeMessage({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const rehydrate = await waitFor(10);
   assert.equal(rehydrate.error, undefined);
   const rehydrateBody = JSON.parse(rehydrate.result.content[0].text);
   assert.equal(rehydrateBody.payload.site_id, 'narada.revolution');
   assert.deepEqual(rehydrateBody.continuation_ref, { ...continuationRef, sha256: continuationRef.sha256.toLowerCase() });
+  assert.deepEqual(rehydrateBody.continuation, checkpointBody.continuation);
+  writeMessage({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation: { ...continuation, current_state: 'A later checkpoint keeps the same canonical continuation contract.' } } } });
+  const updatedCheckpoint = await waitFor(11);
+  assert.equal(updatedCheckpoint.error, undefined);
+  writeMessage({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident', history: true, limit: 1 } } });
+  const history = await waitFor(12);
+  assert.equal(history.error, undefined);
+  const historyBody = JSON.parse(history.result.content[0].text);
+  assert.equal(historyBody.status, 'ok');
+  assert.deepEqual(historyBody.checkpoints[0].continuation, checkpointBody.continuation);
   console.log('agent context MCP tests passed');
 } finally {
   proc.stdin?.destroy();

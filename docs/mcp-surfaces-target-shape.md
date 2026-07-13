@@ -40,9 +40,25 @@ Every surface should make these properties inspectable or mechanically enforced 
 ## Checkpoint and Continuation Contract
 
 Agent-context checkpoint state remains the canonical operational state. A
-checkpoint may carry one exact reference to a portable continuation artifact;
-the artifact is a handoff projection, not a second authority or an independent
-state store.
+checkpoint may carry one canonical, bounded `narada.continuation.v1` subobject
+and one exact reference to a portable continuation artifact. Both live in the
+existing checkpoint payload; the Markdown artifact is a handoff projection,
+not a second authority or an independent state store.
+
+The canonical continuation subobject contains the bounded fresh-session state:
+
+- objective and current-state summary;
+- completed work, decisions, evidence references, open blockers, and next action;
+- canonical sources, constraints, and resume mode;
+- a generated continuation ID and creation timestamp;
+- a generated source checkpoint reference and SHA-256 content hash.
+
+The subobject is capped at 64 KiB. Its provenance is derived when the
+checkpoint is written, and its content hash covers the canonical state without
+the generated provenance link. A caller therefore cannot silently point the
+canonical state at a different checkpoint. Existing checkpoint tables and
+callers remain compatible because the subobject is optional and stored in
+`payload_json`.
 
 The reference has schema `narada.continuation.handoff.v1` and contains:
 

@@ -36,6 +36,9 @@ const siteId = normalizeSiteId(args['site-id'] ?? process.env.NARADA_SITE_ID ?? 
 const SERVER_NAME = `${siteId.replace(/[^a-z0-9_.-]/gi, '-')}-agent-context-mcp`;
 const dbPath = resolve(process.env.NARADA_AGENT_CONTEXT_DB || join(siteRoot, '.ai', 'state', 'agent-context.sqlite'));
 const MAX_CONTINUATION_BYTES = 256 * 1024;
+const MAX_CONTINUATION_STATE_BYTES = 64 * 1024;
+const MAX_CONTINUATION_TEXT_LENGTH = 16 * 1024;
+const MAX_CONTINUATION_ARRAY_ITEMS = 200;
 const startupTracePath = join(siteRoot, '.ai', 'tmp', 'agent-context-mcp-startup.log');
 const startupTraceEnabled = process.env.NARADA_AGENT_CONTEXT_MCP_TRACE === '1';
 
@@ -106,7 +109,7 @@ const TOOLS = [
   },
   {
     name: 'agent_context_checkpoint',
-    description: 'Write a durable site-local agent checkpoint, optionally linked to an exact portable continuation artifact.',
+    description: 'Write a durable site-local agent checkpoint, optionally carrying canonical continuation state and linking an exact portable continuation artifact.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -134,6 +137,26 @@ const TOOLS = [
             created_at: { type: 'string' },
           },
           required: ['schema', 'path', 'sha256', 'created_at'],
+        },
+        continuation: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            schema: { type: 'string', const: 'narada.continuation.v1' },
+            continuation_id: { type: 'string' },
+            objective: { type: 'string' },
+            current_state: { type: 'string' },
+            completed_work: { type: 'array', items: { type: 'string' } },
+            decisions: { type: 'array', items: { type: 'string' } },
+            evidence_refs: { type: 'array', items: { type: 'string' } },
+            open_blockers: { type: 'array', items: { type: 'string' } },
+            next_action: { type: 'string' },
+            canonical_sources: { type: 'array', items: { type: 'string' } },
+            constraints: { type: 'array', items: { type: 'string' } },
+            resume_mode: { type: 'string', enum: ['fresh_session', 'same_session'] },
+            created_at: { type: 'string' },
+          },
+          required: ['schema', 'objective', 'current_state'],
         },
       },
     },
@@ -208,6 +231,112 @@ function toolAnnotations(name: string) {
     idempotentHint: /doctor|whoami|rehydrate|hydrate|startup|list/.test(name),
     openWorldHint: false,
   };
+}
+
+function normalizeContinuation(value, checkpointId, checkpointAt) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('continuation_invalid: expected an object');
+  }
+
+  const allowedKeys = new Set([
+    'schema',
+    'continuation_id',
+    'objective',
+    'current_state',
+    'completed_work',
+    'decisions',
+    'evidence_refs',
+    'open_blockers',
+    'next_action',
+    'canonical_sources',
+    'constraints',
+    'resume_mode',
+    'created_at',
+  ]);
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) throw new Error(`continuation_field_unknown: ${key}`);
+  }
+
+  if (value.schema !== 'narada.continuation.v1') {
+    throw new Error('continuation_schema_invalid');
+  }
+
+  const continuationId = value.continuation_id == null
+    ? `cont_${randomUUID().replace(/-/g, '')}`
+    : continuationText(value.continuation_id, 'continuation_id');
+  const objective = continuationText(value.objective, 'objective', true);
+  const currentState = continuationText(value.current_state, 'current_state', true);
+  const resumeMode = value.resume_mode ?? 'fresh_session';
+  if (resumeMode !== 'fresh_session' && resumeMode !== 'same_session') {
+    throw new Error('continuation_resume_mode_invalid');
+  }
+
+  const createdAt = value.created_at == null
+    ? checkpointAt
+    : normalizeContinuationTimestamp(value.created_at);
+  const canonical = {
+    schema: 'narada.continuation.v1',
+    continuation_id: continuationId,
+    objective,
+    current_state: currentState,
+    completed_work: continuationStringArray(value.completed_work, 'completed_work'),
+    decisions: continuationStringArray(value.decisions, 'decisions'),
+    evidence_refs: continuationStringArray(value.evidence_refs, 'evidence_refs'),
+    open_blockers: continuationStringArray(value.open_blockers, 'open_blockers'),
+    next_action: continuationText(value.next_action, 'next_action'),
+    canonical_sources: continuationStringArray(value.canonical_sources, 'canonical_sources'),
+    constraints: continuationStringArray(value.constraints, 'constraints'),
+    resume_mode: resumeMode,
+    source_checkpoint_ref: `agent_context_checkpoint:${checkpointId}`,
+    created_at: createdAt,
+  };
+  const content = { ...canonical };
+  delete content.source_checkpoint_ref;
+  const serialized = JSON.stringify(content);
+  if (Buffer.byteLength(JSON.stringify(canonical), 'utf8') > MAX_CONTINUATION_STATE_BYTES) {
+    throw new Error('continuation_too_large');
+  }
+
+  return {
+    ...canonical,
+    content_hash: createHash('sha256').update(serialized, 'utf8').digest('hex'),
+  };
+}
+
+function continuationText(value, key, required = false) {
+  if (value == null && !required) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`continuation_${key}_invalid`);
+  }
+  if (value.length > MAX_CONTINUATION_TEXT_LENGTH) {
+    throw new Error(`continuation_${key}_too_long`);
+  }
+  return value;
+}
+
+function continuationStringArray(value, key) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error(`continuation_${key}_invalid`);
+  if (value.length > MAX_CONTINUATION_ARRAY_ITEMS) {
+    throw new Error(`continuation_${key}_too_many_items`);
+  }
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || item.trim() === '') {
+      throw new Error(`continuation_${key}_${index}_invalid`);
+    }
+    if (item.length > MAX_CONTINUATION_TEXT_LENGTH) {
+      throw new Error(`continuation_${key}_${index}_too_long`);
+    }
+    return item;
+  });
+}
+
+function normalizeContinuationTimestamp(value) {
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    throw new Error('continuation_created_at_invalid');
+  }
+  return new Date(value).toISOString();
 }
 
 function genericToolOutputSchema() {
@@ -493,7 +622,7 @@ function promptGet(params) {
   if (name !== 'agent_context_startup') throw new Error(`unknown_prompt: ${name}`);
   return {
     description: 'Guidance for hydrating and checkpointing agent context.',
-    messages: [{ role: 'user', content: { type: 'text', text: 'Use agent_context_hydrate_current at startup, checkpoint meaningful state transitions, and rehydrate before resuming long-running work. When a portable Markdown handoff exists, include its site-relative path, SHA-256, creation time, and schema as continuation_ref.' } }],
+    messages: [{ role: 'user', content: { type: 'text', text: 'Use agent_context_hydrate_current at startup, checkpoint meaningful state transitions, and rehydrate before resuming long-running work. For a fresh-session handoff, keep one bounded narada.continuation.v1 object in the checkpoint and, when a portable Markdown projection exists, include its site-relative path, SHA-256, creation time, and schema as continuation_ref.' } }],
   };
 }
 
@@ -624,7 +753,7 @@ function checkpoint(toolArgs) {
   return withDb((db) => {
     const now = new Date().toISOString();
     const checkpointId = `chk_${randomUUID().replace(/-/g, '')}`;
-    const payload = checkpointPayload(toolArgs, agentId, now);
+    const payload = checkpointPayload(toolArgs, agentId, now, checkpointId);
     const existing = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ?').get(agentId);
     if (existing) {
       db.prepare(`
@@ -679,6 +808,7 @@ function checkpoint(toolArgs) {
       checkpoint_at: now,
       db_path: dbPath,
       site_root: siteRoot,
+      continuation: payload.continuation ?? null,
       continuation_ref: payload.continuation_ref ?? null,
     };
   });
@@ -799,7 +929,7 @@ function listSessions(toolArgs = {}) {
   }));
 }
 
-function checkpointPayload(toolArgs, agentId, checkpointAt) {
+function checkpointPayload(toolArgs, agentId, checkpointAt, checkpointId) {
   return {
     schema: 'narada.agent_context.checkpoint.v1',
     site_id: siteId,
@@ -818,6 +948,7 @@ function checkpointPayload(toolArgs, agentId, checkpointAt) {
     evidence_refs: arrayValue(toolArgs.evidence_refs),
     worktree_state: toolArgs.worktree_state ?? null,
     tactical_resume_notes: arrayValue(toolArgs.tactical_resume_notes),
+    continuation: normalizeContinuation(toolArgs.continuation, checkpointId, checkpointAt),
     continuation_ref: normalizeContinuationRef(toolArgs.continuation_ref),
   };
 }
@@ -841,6 +972,7 @@ function rowToCheckpoint(row) {
     evidence_refs: payload.evidence_refs ?? [],
     worktree_state: payload.worktree_state ?? null,
     tactical_resume_notes: payload.tactical_resume_notes ?? [],
+    continuation: payload.continuation ?? null,
     continuation_ref: payload.continuation_ref ?? null,
     payload,
   };

@@ -25,18 +25,21 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
+      { step: 'checkpoint', guidance: 'Keep operational checkpoint state authoritative; when fresh-session handoff is needed, add one bounded narada.continuation.v1 object and optionally link its Markdown projection with continuation_ref.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
     examples: [
       { intent: 'First use', call: 'agent_context_guidance({})' },
       { intent: 'Tool-specific help', call: "agent_context_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "agent_context_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Workflow-specific help', call: "agent_context_guidance({ workflow: \"<workflow_name>\" })" },
+      { intent: 'Portable continuation', call: "agent_context_checkpoint({ continuation: { schema: 'narada.continuation.v1', objective: '<objective>', current_state: '<bounded state summary>', next_action: '<next action>' }, continuation_ref: { schema: 'narada.continuation.handoff.v1', path: '<site-relative markdown path>', sha256: '<sha256>', created_at: '<iso timestamp>' } })" }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not store raw transcripts, unbounded history, or diff-only state in continuation.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [
