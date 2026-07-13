@@ -51,7 +51,7 @@ const COMMANDS: RegistryCommandSpec[] = [
 
 export function createServerState(options: JsonRecord = {}): ServerState {
   const naradaRoot = normalizePath(String(options.naradaRoot ?? options.narada_root ?? process.env.NARADA_ROOT ?? DEFAULT_NARADA_ROOT));
-  const cliModulePath = normalizePath(String(options.cliModulePath ?? options.cli_module_path ?? join(naradaRoot, 'packages', 'layers', 'cli', 'dist', 'commands', 'sites.js')));
+  const cliModulePath = normalizePath(String(options.cliModulePath ?? options.cli_module_path ?? join(naradaRoot, 'packages', 'layers', 'cli', 'dist', 'commands', 'site-registry-management.js')));
   return { naradaRoot, cliModulePath };
 }
 

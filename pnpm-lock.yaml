@@ -58,7 +58,11 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
 
-  packages/cloudflare-carrier-mcp: {}
+  packages/cloudflare-carrier-mcp:
+    dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/delegated-task-mcp:
     dependencies:
@@ -154,6 +158,9 @@ importers:
 
   packages/nars-session-mcp:
     dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -169,6 +176,9 @@ importers:
 
   packages/runtime-introspection-mcp:
     dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -203,6 +213,9 @@ importers:
 
   packages/site-coherence-mcp:
     dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -217,7 +230,11 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
 
-  packages/site-lifecycle-mcp: {}
+  packages/site-lifecycle-mcp:
+    dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/site-loop-mcp:
     dependencies:
@@ -241,7 +258,11 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
 
-  packages/site-registry-mcp: {}
+  packages/site-registry-mcp:
+    dependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/sop-mcp:
     dependencies:

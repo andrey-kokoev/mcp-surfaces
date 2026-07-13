@@ -1,0 +1,146 @@
+{
+  "schema": "narada.mcp.e2e.debt_evidence.v1",
+  "evidence_id": "mcp-e2e-non-pc-host-batch-20260713",
+  "generated_at": "2026-07-13T03:36:00Z",
+  "repository": "D:/code/mcp-surfaces",
+  "scope": {
+    "objective": "zero outstanding non-PC-host code/test debt",
+    "pc_host_authority": "excluded",
+    "external_not_run_is_not_pass": true
+  },
+  "executions": [
+    {
+      "test_id": "mcp-registrar.site-fabric.full-catalog-sweep",
+      "package": "@narada2/mcp-registrar",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_702ab82369e34c49af507f6d",
+      "artifact_path": "packages/mcp-registrar/.tmp/e2e-results/mcp-registrar.site-fabric.full-catalog-sweep.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "site-lifecycle.site-fabric.real-cli",
+      "package": "@narada2/site-lifecycle-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_ffd7aba54c7c466a80231f95",
+      "artifact_path": "packages/site-lifecycle-mcp/.tmp/e2e-results/site-lifecycle.site-fabric.real-cli.json",
+      "cleanup": "completed_after_finally",
+      "mutation_performed": true
+    },
+    {
+      "test_id": "site-registry.site-fabric.real-cli",
+      "package": "@narada2/site-registry-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_d8c644c9076c473d94898474",
+      "artifact_path": "packages/site-registry-mcp/.tmp/e2e-results/site-registry.site-fabric.real-cli.json",
+      "cleanup": "completed_after_finally",
+      "mutation_performed": false
+    },
+    {
+      "test_id": "nars-session.site-fabric.discovery-health-refusal",
+      "package": "@narada2/nars-session-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_c35e4f14898d435c8df17216",
+      "artifact_path": "packages/nars-session-mcp/.tmp/e2e-results/nars-session.site-fabric.discovery-health-refusal.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "runtime-introspection.site-fabric.child-analysis-readback",
+      "package": "@narada2/runtime-introspection-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_b7020c3e91134c59931f99fd",
+      "artifact_path": "packages/runtime-introspection-mcp/.tmp/e2e-results/runtime-introspection.site-fabric.child-analysis-readback.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "cloudflare-carrier.site-fabric.child-health-product-read",
+      "package": "@narada2/cloudflare-carrier-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "external_authority": "not_run",
+      "execution_ref": "structured_command_execution:e_a561885ec6be4be09f676123",
+      "artifact_path": "packages/cloudflare-carrier-mcp/.tmp/e2e-results/cloudflare-carrier.site-fabric.child-health-product-read.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "site-coherence.site-fabric.local-cloudflare-comparison",
+      "package": "@narada2/site-coherence-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "external_authority": "not_run",
+      "execution_ref": "structured_command_execution:e_1bda10b2e696415583f1f25d",
+      "artifact_path": "packages/site-coherence-mcp/.tmp/e2e-results/site-coherence.site-fabric.local-cloudflare-comparison.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "local-filesystem.site-fabric.governed-read-write",
+      "package": "@narada2/local-filesystem-mcp",
+      "status": "passed",
+      "authority": "A0",
+      "execution_ref": "structured_command_execution:e_dbd41c727cea4e81b7c94c20",
+      "artifact_path": "packages/local-filesystem-mcp/.tmp/e2e-results/local-filesystem.site-fabric.governed-read-write.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "speech.site-fabric.remote-tts-transcription",
+      "package": "@narada2/speech-mcp",
+      "status": "not_run",
+      "authority": "A1",
+      "reason_code": "controlled_remote_speech_authority_not_configured",
+      "execution_ref": "structured_command_execution:e_a34649c6f65d4629bd42605f",
+      "artifact_path": "packages/speech-mcp/.tmp/e2e-results/speech.site-fabric.remote-tts-transcription.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "worker-delegation.site-fabric.external-provider",
+      "package": "@narada2/worker-delegation-mcp",
+      "status": "not_run",
+      "authority": "A1",
+      "reason_code": "controlled_external_provider_not_configured",
+      "execution_ref": "structured_command_execution:e_bfbf0c3efdac420694f172a0",
+      "artifact_path": "packages/worker-delegation-mcp/.tmp/e2e-results/worker-delegation.site-fabric.external-provider.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "graph-mail.site-fabric.external-mail-lifecycle",
+      "package": "@narada2/graph-mail-mcp",
+      "status": "not_run",
+      "authority": "A1",
+      "reason_code": "controlled_graph_authority_not_configured",
+      "execution_ref": "structured_command_execution:e_c165158542e34eb989c1ee77",
+      "artifact_path": "packages/graph-mail-mcp/.tmp/e2e-results/graph-mail.site-fabric.external-mail-lifecycle.json",
+      "cleanup": "completed_after_finally"
+    },
+    {
+      "test_id": "calendar.site-fabric.external-calendar-lifecycle",
+      "package": "@narada2/calendar-mcp",
+      "status": "not_run",
+      "authority": "A1",
+      "reason_code": "controlled_calendar_authority_not_configured",
+      "execution_ref": "structured_command_execution:e_c7513e15f3fe414986dca5d8",
+      "artifact_path": "packages/calendar-mcp/.tmp/e2e-results/calendar.site-fabric.external-calendar-lifecycle.json",
+      "cleanup": "completed_after_finally"
+    }
+  ],
+  "verification": {
+    "root_typecheck": "passed",
+    "pc_host_tests": "not_run_by_scope",
+    "external_authority_tests": "not_run_without_authority"
+  },
+  "review": {
+    "status": "reviewed",
+    "review_basis": [
+      "bounded repository diff audit completed",
+      "focused site-lifecycle and site-registry suites passed after artifact-path repair",
+      "focused graph-mail and calendar suites passed with honest not_run authority results",
+      "root typecheck passed",
+      "all batch artifacts present with passed or completed_after_finally cleanup",
+      "PC-host authority was not executed"
+    ],
+    "completion_rule": "external not_run is not a pass; PC-host authority remains excluded"
+  }
+}

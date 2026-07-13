@@ -17,7 +17,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/calendar-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js"
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/calendar-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-calendar-e2e.test.js"
   },
   "dependencies": {
     "@narada2/mcp-telemetry": "workspace:*",

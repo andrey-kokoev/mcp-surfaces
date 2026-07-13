@@ -426,6 +426,49 @@ export function writeE2eResultArtifact(path: string, result: JsonRecord): void {
   writeFileSync(path, JSON.stringify(result, null, 2), 'utf8');
 }
 
+export type E2eArtifactRecorder = {
+  update: (fields: JsonRecord) => void;
+  finalize: (fields?: JsonRecord) => void;
+};
+
+export function installE2eArtifactRecorder(path: string, base: JsonRecord = {}): E2eArtifactRecorder {
+  let result: JsonRecord = {
+    schema: 'narada.mcp.e2e.result.v1',
+    ...base,
+    status: 'failed',
+    started_at: new Date().toISOString(),
+    cleanup: { status: 'unverified' },
+  };
+  let finalized = false;
+
+  const write = (): void => {
+    try {
+      writeE2eResultArtifact(path, result);
+    } catch (error) {
+      process.stderr.write(`e2e_result_artifact_write_failed:${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  process.once('exit', () => {
+    if (!finalized) {
+      result = { ...result, finished_at: new Date().toISOString() };
+      write();
+    }
+  });
+
+  return {
+    update(fields): void {
+      if (!finalized) result = { ...result, ...fields };
+    },
+    finalize(fields = {}): void {
+      if (finalized) return;
+      result = { ...result, ...fields, finished_at: new Date().toISOString() };
+      finalized = true;
+      write();
+    },
+  };
+}
+
 function positiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
 }

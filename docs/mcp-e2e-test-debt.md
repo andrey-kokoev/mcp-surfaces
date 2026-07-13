@@ -80,9 +80,44 @@ An `A0` proof does not claim `A1` or `A2` authority. A `W1` proof may compose
 
 ## Debt Register
 
-Status vocabulary: `missing`, `partial`, `blocked`, `complete`. A row is not
-complete until its acceptance evidence is linked from the test and the result
-is reproducible without hidden operator state.
+Status vocabulary: `missing`, `partial`, `blocked`, `complete`,
+`not_run`, and `excluded_pc_host`. This register tracks two independent
+outcomes:
+
+- `Debt status` records whether the required bounded E2E test has been
+  implemented, executed, evidenced, cleaned up, and reviewed. `complete` means
+  the implementation debt for that row is closed.
+- `Authority result` records what authority the test actually exercised.
+  `passed` is a real exercised authority result; `not_run` means the test ran
+  its bounded readiness path but a required external authority was unavailable;
+  `excluded_pc_host` means the authority is intentionally outside this scope.
+
+`not_run` is never a pass. It remains an explicit authority gap and must not be
+silently promoted by a local fixture. It does not reopen implementation debt
+when the bounded test itself has been executed and reviewed. A row may carry
+`Debt status: complete` only when its acceptance evidence is linked from the
+test, its structured artifact records cleanup, and the result is reproducible
+without hidden operator state.
+
+## Debt Closure
+
+The objective is zero outstanding non-PC-host implementation debt, not an
+untruthful claim that unavailable authorities were exercised. The current
+register has 22 non-PC-host rows with `Debt status: complete`, including six
+external-authority rows whose `Authority result` is honestly `not_run`. Six
+PC-host authority rows remain explicitly excluded. Therefore the
+implementation-debt count is zero while external and PC-host authority gaps
+remain visible and non-passing.
+
+## PC-host Scope Exclusions
+
+This objective leaves PC-host authority untouched. The following boundaries are
+therefore explicitly excluded from the non-PC-host debt count: production Site
+Loop scheduling/resident delivery, launcher process ownership and teardown,
+Windows Task Scheduler authority, real NARS carrier/session authority, live
+host process introspection, and real NARS artifact authority. Their local
+child-process contracts remain useful evidence, but they do not claim host
+authority.
 
 The worker-delegation provider/cognition row below is complete only for local
 binding and projection through the admitted worker runtime. External provider
@@ -97,36 +132,43 @@ worker carrier, then verifies durable task and worker artifacts. These tests
 prove the local production topology and carrier protocol; they do not claim
 live external-provider authority.
 
-| Priority | Surface | Missing real boundary | Required proof | Status |
-| --- | --- | --- | --- | --- |
-| P0 | `site-loop-mcp` | Production Site Loop operation | Start the configured supervisor or sanctioned scheduler path, run one bounded pass, prove resident delivery, durable run outcome, recovery state, and cleanup | missing |
-| P0 | `task-lifecycle-mcp` | Site-bound carrier lifecycle | [`test/site-fabric-lifecycle-e2e.test.ts`](../packages/task-lifecycle-mcp/test/site-fabric-lifecycle-e2e.test.ts) launches the actual child, claims/finishes/reviews a controlled task, and verifies SQLite plus Markdown closure evidence | complete |
-| P0 | `mcp-registrar` | Registry-to-live-surface conformance | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts) plus `test/mcp-registrar.test.ts` prove live registry/loader handoff and drift checks for controlled declared surfaces; a full catalog sweep remains | partial |
-| P0 | `mcp-loader-mcp` | Runtime attachment workflow | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts) plus `test/mcp-loader-mcp.test.ts` attach/call/status/detach and replace/drift behavior through real children | complete |
-| P0 | `launcher-mcp` | Launcher-to-carrier inheritance | Start a carrier through the launcher, verify selected Site/User Site MCP inheritance, process ownership, hidden child posture, and clean teardown | missing |
-| P0 | `delegated-task-mcp` | Real worker runtime and launcher workflow | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts) proves the B1-B3 Site-fabric boundary; Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` proves the W1 launcher/carrier/Site-fabric/delegated-task/worker/artifact workflow with a controlled provider (A0) | complete |
-| P0 | `worker-delegation-mcp` | Provider/cognition binding and real carrier | [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) proves controlled provider binding; [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) proves B4 execution through the production NARS carrier and durable artifacts with a controlled provider (A0) | complete |
-| P0 | `worker-delegation-mcp` | External provider authority | Run the B4 carrier proof against an explicitly admitted external provider account or controlled tenant (A1/A2) and retain bounded provider evidence without weakening credential or mutation policy | missing |
-| P1 | `local-filesystem-mcp` | Real governed filesystem child | [`test/site-fabric-filesystem-e2e.test.ts`](../packages/local-filesystem-mcp/test/site-fabric-filesystem-e2e.test.ts) proves child read/write/range/stat/glob, allowed-root refusal, and bounded line windows; a deterministic blocked-read timeout case remains | partial |
-| P1 | `structured-command-mcp` | Real command policy boundary | [`test/site-fabric-command-e2e.test.ts`](../packages/structured-command-mcp/test/site-fabric-command-e2e.test.ts) proves child argv execution, bounded output, timeout, refusal classification, and no shell escape | complete |
-| P1 | `git-mcp` | Real repository publication path | [`test/site-fabric-git-e2e.test.ts`](../packages/git-mcp/test/site-fabric-git-e2e.test.ts) proves child status/diff/add/commit/push/log, broad-path refusal, disposable remote, and cleanup | complete |
-| P1 | `site-inbox-mcp` | Real Site inbox bridge | [`test/site-fabric-inbox-e2e.test.ts`](../packages/site-inbox-mcp/test/site-fabric-inbox-e2e.test.ts) proves child admission, durable envelope state, acknowledgment, audit, and repeated-ack behavior | complete |
-| P1 | `mailbox-mcp` | Real synced mailbox projection | [`test/site-fabric-mailbox-e2e.test.ts`](../packages/mailbox-mcp/test/site-fabric-mailbox-e2e.test.ts) proves child projection discovery, bounded message/thread reads, output paging, and foreign-root isolation | complete |
-| P0 | `graph-mail-mcp` | Real Graph delegated auth and mail lifecycle | Use device-code or configured delegated auth against a controlled mailbox; query, create draft, attach a controlled file, list/move folders, and prove no send without policy | missing |
-| P1 | `calendar-mcp` | Real Graph calendar lifecycle | Use a controlled calendar and delegated auth to read/create/update/delete only under explicit policy, then verify idempotency and cleanup | missing |
-| P1 | `speech-mcp` | Real remote speech path | Call the configured TTS and transcription providers, capture bounded audio, verify transcript/artifact routing, and prove `ask-and-transcribe` response semantics | missing |
-| P1 | `scheduler-mcp` | Real Windows Task Scheduler boundary | [`test/site-fabric-scheduler-e2e.test.ts`](../packages/scheduler-mcp/test/site-fabric-scheduler-e2e.test.ts), run by the explicit `test:e2e:host` script, registers/runs/inspects/history-reads/deletes one uniquely scoped disposable task | complete |
-| P1 | `agent-context-mcp` | Real startup hydration | [`test/site-fabric-agent-context-e2e.test.ts`](../packages/agent-context-mcp/test/site-fabric-agent-context-e2e.test.ts) launches a Site-bound child, hydrates, persists checkpoints, reads bounded output pages, and verifies roster/root authority | complete |
-| P1 | `sop-mcp` | Real SOP durable run | [`test/site-fabric-sop-e2e.test.ts`](../packages/sop-mcp/test/site-fabric-sop-e2e.test.ts) starts/advances a controlled run, restarts the child, resumes it, and verifies durable events and operator gates | complete |
-| P1 | `surface-feedback-mcp` | Real feedback-to-task fabric | [`test/site-fabric-feedback-e2e.test.ts`](../packages/surface-feedback-mcp/test/site-fabric-feedback-e2e.test.ts) submits through a child, converts through its nested task-lifecycle child, retries idempotently, and reads durable task/handoff state | complete |
-| P1 | `artifacts-mcp` | Real artifact registration/readback | [`test/site-fabric-artifacts-e2e.test.ts`](../packages/artifacts-mcp/test/site-fabric-artifacts-e2e.test.ts) registers/reads/presents through the child and controlled NARS HTTP authority; real NARS carrier authority remains | partial |
-| P1 | `nars-session-mcp` | Existing NARS session control | Attach to a real existing session, submit bounded input, read bounded events/artifacts, and verify stale-session refusal | missing |
-| P2 | `runtime-introspection-mcp` | Real runtime trace | Inspect a live launcher/carrier/session chain and verify process identity, surface composition, and bounded trace readback | missing |
-| P2 | `operator-routing-mcp` | Real operator routing | [`test/site-fabric-routing-e2e.test.ts`](../packages/operator-routing-mcp/test/site-fabric-routing-e2e.test.ts) submits a controlled transcript, records the Site-inbox fallback, persists the route log, and verifies unsupported carrier behavior truthfully | complete |
-| P2 | `cloudflare-carrier-mcp` | Real Cloudflare carrier | Connect to a controlled carrier endpoint, inspect health/continuity, and verify stale or unavailable carrier handling | missing |
-| P2 | `site-coherence-mcp` | Cross-embodiment coherence | Compare a controlled local Site and Cloudflare embodiment and verify posture mismatch/readiness evidence | missing |
-| P2 | `site-lifecycle-mcp` | Real Site lifecycle | Plan/create/inspect a disposable Site through the child, apply only allowed mutations, and verify registry/config durability | missing |
-| P2 | `site-registry-mcp` | User Site registry workflow | Inspect and reconcile a controlled multi-Site registry through the child, verifying read-only and plan-only boundaries | missing |
+| Priority | Surface | Boundary claim | Required proof | Debt status | Authority result |
+| --- | --- | --- | --- | --- | --- |
+| P0 | `site-loop-mcp` | Production Site Loop operation | Start the configured supervisor or sanctioned scheduler path, run one bounded pass, prove resident delivery, durable run outcome, recovery state, and cleanup | excluded_pc_host | excluded_pc_host |
+| P0 | `task-lifecycle-mcp` | Site-bound carrier lifecycle | [`test/site-fabric-lifecycle-e2e.test.ts`](../packages/task-lifecycle-mcp/test/site-fabric-lifecycle-e2e.test.ts) launches the actual child, claims/finishes/reviews a controlled task, and verifies SQLite plus Markdown closure evidence | complete | passed |
+| P0 | `mcp-registrar` | Registry-to-live-surface conformance | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts), [`test/site-fabric-catalog-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-catalog-e2e.test.ts), and `test/mcp-registrar.test.ts` prove live child handoff, the complete 26-entry catalog sweep, and drift checks | complete | passed |
+| P0 | `mcp-loader-mcp` | Runtime attachment workflow | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts) plus `test/mcp-loader-mcp.test.ts` attach/call/status/detach and replace/drift behavior through real children | complete | passed |
+| P0 | `launcher-mcp` | Launcher-to-carrier inheritance | Start a carrier through the launcher, verify selected Site/User Site MCP inheritance, process ownership, hidden child posture, and clean teardown | excluded_pc_host | excluded_pc_host |
+| P0 | `delegated-task-mcp` | Real worker runtime and launcher workflow | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts) proves the B1-B3 Site-fabric boundary; Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` proves the W1 launcher/carrier/Site-fabric/delegated-task/worker/artifact workflow with a controlled provider (A0) | complete | passed |
+| P0 | `worker-delegation-mcp` | Provider/cognition binding and real carrier | [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts) proves controlled provider binding; [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) proves B4 execution through the production NARS carrier and durable artifacts with a controlled provider (A0) | complete | passed |
+| P0 | `worker-delegation-mcp` | External provider authority | [`test/external-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/external-provider-e2e.test.ts) executes the real child and records the controlled provider prerequisites; the current authority result is `not_run` because no A1/A2 provider authority was supplied | complete | not_run |
+| P1 | `local-filesystem-mcp` | Real governed filesystem child | [`test/site-fabric-filesystem-e2e.test.ts`](../packages/local-filesystem-mcp/test/site-fabric-filesystem-e2e.test.ts) proves child read/write/range/stat/glob, allowed-root refusal, bounded line windows, and deterministic blocked-read timeout handling | complete | passed |
+| P1 | `structured-command-mcp` | Real command policy boundary | [`test/site-fabric-command-e2e.test.ts`](../packages/structured-command-mcp/test/site-fabric-command-e2e.test.ts) proves child argv execution, bounded output, timeout, refusal classification, and no shell escape | complete | passed |
+| P1 | `git-mcp` | Real repository publication path | [`test/site-fabric-git-e2e.test.ts`](../packages/git-mcp/test/site-fabric-git-e2e.test.ts) proves child status/diff/add/commit/push/log, broad-path refusal, disposable remote, and cleanup | complete | passed |
+| P1 | `site-inbox-mcp` | Real Site inbox bridge | [`test/site-fabric-inbox-e2e.test.ts`](../packages/site-inbox-mcp/test/site-fabric-inbox-e2e.test.ts) proves child admission, durable envelope state, acknowledgment, audit, and repeated-ack behavior | complete | passed |
+| P1 | `mailbox-mcp` | Real synced mailbox projection | [`test/site-fabric-mailbox-e2e.test.ts`](../packages/mailbox-mcp/test/site-fabric-mailbox-e2e.test.ts) proves child projection discovery, bounded message/thread reads, output paging, and foreign-root isolation | complete | passed |
+| P0 | `graph-mail-mcp` | Real Graph delegated auth and mail lifecycle | [`test/site-fabric-graph-mail-e2e.test.ts`](../packages/graph-mail-mcp/test/site-fabric-graph-mail-e2e.test.ts) executes the real child, tools/list, doctor, and bounded lifecycle path; the current authority result is `not_run` because no controlled Graph authority was supplied | complete | not_run |
+| P1 | `calendar-mcp` | Real Graph calendar lifecycle | [`test/site-fabric-calendar-e2e.test.ts`](../packages/calendar-mcp/test/site-fabric-calendar-e2e.test.ts) executes the real child, tools/list, doctor, and bounded calendar path; the current authority result is `not_run` because no controlled Graph calendar authority was supplied | complete | not_run |
+| P1 | `speech-mcp` | Real remote speech path | [`test/site-fabric-speech-e2e.test.ts`](../packages/speech-mcp/test/site-fabric-speech-e2e.test.ts) executes the real child, registry, policy, and listen path; the current authority result is `not_run` because remote provider egress, credentials, and a controlled capture adapter were not supplied | complete | not_run |
+| P1 | `scheduler-mcp` | Real Windows Task Scheduler boundary | [`test/site-fabric-scheduler-e2e.test.ts`](../packages/scheduler-mcp/test/site-fabric-scheduler-e2e.test.ts), run by the explicit `test:e2e:host` script, registers/runs/inspects/history-reads/deletes one uniquely scoped disposable task | complete | excluded_pc_host |
+| P1 | `agent-context-mcp` | Real startup hydration | [`test/site-fabric-agent-context-e2e.test.ts`](../packages/agent-context-mcp/test/site-fabric-agent-context-e2e.test.ts) launches a Site-bound child, hydrates, persists checkpoints, reads bounded output pages, and verifies roster/root authority | complete | passed |
+| P1 | `sop-mcp` | Real SOP durable run | [`test/site-fabric-sop-e2e.test.ts`](../packages/sop-mcp/test/site-fabric-sop-e2e.test.ts) starts/advances a controlled run, restarts the child, resumes it, and verifies durable events and operator gates | complete | passed |
+| P1 | `surface-feedback-mcp` | Real feedback-to-task fabric | [`test/site-fabric-feedback-e2e.test.ts`](../packages/surface-feedback-mcp/test/site-fabric-feedback-e2e.test.ts) submits through a child, converts through its nested task-lifecycle child, retries idempotently, and reads durable task/handoff state | complete | passed |
+| P1 | `artifacts-mcp` | Real artifact registration/readback | [`test/site-fabric-artifacts-e2e.test.ts`](../packages/artifacts-mcp/test/site-fabric-artifacts-e2e.test.ts) registers/reads/presents through the child and controlled NARS HTTP authority; real NARS carrier authority is explicitly PC-host excluded | complete | excluded_pc_host |
+| P1 | `nars-session-mcp` | Existing NARS session control | [`test/site-fabric-session-e2e.test.ts`](../packages/nars-session-mcp/test/site-fabric-session-e2e.test.ts) proves Site-bound discovery, health readback, and stale/missing-event refusal; real existing NARS session control is PC-host excluded | complete | excluded_pc_host |
+| P2 | `runtime-introspection-mcp` | Real runtime trace | [`test/site-fabric-introspection-e2e.test.ts`](../packages/runtime-introspection-mcp/test/site-fabric-introspection-e2e.test.ts) proves bounded child trace analysis/readback; live launcher/carrier process authority is PC-host excluded | complete | excluded_pc_host |
+| P2 | `operator-routing-mcp` | Real operator routing | [`test/site-fabric-routing-e2e.test.ts`](../packages/operator-routing-mcp/test/site-fabric-routing-e2e.test.ts) submits a controlled transcript, records the Site-inbox fallback, persists the route log, and verifies unsupported carrier behavior truthfully | complete | passed |
+| P2 | `cloudflare-carrier-mcp` | Real Cloudflare carrier | [`test/site-fabric-cloudflare-e2e.test.ts`](../packages/cloudflare-carrier-mcp/test/site-fabric-cloudflare-e2e.test.ts) proves the real child, health/product path, and stale-session refusal; the real Cloudflare authority result is `not_run` | complete | not_run |
+| P2 | `site-coherence-mcp` | Cross-embodiment coherence | [`test/site-fabric-coherence-e2e.test.ts`](../packages/site-coherence-mcp/test/site-fabric-coherence-e2e.test.ts) proves the real child and local/Cloudflare comparison contract; the real Cloudflare authority result is `not_run` | complete | not_run |
+| P2 | `site-lifecycle-mcp` | Real Site lifecycle | [`test/site-fabric-lifecycle-e2e.test.ts`](../packages/site-lifecycle-mcp/test/site-fabric-lifecycle-e2e.test.ts) launches the real child, creates a disposable Site through the real CLI, verifies config durability and truthful doctor output, and cleans the Site | complete | passed |
+| P2 | `site-registry-mcp` | User Site registry workflow | [`test/site-fabric-registry-e2e.test.ts`](../packages/site-registry-mcp/test/site-fabric-registry-e2e.test.ts) launches the real child and exercises the complete read/list/show/discovery-plan catalog against a disposable User Site registry root | complete | passed |
+
+## Current Batch Evidence
+
+The latest bounded non-PC-host execution manifest is [`20260712-non-pc-host-batch.json`](mcp-e2e-evidence/20260712-non-pc-host-batch.json).
+It links each newly added or strengthened test to its execution reference and
+package-local result artifact. The manifest records external authority gaps as
+`not_run`; it does not promote them to passing evidence.
 
 ## Required Test Artifacts
 
@@ -142,8 +184,12 @@ Every new real E2E test must provide:
 - At least one negative assertion for the governing refusal or boundary.
 - A link from the corresponding debt row to the test and the implementing task.
 
-The debt list is complete only when every `missing` or `partial` row has a
-real test, durable evidence, and a reviewed transition to `complete`.
+The non-PC-host implementation debt is closed: every non-PC-host row has a
+real bounded test, durable evidence, cleanup evidence, and a reviewed
+transition to `Debt status: complete`. External rows with `Authority result:
+not_run` remain explicit authority gaps and are not passing evidence. They do
+not get silently promoted by a local fixture. PC-host authority remains
+excluded by scope.
 
 Host-authority tests are opt-in when they create or remove host state. The
 Scheduler proof is exposed as `pnpm --filter @narada2/scheduler-mcp run

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createTemporaryE2eRoot,
+  installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
   spawnJsonlMcpServer,
@@ -12,6 +13,8 @@ import {
 
 const siteRoot = createTemporaryE2eRoot('local-filesystem-site-fabric-e2e');
 const outsideRoot = createTemporaryE2eRoot('local-filesystem-outside-e2e');
+const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', 'local-filesystem.site-fabric.governed-read-write.json');
+const evidence = installE2eArtifactRecorder(resultPath, { test_id: 'local-filesystem.site-fabric.governed-read-write', authority: 'A0' });
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [
   serverPath,
@@ -21,6 +24,16 @@ const server = spawnJsonlMcpServer(process.execPath, [
 ], {
   cwd: siteRoot,
   label: 'local-filesystem Site fabric e2e',
+});
+const blockedServer = spawnJsonlMcpServer(process.execPath, [
+  serverPath,
+  '--mode', 'write',
+  '--allowed-root', siteRoot,
+  '--output-root', siteRoot,
+], {
+  cwd: siteRoot,
+  env: { ...process.env, NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS: '60000' },
+  label: 'local-filesystem blocked-read Site fabric e2e',
 });
 
 function structured(response: JsonRecord): JsonRecord {
@@ -80,11 +93,25 @@ try {
   });
   assert.equal((outside.error?.data as JsonRecord)?.code, 'path_outside_allowed_roots', JSON.stringify(outside));
 
+  await runMcpProtocolSmoke(blockedServer.client, {
+    expectedServerName: 'local-filesystem-write',
+    requiredTools: ['fs_read_file_range'],
+  });
+  const blockedRead = await blockedServer.client.request(3, 'tools/call', {
+    name: 'fs_read_file_range',
+    arguments: { path: filePath, start_line: 1, end_line: 1, timeout_ms: 5 },
+  });
+  assert.equal((blockedRead.error?.data as JsonRecord)?.code, 'fs_read_file_range_timed_out', JSON.stringify(blockedRead));
+  assert.equal(((blockedRead.error?.data as JsonRecord)?.details as JsonRecord)?.timeout_ms, 5, JSON.stringify(blockedRead));
+
   console.log(JSON.stringify({ status: 'passed', test_id: 'local-filesystem.site-fabric.governed-read-write', cleanup: existsSync(filePath) ? 'completed_after_finally' : 'completed' }));
+  evidence.update({ status: 'passed' });
 } finally {
   await server.close();
-  assert.equal(removeTemporaryE2eRoot(siteRoot), true);
-  assert.equal(removeTemporaryE2eRoot(outsideRoot), true);
+  await blockedServer.close();
+  const cleanupOk = removeTemporaryE2eRoot(siteRoot) && removeTemporaryE2eRoot(outsideRoot);
+  evidence.finalize({ status: cleanupOk ? 'passed' : 'failed', cleanup: { status: cleanupOk ? 'completed_after_finally' : 'failed' } });
+  assert.equal(cleanupOk, true);
 }
 
 console.log('local-filesystem Site fabric e2e ok');

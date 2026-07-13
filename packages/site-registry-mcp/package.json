@@ -17,9 +17,12 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/site-registry-mcp.test.js"
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/site-registry-mcp.test.js && node dist/test/site-fabric-registry-e2e.test.js",
+    "test:e2e:site-fabric": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-fabric-registry-e2e.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  },
   "files": [
     "dist/"
   ]
