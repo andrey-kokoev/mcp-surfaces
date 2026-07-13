@@ -38,7 +38,7 @@ process.stdin.on('data', (chunk) => {
     const request = JSON.parse(line);
     if (request.method === 'initialize') write({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'restartable-child', pid: process.pid } } });
     else if (request.method === 'tools/list') write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }] } });
-    else if (request.method === 'tools/call') write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2) } } });
+    else if (request.method === 'tools/call') write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null } } });
     else write({ jsonrpc: '2.0', id: request.id, result: {} });
   }
 });
@@ -263,6 +263,7 @@ try {
   assert.deepEqual(fabricAttach?.args, ['--site-root', root, '--marker', 'fabric']);
   const fabricCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { n: 0 } } }, 19);
   assert.deepEqual(fabricCall?.result?.structuredContent?.child_args, ['--site-root', root, '--marker', 'fabric']);
+  assert.equal(fabricCall?.result?.structuredContent?.site_root, root.replace(/\\/g, '/'));
   const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
   assert.equal(fabricDetach?.termination?.status, 'terminated');
 
@@ -301,7 +302,12 @@ try {
   console.log('mcp-loader-mcp behavior ok');
 } finally {
   child.stdin.end();
-  await new Promise((resolve) => child.on('close', resolve));
+  if (child.exitCode === null) {
+    await new Promise((resolve) => {
+      child.once('close', resolve);
+      child.kill();
+    });
+  }
   rmSync(root, { recursive: true, force: true });
   rmSync(dirname(aggregateRoot), { recursive: true, force: true });
   rmSync(fragmentedRoot, { recursive: true, force: true });

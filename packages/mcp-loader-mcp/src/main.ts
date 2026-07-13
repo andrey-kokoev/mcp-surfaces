@@ -919,7 +919,7 @@ function buildChildEnv(siteRoot: string, policy: LoaderPolicy): NodeJS.ProcessEn
   for (const key of policy.allowedEnvVars) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
-  env.SITE_ROOT = siteRoot;
+  env.NARADA_SITE_ROOT = siteRoot;
   return env;
 }
 

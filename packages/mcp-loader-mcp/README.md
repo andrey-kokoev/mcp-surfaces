@@ -14,6 +14,8 @@ Site fabric entries may declare `surface_projection.runtime_requirements`. The l
 
 Inventory results carry `runtime_kind` and `runtime_skipped_surface_ids`. A skipped runtime-affined surface is reported as `runtime_not_selected`, not as a missing or drifted surface. To inspect the NARS projection, pass `runtime_kind: "nars"`.
 
+Attached child surfaces receive `NARADA_SITE_ROOT` set to the requested `site_root`. This is the authoritative Site binding for the child process; the loader does not let an ambient caller Site root override it.
+
 Surface requests resolve by exact declared `surface_id` metadata or exact fabric server key. The loader does not derive one identifier from another by name parsing.
 
 The payload's declared creator and id namespace are lineage hints and accidental-misrouting guards, not cryptographic provenance or policy authority.
