@@ -2620,7 +2620,7 @@ compatibility_record: true
   const runTestsPayload = await responsePayload(runTestsResponse, builderRuntime, 108);
   assert.equal(runTestsPayload.status, 'failed');
   assert.equal(runTestsPayload.error, 'test_mcp_server_not_found');
-  assert.match(runTestsPayload.configured_test_server_path, /tools[\\/]mcp-servers[\\/]test[\\/]test-mcp-server\.js/);
+  assert.match(runTestsPayload.configured_test_server_path, /tools[\\/]mcp-servers[\\/]test[\\/]test-mcp-server\.mjs/);
   assert.match(runTestsPayload.remediation, /structured-command/);
 
   // 8. Reopened tasks ignore pre-reopen reports and create fresh dependency work.

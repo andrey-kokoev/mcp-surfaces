@@ -427,6 +427,8 @@ export function createTaskLifecycleOperationsHandlers(context) {
 
 function resolveTestMcpServerPath(siteRoot) {
   const candidates = [
+    'tools/mcp-servers/test/test-mcp-server.mjs',
+    'packages/test-mcp-server/dist/test-mcp-server.mjs',
     'tools/mcp-servers/test/test-mcp-server.js',
     'packages/test-mcp-server/dist/test-mcp-server.js',
   ];
