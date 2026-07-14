@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { callWorkerTool, createWorkerPolicy, providerRuntimeMetadataFromRegistry, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
 import { executionBindingSchema, executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
+import { createWorkOrderLifecycle, normalizeWorkOrderLifecycle, transitionWorkOrderLifecycle, type WorkOrderLifecycle, type WorkOrderLifecycleState } from './work-order-lifecycle.js';
 
 const SERVER_NAME = 'delegated-task-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -303,11 +304,12 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
     summary: null,
     result: { ...handoff(), external_dependencies: externalDependencies(args), external_dependency_status: 'pending', execution_binding: executionBinding, request_fingerprint: requestFingerprint, replacement_depth: replacementDepth },
   };
-  task.result = { ...task.result, step_states: initialStepStates(task.workflow), progress: progressSummary(task) };
+  task.result = { ...task.result, step_states: initialStepStates(task.workflow), progress: progressSummary(task), work_order_lifecycle: createWorkOrderLifecycle() };
   const validation = validateTaskShape({ ...args, acceptance: task.acceptance, execution, result_policy: task.result_policy }, state, false);
   if (validation.status === 'rejected') throw diag('delegated_task_validation_failed', 'delegated_task_validation_failed', { diagnostics: validation.diagnostics });
+  advanceWorkOrderLifecycle(task, state, 'admitted', 'request_validated');
   writeTask(state, task);
-  appendEvent(state, taskId, 'task_created', { intent: taskIntent, status: task.status, ownership: ownershipProjection(task) });
+  appendEvent(state, taskId, 'task_created', { intent: taskIntent, status: task.status, ownership: ownershipProjection(task), work_order_lifecycle: workOrderLifecycle(task) });
   if (Object.keys(sourceRef).length > 0) {
     appendEvent(state, taskId, 'source_task_backlink_observation', { source_task_ref: sourceRef, delegated_task_id: taskId, observation_kind: 'delegated_task_created_from_source' });
     await writeSourceTaskBacklinkObservation(state, task, sourceRef);
@@ -319,14 +321,14 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
 export async function delegatedTaskStatus(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
   const task = args.refresh === true ? await advanceTask(before, state, { waitUntilTerminal: false }) : before;
-  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, lifecycle: lifecycleSummary(task), operator_posture: normalizedOperatorPosture(task), completion_posture: completionPosture(task.status, task.result), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
+  return { schema: 'narada.delegated_task.status.v1', status: 'ok', task_id: task.task_id, task_status: task.status, objective: task.objective, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, lifecycle: lifecycleSummary(task), work_order_lifecycle: workOrderLifecycle(task), operator_posture: normalizedOperatorPosture(task), completion_posture: completionPosture(task.status, task.result), scheduler_state: schedulerState(task), step_counts: stepCounts(task.workflow), step_status_counts: stepStatusCounts(task), acceptance_verdict: rec(task.result).acceptance_verdict ?? 'pending', progress: rec(task.result).progress, progress_delta: progressDelta(before, task), external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', active_step_posture: activeStepPosture(task), step_findings: stepFindings(task).slice(0, state.resultCompaction.maxListItems), review_consensus: reviewConsensus(task.result), closeout_synthesis: closeoutSynthesis(task.result), created_at: task.created_at, updated_at: task.updated_at, cancelled_at: task.cancelled_at };
 }
 
 export async function delegatedTaskAdvance(args: JsonRecord, state: State): Promise<JsonRecord> {
   const before = readTask(state, taskId(args));
   const task = await advanceTask(before, state, { waitUntilTerminal: false });
   const includeDiagnostics = args.include_diagnostics === true;
-  const response: JsonRecord = { schema: 'narada.delegated_task.advance.v1', status: 'ok', task_id: task.task_id, task_status: task.status, scheduler_state: schedulerState(task), progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), closeout_synthesis: closeoutSynthesis(task.result), result_summary: compactResultSummary(task) };
+  const response: JsonRecord = { schema: 'narada.delegated_task.advance.v1', status: 'ok', task_id: task.task_id, task_status: task.status, work_order_lifecycle: workOrderLifecycle(task), scheduler_state: schedulerState(task), progress: rec(task.result).progress, progress_delta: progressDelta(before, task), active_step_posture: activeStepPosture(task), closeout_synthesis: closeoutSynthesis(task.result), result_summary: compactResultSummary(task) };
   if (includeDiagnostics) response.result = delegatedTaskResultView(task, state, true);
   return response;
 }
@@ -452,6 +454,7 @@ export async function delegatedTaskCancel(args: JsonRecord, state: State): Promi
   if (TERMINAL.has(task.status)) throw diag('delegated_task_terminal_status', `delegated_task_terminal_status:${task.status}`, { task_id: id, status: task.status });
   const activeRunIds = activeRunIdsForTask(task);
   task.status = 'cancelled';
+  advanceWorkOrderLifecycle(task, state, 'cancelled', 'task_cancelled');
   task.updated_at = now();
   task.cancelled_at = now();
   task.summary = opt(args.reason) ?? 'cancelled';
@@ -464,7 +467,7 @@ export async function delegatedTaskCancel(args: JsonRecord, state: State): Promi
   task.result = { ...rec(task.result), cancellation_requests: cancellation };
   task.result = enrichHandoff(task, state, stepStates);
   writeTask(state, task);
-  return { schema: 'narada.delegated_task.cancel.v1', status: 'cancelled', task_id: id, task_status: task.status, ownership, event, cancellation_requests: cancellation };
+  return { schema: 'narada.delegated_task.cancel.v1', status: 'cancelled', task_id: id, task_status: task.status, work_order_lifecycle: workOrderLifecycle(task), ownership, event, cancellation_requests: cancellation };
 }
 
 export function delegatedTaskAcknowledge(args: JsonRecord, state: State): JsonRecord {
@@ -488,6 +491,7 @@ export async function delegatedTaskParentTakeover(args: JsonRecord, state: State
   const activeRunIds = activeRunIdsForTask(task);
   const takeover = { parent_task_id: opt(args.parent_task_id) ?? null, reason: opt(args.reason) ?? 'parent_took_over_execution', acknowledged_by: opt(args.acknowledged_by) ?? null, recorded_at: now() };
   task.status = 'cancelled';
+  advanceWorkOrderLifecycle(task, state, 'cancelled', 'parent_takeover');
   task.updated_at = now();
   task.cancelled_at = now();
   task.summary = `parent_takeover:${takeover.reason}`;
@@ -499,7 +503,7 @@ export async function delegatedTaskParentTakeover(args: JsonRecord, state: State
   task.result = enrichHandoff(task, state, stepStates);
   writeTask(state, task);
   const event = appendEvent(state, id, 'task_parent_takeover', { ...takeover, ownership, allow_cross_site: args.allow_cross_site === true });
-  return { schema: 'narada.delegated_task.parent_takeover.v1', status: 'parent_takeover_recorded', task_id: id, task_status: task.status, ownership, parent_takeover: takeover, event, cancellation_requests: cancellation };
+  return { schema: 'narada.delegated_task.parent_takeover.v1', status: 'parent_takeover_recorded', task_id: id, task_status: task.status, work_order_lifecycle: workOrderLifecycle(task), ownership, parent_takeover: takeover, event, cancellation_requests: cancellation };
 }
 
 async function dispatch(method: string, params: JsonRecord, state: State) {
@@ -556,6 +560,7 @@ async function refreshTaskStatus(task: Task, state: State): Promise<Task> {
 async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
   const stepStates = stepStateMap(task);
   await refreshRunningSteps(task, state, stepStates);
+  ensureWorkOrderLifecycle(task);
   const externalDependencyPosture = externalDependencyStatus(task, state);
   const previousExternalDependencyPosture = rec(task.result).external_dependency_status;
   task.result = { ...rec(task.result), external_dependency_status: externalDependencyPosture };
@@ -566,6 +571,8 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
     writeTask(state, task);
     return task;
   }
+  if (workOrderLifecycle(task).state === 'requested') advanceWorkOrderLifecycle(task, state, 'admitted', 'legacy_request_admitted');
+  if (workOrderLifecycle(task).state === 'admitted') advanceWorkOrderLifecycle(task, state, 'planned', 'dependencies_satisfied');
   let progressMade = false;
   const workflow = workflowSteps(task.workflow);
   const readyWorkerSteps: Array<{ step: WorkflowStep; stepState: StepState }> = [];
@@ -590,6 +597,8 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
       continue;
     }
     if (LOCAL_KINDS.has(step.kind)) {
+      if (workOrderLifecycle(task).state === 'planned') advanceWorkOrderLifecycle(task, state, 'dispatched', `local_step:${step.id}`);
+      if (workOrderLifecycle(task).state === 'dispatched') advanceWorkOrderLifecycle(task, state, 'running', `local_step:${step.id}`);
       completeLocalStep(task, state, step, stepState, stepStates);
       progressMade = true;
       continue;
@@ -597,6 +606,9 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
     if (WORKER_KINDS.has(step.kind)) {
       const writeSetConflict = writeSetConflictForStep(task, step, stepStates, readyWorkerSteps.map((item) => item.step));
       if (writeSetConflict.conflict) continue;
+      if (workOrderLifecycle(task).state === 'planned') advanceWorkOrderLifecycle(task, state, 'dispatched', `worker_step:${step.id}`);
+      if (workOrderLifecycle(task).state === 'dispatched') advanceWorkOrderLifecycle(task, state, 'running', `worker_step:${step.id}`);
+      if (step.kind === 'review' && workOrderLifecycle(task).state === 'running') advanceWorkOrderLifecycle(task, state, 'review', `review_step:${step.id}`);
       readyWorkerSteps.push({ step, stepState });
       const concurrencyLimit = executionPolicy(task).max_concurrency;
       if (readyWorkerSteps.length >= concurrencyLimit) break;
@@ -606,6 +618,7 @@ async function advanceTaskOnce(task: Task, state: State): Promise<Task> {
     await Promise.allSettled(readyWorkerSteps.map(async ({ step, stepState }) => {
       try {
         await launchWorkerStep(task, state, step, stepState);
+        if (step.kind === 'repair' && stepState.status === 'completed' && workOrderLifecycle(task).state === 'review') advanceWorkOrderLifecycle(task, state, 'repaired', `repair_step:${step.id}`);
       } catch (error) {
         if (stepState.status === 'pending') {
           const failure = recordWorkerLaunchFailure(task, step, state, error);
@@ -685,6 +698,7 @@ async function refreshRunningSteps(task: Task, state: State, stepStates: Record<
       markStep(stepState, 'completed', opt(statusResult.summary));
       stepState.worker_session_id = opt(statusResult.worker_session_id);
       appendEvent(state, task.task_id, 'step_completed', { step_id: stepState.step_id, run_id: runId });
+      if (step.kind === 'repair' && workOrderLifecycle(task).state === 'review') advanceWorkOrderLifecycle(task, state, 'repaired', `repair_step:${step.id}`);
       dataChanged = true;
     } else if (FAILED_WORKER_STATUSES.has(refreshedStatus)) {
       const maxRetries = executionPolicy(task).max_retries;
@@ -827,6 +841,7 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
   const hasFailed = statuses.includes('failed');
   const allDone = statuses.length > 0 && statuses.every((status) => COMPLETE_STEP_STATES.has(status));
   task.status = hasFailed || hasBlocked ? 'failed' : hasRunning || hasPending ? 'running' : acceptance.verdict === 'failed' ? 'failed' : allDone ? 'completed' : 'accepted_for_execution';
+  const lifecycle = settleWorkOrderLifecycle(task, state);
   const verdict = task.status === 'completed' && acceptance.verdict === 'passed' ? 'passed' : task.status === 'failed' ? 'failed' : 'pending';
   task.summary = summaryForTask(task, stepStates, { verdict });
   task.result = {
@@ -836,6 +851,7 @@ function finalizeTask(task: Task, state: State, stepStates: Record<string, StepS
     acceptance_precheck_verdict: acceptance.verdict,
     acceptance_evidence: acceptance.checks,
     step_states: stepStates,
+    work_order_lifecycle: lifecycle,
     progress: progressSummary(task, stepStates),
     summary: task.summary,
   };
@@ -1048,8 +1064,47 @@ function acceptanceSchema(): JsonRecord { return { type: 'object', properties: {
 function resultPolicySchema(): JsonRecord { return { type: 'object', properties: { include_diagnostics_by_default: { type: 'boolean' }, expose_worker_refs: { type: 'boolean' }, compact_completed_worker_refs: { type: 'boolean' }, max_events: { type: 'integer', minimum: 1, maximum: 1000 }, max_worker_refs: { type: 'integer', minimum: 1, maximum: 1000 }, max_result_items: { type: 'integer', minimum: 1, maximum: 5000 } }, additionalProperties: false }; }
 function executionSchema(): JsonRecord { return { type: 'object', properties: { start: { type: 'boolean', default: true }, wait_for_completion: { type: 'boolean', default: false }, timeout_ms: { type: 'integer', minimum: 0, maximum: 600000, default: 0 }, poll_ms: { type: 'integer', minimum: 50, maximum: 30000, default: 500 }, resumable: { type: 'boolean', default: true }, exit_interview: { type: 'boolean', default: false }, max_concurrency: { type: 'integer', minimum: 1, maximum: 32, default: 10 }, max_retries: { type: 'integer', minimum: 0, maximum: 10, default: 0 } }, additionalProperties: false }; }
 
-function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { const requestStatus = created ? 'accepted_for_execution' : 'existing'; const status = task.status === 'failed' || task.status === 'cancelled' ? task.status : requestStatus; return { schema: 'narada.delegated_task.run.v1', status, request_status: requestStatus, execution_status: task.status, task_id: task.task_id, task_status: task.status, created, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, completion_posture: completionPosture(task.status, task.result), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', worker_refs: rec(task.result).worker_refs ?? [] }; }
+function runResult(task: Task, paths: ReturnType<typeof taskPaths>, created: boolean): JsonRecord { const requestStatus = created ? 'accepted_for_execution' : 'existing'; const status = task.status === 'failed' || task.status === 'cancelled' ? task.status : requestStatus; return { schema: 'narada.delegated_task.run.v1', status, request_status: requestStatus, execution_status: task.status, task_id: task.task_id, task_status: task.status, work_order_lifecycle: workOrderLifecycle(task), created, ownership: ownershipProjection(task), execution_binding: task.execution_binding, request_fingerprint: task.request_fingerprint, completion_posture: completionPosture(task.status, task.result), task_path: paths.taskPath, events_path: paths.eventsPath, summary: task.summary, progress: rec(task.result).progress, external_dependencies: rec(task.result).external_dependencies ?? {}, external_dependency_status: rec(task.result).external_dependency_status ?? 'pending', worker_refs: rec(task.result).worker_refs ?? [] }; }
 function handoff(): JsonRecord { return { schema: 'narada.delegated_task.handoff.v1', acceptance_verdict: 'pending', changed_files: [], verification: [], residual_risks: [], observed_incoherencies: [], exit_interviews: [], exit_interview_count: 0, exit_interview_feedback: exitInterviewFeedbackSummary([]), worker_refs: [], worker_ref_count: 0, summary: null }; }
+function workOrderLifecycle(task: Task): WorkOrderLifecycle {
+  return normalizeWorkOrderLifecycle(rec(task.result).work_order_lifecycle);
+}
+function advanceWorkOrderLifecycle(task: Task, state: State, nextState: WorkOrderLifecycleState, reason: string): WorkOrderLifecycle {
+  const current = workOrderLifecycle(task);
+  const next = transitionWorkOrderLifecycle(current, nextState);
+  task.result = { ...rec(task.result), work_order_lifecycle: next };
+  if (next.state !== current.state) appendEvent(state, task.task_id, 'work_order_lifecycle_transition', { from: current.state, to: next.state, reason, history: next.history });
+  return next;
+}
+function ensureWorkOrderLifecycle(task: Task): WorkOrderLifecycle {
+  const existing = rec(task.result).work_order_lifecycle;
+  const initial = task.status === 'accepted_for_execution' ? 'admitted' : task.status;
+  const lifecycle = existing && typeof existing === 'object'
+    ? workOrderLifecycle(task)
+    : normalizeWorkOrderLifecycle({ state: initial, history: [initial] });
+  task.result = { ...rec(task.result), work_order_lifecycle: lifecycle };
+  return lifecycle;
+}
+function settleWorkOrderLifecycle(task: Task, state: State): WorkOrderLifecycle {
+  let lifecycle = ensureWorkOrderLifecycle(task);
+  if (task.status === 'failed') return advanceWorkOrderLifecycle(task, state, 'failed', 'task_failed');
+  if (task.status === 'cancelled') return advanceWorkOrderLifecycle(task, state, 'cancelled', 'task_cancelled');
+  if (task.status !== 'completed') return lifecycle;
+  const completionPath: WorkOrderLifecycleState[] = ['admitted', 'planned', 'dispatched', 'running', 'review'];
+  for (const nextState of completionPath) {
+    lifecycle = workOrderLifecycle(task);
+    if (lifecycle.state === 'completed' || lifecycle.state === 'repaired') break;
+    if (lifecycle.state === nextState) continue;
+    if (nextState === 'admitted' && lifecycle.state === 'requested') lifecycle = advanceWorkOrderLifecycle(task, state, nextState, 'completion_reconciliation');
+    else if (nextState === 'planned' && lifecycle.state === 'admitted') lifecycle = advanceWorkOrderLifecycle(task, state, nextState, 'completion_reconciliation');
+    else if (nextState === 'dispatched' && lifecycle.state === 'planned') lifecycle = advanceWorkOrderLifecycle(task, state, nextState, 'completion_reconciliation');
+    else if (nextState === 'running' && lifecycle.state === 'dispatched') lifecycle = advanceWorkOrderLifecycle(task, state, nextState, 'completion_reconciliation');
+    else if (nextState === 'review' && lifecycle.state === 'running') lifecycle = advanceWorkOrderLifecycle(task, state, nextState, 'acceptance_review');
+  }
+  lifecycle = workOrderLifecycle(task);
+  if (lifecycle.state === 'review' || lifecycle.state === 'repaired') lifecycle = advanceWorkOrderLifecycle(task, state, 'completed', 'acceptance_passed');
+  return lifecycle;
+}
 function normalizeIntent(args: JsonRecord): { objective: string; instructions: string | null; behavior: string | null; mode: string | null } { const intent = rec(args.intent); return { objective: required(intent.objective ?? args.objective, 'delegated_task_requires_objective'), instructions: opt(intent.instructions), behavior: opt(intent.behavior), mode: opt(intent.mode) }; }
 function validateTaskShape(args: JsonRecord, state: State, dryRun: boolean): JsonRecord {
   const diagnostics: JsonRecord[] = [];
@@ -2146,7 +2201,7 @@ function summaryForTask(task: Task, states: Record<string, StepState>, acceptanc
 function stepCounts(workflow: JsonRecord): JsonRecord { const by_kind: Record<string, number> = {}; const steps = workflowSteps(workflow); for (const step of steps) by_kind[step.kind] = (by_kind[step.kind] ?? 0) + 1; return { total: steps.length, by_kind }; }
 function count(value: unknown): number { return Array.isArray(value) ? value.length : 0; }
 function acceptanceSummary(acceptance: JsonRecord): JsonRecord { return { required_files: count(acceptance.required_files), required_tests: count(acceptance.required_tests), required_tools: count(acceptance.required_tools), forbidden_patterns: count(acceptance.forbidden_patterns) }; }
-function workflowEngineMetadata(): JsonRecord { return { schema: 'narada.delegated_task.workflow_engine.v1', workflow_kinds: DEFAULT_WORKFLOW_KINDS, local_kinds: [...LOCAL_KINDS], worker_kinds: [...WORKER_KINDS], supports_dag: true, supports_imports: true, supports_review_quorum: true, session_affinity_support: { agent_slot: true, resume_from: true, modes: ['none', 'prefer_same_session', 'require_same_session'], worker_resume_tool: 'worker_resume', evidence_schema: 'narada.delegated_task.session_affinity.v1' }, milestone_support: { workflow_milestones: true, step_milestone_id: true }, authority_gate_support: { commit: 'modeled_only', push: 'modeled_only', delegated_task_executes_git: false }, template_catalog_schema: 'narada.delegated_task.template_catalog.v1' }; }
+function workflowEngineMetadata(): JsonRecord { return { schema: 'narada.delegated_task.workflow_engine.v1', workflow_kinds: DEFAULT_WORKFLOW_KINDS, local_kinds: [...LOCAL_KINDS], worker_kinds: [...WORKER_KINDS], supports_dag: true, supports_imports: true, supports_review_quorum: true, work_order_lifecycle: { schema: 'narada.delegation.work_order.lifecycle_state.v1', states: ['requested', 'admitted', 'planned', 'dispatched', 'running', 'review', 'repaired', 'completed', 'failed', 'cancelled'], persisted_in: 'task.result.work_order_lifecycle' }, session_affinity_support: { agent_slot: true, resume_from: true, modes: ['none', 'prefer_same_session', 'require_same_session'], worker_resume_tool: 'worker_resume', evidence_schema: 'narada.delegated_task.session_affinity.v1' }, milestone_support: { workflow_milestones: true, step_milestone_id: true }, authority_gate_support: { commit: 'modeled_only', push: 'modeled_only', delegated_task_executes_git: false }, template_catalog_schema: 'narada.delegated_task.template_catalog.v1' }; }
 function workflowTemplateCatalog(): JsonRecord[] {
   return [
     { template_id: 'implement', strategy: 'implement', title: 'Single implementation worker', feedback_ids: ['sfb_f1ea42cb-062', 'sfb_ac8a8731-f1c'], milestones: [{ id: 'implement', title: 'Implement', step_ids: ['implement'] }], steps: [{ id: 'implement', kind: 'worker', milestone_id: 'implement' }], worker_delegation_contract: workerDelegationContract(['worker']) },

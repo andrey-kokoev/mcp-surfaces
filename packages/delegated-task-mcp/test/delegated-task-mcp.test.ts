@@ -3,6 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServerState, handleRequest } from '../src/main.js';
+import { assertWorkOrderLifecycleTransition, createWorkOrderLifecycle, transitionWorkOrderLifecycle } from '../src/work-order-lifecycle.js';
+
+let lifecycle = createWorkOrderLifecycle();
+for (const state of ['admitted', 'planned', 'dispatched', 'running', 'review', 'completed'] as const) lifecycle = transitionWorkOrderLifecycle(lifecycle, state);
+assert.deepEqual(lifecycle.history, ['requested', 'admitted', 'planned', 'dispatched', 'running', 'review', 'completed']);
+assert.throws(() => assertWorkOrderLifecycleTransition('completed', 'running'), /invalid_work_order_lifecycle_transition/);
 
 const root = mkdtempSync(join(tmpdir(), 'delegated-task-mcp-behavior-'));
 const workerCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -636,6 +642,7 @@ try {
   const runResult = run.result.structuredContent as Record<string, any>;
   assert.equal(runResult.status, 'accepted_for_execution');
   assert.equal(runResult.task_status, 'completed');
+  assert.deepEqual(runResult.work_order_lifecycle.history, ['requested', 'admitted', 'planned', 'dispatched', 'running', 'review', 'completed']);
   assert.match(runResult.task_id, /^task_/);
   assert.ok(statSync(runResult.task_path).isFile());
   assert.match(readFileSync(runResult.task_path, 'utf8'), /"objective": "Implement complete delegated task orchestration"/);
@@ -647,6 +654,7 @@ try {
   const status = await callTool(state, 'delegated_task_status', { task_id: runResult.task_id });
   const statusResult = status.result.structuredContent as Record<string, any>;
   assert.equal(statusResult.task_status, 'completed');
+  assert.equal(statusResult.work_order_lifecycle.state, 'completed');
   assert.equal(statusResult.step_counts.total, 6);
   assert.equal(statusResult.step_status_counts.completed, 5);
   assert.equal(statusResult.step_status_counts.noted, 1);
@@ -1047,6 +1055,8 @@ try {
   const repairedReviewResultView = repairedReviewResult.result.structuredContent as Record<string, any>;
   assert.equal(repairedReviewResultView.result.step_states.repair.status, 'completed');
   assert.equal(repairedReviewResultView.result.acceptance_verdict, 'passed');
+  assert.equal(repairedReviewResultView.result.work_order_lifecycle.state, 'completed');
+  assert.equal(repairedReviewResultView.result.work_order_lifecycle.history.includes('repaired'), true);
   assert.deepEqual(repairedReviewResultView.result.acceptance_evidence.find((check: Record<string, any>) => check.kind === 'review_quorum'), { kind: 'review_quorum', min_passed: 1, max_failed: 0, passed: 1, failed: 0, status: 'passed' });
   assert.equal(repairedReviewResultView.result.terminal_summary.review_passed_count, 1);
   assert.equal(repairedReviewResultView.result.terminal_summary.next_action, 'ready_for_closeout');
@@ -1266,7 +1276,9 @@ try {
   const deniedForeignTakeover = await callTool(state, 'delegated_task_parent_takeover', { task_id: 'task_foreigntakeover', reason: 'test takeover' });
   assert.equal((deniedForeignTakeover.error as Record<string, any>).data.code, 'delegated_task_cross_site_mutation_denied');
   const allowedForeignTakeover = await callTool(state, 'delegated_task_parent_takeover', { task_id: 'task_foreigntakeover', reason: 'test takeover', expected_owner_site_id: 'other-site', allow_cross_site: true });
-  assert.equal((allowedForeignTakeover.result.structuredContent as Record<string, any>).ownership.owner_site_id, 'other-site');
+  const allowedForeignTakeoverView = allowedForeignTakeover.result.structuredContent as Record<string, any>;
+  assert.equal(allowedForeignTakeoverView.ownership.owner_site_id, 'other-site');
+  assert.equal(allowedForeignTakeoverView.work_order_lifecycle.state, 'cancelled');
 
   const beforeConcurrencyCalls = workerCalls.filter((call) => call.name === 'worker_run').length;
   const limitedRun = await callTool(state, 'delegated_task_run', {
@@ -1318,6 +1330,7 @@ try {
   const cancelledResult = await callTool(state, 'delegated_task_result', { task_id: limitedView.task_id, include_diagnostics: true });
   const cancelledResultView = cancelledResult.result.structuredContent as Record<string, any>;
   assert.equal(cancelledResultView.result.acceptance_verdict, 'cancelled');
+  assert.equal(cancelledResultView.result.work_order_lifecycle.state, 'cancelled');
   assert.deepEqual(cancelledResultView.result.progress.running_run_ids, []);
   assert.equal(cancelledResultView.result.progress.running, 0);
   assert.equal(cancelledResultView.result.progress.liveness, 'terminal_no_active_execution');
