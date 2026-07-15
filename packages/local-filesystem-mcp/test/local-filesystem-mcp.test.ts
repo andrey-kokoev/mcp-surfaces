@@ -109,10 +109,12 @@ try {
   mkdirSync(join(ignoredRoot, 'node_modules', 'pkg'), { recursive: true });
   mkdirSync(join(ignoredRoot, 'dist'), { recursive: true });
   mkdirSync(join(ignoredRoot, 'custom-skip'), { recursive: true });
+  mkdirSync(join(ignoredRoot, '.ai', 'runtime'), { recursive: true });
   writeFileSync(join(ignoredRoot, 'src', 'keep.txt'), 'keep\n', 'utf8');
   writeFileSync(join(ignoredRoot, 'node_modules', 'pkg', 'dependency.txt'), 'skip\n', 'utf8');
   writeFileSync(join(ignoredRoot, 'dist', 'bundle.txt'), 'skip\n', 'utf8');
   writeFileSync(join(ignoredRoot, 'custom-skip', 'custom.txt'), 'custom\n', 'utf8');
+  writeFileSync(join(ignoredRoot, '.ai', 'runtime', 'artifact.txt'), 'generated\n', 'utf8');
 
   const configPath = join(tempRoot, 'config.toml');
   writeFileSync(configPath, `
@@ -154,8 +156,11 @@ trust_level = "untrusted"
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
+  assert.ok(readToolNames.includes('fs_repository_inventory'));
   const globToolDescription = listTools('read').find((tool) => tool.name === 'fs_glob_search')?.description;
   assert.match(String(globToolDescription), /Empty matches return ok with count 0/);
+  const inventoryToolDescription = listTools('read').find((tool) => tool.name === 'fs_repository_inventory')?.description;
+  assert.match(String(inventoryToolDescription), /generated runtime artifacts/);
   const grepToolDescription = listTools('read').find((tool) => tool.name === 'fs_grep_search')?.description;
   assert.match(String(grepToolDescription), /line-numbered matches/);
   assert.match(String(grepToolDescription), /empty matches return ok with count 0/);
@@ -167,6 +172,10 @@ trust_level = "untrusted"
   assert.equal(Array.isArray(recoveryGuidance.patch_recovery.sequence), true);
   assert.match(String(recoveryGuidance.patch_recovery.sequence[2]), /fs_patch_outcome_show/);
   assert.match(String(recoveryGuidance.patch_recovery.statuses.failed_before_mutation), /no mutation/);
+  const inventoryGuidance = buildGuidanceResult({ workflow: 'repository_inventory' }) as DynamicTestValue;
+  assert.equal(Array.isArray(inventoryGuidance.repository_inventory.sequence), true);
+  assert.match(String(inventoryGuidance.repository_inventory.sequence[3]), /git_changed_summary/);
+  assert.match(String(inventoryGuidance.repository_inventory.default_behavior), /excluded/);
 
   const writeToolNames = listTools('write').map((tool) => tool.name);
   assert.ok(writeToolNames.includes('fs_guidance'));
@@ -360,6 +369,23 @@ trust_level = "untrusted"
   assert.equal(defaultIgnoredMatches.some((match) => match.includes('/node_modules/')), false);
   assert.equal(defaultIgnoredMatches.some((match) => match.includes('/dist/')), false);
   assert.equal(defaultIgnoredMatches.some((match) => match.endsWith('custom-skip/custom.txt')), true);
+
+  const repositoryInventory = call(readState, 153, 'fs_repository_inventory', { directory: ignoredRoot, pattern: '**/*.txt', limit: 20 });
+  const repositoryInventoryPayload = repositoryInventory.result.structuredContent;
+  const repositoryInventoryMatches = repositoryInventoryPayload.matches.map((match) => match.replace(/\\/g, '/'));
+  assert.equal(repositoryInventoryPayload.schema, 'local.filesystem.repository_inventory.v1');
+  assert.equal(repositoryInventoryPayload.generated_artifacts_excluded_by_default, true);
+  assert.equal(repositoryInventoryPayload.candidate_source_paths.some((match) => match.replace(/\\/g, '/').endsWith('src/keep.txt')), true);
+  assert.equal(repositoryInventoryMatches.some((match) => match.includes('/node_modules/')), false);
+  assert.equal(repositoryInventoryMatches.some((match) => match.includes('/dist/')), false);
+  assert.equal(repositoryInventoryMatches.some((match) => match.includes('/.ai/runtime/')), false);
+  assert.equal(repositoryInventoryPayload.git_tracking_boundary.authority, 'git-mcp');
+  assert.equal(repositoryInventoryPayload.git_tracking_boundary.next_tool, 'git_changed_summary');
+
+  const repositoryInventoryWithGenerated = call(readState, 154, 'fs_repository_inventory', { directory: ignoredRoot, pattern: '**/*.txt', include_generated: true, limit: 20 });
+  const generatedInventoryPayload = repositoryInventoryWithGenerated.result.structuredContent;
+  assert.equal(generatedInventoryPayload.generated_artifacts_excluded_by_default, false);
+  assert.equal(generatedInventoryPayload.generated_artifact_paths.some((match) => match.replace(/\\/g, '/').includes('/.ai/runtime/')), true);
 
   const callerIgnoredGlob = call(readState, 152, 'fs_glob_search', { directory: ignoredRoot, pattern: '**/*.txt', ignore: ['**/custom-skip/**'], limit: 20 });
   const callerIgnoredMatches = callerIgnoredGlob.result.structuredContent.matches.map((match) => match.replace(/\\/g, '/'));

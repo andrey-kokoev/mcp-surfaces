@@ -39,6 +39,24 @@ const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/__pycache__/**',
   '**/target/**',
 ];
+const DEFAULT_REPOSITORY_INVENTORY_IGNORE_PATTERNS = [
+  '**/.ai/runtime/**',
+  '**/.ai/tmp/**',
+  '**/.ai/output/**',
+  '**/.narada/runtime/**',
+  '**/.narada/tmp/**',
+  '**/.narada/local-filesystem-mcp/patch-outcomes/**',
+  '**/.tmp-tests/**',
+];
+const REPOSITORY_GENERATED_PATH_MARKERS = [
+  '/.ai/runtime/',
+  '/.ai/tmp/',
+  '/.ai/output/',
+  '/.narada/runtime/',
+  '/.narada/tmp/',
+  '/.narada/local-filesystem-mcp/patch-outcomes/',
+  '/.tmp-tests/',
+];
 const DEFAULT_GREP_IGNORE_PATTERNS = [
   ...DEFAULT_GLOB_IGNORE_PATTERNS,
   '**/.ai/runtime/**',
@@ -425,6 +443,21 @@ export function listTools(mode) {
       }, ['pattern']),
     },
     {
+      name: 'fs_repository_inventory',
+      description: 'Return a bounded candidate-source inventory under an allowed root, excluding generated runtime artifacts by default. Use git-mcp for authoritative tracked and ignored state.',
+      inputSchema: objectSchema({
+        pattern: { type: 'string', default: '**/*' },
+        directory: { type: 'string', default: '.' },
+        ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude.' },
+        include_generated: { type: 'boolean', default: false, description: 'Include known generated runtime/artifact paths in the inventory.' },
+        offset: { type: 'integer', default: 0 },
+        limit: { type: 'integer', default: 100 },
+        timeout_ms: { type: 'integer', description: 'Optional search timeout in milliseconds.' },
+        cache_policy: { type: 'string', enum: ['auto', 'snapshot', 'refresh', 'bypass'], default: 'auto' },
+        snapshot_id: { type: 'string', description: 'Optional snapshot_id from a previous complete inventory response to page consistently.' },
+      }),
+    },
+    {
       name: 'fs_grep_search',
       description: 'Search file contents under an allowed root using ripgrep. Use output_mode content for line-numbered matches; empty matches return ok with count 0.',
       inputSchema: objectSchema({
@@ -574,6 +607,7 @@ function callTool(params, state) {
     case 'fs_read_file_range': return toolResult(readFileRangeTool(args, state));
     case 'fs_stat': return toolResult(statTool(args, state));
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
+    case 'fs_repository_inventory': return toolResult(repositoryInventoryTool(args, state));
     case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_doctor': return toolResult(doctorTool(state));
     case 'fs_write_file': {
@@ -937,6 +971,70 @@ async function globSearchToolAsync(args, state, context) {
   const freshness = searchFreshness(directory);
   const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'glob', args, page, offset, limit, freshness, cachePolicy });
+}
+
+function repositoryInventoryTool(args, state) {
+  const includeGenerated = booleanField(args, 'include_generated') ?? false;
+  const value = globSearchTool(repositoryInventorySearchArgs(args, includeGenerated), state);
+  return formatRepositoryInventory(value, args, includeGenerated);
+}
+
+async function repositoryInventoryToolAsync(args, state, context) {
+  const includeGenerated = booleanField(args, 'include_generated') ?? false;
+  const value = await globSearchToolAsync(repositoryInventorySearchArgs(args, includeGenerated), state, context);
+  return formatRepositoryInventory(value, args, includeGenerated);
+}
+
+function repositoryInventorySearchArgs(args, includeGenerated) {
+  return {
+    ...args,
+    pattern: stringField(args, 'pattern') ?? '**/*',
+    ignore: [
+      ...(includeGenerated ? [] : DEFAULT_REPOSITORY_INVENTORY_IGNORE_PATTERNS),
+      ...stringList(args.ignore),
+    ],
+  };
+}
+
+function formatRepositoryInventory(value, args, includeGenerated) {
+  const matches = Array.isArray(value.matches) ? value.matches.map((item) => String(item)) : [];
+  const classifications = matches.map((path) => ({ path, classification: classifyRepositoryInventoryPath(path) }));
+  const candidateSourcePaths = classifications.filter((item) => item.classification === 'candidate_source').map((item) => item.path);
+  const generatedArtifactPaths = classifications.filter((item) => item.classification === 'generated_artifact').map((item) => item.path);
+  const appliedIgnorePatterns = [
+    ...DEFAULT_GLOB_IGNORE_PATTERNS,
+    ...(includeGenerated ? [] : DEFAULT_REPOSITORY_INVENTORY_IGNORE_PATTERNS),
+    ...stringList(args.ignore),
+  ];
+  return {
+    ...value,
+    schema: 'local.filesystem.repository_inventory.v1',
+    directory: stringField(args, 'directory') ?? '.',
+    pattern: stringField(args, 'pattern') ?? '**/*',
+    include_generated: includeGenerated,
+    matches,
+    classifications,
+    candidate_source_paths: candidateSourcePaths,
+    candidate_source_count: candidateSourcePaths.length,
+    generated_artifact_paths: generatedArtifactPaths,
+    generated_artifact_count: generatedArtifactPaths.length,
+    applied_ignore_patterns: [...new Set(appliedIgnorePatterns)],
+    generated_artifacts_excluded_by_default: !includeGenerated,
+    git_tracking_boundary: {
+      tracked_paths: null,
+      ignored_paths: null,
+      authority: 'git-mcp',
+      next_tool: 'git_changed_summary',
+      note: 'This filesystem inventory identifies bounded candidate and generated paths; Git-tracked and Git-ignored state is authoritative in git-mcp.',
+    },
+  };
+}
+
+function classifyRepositoryInventoryPath(value) {
+  const normalized = String(value).replaceAll('\\', '/').toLowerCase();
+  return REPOSITORY_GENERATED_PATH_MARKERS.some((marker) => normalized.includes(marker))
+    ? 'generated_artifact'
+    : 'candidate_source';
 }
 
 function readSummary(value) {
@@ -1557,6 +1655,7 @@ async function callToolAsync(params, state, context) {
     case 'fs_read_file': return await callReadToolWithRequestDeadline(name, args, state, context);
     case 'fs_read_file_range': return await callReadToolWithRequestDeadline(name, args, state, context);
     case 'fs_glob_search': return toolResult(await globSearchToolAsync(args, state, context));
+    case 'fs_repository_inventory': return toolResult(await repositoryInventoryToolAsync(args, state, context));
     case 'fs_grep_search': return toolResult(await grepSearchToolAsync(args, state, context), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_write_file': {
       const payload = resolveFilesystemPayloadArgs(name, args, state);

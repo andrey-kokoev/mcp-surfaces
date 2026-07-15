@@ -27,6 +27,22 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       read_mode: 'fs_patch_outcome_show is available in both read and write modes.',
     }
   } : {};
+  const repositoryInventory = workflow === 'repository_inventory' || tool === 'fs_repository_inventory' ? {
+    repository_inventory: {
+      sequence: [
+        'Call fs_repository_inventory with an explicit directory, pattern, limit, and cache policy.',
+        'Use candidate_source_paths for bounded source-oriented follow-up and generated_artifact_paths for runtime cleanup review.',
+        'Set include_generated: true only when generated artifacts are part of the explicit investigation.',
+        'Call git_changed_summary for authoritative tracked and ignored state; this filesystem view does not infer Git status.'
+      ],
+      classification: {
+        candidate_source: 'A path returned by the bounded inventory that is not in a known generated runtime/artifact location.',
+        generated_artifact: 'A path under a known .ai/.narada runtime, temporary, output, or patch-outcome location.'
+      },
+      default_behavior: 'Known generated runtime/artifact patterns are excluded unless include_generated is true.',
+      git_tracking_boundary: 'Filesystem inventory identifies candidate and generated paths; git-mcp owns tracked and ignored classification.'
+    }
+  } : {};
   return {
     schema: 'narada.mcp_surface.guidance.v0',
     status: 'ok',
@@ -35,6 +51,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     purpose: PURPOSE,
     requested: { workflow, tool },
     ...patchRecovery,
+    ...repositoryInventory,
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
@@ -43,7 +60,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     ],
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
-      { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
+      { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters; use fs_repository_inventory for repository-oriented source/artifact discovery.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
@@ -51,7 +68,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     examples: [
       { intent: 'First use', call: 'fs_guidance({})' },
       { intent: 'Tool-specific help', call: "fs_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "fs_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Workflow-specific help', call: "fs_guidance({ workflow: \"<workflow_name>\" })" },
+      { intent: 'Repository inventory', call: 'fs_repository_inventory({ directory: ".", pattern: "**/*", limit: 100 })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
@@ -77,7 +95,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     boundaries: [
       'Guidance is read-only model-facing operating advice.',
       'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
-      'The owning MCP surface remains authoritative for state and enforcement.'
+      'The owning MCP surface remains authoritative for state and enforcement.',
+      'fs_repository_inventory is a bounded filesystem view; use git-mcp for authoritative tracked and ignored state.'
     ]
   };
 }
