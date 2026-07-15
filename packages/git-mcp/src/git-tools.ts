@@ -293,6 +293,7 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, 
   const scopeLabel = optionalNonEmptyString(args.scope_label);
   const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context))));
   if (paths.length === 0) throw diagnosticError('git_add_requires_paths');
+  await preflightGitAddPaths(cwd, paths, state, context);
   const result = await runGit(cwd, ['add', '--', ...paths], state.policy, context);
   ensureGitOk(result, 'git_add_failed');
   const status = await gitStatus({ working_directory: cwd }, state, context);
@@ -303,11 +304,51 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, 
     scope_label: scopeLabel,
     paths,
     staged_count: paths.length,
+    preflight: {
+      status: 'passed',
+      checked_path_count: paths.length,
+      ignored_path_count: 0,
+      atomic: true,
+    },
     summary: `staged ${paths.length} path${paths.length === 1 ? '' : 's'}`,
     post_status: status,
   };
   audit(state, payload);
   return payload;
+}
+
+async function preflightGitAddPaths(cwd: string, paths: string[], state: GitMcpState, context: GitRequestContext): Promise<void> {
+  const checks = await Promise.all(paths.map(async (path) => {
+    const result = await runGit(cwd, ['check-ignore', '--verbose', '--', path], state.policy, context);
+    if (result.exit_code === 0 && !result.timed_out && !result.cancelled) {
+      return {
+        path,
+        ignored: true,
+        diagnostic_text: combineOutput(result),
+      };
+    }
+    if (result.exit_code === 1 && !result.timed_out && !result.cancelled) {
+      return { path, ignored: false };
+    }
+    throw diagnosticError('git_add_ignore_check_failed', 'git_add_ignore_check_failed', {
+      path,
+      exit_code: result.exit_code,
+      timed_out: result.timed_out,
+      cancelled: result.cancelled,
+      diagnostic_text: combineOutput(result),
+    });
+  }));
+  const ignoredEntries = checks.filter((check) => check.ignored);
+  if (ignoredEntries.length === 0) return;
+  throw diagnosticError('git_add_ignored_paths', 'git_add_ignored_paths', {
+    requested_paths: paths,
+    ignored_paths: ignoredEntries.map((entry) => entry.path),
+    ignored_entries: ignoredEntries,
+    preflight: 'failed',
+    mutation_started: false,
+    atomic: true,
+    remediation: 'Remove ignored paths from the request or update the repository ignore policy; git_add does not force ignored files.',
+  });
 }
 
 export async function gitCommit(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {

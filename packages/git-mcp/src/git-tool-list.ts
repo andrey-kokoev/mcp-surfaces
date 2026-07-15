@@ -111,7 +111,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const writeTools = [
     {
       name: 'git_add',
-      description: 'Stage explicit file paths.',
+      description: 'Preflight all explicit paths and stage them atomically; refuses the whole request before mutation when any path is ignored.',
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to stage.' },

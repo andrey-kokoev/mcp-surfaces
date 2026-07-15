@@ -92,6 +92,7 @@ assert.equal(readToolNames.includes('git_status'), true);
 assert.equal(readToolNames.includes('git_add'), true);
 const readAddTool = readTools.result?.tools.find((tool) => tool.name === 'git_add');
 assert.match(readAddTool.description, /mode=write/);
+assert.match(readAddTool.description, /ignored/);
 
 const guidance = await rpc({
   jsonrpc: '2.0',
@@ -215,6 +216,28 @@ await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 
 const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit' }, state);
 assert.match(commitResult.commit, /^[0-9a-f]{40}$/);
+
+writeFileSync(join(repo, '.gitignore'), 'ignored-staging.txt\n', 'utf8');
+writeFileSync(join(repo, 'staging-safe.txt'), 'safe\n', 'utf8');
+writeFileSync(join(repo, 'ignored-staging.txt'), 'ignored\n', 'utf8');
+await assert.rejects(
+  () => gitAdd({ working_directory: repo, paths: ['staging-safe.txt', 'ignored-staging.txt'] }, state),
+  (error: any) => {
+    assert.equal(error.codeName, 'git_add_ignored_paths');
+    assert.deepEqual(error.details.requested_paths, ['staging-safe.txt', 'ignored-staging.txt']);
+    assert.deepEqual(error.details.ignored_paths, ['ignored-staging.txt']);
+    assert.equal(error.details.mutation_started, false);
+    assert.equal(error.details.atomic, true);
+    assert.match(error.details.remediation, /Remove ignored paths/);
+    assert.match(error.details.ignored_entries[0].diagnostic_text, /ignored-staging\.txt/);
+    return true;
+  },
+);
+const afterRejectedBatchAdd = await gitStatus({ working_directory: repo }, state);
+assert.deepEqual(afterRejectedBatchAdd.staged, []);
+const afterRejectedUntracked = afterRejectedBatchAdd.untracked as string[];
+assert.equal(afterRejectedUntracked.includes('staging-safe.txt'), true);
+assert.equal(afterRejectedUntracked.includes('ignored-staging.txt'), false);
 
 const logResult = await gitLog({ working_directory: repo, limit: 5 }, state);
 assert.equal(logResult.returned, 1);
