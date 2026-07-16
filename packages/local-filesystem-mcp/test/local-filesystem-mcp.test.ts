@@ -97,6 +97,17 @@ try {
   for (let i = 0; i < 120; i += 1) {
     writeFileSync(join(largeRoot, `very-long-file-name-${String(i).padStart(3, '0')}-${'x'.repeat(60)}.txt`), 'needle\n', 'utf8');
   }
+  const largeMetricsRoot = join(trusted, 'large-metrics');
+  mkdirSync(largeMetricsRoot, { recursive: true });
+  for (let i = 0; i < 505; i += 1) {
+    writeFileSync(join(largeMetricsRoot, `metric-${String(i).padStart(3, '0')}.txt`), 'line\n', 'utf8');
+  }
+  const metricsExclusionRoot = join(trusted, 'metrics-exclusion');
+  mkdirSync(metricsExclusionRoot, { recursive: true });
+  writeFileSync(join(metricsExclusionRoot, 'included.txt'), 'included\n', 'utf8');
+  for (let i = 0; i < 105; i += 1) {
+    writeFileSync(join(metricsExclusionRoot, `excluded-${String(i).padStart(3, '0')}.txt`), 'excluded\n', 'utf8');
+  }
   const largeGrepRoot = join(trusted, 'large-grep-output');
   mkdirSync(largeGrepRoot, { recursive: true });
   const largeGrepLine = `${'needle '.repeat(20)}${'x'.repeat(20_000)}\n`;
@@ -443,6 +454,21 @@ trust_level = "untrusted"
   assert.equal(pagedMetrics.result.structuredContent.totals.file_count, 5);
   assert.equal(pagedMetrics.result.structuredContent.totals.line_count, 5);
   assert.equal(pagedMetrics.result.structuredContent.scope.contents_returned, false);
+  const pagedMetricsSecond = call(readState, 171, 'fs_file_metrics', { directory: largeRoot, pattern: '**/*.txt', offset: 5, limit: 5, cache_policy: 'bypass' });
+  assert.deepEqual(pagedMetricsSecond.result.structuredContent.scope.ignored_paths, []);
+  assert.equal(pagedMetricsSecond.result.structuredContent.scope.ignored_paths_complete, false);
+  assert.equal(pagedMetricsSecond.result.structuredContent.scope.out_of_scope_paths_complete, false);
+  const scanBudgetMetrics = call(readState, 172, 'fs_file_metrics', { directory: largeRoot, pattern: '**/*.txt', limit: 1, max_total_scan_bytes: 1, cache_policy: 'bypass' });
+  assert.equal(scanBudgetMetrics.result.structuredContent.scan_budget_bytes, 1);
+  assert.equal(scanBudgetMetrics.result.structuredContent.scan_bytes_reserved, 0);
+  assert.equal(scanBudgetMetrics.result.structuredContent.files[0].line_count, null);
+  assert.equal(scanBudgetMetrics.result.structuredContent.files[0].line_count_status, 'scan_budget_exceeded');
+  assert.equal(scanBudgetMetrics.result.structuredContent.totals.scan_budget_exceeded_file_count, 1);
+  const truncatedExcludedMetrics = call(readState, 176, 'fs_file_metrics', { directory: metricsExclusionRoot, pattern: '**/*.txt', ignore: ['**/excluded-*.txt'], limit: 20, cache_policy: 'bypass' });
+  assert.equal(truncatedExcludedMetrics.result.structuredContent.scope.ignored_path_count, 105);
+  assert.equal(truncatedExcludedMetrics.result.structuredContent.scope.ignored_paths.length, 100);
+  assert.equal(truncatedExcludedMetrics.result.structuredContent.scope.ignored_paths_truncated, true);
+  assert.equal(truncatedExcludedMetrics.result.structuredContent.scope.ignored_paths_complete, false);
 
   writeFileSync(join(trusted, 'metrics-snapshot-a.txt'), 'one\ntwo\nthree\n', 'utf8');
   writeFileSync(join(trusted, 'metrics-snapshot-z.txt'), 'old\n', 'utf8');
@@ -450,6 +476,10 @@ trust_level = "untrusted"
   const metricsSnapshotId = metricsSnapshot.result.structuredContent.snapshot_id;
   assert.match(metricsSnapshotId, /^fm_[0-9a-f]+$/);
   assert.equal(metricsSnapshot.result.structuredContent.snapshot_complete, true);
+  assert.equal(metricsSnapshot.result.structuredContent.snapshot_lifecycle.scope, 'process_local');
+  assert.equal(metricsSnapshot.result.structuredContent.snapshot_lifecycle.survives_restart, false);
+  assert.equal(metricsSnapshot.result.structuredContent.snapshot_lifecycle.eviction_policy, 'least_recently_used');
+  assert.equal(metricsSnapshot.result.structuredContent.snapshot_lifecycle.max_entries, 4);
   writeFileSync(join(trusted, 'metrics-snapshot-z.txt'), 'new\none\ntwo\n', 'utf8');
   const metricsSnapshotSecond = call(readState, 168, 'fs_file_metrics', { root: trusted, pattern: '**/metrics-snapshot-*.txt', offset: 1, limit: 1, snapshot_id: metricsSnapshotId });
   assert.equal(metricsSnapshotSecond.result.structuredContent.requested_snapshot_id, metricsSnapshotId);
@@ -462,6 +492,17 @@ trust_level = "untrusted"
     new Set(['metrics-snapshot-a.txt', 'metrics-snapshot-z.txt']),
   );
   assert.equal(snapshotFiles.find((file) => file.relative_path === 'metrics-snapshot-z.txt')?.line_count, 1);
+
+  const largeMetricsSnapshot = call(readState, 173, 'fs_file_metrics', { directory: largeMetricsRoot, pattern: '**/*.txt', limit: 1, cache_policy: 'snapshot' });
+  assert.equal(largeMetricsSnapshot.result.structuredContent.count, 505);
+  assert.equal(largeMetricsSnapshot.result.structuredContent.snapshot_complete, true);
+  assert.match(largeMetricsSnapshot.result.structuredContent.snapshot_id, /^fm_[0-9a-f]+$/);
+  const largeMetricsSnapshotPage = call(readState, 174, 'fs_file_metrics', { directory: largeMetricsRoot, pattern: '**/*.txt', offset: 504, limit: 1, snapshot_id: largeMetricsSnapshot.result.structuredContent.snapshot_id });
+  assert.equal(largeMetricsSnapshotPage.result.structuredContent.requested_snapshot_id, largeMetricsSnapshot.result.structuredContent.snapshot_id);
+  assert.equal(largeMetricsSnapshotPage.result.structuredContent.files.length, 1);
+  const largeMetricsRefresh = call(readState, 175, 'fs_file_metrics', { directory: largeMetricsRoot, pattern: '**/*.txt', limit: 1, cache_policy: 'refresh' });
+  assert.equal(largeMetricsRefresh.result.structuredContent.count, 505);
+  assert.equal(largeMetricsRefresh.result.structuredContent.snapshot_complete, true);
 
   writeFileSync(join(other, 'metrics-outside-target.txt'), 'outside\n', 'utf8');
   let outsideMetricsLinkCreated = false;

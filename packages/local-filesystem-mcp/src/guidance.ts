@@ -46,13 +46,13 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const fileMetrics = workflow === 'file_metrics' || tool === 'fs_file_metrics' ? {
     file_metrics: {
       sequence: [
-        'Call fs_file_metrics with an explicit directory/root, include pattern, ignore policy, limit, and cache policy.',
+        'Call fs_file_metrics with an explicit directory/root, include pattern, ignore policy, limit, max_total_scan_bytes, and cache policy.',
         'Use the returned files table for path, line_count, byte_count, file_type, and scope classification; structuredContent is authoritative.',
         'Use offset and next_offset to page larger trees. totals are explicitly scoped to the returned page and never imply that file contents were transferred.',
         'Prefer this metadata-only operation over concurrent full-content fs_read_file calls when the task needs line counts, sizes, or bounded source inventory.',
       ],
       semantics: {
-        line_count: 'Exact for text files within max_bytes_per_file; larger text files return a null line_count with line_count_status=too_large, while binary or unavailable files use their own explicit statuses.',
+        line_count: 'Exact for text files within max_bytes_per_file and the cumulative max_total_scan_bytes budget; larger text files return line_count_status=too_large, budget-exhausted files return line_count_status=scan_budget_exceeded, and binary or unavailable files use their own explicit statuses.',
         byte_count: 'Filesystem byte size from stat metadata; no file content is returned.',
         scope: 'The response declares the allowed root, selected directory, include pattern, ignore patterns, and excluded-path boundary.',
       },

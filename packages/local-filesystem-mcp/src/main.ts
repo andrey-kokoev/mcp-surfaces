@@ -52,6 +52,8 @@ const DEFAULT_FILE_METRICS_PATTERN = '**/*';
 const MAX_FILE_METRICS_LIMIT = 100;
 const DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE = 8 * 1024 * 1024;
 const MAX_FILE_METRICS_MAX_BYTES_PER_FILE = 64 * 1024 * 1024;
+const DEFAULT_FILE_METRICS_MAX_TOTAL_SCAN_BYTES = 256 * 1024 * 1024;
+const MAX_FILE_METRICS_MAX_TOTAL_SCAN_BYTES = 512 * 1024 * 1024;
 const MAX_FILE_METRICS_SNAPSHOT_FILES = 10_000;
 const FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES = 4;
 const fileMetricsSnapshotCache = new Map();
@@ -503,6 +505,7 @@ export function listTools(mode) {
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: MAX_FILE_METRICS_LIMIT, description: `Maximum metric rows to return; capped at ${MAX_FILE_METRICS_LIMIT}.` },
         max_bytes_per_file: { type: 'integer', default: DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE, description: 'Maximum bytes scanned for one text file; larger files return byte metadata with line_count_status=too_large.' },
+        max_total_scan_bytes: { type: 'integer', default: DEFAULT_FILE_METRICS_MAX_TOTAL_SCAN_BYTES, description: 'Maximum cumulative bytes scanned for exact line counts across one request; files beyond the budget return line_count_status=scan_budget_exceeded.' },
         timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
         cache_policy: { type: 'string', enum: ['auto', 'snapshot', 'refresh', 'bypass'], default: 'auto' },
         snapshot_id: { type: 'string', description: 'Optional snapshot_id from a previous metrics request to page consistently.' },
@@ -1078,7 +1081,7 @@ function fileMetricsTool(args, state) {
   const cachePolicy = searchCachePolicy(args);
   const value = globSearchToolWithOptions(withRemainingFileMetricsTimeout(
     cachePolicy === 'snapshot' || cachePolicy === 'refresh'
-      ? { ...normalizedArgs, cache_policy: 'bypass', snapshot_id: null, offset: 0, limit: 500 }
+      ? { ...normalizedArgs, cache_policy: cachePolicy, snapshot_id: null, offset: 0, limit: 500 }
       : normalizedArgs,
     deadlineAt,
     timeoutMs,
@@ -1086,7 +1089,7 @@ function fileMetricsTool(args, state) {
   if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
     const collected = collectMetricMatchesSync(value, normalizedArgs, state, deadlineAt, timeoutMs);
     const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, collected.matches);
-    const rows = buildFileMetricRowsSync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs);
+    const rows = buildFileMetricRowsSync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, createFileMetricsScanBudget(normalizedArgs));
     excluded.out_of_scope_paths = rows.out_of_scope_paths;
     const snapshot = rememberFileMetricsSnapshot({
       args: normalizedArgs,
@@ -1095,11 +1098,13 @@ function fileMetricsTool(args, state) {
       matchedCount: collected.count,
       excluded,
       freshness: collected.freshness,
+      scanBytesReserved: rows.scan_bytes_reserved,
+      scanBudgetBytes: rows.scan_budget_bytes,
     });
     return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
   }
   const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs);
-  const rows = buildFileMetricRowsSync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs);
+  const rows = buildFileMetricRowsSync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, createFileMetricsScanBudget(normalizedArgs));
   excluded.out_of_scope_paths = rows.out_of_scope_paths;
   return formatFileMetricsPage({
     value,
@@ -1115,6 +1120,8 @@ function fileMetricsTool(args, state) {
     cacheHit: value.cache_hit === true,
     cachePolicy: value.cache_policy ?? cachePolicy,
     freshness: value.freshness ?? null,
+    scanBytesReserved: rows.scan_bytes_reserved,
+    scanBudgetBytes: rows.scan_budget_bytes,
   });
 }
 
@@ -1131,7 +1138,7 @@ async function fileMetricsToolAsync(args, state, context) {
   const cachePolicy = searchCachePolicy(args);
   const value = await globSearchToolAsyncWithOptions(withRemainingFileMetricsTimeout(
     cachePolicy === 'snapshot' || cachePolicy === 'refresh'
-      ? { ...normalizedArgs, cache_policy: 'bypass', snapshot_id: null, offset: 0, limit: 500 }
+      ? { ...normalizedArgs, cache_policy: cachePolicy, snapshot_id: null, offset: 0, limit: 500 }
       : normalizedArgs,
     deadlineAt,
     timeoutMs,
@@ -1139,7 +1146,7 @@ async function fileMetricsToolAsync(args, state, context) {
   if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
     const collected = await collectMetricMatchesAsync(value, normalizedArgs, state, deadlineAt, timeoutMs, context.abortSignal);
     const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, collected.matches);
-    const rows = await buildFileMetricRowsAsync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+    const rows = await buildFileMetricRowsAsync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, createFileMetricsScanBudget(normalizedArgs));
     excluded.out_of_scope_paths = rows.out_of_scope_paths;
     const snapshot = rememberFileMetricsSnapshot({
       args: normalizedArgs,
@@ -1148,11 +1155,13 @@ async function fileMetricsToolAsync(args, state, context) {
       matchedCount: collected.count,
       excluded,
       freshness: collected.freshness,
+      scanBytesReserved: rows.scan_bytes_reserved,
+      scanBudgetBytes: rows.scan_budget_bytes,
     });
     return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
   }
   const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
-  const rows = await buildFileMetricRowsAsync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+  const rows = await buildFileMetricRowsAsync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, createFileMetricsScanBudget(normalizedArgs));
   excluded.out_of_scope_paths = rows.out_of_scope_paths;
   return formatFileMetricsPage({
     value,
@@ -1168,6 +1177,8 @@ async function fileMetricsToolAsync(args, state, context) {
     cacheHit: value.cache_hit === true,
     cachePolicy: value.cache_policy ?? cachePolicy,
     freshness: value.freshness ?? null,
+    scanBytesReserved: rows.scan_bytes_reserved,
+    scanBudgetBytes: rows.scan_budget_bytes,
   });
 }
 
@@ -1183,6 +1194,7 @@ function fileMetricsSearchArgs(args) {
     timeout_ms: integerField(args, 'timeout_ms') ?? DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS,
     limit: Math.min(MAX_FILE_METRICS_LIMIT, Math.max(1, integerField(args, 'limit') ?? MAX_FILE_METRICS_LIMIT)),
     max_bytes_per_file: fileMetricsMaxBytesPerFile(args),
+    max_total_scan_bytes: fileMetricsMaxTotalScanBytes(args),
   };
 }
 
@@ -1207,14 +1219,17 @@ function formatStoredFileMetricsSnapshot(snapshot, args, state, directoryInfo, {
     cacheHit,
     cachePolicy: searchCachePolicy(args),
     freshness: snapshot.freshness,
+    scanBytesReserved: snapshot.scan_bytes_reserved,
+    scanBudgetBytes: snapshot.scan_budget_bytes,
   });
 }
 
-function formatFileMetricsPage({ value, args, state, directoryInfo, files, excluded, timeoutMs, matchedCount = null, hasMore = null, nextOffset = undefined, snapshotId = null, requestedSnapshotId = null, snapshotComplete = false, cacheHit = false, cachePolicy = 'auto', freshness = null }) {
+function formatFileMetricsPage({ value, args, state, directoryInfo, files, excluded, timeoutMs, matchedCount = null, hasMore = null, nextOffset = undefined, snapshotId = null, requestedSnapshotId = null, snapshotComplete = false, cacheHit = false, cachePolicy = 'auto', freshness = null, scanBytesReserved = null, scanBudgetBytes = null }) {
   const pageTotals = aggregateFileMetrics(files);
   const count = matchedCount ?? value?.count ?? files.length;
   const effectiveHasMore = hasMore ?? value?.has_more === true;
   const effectiveNextOffset = nextOffset === undefined ? value?.next_offset ?? null : nextOffset;
+  const requestedOffset = Math.max(0, integerField(args, 'offset') ?? value?.offset ?? 0);
   const effectiveFreshness = freshness ?? value?.freshness ?? null;
   const appliedIgnorePatterns = [
     ...DEFAULT_GLOB_IGNORE_PATTERNS,
@@ -1239,7 +1254,16 @@ function formatFileMetricsPage({ value, args, state, directoryInfo, files, exclu
     snapshot_id: snapshotId,
     requested_snapshot_id: requestedSnapshotId,
     snapshot_complete: snapshotComplete,
+    snapshot_lifecycle: snapshotId || requestedSnapshotId ? {
+      scope: 'process_local',
+      survives_restart: false,
+      eviction_policy: 'least_recently_used',
+      max_entries: FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES,
+      recovery: 'If the snapshot is missing, rerun fs_file_metrics with cache_policy=snapshot or refresh.',
+    } : null,
     timeout_ms: timeoutMs,
+    scan_budget_bytes: scanBudgetBytes ?? fileMetricsMaxTotalScanBytes(args),
+    scan_bytes_reserved: scanBytesReserved,
     freshness: effectiveFreshness,
     scope: {
       directory: directoryInfo.path,
@@ -1250,9 +1274,10 @@ function formatFileMetricsPage({ value, args, state, directoryInfo, files, exclu
       ignored_paths: excluded.ignored_paths,
       ignored_path_count: excluded.ignored_count,
       ignored_paths_complete: excluded.ignored_paths_complete,
+      ignored_paths_truncated: excluded.ignored_paths_truncated === true,
       out_of_scope_paths: excluded.out_of_scope_paths,
       out_of_scope_path_count: excluded.out_of_scope_paths.length,
-      out_of_scope_paths_complete: true,
+      out_of_scope_paths_complete: snapshotComplete === true || (effectiveHasMore !== true && requestedOffset === 0),
       boundary: {
         allowed_root: directoryInfo.root,
         directory: directoryInfo.path,
@@ -1270,6 +1295,23 @@ function fileMetricsMaxBytesPerFile(args) {
   const value = integerField(args, 'max_bytes_per_file');
   if (value === null) return DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE;
   return Math.min(MAX_FILE_METRICS_MAX_BYTES_PER_FILE, Math.max(1, value));
+}
+
+function fileMetricsMaxTotalScanBytes(args) {
+  const value = integerField(args, 'max_total_scan_bytes');
+  if (value === null) return DEFAULT_FILE_METRICS_MAX_TOTAL_SCAN_BYTES;
+  return Math.min(MAX_FILE_METRICS_MAX_TOTAL_SCAN_BYTES, Math.max(1, value));
+}
+
+function createFileMetricsScanBudget(args) {
+  return { max_bytes: fileMetricsMaxTotalScanBytes(args), reserved_bytes: 0 };
+}
+
+function reserveFileMetricsScanBytes(scanBudget, byteCount) {
+  const bytes = typeof byteCount === 'number' && Number.isFinite(byteCount) ? Math.max(0, byteCount) : 0;
+  if (scanBudget.reserved_bytes + bytes > scanBudget.max_bytes) return false;
+  scanBudget.reserved_bytes += bytes;
+  return true;
 }
 
 function withRemainingFileMetricsTimeout(args, deadlineAt, timeoutMs) {
@@ -1362,7 +1404,7 @@ async function resolveFileMetricsDirectoryAsync(args, state, deadlineAt, timeout
   }
 }
 
-function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt, timeoutMs) {
+function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, scanBudget = createFileMetricsScanBudget(args)) {
   const files = [];
   const outOfScopePaths = [];
   const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
@@ -1382,7 +1424,9 @@ function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt
       if (!stat.isFile()) continue;
       const lineMetrics = stat.size > maxBytesPerFile
         ? { line_count: null, line_count_status: 'too_large' }
-        : countFileLines(realPath, checkTimeout);
+        : reserveFileMetricsScanBytes(scanBudget, stat.size)
+          ? countFileLines(realPath, checkTimeout)
+          : { line_count: null, line_count_status: 'scan_budget_exceeded' };
       const relativePath = relative(directoryInfo.path, resolved.path).replace(/\\/g, '/');
       const rootRelativePath = relative(resolved.root, resolved.path).replace(/\\/g, '/');
       files.push({
@@ -1411,10 +1455,10 @@ function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt
       });
     }
   }
-  return { files, out_of_scope_paths: outOfScopePaths };
+  return { files, out_of_scope_paths: outOfScopePaths, scan_bytes_reserved: scanBudget.reserved_bytes, scan_budget_bytes: scanBudget.max_bytes };
 }
 
-async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, abortSignal) {
+async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, abortSignal, scanBudget = createFileMetricsScanBudget(args)) {
   const files = [];
   const outOfScopePaths = [];
   const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
@@ -1436,7 +1480,9 @@ async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, dea
       if (!stat.isFile()) continue;
       const lineMetrics = stat.size > maxBytesPerFile
         ? { line_count: null, line_count_status: 'too_large' }
-        : await countFileLinesAsync(realPath, checkTimeout, abortSignal);
+        : reserveFileMetricsScanBytes(scanBudget, stat.size)
+          ? await countFileLinesAsync(realPath, checkTimeout, abortSignal)
+          : { line_count: null, line_count_status: 'scan_budget_exceeded' };
       const relativePath = relative(directoryInfo.path, resolved.path).replace(/\\/g, '/');
       const rootRelativePath = relative(resolved.root, resolved.path).replace(/\\/g, '/');
       files.push({
@@ -1465,7 +1511,7 @@ async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, dea
       });
     }
   }
-  return { files, out_of_scope_paths: outOfScopePaths };
+  return { files, out_of_scope_paths: outOfScopePaths, scan_bytes_reserved: scanBudget.reserved_bytes, scan_budget_bytes: scanBudget.max_bytes };
 }
 
 function collectMetricMatchesSync(firstValue, args, state, deadlineAt, timeoutMs) {
@@ -1517,67 +1563,55 @@ async function collectMetricMatchesAsync(firstValue, args, state, deadlineAt, ti
 }
 
 function collectExcludedPathsSync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, selectedMatches = null) {
-  let selected = selectedMatches;
-  let selectedComplete = Array.isArray(selectedMatches);
-  if (!selected) {
-    selected = Array.isArray(selectedValue.matches) ? selectedValue.matches : [];
-    selectedComplete = selectedValue.has_more !== true;
-    if (!selectedComplete) {
-      const selectedPage = globSearchToolWithOptions({
-        ...withRemainingFileMetricsTimeout({ ...args, offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
-      }, state);
-      selected = selectedPage.matches;
-      selectedComplete = selectedPage.has_more !== true;
-    }
-  }
+  const requestedOffset = Math.max(0, integerField(args, 'offset') ?? 0);
+  const selectedComplete = Array.isArray(selectedMatches) || (requestedOffset === 0 && selectedValue.has_more !== true);
+  const selected = selectedComplete
+    ? (Array.isArray(selectedMatches) ? selectedMatches : (Array.isArray(selectedValue.matches) ? selectedValue.matches : []))
+    : [];
   const allValue = globSearchToolWithOptions({
     ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
   }, state, { ignorePatterns: [] });
   const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
-  const ignoredPaths = (Array.isArray(allValue.matches) ? allValue.matches : [])
+  const ignoredCandidates = (selectedComplete && Array.isArray(allValue.matches) ? allValue.matches : [])
     .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
-    .map((path) => metricDisplayPath(path, directoryInfo.path))
-    .slice(0, MAX_FILE_METRICS_LIMIT);
+    .map((path) => metricDisplayPath(path, directoryInfo.path));
+  const ignoredPaths = ignoredCandidates.slice(0, MAX_FILE_METRICS_LIMIT);
+  const ignoredPathsTruncated = ignoredCandidates.length > MAX_FILE_METRICS_LIMIT;
   const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
     ? Math.max(0, allValue.count - selectedValue.count)
     : null;
   return {
     ignored_paths: ignoredPaths,
     ignored_count: ignoredCount,
-    ignored_paths_complete: allValue.has_more !== true && selectedComplete,
+    ignored_paths_complete: allValue.has_more !== true && selectedComplete && !ignoredPathsTruncated,
+    ignored_paths_truncated: ignoredPathsTruncated,
     out_of_scope_paths: [],
   };
 }
 
 async function collectExcludedPathsAsync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, abortSignal, selectedMatches = null) {
-  let selected = selectedMatches;
-  let selectedComplete = Array.isArray(selectedMatches);
-  if (!selected) {
-    selected = Array.isArray(selectedValue.matches) ? selectedValue.matches : [];
-    selectedComplete = selectedValue.has_more !== true;
-    if (!selectedComplete) {
-      const selectedPage = await globSearchToolAsyncWithOptions({
-        ...withRemainingFileMetricsTimeout({ ...args, offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
-      }, state, { abortSignal });
-      selected = selectedPage.matches;
-      selectedComplete = selectedPage.has_more !== true;
-    }
-  }
+  const requestedOffset = Math.max(0, integerField(args, 'offset') ?? 0);
+  const selectedComplete = Array.isArray(selectedMatches) || (requestedOffset === 0 && selectedValue.has_more !== true);
+  const selected = selectedComplete
+    ? (Array.isArray(selectedMatches) ? selectedMatches : (Array.isArray(selectedValue.matches) ? selectedValue.matches : []))
+    : [];
   const allValue = await globSearchToolAsyncWithOptions({
     ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
   }, state, { abortSignal }, { ignorePatterns: [] });
   const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
-  const ignoredPaths = (Array.isArray(allValue.matches) ? allValue.matches : [])
+  const ignoredCandidates = (selectedComplete && Array.isArray(allValue.matches) ? allValue.matches : [])
     .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
-    .map((path) => metricDisplayPath(path, directoryInfo.path))
-    .slice(0, MAX_FILE_METRICS_LIMIT);
+    .map((path) => metricDisplayPath(path, directoryInfo.path));
+  const ignoredPaths = ignoredCandidates.slice(0, MAX_FILE_METRICS_LIMIT);
+  const ignoredPathsTruncated = ignoredCandidates.length > MAX_FILE_METRICS_LIMIT;
   const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
     ? Math.max(0, allValue.count - selectedValue.count)
     : null;
   return {
     ignored_paths: ignoredPaths,
     ignored_count: ignoredCount,
-    ignored_paths_complete: allValue.has_more !== true && selectedComplete,
+    ignored_paths_complete: allValue.has_more !== true && selectedComplete && !ignoredPathsTruncated,
+    ignored_paths_truncated: ignoredPathsTruncated,
     out_of_scope_paths: [],
   };
 }
@@ -1588,10 +1622,11 @@ function fileMetricsSnapshotKey(args, directoryInfo) {
     pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
     ignore: stringList(args.ignore),
     max_bytes_per_file: fileMetricsMaxBytesPerFile(args),
+    max_total_scan_bytes: fileMetricsMaxTotalScanBytes(args),
   }));
 }
 
-function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount, excluded, freshness }) {
+function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount, excluded, freshness, scanBytesReserved, scanBudgetBytes }) {
   const cacheKey = fileMetricsSnapshotKey(args, directoryInfo);
   for (const [id, existing] of fileMetricsSnapshotCache.entries()) {
     if (existing.cache_key === cacheKey) fileMetricsSnapshotCache.delete(id);
@@ -1605,6 +1640,8 @@ function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount,
     matched_count: matchedCount,
     excluded,
     freshness,
+    scan_bytes_reserved: scanBytesReserved,
+    scan_budget_bytes: scanBudgetBytes,
   };
   fileMetricsSnapshotCache.set(snapshot.snapshot_id, snapshot);
   while (fileMetricsSnapshotCache.size > FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES) {
@@ -1622,6 +1659,8 @@ function loadFileMetricsSnapshot(snapshotId, args, directoryInfo) {
       requested_directory: directoryInfo.path,
     });
   }
+  fileMetricsSnapshotCache.delete(snapshotId);
+  fileMetricsSnapshotCache.set(snapshotId, snapshot);
   return snapshot;
 }
 
@@ -1673,6 +1712,7 @@ function aggregateFileMetrics(files) {
   let binaryFileCount = 0;
   let tooLargeFileCount = 0;
   let unavailableFileCount = 0;
+  let scanBudgetExceededFileCount = 0;
   for (const file of files) {
     if (typeof file.byte_count === 'number') byteCount += file.byte_count;
     if (typeof file.line_count === 'number') lineCount += file.line_count;
@@ -1681,6 +1721,7 @@ function aggregateFileMetrics(files) {
       if (file.line_count_status === 'binary') binaryFileCount += 1;
       if (file.line_count_status === 'too_large') tooLargeFileCount += 1;
       if (file.line_count_status === 'unavailable') unavailableFileCount += 1;
+      if (file.line_count_status === 'scan_budget_exceeded') scanBudgetExceededFileCount += 1;
     }
   }
   return {
@@ -1691,6 +1732,7 @@ function aggregateFileMetrics(files) {
     binary_file_count: binaryFileCount,
     too_large_file_count: tooLargeFileCount,
     unavailable_file_count: unavailableFileCount,
+    scan_budget_exceeded_file_count: scanBudgetExceededFileCount,
   };
 }
 

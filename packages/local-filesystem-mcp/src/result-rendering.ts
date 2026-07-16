@@ -57,6 +57,7 @@ function renderFileMetricsResult(record) {
     `total_bytes: ${totals.byte_count ?? 0}`,
     `binary_files: ${totals.binary_file_count ?? 0}`,
     `too_large_files: ${totals.too_large_file_count ?? 0}`,
+    `scan_budget_exceeded_files: ${totals.scan_budget_exceeded_file_count ?? 0}`,
     `unavailable_files: ${totals.unavailable_file_count ?? 0}`,
     'files:',
     ...files.map((file) => `${file.relative_path ?? file.path ?? ''} lines=${file.line_count ?? 'unknown'} bytes=${file.byte_count ?? 'unknown'} type=${file.file_type ?? 'unknown'} scope=${file.scope_classification ?? 'unknown'}`),
