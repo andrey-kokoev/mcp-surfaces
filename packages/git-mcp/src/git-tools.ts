@@ -357,9 +357,34 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
   const scopeLabel = optionalNonEmptyString(args.scope_label);
   const message = requiredNonEmptyString(args.message, 'git_commit_requires_message');
   const body = optionalNonEmptyString(args.body);
+  const expectedStagedPaths = optionalExpectedStagedPaths(args.expected_staged_paths);
   const statusBefore = await gitStatus({ working_directory: cwd }, state, context);
   if (!Array.isArray(statusBefore.staged) || statusBefore.staged.length === 0) {
     throw diagnosticError('git_commit_requires_staged_changes');
+  }
+  const actualStagedPaths = Array.isArray(statusBefore.status_entries)
+    ? statusBefore.status_entries
+      .filter((entry) => asStatusEntry(entry).staged)
+      .map((entry) => normalizeCommitScopePath(asStatusEntry(entry).display_path ?? asStatusEntry(entry).path))
+      .filter(Boolean)
+    : stringArray(statusBefore.staged).map(normalizeCommitScopePath).filter(Boolean);
+  if (expectedStagedPaths) {
+    const expectedSet = new Set(expectedStagedPaths);
+    const actualSet = new Set(actualStagedPaths);
+    const missingPaths = expectedStagedPaths.filter((path) => !actualSet.has(path));
+    const unexpectedPaths = actualStagedPaths.filter((path) => !expectedSet.has(path));
+    if (missingPaths.length > 0 || unexpectedPaths.length > 0) {
+      throw diagnosticError('git_commit_staged_scope_mismatch', 'git_commit_staged_scope_mismatch', {
+        scope_label: scopeLabel,
+        expected_staged_paths: expectedStagedPaths,
+        actual_staged_paths: actualStagedPaths,
+        missing_paths: missingPaths,
+        unexpected_paths: unexpectedPaths,
+        mutation_started: false,
+        atomic: true,
+        remediation: 'Stage exactly the expected paths before retrying, or omit expected_staged_paths only when committing the whole current index is intentional.',
+      });
+    }
   }
   const commitArgs = ['commit', '-m', message];
   if (body) commitArgs.push('-m', body);
@@ -645,6 +670,21 @@ function optionalNonEmptyString(value: unknown): string | null {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+function optionalExpectedStagedPaths(value: unknown): string[] | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.some((path) => typeof path !== 'string' || !path.trim())) {
+    throw diagnosticError('git_commit_expected_staged_paths_invalid', 'git_commit_expected_staged_paths_invalid', {
+      remediation: 'Pass a non-empty array of explicit staged path strings, or omit expected_staged_paths.',
+      mutation_started: false,
+    });
+  }
+  return [...new Set(value.map(normalizeCommitScopePath))];
+}
+
+function normalizeCommitScopePath(value: unknown): string {
+  return String(value ?? '').trim().replaceAll('\\', '/').replace(/^\.\//, '');
 }
 
 function arrayOfRecords(value: unknown): Array<Record<string, unknown>> {

@@ -4,16 +4,33 @@ Cross-site MCP surface feedback intake and routing. Any site may submit feedback
 
 ## Purpose
 
-Provides a single durable feedback channel for MCP surfaces. Agents across all Narada sites can report surface issues without needing knowledge of which site owns the surface. SQLite-backed for durability.
+Provides a single durable feedback channel for MCP surfaces. Agents across all Narada sites can report surface issues without needing to know which site owns the surface. SQLite-backed for durability.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `surface_feedback_submit` | Submit feedback (surface_id, site, principal, kind, summary, details) |
+| `surface_feedback_submit` | Submit feedback (surface, declared submitter site, principal, kind, summary, details) |
 | `surface_feedback_convert_to_task` | Create and link one visible feedback entry through task-lifecycle; returns the next lifecycle action but does not execute the task |
-| `surface_feedback_list` | List entries with filters by surface, site, kind, status |
-| `surface_feedback_show` | Show one entry by ID |
+| `surface_feedback_list` | List entries with an explicit read scope and bounded metadata filters |
+| `surface_feedback_actionable_queue` | Read the bounded actionable queue with an explicit read scope |
+| `surface_feedback_show` | Show one entry by ID within an explicit read scope |
+| `surface_feedback_stats` | Aggregate visible entries within an explicit read scope |
+
+## Read scopes
+
+Every list, queue, show, and stats call must provide `scope` explicitly:
+
+| Scope | Meaning | Required server posture |
+|------|---------|-------------------------|
+| `all_authorized` | Canonical cross-site feedback view | `feedback_root` must equal `canonical_feedback_root` and server-bound Site authority must be configured |
+| `authority_visible` | Entries whose declared submitter site matches the bound Site or that are attached to its owned surfaces | Server-bound Site authority |
+| `owned_surfaces` | Entries for surfaces owned by the bound Site | Server-bound Site authority and owned surface IDs |
+| `authority_site_submissions` | Entries whose declared `submitter_site_id` matches the bound Site | Server-bound Site authority |
+
+`submitter_site_id_filter` is an optional metadata filter for list and queue. It does not authenticate the submitter, establish provenance, or expand authorization. The submitter site recorded in a feedback entry remains declarative submission metadata.
+
+The canonical User Site projection should pass `--feedback-root`, `--canonical-feedback-root`, `--site-id`, and repeated `--owned-surface-id` arguments explicitly. Do not rely on the current directory or an ambient caller-supplied site filter. A scoped show of an entry outside the scope returns `feedback_not_found` so existence is not disclosed.
 
 `surface_feedback_convert_to_task` is idempotent per feedback entry. It uses an isolated task-lifecycle stdio process and a durable handoff ledger. The ledger preserves payload and task references across failures, excludes concurrent conversion with a lease, and links feedback only after successful task creation. Retry the same conversion after a retryable failure; it resumes from the last durable stage.
 

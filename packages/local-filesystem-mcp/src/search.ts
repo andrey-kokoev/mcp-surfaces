@@ -83,7 +83,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
   }
   assertRipgrepOk(page, { operation, noMatchStatus, diagnosticError });
   if (page.count_exact) {
-    rememberCompleteSearch(cacheKey, page.matches, { freshness, timeoutMs: effectiveTimeoutMs });
+    if (cachePolicy !== 'bypass') rememberCompleteSearch(cacheKey, page.matches, { freshness, timeoutMs: effectiveTimeoutMs });
     const cachedComplete = completeSearchCache.get(cacheKey);
     if (cachedComplete && cachePolicy !== 'bypass') return pageFromComplete(cachedComplete, { offset, limit, cachePolicy, cacheHit: cachePolicy !== 'refresh' });
     const pageMatches = page.matches.slice(offset, offset + limit);
@@ -179,7 +179,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
   }
   assertRipgrepOk(page, { operation, noMatchStatus, diagnosticError });
   if (page.count_exact) {
-    rememberCompleteSearch(cacheKey, page.matches, { freshness, timeoutMs: effectiveTimeoutMs });
+    if (cachePolicy !== 'bypass') rememberCompleteSearch(cacheKey, page.matches, { freshness, timeoutMs: effectiveTimeoutMs });
     const cachedComplete = completeSearchCache.get(cacheKey);
     if (cachedComplete && cachePolicy !== 'bypass') return pageFromComplete(cachedComplete, { offset, limit, cachePolicy, cacheHit: cachePolicy !== 'refresh' });
     const pageMatches = page.matches.slice(offset, offset + limit);

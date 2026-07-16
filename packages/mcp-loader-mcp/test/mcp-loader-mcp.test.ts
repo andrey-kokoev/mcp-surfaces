@@ -153,6 +153,21 @@ try {
   child.stdin.write(rpc('initialize', { protocolVersion: '2024-11-05' }, 1));
   child.stdin.write(rpc('tools/list', {}, 2));
 
+  const guidance = await call('tools/call', { name: 'mcp_loader_guidance', arguments: { workflow: 'discover', tool: 'mcp_loader_list_tools' } }, 35);
+  assert.equal(guidance?.schema, 'narada.mcp_surface.guidance.v0');
+  assert.equal(guidance?.surface_id, 'mcp-loader');
+  assert.equal(guidance?.guidance_tool, 'mcp_loader_guidance');
+  assert.deepEqual(guidance?.requested, { workflow: 'discover', tool: 'mcp_loader_list_tools' });
+  assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
+  assert.ok((guidance?.boundaries as string[]).some((boundary) => boundary.includes('does not own attached-surface domain policy')));
+
+  const emptyInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 36);
+  assert.equal(emptyInventory?.schema, 'narada.mcp_loader.connection_inventory.v1');
+  assert.equal(emptyInventory?.connection_count, 0);
+  assert.equal(emptyInventory?.available_slots, 8);
+  assert.equal(emptyInventory?.closed_count, 0);
+  assert.match(String(emptyInventory?.recovery?.note), /read-only/);
+
   const listResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: root } }, 3);
   assert.equal(listResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
   const surfaces = listResult?.surfaces as { surface_id: string }[];
@@ -267,6 +282,13 @@ try {
   assert.equal(fabricCall?.result?.structuredContent?.caller_agent_id, 'test.agent');
   assert.equal(fabricCall?.result?.structuredContent?.carrier_session_id, 'carrier-test');
   assert.equal(fabricCall?.result?.structuredContent?.site_id, 'test-site');
+  const liveInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 37);
+  const liveEntry = (liveInventory?.connections as Array<Record<string, any>>).find((entry) => entry.connection_id === fabricAttach?.connection_id);
+  assert.equal(liveEntry?.status, 'live');
+  assert.equal(liveEntry?.liveness, 'live');
+  assert.equal(typeof liveEntry?.age_ms, 'number');
+  assert.equal(liveEntry?.recovery_actions?.inspect?.tool_name, 'mcp_loader_surface_status');
+  assert.equal(liveEntry?.recovery_actions?.detach?.tool_name, 'mcp_loader_detach');
   const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
   assert.equal(fabricDetach?.termination?.status, 'terminated');
 
@@ -301,6 +323,25 @@ try {
   assert.notEqual(replacementCall?.result?.structuredContent?.pid, firstPid);
   const replacementDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: restart?.connection_id } }, 17);
   assert.equal(replacementDetach?.termination?.status, 'terminated');
+
+  const capacityBeforeFill = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 50);
+  const availableSlots = Number(capacityBeforeFill?.available_slots ?? 0);
+  for (let index = 0; index < availableSlots; index += 1) {
+    const attached = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable' } }, 60 + index);
+    assert.equal(attached?.schema, 'narada.mcp_loader.surface_attached.v1');
+  }
+  const capacityRefusal = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable' } }, 70);
+  assert.equal(capacityRefusal?.data?.code, 'max_connections_reached');
+  assert.equal(capacityRefusal?.data?.details?.available_slots, 0);
+  assert.ok(Array.isArray(capacityRefusal?.data?.details?.closed_connection_ids));
+  const fullInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 71);
+  assert.equal(fullInventory?.available_slots, 0);
+  assert.equal(fullInventory?.connection_count, fullInventory?.max_connections);
+  assert.equal(fullInventory?.closed_count, fullInventory?.closed_connection_ids?.length);
+  for (const entry of fullInventory?.connections as Array<Record<string, any>>) {
+    const detached = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: entry.connection_id } }, 80);
+    assert.ok(['terminated', 'already_exited'].includes(detached?.termination?.status));
+  }
 
   console.log('mcp-loader-mcp behavior ok');
 } finally {

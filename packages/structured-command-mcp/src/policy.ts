@@ -210,7 +210,59 @@ function buildMcpFallbacks(argv, reasons, cwd) {
     });
   }
 
+  if (command === 'git') {
+    const toolBySubcommand = {
+      add: 'git_add',
+      commit: 'git_commit',
+      diff: 'git_diff',
+      log: 'git_log',
+      push: 'git_push',
+      show: 'git_show',
+      status: 'git_status',
+    };
+    const toolName = toolBySubcommand[args[0]?.toLowerCase()] ?? 'git_status';
+    const fallbackArguments: Record<string, unknown> = { working_directory: cwd };
+    if (toolName === 'git_add') {
+      const paths = gitPathArgs(args.slice(1));
+      if (paths.length > 0) fallbackArguments.paths = paths;
+    }
+    if (toolName === 'git_commit') {
+      const message = gitOptionValue(args.slice(1), new Set(['-m', '--message']));
+      if (message) fallbackArguments.message = message;
+    }
+    fallbacks.push({
+      surface_id: 'git',
+      tool: toolName,
+      tool_name: toolName,
+      canonical_name: toolName,
+      purpose: 'git_operation',
+      arguments: fallbackArguments,
+    });
+  }
+
   return fallbacks;
+}
+
+function gitPathArgs(args) {
+  const paths = [];
+  let afterSeparator = false;
+  for (const rawArg of args) {
+    const arg = String(rawArg ?? '');
+    if (arg === '--') {
+      afterSeparator = true;
+      continue;
+    }
+    if (!afterSeparator && arg.startsWith('-')) continue;
+    if (arg) paths.push(arg);
+  }
+  return [...new Set(paths)];
+}
+
+function gitOptionValue(args, options) {
+  for (let index = 0; index < args.length; index += 1) {
+    if (options.has(String(args[index] ?? '')) && args[index + 1]) return String(args[index + 1]);
+  }
+  return null;
 }
 
 function firstSearchPatternArg(args) {

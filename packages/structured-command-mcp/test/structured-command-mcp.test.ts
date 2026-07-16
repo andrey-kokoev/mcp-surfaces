@@ -334,6 +334,14 @@ const refusedGitStatus = await exec({
 }, stateWithDefaultCommands);
 assert.equal(refusedGitStatus.status, 'refused');
 assert.deepEqual(refusedGitStatus.remediation_hints, ['Use the governed Git MCP tool git_status instead of shelling out to git.']);
+assert.deepEqual(refusedGitStatus.mcp_fallbacks, [{
+  surface_id: 'git',
+  tool: 'git_status',
+  tool_name: 'git_status',
+  canonical_name: 'git_status',
+  purpose: 'git_operation',
+  arguments: { working_directory: root },
+}]);
 
 const refusedSearch = await rpc({
   jsonrpc: '2.0',

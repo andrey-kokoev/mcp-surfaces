@@ -50,9 +50,16 @@ const proc = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning
 
 const lines = proc.stdout.trim().split('\n');
 const response = JSON.parse(lines[1] ?? lines[0]);
-assert.equal(response.result.tools.length, 5);
+assert.equal(response.result.tools.length, 6);
 const names = response.result.tools.map((t: Record<string, unknown>) => t.name);
-assert.deepEqual(names, ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor']);
+assert.deepEqual(new Set(names), new Set([
+  'cloudflare_carrier_guidance',
+  'cloudflare_product_read',
+  'cloudflare_session_status',
+  'cloudflare_health',
+  'cloudflare_doctor',
+  'cloudflare_carrier_health',
+]));
 
 const readTool = response.result.tools.find((t: Record<string, unknown>) => t.name === 'cloudflare_product_read');
 assert.equal(readTool.annotations.readOnlyHint, true);
@@ -63,6 +70,10 @@ assert.equal(sessTool.annotations.readOnlyHint, true);
 
 const healthTool = response.result.tools.find((t: Record<string, unknown>) => t.name === 'cloudflare_health');
 assert.equal(healthTool.annotations.readOnlyHint, true);
+
+const carrierHealthTool = response.result.tools.find((t: Record<string, unknown>) => t.name === 'cloudflare_carrier_health');
+assert.equal(carrierHealthTool.annotations.readOnlyHint, true);
+assert.deepEqual(carrierHealthTool.inputSchema.required, ['projection_id']);
 
 rmSync(root, { recursive: true, force: true });
 process.stderr.write('cloudflare-carrier-mcp protocol smoke ok\n');

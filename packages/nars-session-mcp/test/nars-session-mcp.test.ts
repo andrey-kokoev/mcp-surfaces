@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { createServer, type Socket } from 'node:net';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -87,6 +88,44 @@ test('discovers a bounded session from the canonical site-paths root', async () 
     assert.equal(result.sessions[0].session_id, 'session_test');
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('user-site operator projection resolves sessions only through the admitted Site registry', async () => {
+  const userRoot = mkdtempSync(join(tmpdir(), 'nars-session-mcp-user-site-'));
+  const siteRoot = mkdtempSync(join(tmpdir(), 'nars-session-mcp-user-child-'));
+  const registry = new DatabaseSync(join(userRoot, 'registry.db'));
+  try {
+    registry.exec('CREATE TABLE site_registry (site_id TEXT NOT NULL, site_root TEXT NOT NULL, created_at TEXT NOT NULL)');
+    registry.prepare('INSERT INTO site_registry (site_id, site_root, created_at) VALUES (?, ?, ?)').run('fixture-site', siteRoot, '2026-01-01T00:00:00Z');
+    const paths = resolveNaradaSitePaths({ siteRoot });
+    const sessionDir = join(paths.narsSessionsRoot, 'session_user_site');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(paths.narsSessionsRoot, 'index.json'), JSON.stringify({ sessions: [{ session_id: 'session_user_site', site_id: 'fixture-site' }] }));
+    writeFileSync(join(sessionDir, 'session-index-record.json'), JSON.stringify({
+      schema: 'narada.nars.session_index_record.v1',
+      session_id: 'session_user_site',
+      site_id: 'fixture-site',
+      site_root: siteRoot,
+      event_endpoint: null,
+    }));
+    registry.close();
+
+    const argv = ['--projection', 'user-site-operator', '--user-site-root', userRoot, '--source-kind', 'operator', '--operator-id', 'andrey'];
+    const config = configFromEnv({ USERPROFILE: userRoot }, argv);
+    assert.equal(config.scope, 'user_site');
+    assert.equal(config.sourceKind, 'operator');
+    assert.equal(config.sourceId, 'andrey');
+    assert.deepEqual(config.authorities.map((authority) => authority.siteId), ['fixture-site']);
+
+    const result = await createSessionClient({ USERPROFILE: userRoot }, argv).list({ include_health: false });
+    assert.equal(result.count, 1);
+    assert.equal(result.sessions[0].site_id, 'fixture-site');
+    assert.equal(result.sessions[0].site_root, siteRoot);
+  } finally {
+    try { registry.close(); } catch { /* already closed */ }
+    rmSync(userRoot, { recursive: true, force: true });
+    rmSync(siteRoot, { recursive: true, force: true });
   }
 });
 

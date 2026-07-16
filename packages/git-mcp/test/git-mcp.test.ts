@@ -214,8 +214,27 @@ assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).
 assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).unstaged, []);
 await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 
-const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit' }, state);
+const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit', expected_staged_paths: ['README.md'] }, state);
 assert.match(commitResult.commit, /^[0-9a-f]{40}$/);
+
+writeFileSync(join(repo, 'scope-a.txt'), 'a\n', 'utf8');
+writeFileSync(join(repo, 'scope-b.txt'), 'b\n', 'utf8');
+await gitAdd({ working_directory: repo, paths: ['scope-a.txt', 'scope-b.txt'] }, state);
+await assert.rejects(
+  () => gitCommit({ working_directory: repo, message: 'Reject unrelated staged path', scope_label: 'scope-a-only', expected_staged_paths: ['scope-a.txt'] }, state),
+  (error: any) => {
+    assert.equal(error.codeName, 'git_commit_staged_scope_mismatch');
+    assert.deepEqual(error.details.expected_staged_paths, ['scope-a.txt']);
+    assert.deepEqual(error.details.actual_staged_paths, ['scope-a.txt', 'scope-b.txt']);
+    assert.deepEqual(error.details.missing_paths, []);
+    assert.deepEqual(error.details.unexpected_paths, ['scope-b.txt']);
+    assert.equal(error.details.mutation_started, false);
+    assert.equal(error.details.atomic, true);
+    return true;
+  },
+);
+assert.deepEqual((await gitStatus({ working_directory: repo }, state)).staged, ['scope-a.txt', 'scope-b.txt']);
+await gitUnstage({ working_directory: repo, paths: ['scope-a.txt', 'scope-b.txt'] }, state);
 
 writeFileSync(join(repo, '.gitignore'), 'ignored-staging.txt\n', 'utf8');
 writeFileSync(join(repo, 'staging-safe.txt'), 'safe\n', 'utf8');

@@ -3,7 +3,7 @@ export type GuidanceToolDefinition = GuidanceRecord & { name: string; descriptio
 
 const SURFACE_ID = "cloudflare-carrier";
 const GUIDANCE_TOOL = "cloudflare_carrier_guidance";
-const PURPOSE = "Cloudflare-carrier live operations and continuity health inspection.";
+const PURPOSE = "Cloudflare-carrier live operations and continuity health inspection, including bounded joined projection readback.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -19,6 +19,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
       'Use bounded list/search/query tools for discovery, then show/read/detail tools before acting on a specific object.',
+      'When browser projection health and carrier health must be correlated, call cloudflare_carrier_health with only the projection id; the server-bound registry supplies the projection endpoint and credentials.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.'
     ],
     tool_preference: [
@@ -31,12 +32,15 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     examples: [
       { intent: 'First use', call: 'cloudflare_carrier_guidance({})' },
       { intent: 'Tool-specific help', call: "cloudflare_carrier_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "cloudflare_carrier_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Workflow-specific help', call: "cloudflare_carrier_guidance({ workflow: \"<workflow_name>\" })" },
+      { intent: 'Joined projection/carrier health', call: 'cloudflare_carrier_health({ projection_id: "<registered-projection-id>" })' }
     ],
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not infer carrier lineage from a projection id, NARS session id, site name, or URL; only explicit registry source_ref data may authorize the joined carrier read.',
+      'Do not treat projection browser-token health as carrier operator-session health; the two authorities remain separate.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [

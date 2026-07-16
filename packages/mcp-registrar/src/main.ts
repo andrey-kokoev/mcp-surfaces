@@ -136,7 +136,19 @@ type CarrierDef = {
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
+const USER_OPERATOR_ID = 'andrey';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
+const SURFACE_FEEDBACK_USER_SITE_ARGS = [
+  '--feedback-root', 'D:/code/mcp-surfaces',
+  '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+  '--site-id', 'andrey-user',
+  '--owned-surface-id', 'surface-feedback',
+  '--owned-surface-id', 'site-registry',
+  '--owned-surface-id', 'mcp-loader',
+  '--owned-surface-id', 'mcp-registrar',
+  '--owned-surface-id', 'launcher',
+  '--owned-surface-id', 'operator-routing',
+];
 
 const GIT_TOOLS = ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff', 'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push'];
 const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
@@ -144,13 +156,13 @@ const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox
 const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_evidence_supersede', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_compatibility_reconcile', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref', 'task_lifecycle_evidence_preflight', 'task_lifecycle_dependency_declare', 'task_lifecycle_dependency_disposition_record'];
 const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_cognition_defaults_update', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
 const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
-const MCP_LOADER_TOOLS = ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
+const MCP_LOADER_TOOLS = ['mcp_loader_guidance', 'mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
 const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'];
 const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
 const NARS_SESSION_TOOLS = ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_deliver', 'nars_session_input_status'];
 
 const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
-  'local-filesystem': ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor', 'fs_patch_outcome_show'],
+  'local-filesystem': ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_repository_inventory', 'fs_file_metrics', 'fs_doctor', 'fs_patch_outcome_show'],
   'structured-command': ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check'],
   git: ['git_guidance', 'git_policy_inspect', 'git_status', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show'],
   'site-inbox': ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'],
@@ -166,7 +178,7 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
   sop: ['sop_guidance', 'sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_status', 'sop_run_list', 'sop_run_events', 'sop_run_coverage_since'],
   scheduler: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
-  'mcp-loader': ['mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
+  'mcp-loader': ['mcp_loader_guidance', 'mcp_loader_policy_inspect', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
   'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'],
   'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
   launcher: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
@@ -174,7 +186,7 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'operator-routing': ['operator_route_doctor'],
   artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_message_part_create'],
   'nars-session': ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_status'],
-  'cloudflare-carrier': ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+  'cloudflare-carrier': ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor', 'cloudflare_carrier_health'],
   'site-coherence': ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor'],
 };
 
@@ -186,7 +198,7 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--mode', 'write', '--allowed-root', '{workspace_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
-    tools: ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_doctor', 'fs_patch_outcome_show', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
+    tools: ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_repository_inventory', 'fs_file_metrics', 'fs_doctor', 'fs_patch_outcome_show', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
   },
   {
     id: 'structured-command', package: 'structured-command-mcp',
@@ -353,7 +365,7 @@ const SURFACES: SurfaceDef[] = [
     id: 'surface-feedback', package: 'surface-feedback-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--feedback-root', 'D:/code/mcp-surfaces'],
+    args: SURFACE_FEEDBACK_USER_SITE_ARGS,
     tools: ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_convert_to_task', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
     injection_scope: 'user_site',
   },
@@ -422,8 +434,8 @@ const SURFACES: SurfaceDef[] = [
     id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
     entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
-    args: ['--repo-root', 'D:/code/narada', '--session-file', 'D:/code/narada/.narada/auth/cloudflare-operator-session.json'],
-    tools: ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor'],
+    args: ['--site-root', '{site_root}'],
+    tools: ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor', 'cloudflare_carrier_health'],
   },
   {
     id: 'site-coherence', package: 'site-coherence-mcp',
@@ -460,6 +472,29 @@ type SiteRegistryRow = {
 
 function comparableSiteRoot(root: string): string {
   return root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function projectionLaunchArgs(projection: McpSurfaceProjection): string[] {
+  if (projection.id !== 'user-site-operator') return [];
+  return [
+    '--projection', projection.id,
+    '--user-site-root', USER_NARADA_ROOT,
+    '--source-kind', 'operator',
+    '--operator-id', USER_OPERATOR_ID,
+  ];
+}
+
+function projectionEnvVars(surface: SurfaceDef, projection: McpSurfaceProjection): string[] {
+  if (projection.id === 'user-site-operator') {
+    return uniqueStrings([
+      'NARADA_OPERATOR_ID',
+      'NARADA_USER_SITE_ROOT',
+      'NARADA_SITE_REGISTRY_DB',
+      'NARADA_NARS_SESSION_ALLOW_STEER',
+      ...(projection.env_vars ?? []),
+    ]);
+  }
+  return uniqueStrings([...(surface.env_vars ?? []), ...(projection.env_vars ?? [])]);
 }
 
 function assertCanonicalSiteId(siteId: string, fieldName = 'site_id'): string {
@@ -546,6 +581,7 @@ const CARRIERS: CarrierDef[] = [
         'structured-command',
         'worker-delegation',
         'delegated-task',
+        'nars-session',
         'sop',
         'scheduler',
         'site-loop',
@@ -564,7 +600,7 @@ const CARRIERS: CarrierDef[] = [
     }],
     extra_allowed_roots: ['D:/code'],
     surface_overrides: {
-      'surface-feedback': { args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
+      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
     },
   },
   {
@@ -583,6 +619,7 @@ const CARRIERS: CarrierDef[] = [
         'structured-command',
         'worker-delegation',
         'delegated-task',
+        'nars-session',
         'sop',
         'scheduler',
         'site-loop',
@@ -601,7 +638,7 @@ const CARRIERS: CarrierDef[] = [
     }],
     extra_allowed_roots: ['D:/code'],
     surface_overrides: {
-      'surface-feedback': { args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
+      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
     },
   },
   {
@@ -620,6 +657,7 @@ const CARRIERS: CarrierDef[] = [
         'structured-command',
         'worker-delegation',
         'delegated-task',
+        'nars-session',
         'sop',
         'scheduler',
         'site-loop',
@@ -638,7 +676,7 @@ const CARRIERS: CarrierDef[] = [
     }],
     extra_allowed_roots: ['D:/code'],
     surface_overrides: {
-      'surface-feedback': { args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
+      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
     },
   },
 ];
@@ -1434,7 +1472,10 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
   const surface = lookupSurface(surfaceId);
   const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
   const projection = selected.projection;
-  const resolvedArgs = resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots);
+  const resolvedArgs = [
+    ...resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots),
+    ...projectionLaunchArgs(projection),
+  ];
   const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
@@ -1447,7 +1488,7 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
       args: resolvedArgs,
       surface,
       projection,
-      env_vars: uniqueStrings([...(surface.env_vars ?? []), ...(projection.env_vars ?? [])]),
+      env_vars: projectionEnvVars(surface, projection),
       ...naradaScope,
       narada_scope: naradaScope,
     },
@@ -2752,7 +2793,10 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef, projecti
   const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
   const workspaceRoot = siteWorkspaceRoot(site);
   const paths = sitePathInterpolation(site.root, workspaceRoot);
-  const resolvedArgs = surface.args.map((arg) => interpolateArg(arg, siteId, paths));
+  const resolvedArgs = [
+    ...surface.args.map((arg) => interpolateArg(arg, siteId, paths)),
+    ...projectionLaunchArgs(projection),
+  ];
   const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
   const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root, projection.id);
   const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId, projection.id);
@@ -2779,7 +2823,7 @@ export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef, projecti
           command: launch.command,
           args: launch.args,
           tools: surface.tools,
-          env_vars: uniqueStrings(['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT', ...(surface.env_vars ?? [])]),
+          env_vars: projectionEnvVars(surface, projection),
           surface_id: surfaceId,
           projection_id: projection.id,
           surface_projection: projectionMetadata(surfaceId, projection.id, runtimeKind),

@@ -9,7 +9,7 @@ const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const MUTATING_TOOL = 'nars_session_input_deliver';
 const PAYLOAD_TOOLS = [MUTATING_TOOL, 'nars_session_input_status'];
-const client = createSessionClient();
+const client = createSessionClient(process.env, process.argv.slice(2));
 
 export async function handleRequest(request: JsonRecord, requestClient = client): Promise<JsonRecord | null> {
   if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;

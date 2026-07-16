@@ -9,16 +9,18 @@ import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 const SERVER_NAME = 'surface-feedback-mcp';
-const SERVER_VERSION = '0.1.0';
+const SERVER_VERSION = '0.2.0';
 const PROTOCOL_VERSION = '2024-11-05';
 
 const FEEDBACK_KINDS = ['bug', 'improvement', 'gap', 'observation'] as const;
 const FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task', 'closed'] as const;
 const ACTIONABLE_FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task'] as const;
+const FEEDBACK_READ_SCOPES = ['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'] as const;
 const HANDOFF_LEASE_MS = 120_000;
 const HANDOFF_LEASE_RENEW_MS = 30_000;
 
 type JsonRecord = Record<string, unknown>;
+type FeedbackReadScope = typeof FEEDBACK_READ_SCOPES[number];
 type TaskLifecycleRequest = (request: JsonRecord) => Promise<JsonRecord>;
 type AuthoritySource = 'server_config' | 'unconfigured';
 type TaskLifecycleRootSource = 'option' | 'task_lifecycle_env' | 'site_root_env' | 'feedback_root_fallback';
@@ -328,21 +330,21 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_list',
-      description: 'List feedback entries scoped by caller site visibility. When caller_site_id is provided, entries are filtered to: (a) feedback for surfaces in owned_surface_ids, and (b) feedback submitted by the caller site. When absent, returns all feedback.',
+      description: 'List feedback entries using the required server-bound read scope. all_authorized is the canonical cross-site view; authority_visible, owned_surfaces, and authority_site_submissions are narrower server-bound views. Submitter-site visibility uses declared metadata, not authenticated provenance.',
       inputSchema: {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Filter by surface identifier.' },
-          submitter_site_id: { type: 'string', description: 'Filter by submitter site ID.' },
+          submitter_site_id_filter: { type: 'string', description: 'Optional metadata filter by declared submitter site ID; this never grants or changes authorization.' },
           kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Filter by feedback kind.' },
           status: { type: 'string', enum: FEEDBACK_STATUSES, description: 'Filter by status.' },
-          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
-          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site. When provided with caller_site_id, the caller also sees all feedback for these surfaces.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
           since: { type: 'string', description: 'ISO 8601 start date.' },
           until: { type: 'string', description: 'ISO 8601 end date.' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
+        required: ['scope'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_list', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -350,20 +352,20 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_actionable_queue',
-      description: 'Return one bounded actionable feedback queue with visibility scoping, conversion linkage, and optional linked task lifecycle state.',
+      description: 'Return one bounded actionable feedback queue using the required server-bound read scope. all_authorized is the canonical cross-site queue; narrower scopes are explicit. Submitter-site visibility uses declared metadata, not authenticated provenance.',
       inputSchema: {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Optional filter by surface identifier.' },
-          submitter_site_id: { type: 'string', description: 'Optional filter by submitter site ID.' },
+          submitter_site_id_filter: { type: 'string', description: 'Optional metadata filter by declared submitter site ID; this never grants or changes authorization.' },
           kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Optional filter by feedback kind.' },
-          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
-          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
           since: { type: 'string', description: 'ISO 8601 start date.' },
           until: { type: 'string', description: 'ISO 8601 end date.' },
           limit: { type: 'number', default: 50 },
           offset: { type: 'number', default: 0 },
         },
+        required: ['scope'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_actionable_queue', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -371,15 +373,14 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_show',
-      description: 'Show one feedback entry by feedback_id, scoped by visibility when caller_site_id is provided.',
+      description: 'Show one feedback entry by feedback_id using the required server-bound read scope. An entry outside that scope is reported as not found.',
       inputSchema: {
         type: 'object',
         properties: {
           feedback_id: { type: 'string' },
-          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
-          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
         },
-        required: ['feedback_id'],
+        required: ['feedback_id', 'scope'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_show', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -387,14 +388,14 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_stats',
-      description: 'Return aggregated feedback counts by surface, kind, and status, scoped by caller site visibility.',
+      description: 'Return aggregated feedback counts by surface, kind, and status using an explicit server-bound read scope.',
       inputSchema: {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Optional surface ID filter.' },
-          caller_site_id: { type: 'string', description: 'Caller site ID for visibility scoping.' },
-          owned_surface_ids: { type: 'array', items: { type: 'string' }, description: 'Surface IDs owned/maintained by the caller site.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
         },
+        required: ['scope'],
         additionalProperties: false,
       },
       annotations: { title: 'surface_feedback_stats', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -1468,33 +1469,138 @@ function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
   };
 }
 
-function visibilityClause(callerSiteId: string | null, ownedSurfaceIds: string[]): { sql: string; params: string[] } {
-  if (!callerSiteId) return { sql: '', params: [] };
-  if (ownedSurfaceIds.length > 0) {
-    const placeholders = ownedSurfaceIds.map(() => '?').join(', ');
-    return { sql: ` AND (submitter_site_id = ? OR surface_id IN (${placeholders}))`, params: [callerSiteId, ...ownedSurfaceIds] };
+function feedbackReadScope(args: JsonRecord): FeedbackReadScope {
+  const legacyFields = ['caller_site_id', 'owned_surface_ids'].filter((field) => args[field] !== undefined);
+  if (legacyFields.length > 0) {
+    throw diagnosticError('feedback_read_scope_server_bound', 'feedback_read_scope_server_bound', {
+      forbidden_fields: legacyFields,
+      required_field: 'scope',
+      allowed_scopes: [...FEEDBACK_READ_SCOPES],
+      remediation: 'Use the required explicit scope: all_authorized, authority_visible, owned_surfaces, or authority_site_submissions. Site identity and owned surfaces are bound by the server.',
+    });
   }
-  return { sql: ' AND submitter_site_id = ?', params: [callerSiteId] };
+  if (args.submitter_site_id !== undefined) {
+    throw diagnosticError('feedback_read_filter_renamed', 'feedback_read_filter_renamed', {
+      forbidden_field: 'submitter_site_id',
+      replacement_field: 'submitter_site_id_filter',
+      remediation: 'Use submitter_site_id_filter for an explicit declared-metadata filter; it never changes authorization.',
+    });
+  }
+  if (args.scope === undefined || args.scope === null || (typeof args.scope === 'string' && !args.scope.trim())) {
+    throw diagnosticError('feedback_read_scope_required', 'feedback_read_scope_required', {
+      allowed_scopes: [...FEEDBACK_READ_SCOPES],
+      remediation: 'Provide one explicit read scope; do not rely on an implicit default.',
+    });
+  }
+  if (typeof args.scope !== 'string') {
+    throw diagnosticError('feedback_invalid_read_scope', 'feedback_invalid_read_scope', {
+      scope: args.scope,
+      allowed_scopes: [...FEEDBACK_READ_SCOPES],
+    });
+  }
+  const raw = args.scope.trim();
+  if (!FEEDBACK_READ_SCOPES.includes(raw as FeedbackReadScope)) {
+    throw diagnosticError('feedback_invalid_read_scope', `feedback_invalid_read_scope:${raw}`, {
+      scope: raw,
+      allowed_scopes: [...FEEDBACK_READ_SCOPES],
+    });
+  }
+  return raw as FeedbackReadScope;
 }
 
-function ownedSurfaceIds(args: JsonRecord): string[] {
-  const raw = args.owned_surface_ids;
-  if (Array.isArray(raw)) return raw.map((v) => String(v).trim()).filter(Boolean);
-  return [];
+function feedbackReadScopeQuery(args: JsonRecord, state: FeedbackState): { sql: string; params: string[]; read_scope: JsonRecord } {
+  const scope = feedbackReadScope(args);
+  if (scope === 'all_authorized') {
+    if (!samePath(state.feedbackRoot, state.canonicalFeedbackRoot)) {
+      throw diagnosticError('feedback_global_read_requires_canonical_store', 'feedback_global_read_requires_canonical_store', {
+        scope,
+        feedback_root: state.feedbackRoot,
+        canonical_feedback_root: state.canonicalFeedbackRoot,
+        storage_posture: 'noncanonical_feedback_root',
+        remediation: `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`,
+      });
+    }
+    if (!state.authoritySiteId) {
+      throw diagnosticError('feedback_global_read_requires_server_authority', 'feedback_global_read_requires_server_authority', {
+        scope,
+        remediation: 'Configure --site-id or NARADA_SITE_ID on the serving User Site projection.',
+      });
+    }
+    return {
+      sql: '',
+      params: [],
+      read_scope: {
+        mode: scope,
+        scope_limited: false,
+        authorization_basis: 'canonical_feedback_store_and_server_binding',
+        authority_site_id: state.authoritySiteId,
+      },
+    };
+  }
+  if (!state.authoritySiteId) {
+    throw diagnosticError('feedback_read_scope_requires_server_authority', 'feedback_read_scope_requires_server_authority', {
+      scope,
+      remediation: 'Configure NARADA_SITE_ID or --site-id before using an authority-bound read scope.',
+    });
+  }
+  if (scope === 'authority_site_submissions') {
+    return {
+      sql: ' AND submitter_site_id = ?',
+      params: [state.authoritySiteId],
+      read_scope: {
+        mode: scope,
+        scope_limited: true,
+        authorization_basis: 'server_bound_site_authority_metadata_filter',
+        authority_site_id: state.authoritySiteId,
+        declared_submitter_site_id: state.authoritySiteId,
+        metadata_only: true,
+        provenance_authenticated: false,
+      },
+    };
+  }
+  const ownedSurfaceIds = state.authorityOwnedSurfaceIds;
+  if (scope === 'owned_surfaces') {
+    const readScope = {
+      mode: scope,
+      scope_limited: true,
+      authorization_basis: 'server_bound_surface_ownership',
+      authority_site_id: state.authoritySiteId,
+      surface_ids: [...ownedSurfaceIds],
+    };
+    if (ownedSurfaceIds.length === 0) return { sql: ' AND 0 = 1', params: [], read_scope: readScope };
+    const placeholders = ownedSurfaceIds.map(() => '?').join(', ');
+    return { sql: ` AND surface_id IN (${placeholders})`, params: ownedSurfaceIds, read_scope: readScope };
+  }
+  const readScope = {
+    mode: scope,
+    scope_limited: true,
+    authorization_basis: 'server_bound_authority_visibility',
+    authority_site_id: state.authoritySiteId,
+    surface_ids: [...ownedSurfaceIds],
+    declared_submitter_metadata: true,
+    provenance_authenticated: false,
+  };
+  if (ownedSurfaceIds.length === 0) {
+    return { sql: ' AND submitter_site_id = ?', params: [state.authoritySiteId], read_scope: readScope };
+  }
+  const placeholders = ownedSurfaceIds.map(() => '?').join(', ');
+  return {
+    sql: ` AND (submitter_site_id = ? OR surface_id IN (${placeholders}))`,
+    params: [state.authoritySiteId, ...ownedSurfaceIds],
+    read_scope: readScope,
+  };
 }
 
 function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   const limit = clamp(integer(args.limit, 50, 1, 200), 1, 200);
   const offset = Math.max(0, integer(args.offset, 0, 0, 10000));
   const surfaceId = optionalString(args.surface_id);
-  const siteId = optionalString(args.submitter_site_id);
+  const siteId = optionalString(args.submitter_site_id_filter);
   const kind = optionalString(args.kind);
   const status = optionalString(args.status);
-  const callerSiteId = optionalString(args.caller_site_id);
-  const owned = ownedSurfaceIds(args);
   const since = optionalString(args.since);
   const until = optionalString(args.until);
-  const vis = visibilityClause(callerSiteId, owned);
+  const readScope = feedbackReadScopeQuery(args, state);
   let sql = 'SELECT * FROM feedback_entries WHERE 1=1';
   const params: (string | number)[] = [];
   if (surfaceId) { sql += ' AND surface_id = ?'; params.push(surfaceId); }
@@ -1503,25 +1609,23 @@ function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   if (status) { sql += ' AND status = ?'; params.push(status); }
   if (since) { sql += ' AND created_at >= ?'; params.push(since); }
   if (until) { sql += ' AND created_at <= ?'; params.push(until); }
-  sql += vis.sql;
-  params.push(...vis.params);
+  sql += readScope.sql;
+  params.push(...readScope.params);
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
-  return { store: storeIdentity(state), items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
+  return { store: storeIdentity(state), read_scope: readScope.read_scope, items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
 }
 
 function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRecord {
   const limit = clamp(integer(args.limit, 50, 1, 200), 1, 200);
   const offset = Math.max(0, integer(args.offset, 0, 0, 10000));
   const surfaceId = optionalString(args.surface_id);
-  const siteId = optionalString(args.submitter_site_id);
+  const siteId = optionalString(args.submitter_site_id_filter);
   const kind = optionalString(args.kind);
-  const callerSiteId = optionalString(args.caller_site_id);
-  const owned = ownedSurfaceIds(args);
   const since = optionalString(args.since);
   const until = optionalString(args.until);
-  const vis = visibilityClause(callerSiteId, owned);
+  const readScope = feedbackReadScopeQuery(args, state);
   const statusPlaceholders = ACTIONABLE_FEEDBACK_STATUSES.map(() => '?').join(', ');
   let fromWhere = `FROM feedback_entries WHERE status IN (${statusPlaceholders})`;
   const params: (string | number)[] = [...ACTIONABLE_FEEDBACK_STATUSES];
@@ -1530,8 +1634,8 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
   if (kind) { fromWhere += ' AND kind = ?'; params.push(kind); }
   if (since) { fromWhere += ' AND created_at >= ?'; params.push(since); }
   if (until) { fromWhere += ' AND created_at <= ?'; params.push(until); }
-  fromWhere += vis.sql;
-  params.push(...vis.params);
+  fromWhere += readScope.sql;
+  params.push(...readScope.params);
   const countRow = state.db.prepare(`SELECT COUNT(*) AS total ${fromWhere}`).get(...params) as JsonRecord;
   const rows = state.db.prepare(`SELECT * ${fromWhere} ORDER BY updated_at DESC, created_at DESC, feedback_id ASC LIMIT ? OFFSET ?`).all(...params, limit, offset) as JsonRecord[];
   const totalCount = Number(countRow.total ?? 0);
@@ -1558,6 +1662,7 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
     schema: 'narada.surface_feedback.actionable_queue.v1',
     status: 'ok',
     store: storeIdentity(state),
+    read_scope: readScope.read_scope,
     actionable_statuses: [...ACTIONABLE_FEEDBACK_STATUSES],
     items,
     count: items.length,
@@ -1571,13 +1676,12 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
 
 function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
   const feedbackId = requiredString(args.feedback_id, 'feedback_requires_feedback_id');
-  const callerSiteId = optionalString(args.caller_site_id);
-  const owned = ownedSurfaceIds(args);
-  const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
+  const readScope = feedbackReadScopeQuery(args, state);
+  const row = state.db.prepare(`SELECT * FROM feedback_entries WHERE feedback_id = ?${readScope.sql}`).get(feedbackId, ...readScope.params) as JsonRecord | undefined;
   if (!row) throw feedbackNotFound(feedbackId, state);
-  if (!isVisible(row, callerSiteId, owned)) throw diagnosticError('feedback_not_visible', `feedback_not_visible:${feedbackId}`);
   return {
     ...hydrateFeedback(row),
+    read_scope: readScope.read_scope,
     audit_events: feedbackEventHistory(state, feedbackId),
     task_handoff: buildTaskHandoffReadback(readFeedbackTaskHandoff(state, feedbackId)),
     store: storeIdentity(state),
@@ -1586,17 +1690,15 @@ function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
 
 function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
   const surfaceId = optionalString(args.surface_id);
-  const callerSiteId = optionalString(args.caller_site_id);
-  const owned = ownedSurfaceIds(args);
-  const vis = visibilityClause(callerSiteId, owned);
+  const readScope = feedbackReadScopeQuery(args, state);
   const bySurface: Record<string, number> = {};
   const byKind: Record<string, number> = {};
   const byStatus: Record<string, number> = {};
   let sql = 'SELECT surface_id, kind, status FROM feedback_entries WHERE 1=1';
   const params: string[] = [];
   if (surfaceId) { sql += ' AND surface_id = ?'; params.push(surfaceId); }
-  sql += vis.sql;
-  params.push(...vis.params);
+  sql += readScope.sql;
+  params.push(...readScope.params);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
   for (const row of rows) {
     const s = String(row.surface_id);
@@ -1606,7 +1708,7 @@ function feedbackStats(args: JsonRecord, state: FeedbackState): JsonRecord {
     byKind[k] = (byKind[k] ?? 0) + 1;
     byStatus[st] = (byStatus[st] ?? 0) + 1;
   }
-  return { store: storeIdentity(state), by_surface: bySurface, by_kind: byKind, by_status: byStatus, total: rows.length };
+  return { store: storeIdentity(state), read_scope: readScope.read_scope, by_surface: bySurface, by_kind: byKind, by_status: byStatus, total: rows.length };
 }
 
 function isVisible(row: JsonRecord, callerSiteId: string | null, ownedSurfaceIds: string[]): boolean {

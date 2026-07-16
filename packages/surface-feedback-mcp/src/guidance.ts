@@ -24,6 +24,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
+      { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Use all_authorized only against the canonical feedback store with server-bound User Site authority; use authority_visible for the server-bound union of entries whose declared submitter site matches that Site and its owned surfaces, owned_surfaces for only owned surfaces, or authority_site_submissions for declared submitter-site metadata.' },
       { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for one bounded queue of submitted, acknowledged, routed, and converted feedback; it includes task links and projected task state when available.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
       { step: 'convert', guidance: 'Use surface_feedback_convert_to_task for one visible feedback entry when a governed task handoff is intended; it creates and links through task-lifecycle and returns the next authoritative action.' },
@@ -39,6 +40,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
+      'Do not pass caller_site_id or owned_surface_ids to read tools; use the required explicit scope field. A zero result is only meaningful within the returned read_scope.',
+      'Do not confuse submitter_site_id_filter with authorization: it filters declared metadata only and never establishes provenance or access.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
@@ -63,6 +66,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
       'Task lifecycle state in actionable queue results is an optional feedback projection; it is not a replacement for authoritative task-lifecycle readback.',
       'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
+      'Read scope is explicit and server-bound: all_authorized requires the canonical feedback store plus server authority; authority_visible, owned_surfaces, and authority_site_submissions require configured server authority.',
+      'The submitter site recorded in feedback is declarative metadata supplied at submission time; authority_site_submissions is a metadata filter, not authenticated provenance.',
       'Mutation authority is bound when the server starts; callers must not supply caller_site_id or owned_surface_ids to mutation tools.',
       'Mutation audit identity is derived from server authority; caller-supplied resolved_by compatibility fields are ignored.',
       'The owning MCP surface remains authoritative for state and enforcement.'

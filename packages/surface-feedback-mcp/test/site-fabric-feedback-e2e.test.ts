@@ -70,9 +70,10 @@ try {
 
   const listed = structured(await server.client.request(5, 'tools/call', {
     name: 'surface_feedback_list',
-    arguments: { status: 'converted_to_task', limit: 10 },
+    arguments: { scope: 'all_authorized', status: 'converted_to_task', limit: 10 },
   }));
   assert.equal(listed.count, 1, JSON.stringify(listed));
+  assert.equal((listed.read_scope as JsonRecord).mode, 'all_authorized');
 
   console.log(JSON.stringify({ status: 'passed', test_id: 'surface-feedback.site-fabric.feedback-to-task', site_root: siteRoot, task_number: converted.task_number, cleanup: 'pending_until_finally' }));
 } finally {

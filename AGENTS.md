@@ -65,9 +65,12 @@ When a model is unfamiliar with a surface, uncertain about the correct workflow,
 Agents can submit feedback about any MCP surface via `@narada2/surface-feedback-mcp`:
 
 - `surface_feedback_submit` — submit a bug, improvement, gap, or observation about a surface.
-- `surface_feedback_list` — list feedback with visibility scoping.
-- `surface_feedback_show` — show one feedback entry.
-- `surface_feedback_stats` — aggregated counts by surface, kind, and status.
+- `surface_feedback_list` — list feedback with an explicit server-bound read scope.
+- `surface_feedback_actionable_queue` — read the bounded actionable queue with an explicit server-bound read scope.
+- `surface_feedback_show` — show one feedback entry within an explicit read scope.
+- `surface_feedback_stats` — aggregated counts by surface, kind, and status within an explicit read scope.
+
+Read calls must pass `scope` explicitly. `all_authorized` requires the canonical feedback store and server-bound User Site authority; `authority_visible`, `owned_surfaces`, and `authority_site_submissions` are narrower server-bound views. Submitter-site visibility compares server-bound authority to declared metadata and is not authenticated provenance; `submitter_site_id_filter` is declarative metadata filtering only and never establishes provenance or authorization.
 
 Kinds:
 

@@ -73,6 +73,20 @@ assert.equal(doctorContent.health_file_exists, true);
 assert.equal(doctorContent.health_status, 'ok');
 assert.equal(doctorContent.operator_action, null);
 
+const siteBoundState = createServerState({
+  repoRoot: root,
+  site_root: root,
+  workerUrl: 'https://cloudflare.example.test',
+});
+const siteBoundDoctor = await handleRequest({
+  jsonrpc: '2.0', id: 11, method: 'tools/call',
+  params: { name: 'cloudflare_doctor', arguments: {} },
+}, siteBoundState);
+assert.equal(
+  (siteBoundDoctor.result as any).structuredContent.projection_registry_root,
+  join(root, '.narada', 'crew', 'nars-projections').replace(/\\/g, '/'),
+);
+
 const sessionStatus = await handleRequest({
   jsonrpc: '2.0', id: 2, method: 'tools/call',
   params: { name: 'cloudflare_session_status', arguments: {} },
@@ -123,6 +137,142 @@ const missingHealth = await handleRequest({
   params: { name: 'cloudflare_health', arguments: { health_file: join(root, 'nonexistent.json') } },
 }, state);
 assert.equal((missingHealth.result as any).structuredContent.status, 'missing');
+
+writeFileSync(sessionFile, JSON.stringify({
+  cookie: 'narada_operator_session=fresh_cookie_value',
+  captured_at: new Date().toISOString(),
+  worker_url: 'https://cloudflare.example.test',
+}));
+
+const projectionRegistryRoot = join(root, 'projection-registry');
+const joinedProjectionDir = join(projectionRegistryRoot, 'proj_health');
+mkdirSync(joinedProjectionDir, { recursive: true });
+writeFileSync(join(joinedProjectionDir, 'intent.json'), JSON.stringify({
+  projection_id: 'proj_health',
+  site_id: 'sonar',
+  nars_session_id: 'carrier_health_session',
+  source_ref: { kind: 'cloudflare_carrier', carrier_session_id: 'carrier_health_session', operation_id: null },
+  projection_api_base_url: 'https://projection.example.test',
+  lifecycle_state: 'active',
+}));
+writeFileSync(join(joinedProjectionDir, 'remote-access.json'), JSON.stringify({
+  projection_id: 'proj_health',
+  site_id: 'sonar',
+  nars_session_id: 'carrier_health_session',
+  source_ref: { kind: 'cloudflare_carrier', carrier_session_id: 'carrier_health_session', operation_id: null },
+  projection_api_base_url: 'https://projection.example.test',
+  lifecycle_state: 'active',
+  browser_access_tokens: [{ kind: 'browser', status: 'active', token_fingerprint: 'fingerprint:proj_health:browser' }],
+}));
+
+let carrierMode: 'unauthorized' | 'ok' = 'unauthorized';
+const carrierCalls: Array<{ body: any; cookie: string | null }> = [];
+const fetchImpl: typeof fetch = async (input, init: RequestInit = {}) => {
+  const url = String(input);
+  if (url.endsWith('/health')) {
+    return new Response(JSON.stringify({
+      schema: 'narada.cloudflare_nars_projection.health.v1',
+      status: 'healthy',
+      projection_id: 'proj_health',
+      last_event_sequence: 68,
+      last_projected_at: '2026-07-15T18:00:00.000Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  if (url.includes('/events?')) {
+    return new Response(JSON.stringify({ status: 'ok', cursor: { last_sequence: 68 }, events: [] }), { status: 200 });
+  }
+  if (url.endsWith('/api/carrier')) {
+    const headers = new Headers(init.headers);
+    carrierCalls.push({ body: JSON.parse(String(init.body ?? '{}')), cookie: headers.get('cookie') });
+    if (carrierMode === 'unauthorized') return new Response(JSON.stringify({ code: 'operator_session_unauthorized' }), { status: 401 });
+    return new Response(JSON.stringify({ ok: true, site_product_status: { health: 'ready', next_action: 'monitor_sites' } }), { status: 200 });
+  }
+  return new Response(JSON.stringify({ status: 'not_found' }), { status: 404 });
+};
+
+const joinedState = createServerState({
+  repoRoot: root,
+  workerUrl: 'https://cloudflare.example.test',
+  projectionRegistryRoot,
+  fetch_impl: fetchImpl,
+});
+const joinedUnauthorized = await handleRequest({
+  jsonrpc: '2.0', id: 6, method: 'tools/call',
+  params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_health' } },
+}, joinedState);
+const joinedUnauthorizedContent = (joinedUnauthorized.result as any).structuredContent;
+assert.equal(joinedUnauthorizedContent.status, 'degraded');
+assert.equal(joinedUnauthorizedContent.code, 'carrier_api_unauthorized_projection_available');
+assert.equal(joinedUnauthorizedContent.projection.status, 'healthy');
+assert.equal(joinedUnauthorizedContent.projection.lineage_status, 'matched');
+assert.equal(joinedUnauthorizedContent.carrier_api.status, 'unauthorized');
+assert.equal(joinedUnauthorizedContent.carrier_api.auth_source, 'operator_session_file');
+assert.equal(JSON.stringify(joinedUnauthorizedContent).includes('fingerprint:proj_health:browser'), false);
+
+writeFileSync(sessionFile, JSON.stringify({
+  cookie: 'narada_operator_session=rotated_cookie_value',
+  captured_at: new Date().toISOString(),
+  worker_url: 'https://cloudflare.example.test',
+}));
+carrierMode = 'ok';
+const joinedHealthy = await handleRequest({
+  jsonrpc: '2.0', id: 7, method: 'tools/call',
+  params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_health' } },
+}, joinedState);
+const joinedHealthyContent = (joinedHealthy.result as any).structuredContent;
+assert.equal(joinedHealthyContent.status, 'healthy');
+assert.equal(joinedHealthyContent.carrier_api.status, 'ok');
+assert.equal(carrierCalls.at(-1)?.cookie, 'narada_operator_session=rotated_cookie_value');
+
+const unknownProjectionDir = join(projectionRegistryRoot, 'proj_unknown');
+mkdirSync(unknownProjectionDir, { recursive: true });
+writeFileSync(join(unknownProjectionDir, 'intent.json'), JSON.stringify({
+  projection_id: 'proj_unknown',
+  site_id: 'sonar',
+  nars_session_id: 'unrelated_session_name',
+  projection_api_base_url: 'https://projection.example.test',
+  lifecycle_state: 'active',
+}));
+writeFileSync(join(unknownProjectionDir, 'remote-access.json'), JSON.stringify({
+  projection_id: 'proj_unknown',
+  site_id: 'sonar',
+  browser_access_tokens: [{ kind: 'browser', status: 'active', token_fingerprint: 'fingerprint:proj_unknown:browser' }],
+}));
+const carrierCallCountBeforeUnknown = carrierCalls.length;
+const unknownLineage = await handleRequest({
+  jsonrpc: '2.0', id: 8, method: 'tools/call',
+  params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_unknown' } },
+}, joinedState);
+const unknownLineageContent = (unknownLineage.result as any).structuredContent;
+assert.equal(unknownLineageContent.status, 'unverified');
+assert.equal(unknownLineageContent.code, 'projection_lineage_unknown');
+assert.equal(unknownLineageContent.projection.status, 'healthy');
+assert.equal(unknownLineageContent.carrier_api.status, 'not_checked');
+assert.equal(carrierCalls.length, carrierCallCountBeforeUnknown);
+
+const legacyProjectionDir = join(projectionRegistryRoot, 'proj_legacy_registration');
+mkdirSync(legacyProjectionDir, { recursive: true });
+writeFileSync(join(legacyProjectionDir, 'intent.json'), JSON.stringify({
+  projection_id: 'proj_legacy_registration',
+  site_id: 'sonar',
+  nars_session_id: 'carrier_health_session',
+  remote_registration: { endpoint: 'https://projection.example.test/api/nars/projections/register' },
+  lifecycle_state: 'active',
+}));
+writeFileSync(join(legacyProjectionDir, 'remote-access.json'), JSON.stringify({
+  projection_id: 'proj_legacy_registration',
+  site_id: 'sonar',
+  browser_access_tokens: [{ kind: 'browser', status: 'active', token_fingerprint: 'fingerprint:proj_legacy_registration:browser' }],
+}));
+const legacyRead = await handleRequest({
+  jsonrpc: '2.0', id: 9, method: 'tools/call',
+  params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_legacy_registration' } },
+}, joinedState);
+const legacyReadContent = (legacyRead.result as any).structuredContent;
+assert.equal(legacyReadContent.status, 'unverified');
+assert.equal(legacyReadContent.code, 'projection_lineage_unknown');
+assert.equal(legacyReadContent.projection.status, 'healthy');
+assert.equal(carrierCalls.length, carrierCallCountBeforeUnknown);
 
 rmSync(root, { recursive: true, force: true });
 process.stderr.write('cloudflare-carrier-mcp behavior ok\n');

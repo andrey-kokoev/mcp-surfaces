@@ -297,13 +297,26 @@ try {
   assert.ok((bySurface.get('sop')?.tools as string[]).includes('sop_doctor'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_fabric_diagnostics'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_tool_inventory_check'));
+  assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_guidance'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_status'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_surface_restart'));
   assert.equal(bySurface.get('mcp-loader')?.injection_scope, 'user_site');
   assert.equal(bySurface.get('mcp-loader')?.default_injection, 'all_site_bound_sessions');
   assert.equal(bySurface.get('mcp-loader')?.restart_owner, 'user_site');
-  assert.ok((bySurface.get('surface-feedback')?.tools as string[]).includes('surface_feedback_import'));
-  assert.ok((bySurface.get('surface-feedback')?.tools as string[]).includes('surface_feedback_actionable_queue'));
+  const surfaceFeedback = bySurface.get('surface-feedback');
+  assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_import'));
+  assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_actionable_queue'));
+  assert.deepEqual(surfaceFeedback?.args, [
+    '--feedback-root', 'D:/code/mcp-surfaces',
+    '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+    '--site-id', 'andrey-user',
+    '--owned-surface-id', 'surface-feedback',
+    '--owned-surface-id', 'site-registry',
+    '--owned-surface-id', 'mcp-loader',
+    '--owned-surface-id', 'mcp-registrar',
+    '--owned-surface-id', 'launcher',
+    '--owned-surface-id', 'operator-routing',
+  ]);
 
   const localFilesystemEntrypoint = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
   const observedLocalFilesystemTools = await observeToolsList(localFilesystemEntrypoint, [
@@ -906,13 +919,21 @@ try {
       package: 'surface-feedback-mcp',
       entrypoint: 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
       kind: 'mcp_surface',
-      args: ['--feedback-root', 'D:/code/mcp-surfaces'],
+      args: [
+        '--feedback-root', 'D:/code/mcp-surfaces',
+        '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+        '--site-id', 'narada-staccato',
+        '--owned-surface-id', 'surface-feedback',
+      ],
       tools: ['surface_feedback_submit'],
     },
   );
   const surfaceFeedbackServer = (surfaceFeedbackBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-surface-feedback'];
   assertRuntimeProxy(surfaceFeedbackServer, 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
+  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--canonical-feedback-root') + 1], 'D:/code/mcp-surfaces');
+  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--site-id') + 1], 'narada-staccato');
+  assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--owned-surface-id') + 1], 'surface-feedback');
 
   const scopeReadbackRoot = join(root, 'scope-readback-site');
   mkdirSync(join(scopeReadbackRoot, '.ai', 'mcp'), { recursive: true });
@@ -1055,6 +1076,9 @@ try {
     const content = readFileSync(outputPath, 'utf8');
     assert.match(content, /surface-feedback/);
     assert.match(content, /--feedback-root/);
+    assert.match(content, /--canonical-feedback-root/);
+    assert.match(content, /--site-id/);
+    assert.match(content, /--owned-surface-id/);
     assert.match(content, /D:\/code\/mcp-surfaces/);
     assert.doesNotMatch(content, /--feedback-root["',\s\]]+[A-Z]:\/code\/narada(?!\/mcp-surfaces)/i);
     if (carrierId === 'codex-andrey') {
@@ -1192,7 +1216,13 @@ try {
       'narada-sonar-surface-feedback': {
         transport: 'stdio',
         command: 'node',
-        args: ['D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js', '--feedback-root', 'D:/code/mcp-surfaces'],
+        args: [
+          'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js',
+          '--feedback-root', 'D:/code/mcp-surfaces',
+          '--canonical-feedback-root', 'D:/code/mcp-surfaces',
+          '--site-id', 'narada-sonar',
+          '--owned-surface-id', 'surface-feedback',
+        ],
         tools: [
           'surface_feedback_guidance',
           'surface_feedback_doctor',

@@ -19,9 +19,11 @@ try {
   }
 
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'mcp-loader-mcp' });
-  const tools = protocol.tools.tools as { name: string; annotations: { readOnlyHint: boolean } }[];
+  const tools = protocol.tools.tools as { name: string; description: string; annotations: Record<string, unknown>; inputSchema: Record<string, any>; outputSchema: Record<string, any> }[];
   assert.deepEqual(tools.map((t) => t.name), [
+    'mcp_loader_guidance',
     'mcp_loader_policy_inspect',
+    'mcp_loader_connection_inventory',
     'mcp_loader_list_site_surfaces',
     'mcp_loader_site_fabric_diagnostics',
     'mcp_loader_site_tool_inventory_check',
@@ -34,8 +36,21 @@ try {
     'mcp_loader_surface_restart',
   ]);
 
+  const guidanceTool = tools.find((t) => t.name === 'mcp_loader_guidance');
+  assert.equal(guidanceTool?.description, 'Show model-facing operating guidance for mcp-loader MCP workflows.');
+  assert.equal(guidanceTool?.annotations.readOnlyHint, true);
+  assert.equal(guidanceTool?.annotations.idempotentHint, true);
+  assert.equal(guidanceTool?.annotations.openWorldHint, false);
+  assert.deepEqual(guidanceTool?.inputSchema.properties, {
+    workflow: { type: 'string', description: 'Optional workflow name or area to focus guidance on.' },
+    tool: { type: 'string', description: 'Optional tool name for tool-specific guidance.' },
+  });
+
   const listTool = tools.find((t) => t.name === 'mcp_loader_list_site_surfaces');
   assert.equal(listTool?.annotations.readOnlyHint, true);
+
+  const connectionInventoryTool = tools.find((t) => t.name === 'mcp_loader_connection_inventory');
+  assert.equal(connectionInventoryTool?.annotations.readOnlyHint, true);
 
   const diagnosticsTool = tools.find((t) => t.name === 'mcp_loader_site_fabric_diagnostics');
   assert.equal(diagnosticsTool?.annotations.readOnlyHint, true);

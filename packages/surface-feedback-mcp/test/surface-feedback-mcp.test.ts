@@ -80,7 +80,18 @@ try {
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);
   assert.ok(view(noncanonicalDoctor).diagnostics.some((item: string) => /noncanonical/.test(item)));
   assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--feedback-root/.test(item)));
+  const noncanonicalRead = await callWith(noncanonicalState, 'surface_feedback_list', { scope: 'all_authorized' });
+  assert.equal(errorCode(noncanonicalRead), 'feedback_global_read_requires_canonical_store');
   await closeServerState(noncanonicalState);
+
+  const unconfiguredState = createServerState({
+    feedbackRoot: join(root, 'unconfigured'),
+    canonicalFeedbackRoot: join(root, 'unconfigured'),
+    taskLifecycleRoot: root,
+  });
+  const unconfiguredRead = await callWith(unconfiguredState, 'surface_feedback_list', { scope: 'all_authorized' });
+  assert.equal(errorCode(unconfiguredRead), 'feedback_global_read_requires_server_authority');
+  await closeServerState(unconfiguredState);
 
   const sub = await call('surface_feedback_submit', {
     surface_id: 'sop',
@@ -103,7 +114,7 @@ try {
     resolution_note: 'This projection must roll back.',
   });
   assert.equal(errorCode(atomicStatusFailure), 'surface_feedback_error');
-  const atomicStatusReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
+  const atomicStatusReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id, scope: 'all_authorized' });
   assert.equal(view(atomicStatusReadback).status, 'submitted');
   assert.equal(view(atomicStatusReadback).audit_events.length, 1);
   state.db.exec('DROP TRIGGER reject_status_audit');
@@ -118,7 +129,7 @@ try {
   assert.equal(updateData.status, 'closed');
   assert.equal(updateData.resolved_by, 'surface-feedback@andrey-user');
   assert.equal(updateData.resolution_note, 'Covered by behavior test.');
-  const updateReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
+  const updateReadback = await call('surface_feedback_show', { feedback_id: subData.feedback_id, scope: 'all_authorized' });
   assert.deepEqual(view(updateReadback).audit_events.map((event: any) => event.event_type), ['submitted', 'status_updated']);
   assert.equal(view(updateReadback).audit_events[1].actor_principal, 'surface-feedback@andrey-user');
 
@@ -146,28 +157,62 @@ try {
   assert.equal(convertData.task_ref, 'task #999');
   assert.equal(convertData.task_status, 'in_review');
 
+  const crossSite = await call('surface_feedback_submit', {
+    surface_id: 'structured-command',
+    submitter_site_id: 'smart-scheduling',
+    submitter_principal: 'smart-scheduling.test',
+    kind: 'bug',
+    summary: 'Cross-site feedback must remain discoverable',
+    details: 'The actionable queue must not silently narrow to the caller site.',
+  });
+  const crossSiteId = view(crossSite).feedback_id;
+
   const actionableQueue = await call('surface_feedback_actionable_queue', {
-    caller_site_id: 'andrey-user',
+    scope: 'all_authorized',
     limit: 10,
   });
   const actionableData = view(actionableQueue);
   assert.equal(actionableData.schema, 'narada.surface_feedback.actionable_queue.v1');
-  assert.equal(actionableData.total_count, 1);
-  assert.equal(actionableData.count, 1);
+  assert.equal(actionableData.read_scope.mode, 'all_authorized');
+  assert.equal(actionableData.read_scope.scope_limited, false);
+  assert.equal(actionableData.total_count, 2);
+  assert.equal(actionableData.count, 2);
   assert.equal(actionableData.has_more, false);
-  assert.equal(actionableData.items[0].feedback_id, convertedId);
-  assert.equal(actionableData.items[0].actionability, 'task_follow_up');
-  assert.deepEqual(actionableData.items[0].task_link, {
+  assert.equal(actionableData.items.some((item: any) => item.feedback_id === crossSiteId), true);
+  const actionableConverted = actionableData.items.find((item: any) => item.feedback_id === convertedId);
+  assert.equal(actionableConverted.actionability, 'task_follow_up');
+  assert.deepEqual(actionableConverted.task_link, {
     task_ref: 'task #999',
     lifecycle_state: 'in_review',
     lifecycle_state_source: 'feedback_projection',
   });
 
-  const actionableStranger = await call('surface_feedback_actionable_queue', {
-    caller_site_id: 'narada-revolution',
+  const actionableMine = await call('surface_feedback_actionable_queue', {
+    scope: 'authority_site_submissions',
     limit: 10,
   });
-  assert.equal(view(actionableStranger).total_count, 0);
+  assert.equal(view(actionableMine).read_scope.mode, 'authority_site_submissions');
+  assert.equal(view(actionableMine).total_count, 1);
+  assert.equal(view(actionableMine).items[0].feedback_id, convertedId);
+
+  const actionableOwned = await call('surface_feedback_actionable_queue', {
+    scope: 'owned_surfaces',
+    limit: 10,
+  });
+  assert.equal(view(actionableOwned).read_scope.mode, 'owned_surfaces');
+  assert.equal(view(actionableOwned).total_count, 1);
+  assert.equal(view(actionableOwned).items[0].feedback_id, convertedId);
+
+  const actionableAuthorityVisible = await call('surface_feedback_actionable_queue', {
+    scope: 'authority_visible',
+    limit: 10,
+  });
+  assert.equal(view(actionableAuthorityVisible).read_scope.mode, 'authority_visible');
+  assert.ok(view(actionableAuthorityVisible).items.every((item: any) => item.submitter_site_id === 'andrey-user' || ['sop', 'delegated-task', 'surface-feedback', 'task-lifecycle'].includes(item.surface_id)));
+  assert.equal(view(actionableAuthorityVisible).items.some((item: any) => item.feedback_id === crossSiteId), false);
+
+  const legacyActionable = await call('surface_feedback_actionable_queue', { caller_site_id: 'andrey-user' });
+  assert.equal(errorCode(legacyActionable), 'feedback_read_scope_server_bound');
 
   // --- convert_to_task: success, duplicate, visibility, and task-create failure ---
   const handoffRoot = join(root, 'handoff');
@@ -226,7 +271,7 @@ try {
     });
     assert.equal(errorCode(failedConversion), 'feedback_task_handoff_failed');
     assert.equal(failedConversion.error.data.stage, 'task_lifecycle_create');
-    const failedReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: view(failedSource).feedback_id });
+    const failedReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: view(failedSource).feedback_id, scope: 'all_authorized' });
     assert.equal(view(failedReadback).status, 'submitted');
     assert.equal(view(failedReadback).task_ref, null);
     assert.equal(view(failedReadback).task_status, null);
@@ -270,7 +315,7 @@ try {
     assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
     assert.equal(handoffRequests[handoffRequests.length - 2].params.arguments.payload.idempotency_key, `surface-feedback:${successFeedbackId}`);
 
-    const handoffReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: successFeedbackId });
+    const handoffReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: successFeedbackId, scope: 'all_authorized' });
     assert.equal(view(handoffReadback).status, 'converted_to_task');
     assert.equal(view(handoffReadback).task_ref, 'task #1983');
     assert.equal(view(handoffReadback).task_status, 'opened');
@@ -300,7 +345,7 @@ try {
     assert.equal(errorCode(linkFailure), 'feedback_task_link_failed');
     assert.equal(linkFailure.error.data.handoff_status, 'task_created');
     assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
-    const failedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId });
+    const failedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId, scope: 'all_authorized' });
     assert.equal(view(failedLinkReadback).status, 'submitted');
     assert.equal(view(failedLinkReadback).task_handoff.status, 'task_created');
     assert.equal(view(failedLinkReadback).task_handoff.task_ref, 'task #1984');
@@ -313,7 +358,7 @@ try {
     assert.equal(view(repairedLink).status, 'recovered');
     assert.equal(view(repairedLink).task_ref, 'task #1984');
     assert.deepEqual(handoffCalls, []);
-    const repairedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId });
+    const repairedLinkReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: linkFailureId, scope: 'all_authorized' });
     assert.deepEqual(
       view(repairedLinkReadback).audit_events.map((event: any) => event.event_type),
       ['submitted', 'task_handoff_reserved', 'task_payload_created', 'task_created', 'task_link_failed', 'task_handoff_resumed', 'task_linked'],
@@ -336,7 +381,7 @@ try {
     assert.equal(postCreateFailure.error.data.stage, 'task_audit_persist');
     assert.equal(postCreateFailure.error.data.task_ref, 'task #1985');
     handoffState.db.exec('DROP TRIGGER reject_task_created_audit');
-    const postCreateReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: postCreateId });
+    const postCreateReadback = await callWith(handoffState, 'surface_feedback_show', { feedback_id: postCreateId, scope: 'all_authorized' });
     assert.equal(view(postCreateReadback).task_handoff.status, 'task_created');
     assert.equal(view(postCreateReadback).task_handoff.task_ref, 'task #1985');
     assert.equal(view(postCreateReadback).task_handoff.last_error_code, 'surface_feedback_error');
@@ -616,67 +661,85 @@ try {
     details: '',
   });
 
-  // --- list: no scope (all visible) ---
-  const listAll = await call('surface_feedback_list', {});
-  assert.equal(view(listAll).count, 7);
+  // --- list: explicit canonical cross-site scope ---
+  const missingReadScope = await call('surface_feedback_list', {});
+  assert.equal(errorCode(missingReadScope), 'feedback_read_scope_required');
+  const listAll = await call('surface_feedback_list', { scope: 'all_authorized' });
+  assert.equal(view(listAll).count, 8);
+  assert.equal(view(listAll).read_scope.mode, 'all_authorized');
+  assert.equal(view(listAll).read_scope.scope_limited, false);
   assert.equal(view(listAll).store.feedback_root, root);
   assert.equal(view(listAll).store.uses_canonical_store, true);
 
   // --- list: by surface_id ---
-  const listSop = await call('surface_feedback_list', { surface_id: 'sop' });
+  const listSop = await call('surface_feedback_list', { scope: 'all_authorized', surface_id: 'sop' });
   assert.equal(view(listSop).count, 2);
 
-  // --- list: by submitter_site_id ---
-  const listBySite = await call('surface_feedback_list', { submitter_site_id: 'narada-proper' });
+  // --- list: by declared submitter metadata ---
+  const listBySite = await call('surface_feedback_list', { scope: 'all_authorized', submitter_site_id_filter: 'narada-proper' });
   assert.equal(view(listBySite).count, 1);
+  const legacySiteFilter = await call('surface_feedback_list', { scope: 'all_authorized', submitter_site_id: 'narada-proper' });
+  assert.equal(errorCode(legacySiteFilter), 'feedback_read_filter_renamed');
 
   // --- list: pagination (limit + offset) ---
-  const listPage1 = await call('surface_feedback_list', { limit: 2, offset: 0 });
+  const listPage1 = await call('surface_feedback_list', { scope: 'all_authorized', limit: 2, offset: 0 });
   assert.equal(view(listPage1).count, 2);
-  const listPage2 = await call('surface_feedback_list', { limit: 2, offset: 2 });
+  const listPage2 = await call('surface_feedback_list', { scope: 'all_authorized', limit: 2, offset: 2 });
   assert.equal(view(listPage2).count, 2);
   const itemsP1 = view(listPage1).items as any[];
   const itemsP2 = view(listPage2).items as any[];
   assert.notDeepEqual(itemsP1.map((i: any) => i.feedback_id), itemsP2.map((i: any) => i.feedback_id));
 
-  // --- visibility: caller site sees own submissions only (no owned surfaces) ---
-  const listSonarOnly = await call('surface_feedback_list', { caller_site_id: 'narada-sonar' });
-  assert.equal(view(listSonarOnly).count, 2); // 2 entries submitted by narada-sonar
+  // --- explicit read scopes: submitter is metadata, not the default queue boundary ---
+  const listMine = await call('surface_feedback_list', { scope: 'authority_site_submissions' });
+  assert.equal(view(listMine).read_scope.mode, 'authority_site_submissions');
+  assert.equal(view(listMine).read_scope.metadata_only, true);
+  assert.equal(view(listMine).read_scope.provenance_authenticated, false);
+  assert.ok(view(listMine).items.every((item: any) => item.submitter_site_id === 'andrey-user'));
+  assert.equal(view(listMine).items.some((item: any) => item.feedback_id === crossSiteId), false);
 
-  // --- visibility: caller with owned surfaces sees own + maintained surface feedback ---
-  const listAndreyMaintainer = await call('surface_feedback_list', {
-    caller_site_id: 'andrey-user',
-    owned_surface_ids: ['sop'],
-  });
-  assert.equal(view(listAndreyMaintainer).count, 5); // andrey-user's own submissions overlap with sop surface ownership
+  const listOwned = await call('surface_feedback_list', { scope: 'owned_surfaces' });
+  assert.equal(view(listOwned).read_scope.mode, 'owned_surfaces');
+  assert.ok(view(listOwned).items.every((item: any) => ['sop', 'delegated-task', 'surface-feedback', 'task-lifecycle'].includes(item.surface_id)));
+  assert.equal(view(listOwned).items.some((item: any) => item.feedback_id === crossSiteId), false);
 
-  // --- visibility: different site with no owned surfaces sees nothing ---
-  const listStranger = await call('surface_feedback_list', { caller_site_id: 'narada-revolution' });
-  assert.equal(view(listStranger).count, 0);
+  const listAuthorityVisible = await call('surface_feedback_list', { scope: 'authority_visible' });
+  assert.equal(view(listAuthorityVisible).read_scope.mode, 'authority_visible');
+  assert.equal(view(listAuthorityVisible).read_scope.provenance_authenticated, false);
+  assert.ok(view(listAuthorityVisible).items.every((item: any) => item.submitter_site_id === 'andrey-user' || ['sop', 'delegated-task', 'surface-feedback', 'task-lifecycle'].includes(item.surface_id)));
+  assert.equal(view(listAuthorityVisible).items.some((item: any) => item.feedback_id === subData.feedback_id), true);
+  assert.equal(view(listAuthorityVisible).items.some((item: any) => item.feedback_id === crossSiteId), false);
+
+  const legacyList = await call('surface_feedback_list', { caller_site_id: 'andrey-user' });
+  assert.equal(errorCode(legacyList), 'feedback_read_scope_server_bound');
 
   // --- show: visible (own submission) ---
-  const show = await call('surface_feedback_show', { feedback_id: subData.feedback_id });
+  const show = await call('surface_feedback_show', { feedback_id: subData.feedback_id, scope: 'all_authorized' });
   assert.equal(view(show).summary, 'Add agent step kind');
   assert.equal(view(show).status, 'closed');
+  assert.equal(view(show).read_scope.mode, 'all_authorized');
   assert.equal(view(show).details, 'SOP should support agent executor with blocking for agent-performed steps.');
   assert.equal(view(show).store.db_path, state.dbPath);
 
-  // --- show: visible via owned surface ---
+  // --- show: visible via server-bound owned surface scope ---
   const showSop = await call('surface_feedback_show', {
     feedback_id: subData.feedback_id,
-    caller_site_id: 'andrey-user',
-    owned_surface_ids: ['sop'],
+    scope: 'owned_surfaces',
   });
   assert.equal(view(showSop).feedback_id, subData.feedback_id);
 
-  // --- show: not visible ---
+  // --- show: outside server-bound submitter scope is indistinguishable from missing ---
   const showBlockedRes = await call('surface_feedback_show', {
     feedback_id: subData.feedback_id,
-    caller_site_id: 'narada-revolution',
+    scope: 'authority_site_submissions',
   });
-  assert.equal(errorCode(showBlockedRes), 'feedback_not_visible');
+  assert.equal(errorCode(showBlockedRes), 'feedback_not_found');
 
-  const showMissing = await call('surface_feedback_show', { feedback_id: 'sfb_missing' });
+  const showCrossSite = await call('surface_feedback_show', { feedback_id: crossSiteId, scope: 'all_authorized' });
+  assert.equal(view(showCrossSite).feedback_id, crossSiteId);
+  assert.equal(view(showCrossSite).read_scope.mode, 'all_authorized');
+
+  const showMissing = await call('surface_feedback_show', { feedback_id: 'sfb_missing', scope: 'all_authorized' });
   assert.equal(errorCode(showMissing), 'feedback_not_found');
   assert.equal(showMissing.error.data.db_path.endsWith('surface-feedback.db'), true);
   assert.match(showMissing.error.data.store_hint, /feedback_root/);
@@ -707,7 +770,7 @@ try {
       task_status: 'claimed',
     });
     assert.equal(view(localLinkUpdate).feedback.task_ref, 'task #88');
-    const missingBeforeImport = await call('surface_feedback_show', { feedback_id: localFeedbackId });
+    const missingBeforeImport = await call('surface_feedback_show', { feedback_id: localFeedbackId, scope: 'all_authorized' });
     assert.equal(errorCode(missingBeforeImport), 'feedback_not_found');
 
     const importResult = await call('surface_feedback_import', {
@@ -723,7 +786,7 @@ try {
     assert.equal(importData.source_db_path, siteLocalState.dbPath);
     assert.equal(importData.target_db_path, state.dbPath);
 
-    const importedShow = await call('surface_feedback_show', { feedback_id: localFeedbackId });
+    const importedShow = await call('surface_feedback_show', { feedback_id: localFeedbackId, scope: 'all_authorized' });
     assert.equal(view(importedShow).summary, 'Local feedback is invisible to maintainers');
     assert.equal(view(importedShow).task_ref, 'task #88');
     assert.equal(view(importedShow).task_status, 'claimed');
@@ -740,10 +803,11 @@ try {
     await closeServerState(siteLocalState);
   }
 
-  // --- stats: no scope ---
-  const statsAll = await call('surface_feedback_stats', {});
+  // --- stats: explicit canonical cross-site scope ---
+  const statsAll = await call('surface_feedback_stats', { scope: 'all_authorized' });
   const statsAllData = view(statsAll);
-  assert.equal(statsAllData.total, 8);
+  assert.equal(statsAllData.total, 9);
+  assert.equal(statsAllData.read_scope.mode, 'all_authorized');
   assert.ok(statsAllData.by_surface.sop >= 2);
   assert.ok(statsAllData.by_kind.improvement >= 1);
   assert.ok(statsAllData.by_kind.bug >= 1);
@@ -753,19 +817,19 @@ try {
   assert.ok(statsAllData.by_status.closed >= 1);
   assert.ok(statsAllData.by_status.converted_to_task >= 1);
 
-  // --- stats: scoped to caller_site_id ---
-  const statsSonar = await call('surface_feedback_stats', { caller_site_id: 'narada-sonar' });
-  assert.equal(view(statsSonar).total, 2);
+  // --- stats: explicit server-bound scopes ---
+  const statsMine = await call('surface_feedback_stats', { scope: 'authority_site_submissions' });
+  assert.equal(view(statsMine).read_scope.mode, 'authority_site_submissions');
+  assert.ok(view(statsMine).total > 0);
+  const statsOwned = await call('surface_feedback_stats', { scope: 'owned_surfaces' });
+  assert.equal(view(statsOwned).read_scope.mode, 'owned_surfaces');
+  assert.ok(view(statsOwned).total > 0);
 
-  // --- stats: scoped with owned surfaces ---
-  const statsAndrey = await call('surface_feedback_stats', {
-    caller_site_id: 'andrey-user',
-    owned_surface_ids: ['sop'],
-  });
-  assert.equal(view(statsAndrey).total, 5); // overlaps: own submissions are also sop surface entries
+  const legacyStats = await call('surface_feedback_stats', { caller_site_id: 'andrey-user' });
+  assert.equal(errorCode(legacyStats), 'feedback_read_scope_server_bound');
 
   // --- stats: surface filter ---
-  const statsSop = await call('surface_feedback_stats', { surface_id: 'sop' });
+  const statsSop = await call('surface_feedback_stats', { scope: 'all_authorized', surface_id: 'sop' });
   assert.equal(view(statsSop).total, 2);
 
   console.log('surface-feedback-mcp behavior ok');

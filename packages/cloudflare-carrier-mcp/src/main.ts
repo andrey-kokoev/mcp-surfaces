@@ -2,7 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SERVER_NAME = 'cloudflare-carrier-mcp';
@@ -14,6 +14,7 @@ const DEFAULT_PACKAGE_FILTER = '@narada2/cloudflare-carrier';
 const DEFAULT_SESSION_FILE = '.narada/auth/cloudflare-operator-session.json';
 const DEFAULT_WORKER_URL = 'https://narada-cloudflare-carrier.andrei-kokoev.workers.dev';
 const DEFAULT_HEALTH_FILE = '.narada/site-continuity/health/cloudflare-continuity-health-last.json';
+const DEFAULT_PROJECTION_REGISTRY_ROOT = resolve(DEFAULT_REPO_ROOT, '.narada/crew/nars-projections');
 
 type JsonRecord = Record<string, unknown>;
 
@@ -23,16 +24,29 @@ type CloudflareCarrierState = {
   sessionFile: string;
   workerUrl: string;
   healthFile: string;
+  projectionRegistryRoot: string;
+  fetchImpl?: typeof fetch;
 };
 
 export function createServerState(options: JsonRecord = {}): CloudflareCarrierState {
   const repoRoot = String(options.repoRoot ?? options['repo_root'] ?? options['repo-root'] ?? DEFAULT_REPO_ROOT).replace(/\\/g, '/');
+  const projectionRegistryRoot = String(
+    options.projectionRegistryRoot
+      ?? options['projection_registry_root']
+      ?? options['projection-registry-root']
+      ?? (options.siteRoot ?? options.site_root ? resolve(String(options.siteRoot ?? options.site_root), '.narada', 'crew', 'nars-projections') : null)
+      ?? process.env.NARADA_CLOUDFLARE_PROJECTION_REGISTRY_ROOT
+      ?? resolve(repoRoot, '.narada', 'crew', 'nars-projections')
+      ?? DEFAULT_PROJECTION_REGISTRY_ROOT,
+  ).replace(/\\/g, '/');
   return {
     repoRoot,
     packageFilter: String(options.packageFilter ?? options['package-filter'] ?? DEFAULT_PACKAGE_FILTER),
     sessionFile: String(options.sessionFile ?? options['session-file'] ?? resolve(repoRoot, DEFAULT_SESSION_FILE)).replace(/\\/g, '/'),
     workerUrl: String(options.workerUrl ?? options['worker-url'] ?? process.env.CLOUDFLARE_CARRIER_URL ?? DEFAULT_WORKER_URL).replace(/\/+$/, ''),
     healthFile: String(options.healthFile ?? options['health-file'] ?? resolve(repoRoot, DEFAULT_HEALTH_FILE)).replace(/\\/g, '/'),
+    projectionRegistryRoot,
+    fetchImpl: typeof options.fetch_impl === 'function' ? options.fetch_impl as typeof fetch : undefined,
   };
 }
 
@@ -133,13 +147,27 @@ export function listTools() {
     },
     {
       name: 'cloudflare_doctor',
-      description: 'Check Cloudflare carrier MCP readiness: operator session, health snapshot, and worker URL.',
+      description: 'Check Cloudflare carrier MCP readiness: operator session, health snapshot, worker URL, and the server-bound projection registry.',
       inputSchema: {
         type: 'object',
         properties: {},
         additionalProperties: false,
       },
       annotations: { title: 'cloudflare_doctor', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      outputSchema: { type: 'object', additionalProperties: true },
+    },
+    {
+      name: 'cloudflare_carrier_health',
+      description: 'Read one projection and its explicitly registered Cloudflare carrier lineage as a bounded joined health result. A healthy projection never masks an unauthorized or unavailable carrier API.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projection_id: { type: 'string', description: 'Projection id resolved from the server-bound projection registry.' },
+        },
+        required: ['projection_id'],
+        additionalProperties: false,
+      },
+      annotations: { title: 'cloudflare_carrier_health', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       outputSchema: { type: 'object', additionalProperties: true },
     },
   ];
@@ -157,6 +185,7 @@ async function callTool(params: JsonRecord, state: CloudflareCarrierState) {
     case 'cloudflare_session_status': result = cloudflareSessionStatus(args, state); break;
     case 'cloudflare_health': result = cloudflareHealth(args, state); break;
     case 'cloudflare_doctor': result = cloudflareDoctor(state); break;
+    case 'cloudflare_carrier_health': result = await cloudflareCarrierHealth(args, state); break;
     default: throw diagnosticError('unknown_tool', `unknown_tool:${name}`, { tool_name: name });
   }
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
@@ -220,6 +249,281 @@ async function cloudflareProductRead(args: JsonRecord, state: CloudflareCarrierS
     response: responseBody,
     commands: buildProductCommands(operation, state),
   };
+}
+
+type ProjectionLineageStatus = 'matched' | 'unknown' | 'mismatched';
+type ProjectionLifecycleState = 'active' | 'revoked' | 'expired';
+
+interface ProjectionRegistryEntry {
+  projectionId: string;
+  siteId: string | null;
+  narsSessionId: string | null;
+  sourceRef: JsonRecord | null;
+  lineageStatus: ProjectionLineageStatus;
+  projectionApiBaseUrl: string | null;
+  browserTokenFingerprint: string | null;
+  lifecycleState: ProjectionLifecycleState;
+  expiresAt: string | null;
+  revokedAt: string | null;
+}
+
+interface ProjectionRegistryResolution {
+  status: 'ok' | 'missing' | 'refused';
+  code?: string;
+  entry?: ProjectionRegistryEntry;
+}
+
+function readJsonRecord(path: string): JsonRecord | null {
+  if (!existsSync(path)) return null;
+  try {
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHttpBaseUrl(value: unknown): string | null {
+  const raw = optionalString(value);
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function legacyProjectionBaseUrl(value: unknown): string | null {
+  const endpoint = normalizeHttpBaseUrl(value);
+  const registrationSuffix = '/api/nars/projections/register';
+  if (!endpoint || !endpoint.endsWith(registrationSuffix)) return null;
+  return endpoint.slice(0, -registrationSuffix.length).replace(/\/+$/, '') || null;
+}
+
+function normalizeProjectionSourceRef(value: unknown, siteId: string | null): { status: ProjectionLineageStatus; sourceRef: JsonRecord | null } {
+  if (value == null) return { status: 'unknown', sourceRef: null };
+  const source = asRecord(value);
+  if (source.kind !== 'cloudflare_carrier') return { status: 'mismatched', sourceRef: null };
+  const carrierSessionId = optionalString(source.carrier_session_id);
+  const operationId = optionalString(source.operation_id);
+  if (!carrierSessionId && !operationId) return { status: 'mismatched', sourceRef: null };
+  return {
+    status: siteId ? 'matched' : 'mismatched',
+    sourceRef: { kind: 'cloudflare_carrier', carrier_session_id: carrierSessionId, operation_id: operationId },
+  };
+}
+
+function resolveProjectionRegistry(state: CloudflareCarrierState, projectionId: string, now: string): ProjectionRegistryResolution {
+  if (!/^[A-Za-z0-9._-]+$/.test(projectionId)) return { status: 'refused', code: 'projection_id_invalid' };
+  const projectionRoot = join(state.projectionRegistryRoot, projectionId);
+  const intent = readJsonRecord(join(projectionRoot, 'intent.json'));
+  const remoteAccess = readJsonRecord(join(projectionRoot, 'remote-access.json'));
+  if (!intent && !remoteAccess) return { status: 'missing', code: 'projection_registry_entry_missing' };
+
+  const siteId = optionalString(intent?.site_id) ?? optionalString(remoteAccess?.site_id);
+  const narsSessionId = optionalString(intent?.nars_session_id) ?? optionalString(remoteAccess?.nars_session_id);
+  const normalizedSource = normalizeProjectionSourceRef(intent?.source_ref ?? remoteAccess?.source_ref, siteId);
+  let projectionApiBaseUrl = normalizeHttpBaseUrl(intent?.projection_api_base_url) ?? normalizeHttpBaseUrl(remoteAccess?.projection_api_base_url);
+  if (!projectionApiBaseUrl) {
+    const intentRegistration = asRecord(intent?.remote_registration);
+    const remoteRegistration = asRecord(remoteAccess?.remote_registration);
+    projectionApiBaseUrl = legacyProjectionBaseUrl(intentRegistration.endpoint) ?? legacyProjectionBaseUrl(remoteRegistration.endpoint);
+  }
+
+  const browserTokens = Array.isArray(remoteAccess?.browser_access_tokens) ? remoteAccess.browser_access_tokens : [];
+  const browserToken = browserTokens
+    .map((candidate) => asRecord(candidate))
+    .find((candidate) => optionalString(candidate.kind) === 'browser'
+      && optionalString(candidate.token_fingerprint)
+      && (candidate.status == null || candidate.status === 'active'));
+  const expiresAt = optionalString(remoteAccess?.expires_at) ?? optionalString(intent?.expires_at);
+  const revokedAt = optionalString(remoteAccess?.revoked_at) ?? optionalString(intent?.revoked_at);
+  const declaredLifecycle = optionalString(remoteAccess?.lifecycle_state) ?? optionalString(intent?.lifecycle_state);
+  const lifecycleState: ProjectionLifecycleState = revokedAt || declaredLifecycle === 'revoked'
+    ? 'revoked'
+    : expiresAt && Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.parse(now)
+      ? 'expired'
+      : 'active';
+
+  return {
+    status: 'ok',
+    entry: {
+      projectionId,
+      siteId,
+      narsSessionId,
+      sourceRef: normalizedSource.sourceRef,
+      lineageStatus: normalizedSource.status,
+      projectionApiBaseUrl,
+      browserTokenFingerprint: optionalString(browserToken?.token_fingerprint),
+      lifecycleState,
+      expiresAt,
+      revokedAt,
+    },
+  };
+}
+
+async function fetchJsonRecord(fetchImpl: typeof fetch, url: string, headers: Record<string, string>): Promise<{ status: number; body: JsonRecord }> {
+  try {
+    const response = await fetchImpl(url, { method: 'GET', headers });
+    const value: unknown = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      body: value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {},
+    };
+  } catch {
+    return { status: 0, body: {} };
+  }
+}
+
+function projectionUnavailableStatus(status: number): string {
+  if (status === 401 || status === 403) return 'projection_browser_access_refused';
+  if (status === 0) return 'projection_unavailable';
+  return `projection_http_${status}`;
+}
+
+async function cloudflareCarrierHealth(args: JsonRecord, state: CloudflareCarrierState): Promise<JsonRecord> {
+  const projectionId = requiredString(args.projection_id, 'projection_id_required');
+  const observedAt = new Date().toISOString();
+  const registry = resolveProjectionRegistry(state, projectionId, observedAt);
+  if (registry.status !== 'ok' || !registry.entry) {
+    return {
+      schema: 'narada.cloudflare_carrier_mcp.carrier_health.v1',
+      status: registry.status === 'missing' ? 'missing' : 'refused',
+      code: registry.code,
+      carrier_api: { status: 'not_checked', site_id: null, operation_id: null, auth_source: null },
+      projection: { status: 'not_checked', projection_id: projectionId, lineage_status: 'unknown', last_event_sequence: null, last_projected_at: null, observed_at: observedAt },
+      next_action: registry.status === 'missing'
+        ? 'Configure the server-bound projection registry root and ensure the projection registration exists.'
+        : 'Use a valid projection id from the server-bound projection registry.',
+    };
+  }
+
+  const entry = registry.entry;
+  const projection: JsonRecord = {
+    status: entry.lifecycleState === 'revoked' ? 'revoked' : entry.lifecycleState === 'expired' ? 'expired' : 'not_checked',
+    projection_id: projectionId,
+    lineage_status: entry.lineageStatus,
+    last_event_sequence: null,
+    last_projected_at: null,
+    observed_at: observedAt,
+  };
+  const carrier: JsonRecord = {
+    status: 'not_checked',
+    site_id: entry.siteId,
+    operation_id: optionalString(entry.sourceRef?.operation_id),
+    auth_source: null,
+  };
+
+  if (entry.lifecycleState === 'active' && entry.projectionApiBaseUrl && entry.browserTokenFingerprint) {
+    const browserHeaders = { 'x-narada-browser-token-fingerprint': entry.browserTokenFingerprint };
+    const healthRead = await fetchJsonRecord(state.fetchImpl ?? fetch, `${entry.projectionApiBaseUrl}/api/nars/projections/${encodeURIComponent(projectionId)}/health`, browserHeaders);
+    if (healthRead.status >= 200 && healthRead.status < 300 && healthRead.body.status === 'healthy') {
+      projection.status = 'healthy';
+      projection.last_event_sequence = typeof healthRead.body.last_event_sequence === 'number' ? healthRead.body.last_event_sequence : null;
+      projection.last_projected_at = optionalString(healthRead.body.last_projected_at);
+      if (projection.last_event_sequence === null || projection.last_projected_at === null) {
+        const eventsRead = await fetchJsonRecord(state.fetchImpl ?? fetch, `${entry.projectionApiBaseUrl}/api/nars/projections/${encodeURIComponent(projectionId)}/events?direction=backward&max_events=1`, browserHeaders);
+        const cursor = asRecord(eventsRead.body.cursor);
+        const firstEvent = Array.isArray(eventsRead.body.events) ? asRecord(eventsRead.body.events[0]) : {};
+        projection.last_event_sequence = projection.last_event_sequence ?? (typeof cursor.last_sequence === 'number' ? cursor.last_sequence : null);
+        projection.last_projected_at = projection.last_projected_at ?? optionalString(firstEvent.projected_at);
+      }
+    } else {
+      projection.status = 'unavailable';
+      projection.code = projectionUnavailableStatus(healthRead.status);
+    }
+  } else if (entry.lifecycleState === 'active') {
+    projection.status = 'unavailable';
+    projection.code = entry.projectionApiBaseUrl ? 'projection_browser_credential_missing' : 'projection_api_base_url_missing';
+  }
+
+  if (projection.status === 'healthy' && entry.lineageStatus === 'matched' && entry.siteId) {
+    const operationId = optionalString(entry.sourceRef?.operation_id);
+    const operation = operationId ? 'operation.read' : 'site.read';
+    const auth = resolveSessionAuth(state.sessionFile);
+    const carrierHeaders: Record<string, string> = { 'content-type': 'application/json' };
+    if (auth) carrierHeaders.cookie = `narada_operator_session=${auth}`;
+    const params: JsonRecord = { site_id: entry.siteId };
+    if (operationId) params.operation_id = operationId;
+    const carrierRead = await fetchJsonRecordPost(state.fetchImpl ?? fetch, new URL('/api/carrier', state.workerUrl).toString(), carrierHeaders, {
+      operation,
+      request_id: `mcp_carrier_health_${Date.now()}`,
+      params,
+    });
+    carrier.auth_source = auth ? 'operator_session_file' : null;
+    if (carrierRead.status >= 200 && carrierRead.status < 300) {
+      carrier.status = 'ok';
+      const productStatus = asRecord(carrierRead.body.site_product_status ?? carrierRead.body.product_status);
+      carrier.product_health = optionalString(productStatus.health);
+      carrier.next_action = optionalString(productStatus.next_action);
+    } else if (carrierRead.status === 401) {
+      carrier.status = 'unauthorized';
+      carrier.next_action = 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human';
+    } else if (carrierRead.status === 403) {
+      carrier.status = 'forbidden';
+      carrier.next_action = 'inspect_cloudflare_carrier_site_membership';
+    } else {
+      carrier.status = 'unavailable';
+      carrier.next_action = 'inspect_cloudflare_carrier_worker_and_network';
+    }
+  }
+
+  let status: 'healthy' | 'degraded' | 'unverified';
+  let code: string | undefined;
+  let nextAction: string | null = null;
+  if (projection.status === 'healthy') {
+    if (entry.lineageStatus !== 'matched') {
+      status = 'unverified';
+      code = entry.lineageStatus === 'unknown' ? 'projection_lineage_unknown' : 'projection_lineage_mismatched';
+      nextAction = 'Register the projection with an explicit Cloudflare carrier source reference before claiming joined health.';
+    } else if (carrier.status === 'ok') {
+      status = 'healthy';
+    } else if (carrier.status === 'unauthorized') {
+      status = 'degraded';
+      code = 'carrier_api_unauthorized_projection_available';
+      nextAction = 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human';
+    } else if (carrier.status === 'forbidden') {
+      status = 'degraded';
+      code = 'carrier_api_forbidden_projection_available';
+      nextAction = 'inspect_cloudflare_carrier_site_membership';
+    } else {
+      status = 'degraded';
+      code = 'carrier_api_unavailable_projection_available';
+      nextAction = 'inspect_cloudflare_carrier_worker_and_network';
+    }
+  } else if (projection.status === 'revoked' || projection.status === 'expired') {
+    status = 'degraded';
+    code = `projection_${projection.status}`;
+    nextAction = 'Re-register or renew the projection before using it as a live readback source.';
+  } else {
+    status = 'unverified';
+    code = String(projection.code ?? 'projection_unavailable');
+    nextAction = 'Repair projection readback before relying on joined carrier health.';
+  }
+
+  return {
+    schema: 'narada.cloudflare_carrier_mcp.carrier_health.v1',
+    status,
+    ...(code ? { code } : {}),
+    carrier_api: carrier,
+    projection,
+    next_action: nextAction,
+  };
+}
+
+async function fetchJsonRecordPost(fetchImpl: typeof fetch, url: string, headers: Record<string, string>, body: JsonRecord): Promise<{ status: number; body: JsonRecord }> {
+  try {
+    const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    const value: unknown = await response.json().catch(() => null);
+    return {
+      status: response.status,
+      body: value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {},
+    };
+  } catch {
+    return { status: 0, body: {} };
+  }
 }
 
 function cloudflareSessionStatus(args: JsonRecord, state: CloudflareCarrierState): JsonRecord {
@@ -331,6 +635,9 @@ function cloudflareDoctor(state: CloudflareCarrierState): JsonRecord {
     health_file: state.healthFile,
     health_file_exists: healthFileExists,
     health_status: healthStatus ?? 'missing',
+    projection_registry_root: state.projectionRegistryRoot,
+    projection_registry_exists: existsSync(state.projectionRegistryRoot),
+    projection_registry_status: existsSync(state.projectionRegistryRoot) ? 'ready' : 'missing',
   };
 }
 
@@ -402,6 +709,16 @@ function buildProductCommands(operation: string, state: CloudflareCarrierState):
 }
 
 function renderResult(result: JsonRecord): string {
+  if (result.carrier_api !== undefined && result.projection !== undefined) {
+    const carrier = result.carrier_api as JsonRecord;
+    const projection = result.projection as JsonRecord;
+    return [
+      `Cloudflare carrier health: ${result.status ?? 'unknown'}${result.code ? ` (${result.code})` : ''}`,
+      `Projection: ${projection.status ?? 'unknown'} lineage=${projection.lineage_status ?? 'unknown'} last_sequence=${projection.last_event_sequence ?? '?'}`,
+      `Carrier API: ${carrier.status ?? 'unknown'} site=${carrier.site_id ?? '?'} auth=${carrier.auth_source ?? 'none'}`,
+      `Next action: ${result.next_action ?? 'none'}`,
+    ].join('\n');
+  }
   if (result.operation !== undefined) {
     const lines = [`Cloudflare product read: ${result.operation}`, `Worker: ${result.worker_url ?? 'unknown'}`];
     if (result.summary) {
@@ -503,6 +820,8 @@ function parseArgs(argv: string[]) {
     else if (arg === '--session-file') options.sessionFile = argv[++i];
     else if (arg === '--worker-url') options.workerUrl = argv[++i];
     else if (arg === '--health-file') options.healthFile = argv[++i];
+    else if (arg === '--projection-registry-root') options.projectionRegistryRoot = argv[++i];
+    else if (arg === '--site-root') options.projectionRegistryRoot = resolve(argv[++i], '.narada', 'crew', 'nars-projections');
   }
   return options;
 }

@@ -43,6 +43,21 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       git_tracking_boundary: 'Filesystem inventory identifies candidate and generated paths; git-mcp owns tracked and ignored classification.'
     }
   } : {};
+  const fileMetrics = workflow === 'file_metrics' || tool === 'fs_file_metrics' ? {
+    file_metrics: {
+      sequence: [
+        'Call fs_file_metrics with an explicit directory/root, include pattern, ignore policy, limit, and cache policy.',
+        'Use the returned files table for path, line_count, byte_count, file_type, and scope classification; structuredContent is authoritative.',
+        'Use offset and next_offset to page larger trees. totals are explicitly scoped to the returned page and never imply that file contents were transferred.',
+        'Prefer this metadata-only operation over concurrent full-content fs_read_file calls when the task needs line counts, sizes, or bounded source inventory.',
+      ],
+      semantics: {
+        line_count: 'Exact for text files within max_bytes_per_file; larger text files return a null line_count with line_count_status=too_large, while binary or unavailable files use their own explicit statuses.',
+        byte_count: 'Filesystem byte size from stat metadata; no file content is returned.',
+        scope: 'The response declares the allowed root, selected directory, include pattern, ignore patterns, and excluded-path boundary.',
+      },
+    },
+  } : {};
   return {
     schema: 'narada.mcp_surface.guidance.v0',
     status: 'ok',
@@ -52,6 +67,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     requested: { workflow, tool },
     ...patchRecovery,
     ...repositoryInventory,
+    ...fileMetrics,
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
@@ -60,7 +76,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     ],
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
-      { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters; use fs_repository_inventory for repository-oriented source/artifact discovery.' },
+      { step: 'discover', guidance: 'Use bounded list/search/query commands for discovery; use fs_file_metrics for metadata-only line/byte counts and fs_repository_inventory for repository-oriented source/artifact discovery.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
@@ -74,6 +90,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     anti_patterns: [
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
+      'Do not fan out full-content fs_read_file calls when only line counts or byte sizes are needed; use fs_file_metrics with a bounded limit and page deliberately.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],

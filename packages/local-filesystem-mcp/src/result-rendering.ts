@@ -22,6 +22,7 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
   }
   if (isReadFileResult(record)) return renderReadFileResult(record);
   if (record.schema === 'local.filesystem.glob.v1') return renderSearchResult('fs_glob_search', record);
+  if (record.schema === 'local.filesystem.file_metrics.v1') return renderFileMetricsResult(record);
   if (record.schema === 'local.filesystem.grep.v1') return renderSearchResult('fs_grep_search', record, renderContext);
   if (record.schema === 'local.filesystem.apply_patch.v1') {
     const changedFiles = Array.isArray(record.changed_files) ? record.changed_files : [];
@@ -36,6 +37,30 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
   }
   if (record.schema || record.status || record.path || record.relative_path || record.type) return renderCompactRecord(record);
   return JSON.stringify(value, null, 2);
+}
+
+function renderFileMetricsResult(record) {
+  const files = Array.isArray(record.files) ? record.files.map(asRecord) : [];
+  const totals = asRecord(record.totals);
+  return compactLines([
+    `fs_file_metrics: ${record.status ?? 'ok'}`,
+    `directory: ${record.directory ?? ''}`,
+    `pattern: ${record.pattern ?? '**/*'}`,
+    `count: ${record.count ?? 'unknown'}`,
+    `count_exact: ${record.count_exact ?? false}`,
+    `returned: ${record.returned ?? files.length}`,
+    `has_more: ${record.has_more ?? false}`,
+    `next_offset: ${record.next_offset ?? 'null'}`,
+    `totals_scope: ${record.totals_scope ?? 'returned_page'}`,
+    `total_files: ${totals.file_count ?? files.length}`,
+    `total_lines: ${totals.line_count ?? 'partial'}`,
+    `total_bytes: ${totals.byte_count ?? 0}`,
+    `binary_files: ${totals.binary_file_count ?? 0}`,
+    `too_large_files: ${totals.too_large_file_count ?? 0}`,
+    `unavailable_files: ${totals.unavailable_file_count ?? 0}`,
+    'files:',
+    ...files.map((file) => `${file.relative_path ?? file.path ?? ''} lines=${file.line_count ?? 'unknown'} bytes=${file.byte_count ?? 'unknown'} type=${file.file_type ?? 'unknown'} scope=${file.scope_classification ?? 'unknown'}`),
+  ]);
 }
 
 function isReadFileResult(record) {

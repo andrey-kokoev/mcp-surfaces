@@ -382,8 +382,20 @@ export function createTaskLifecycleOperationsHandlers(context) {
         }, true);
       }
       for (const target of targets) {
-        const result = await testMcpTool(siteRoot, testServer.path, 'run_test', target, { timeoutSeconds });
-        results.push(result);
+        try {
+          const result = await testMcpTool(siteRoot, testServer.path, 'run_test', target, { timeoutSeconds, agentId });
+          results.push(result);
+        } catch (error) {
+          const diagnostic = error instanceof Error ? error.message : String(error);
+          results.push({
+            status: 'failed',
+            error: 'test_mcp_execution_failed',
+            target,
+            test_server_path: testServer.path,
+            diagnostic,
+            remediation: 'Verify the configured Test MCP server path and restart the task-lifecycle session with the requested agent identity before retrying.',
+          });
+        }
       }
       const failed = results.filter((result) => result.status !== 'passed');
       const payload: Record<string, unknown> = {

@@ -3576,11 +3576,19 @@ async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<
   const stdin = init + '\n' + req + '\n';
   const timeoutSeconds = Math.min(300, Math.max(1, typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) ? options.timeoutSeconds : 10));
   const timeoutMs = timeoutSeconds * 1000;
+  const agentId = typeof options.agentId === 'string' && options.agentId.trim()
+    ? options.agentId.trim()
+    : process.env.NARADA_AGENT_ID;
 
   return new Promise((res, rej) => {
+    const childEnv = {
+      ...process.env,
+      NARADA_MCP_ONE_SHOT_VERIFIER: '1',
+      ...(agentId ? { NARADA_AGENT_ID: agentId } : {}),
+    };
     const proc = spawn(process.execPath, [fullServerPath, '--site-root', cwd], {
       cwd,
-      env: { ...process.env, NARADA_MCP_ONE_SHOT_VERIFIER: '1' },
+      env: childEnv,
     });
     let out = '';
     let err = '';

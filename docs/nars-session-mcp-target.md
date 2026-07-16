@@ -105,6 +105,21 @@ registrar refuses ambiguous
 multi-projection materialization instead of selecting from a server name,
 current directory, or entrypoint path.
 
+### User Site operator binding
+
+`user-site-operator` is a process-bound operator projection. The registrar
+passes the User Site root and operator identity as launch arguments; the
+adapter reads `registry.db` and admits only the registered Site roots. The
+MCP tool schema does not accept a filesystem root. Session discovery may span
+those admitted Sites, `site_id` remains an optional filter, and a session id
+that resolves to more than one admitted Site is refused as ambiguous. Delivery
+uses the same Site-root, health, write-posture, authority-epoch, and
+idempotency checks as local delivery, with the caller source fixed to the
+bound operator identity.
+
+Materialized projection changes take effect when the MCP process is restarted;
+they are not a live reload contract.
+
 ## Non-Goals
 
 This surface must not:

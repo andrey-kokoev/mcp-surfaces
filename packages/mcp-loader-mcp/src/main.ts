@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
+import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 
@@ -319,7 +320,9 @@ async function dispatchMethod(method: string, params: JsonRecord, state: LoaderS
 
 export function listTools() {
   return [
+    guidanceToolDefinition(),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
+    tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
       site_root: { type: 'string', description: 'Site root directory.' },
     }, ['site_root'], { readOnly: true }),
@@ -367,8 +370,12 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
   const name = requiredString(params.name, 'missing_tool_name');
   const args = asRecord(params.arguments);
   switch (name) {
+    case 'mcp_loader_guidance':
+      return buildGuidanceResult(args);
     case 'mcp_loader_policy_inspect':
       return policyInspect(state);
+    case 'mcp_loader_connection_inventory':
+      return connectionInventory(state);
     case 'mcp_loader_list_site_surfaces':
       return listSiteSurfaces(args, state);
     case 'mcp_loader_site_fabric_diagnostics':
@@ -396,6 +403,46 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
 
 function policyInspect(state: LoaderState): JsonRecord {
   return { schema: 'narada.mcp_loader.policy.v1', policy: state.policy };
+}
+
+function connectionInventory(state: LoaderState): JsonRecord {
+  const now = Date.now();
+  const connections = [...state.connections.values()].map((connection) => {
+    const status = connectionStatusFields(connection);
+    const attachedAtMs = Date.parse(connection.attachedAt);
+    return {
+      ...status,
+      connection_id: connection.connectionId,
+      liveness: status.status,
+      age_ms: Number.isFinite(attachedAtMs) ? Math.max(0, now - attachedAtMs) : null,
+      recovery_actions: {
+        inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connection.connectionId } },
+        detach: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } },
+        restart: { tool_name: 'mcp_loader_surface_restart', arguments: { connection_id: connection.connectionId } },
+      },
+    };
+  });
+  const liveConnections = connections.filter((connection) => connection.liveness === 'live');
+  const closedConnections = connections.filter((connection) => connection.liveness === 'closed');
+  return {
+    schema: 'narada.mcp_loader.connection_inventory.v1',
+    status: 'ok',
+    max_connections: state.policy.maxConnections,
+    connection_count: connections.length,
+    available_slots: Math.max(0, state.policy.maxConnections - connections.length),
+    live_count: liveConnections.length,
+    closed_count: closedConnections.length,
+    live_connection_ids: liveConnections.map((connection) => connection.connection_id),
+    closed_connection_ids: closedConnections.map((connection) => connection.connection_id),
+    connections,
+    recovery: {
+      when_full: 'Inspect this inventory, then detach closed or no-longer-needed connections. Use surface restart only for an intentionally live replacement.',
+      inspect_tool: 'mcp_loader_surface_status',
+      detach_tool: 'mcp_loader_detach',
+      restart_tool: 'mcp_loader_surface_restart',
+      note: 'The inventory is read-only and does not reap children or free slots automatically.',
+    },
+  };
 }
 
 function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
@@ -496,7 +543,14 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
   const runtimeRequirements = ensureSurfaceRuntimeAllowed(surfaceId, siteRoot, runtimeKind);
 
   if (state.connections.size >= state.policy.maxConnections) {
-    throw diagnosticError('max_connections_reached', `max_connections_reached:${state.connections.size}`);
+    const inventory = connectionInventory(state);
+    throw diagnosticError('max_connections_reached', `max_connections_reached:${state.connections.size}`, {
+      max_connections: inventory.max_connections,
+      connection_count: inventory.connection_count,
+      available_slots: inventory.available_slots,
+      closed_connection_ids: inventory.closed_connection_ids,
+      recovery: inventory.recovery,
+    });
   }
 
   const explicitEntrypoint = optionalString(args.entrypoint);

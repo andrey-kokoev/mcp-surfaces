@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Socket } from 'node:net';
@@ -39,11 +40,26 @@ type SessionRecord = JsonRecord & {
   superseded_by_session_id?: string | null;
 };
 
+type SessionAuthority = {
+  siteId: string | null;
+  siteRoot: string;
+  sessionsRoot: string;
+};
+
+type BindingArgs = {
+  projection?: string;
+  userSiteRoot?: string;
+  sourceKind?: string;
+  operatorId?: string;
+};
+
 type ClientConfig = {
   env: NodeJS.ProcessEnv;
+  scope: 'local_site' | 'user_site';
   siteRoot: string;
   siteId: string | null;
   sessionsRoot: string;
+  authorities: SessionAuthority[];
   sourceKind: 'agent' | 'operator';
   sourceId: string;
   carrierSessionId: string | null;
@@ -55,32 +71,119 @@ type ClientConfig = {
 
 export type NarsSessionClient = ReturnType<typeof createSessionClient>;
 
-export function createSessionClient(env: NodeJS.ProcessEnv = process.env) {
+export function createSessionClient(env: NodeJS.ProcessEnv = process.env, argv = process.argv.slice(2)) {
   return {
-    siteRoot: () => configFromEnv(env).siteRoot,
+    siteRoot: () => configFromEnv(env, argv).siteRoot,
     guidance: () => ({ status: 'ok' as const }),
-    list: (args: JsonRecord = {}) => listSessions(configFromEnv(env), args),
-    show: (args: JsonRecord = {}) => showSession(configFromEnv(env), args),
-    deliver: (args: JsonRecord = {}) => deliverSessionInput(configFromEnv(env), args),
-    status: (args: JsonRecord = {}) => inputStatus(configFromEnv(env), args),
+    list: (args: JsonRecord = {}) => listSessions(configFromEnv(env, argv), args),
+    show: (args: JsonRecord = {}) => showSession(configFromEnv(env, argv), args),
+    deliver: (args: JsonRecord = {}) => deliverSessionInput(configFromEnv(env, argv), args),
+    status: (args: JsonRecord = {}) => inputStatus(configFromEnv(env, argv), args),
   };
 }
 
-export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ClientConfig {
-  const siteRoot = requiredText(env.NARADA_SITE_ROOT, 'site_root_required');
-  const sitePaths = resolveNaradaSitePaths({ siteRoot });
-  const sourceKind = optionalText(env.NARADA_NARS_SESSION_SOURCE_KIND) ?? 'agent';
+function parseBindingArgs(argv: string[]): BindingArgs {
+  const binding: BindingArgs = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const value = argv[index + 1];
+    if (arg === '--projection' && value) binding.projection = value;
+    else if (arg === '--user-site-root' && value) binding.userSiteRoot = value;
+    else if (arg === '--source-kind' && value) binding.sourceKind = value;
+    else if (arg === '--operator-id' && value) binding.operatorId = value;
+    if (arg?.startsWith('--') && value) index += 1;
+  }
+  return binding;
+}
+
+function defaultUserSiteRoot(env: NodeJS.ProcessEnv): string {
+  const profile = optionalText(env.USERPROFILE);
+  if (!profile) throw new NarsSessionMcpError('user_site_root_required', 'User Site root is not configured');
+  return join(profile, 'Narada');
+}
+
+function readUserSiteAuthorities(userSiteRoot: string, env: NodeJS.ProcessEnv): SessionAuthority[] {
+  const registryPath = env.NARADA_SITE_REGISTRY_DB
+    ? resolve(env.NARADA_SITE_REGISTRY_DB)
+    : join(userSiteRoot, 'registry.db');
+  if (!existsSync(registryPath)) {
+    throw new NarsSessionMcpError('user_site_registry_required', 'User Site registry is not available', { registry_path: registryPath });
+  }
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(registryPath, { readOnly: true });
+    const rows = db.prepare('SELECT site_id, site_root FROM site_registry ORDER BY created_at ASC, site_id ASC').all() as Array<{ site_id?: unknown; site_root?: unknown }>;
+    const authorities = rows.flatMap((row) => {
+      const siteId = optionalText(row.site_id);
+      const siteRoot = optionalText(row.site_root);
+      if (!siteId || !siteRoot) return [];
+      const resolvedSiteRoot = resolve(siteRoot);
+      return [{
+        siteId,
+        siteRoot: resolvedSiteRoot,
+        sessionsRoot: resolveNaradaSitePaths({ siteRoot: resolvedSiteRoot }).narsSessionsRoot,
+      } satisfies SessionAuthority];
+    });
+    if (authorities.length === 0) {
+      throw new NarsSessionMcpError('user_site_registry_empty', 'User Site registry contains no admitted Sites', { registry_path: registryPath });
+    }
+    return authorities;
+  } catch (error) {
+    if (error instanceof NarsSessionMcpError) throw error;
+    throw new NarsSessionMcpError('user_site_registry_unreadable', 'User Site registry could not be read', {
+      registry_path: registryPath,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  } finally {
+    db?.close();
+  }
+}
+
+export function configFromEnv(env: NodeJS.ProcessEnv = process.env, argv = process.argv.slice(2)): ClientConfig {
+  const binding = parseBindingArgs(argv);
+  const projection = optionalText(binding.projection) ?? optionalText(env.NARADA_NARS_SESSION_PROJECTION);
+  const userSiteProjection = projection === 'user-site-operator' || env.NARADA_NARS_SESSION_SCOPE === 'user_site';
+  const sourceKind = optionalText(binding.sourceKind)
+    ?? optionalText(env.NARADA_NARS_SESSION_SOURCE_KIND)
+    ?? (userSiteProjection ? 'operator' : 'agent');
   if (sourceKind !== 'agent' && sourceKind !== 'operator') {
     throw new NarsSessionMcpError('source_kind_unsupported', `source_kind_unsupported:${sourceKind}`);
   }
   const sourceId = sourceKind === 'agent'
     ? requiredText(env.NARADA_AGENT_ID, 'caller_agent_identity_required')
-    : requiredText(env.NARADA_OPERATOR_ID, 'caller_operator_identity_required');
+    : requiredText(binding.operatorId ?? env.NARADA_OPERATOR_ID, 'caller_operator_identity_required');
+  if (userSiteProjection) {
+    const siteRoot = resolve(requiredText(
+      binding.userSiteRoot ?? env.NARADA_USER_SITE_ROOT ?? defaultUserSiteRoot(env),
+      'user_site_root_required',
+    ));
+    const authorities = readUserSiteAuthorities(siteRoot, env);
+    return {
+      env,
+      scope: 'user_site',
+      siteRoot,
+      siteId: null,
+      sessionsRoot: '',
+      authorities,
+      sourceKind,
+      sourceId,
+      carrierSessionId: optionalText(env.NARADA_CARRIER_SESSION_ID),
+      allowSteer: env.NARADA_NARS_SESSION_ALLOW_STEER === '1' || env.NARADA_NARS_SESSION_ALLOW_STEER === 'true',
+      requestTimeoutMs: boundedNumber(env.NARADA_NARS_SESSION_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS, 500, 15_000),
+      healthTimeoutMs: boundedNumber(env.NARADA_NARS_SESSION_HEALTH_TIMEOUT_MS, DEFAULT_HEALTH_TIMEOUT_MS, 250, 5000),
+      maxSessions: boundedNumber(env.NARADA_NARS_SESSION_MAX_SESSIONS, DEFAULT_MAX_SESSIONS, 1, 100),
+    };
+  }
+  const siteRoot = requiredText(env.NARADA_SITE_ROOT, 'site_root_required');
+  const sitePaths = resolveNaradaSitePaths({ siteRoot });
+  const authority = { siteId: optionalText(env.NARADA_SITE_ID), siteRoot: resolve(siteRoot), sessionsRoot: sitePaths.narsSessionsRoot } satisfies SessionAuthority;
   return {
     env,
-    siteRoot: resolve(siteRoot),
-    siteId: optionalText(env.NARADA_SITE_ID),
+    scope: 'local_site',
+    siteRoot: authority.siteRoot,
+    siteId: authority.siteId,
     sessionsRoot: sitePaths.narsSessionsRoot,
+    authorities: [authority],
     sourceKind,
     sourceId,
     carrierSessionId: optionalText(env.NARADA_CARRIER_SESSION_ID),
@@ -92,29 +195,32 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ClientConfi
 }
 
 export async function listSessions(config: ClientConfig, args: JsonRecord = {}) {
-  assertRequestedSite(config, args);
   const limit = boundedNumber(args.limit, Math.min(config.maxSessions, 20), 1, config.maxSessions);
   const includeHealth = args.include_health === true;
-  const entries = readSessionEntries(config.sessionsRoot, limit)
-    .filter((entry) => typeof entry.session_id === 'string' && SESSION_ID_PATTERN.test(entry.session_id));
-  const sessions = await Promise.all(entries.map(async (entry) => {
-    const record = readSessionRecord(config, String(entry.session_id));
+  const authorities = selectAuthorities(config, args);
+  const entries = authorities.flatMap((authority) => readSessionEntries(authority.sessionsRoot, limit)
+    .filter((entry) => typeof entry.session_id === 'string' && SESSION_ID_PATTERN.test(entry.session_id))
+    .map((entry) => ({ authority, entry }))).slice(0, limit);
+  const sessions = await Promise.all(entries.flatMap(({ authority, entry }) => {
+    const record = tryReadSessionRecord(authority, String(entry.session_id));
+    return record ? [{ authority, record }] : [];
+  }).map(async ({ record }) => {
     const health = includeHealth ? await probeSession(config, record) : { status: 'not_requested' };
     return publicSession(record, health);
   }));
   return {
     schema: 'narada.nars_session_mcp.sessions.v1',
     status: 'ok',
-    site_id: config.siteId ?? entries.find((entry) => optionalText(entry.site_id))?.site_id ?? null,
+    site_id: optionalText(args.site_id) ?? config.siteId ?? null,
     site_root: config.siteRoot,
+    scope: config.scope,
     count: sessions.length,
     sessions,
   };
 }
 
 export async function showSession(config: ClientConfig, args: JsonRecord = {}) {
-  assertRequestedSite(config, args);
-  const record = readSessionRecord(config, requiredSessionId(args.session_id));
+  const { record } = resolveSessionAuthority(config, args, requiredSessionId(args.session_id));
   const health = args.include_health === false ? { status: 'not_requested' } : await probeSession(config, record);
   return {
     schema: 'narada.nars_session_mcp.session.v1',
@@ -125,8 +231,7 @@ export async function showSession(config: ClientConfig, args: JsonRecord = {}) {
 }
 
 export async function deliverSessionInput(config: ClientConfig, args: JsonRecord = {}) {
-  assertRequestedSite(config, args);
-  const record = readSessionRecord(config, requiredSessionId(args.session_id));
+  const { record } = resolveSessionAuthority(config, args, requiredSessionId(args.session_id));
   assertWritableAuthority(config, record, args);
   const delivery = normalizeDelivery(args.delivery ?? args.delivery_mode);
   if (delivery === 'steer' && !config.allowSteer) {
@@ -186,8 +291,7 @@ export async function deliverSessionInput(config: ClientConfig, args: JsonRecord
 }
 
 export async function inputStatus(config: ClientConfig, args: JsonRecord = {}) {
-  assertRequestedSite(config, args);
-  const record = readSessionRecord(config, requiredSessionId(args.session_id));
+  const { record } = resolveSessionAuthority(config, args, requiredSessionId(args.session_id));
   const inputEventId = optionalText(args.input_event_id);
   const requestId = optionalText(args.request_id);
   const directiveId = optionalText(args.directive_id);
@@ -275,19 +379,51 @@ function readSessionEntries(sessionsRoot: string, limit: number): JsonRecord[] {
     .map((entry) => ({ session_id: entry.name }));
 }
 
-function readSessionRecord(config: ClientConfig, sessionId: string): SessionRecord {
-  const path = join(config.sessionsRoot, sessionId, 'session-index-record.json');
+function readSessionRecord(authority: SessionAuthority, sessionId: string): SessionRecord {
+  const path = join(authority.sessionsRoot, sessionId, 'session-index-record.json');
   const record = readJson(path);
   if (!record || record.session_id !== sessionId) {
     throw new NarsSessionMcpError('session_not_found', `session_not_found:${sessionId}`);
   }
-  if (record.site_root && resolve(String(record.site_root)) !== config.siteRoot) {
+  if (record.site_root && resolve(String(record.site_root)) !== authority.siteRoot) {
     throw new NarsSessionMcpError('session_site_root_mismatch', 'session record is outside the bound Site root');
   }
-  if (config.siteId && record.site_id && record.site_id !== config.siteId) {
+  if (authority.siteId && record.site_id && record.site_id !== authority.siteId) {
     throw new NarsSessionMcpError('session_site_id_mismatch', 'session record belongs to a different Site');
   }
   return record as SessionRecord;
+}
+
+function tryReadSessionRecord(authority: SessionAuthority, sessionId: string): SessionRecord | null {
+  try {
+    return readSessionRecord(authority, sessionId);
+  } catch {
+    return null;
+  }
+}
+
+function selectAuthorities(config: ClientConfig, args: JsonRecord): SessionAuthority[] {
+  const requested = optionalText(args.site_id);
+  if (!requested) return config.authorities;
+  const matches = config.authorities.filter((authority) => authority.siteId === requested);
+  if (matches.length > 0) return matches;
+  if (config.scope === 'local_site' && config.authorities.length === 1 && config.authorities[0].siteId === null) return config.authorities;
+  throw new NarsSessionMcpError('site_scope_refused', `site_scope_refused:${requested}`);
+}
+
+function resolveSessionAuthority(config: ClientConfig, args: JsonRecord, sessionId: string): { authority: SessionAuthority; record: SessionRecord } {
+  const matches = selectAuthorities(config, args).flatMap((authority) => {
+    const record = tryReadSessionRecord(authority, sessionId);
+    return record ? [{ authority, record }] : [];
+  });
+  if (matches.length === 0) throw new NarsSessionMcpError('session_not_found', `session_not_found:${sessionId}`);
+  if (matches.length > 1) {
+    throw new NarsSessionMcpError('session_ambiguous', `session_ambiguous:${sessionId}`, {
+      session_id: sessionId,
+      site_ids: matches.map(({ authority }) => authority.siteId),
+    });
+  }
+  return matches[0];
 }
 
 function publicSession(record: SessionRecord, health: JsonRecord) {
@@ -296,6 +432,7 @@ function publicSession(record: SessionRecord, health: JsonRecord) {
     carrier_session_id: record.carrier_session_id ?? record.session_id,
     nars_session_id: record.nars_session_id ?? record.session_id,
     site_id: record.site_id ?? null,
+    site_root: record.site_root ?? null,
     agent_id: record.agent_id ?? null,
     runtime_kind: record.runtime_kind ?? null,
     launch_operator_surface_kind: record.launch_operator_surface_kind ?? null,
