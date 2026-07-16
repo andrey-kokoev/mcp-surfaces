@@ -217,6 +217,33 @@ const DEFAULT_ALLOWED_ENV_VARS = [
 
 type JsonRecord = Record<string, unknown>;
 
+const LOADER_RUNTIME_LIFECYCLE = {
+  managed_by: 'mcp-loader',
+  restartable: true,
+  restart_scope: 'attached_child_process',
+  session_restart_required: false,
+  connection_id_required: true,
+  inventory_tool: 'mcp_loader_connection_inventory',
+  status_tool: 'mcp_loader_surface_status',
+  restart_tool: 'mcp_loader_surface_restart',
+  guidance: 'Restart replaces only the attached child surface process; it does not restart the agent session.',
+};
+
+function loaderRuntimeLifecycle(connectionId?: string): JsonRecord {
+  const lifecycle: JsonRecord = {
+    ...LOADER_RUNTIME_LIFECYCLE,
+    restartable: connectionId ? true : null,
+    restartability_status: connectionId ? 'available' : 'available_after_successful_attach',
+  };
+  if (connectionId) {
+    lifecycle.actions = {
+      inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connectionId } },
+      restart: { tool_name: 'mcp_loader_surface_restart', arguments: { connection_id: connectionId } },
+    };
+  }
+  return lifecycle;
+}
+
 type LoaderPolicy = {
   allowedSiteRoots: string[];
   allowedEntrypointPrefixes: string[];
@@ -322,7 +349,7 @@ export function listTools() {
   return [
     guidanceToolDefinition(),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
-    tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
+    tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, explicit loader-managed restartability, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
       site_root: { type: 'string', description: 'Site root directory.' },
     }, ['site_root'], { readOnly: true }),
@@ -335,7 +362,7 @@ export function listTools() {
       runtime_kind: { type: 'string', description: 'Explicit runtime context used to select runtime-affined projections. Omit to inspect only runtime-neutral surfaces.' },
       include_ok: { type: 'boolean', description: 'Include passing surface findings.' },
     }, ['site_root'], { readOnly: true }),
-    tool('mcp_loader_attach_surface', 'Spawn and initialize a stdio MCP surface and return a connection id.', {
+    tool('mcp_loader_attach_surface', 'Spawn and initialize a stdio MCP surface, return a connection id, and report loader-managed restartability.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_id: { type: 'string', description: 'Surface identifier from the site fabric or shared surface registry.' },
       runtime_kind: { type: 'string', description: 'Explicit runtime context required when the selected surface projection declares runtime_requirements.' },
@@ -345,7 +372,7 @@ export function listTools() {
     tool('mcp_loader_list_tools', 'List tools exposed by an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
-    tool('mcp_loader_surface_status', 'Inspect the runtime status of an attached MCP surface child process.', {
+    tool('mcp_loader_surface_status', 'Inspect the runtime status and loader-managed restartability of an attached MCP surface child process.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
     tool('mcp_loader_tool_discovery_manifest', 'Return canonical semantic tool names for an attached surface and flag generated aliases as non-authoritative.', {
@@ -359,7 +386,7 @@ export function listTools() {
     tool('mcp_loader_detach', 'Detach and terminate an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: false, destructive: true }),
-    tool('mcp_loader_surface_restart', 'Replace an attached MCP surface child process with a freshly initialized connection using the same site, surface, entrypoint, and args.', {
+    tool('mcp_loader_surface_restart', 'Replace an attached MCP surface child process with a freshly initialized connection using the same site, surface, entrypoint, and args; this does not restart the agent session.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       reason: { type: 'string', description: 'Optional operator or caller reason for the restart.' },
     }, ['connection_id'], { readOnly: false, destructive: true }),
@@ -415,6 +442,7 @@ function connectionInventory(state: LoaderState): JsonRecord {
       connection_id: connection.connectionId,
       liveness: status.status,
       age_ms: Number.isFinite(attachedAtMs) ? Math.max(0, now - attachedAtMs) : null,
+      runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
       recovery_actions: {
         inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connection.connectionId } },
         detach: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } },
@@ -460,6 +488,7 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
       args: rec.args,
       env_vars: rec.env ? Object.keys(asRecord(rec.env)) : [],
       runtime_requirements: surfaceRuntimeRequirements(rec),
+      runtime_lifecycle: loaderRuntimeLifecycle(),
     });
   }
   return { schema: 'narada.mcp_loader.site_surfaces.v1', site_root: siteRoot, surfaces };
@@ -650,6 +679,7 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     surface_id: connection.surfaceId,
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
     entrypoint: connection.entrypoint,
     args: connection.args,
     server_info: connection.serverInfo,
@@ -663,6 +693,7 @@ async function listAttachedTools(args: JsonRecord, state: LoaderState): Promise<
     schema: 'narada.mcp_loader.tools.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
     tools: connection.toolSnapshot ?? [],
   };
 }
@@ -722,6 +753,7 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
     schema: 'narada.mcp_loader.tool_result.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
     result,
   };
 }
@@ -765,6 +797,7 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
     connection_id: replacement.connectionId,
     previous_connection_id: previousConnectionId,
     surface_id: replacement.surfaceId,
+    runtime_lifecycle: loaderRuntimeLifecycle(replacement.connectionId),
     entrypoint: replacement.entrypoint,
     args: replacement.args,
     termination,
@@ -1143,6 +1176,7 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     surface_id: connection.surfaceId,
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
     entrypoint: connection.entrypoint,
     args: connection.args,
     status: live ? 'live' : 'closed',
@@ -1180,6 +1214,7 @@ function childRuntimeDiagnostic(connection: ChildConnection, extra: JsonRecord =
     exit_code: connection.process.exitCode,
     signal_code: connection.process.signalCode,
     stderr_tail: connection.stderrTail,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
     ...extra,
   };
 }

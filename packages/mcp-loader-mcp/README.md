@@ -6,6 +6,8 @@ Policy-gated runtime attachment and proxying for MCP surfaces admitted by a Site
 
 Use mcp_loader_guidance for model-facing orientation, workflow selection, recovery guidance, and loader boundaries. Use the standard child tools/list response, mcp_loader_list_tools, or mcp_loader_tool_discovery_manifest for exact attached-tool interface schemas.
 
+Every child attached through mcp-loader exposes `runtime_lifecycle` metadata declaring `managed_by: "mcp-loader"` and `restartable: true`. Inspect `mcp_loader_surface_status` or `mcp_loader_connection_inventory`, then call `mcp_loader_surface_restart({ connection_id, reason })` to replace only the child process. The agent session does not need to restart. Child-surface domain policy remains authoritative, and restart invalidates refs owned by the replaced child.
+
 ## Live Tool Inventory
 
 `mcp_loader_site_tool_inventory_check` starts fresh child surfaces, compares each live `tools/list` response with the Site fabric, and materializes the complete observation as an immutable `mcp_payload` ref. Pass the returned `observation_ref` to `registrar_site_registry_conformance_check`; do not copy the three observation maps into a new request.

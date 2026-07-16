@@ -170,6 +170,9 @@ try {
   assert.equal(guidance?.surface_id, 'mcp-loader');
   assert.equal(guidance?.guidance_tool, 'mcp_loader_guidance');
   assert.deepEqual(guidance?.requested, { workflow: 'discover', tool: 'mcp_loader_list_tools' });
+  assert.equal(guidance?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(guidance?.runtime_lifecycle?.restartable_attached_children, true);
+  assert.equal(guidance?.runtime_lifecycle?.restart_tool, 'mcp_loader_surface_restart');
   assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
   assert.ok((guidance?.boundaries as string[]).some((boundary) => boundary.includes('does not own attached-surface domain policy')));
 
@@ -182,9 +185,14 @@ try {
 
   const listResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: root } }, 3);
   assert.equal(listResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
-  const surfaces = listResult?.surfaces as { surface_id: string }[];
+  const surfaces = listResult?.surfaces as { surface_id: string; runtime_lifecycle: Record<string, any> }[];
   assert.ok(surfaces.some((s) => s.surface_id === 'test-echo'), `expected test-echo in ${JSON.stringify(surfaces)}`);
   assert.ok(surfaces.some((s) => s.surface_id === 'nars-session'), `expected canonical nars-session in ${JSON.stringify(surfaces)}`);
+  const restartableSurface = surfaces.find((s) => s.surface_id === 'restartable');
+  assert.equal(restartableSurface?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(restartableSurface?.runtime_lifecycle?.restartable, null);
+  assert.equal(restartableSurface?.runtime_lifecycle?.restartability_status, 'available_after_successful_attach');
+  assert.equal(restartableSurface?.runtime_lifecycle?.connection_id_required, true);
 
   const aggregateListResult = await call('tools/call', { name: 'mcp_loader_list_site_surfaces', arguments: { site_root: aggregateRoot } }, 10);
   assert.equal(aggregateListResult?.schema, 'narada.mcp_loader.site_surfaces.v1');
@@ -274,6 +282,8 @@ try {
   const failingAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'test-echo', entrypoint: failingEntrypoint } }, 9);
   assert.equal(failingAttach?.data?.code, 'child_exited');
   assert.match(failingAttach?.data?.details?.stderr_tail ?? '', /loader child import failed/);
+  assert.equal(failingAttach?.data?.details?.runtime_lifecycle?.restartable, true);
+  assert.equal(failingAttach?.data?.details?.runtime_lifecycle?.restart_tool, 'mcp_loader_surface_restart');
 
   const feedbackAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'surface-feedback' } }, 7);
   assert.equal(feedbackAttach?.code, undefined, JSON.stringify(feedbackAttach));
@@ -302,6 +312,9 @@ try {
   assert.equal(liveEntry?.status, 'live');
   assert.equal(liveEntry?.liveness, 'live');
   assert.equal(typeof liveEntry?.age_ms, 'number');
+  assert.equal(liveEntry?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(liveEntry?.runtime_lifecycle?.restartable, true);
+  assert.equal(liveEntry?.runtime_lifecycle?.actions?.restart?.tool_name, 'mcp_loader_surface_restart');
   assert.equal(liveEntry?.recovery_actions?.inspect?.tool_name, 'mcp_loader_surface_status');
   assert.equal(liveEntry?.recovery_actions?.detach?.tool_name, 'mcp_loader_detach');
   const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
@@ -316,12 +329,19 @@ try {
 
   const restartableAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable', entrypoint: restartableEntrypoint } }, 11);
   assert.equal(restartableAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  assert.equal(restartableAttach?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(restartableAttach?.runtime_lifecycle?.restartable, true);
+  assert.equal(restartableAttach?.runtime_lifecycle?.actions?.restart?.tool_name, 'mcp_loader_surface_restart');
   const oldConnectionId = String(restartableAttach?.connection_id);
   const initialStatus = await call('tools/call', { name: 'mcp_loader_surface_status', arguments: { connection_id: oldConnectionId } }, 12);
   assert.equal(initialStatus?.schema, 'narada.mcp_loader.surface_status.v1');
   assert.equal(initialStatus?.status, 'live');
+  assert.equal(initialStatus?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(initialStatus?.runtime_lifecycle?.restartable, true);
   const firstCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: oldConnectionId, tool_name: 'echo', arguments: { n: 1 } } }, 13);
   assert.equal(firstCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  assert.equal(firstCall?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(firstCall?.runtime_lifecycle?.restartable, true);
   const firstPid = firstCall?.result?.structuredContent?.pid;
   const restart = await call('tools/call', { name: 'mcp_loader_surface_restart', arguments: { connection_id: oldConnectionId, reason: 'test transport replacement' } }, 14);
   assert.equal(restart?.schema, 'narada.mcp_loader.surface_restarted.v1');
@@ -330,6 +350,8 @@ try {
   assert.notEqual(restart?.connection_id, oldConnectionId);
   assert.equal(restart?.previous_connection?.status, 'live');
   assert.equal(restart?.replacement_connection?.status, 'live');
+  assert.equal(restart?.runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(restart?.runtime_lifecycle?.restartable, true);
   assert.equal(restart?.termination?.status, 'terminated');
   const oldCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: oldConnectionId, tool_name: 'echo', arguments: {} } }, 15);
   assert.equal(oldCall?.data?.code, 'connection_not_found');
