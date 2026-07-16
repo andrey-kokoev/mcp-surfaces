@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, isAbsolute, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { enrichFailedRunDiagnostics, readDiagnosticTail, readJsonPreview, readTextTail, withFreshProgress, withProgressObservability, withRunningLiveness } from './diagnostics.js';
 import { recoverCompletedRunFromEvents, recoverExpiredRunningRun, recoverOrphanedRunningRun } from './recovery.js';
@@ -13,8 +13,8 @@ function siteControlRoot(siteRoot: string): string {
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-export function listRunIds(state: WorkerMcpState): string[] {
-  return uniqueStrings(candidateRunRoots(state).flatMap((root) => {
+export function listRunIds(state: WorkerMcpState, requestedSiteRoot?: string): string[] {
+  return uniqueStrings(candidateRunRoots(state, requestedSiteRoot).flatMap((root) => {
     if (!existsSync(root)) return [];
     try {
       return readdirSync(root).filter((entry) => entry.startsWith('run-') && statSync(resolve(root, entry)).isDirectory());
@@ -24,9 +24,9 @@ export function listRunIds(state: WorkerMcpState): string[] {
   }));
 }
 
-export function locateRunResult(state: WorkerMcpState, runId: string): LocatedRunResult | null {
+export function locateRunResult(state: WorkerMcpState, runId: string, requestedSiteRoot?: string): LocatedRunResult | null {
   const primaryRoot = resolve(state.policy.runRoot);
-  for (const runRoot of candidateRunRoots(state)) {
+  for (const runRoot of candidateRunRoots(state, requestedSiteRoot)) {
     const runDir = resolve(runRoot, runId);
     const resultPath = resolve(runDir, 'result.json');
     if (existsSync(resultPath)) return { runRoot, runDir, resultPath, primary: runRoot === primaryRoot };
@@ -34,12 +34,12 @@ export function locateRunResult(state: WorkerMcpState, runId: string): LocatedRu
   return null;
 }
 
-export function readRunResult(state: WorkerMcpState, runId: string, required = true): Record<string, unknown> | null {
+export function readRunResult(state: WorkerMcpState, runId: string, required = true, requestedSiteRoot?: string): Record<string, unknown> | null {
   if (!/^run-[A-Za-z0-9TZ-]+$/.test(runId)) throw diagnosticError('worker_run_id_invalid', 'worker_run_id_invalid', { run_id: runId });
-  const located = locateRunResult(state, runId);
+  const located = locateRunResult(state, runId, requestedSiteRoot);
   if (!located) {
     if (!required) return null;
-    throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
+    throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state, requestedSiteRoot) });
   }
   try {
     const run = JSON.parse(readFileSync(located.resultPath, 'utf8')) as Record<string, unknown>;
@@ -58,17 +58,57 @@ export function readRunResult(state: WorkerMcpState, runId: string, required = t
   }
 }
 
-export function candidateRunRoots(state: WorkerMcpState): string[] {
+export function resolveRunInspectionSiteRoot(state: WorkerMcpState, value: unknown): string | null {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  if (typeof value !== 'string' || !isAbsolute(value.trim())) {
+    throw diagnosticError('worker_run_site_root_invalid', 'worker_run_site_root_invalid', { site_root: value, reason: 'absolute_path_required' });
+  }
+  const siteRoot = resolve(value.trim());
+  const authorizedRoots = [
+    ...(state.policy.allowedRoots ?? []),
+    ...(state.siteRoot ? [state.siteRoot] : []),
+    ...(state.env?.NARADA_SITE_ROOT ? [state.env.NARADA_SITE_ROOT] : []),
+  ];
+  if (!authorizedRoots.some((root) => isPathInside(siteRoot, root))) {
+    throw diagnosticError('worker_run_site_root_not_allowed', 'worker_run_site_root_not_allowed', { site_root: siteRoot, allowed_roots: authorizedRoots });
+  }
+  if (!hasSiteMarker(siteRoot)) {
+    throw diagnosticError('worker_run_site_root_not_found', 'worker_run_site_root_not_found', { site_root: siteRoot, required_markers: ['.narada/', '.ai/mcp/'] });
+  }
+  return siteRoot;
+}
+
+export function candidateRunRoots(state: WorkerMcpState, requestedSiteRoot?: string): string[] {
   const roots = [resolve(state.policy.runRoot)];
-  const userHome = process.env.USERPROFILE || process.env.HOME;
-  const codeHome = process.env.CODEX_HOME;
-  if (process.env.NARADA_SITE_ROOT) roots.push(resolve(siteControlRoot(process.env.NARADA_SITE_ROOT), 'runtime', 'worker-delegation'));
+  const requested = requestedSiteRoot ? resolve(requestedSiteRoot) : null;
+  const environment = state.env ?? {};
+  const siteRoots = [
+    requested,
+    state.siteRoot ?? null,
+    environment.NARADA_SITE_ROOT ?? null,
+    process.env.NARADA_SITE_ROOT ?? null,
+  ].filter((root): root is string => Boolean(root));
+  for (const siteRoot of siteRoots) roots.push(resolve(siteControlRoot(siteRoot), 'runtime', 'worker-delegation'));
+  const userHome = environment.USERPROFILE || environment.HOME || process.env.USERPROFILE || process.env.HOME;
+  const codeHome = environment.CODEX_HOME || process.env.CODEX_HOME;
   if (userHome) {
     roots.push(resolve(userHome, 'Narada', '.narada', 'runtime', 'worker-delegation'));
     roots.push(resolve(userHome, 'worker-delegation', 'runs'));
   }
   if (codeHome) roots.push(resolve(codeHome, 'worker-delegation', 'runs'));
   return uniqueStrings(roots);
+}
+
+function hasSiteMarker(siteRoot: string): boolean {
+  const root = resolve(siteRoot);
+  return (basename(root).toLowerCase() === '.narada' && existsSync(root))
+    || existsSync(resolve(root, '.narada'))
+    || existsSync(resolve(root, '.ai', 'mcp'));
+}
+
+function isPathInside(candidate: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
 
 export function runArtifacts(runRecord: RunRecordPaths): Record<string, unknown>[] {

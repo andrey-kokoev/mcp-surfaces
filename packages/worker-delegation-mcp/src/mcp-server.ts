@@ -81,7 +81,7 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
-  return { policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  return { siteRoot, policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {

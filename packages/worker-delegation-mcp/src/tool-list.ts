@@ -53,11 +53,13 @@ export function listTools(): WorkerToolDefinition[] {
     }, ['worker_session_id', 'constraints']) },
     { name: 'worker_run_status', description: 'Inspect a worker run by run id without waiting for completion.', inputSchema: objectSchema({
       run_id: { type: 'string' },
+      site_root: { type: 'string', description: 'Optional authorized Narada Site root whose worker run store should be inspected.' },
     }, ['run_id']) },
     { name: 'worker_run_reap', description: 'Governed cleanup for a running worker record: abort a managed active run when possible, or persist a terminal orphaned/cancelled result with evidence for a stale run.', inputSchema: objectSchema({
       run_id: { type: 'string' },
       reason: { type: 'string', description: 'Required cleanup rationale.' },
       force: { type: 'boolean', description: 'Allow reaping a non-stale running run. Defaults false.' },
+      site_root: { type: 'string', description: 'Optional authorized Narada Site root whose worker run store should be reaped.' },
     }, ['run_id', 'reason']) },
     { name: 'worker_runs_list', description: 'List recent worker runs so callers can rediscover outstanding run ids.', inputSchema: objectSchema({
       limit: { type: 'integer', minimum: 1, maximum: 200 },
@@ -65,6 +67,7 @@ export function listTools(): WorkerToolDefinition[] {
       include_completed: { type: 'boolean' },
       include_summary: { type: 'boolean', description: 'Include full summaries in each compact list item.' },
       verbose: { type: 'boolean', description: 'Include full run path, timing object, session id, and full error fields.' },
+      site_root: { type: 'string', description: 'Optional authorized Narada Site root whose worker run store should be listed.' },
     }) },
     { name: 'worker_run_wait', description: 'Wait briefly for one worker run to finish, returning the latest run status on timeout.', inputSchema: objectSchema({
       run_id: { type: 'string' },
@@ -72,6 +75,7 @@ export function listTools(): WorkerToolDefinition[] {
       poll_ms: { type: 'integer', minimum: 25, maximum: 10000 },
       summary_only: { type: 'boolean', description: 'Return only run id, status, summary, and error preview.' },
       verbose: { type: 'boolean', description: 'Include the full worker run payload as full_run.' },
+      site_root: { type: 'string', description: 'Optional authorized Narada Site root whose worker run store should be read.' },
     }, ['run_id']) },
     { name: 'worker_run_batch', description: 'Start multiple worker runs from one request and return compact per-run status plus launch diagnostics.', inputSchema: objectSchema({
       requests: { type: 'array', minItems: 1, maxItems: 50, items: objectSchema({ intent: intentSchema(), constraints: constraintRequestSchema() }, ['intent', 'constraints']) },

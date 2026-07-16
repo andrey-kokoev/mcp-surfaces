@@ -3,6 +3,7 @@ import type { CognitionDefaultsState } from './cognition-defaults.js';
 import type { WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
 
 export type WorkerMcpState = {
+  siteRoot?: string;
   policy: WorkerPolicy;
   env: NodeJS.ProcessEnv;
   activeRunCount: number;

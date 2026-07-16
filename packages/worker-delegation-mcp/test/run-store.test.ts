@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runArtifacts, withArtifactReadback } from '../src/run-store.js';
+import { candidateRunRoots, locateRunResult, runArtifacts, withArtifactReadback } from '../src/run-store.js';
+import type { WorkerMcpState } from '../src/state.js';
 
 const root = mkdtempSync(join(tmpdir(), 'worker-run-store-'));
 const runDir = join(root, 'run-20260626T160000Z-test');
@@ -56,3 +57,18 @@ assert.deepEqual(withReadback.artifact_readback, {
   worker_invocation_preview: { command: 'codex', argv: ['exec'] },
   resolved_worker_config_preview: { runtime: 'codex', authority: 'write' },
 });
+
+const scopedSiteRoot = join(root, 'scoped-site');
+const scopedRunRoot = join(scopedSiteRoot, '.narada', 'runtime', 'worker-delegation');
+const scopedRunId = 'run-20260626T170000Z-scoped';
+mkdirSync(join(scopedRunRoot, scopedRunId), { recursive: true });
+writeFileSync(join(scopedRunRoot, scopedRunId, 'result.json'), JSON.stringify({ status: 'running' }));
+
+const scopedState = {
+  siteRoot: root,
+  policy: { runRoot: join(root, 'primary'), allowedRoots: [root] },
+  env: { NARADA_SITE_ROOT: root },
+} as unknown as WorkerMcpState;
+assert.ok(candidateRunRoots(scopedState, scopedSiteRoot).includes(scopedRunRoot));
+assert.ok(candidateRunRoots(scopedState).includes(join(root, '.narada', 'runtime', 'worker-delegation')));
+assert.equal(locateRunResult(scopedState, scopedRunId, scopedSiteRoot)?.runRoot, scopedRunRoot);

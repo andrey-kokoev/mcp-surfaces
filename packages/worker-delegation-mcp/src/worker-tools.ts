@@ -10,7 +10,7 @@ import { publicCognitionDefaults, updateCognitionDefault } from './cognition-def
 import { projectWorkerProviderRuntimeEnvironment, redactWorkerProviderRuntimeBinding, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
-import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, runArtifacts } from './run-store.js';
+import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
 import { reapEvidence } from './recovery.js';
 import { extractSessionEventEvidence } from './runtime-events.js';
 import { normalizeBatchRequests, normalizeOptionalRunIds, normalizeRunIds } from './tool-handlers/batch.js';
@@ -778,7 +778,8 @@ function buildWorkerRunPayload(options: {
 
 function workerRunStatus(args: Record<string, unknown>, state: WorkerMcpState): Record<string, unknown> {
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
-  return withManagedProcessLiveness(readRunResult(state, runId), state, runId);
+  const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
+  return withManagedProcessLiveness(readRunResult(state, runId, true, requestedSiteRoot ?? undefined), state, runId);
 }
 
 function withManagedProcessLiveness(run: Record<string, unknown>, state: WorkerMcpState, runId: string): Record<string, unknown> {
@@ -790,10 +791,11 @@ async function workerRunReap(args: Record<string, unknown>, state: WorkerMcpStat
   const runId = requiredNonEmptyString(args.run_id, 'worker_run_id_required');
   const reason = requiredNonEmptyString(args.reason, 'worker_run_reap_reason_required');
   const force = Boolean(args.force);
-  const located = locateRunResult(state, runId);
-  if (!located) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
-  const current = readRunResult(state, runId);
-  if (!current) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state) });
+  const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
+  const located = locateRunResult(state, runId, requestedSiteRoot ?? undefined);
+  if (!located) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state, requestedSiteRoot ?? undefined) });
+  const current = readRunResult(state, runId, true, requestedSiteRoot ?? undefined);
+  if (!current) throw diagnosticError('worker_run_not_found', 'worker_run_not_found', { run_id: runId, searched_run_roots: candidateRunRoots(state, requestedSiteRoot ?? undefined) });
   if (isTerminalRunStatus(String(current.status ?? ''))) {
     return { schema: 'narada.worker.run_reap.v1', status: 'already_terminal', run_id: runId, reaped: false, evidence: reapEvidence(current, reason, force), run: current };
   }
@@ -810,7 +812,7 @@ async function workerRunReap(args: Record<string, unknown>, state: WorkerMcpStat
     controller.abort();
   }
   if (completion) await waitForActiveCompletion(completion, 5000);
-  const settled = readRunResult(state, runId);
+  const settled = readRunResult(state, runId, true, requestedSiteRoot ?? undefined);
   if (isTerminalRunStatus(String(settled.status ?? ''))) {
     const evidence = { ...reapEvidence(settled, reason, force), ...(controller ? { process_liveness: 'managed_active', process_verification: 'abort_controller_signalled' } : {}), cancellation_requested: Boolean(controller), cancellation_propagated: Boolean(controller) };
     return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: settled };
@@ -841,7 +843,7 @@ async function workerRunReap(args: Record<string, unknown>, state: WorkerMcpStat
   writeJson(located.resultPath, reapedRun);
   if (!completion) state.activeRunCancellationRequests?.delete(runId);
   audit(state.policy, { tool: 'worker_run_reap', run_id: runId, reason, force, evidence, result_path: located.resultPath, at: finishedAt });
-  return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: readRunResult(state, runId) };
+  return { schema: 'narada.worker.run_reap.v1', status: 'reaped', run_id: runId, reaped: true, evidence, run: readRunResult(state, runId, true, requestedSiteRoot ?? undefined) };
 }
 
 async function waitForActiveCompletion(completion: Promise<Record<string, unknown>>, timeoutMs: number): Promise<void> {
@@ -859,9 +861,10 @@ function workerRunsList(args: Record<string, unknown>, state: WorkerMcpState): R
   const includeRunning = args.include_running === undefined ? true : Boolean(args.include_running);
   const verbose = Boolean(args.verbose);
   const includeSummary = Boolean(args.include_summary) || verbose;
+  const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
 
-  const runs = listRunIds(state)
-    .map((runId) => readRunResult(state, runId, false))
+  const runs = listRunIds(state, requestedSiteRoot ?? undefined)
+    .map((runId) => readRunResult(state, runId, false, requestedSiteRoot ?? undefined))
     .filter((run): run is Record<string, unknown> => Boolean(run))
     .filter((run) => includeRunByStatus(String(run.status ?? ''), { includeCompleted, includeRunning }))
     .sort((a, b) => runSortKey(b).localeCompare(runSortKey(a)))
@@ -884,9 +887,10 @@ async function workerRunWait(args: Record<string, unknown>, state: WorkerMcpStat
   const pollMs = boundedInteger(args.poll_ms, 250, 25, 10_000, 'worker_run_wait_poll_invalid');
   const verbose = Boolean(args.verbose);
   const summaryOnly = Boolean(args.summary_only);
+  const requestedSiteRoot = resolveRunInspectionSiteRoot(state, args.site_root);
   const started = Date.now();
   while (true) {
-    const result = withManagedProcessLiveness(readRunResult(state, runId), state, runId);
+    const result = withManagedProcessLiveness(readRunResult(state, runId, true, requestedSiteRoot ?? undefined), state, runId);
     if (String(result.status ?? '') !== 'running') return runWaitPayload(result, { status: 'finished', timeoutMs, elapsedMs: Date.now() - started, verbose, summaryOnly });
     if (Date.now() - started >= timeoutMs) return runWaitPayload(result, { status: 'timed_out', timeoutMs, elapsedMs: Date.now() - started, verbose, summaryOnly });
     await new Promise((resolvePromise) => setTimeout(resolvePromise, Math.min(pollMs, Math.max(1, timeoutMs - (Date.now() - started)))));
