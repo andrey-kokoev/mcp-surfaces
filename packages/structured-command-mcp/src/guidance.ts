@@ -45,7 +45,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
       'For a "Transport closed" error through mcp-loader, inspect mcp_loader_connection_inventory and mcp_loader_surface_status, then call mcp_loader_surface_restart({ connection_id, reason }) to replace only the child surface process; the agent session does not need to restart.',
       'After mcp_loader_surface_restart or detach plus reattach, treat input_ref and execution_ref from the old child as expired. Create a fresh structured_command_input_create result or send a new inline argv request before retrying. If the child stayed live after a timeout, page the existing execution_ref first.',
-      'Use mcp_loader_list_tools followed by structured_command_execution_policy_inspect as a small health check on the replacement connection. When calling through mcp-loader, pass timeout_ms in the nested structured-command arguments and stay within the loader and child policy caps.',
+      'Use mcp_loader_list_tools({ connection_id: replacement_connection_id }) followed by mcp_loader_call_tool({ connection_id: replacement_connection_id, tool_name: "structured_command_execution_policy_inspect", arguments: {} }) as a small health check on the replacement connection. When calling through mcp-loader, pass timeout_ms in the nested structured-command arguments and stay within the loader and child policy caps.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     recovery_commands: [
@@ -56,15 +56,15 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
           'mcp_loader_surface_status({ connection_id })',
           'mcp_loader_surface_restart({ connection_id, reason: "replace closed structured-command child" })',
           'mcp_loader_list_tools({ connection_id: replacement_connection_id })',
-          'structured_command_execution_policy_inspect({})'
+          'mcp_loader_call_tool({ connection_id: replacement_connection_id, tool_name: "structured_command_execution_policy_inspect", arguments: {} })'
         ],
         note: 'Restart replaces the attached child only. Recreate input_ref and execution_ref after replacement; do not reuse refs owned by the dead child.'
       },
       {
         failure: 'Timed-out execution with a live child',
         sequence: [
-          'structured_command_execute({ execution_ref, stdout_offset, stdout_limit })',
-          'structured_command_execute({ input_ref: fresh_input_ref, timeout_ms: policy_max })'
+          'mcp_loader_call_tool({ connection_id, tool_name: "structured_command_execute", arguments: { execution_ref, stdout_offset, stdout_limit } })',
+          'mcp_loader_call_tool({ connection_id, tool_name: "structured_command_execute", arguments: { input_ref: fresh_input_ref, timeout_ms: policy_max } })'
         ],
         note: 'Read back the existing execution_ref before rerunning. If the child was replaced, create a fresh input_ref and execution request.'
       }
