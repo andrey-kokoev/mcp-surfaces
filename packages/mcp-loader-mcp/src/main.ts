@@ -6,6 +6,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
+import { DEFAULT_TOOL_CALL_TIMEOUT_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 
@@ -16,7 +17,6 @@ const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_MAX_CONNECTIONS = 8;
 const DEFAULT_MAX_REQUEST_BYTES = 1024 * 1024;
 const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-const DEFAULT_TOOL_CALL_TIMEOUT_MS = 120000;
 const STDERR_TAIL_LIMIT = 8000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
 const SITE_TOOL_OBSERVATION_PAYLOAD_PREFIX = 'site-tools-';
@@ -351,7 +351,7 @@ export function listTools() {
     tool('mcp_loader_tool_discovery_manifest', 'Return canonical semantic tool names for an attached surface and flag generated aliases as non-authoritative.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
-    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface.', {
+    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface. If the nested arguments include timeout_ms, the loader honors it up to its bounded maximum.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       tool_name: { type: 'string', description: 'Tool name on the attached surface.' },
       arguments: { type: 'object', description: 'Arguments object for the tool call.' },
@@ -706,7 +706,17 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
   const toolName = requiredString(args.tool_name, 'missing_tool_name');
   const toolArgs = asRecord(args.arguments);
   enforceRequestSize(toolArgs, state.policy.maxRequestBytes);
-  const result = await sendChildRequest(connection, 'tools/call', { name: toolName, arguments: toolArgs }, state.policy.toolCallTimeoutMs);
+  const timeout = resolveToolCallTimeoutMs(toolArgs.timeout_ms, state.policy.toolCallTimeoutMs);
+  if (timeout.status === 'refused') {
+    const code = timeout.reason === 'exceeds_loader_max'
+      ? 'tool_call_timeout_exceeds_loader_max'
+      : 'invalid_tool_call_timeout';
+    throw diagnosticError(code, `${code}:${String(timeout.requestedTimeoutMs)}`, {
+      requested_timeout_ms: timeout.requestedTimeoutMs,
+      max_timeout_ms: timeout.maxTimeoutMs,
+    });
+  }
+  const result = await sendChildRequest(connection, 'tools/call', { name: toolName, arguments: toolArgs }, timeout.timeoutMs);
   enforceResponseSize(result, state.policy.maxResponseBytes);
   return {
     schema: 'narada.mcp_loader.tool_result.v1',

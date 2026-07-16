@@ -5,6 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { payloadShow } from '@narada2/mcp-transport';
+import { resolveToolCallTimeoutMs } from '../src/tool-timeout.js';
+
+assert.deepEqual(resolveToolCallTimeoutMs(undefined), { status: 'ok', timeoutMs: 120000, source: 'policy_default' });
+assert.deepEqual(resolveToolCallTimeoutMs(240000), { status: 'ok', timeoutMs: 240000, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(1000), { status: 'ok', timeoutMs: 1000, source: 'tool_request' });
+assert.equal(resolveToolCallTimeoutMs(600001).status, 'refused');
+assert.equal(resolveToolCallTimeoutMs('not-a-number').status, 'refused');
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
@@ -38,7 +45,12 @@ process.stdin.on('data', (chunk) => {
     const request = JSON.parse(line);
     if (request.method === 'initialize') write({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'restartable-child', pid: process.pid } } });
     else if (request.method === 'tools/list') write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }] } });
-    else if (request.method === 'tools/call') write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
+    else if (request.method === 'tools/call') {
+      const respond = () => write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
+      const delayMs = Number(request.params?.arguments?.delay_ms ?? 0);
+      if (Number.isFinite(delayMs) && delayMs > 0) setTimeout(respond, delayMs);
+      else respond();
+    }
     else write({ jsonrpc: '2.0', id: request.id, result: {} });
   }
 });
@@ -120,7 +132,7 @@ for (const [legacyRoot, site_id] of [[legacyAndreyRoot, 'narada-andrey'], [legac
 }
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/', '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
 
 let stdout = '';
 let stderr = '';
@@ -282,6 +294,9 @@ try {
   assert.equal(fabricCall?.result?.structuredContent?.caller_agent_id, 'test.agent');
   assert.equal(fabricCall?.result?.structuredContent?.carrier_session_id, 'carrier-test');
   assert.equal(fabricCall?.result?.structuredContent?.site_id, 'test-site');
+  const propagatedTimeoutCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { delay_ms: 1050, timeout_ms: 1200 } } }, 191);
+  assert.equal(propagatedTimeoutCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  assert.equal(propagatedTimeoutCall?.result?.structuredContent?.args?.timeout_ms, 1200);
   const liveInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 37);
   const liveEntry = (liveInventory?.connections as Array<Record<string, any>>).find((entry) => entry.connection_id === fabricAttach?.connection_id);
   assert.equal(liveEntry?.status, 'live');

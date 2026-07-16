@@ -4,6 +4,7 @@ node_modules/
 *.log
 .ai/
 .narada/crew/
+.narada/runtime/
 packages/*/dist/
 packages/shared/*/dist/
 .feedback/

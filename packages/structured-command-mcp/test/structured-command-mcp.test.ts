@@ -8,6 +8,7 @@ import {
   executeStructuredCommand,
   handleRequest,
 } from '../src/main.js';
+import { buildGuidanceResult } from '../src/guidance.js';
 import { decideStructuredCommandExecution } from '../src/policy.js';
 type DynamicTestValue = string & DynamicTestValue[] & {
   [key: string]: DynamicTestValue;
@@ -71,6 +72,11 @@ if (originalStructuredCommandSecret === undefined) delete process.env.STRUCTURED
 else process.env.STRUCTURED_COMMAND_TEST_SECRET = originalStructuredCommandSecret;
 const rpc = handleRequest as unknown as (request: Record<string, unknown>, requestState: typeof state) => Promise<JsonRpcTestResponse>;
 const exec = executeStructuredCommand as unknown as (args: Record<string, unknown>, requestState: typeof state) => Promise<ExecutionResult>;
+
+const recoveryGuidance = buildGuidanceResult().recovery as string[];
+assert.ok(recoveryGuidance.some((entry) => entry.includes('Transport closed')));
+assert.ok(recoveryGuidance.some((entry) => entry.includes('input_ref') && entry.includes('execution_ref')));
+assert.ok(recoveryGuidance.some((entry) => entry.includes('mcp_loader_surface_restart')));
 
 assert.equal(state.policy.maxTimeoutMs, 300_000);
 assert.equal(stateFromSiteRoot.policy.allowedRoots.some((allowedRoot) => allowedRoot === outsideRoot), true);
