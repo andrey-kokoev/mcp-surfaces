@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createServerState } from '../src/main.js';
+import { classifyLoaderRuntimeFreshness, createServerState } from '../src/main.js';
 import { runMcpProtocolSmoke, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-protocol-'));
@@ -12,12 +12,44 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--allowed-sit
 
 try {
   const defaultState = createServerState();
+  const surfacesRoot = resolve(dirname(serverPath), '..', '..', '..');
   const userProfile = process.env.USERPROFILE || process.env.HOME;
+  assert.ok(defaultState.policy.allowedSiteRoots.includes(resolve(surfacesRoot, '..').replace(/\\/g, '/')));
+  assert.ok(defaultState.policy.allowedEntrypointPrefixes.includes(surfacesRoot.replace(/\\/g, '/')));
   if (userProfile) {
     assert.ok(defaultState.policy.allowedSiteRoots.includes(resolve(userProfile, 'Narada').replace(/\\/g, '/')));
     assert.ok(defaultState.policy.allowedEntrypointPrefixes.includes(resolve(userProfile, 'Narada', 'tools').replace(/\\/g, '/')));
   }
 
+  const syntheticObservation = (path: string, mtime_ms: number) => ({
+    path,
+    exists: true,
+    mtime_ms,
+    mtime: new Date(mtime_ms).toISOString(),
+  });
+  const syntheticFreshness = classifyLoaderRuntimeFreshness({
+    processStartedAtMs: 100,
+    filePairs: [
+      {
+        name: 'loader_entrypoint',
+        source: syntheticObservation('loader/main.ts', 50),
+        runtime: syntheticObservation('loader/main.js', 50),
+      },
+      {
+        name: 'mcp_transport',
+        source: syntheticObservation('transport/mcp-payload-file.ts', 200),
+        runtime: syntheticObservation('transport/mcp-payload-file.js', 50),
+      },
+    ],
+    configFiles: [
+      { name: 'workspace_lockfile', observation: syntheticObservation('pnpm-lock.yaml', 150) },
+    ],
+  });
+  assert.equal(syntheticFreshness.status, 'stale');
+  assert.equal(syntheticFreshness.reload_required, true);
+  assert.ok((syntheticFreshness.reasons as string[]).includes('source_file_newer_than_runtime_file:mcp_transport'));
+  assert.ok((syntheticFreshness.reasons as string[]).includes('config_file_newer_than_runtime_files:workspace_lockfile'));
+  assert.equal((syntheticFreshness.reload_action as Record<string, unknown>).schema, 'narada.mcp_loader.supervisor_restart_action.v1');
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'mcp-loader-mcp' });
   const tools = protocol.tools.tools as { name: string; description: string; annotations: Record<string, unknown>; inputSchema: Record<string, any>; outputSchema: Record<string, any> }[];
   assert.deepEqual(tools.map((t) => t.name), [

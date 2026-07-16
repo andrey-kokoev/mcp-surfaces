@@ -6,13 +6,49 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
-import { loaderRuntimeLifecycle } from './runtime-lifecycle.js';
+import { loaderRuntimeLifecycle, loaderSupervisorRestartAction } from './runtime-lifecycle.js';
 import { DEFAULT_TOOL_CALL_TIMEOUT_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
+const MCP_WORKSPACE_ROOT = normalizePath(resolve(MCP_SURFACES_ROOT, '..'));
 const LOADER_RUNTIME_ENTRYPOINT = normalizePath(fileURLToPath(import.meta.url));
 const LOADER_SOURCE_ENTRYPOINT = normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/main.ts'));
 const LOADER_PROCESS_STARTED_AT_MS = Date.now();
+const LOADER_RUNTIME_FILE_PAIRS = [
+  {
+    name: 'loader_entrypoint',
+    source: LOADER_SOURCE_ENTRYPOINT,
+    runtime: LOADER_RUNTIME_ENTRYPOINT,
+  },
+  {
+    name: 'loader_guidance',
+    source: normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/guidance.ts')),
+    runtime: normalizePath(resolve(dirname(LOADER_RUNTIME_ENTRYPOINT), 'guidance.js')),
+  },
+  {
+    name: 'loader_runtime_lifecycle',
+    source: normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/runtime-lifecycle.ts')),
+    runtime: normalizePath(resolve(dirname(LOADER_RUNTIME_ENTRYPOINT), 'runtime-lifecycle.js')),
+  },
+  {
+    name: 'loader_tool_timeout',
+    source: normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/tool-timeout.ts')),
+    runtime: normalizePath(resolve(dirname(LOADER_RUNTIME_ENTRYPOINT), 'tool-timeout.js')),
+  },
+  {
+    name: 'mcp_transport',
+    source: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'packages/shared/mcp-transport/src/mcp-payload-file.ts')),
+    runtime: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'packages/shared/mcp-transport/dist/src/mcp-payload-file.js')),
+  },
+] as const;
+const LOADER_CONFIG_FILES = [
+  { name: 'workspace_package', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'package.json')) },
+  { name: 'workspace_lockfile', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'pnpm-lock.yaml')) },
+  { name: 'workspace_typescript_config', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'tsconfig.base.json')) },
+  { name: 'loader_package', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'packages/mcp-loader-mcp/package.json')) },
+  { name: 'loader_typescript_config', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'packages/mcp-loader-mcp/tsconfig.json')) },
+  { name: 'mcp_transport_package', path: normalizePath(resolve(MCP_WORKSPACE_ROOT, 'packages/shared/mcp-transport/package.json')) },
+] as const;
 
 const SERVER_NAME = 'mcp-loader-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -35,17 +71,21 @@ function assertSupportedSiteId(siteId: string, source: string): string {
     throw diagnosticError(
       'site_fabric_legacy_site_id_rejected',
       `site_fabric_legacy_site_id_rejected:${siteId}:${source}`,
-      { received: siteId, required: 'andrey-user', source },
+      { received: siteId, source, reason: 'legacy_site_id_not_supported' },
     );
   }
   return siteId;
 }
 
 function defaultAllowedSiteRoots(): string[] {
-  const roots = ['D:/code'];
+  const roots = [MCP_WORKSPACE_ROOT];
+  const configuredRoots = normalizeStringArray(process.env.NARADA_MCP_ALLOWED_SITE_ROOTS) ?? [];
+  if (configuredRoots.length > 0) roots.push(...configuredRoots);
+  const configuredSiteRoot = optionalString(process.env.NARADA_SITE_ROOT);
+  if (configuredSiteRoot) roots.push(configuredSiteRoot);
   const userProfile = process.env.USERPROFILE || process.env.HOME;
   if (userProfile) roots.push(resolve(userProfile, 'Narada'));
-  return roots;
+  return [...new Set(roots)];
 }
 
 function duplicateStrings(values: string[]): string[] {
@@ -154,9 +194,13 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
   }
 
   const violationCount = findings.filter((finding) => finding.status !== 'ok' && finding.status !== 'runtime_not_selected').length;
+  const runtimeSkippedSurfaceIds = findings
+    .filter((finding) => finding.status === 'runtime_not_selected')
+    .map((finding) => finding.surface_id);
+  const runtimeSkippedCount = runtimeSkippedSurfaceIds.length;
   const observation = {
     schema: 'narada.mcp_loader.site_tool_inventory_check.v1',
-    status: violationCount === 0 ? 'ok' : 'drift',
+    status: violationCount > 0 ? 'drift' : runtimeSkippedCount > 0 ? 'partial' : 'ok',
     site_root: siteRoot,
     observed_at: new Date().toISOString(),
     requested_surface_ids: requestedSurfaceIds ?? null,
@@ -164,8 +208,9 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
     attempted_surface_ids: surfaceIds,
     observed_surface_ids: Object.keys(observedToolsBySurface).sort(),
     unobserved_surface_ids: surfaceIds.filter((surfaceId) => !Object.hasOwn(observedToolsBySurface, surfaceId)),
-    runtime_skipped_surface_ids: findings.filter((finding) => finding.status === 'runtime_not_selected').map((finding) => finding.surface_id),
-    observation_coverage: requestedSurfaceIds ? 'partial' : 'complete',
+    runtime_skipped_surface_ids: runtimeSkippedSurfaceIds,
+    runtime_skipped_count: runtimeSkippedCount,
+    observation_coverage: requestedSurfaceIds || runtimeSkippedCount > 0 ? 'partial' : 'complete',
     checked_surface_count: surfaceIds.length,
     violation_count: violationCount,
     observed_tools: observedToolsBySurface,
@@ -199,14 +244,15 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
 
 function defaultAllowedEntrypointPrefixes(): string[] {
   const prefixes = [
-    'D:/code/mcp-surfaces/packages/',
+    MCP_SURFACES_ROOT,
     '{site_root}/tools/',
   ];
+  const configuredPrefixes = normalizeStringArray(process.env.NARADA_MCP_ALLOWED_ENTRYPOINT_PREFIXES) ?? [];
+  if (configuredPrefixes.length > 0) prefixes.push(...configuredPrefixes);
   const userProfile = process.env.USERPROFILE || process.env.HOME;
   if (userProfile) prefixes.push(resolve(userProfile, 'Narada', 'tools'));
-  return prefixes;
+  return [...new Set(prefixes)];
 }
-
 const DEFAULT_ALLOWED_ENV_VARS = [
   'NODE_OPTIONS',
   'PATH',
@@ -217,15 +263,32 @@ const DEFAULT_ALLOWED_ENV_VARS = [
   'NARADA_NARS_SESSION_SOURCE_KIND',
   'NARADA_CARRIER_SESSION_ID',
   'NARADA_SITE_ID',
+  'NARADA_ROOT',
 ];
-
 type JsonRecord = Record<string, unknown>;
 
-type RuntimeFileObservation = {
+export type RuntimeFileObservation = {
   path: string;
   exists: boolean;
   mtime_ms: number | null;
   mtime: string | null;
+};
+
+export type RuntimeFilePair = {
+  name: string;
+  source: RuntimeFileObservation;
+  runtime: RuntimeFileObservation;
+};
+
+export type LoaderConfigObservation = {
+  name: string;
+  observation: RuntimeFileObservation;
+};
+
+export type LoaderFreshnessEvidence = {
+  processStartedAtMs: number;
+  filePairs: RuntimeFilePair[];
+  configFiles: LoaderConfigObservation[];
 };
 
 function observeRuntimeFile(path: string): RuntimeFileObservation {
@@ -242,40 +305,83 @@ function observeRuntimeFile(path: string): RuntimeFileObservation {
   }
 }
 
-function loaderRuntimeFreshness(): JsonRecord {
-  const runtime = observeRuntimeFile(LOADER_RUNTIME_ENTRYPOINT);
-  const source = observeRuntimeFile(LOADER_SOURCE_ENTRYPOINT);
+export function classifyLoaderRuntimeFreshness(evidence: LoaderFreshnessEvidence): JsonRecord {
   const reasons: string[] = [];
-  if (!runtime.exists) reasons.push('runtime_entrypoint_unavailable');
-  if (!source.exists) reasons.push('source_entrypoint_unavailable');
-  if (runtime.mtime_ms !== null && runtime.mtime_ms > LOADER_PROCESS_STARTED_AT_MS) {
-    reasons.push('runtime_entrypoint_changed_after_process_start');
+  for (const pair of evidence.filePairs) {
+    if (!pair.runtime.exists) reasons.push(`runtime_file_unavailable:${pair.name}`);
+    if (!pair.source.exists) reasons.push(`source_file_unavailable:${pair.name}`);
+    if (pair.runtime.mtime_ms !== null && pair.runtime.mtime_ms > evidence.processStartedAtMs) {
+      reasons.push(`runtime_file_changed_after_process_start:${pair.name}`);
+    }
+    if (pair.source.mtime_ms !== null && pair.source.mtime_ms > evidence.processStartedAtMs) {
+      reasons.push(`source_file_changed_after_process_start:${pair.name}`);
+    }
+    if (pair.runtime.mtime_ms !== null && pair.source.mtime_ms !== null && pair.source.mtime_ms > pair.runtime.mtime_ms) {
+      reasons.push(`source_file_newer_than_runtime_file:${pair.name}`);
+    }
   }
-  if (source.mtime_ms !== null && source.mtime_ms > LOADER_PROCESS_STARTED_AT_MS) {
-    reasons.push('source_entrypoint_changed_after_process_start');
+
+  const newestRuntimeMtime = evidence.filePairs
+    .map((pair) => pair.runtime.mtime_ms)
+    .filter((mtime): mtime is number => mtime !== null)
+    .reduce((latest, mtime) => Math.max(latest, mtime), 0);
+  for (const config of evidence.configFiles) {
+    if (!config.observation.exists) {
+      reasons.push(`config_file_unavailable:${config.name}`);
+      continue;
+    }
+    if (config.observation.mtime_ms !== null && config.observation.mtime_ms > evidence.processStartedAtMs) {
+      reasons.push(`config_file_changed_after_process_start:${config.name}`);
+    }
+    if (config.observation.mtime_ms !== null && config.observation.mtime_ms > newestRuntimeMtime) {
+      reasons.push(`config_file_newer_than_runtime_files:${config.name}`);
+    }
   }
-  if (runtime.mtime_ms !== null && source.mtime_ms !== null && source.mtime_ms > runtime.mtime_ms) {
-    reasons.push('source_entrypoint_newer_than_runtime_entrypoint');
-  }
+
   const status = reasons.some((reason) => reason.includes('unavailable'))
     ? 'unknown'
     : reasons.length > 0
       ? 'stale'
       : 'current';
+  const entrypoint = evidence.filePairs.find((pair) => pair.name === 'loader_entrypoint');
+  const dependencyPairs = evidence.filePairs.filter((pair) => pair.name !== 'loader_entrypoint');
   return {
     schema: 'narada.mcp_loader.runtime_freshness.v1',
     status,
     reload_required: status === 'stale' ? true : status === 'current' ? false : null,
-    process_started_at: new Date(LOADER_PROCESS_STARTED_AT_MS).toISOString(),
-    process_started_at_ms: LOADER_PROCESS_STARTED_AT_MS,
-    runtime_entrypoint: runtime,
-    source_entrypoint: source,
+    process_started_at: new Date(evidence.processStartedAtMs).toISOString(),
+    process_started_at_ms: evidence.processStartedAtMs,
+    freshness_scope: 'loader_source_runtime_dependencies_and_build_configuration',
+    runtime_entrypoint: entrypoint?.runtime ?? null,
+    source_entrypoint: entrypoint?.source ?? null,
+    source_files: evidence.filePairs.map((pair) => ({ name: pair.name, ...pair.source })),
+    runtime_files: evidence.filePairs.map((pair) => ({ name: pair.name, ...pair.runtime })),
+    dependency_files: dependencyPairs.map((pair) => ({ name: pair.name, source: pair.source, runtime: pair.runtime })),
+    config_files: evidence.configFiles.map((config) => ({ name: config.name, ...config.observation })),
+    tracked_file_count: evidence.filePairs.length * 2 + evidence.configFiles.length,
     reasons,
     reload_action: {
-      kind: 'restart_loader_process',
+      ...loaderSupervisorRestartAction(),
       guidance: 'Restart the mcp-loader process through its carrier or runtime supervisor to load rebuilt loader code. mcp_loader_surface_restart replaces only an attached child and does not reload this loader process.',
     },
   };
+}
+
+function loaderRuntimeFreshness(): JsonRecord {
+  const filePairs = LOADER_RUNTIME_FILE_PAIRS.map((pair) => ({
+    name: pair.name,
+    source: observeRuntimeFile(pair.source),
+    runtime: observeRuntimeFile(pair.runtime),
+  }));
+  const configFiles = LOADER_CONFIG_FILES.map((config) => ({
+    name: config.name,
+    observation: observeRuntimeFile(config.path),
+  }));
+  return classifyLoaderRuntimeFreshness({
+    processStartedAtMs: LOADER_PROCESS_STARTED_AT_MS,
+    filePairs,
+    configFiles,
+  });
 }
 
 type LoaderPolicy = {
@@ -382,7 +488,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: LoaderS
 export function listTools() {
   return [
     guidanceToolDefinition(),
-    tool('mcp_loader_runtime_status', 'Inspect whether this loader process is current relative to its runtime and source entrypoints and whether the loader process itself must be restarted.', {}, [], { readOnly: true }),
+    tool('mcp_loader_runtime_status', 'Inspect whether this loader process is current relative to its runtime, source, dependency, and build-configuration evidence and whether the loader process itself must be restarted.', {}, [], { readOnly: true }),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
     tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, explicit loader-managed restartability, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
@@ -391,7 +497,7 @@ export function listTools() {
     tool('mcp_loader_site_fabric_diagnostics', 'Inspect site MCP fabric provenance and classify shared-registry drift or intentional entrypoint overrides.', {
       site_root: { type: 'string', description: 'Site root directory.' },
     }, ['site_root'], { readOnly: true }),
-    tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric declarations with fresh child tools/list responses and materialize an immutable observation_ref for Registrar conformance checks.', {
+    tool('mcp_loader_site_tool_inventory_check', 'Compare site fabric declarations with fresh child tools/list responses; runtime-skipped surfaces produce partial coverage and an immutable observation_ref is materialized for Registrar conformance checks.', {
       site_root: { type: 'string', description: 'Site root directory.' },
       surface_ids: { type: 'array', items: { type: 'string' }, description: 'Optional surface ids to check. Defaults to every surface in the site fabric.' },
       runtime_kind: { type: 'string', description: 'Explicit runtime context used to select runtime-affined projections. Omit to inspect only runtime-neutral surfaces.' },
@@ -978,11 +1084,11 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
   'scheduler': { entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`, args: [] },
   'mcp-registrar': { entrypoint: `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`, args: [] },
-  'surface-feedback': { entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`, args: ['--feedback-root', 'D:/code/mcp-surfaces'] },
+  'surface-feedback': { entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`, args: ['--feedback-root', MCP_WORKSPACE_ROOT] },
   'speech': { entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`, args: [] },
   'cloudflare-carrier': { entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-coherence': { entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
-  'site-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`, args: ['--narada-root', 'D:/code/narada'] },
+  'site-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`, args: [] },
   'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
   'nars-session': { entrypoint: `${MCP_SURFACES_ROOT}/nars-session-mcp/dist/src/main.js`, args: [] },
 };

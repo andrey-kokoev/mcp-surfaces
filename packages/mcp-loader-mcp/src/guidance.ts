@@ -30,7 +30,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Call mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics for the explicit Site root.',
       'Use mcp_loader_attach_surface with an explicit surface_id and runtime_kind when the projection requires one.',
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
-      'Call mcp_loader_runtime_status when the loader process may have out-of-date source or runtime code; restarting a child does not reload this loader process.',
+      'Call mcp_loader_runtime_status when the loader process may have out-of-date source, dependency, or build-configuration evidence; inspect runtime_freshness.reload_action for the machine-readable carrier/runtime-supervisor restart operation.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.',
     ],
     tool_preference: [
@@ -39,9 +39,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'resolve_site', guidance: 'Use mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics against the same explicit Site root.' },
       { step: 'attach', guidance: 'Attach the exact declared surface and provide runtime_kind explicitly when the projection requires it.' },
       { step: 'discover', guidance: 'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest; use the child tools/list definitions for exact input and output shape.' },
-      { step: 'observe_live', guidance: 'Use mcp_loader_site_tool_inventory_check to compare declared tools with fresh child tools/list responses and retain its immutable observation_ref.' },
+      { step: 'observe_live', guidance: 'Use mcp_loader_site_tool_inventory_check to compare declared tools with fresh child tools/list responses; a skipped runtime-affined surface makes the aggregate status partial, so retain its immutable observation_ref and rerun with the required runtime_kind for complete coverage.' },
       { step: 'operate', guidance: 'Call a child tool only after selecting the intended connection and honoring the child surface policy.' },
-      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; restart the loader process itself through its carrier/runtime supervisor when mcp_loader_runtime_status reports stale.' },
+      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; when mcp_loader_runtime_status reports stale, execute the structured runtime_freshness.reload_action through the carrier/runtime supervisor rather than restarting only a child.' },
     ],
     examples: [
       { intent: 'First use', call: 'mcp_loader_guidance({})' },

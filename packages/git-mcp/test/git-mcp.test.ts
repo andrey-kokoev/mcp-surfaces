@@ -112,6 +112,7 @@ if (guidanceContent.schema === 'narada.producer_output_page.v1') {
 }
 assert.equal(guidanceContent.surface_id, 'git');
 assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('git_workflow_record')));
+assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('any unstaged, untracked, or conflict paths')));
 assert.deepEqual(guidanceContent.tool_inventory.write, ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_workflow_record']);
 
 const policy = await rpc({

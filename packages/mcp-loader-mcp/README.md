@@ -6,25 +6,27 @@ Policy-gated runtime attachment and proxying for MCP surfaces admitted by a Site
 
 Use mcp_loader_guidance for model-facing orientation, workflow selection, recovery guidance, and loader boundaries. Use the standard child tools/list response, mcp_loader_list_tools, or mcp_loader_tool_discovery_manifest for exact attached-tool interface schemas.
 
-Every loader lifecycle projection uses the `narada.mcp_loader.runtime_lifecycle.v1` shape. Attached responses expose `runtime_lifecycle` with `managed_by: "mcp-loader"`, `restartable: true`, and connection-scoped inspect/restart actions. Pre-attachment guidance exposes the same shape with `restartable: null` and `restartability_status: "available_after_successful_attach"`. Inspect `mcp_loader_surface_status` or `mcp_loader_connection_inventory`, then call `mcp_loader_surface_restart({ connection_id, reason })` to replace only the child process. The agent session does not need to restart. Child-surface domain policy remains authoritative, and restart invalidates refs owned by the replaced child.
+Every loader lifecycle projection uses the `narada.mcp_loader.runtime_lifecycle.v1` shape. Attached responses expose `runtime_lifecycle` with `managed_by: "mcp-loader"`, `restartable: true`, connection-scoped inspect/restart actions, and a machine-readable `loader_restart_action` describing the carrier/runtime-supervisor operation required to restart the loader itself. Pre-attachment guidance exposes the same shape with `restartable: null` and `restartability_status: "available_after_successful_attach"`. Inspect `mcp_loader_surface_status` or `mcp_loader_connection_inventory`, then call `mcp_loader_surface_restart({ connection_id, reason })` to replace only the child process. The agent session does not need to restart. Child-surface domain policy remains authoritative, and restart invalidates refs owned by the replaced child.
 
 When a proxied child guidance tool is called, its `structuredContent` is augmented with `loader_runtime_lifecycle` and `loader_runtime_freshness`, so the attached surface guidance itself advertises loader ownership and recovery.
 
 ## Loader Runtime Freshness
 
-A long-lived loader process can outlive a source or runtime rebuild. Call `mcp_loader_runtime_status` to compare the running loader entrypoint and source entrypoint with the loader process start time. `status: "stale"` means the loader process must be restarted through its carrier or runtime supervisor; `mcp_loader_surface_restart` replaces only an attached child and does not hot-reload the loader. `status: "unknown"` means the freshness evidence is unavailable and should not be treated as current.
+A long-lived loader process can outlive a source, dependency, build-configuration, or runtime rebuild. Call `mcp_loader_runtime_status` to compare the running loader files with their source files and to inspect dependency/configuration evidence. `status: "stale"` means the loader process must be restarted through its carrier or runtime supervisor; use the machine-readable `reload_action` descriptor to route that operation. `mcp_loader_surface_restart` replaces only an attached child and does not hot-reload the loader. `status: "unknown"` means required freshness evidence is unavailable and should not be treated as current.
+
+The default allowed roots and entrypoint prefixes derive from the loader's resolved surfaces root, the active `NARADA_SITE_ROOT`, optional `NARADA_MCP_ALLOWED_SITE_ROOTS`/`NARADA_MCP_ALLOWED_ENTRYPOINT_PREFIXES`, and the current user's Narada root. They do not depend on a fixed checkout path or User Site identifier.
 
 ## Live Tool Inventory
 
 `mcp_loader_site_tool_inventory_check` starts fresh child surfaces, compares each live `tools/list` response with the Site fabric, and materializes the complete observation as an immutable `mcp_payload` ref. Pass the returned `observation_ref` to `registrar_site_registry_conformance_check`; do not copy the three observation maps into a new request.
 
-Inventory observations use the `site-tools-` payload-id namespace. Loader retains at most 32 observations per Site and removes observations older than seven days. Each result includes `observation_retention` with the applied limits and removals.
+Inventory observations use the `site-tools-` payload-id namespace. Loader retains at most 32 observations per Site and removes observations older than seven days. Each result includes `observation_retention` with the applied limits and removals. If a runtime-affined surface is skipped because no compatible `runtime_kind` was supplied, the overall observation status is `partial`, never `ok`; pass the required runtime kind for complete coverage.
 
 ## Runtime-Affined Projections
 
 Site fabric entries may declare `surface_projection.runtime_requirements`. The loader never infers a runtime from the entrypoint, process name, or current directory. `mcp_loader_attach_surface` and `mcp_loader_site_tool_inventory_check` accept an explicit `runtime_kind`; omitting it selects only runtime-neutral projections, while a runtime-affined surface is refused with `surface_runtime_required`. A supplied but incompatible runtime is refused with `surface_runtime_not_supported`.
 
-Inventory results carry `runtime_kind` and `runtime_skipped_surface_ids`. A skipped runtime-affined surface is reported as `runtime_not_selected`, not as a missing or drifted surface. To inspect the NARS projection, pass `runtime_kind: "nars"`.
+Inventory results carry `runtime_kind` and `runtime_skipped_surface_ids`. A skipped runtime-affined surface is reported as `runtime_not_selected` at finding level and makes the aggregate observation `partial`, not as a missing or drifted surface. To inspect the NARS projection, pass `runtime_kind: "nars"`.
 
 Attached child surfaces receive `NARADA_SITE_ROOT` set to the requested `site_root`. This is the authoritative Site binding for the child process; the loader does not let an ambient caller Site root override it.
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { payloadShow } from '@narada2/mcp-transport';
 import { resolveToolCallTimeoutMs } from '../src/tool-timeout.js';
@@ -142,7 +142,7 @@ for (const [legacyRoot, site_id] of [[legacyAndreyRoot, 'narada-andrey'], [legac
 }
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', 'D:/code/mcp-surfaces/packages/', '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
+const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', resolve(dirname(serverPath), '..', '..', '..'), '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
 
 let stdout = '';
 let stderr = '';
@@ -185,11 +185,17 @@ try {
   assert.equal(guidance?.runtime_lifecycle?.restartable, null);
   assert.equal(guidance?.runtime_lifecycle?.restartability_status, 'available_after_successful_attach');
   assert.equal(guidance?.runtime_lifecycle?.restart_tool, 'mcp_loader_surface_restart');
+  assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
+  assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.owner, 'carrier_or_runtime_supervisor');
   assert.equal(guidance?.runtime_freshness?.schema, 'narada.mcp_loader.runtime_freshness.v1');
   assert.equal(guidance?.runtime_freshness?.status, 'current');
   assert.equal(guidance?.runtime_freshness?.runtime_entrypoint?.exists, true);
   assert.equal(guidance?.runtime_freshness?.source_entrypoint?.exists, true);
   assert.equal(guidance?.runtime_freshness?.reload_action?.kind, 'restart_loader_process');
+  assert.equal(guidance?.runtime_freshness?.reload_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
+  assert.equal(guidance?.runtime_freshness?.reload_action?.operation, 'restart');
+  assert.ok((guidance?.runtime_freshness?.dependency_files as Array<Record<string, unknown>>).some((file) => file.name === 'mcp_transport'));
+  assert.ok((guidance?.runtime_freshness?.config_files as Array<Record<string, unknown>>).some((file) => file.name === 'workspace_lockfile'));
   assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
 
   const runtimeStatus = await call('tools/call', { name: 'mcp_loader_runtime_status', arguments: {} }, 351);
@@ -198,6 +204,8 @@ try {
   assert.equal(runtimeStatus?.runtime_entrypoint?.exists, true);
   assert.equal(runtimeStatus?.source_entrypoint?.exists, true);
   assert.equal(runtimeStatus?.reload_action?.kind, 'restart_loader_process');
+  assert.equal(runtimeStatus?.reload_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
+  assert.equal(runtimeStatus?.reload_action?.owner, 'carrier_or_runtime_supervisor');
   assert.ok((guidance?.boundaries as string[]).some((boundary) => boundary.includes('does not own attached-surface domain policy')));
 
   const emptyInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 36);
@@ -261,8 +269,9 @@ try {
   assert.equal(inventoryUnclassified?.status, 'drift');
   assert.deepEqual(inventoryUnclassified?.findings?.[0]?.unclassified_observed_tools, ['echo']);
 
-  const runtimeNeutralInventory = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['nars-session'], include_ok: true } }, 27);
-  assert.equal(runtimeNeutralInventory?.status, 'ok');
+  const runtimeNeutralInventory = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['nars-session'] } }, 27);
+  assert.equal(runtimeNeutralInventory?.status, 'partial');
+  assert.equal(runtimeNeutralInventory?.runtime_skipped_count, 1);
   assert.equal(runtimeNeutralInventory?.runtime_kind, null);
   assert.deepEqual(runtimeNeutralInventory?.runtime_skipped_surface_ids, ['nars-session']);
   assert.equal(runtimeNeutralInventory?.findings?.[0]?.status, 'runtime_not_selected');
@@ -313,7 +322,7 @@ try {
   assert.equal(feedbackAttach?.code, undefined, JSON.stringify(feedbackAttach));
   assert.equal(feedbackAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
   const feedbackArgs = feedbackAttach?.args as string[];
-  assert.equal(feedbackArgs[feedbackArgs.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
+  assert.equal(feedbackArgs[feedbackArgs.indexOf('--feedback-root') + 1], resolve(dirname(serverPath), '..', '..', '..', '..').replace(/\\/g, '/'));
   assert.equal(feedbackArgs.includes(root), false);
   const feedbackDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: feedbackAttach?.connection_id } }, 8);
   assert.equal(feedbackDetach?.termination?.status, 'terminated');

@@ -1,4 +1,33 @@
 export const LOADER_RUNTIME_LIFECYCLE_SCHEMA = 'narada.mcp_loader.runtime_lifecycle.v1' as const;
+export const LOADER_SUPERVISOR_RESTART_ACTION_SCHEMA = 'narada.mcp_loader.supervisor_restart_action.v1' as const;
+
+export type LoaderSupervisorRestartAction = {
+  schema: typeof LOADER_SUPERVISOR_RESTART_ACTION_SCHEMA;
+  kind: 'restart_loader_process';
+  target: 'mcp-loader-process';
+  owner: 'carrier_or_runtime_supervisor';
+  operation: 'restart';
+  capability: 'restart_mcp_loader_process';
+  tool_name: null;
+  arguments: Record<string, never>;
+  connection_id_required: false;
+  session_restart_required: false;
+};
+
+export function loaderSupervisorRestartAction(): LoaderSupervisorRestartAction {
+  return {
+    schema: LOADER_SUPERVISOR_RESTART_ACTION_SCHEMA,
+    kind: 'restart_loader_process',
+    target: 'mcp-loader-process',
+    owner: 'carrier_or_runtime_supervisor',
+    operation: 'restart',
+    capability: 'restart_mcp_loader_process',
+    tool_name: null,
+    arguments: {},
+    connection_id_required: false,
+    session_restart_required: false,
+  };
+}
 
 export type LoaderRuntimeLifecycle = {
   schema: typeof LOADER_RUNTIME_LIFECYCLE_SCHEMA;
@@ -11,6 +40,7 @@ export type LoaderRuntimeLifecycle = {
   inventory_tool: 'mcp_loader_connection_inventory';
   status_tool: 'mcp_loader_surface_status';
   restart_tool: 'mcp_loader_surface_restart';
+  loader_restart_action: LoaderSupervisorRestartAction;
   guidance: string;
   actions?: {
     inspect: {
@@ -37,6 +67,7 @@ export function loaderRuntimeLifecycle(connectionId?: string): LoaderRuntimeLife
     inventory_tool: 'mcp_loader_connection_inventory',
     status_tool: 'mcp_loader_surface_status',
     restart_tool: 'mcp_loader_surface_restart',
+    loader_restart_action: loaderSupervisorRestartAction(),
     guidance: 'Restart replaces only the attached child surface process; it does not restart the agent session or reload the mcp-loader process.',
   };
   if (attached) {

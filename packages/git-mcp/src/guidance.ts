@@ -34,7 +34,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'git_changed_summary and git_diff for scoped review.',
         'git_add with explicit paths only.',
         'git_status or staged git_diff to verify staged content.',
-        'If git_status reports unstaged, untracked, or conflict paths outside the index, pass expected_staged_paths to git_commit; never infer a mixed-worktree scope.',
+        'If git_status reports any unstaged, untracked, or conflict paths, pass expected_staged_paths to git_commit; the guard protects the exact index scope and never infers mixed-worktree intent.',
         'git_commit with concise message and verification body.',
         'git_push only after target is resolved.',
         'git_workflow_record for SHA, push status, staged paths, and unrelated dirty paths.'
