@@ -22,6 +22,7 @@ try {
   const tools = protocol.tools.tools as { name: string; description: string; annotations: Record<string, unknown>; inputSchema: Record<string, any>; outputSchema: Record<string, any> }[];
   assert.deepEqual(tools.map((t) => t.name), [
     'mcp_loader_guidance',
+    'mcp_loader_runtime_status',
     'mcp_loader_policy_inspect',
     'mcp_loader_connection_inventory',
     'mcp_loader_list_site_surfaces',
@@ -51,6 +52,9 @@ try {
 
   const connectionInventoryTool = tools.find((t) => t.name === 'mcp_loader_connection_inventory');
   assert.equal(connectionInventoryTool?.annotations.readOnlyHint, true);
+
+  const runtimeStatusTool = tools.find((t) => t.name === 'mcp_loader_runtime_status');
+  assert.equal(runtimeStatusTool?.annotations.readOnlyHint, true);
 
   const diagnosticsTool = tools.find((t) => t.name === 'mcp_loader_site_fabric_diagnostics');
   assert.equal(diagnosticsTool?.annotations.readOnlyHint, true);

@@ -34,6 +34,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'git_changed_summary and git_diff for scoped review.',
         'git_add with explicit paths only.',
         'git_status or staged git_diff to verify staged content.',
+        'If git_status reports unstaged, untracked, or conflict paths outside the index, pass expected_staged_paths to git_commit; never infer a mixed-worktree scope.',
         'git_commit with concise message and verification body.',
         'git_push only after target is resolved.',
         'git_workflow_record for SHA, push status, staged paths, and unrelated dirty paths.'
@@ -59,12 +60,14 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
-      'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
+      'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.',
+      'Do not call git_commit without expected_staged_paths when git_status reports any unstaged, untracked, or conflict paths; scope_label alone does not isolate the index.'
     ],
     recovery: [
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
+      'For git_commit_scope_required_for_mixed_worktree, inspect git_status, pass the exact intended expected_staged_paths, and retry; the refusal is atomic.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {

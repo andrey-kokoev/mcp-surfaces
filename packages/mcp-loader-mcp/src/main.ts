@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { spawn, ChildProcess } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
+import { loaderRuntimeLifecycle } from './runtime-lifecycle.js';
 import { DEFAULT_TOOL_CALL_TIMEOUT_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
+const LOADER_RUNTIME_ENTRYPOINT = normalizePath(fileURLToPath(import.meta.url));
+const LOADER_SOURCE_ENTRYPOINT = normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/main.ts'));
+const LOADER_PROCESS_STARTED_AT_MS = Date.now();
 
 const SERVER_NAME = 'mcp-loader-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -217,31 +221,61 @@ const DEFAULT_ALLOWED_ENV_VARS = [
 
 type JsonRecord = Record<string, unknown>;
 
-const LOADER_RUNTIME_LIFECYCLE = {
-  managed_by: 'mcp-loader',
-  restartable: true,
-  restart_scope: 'attached_child_process',
-  session_restart_required: false,
-  connection_id_required: true,
-  inventory_tool: 'mcp_loader_connection_inventory',
-  status_tool: 'mcp_loader_surface_status',
-  restart_tool: 'mcp_loader_surface_restart',
-  guidance: 'Restart replaces only the attached child surface process; it does not restart the agent session.',
+type RuntimeFileObservation = {
+  path: string;
+  exists: boolean;
+  mtime_ms: number | null;
+  mtime: string | null;
 };
 
-function loaderRuntimeLifecycle(connectionId?: string): JsonRecord {
-  const lifecycle: JsonRecord = {
-    ...LOADER_RUNTIME_LIFECYCLE,
-    restartable: connectionId ? true : null,
-    restartability_status: connectionId ? 'available' : 'available_after_successful_attach',
-  };
-  if (connectionId) {
-    lifecycle.actions = {
-      inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connectionId } },
-      restart: { tool_name: 'mcp_loader_surface_restart', arguments: { connection_id: connectionId } },
+function observeRuntimeFile(path: string): RuntimeFileObservation {
+  try {
+    const stat = statSync(path);
+    return {
+      path,
+      exists: true,
+      mtime_ms: stat.mtimeMs,
+      mtime: new Date(stat.mtimeMs).toISOString(),
     };
+  } catch {
+    return { path, exists: false, mtime_ms: null, mtime: null };
   }
-  return lifecycle;
+}
+
+function loaderRuntimeFreshness(): JsonRecord {
+  const runtime = observeRuntimeFile(LOADER_RUNTIME_ENTRYPOINT);
+  const source = observeRuntimeFile(LOADER_SOURCE_ENTRYPOINT);
+  const reasons: string[] = [];
+  if (!runtime.exists) reasons.push('runtime_entrypoint_unavailable');
+  if (!source.exists) reasons.push('source_entrypoint_unavailable');
+  if (runtime.mtime_ms !== null && runtime.mtime_ms > LOADER_PROCESS_STARTED_AT_MS) {
+    reasons.push('runtime_entrypoint_changed_after_process_start');
+  }
+  if (source.mtime_ms !== null && source.mtime_ms > LOADER_PROCESS_STARTED_AT_MS) {
+    reasons.push('source_entrypoint_changed_after_process_start');
+  }
+  if (runtime.mtime_ms !== null && source.mtime_ms !== null && source.mtime_ms > runtime.mtime_ms) {
+    reasons.push('source_entrypoint_newer_than_runtime_entrypoint');
+  }
+  const status = reasons.some((reason) => reason.includes('unavailable'))
+    ? 'unknown'
+    : reasons.length > 0
+      ? 'stale'
+      : 'current';
+  return {
+    schema: 'narada.mcp_loader.runtime_freshness.v1',
+    status,
+    reload_required: status === 'stale' ? true : status === 'current' ? false : null,
+    process_started_at: new Date(LOADER_PROCESS_STARTED_AT_MS).toISOString(),
+    process_started_at_ms: LOADER_PROCESS_STARTED_AT_MS,
+    runtime_entrypoint: runtime,
+    source_entrypoint: source,
+    reasons,
+    reload_action: {
+      kind: 'restart_loader_process',
+      guidance: 'Restart the mcp-loader process through its carrier or runtime supervisor to load rebuilt loader code. mcp_loader_surface_restart replaces only an attached child and does not reload this loader process.',
+    },
+  };
 }
 
 type LoaderPolicy = {
@@ -348,6 +382,7 @@ async function dispatchMethod(method: string, params: JsonRecord, state: LoaderS
 export function listTools() {
   return [
     guidanceToolDefinition(),
+    tool('mcp_loader_runtime_status', 'Inspect whether this loader process is current relative to its runtime and source entrypoints and whether the loader process itself must be restarted.', {}, [], { readOnly: true }),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
     tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, explicit loader-managed restartability, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_site_surfaces', 'List resolvable MCP surfaces declared in a site\'s local fabric.', {
@@ -398,7 +433,9 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
   const args = asRecord(params.arguments);
   switch (name) {
     case 'mcp_loader_guidance':
-      return buildGuidanceResult(args);
+      return { ...buildGuidanceResult(args), runtime_freshness: loaderRuntimeFreshness() };
+    case 'mcp_loader_runtime_status':
+      return loaderRuntimeFreshness();
     case 'mcp_loader_policy_inspect':
       return policyInspect(state);
     case 'mcp_loader_connection_inventory':
@@ -455,6 +492,7 @@ function connectionInventory(state: LoaderState): JsonRecord {
   return {
     schema: 'narada.mcp_loader.connection_inventory.v1',
     status: 'ok',
+    runtime_freshness: loaderRuntimeFreshness(),
     max_connections: state.policy.maxConnections,
     connection_count: connections.length,
     available_slots: Math.max(0, state.policy.maxConnections - connections.length),
@@ -491,7 +529,7 @@ function listSiteSurfaces(args: JsonRecord, state: LoaderState): JsonRecord {
       runtime_lifecycle: loaderRuntimeLifecycle(),
     });
   }
-  return { schema: 'narada.mcp_loader.site_surfaces.v1', site_root: siteRoot, surfaces };
+  return { schema: 'narada.mcp_loader.site_surfaces.v1', site_root: siteRoot, runtime_freshness: loaderRuntimeFreshness(), surfaces };
 }
 
 function siteFabricDiagnostics(args: JsonRecord, state: LoaderState): JsonRecord {
@@ -680,6 +718,7 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
     runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_freshness: loaderRuntimeFreshness(),
     entrypoint: connection.entrypoint,
     args: connection.args,
     server_info: connection.serverInfo,
@@ -694,6 +733,7 @@ async function listAttachedTools(args: JsonRecord, state: LoaderState): Promise<
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
     runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_freshness: loaderRuntimeFreshness(),
     tools: connection.toolSnapshot ?? [],
   };
 }
@@ -713,6 +753,8 @@ async function toolDiscoveryManifest(args: JsonRecord, state: LoaderState): Prom
     schema: 'narada.mcp_loader.tool_discovery_manifest.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_freshness: loaderRuntimeFreshness(),
     alias_policy: {
       canonical_name_source: 'tools/list.name',
       generated_aliases_authoritative: false,
@@ -748,13 +790,28 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
     });
   }
   const result = await sendChildRequest(connection, 'tools/call', { name: toolName, arguments: toolArgs }, timeout.timeoutMs);
-  enforceResponseSize(result, state.policy.maxResponseBytes);
+  const enrichedResult = enrichAttachedGuidanceResult(result, toolName, connection);
+  enforceResponseSize(enrichedResult, state.policy.maxResponseBytes);
   return {
     schema: 'narada.mcp_loader.tool_result.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
     runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
-    result,
+    runtime_freshness: loaderRuntimeFreshness(),
+    result: enrichedResult,
+  };
+}
+
+function enrichAttachedGuidanceResult(result: JsonRecord, toolName: string, connection: ChildConnection): JsonRecord {
+  if (!toolName.endsWith('_guidance') && toolName !== 'guidance') return result;
+  const structuredContent = asRecord(result.structuredContent);
+  return {
+    ...result,
+    structuredContent: {
+      ...structuredContent,
+      loader_runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+      loader_runtime_freshness: loaderRuntimeFreshness(),
+    },
   };
 }
 
@@ -1177,6 +1234,7 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
     runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_freshness: loaderRuntimeFreshness(),
     entrypoint: connection.entrypoint,
     args: connection.args,
     status: live ? 'live' : 'closed',

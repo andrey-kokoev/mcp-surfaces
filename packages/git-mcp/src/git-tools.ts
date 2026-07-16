@@ -368,6 +368,21 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
       .map((entry) => normalizeCommitScopePath(asStatusEntry(entry).display_path ?? asStatusEntry(entry).path))
       .filter(Boolean)
     : stringArray(statusBefore.staged).map(normalizeCommitScopePath).filter(Boolean);
+  const unstagedPaths = (stringArray(statusBefore.unstaged) ?? []).map(normalizeCommitScopePath).filter(Boolean);
+  const untrackedPaths = (stringArray(statusBefore.untracked) ?? []).map(normalizeCommitScopePath).filter(Boolean);
+  const conflictPaths = (stringArray(statusBefore.conflicts) ?? []).map(normalizeCommitScopePath).filter(Boolean);
+  if (!expectedStagedPaths && (unstagedPaths.length > 0 || untrackedPaths.length > 0 || conflictPaths.length > 0)) {
+    throw diagnosticError('git_commit_scope_required_for_mixed_worktree', 'git_commit_scope_required_for_mixed_worktree', {
+      scope_label: scopeLabel,
+      staged_paths: actualStagedPaths,
+      unstaged_paths: unstagedPaths,
+      untracked_paths: untrackedPaths,
+      conflict_paths: conflictPaths,
+      mutation_started: false,
+      atomic: true,
+      remediation: 'Pass expected_staged_paths containing exactly the intended staged paths; git_commit will not infer scope from a mixed worktree.',
+    });
+  }
   if (expectedStagedPaths) {
     const expectedSet = new Set(expectedStagedPaths);
     const actualSet = new Set(actualStagedPaths);

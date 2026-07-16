@@ -129,13 +129,13 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_commit',
-      description: 'Create a commit from already staged changes. Pass expected_staged_paths to refuse the commit when the index contains paths outside the caller-declared scope; scope_label is audit metadata and does not isolate the index.',
+      description: 'Create a commit from already staged changes. In a mixed worktree, expected_staged_paths is required and must exactly match the intended index scope; scope_label is audit metadata and does not isolate the index.',
       inputSchema: objectSchema({
         working_directory: { type: 'string' },
         message: { type: 'string' },
         body: { type: 'string' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
-        expected_staged_paths: { type: 'array', items: { type: 'string' }, description: 'Optional exact set of staged display paths required before mutation. The commit is refused atomically when the actual index differs.' },
+        expected_staged_paths: { type: 'array', items: { type: 'string' }, description: 'Exact set of staged display paths required before mutation when unstaged, untracked, or conflict paths exist outside the index; also guards the index in clean or staged-only worktrees. The commit is refused atomically when the actual index differs.' },
       }, ['message']),
     },
     {

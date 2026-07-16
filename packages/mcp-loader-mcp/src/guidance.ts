@@ -1,3 +1,5 @@
+import { loaderRuntimeLifecycle } from './runtime-lifecycle.js';
+
 export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & {
   name: string;
@@ -21,39 +23,32 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
-    runtime_lifecycle: {
-      managed_by: 'mcp-loader',
-      restartable_attached_children: true,
-      restart_scope: 'attached_child_process',
-      session_restart_required: false,
-      inventory_tool: 'mcp_loader_connection_inventory',
-      status_tool: 'mcp_loader_surface_status',
-      restart_tool: 'mcp_loader_surface_restart',
-      guidance: 'Any surface attached through this loader can be restarted by connection id. Restart replaces only the child process; it does not restart the agent session.',
-    },
+    runtime_lifecycle: loaderRuntimeLifecycle(),
     first_use: [
       'Call mcp_loader_policy_inspect before relying on loader capabilities or allowed roots.',
       'Call mcp_loader_connection_inventory before attachment when recovering from capacity errors or an earlier interrupted session.',
       'Call mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics for the explicit Site root.',
       'Use mcp_loader_attach_surface with an explicit surface_id and runtime_kind when the projection requires one.',
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
+      'Call mcp_loader_runtime_status when the loader process may have out-of-date source or runtime code; restarting a child does not reload this loader process.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.',
     ],
     tool_preference: [
-      { step: 'orient', guidance: 'Use mcp_loader_guidance and mcp_loader_policy_inspect before attachment or proxy calls.' },
+      { step: 'orient', guidance: 'Use mcp_loader_guidance, mcp_loader_runtime_status, and mcp_loader_policy_inspect before attachment or proxy calls.' },
       { step: 'recover', guidance: 'For a stale or transport-closed child, inspect mcp_loader_connection_inventory or mcp_loader_surface_status, then call mcp_loader_surface_restart with the connection_id; the agent session does not need to restart.' },
       { step: 'resolve_site', guidance: 'Use mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics against the same explicit Site root.' },
       { step: 'attach', guidance: 'Attach the exact declared surface and provide runtime_kind explicitly when the projection requires it.' },
       { step: 'discover', guidance: 'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest; use the child tools/list definitions for exact input and output shape.' },
       { step: 'observe_live', guidance: 'Use mcp_loader_site_tool_inventory_check to compare declared tools with fresh child tools/list responses and retain its immutable observation_ref.' },
       { step: 'operate', guidance: 'Call a child tool only after selecting the intended connection and honoring the child surface policy.' },
-      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence.' },
+      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; restart the loader process itself through its carrier/runtime supervisor when mcp_loader_runtime_status reports stale.' },
     ],
     examples: [
       { intent: 'First use', call: 'mcp_loader_guidance({})' },
       { intent: 'Inspect a workflow', call: 'mcp_loader_guidance({ workflow: "discover", tool: "mcp_loader_list_tools" })' },
       { intent: 'Recover capacity', call: 'mcp_loader_connection_inventory({})' },
       { intent: 'Inspect a Site', call: 'mcp_loader_list_site_surfaces({ site_root: "<site_root>" })' },
+      { intent: 'Inspect loader freshness', call: 'mcp_loader_runtime_status({})' },
       { intent: 'Observe live tools', call: 'mcp_loader_site_tool_inventory_check({ site_root: "<site_root>", runtime_kind: "<runtime_kind>" })' },
     ],
     anti_patterns: [
@@ -63,6 +58,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not treat loader attachment as authorization for the child surface domain; the attached surface remains authoritative.',
       'Do not copy or hand-build observation maps; pass the immutable observation_ref returned by mcp_loader_site_tool_inventory_check.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not treat mcp_loader_surface_restart as a loader hot-reload; it replaces only the selected attached child process.',
     ],
     recovery: [
       'For unknown_tool, call tools/list and mcp_loader_guidance again after restart.',
@@ -71,6 +67,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For missing or stale live observations, rerun mcp_loader_site_tool_inventory_check and pass its new observation_ref to the Registrar.',
       'For child failures, inspect mcp_loader_surface_status and stderr evidence, then use mcp_loader_surface_restart({ connection_id, reason }) when the attached child should be replaced.',
       'For max_connections_reached, call mcp_loader_connection_inventory, detach stale or closed connection ids, and retry only after capacity is available.',
+      'For stale loader runtime, call mcp_loader_runtime_status and restart the mcp-loader process through its carrier or runtime supervisor; child restart cannot reload the loader.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
     ],
     feedback: {

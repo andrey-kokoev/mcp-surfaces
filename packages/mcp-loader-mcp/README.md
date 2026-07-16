@@ -6,7 +6,13 @@ Policy-gated runtime attachment and proxying for MCP surfaces admitted by a Site
 
 Use mcp_loader_guidance for model-facing orientation, workflow selection, recovery guidance, and loader boundaries. Use the standard child tools/list response, mcp_loader_list_tools, or mcp_loader_tool_discovery_manifest for exact attached-tool interface schemas.
 
-Every child attached through mcp-loader exposes `runtime_lifecycle` metadata declaring `managed_by: "mcp-loader"` and `restartable: true`. Inspect `mcp_loader_surface_status` or `mcp_loader_connection_inventory`, then call `mcp_loader_surface_restart({ connection_id, reason })` to replace only the child process. The agent session does not need to restart. Child-surface domain policy remains authoritative, and restart invalidates refs owned by the replaced child.
+Every loader lifecycle projection uses the `narada.mcp_loader.runtime_lifecycle.v1` shape. Attached responses expose `runtime_lifecycle` with `managed_by: "mcp-loader"`, `restartable: true`, and connection-scoped inspect/restart actions. Pre-attachment guidance exposes the same shape with `restartable: null` and `restartability_status: "available_after_successful_attach"`. Inspect `mcp_loader_surface_status` or `mcp_loader_connection_inventory`, then call `mcp_loader_surface_restart({ connection_id, reason })` to replace only the child process. The agent session does not need to restart. Child-surface domain policy remains authoritative, and restart invalidates refs owned by the replaced child.
+
+When a proxied child guidance tool is called, its `structuredContent` is augmented with `loader_runtime_lifecycle` and `loader_runtime_freshness`, so the attached surface guidance itself advertises loader ownership and recovery.
+
+## Loader Runtime Freshness
+
+A long-lived loader process can outlive a source or runtime rebuild. Call `mcp_loader_runtime_status` to compare the running loader entrypoint and source entrypoint with the loader process start time. `status: "stale"` means the loader process must be restarted through its carrier or runtime supervisor; `mcp_loader_surface_restart` replaces only an attached child and does not hot-reload the loader. `status: "unknown"` means the freshness evidence is unavailable and should not be treated as current.
 
 ## Live Tool Inventory
 

@@ -214,6 +214,20 @@ assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).
 assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).unstaged, []);
 await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 
+await assert.rejects(
+  () => gitCommit({ working_directory: repo, message: 'Reject mixed worktree scope' }, state),
+  (error: any) => {
+    assert.equal(error.codeName, 'git_commit_scope_required_for_mixed_worktree');
+    assert.deepEqual(error.details.staged_paths, ['README.md']);
+    assert.ok(error.details.untracked_paths.includes('notes/task.md'));
+    assert.ok(error.details.untracked_paths.includes('runtime/tmp/artifact.log'));
+    assert.equal(error.details.mutation_started, false);
+    assert.equal(error.details.atomic, true);
+    assert.match(error.details.remediation, /expected_staged_paths/);
+    return true;
+  },
+);
+
 const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit', expected_staged_paths: ['README.md'] }, state);
 assert.match(commitResult.commit, /^[0-9a-f]{40}$/);
 
@@ -309,7 +323,7 @@ await assert.rejects(
 );
 
 await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
-await gitCommit({ working_directory: repo, message: 'Update readme' }, state);
+await gitCommit({ working_directory: repo, message: 'Update readme', expected_staged_paths: ['README.md'] }, state);
 
 git(repo, ['mv', 'README.md', 'RENAMED.md']);
 const renameStatus = await gitStatus({ working_directory: repo }, state);
@@ -320,7 +334,7 @@ assert.deepEqual((renameStatus.status_entries as any[]).filter((entry) => !entry
   path: entry.path,
   original_path: entry.original_path,
 })), [{ x: 'R', y: ' ', path: 'RENAMED.md', original_path: 'README.md' }]);
-const renameCommit = await gitCommit({ working_directory: repo, message: 'Rename readme' }, state);
+const renameCommit = await gitCommit({ working_directory: repo, message: 'Rename readme', expected_staged_paths: ['README.md <- RENAMED.md'] }, state);
 assert.deepEqual(renameCommit.committed_files, ['README.md <- RENAMED.md']);
 assert.deepEqual((renameCommit.committed_entries as any[]).map((entry) => ({
   x: entry.x,
@@ -447,7 +461,7 @@ const commitCall = await rpc({
   jsonrpc: '2.0',
   id: 62,
   method: 'tools/call',
-  params: { name: 'git_commit', arguments: { working_directory: repo, message: 'Summary commit' } },
+  params: { name: 'git_commit', arguments: { working_directory: repo, message: 'Summary commit', expected_staged_paths: ['summary.txt'] } },
 }, state);
 assert.match(commitCall.result?.content[0].text, /summary\.txt/);
 

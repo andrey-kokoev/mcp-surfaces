@@ -44,7 +44,12 @@ process.stdin.on('data', (chunk) => {
     if (!line.trim()) continue;
     const request = JSON.parse(line);
     if (request.method === 'initialize') write({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'restartable-child', pid: process.pid } } });
-    else if (request.method === 'tools/list') write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }] } });
+    else if (request.method === 'tools/list') {
+      const guidanceTools = process.argv.includes('--guidance')
+        ? [{ name: 'guidance-surface_guidance', inputSchema: { type: 'object', additionalProperties: false }, annotations: { readOnlyHint: true } }]
+        : [];
+      write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }, ...guidanceTools] } });
+    }
     else if (request.method === 'tools/call') {
       const respond = () => write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
       const delayMs = Number(request.params?.arguments?.delay_ms ?? 0);
@@ -73,6 +78,11 @@ process.stdin.on('data', (chunk) => {
       command: 'node',
       args: [restartableEntrypoint, '--site-root', root, '--marker', 'fabric'],
       tools: ['echo'],
+    },
+    'guidance-surface': {
+      command: 'node',
+      args: [restartableEntrypoint, '--guidance'],
+      tools: ['echo', 'guidance-surface_guidance'],
     },
     'absolute-node': {
       command: process.execPath,
@@ -170,10 +180,24 @@ try {
   assert.equal(guidance?.surface_id, 'mcp-loader');
   assert.equal(guidance?.guidance_tool, 'mcp_loader_guidance');
   assert.deepEqual(guidance?.requested, { workflow: 'discover', tool: 'mcp_loader_list_tools' });
+  assert.equal(guidance?.runtime_lifecycle?.schema, 'narada.mcp_loader.runtime_lifecycle.v1');
   assert.equal(guidance?.runtime_lifecycle?.managed_by, 'mcp-loader');
-  assert.equal(guidance?.runtime_lifecycle?.restartable_attached_children, true);
+  assert.equal(guidance?.runtime_lifecycle?.restartable, null);
+  assert.equal(guidance?.runtime_lifecycle?.restartability_status, 'available_after_successful_attach');
   assert.equal(guidance?.runtime_lifecycle?.restart_tool, 'mcp_loader_surface_restart');
+  assert.equal(guidance?.runtime_freshness?.schema, 'narada.mcp_loader.runtime_freshness.v1');
+  assert.equal(guidance?.runtime_freshness?.status, 'current');
+  assert.equal(guidance?.runtime_freshness?.runtime_entrypoint?.exists, true);
+  assert.equal(guidance?.runtime_freshness?.source_entrypoint?.exists, true);
+  assert.equal(guidance?.runtime_freshness?.reload_action?.kind, 'restart_loader_process');
   assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
+
+  const runtimeStatus = await call('tools/call', { name: 'mcp_loader_runtime_status', arguments: {} }, 351);
+  assert.equal(runtimeStatus?.schema, 'narada.mcp_loader.runtime_freshness.v1');
+  assert.equal(runtimeStatus?.status, 'current');
+  assert.equal(runtimeStatus?.runtime_entrypoint?.exists, true);
+  assert.equal(runtimeStatus?.source_entrypoint?.exists, true);
+  assert.equal(runtimeStatus?.reload_action?.kind, 'restart_loader_process');
   assert.ok((guidance?.boundaries as string[]).some((boundary) => boundary.includes('does not own attached-surface domain policy')));
 
   const emptyInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 36);
@@ -319,6 +343,18 @@ try {
   assert.equal(liveEntry?.recovery_actions?.detach?.tool_name, 'mcp_loader_detach');
   const fabricDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: fabricAttach?.connection_id } }, 20);
   assert.equal(fabricDetach?.termination?.status, 'terminated');
+
+  const guidanceAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'guidance-surface' } }, 201);
+  assert.equal(guidanceAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  const guidanceCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: guidanceAttach?.connection_id, tool_name: 'guidance-surface_guidance', arguments: {} } }, 202);
+  assert.equal(guidanceCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  assert.equal(guidanceCall?.result?.structuredContent?.loader_runtime_lifecycle?.schema, 'narada.mcp_loader.runtime_lifecycle.v1');
+  assert.equal(guidanceCall?.result?.structuredContent?.loader_runtime_lifecycle?.managed_by, 'mcp-loader');
+  assert.equal(guidanceCall?.result?.structuredContent?.loader_runtime_lifecycle?.restartable, true);
+  assert.equal(guidanceCall?.result?.structuredContent?.loader_runtime_lifecycle?.actions?.restart?.tool_name, 'mcp_loader_surface_restart');
+  assert.equal(guidanceCall?.result?.structuredContent?.loader_runtime_freshness?.schema, 'narada.mcp_loader.runtime_freshness.v1');
+  const guidanceDetach = await call('tools/call', { name: 'mcp_loader_detach', arguments: { connection_id: guidanceAttach?.connection_id } }, 203);
+  assert.equal(guidanceDetach?.termination?.status, 'terminated');
 
   const absoluteNodeAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'absolute-node' } }, 33);
   assert.equal(absoluteNodeAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
