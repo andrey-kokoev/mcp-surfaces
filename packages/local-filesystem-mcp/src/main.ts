@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { mkdir as mkdirAsync, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdir as mkdirAsync, open as openFileAsync, readFile as readFileAsync, realpath as realpathAsync, stat as statAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
@@ -48,6 +48,13 @@ const DEFAULT_REPOSITORY_INVENTORY_IGNORE_PATTERNS = [
   '**/.narada/local-filesystem-mcp/patch-outcomes/**',
   '**/.tmp-tests/**',
 ];
+const DEFAULT_FILE_METRICS_PATTERN = '**/*';
+const MAX_FILE_METRICS_LIMIT = 100;
+const DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE = 8 * 1024 * 1024;
+const MAX_FILE_METRICS_MAX_BYTES_PER_FILE = 64 * 1024 * 1024;
+const MAX_FILE_METRICS_SNAPSHOT_FILES = 10_000;
+const FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES = 4;
+const fileMetricsSnapshotCache = new Map();
 const REPOSITORY_GENERATED_PATH_MARKERS = [
   '/.ai/runtime/',
   '/.ai/tmp/',
@@ -77,6 +84,33 @@ class McpToolError extends Error {
     this.name = 'McpToolError';
     this.codeName = codeName;
     this.details = details;
+  }
+}
+
+async function countFileLinesAsync(path, checkTimeout, abortSignal) {
+  const handle = await openFileAsync(path, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  let lineCount = 0;
+  let pending = '';
+  try {
+    while (true) {
+      checkTimeout('read_file', abortSignal);
+      const result = await handle.read(buffer, 0, buffer.length, null);
+      checkTimeout('after_read_file', abortSignal);
+      if (result.bytesRead === 0) break;
+      const chunk = buffer.subarray(0, result.bytesRead);
+      if (chunk.includes(0)) return { line_count: null, line_count_status: 'binary' };
+      pending += decoder.write(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      lineCount += lines.length;
+    }
+    pending += decoder.end();
+    if (pending.length > 0) lineCount += 1;
+    return { line_count: lineCount, line_count_status: 'exact' };
+  } finally {
+    await handle.close();
   }
 }
 
@@ -458,6 +492,23 @@ export function listTools(mode) {
       }),
     },
     {
+      name: 'fs_file_metrics',
+      description: 'Return bounded metadata-only file metrics under an allowed root. It reports paths, exact byte counts, bounded line counts for text files, file type, scope classification, aggregate page totals, and the explicit include/ignore boundary without returning file contents.',
+      inputSchema: objectSchema({
+        pattern: { type: 'string', default: DEFAULT_FILE_METRICS_PATTERN, description: 'Include glob pattern. Defaults to all files under directory.' },
+        directory: { type: 'string', default: '.', description: 'Explicit directory/root under an allowed root.' },
+        root: { type: 'string', description: 'Alias for directory; do not pass both.' },
+        ignore: { type: 'array', items: { type: 'string' }, description: 'Additional ignore glob patterns.' },
+        exclude: { type: 'array', items: { type: 'string' }, description: 'Alias for additional ignore glob patterns.' },
+        offset: { type: 'integer', default: 0 },
+        limit: { type: 'integer', default: MAX_FILE_METRICS_LIMIT, description: `Maximum metric rows to return; capped at ${MAX_FILE_METRICS_LIMIT}.` },
+        max_bytes_per_file: { type: 'integer', default: DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE, description: 'Maximum bytes scanned for one text file; larger files return byte metadata with line_count_status=too_large.' },
+        timeout_ms: { type: 'integer', description: 'Optional operation timeout in milliseconds. Defaults to 10000.' },
+        cache_policy: { type: 'string', enum: ['auto', 'snapshot', 'refresh', 'bypass'], default: 'auto' },
+        snapshot_id: { type: 'string', description: 'Optional snapshot_id from a previous metrics request to page consistently.' },
+      }),
+    },
+    {
       name: 'fs_grep_search',
       description: 'Search file contents under an allowed root using ripgrep. Use output_mode content for line-numbered matches; empty matches return ok with count 0.',
       inputSchema: objectSchema({
@@ -608,6 +659,7 @@ function callTool(params, state) {
     case 'fs_stat': return toolResult(statTool(args, state));
     case 'fs_glob_search': return toolResult(globSearchTool(args, state));
     case 'fs_repository_inventory': return toolResult(repositoryInventoryTool(args, state));
+    case 'fs_file_metrics': return toolResult(fileMetricsTool(args, state));
     case 'fs_grep_search': return toolResult(grepSearchTool(args, state), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_doctor': return toolResult(doctorTool(state));
     case 'fs_write_file': {
@@ -738,6 +790,8 @@ async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operat
       limit,
       operation,
       blockMs: readWorkerBlockMs(state),
+      timeoutMs,
+      deadlineAt: Date.now() + timeoutMs,
     },
   });
   let settled = false;
@@ -820,6 +874,10 @@ const { createHash } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 
 const READ_BUFFER_BYTES = ${READ_BUFFER_BYTES};
+const timeoutMs = Number.isFinite(Number(workerData.timeoutMs)) ? Number(workerData.timeoutMs) : 5000;
+const deadlineAt = Number.isFinite(Number(workerData.deadlineAt))
+  ? Number(workerData.deadlineAt)
+  : Date.now() + timeoutMs;
 
 function pathMetadata(path, root) {
   const relative = require('node:path').relative(root, path).replace(/\\/g, '/');
@@ -831,6 +889,18 @@ function fail(codeName, message, details = {}) {
   error.codeName = codeName;
   error.details = details;
   throw error;
+}
+
+function checkTimeout(phase) {
+  const now = Date.now();
+  if (now <= deadlineAt) return;
+  fail(workerData.operation + '_timed_out', workerData.operation + '_timed_out', {
+    timeout_kind: 'read_timeout',
+    timeout_ms: timeoutMs,
+    elapsed_ms: now - (deadlineAt - timeoutMs),
+    phase,
+    ...pathMetadata(workerData.path, workerData.root),
+  });
 }
 
 function readTextLineWindow({ path, root, offset, limit }) {
@@ -845,7 +915,9 @@ function readTextLineWindow({ path, root, offset, limit }) {
   let nextOffset = null;
   try {
     while (true) {
+      checkTimeout('before_read_file');
       const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+
       if (bytesRead === 0) {
         reachedEof = true;
         break;
@@ -943,6 +1015,10 @@ function doctorTool(state) {
 }
 
 function globSearchTool(args, state) {
+  return globSearchToolWithOptions(args, state);
+}
+
+function globSearchToolWithOptions(args, state, { ignorePatterns: ignorePatternsOverride = null } = {}) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
@@ -951,13 +1027,17 @@ function globSearchTool(args, state) {
   const timeoutMs = searchTimeoutMs(args);
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
-  const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
+  const ignorePatterns = ignorePatternsOverride ?? [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
   return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
 async function globSearchToolAsync(args, state, context) {
+  return await globSearchToolAsyncWithOptions(args, state, context);
+}
+
+async function globSearchToolAsyncWithOptions(args, state, context, { ignorePatterns: ignorePatternsOverride = null } = {}) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
@@ -966,7 +1046,7 @@ async function globSearchToolAsync(args, state, context) {
   const timeoutMs = searchTimeoutMs(args);
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
-  const ignorePatterns = [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
+  const ignorePatterns = ignorePatternsOverride ?? [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
   const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
@@ -983,6 +1063,635 @@ async function repositoryInventoryToolAsync(args, state, context) {
   const includeGenerated = booleanField(args, 'include_generated') ?? false;
   const value = await globSearchToolAsync(repositoryInventorySearchArgs(args, includeGenerated), state, context);
   return formatRepositoryInventory(value, args, includeGenerated);
+}
+
+function fileMetricsTool(args, state) {
+  const normalizedArgs = fileMetricsSearchArgs(args);
+  const timeoutMs = filesystemOperationTimeoutMs(args);
+  const deadlineAt = Date.now() + timeoutMs;
+  const directoryInfo = resolveFileMetricsDirectorySync(normalizedArgs, state);
+  const requestedSnapshotId = stringField(args, 'snapshot_id');
+  if (requestedSnapshotId) {
+    const snapshot = loadFileMetricsSnapshot(requestedSnapshotId, normalizedArgs, directoryInfo);
+    return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: true });
+  }
+  const cachePolicy = searchCachePolicy(args);
+  const value = globSearchToolWithOptions(withRemainingFileMetricsTimeout(
+    cachePolicy === 'snapshot' || cachePolicy === 'refresh'
+      ? { ...normalizedArgs, cache_policy: 'bypass', snapshot_id: null, offset: 0, limit: 500 }
+      : normalizedArgs,
+    deadlineAt,
+    timeoutMs,
+  ), state);
+  if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
+    const collected = collectMetricMatchesSync(value, normalizedArgs, state, deadlineAt, timeoutMs);
+    const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, collected.matches);
+    const rows = buildFileMetricRowsSync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs);
+    excluded.out_of_scope_paths = rows.out_of_scope_paths;
+    const snapshot = rememberFileMetricsSnapshot({
+      args: normalizedArgs,
+      directoryInfo,
+      files: rows.files,
+      matchedCount: collected.count,
+      excluded,
+      freshness: collected.freshness,
+    });
+    return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
+  }
+  const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs);
+  const rows = buildFileMetricRowsSync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs);
+  excluded.out_of_scope_paths = rows.out_of_scope_paths;
+  return formatFileMetricsPage({
+    value,
+    args: normalizedArgs,
+    state,
+    directoryInfo,
+    files: rows.files,
+    excluded,
+    timeoutMs,
+    snapshotId: null,
+    requestedSnapshotId: null,
+    snapshotComplete: false,
+    cacheHit: value.cache_hit === true,
+    cachePolicy: value.cache_policy ?? cachePolicy,
+    freshness: value.freshness ?? null,
+  });
+}
+
+async function fileMetricsToolAsync(args, state, context) {
+  const normalizedArgs = fileMetricsSearchArgs(args);
+  const timeoutMs = filesystemOperationTimeoutMs(args);
+  const deadlineAt = Date.now() + timeoutMs;
+  const directoryInfo = await resolveFileMetricsDirectoryAsync(normalizedArgs, state, deadlineAt, timeoutMs, context.abortSignal);
+  const requestedSnapshotId = stringField(args, 'snapshot_id');
+  if (requestedSnapshotId) {
+    const snapshot = loadFileMetricsSnapshot(requestedSnapshotId, normalizedArgs, directoryInfo);
+    return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: true });
+  }
+  const cachePolicy = searchCachePolicy(args);
+  const value = await globSearchToolAsyncWithOptions(withRemainingFileMetricsTimeout(
+    cachePolicy === 'snapshot' || cachePolicy === 'refresh'
+      ? { ...normalizedArgs, cache_policy: 'bypass', snapshot_id: null, offset: 0, limit: 500 }
+      : normalizedArgs,
+    deadlineAt,
+    timeoutMs,
+  ), state, context);
+  if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
+    const collected = await collectMetricMatchesAsync(value, normalizedArgs, state, deadlineAt, timeoutMs, context.abortSignal);
+    const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, collected.matches);
+    const rows = await buildFileMetricRowsAsync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+    excluded.out_of_scope_paths = rows.out_of_scope_paths;
+    const snapshot = rememberFileMetricsSnapshot({
+      args: normalizedArgs,
+      directoryInfo,
+      files: rows.files,
+      matchedCount: collected.count,
+      excluded,
+      freshness: collected.freshness,
+    });
+    return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
+  }
+  const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+  const rows = await buildFileMetricRowsAsync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+  excluded.out_of_scope_paths = rows.out_of_scope_paths;
+  return formatFileMetricsPage({
+    value,
+    args: normalizedArgs,
+    state,
+    directoryInfo,
+    files: rows.files,
+    excluded,
+    timeoutMs,
+    snapshotId: null,
+    requestedSnapshotId: null,
+    snapshotComplete: false,
+    cacheHit: value.cache_hit === true,
+    cachePolicy: value.cache_policy ?? cachePolicy,
+    freshness: value.freshness ?? null,
+  });
+}
+
+function fileMetricsSearchArgs(args) {
+  const directory = stringField(args, 'directory');
+  const root = stringField(args, 'root');
+  if (directory && root) throw diagnosticError('file_metrics_directory_ambiguous', 'file_metrics_directory_ambiguous', { directory, root, remediation: 'Pass either directory or root, not both.' });
+  return {
+    ...args,
+    pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
+    directory: directory ?? root ?? '.',
+    ignore: [...stringList(args.ignore), ...stringList(args.exclude)],
+    timeout_ms: integerField(args, 'timeout_ms') ?? DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS,
+    limit: Math.min(MAX_FILE_METRICS_LIMIT, Math.max(1, integerField(args, 'limit') ?? MAX_FILE_METRICS_LIMIT)),
+    max_bytes_per_file: fileMetricsMaxBytesPerFile(args),
+  };
+}
+
+function formatStoredFileMetricsSnapshot(snapshot, args, state, directoryInfo, { timeoutMs, cacheHit }) {
+  const offset = Math.max(0, integerField(args, 'offset') ?? 0);
+  const limit = Math.min(MAX_FILE_METRICS_LIMIT, Math.max(1, integerField(args, 'limit') ?? MAX_FILE_METRICS_LIMIT));
+  const pageFiles = snapshot.files.slice(offset, offset + limit);
+  return formatFileMetricsPage({
+    value: null,
+    args,
+    state,
+    directoryInfo,
+    files: pageFiles,
+    excluded: snapshot.excluded,
+    timeoutMs,
+    matchedCount: snapshot.matched_count,
+    hasMore: offset + pageFiles.length < snapshot.files.length,
+    nextOffset: offset + pageFiles.length < snapshot.files.length ? offset + pageFiles.length : null,
+    snapshotId: snapshot.snapshot_id,
+    requestedSnapshotId: stringField(args, 'snapshot_id'),
+    snapshotComplete: true,
+    cacheHit,
+    cachePolicy: searchCachePolicy(args),
+    freshness: snapshot.freshness,
+  });
+}
+
+function formatFileMetricsPage({ value, args, state, directoryInfo, files, excluded, timeoutMs, matchedCount = null, hasMore = null, nextOffset = undefined, snapshotId = null, requestedSnapshotId = null, snapshotComplete = false, cacheHit = false, cachePolicy = 'auto', freshness = null }) {
+  const pageTotals = aggregateFileMetrics(files);
+  const count = matchedCount ?? value?.count ?? files.length;
+  const effectiveHasMore = hasMore ?? value?.has_more === true;
+  const effectiveNextOffset = nextOffset === undefined ? value?.next_offset ?? null : nextOffset;
+  const effectiveFreshness = freshness ?? value?.freshness ?? null;
+  const appliedIgnorePatterns = [
+    ...DEFAULT_GLOB_IGNORE_PATTERNS,
+    ...stringList(args.ignore),
+    ...stringList(args.exclude),
+  ];
+  return {
+    schema: 'local.filesystem.file_metrics.v1',
+    status: 'ok',
+    directory: directoryInfo.path,
+    pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
+    offset: Math.max(0, integerField(args, 'offset') ?? value?.offset ?? 0),
+    limit: Math.min(MAX_FILE_METRICS_LIMIT, Math.max(1, integerField(args, 'limit') ?? value?.limit ?? MAX_FILE_METRICS_LIMIT)),
+    count,
+    count_exact: matchedCount !== null || value?.count_exact === true,
+    returned: files.length,
+    has_more: effectiveHasMore,
+    next_offset: effectiveNextOffset,
+    order: value?.order ?? 'ripgrep_traversal',
+    cache_hit: cacheHit,
+    cache_policy: cachePolicy,
+    snapshot_id: snapshotId,
+    requested_snapshot_id: requestedSnapshotId,
+    snapshot_complete: snapshotComplete,
+    timeout_ms: timeoutMs,
+    freshness: effectiveFreshness,
+    scope: {
+      directory: directoryInfo.path,
+      allowed_root: directoryInfo.root,
+      allowed_roots: state.allowedRoots,
+      include_pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
+      ignore_patterns: [...new Set(appliedIgnorePatterns)],
+      ignored_paths: excluded.ignored_paths,
+      ignored_path_count: excluded.ignored_count,
+      ignored_paths_complete: excluded.ignored_paths_complete,
+      out_of_scope_paths: excluded.out_of_scope_paths,
+      out_of_scope_path_count: excluded.out_of_scope_paths.length,
+      out_of_scope_paths_complete: true,
+      boundary: {
+        allowed_root: directoryInfo.root,
+        directory: directoryInfo.path,
+        realpath_enforced: true,
+      },
+      contents_returned: false,
+    },
+    totals: pageTotals,
+    totals_scope: 'returned_page',
+    files,
+  };
+}
+
+function fileMetricsMaxBytesPerFile(args) {
+  const value = integerField(args, 'max_bytes_per_file');
+  if (value === null) return DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE;
+  return Math.min(MAX_FILE_METRICS_MAX_BYTES_PER_FILE, Math.max(1, value));
+}
+
+function withRemainingFileMetricsTimeout(args, deadlineAt, timeoutMs) {
+  const remaining = Math.max(1, deadlineAt - Date.now());
+  checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_search');
+  return { ...args, timeout_ms: Math.min(timeoutMs, remaining) };
+}
+
+function fileMetricsTimeoutError(timeoutMs, phase, elapsedMs) {
+  return diagnosticError('fs_file_metrics_timed_out', 'fs_file_metrics_timed_out', {
+    timeout_kind: 'filesystem_operation_timeout',
+    operation: 'fs_file_metrics',
+    phase,
+    timeout_ms: timeoutMs,
+    elapsed_ms: elapsedMs,
+    remediation: [
+      'Reduce the requested directory or include pattern.',
+      'Use offset and limit to page bounded metric rows.',
+      'Lower max_bytes_per_file when exact line counts are not required for large files.',
+      'Use fs_file_metrics instead of concurrent full-content fs_read_file calls when only line counts or sizes are needed.',
+    ],
+  });
+}
+
+function checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, abortSignal = null) {
+  if (abortSignal?.aborted) {
+    throw diagnosticError('fs_file_metrics_cancelled', 'fs_file_metrics_cancelled', {
+      operation: 'fs_file_metrics',
+      phase,
+      timeout_ms: timeoutMs,
+      elapsed_ms: Date.now() - (deadlineAt - timeoutMs),
+    });
+  }
+  const elapsedMs = Date.now() - (deadlineAt - timeoutMs);
+  if (Date.now() <= deadlineAt) return;
+  throw fileMetricsTimeoutError(timeoutMs, phase, elapsedMs);
+}
+
+function resolveFileMetricsDirectorySync(args, state) {
+  const input = stringField(args, 'directory') ?? stringField(args, 'root') ?? '.';
+  const lexical = resolveAllowedToolPath(input, state.allowedRoots, { operation: 'fs_file_metrics', field: 'directory' });
+  try {
+    const realRoot = realpathSync(lexical.root);
+    const realPath = realpathSync(lexical.path);
+    if (!isPathWithinOrEqual(realPath, realRoot)) {
+      throw diagnosticError('file_metrics_directory_outside_allowed_root', 'file_metrics_directory_outside_allowed_root', {
+        operation: 'fs_file_metrics',
+        path: lexical.path,
+        root: lexical.root,
+        realpath: realPath,
+      });
+    }
+    return { ...lexical, real_path: realPath, real_root: realRoot };
+  } catch (error) {
+    if (error instanceof McpToolError) throw error;
+    throw diagnosticError('file_metrics_directory_unavailable', 'file_metrics_directory_unavailable', {
+      operation: 'fs_file_metrics',
+      path: lexical.path,
+      root: lexical.root,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function resolveFileMetricsDirectoryAsync(args, state, deadlineAt, timeoutMs, abortSignal) {
+  const input = stringField(args, 'directory') ?? stringField(args, 'root') ?? '.';
+  const lexical = resolveAllowedToolPath(input, state.allowedRoots, { operation: 'fs_file_metrics', field: 'directory' });
+  checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_directory', abortSignal);
+  try {
+    const realRoot = await realpathAsync(lexical.root);
+    const realPath = await realpathAsync(lexical.path);
+    checkFileMetricsDeadline(deadlineAt, timeoutMs, 'after_directory', abortSignal);
+    if (!isPathWithinOrEqual(realPath, realRoot)) {
+      throw diagnosticError('file_metrics_directory_outside_allowed_root', 'file_metrics_directory_outside_allowed_root', {
+        operation: 'fs_file_metrics',
+        path: lexical.path,
+        root: lexical.root,
+        realpath: realPath,
+      });
+    }
+    return { ...lexical, real_path: realPath, real_root: realRoot };
+  } catch (error) {
+    if (error instanceof McpToolError) throw error;
+    throw diagnosticError('file_metrics_directory_unavailable', 'file_metrics_directory_unavailable', {
+      operation: 'fs_file_metrics',
+      path: lexical.path,
+      root: lexical.root,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt, timeoutMs) {
+  const files = [];
+  const outOfScopePaths = [];
+  const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
+  const checkTimeout = (phase) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase);
+  for (const match of Array.isArray(matches) ? matches : []) {
+    checkTimeout('before_file');
+    const filePath = String(match);
+    try {
+      const resolved = resolveAllowedToolPath(filePath, state.allowedRoots, { operation: 'fs_file_metrics', field: 'match' });
+      const realPath = realpathSync(resolved.path);
+      const realRoot = samePath(resolved.root, directoryInfo.root) ? directoryInfo.real_root : realpathSync(resolved.root);
+      if (!isPathWithinOrEqual(realPath, realRoot)) {
+        outOfScopePaths.push(metricDisplayPath(resolved.path, directoryInfo.path));
+        continue;
+      }
+      const stat = statSync(realPath);
+      if (!stat.isFile()) continue;
+      const lineMetrics = stat.size > maxBytesPerFile
+        ? { line_count: null, line_count_status: 'too_large' }
+        : countFileLines(realPath, checkTimeout);
+      const relativePath = relative(directoryInfo.path, resolved.path).replace(/\\/g, '/');
+      const rootRelativePath = relative(resolved.root, resolved.path).replace(/\\/g, '/');
+      files.push({
+        path: resolved.path,
+        relative_path: relativePath,
+        root_relative_path: rootRelativePath,
+        line_count: lineMetrics.line_count,
+        line_count_status: lineMetrics.line_count_status,
+        byte_count: stat.size,
+        file_type: fileType(resolved.path, lineMetrics.line_count_status),
+        scope_classification: classifyRepositoryInventoryPath(rootRelativePath),
+        mtime: stat.mtime.toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof McpToolError) throw error;
+      files.push({
+        path: filePath,
+        relative_path: metricDisplayPath(filePath, directoryInfo.path),
+        root_relative_path: metricDisplayPath(filePath, directoryInfo.root),
+        line_count: null,
+        line_count_status: 'unavailable',
+        byte_count: null,
+        file_type: 'unavailable',
+        scope_classification: 'unavailable',
+        error_code: 'file_metric_unavailable',
+      });
+    }
+  }
+  return { files, out_of_scope_paths: outOfScopePaths };
+}
+
+async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, abortSignal) {
+  const files = [];
+  const outOfScopePaths = [];
+  const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
+  const checkTimeout = (phase, signal = abortSignal) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, signal);
+  for (const match of Array.isArray(matches) ? matches : []) {
+    checkTimeout('before_file');
+    const filePath = String(match);
+    try {
+      const resolved = resolveAllowedToolPath(filePath, state.allowedRoots, { operation: 'fs_file_metrics', field: 'match' });
+      const realPath = await realpathAsync(resolved.path);
+      const realRoot = samePath(resolved.root, directoryInfo.root) ? directoryInfo.real_root : await realpathAsync(resolved.root);
+      checkTimeout('after_realpath');
+      if (!isPathWithinOrEqual(realPath, realRoot)) {
+        outOfScopePaths.push(metricDisplayPath(resolved.path, directoryInfo.path));
+        continue;
+      }
+      const stat = await statAsync(realPath);
+      checkTimeout('after_stat');
+      if (!stat.isFile()) continue;
+      const lineMetrics = stat.size > maxBytesPerFile
+        ? { line_count: null, line_count_status: 'too_large' }
+        : await countFileLinesAsync(realPath, checkTimeout, abortSignal);
+      const relativePath = relative(directoryInfo.path, resolved.path).replace(/\\/g, '/');
+      const rootRelativePath = relative(resolved.root, resolved.path).replace(/\\/g, '/');
+      files.push({
+        path: resolved.path,
+        relative_path: relativePath,
+        root_relative_path: rootRelativePath,
+        line_count: lineMetrics.line_count,
+        line_count_status: lineMetrics.line_count_status,
+        byte_count: stat.size,
+        file_type: fileType(resolved.path, lineMetrics.line_count_status),
+        scope_classification: classifyRepositoryInventoryPath(rootRelativePath),
+        mtime: stat.mtime.toISOString(),
+      });
+    } catch (error) {
+      if (error instanceof McpToolError) throw error;
+      files.push({
+        path: filePath,
+        relative_path: metricDisplayPath(filePath, directoryInfo.path),
+        root_relative_path: metricDisplayPath(filePath, directoryInfo.root),
+        line_count: null,
+        line_count_status: 'unavailable',
+        byte_count: null,
+        file_type: 'unavailable',
+        scope_classification: 'unavailable',
+        error_code: 'file_metric_unavailable',
+      });
+    }
+  }
+  return { files, out_of_scope_paths: outOfScopePaths };
+}
+
+function collectMetricMatchesSync(firstValue, args, state, deadlineAt, timeoutMs) {
+  const matches = [];
+  let page = firstValue;
+  let snapshotId = page.snapshot_id ?? null;
+  while (true) {
+    checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_snapshot_page');
+    matches.push(...(Array.isArray(page.matches) ? page.matches : []));
+    if (matches.length > MAX_FILE_METRICS_SNAPSHOT_FILES) {
+      throw diagnosticError('file_metrics_snapshot_too_large', 'file_metrics_snapshot_too_large', { max_files: MAX_FILE_METRICS_SNAPSHOT_FILES });
+    }
+    if (page.has_more !== true) break;
+    if (!snapshotId) {
+      throw diagnosticError('file_metrics_snapshot_unavailable', 'file_metrics_snapshot_unavailable', { reason: 'path_snapshot_not_available' });
+    }
+    page = globSearchToolWithOptions({
+      ...withRemainingFileMetricsTimeout(args, deadlineAt, timeoutMs),
+      offset: matches.length,
+      snapshot_id: snapshotId,
+      cache_policy: 'auto',
+    }, state);
+  }
+  return { matches, count: page.count ?? matches.length, freshness: page.freshness ?? firstValue.freshness ?? null };
+}
+
+async function collectMetricMatchesAsync(firstValue, args, state, deadlineAt, timeoutMs, abortSignal) {
+  const matches = [];
+  let page = firstValue;
+  let snapshotId = page.snapshot_id ?? null;
+  while (true) {
+    checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_snapshot_page', abortSignal);
+    matches.push(...(Array.isArray(page.matches) ? page.matches : []));
+    if (matches.length > MAX_FILE_METRICS_SNAPSHOT_FILES) {
+      throw diagnosticError('file_metrics_snapshot_too_large', 'file_metrics_snapshot_too_large', { max_files: MAX_FILE_METRICS_SNAPSHOT_FILES });
+    }
+    if (page.has_more !== true) break;
+    if (!snapshotId) {
+      throw diagnosticError('file_metrics_snapshot_unavailable', 'file_metrics_snapshot_unavailable', { reason: 'path_snapshot_not_available' });
+    }
+    page = await globSearchToolAsyncWithOptions({
+      ...withRemainingFileMetricsTimeout(args, deadlineAt, timeoutMs),
+      offset: matches.length,
+      snapshot_id: snapshotId,
+      cache_policy: 'auto',
+    }, state, { abortSignal });
+  }
+  return { matches, count: page.count ?? matches.length, freshness: page.freshness ?? firstValue.freshness ?? null };
+}
+
+function collectExcludedPathsSync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, selectedMatches = null) {
+  let selected = selectedMatches;
+  let selectedComplete = Array.isArray(selectedMatches);
+  if (!selected) {
+    selected = Array.isArray(selectedValue.matches) ? selectedValue.matches : [];
+    selectedComplete = selectedValue.has_more !== true;
+    if (!selectedComplete) {
+      const selectedPage = globSearchToolWithOptions({
+        ...withRemainingFileMetricsTimeout({ ...args, offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
+      }, state);
+      selected = selectedPage.matches;
+      selectedComplete = selectedPage.has_more !== true;
+    }
+  }
+  const allValue = globSearchToolWithOptions({
+    ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
+  }, state, { ignorePatterns: [] });
+  const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
+  const ignoredPaths = (Array.isArray(allValue.matches) ? allValue.matches : [])
+    .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
+    .map((path) => metricDisplayPath(path, directoryInfo.path))
+    .slice(0, MAX_FILE_METRICS_LIMIT);
+  const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
+    ? Math.max(0, allValue.count - selectedValue.count)
+    : null;
+  return {
+    ignored_paths: ignoredPaths,
+    ignored_count: ignoredCount,
+    ignored_paths_complete: allValue.has_more !== true && selectedComplete,
+    out_of_scope_paths: [],
+  };
+}
+
+async function collectExcludedPathsAsync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, abortSignal, selectedMatches = null) {
+  let selected = selectedMatches;
+  let selectedComplete = Array.isArray(selectedMatches);
+  if (!selected) {
+    selected = Array.isArray(selectedValue.matches) ? selectedValue.matches : [];
+    selectedComplete = selectedValue.has_more !== true;
+    if (!selectedComplete) {
+      const selectedPage = await globSearchToolAsyncWithOptions({
+        ...withRemainingFileMetricsTimeout({ ...args, offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
+      }, state, { abortSignal });
+      selected = selectedPage.matches;
+      selectedComplete = selectedPage.has_more !== true;
+    }
+  }
+  const allValue = await globSearchToolAsyncWithOptions({
+    ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
+  }, state, { abortSignal }, { ignorePatterns: [] });
+  const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
+  const ignoredPaths = (Array.isArray(allValue.matches) ? allValue.matches : [])
+    .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
+    .map((path) => metricDisplayPath(path, directoryInfo.path))
+    .slice(0, MAX_FILE_METRICS_LIMIT);
+  const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
+    ? Math.max(0, allValue.count - selectedValue.count)
+    : null;
+  return {
+    ignored_paths: ignoredPaths,
+    ignored_count: ignoredCount,
+    ignored_paths_complete: allValue.has_more !== true && selectedComplete,
+    out_of_scope_paths: [],
+  };
+}
+
+function fileMetricsSnapshotKey(args, directoryInfo) {
+  return sha256(JSON.stringify({
+    directory: directoryInfo.path,
+    pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
+    ignore: stringList(args.ignore),
+    max_bytes_per_file: fileMetricsMaxBytesPerFile(args),
+  }));
+}
+
+function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount, excluded, freshness }) {
+  const cacheKey = fileMetricsSnapshotKey(args, directoryInfo);
+  for (const [id, existing] of fileMetricsSnapshotCache.entries()) {
+    if (existing.cache_key === cacheKey) fileMetricsSnapshotCache.delete(id);
+  }
+  const snapshot = {
+    snapshot_id: 'fm_' + randomUUID().replace(/-/g, ''),
+    cache_key: cacheKey,
+    directory: directoryInfo.path,
+    allowed_root: directoryInfo.root,
+    files,
+    matched_count: matchedCount,
+    excluded,
+    freshness,
+  };
+  fileMetricsSnapshotCache.set(snapshot.snapshot_id, snapshot);
+  while (fileMetricsSnapshotCache.size > FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES) {
+    const oldest = fileMetricsSnapshotCache.keys().next().value;
+    fileMetricsSnapshotCache.delete(oldest);
+  }
+  return snapshot;
+}
+
+function loadFileMetricsSnapshot(snapshotId, args, directoryInfo) {
+  const snapshot = fileMetricsSnapshotCache.get(snapshotId);
+  if (!snapshot || snapshot.cache_key !== fileMetricsSnapshotKey(args, directoryInfo)) {
+    throw diagnosticError('fs_file_metrics_snapshot_not_found', 'fs_file_metrics_snapshot_not_found: ' + snapshotId, {
+      snapshot_id: snapshotId,
+      requested_directory: directoryInfo.path,
+    });
+  }
+  return snapshot;
+}
+
+function metricDisplayPath(path, directory) {
+  try {
+    return relative(directory, path).replace(/\\/g, '/');
+  } catch {
+    return String(path);
+  }
+}
+
+function countFileLines(path, checkTimeout) {
+  const fd = openSync(path, 'r');
+  const decoder = new StringDecoder('utf8');
+  const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
+  let lineCount = 0;
+  let pending = '';
+  try {
+    while (true) {
+      checkTimeout('read_file');
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      checkTimeout('after_read_file');
+      if (bytesRead === 0) break;
+      const chunk = buffer.subarray(0, bytesRead);
+      if (chunk.includes(0)) return { line_count: null, line_count_status: 'binary' };
+      pending += decoder.write(chunk);
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop() ?? '';
+      lineCount += lines.length;
+    }
+    pending += decoder.end();
+    if (pending.length > 0) lineCount += 1;
+    return { line_count: lineCount, line_count_status: 'exact' };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function fileType(path, lineCountStatus) {
+  if (lineCountStatus === 'binary') return 'binary';
+  const extension = extname(path).replace(/^\./, '').toLowerCase();
+  return extension || 'no_extension';
+}
+
+function aggregateFileMetrics(files) {
+  let lineCount = 0;
+  let lineCountKnown = true;
+  let byteCount = 0;
+  let binaryFileCount = 0;
+  let tooLargeFileCount = 0;
+  let unavailableFileCount = 0;
+  for (const file of files) {
+    if (typeof file.byte_count === 'number') byteCount += file.byte_count;
+    if (typeof file.line_count === 'number') lineCount += file.line_count;
+    else {
+      lineCountKnown = false;
+      if (file.line_count_status === 'binary') binaryFileCount += 1;
+      if (file.line_count_status === 'too_large') tooLargeFileCount += 1;
+      if (file.line_count_status === 'unavailable') unavailableFileCount += 1;
+    }
+  }
+  return {
+    file_count: files.length,
+    byte_count: byteCount,
+    line_count: lineCountKnown ? lineCount : null,
+    line_count_status: lineCountKnown ? 'exact' : 'partial',
+    binary_file_count: binaryFileCount,
+    too_large_file_count: tooLargeFileCount,
+    unavailable_file_count: unavailableFileCount,
+  };
 }
 
 function repositoryInventorySearchArgs(args, includeGenerated) {
@@ -1031,7 +1740,7 @@ function formatRepositoryInventory(value, args, includeGenerated) {
 }
 
 function classifyRepositoryInventoryPath(value) {
-  const normalized = String(value).replaceAll('\\', '/').toLowerCase();
+  const normalized = '/' + String(value).replaceAll('\\', '/').replace(/^\/+|\/+$/g, '').toLowerCase() + '/';
   return REPOSITORY_GENERATED_PATH_MARKERS.some((marker) => normalized.includes(marker))
     ? 'generated_artifact'
     : 'candidate_source';
@@ -1656,6 +2365,7 @@ async function callToolAsync(params, state, context) {
     case 'fs_read_file_range': return await callReadToolWithRequestDeadline(name, args, state, context);
     case 'fs_glob_search': return toolResult(await globSearchToolAsync(args, state, context));
     case 'fs_repository_inventory': return toolResult(await repositoryInventoryToolAsync(args, state, context));
+    case 'fs_file_metrics': return toolResult(await fileMetricsToolAsync(args, state, context));
     case 'fs_grep_search': return toolResult(await grepSearchToolAsync(args, state, context), { grepOutputMode: stringField(args, 'output_mode') ?? 'files_with_matches' });
     case 'fs_write_file': {
       const payload = resolveFilesystemPayloadArgs(name, args, state);
@@ -1999,6 +2709,11 @@ function isPathInside(path, root) {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
+function isPathWithinOrEqual(path, root) {
+  const rel = relative(root, path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
 function objectSchema(properties, required = []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
@@ -2013,7 +2728,7 @@ function toolAnnotations(name) {
     title: String(name),
     readOnlyHint: !write,
     destructiveHint: /^fs_(str_replace|replace|apply|move|rename|delete)/.test(String(name)),
-    idempotentHint: /^fs_(read|stat|glob|grep)/.test(String(name)),
+    idempotentHint: /^fs_(read|stat|glob|grep|repository_inventory|file_metrics)/.test(String(name)),
     openWorldHint: false,
   };
 }

@@ -151,16 +151,20 @@ trust_level = "untrusted"
     /fs_glob_search_cancelled/
   );
 
+
   const readToolNames = listTools('read').map((tool) => tool.name);
   assert.ok(readToolNames.includes('fs_guidance'));
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
   assert.ok(readToolNames.includes('fs_repository_inventory'));
+  assert.ok(readToolNames.includes('fs_file_metrics'));
   const globToolDescription = listTools('read').find((tool) => tool.name === 'fs_glob_search')?.description;
   assert.match(String(globToolDescription), /Empty matches return ok with count 0/);
   const inventoryToolDescription = listTools('read').find((tool) => tool.name === 'fs_repository_inventory')?.description;
   assert.match(String(inventoryToolDescription), /generated runtime artifacts/);
+  const fileMetricsToolDescription = listTools('read').find((tool) => tool.name === 'fs_file_metrics')?.description;
+  assert.match(String(fileMetricsToolDescription), /metadata-only file metrics/);
   const grepToolDescription = listTools('read').find((tool) => tool.name === 'fs_grep_search')?.description;
   assert.match(String(grepToolDescription), /line-numbered matches/);
   assert.match(String(grepToolDescription), /empty matches return ok with count 0/);
@@ -387,6 +391,105 @@ trust_level = "untrusted"
   assert.equal(generatedInventoryPayload.generated_artifacts_excluded_by_default, false);
   assert.equal(generatedInventoryPayload.generated_artifact_paths.some((match) => match.replace(/\\/g, '/').includes('/.ai/runtime/')), true);
 
+  const fileMetrics = call(readState, 155, 'fs_file_metrics', { directory: ignoredRoot, pattern: '**/*.txt', ignore: ['**/.ai/runtime/**'], limit: 20, cache_policy: 'bypass' });
+  const fileMetricsPayload = fileMetrics.result.structuredContent;
+  assert.equal(fileMetricsPayload.schema, 'local.filesystem.file_metrics.v1');
+  assert.equal(fileMetricsPayload.scope.contents_returned, false);
+  assert.equal(fileMetricsPayload.totals_scope, 'returned_page');
+  assert.equal(fileMetricsPayload.totals.file_count, 2);
+  assert.equal(fileMetricsPayload.totals.line_count, 2);
+  assert.equal(fileMetricsPayload.totals.byte_count, Buffer.byteLength('keep\n') + Buffer.byteLength('custom\n'));
+  assert.equal(fileMetricsPayload.files.some((file) => file.relative_path === 'src/keep.txt' && Number(file.line_count) === 1 && Number(file.byte_count) === 5 && file.file_type === 'txt'), true);
+  assert.equal(fileMetricsPayload.files.some((file) => file.relative_path === 'custom-skip/custom.txt' && Number(file.line_count) === 1 && Number(file.byte_count) === 7), true);
+  assert.equal(fileMetricsPayload.files.every((file) => Object.prototype.hasOwnProperty.call(file, 'content') === false), true);
+  assert.equal(fileMetricsPayload.scope.ignore_patterns.some((pattern) => pattern.includes('node_modules')), true);
+  assert.equal(fileMetricsPayload.scope.ignore_patterns.some((pattern) => pattern.includes('.ai/runtime')), true);
+  assert.equal(fileMetricsPayload.scope.ignored_path_count, 3);
+  assert.equal(fileMetricsPayload.scope.ignored_paths_complete, true);
+  assert.equal(fileMetricsPayload.scope.ignored_paths.some((path) => path.includes('node_modules')), true);
+  assert.equal(fileMetricsPayload.scope.ignored_paths.some((path) => path.includes('.ai/runtime')), true);
+  assert.equal(fileMetricsPayload.scope.boundary.realpath_enforced, true);
+
+  const cancelledMetrics = new AbortController();
+  cancelledMetrics.abort();
+  const cancelledMetricsResponse = await handleRequestAsync({
+    jsonrpc: '2.0',
+    id: 14,
+    method: 'tools/call',
+    params: { name: 'fs_file_metrics', arguments: { directory: largeRoot, pattern: '**/*.txt', limit: 1, cache_policy: 'bypass' } },
+  }, readState, { abortSignal: cancelledMetrics.signal });
+  assert.equal(cancelledMetricsResponse.error.data.code, 'fs_file_metrics_cancelled');
+  const binaryMetrics = call(readState, 156, 'fs_file_metrics', { root: trusted, pattern: '**/binary.bin', limit: 20, cache_policy: 'bypass' });
+  const binaryMetricsFile = binaryMetrics.result.structuredContent.files[0];
+  assert.equal(binaryMetrics.result.structuredContent.schema, 'local.filesystem.file_metrics.v1');
+  assert.equal(binaryMetricsFile.line_count, null);
+  assert.equal(binaryMetricsFile.line_count_status, 'binary');
+  assert.equal(binaryMetricsFile.byte_count, 4);
+  assert.equal(binaryMetricsFile.file_type, 'binary');
+  assert.equal(binaryMetrics.result.structuredContent.totals.binary_file_count, 1);
+
+  const tooLargeMetrics = call(readState, 159, 'fs_file_metrics', { root: trusted, pattern: '**/large-read.txt', limit: 20, max_bytes_per_file: 100, cache_policy: 'bypass' });
+  const tooLargeMetricsFile = tooLargeMetrics.result.structuredContent.files[0];
+  assert.equal(tooLargeMetricsFile.line_count, null);
+  assert.equal(tooLargeMetricsFile.line_count_status, 'too_large');
+  assert.equal(tooLargeMetricsFile.byte_count, 7001);
+  assert.equal(tooLargeMetrics.result.structuredContent.totals.too_large_file_count, 1);
+  assert.equal(tooLargeMetrics.result.structuredContent.totals.unavailable_file_count, 0);
+
+  const pagedMetrics = call(readState, 157, 'fs_file_metrics', { directory: largeRoot, pattern: '**/*.txt', limit: 5, cache_policy: 'bypass' });
+  assert.equal(pagedMetrics.result.structuredContent.returned, 5);
+  assert.equal(pagedMetrics.result.structuredContent.has_more, true);
+  assert.equal(pagedMetrics.result.structuredContent.next_offset, 5);
+  assert.equal(pagedMetrics.result.structuredContent.totals.file_count, 5);
+  assert.equal(pagedMetrics.result.structuredContent.totals.line_count, 5);
+  assert.equal(pagedMetrics.result.structuredContent.scope.contents_returned, false);
+
+  writeFileSync(join(trusted, 'metrics-snapshot-a.txt'), 'one\ntwo\nthree\n', 'utf8');
+  writeFileSync(join(trusted, 'metrics-snapshot-z.txt'), 'old\n', 'utf8');
+  const metricsSnapshot = call(readState, 167, 'fs_file_metrics', { root: trusted, pattern: '**/metrics-snapshot-*.txt', limit: 1, cache_policy: 'snapshot' });
+  const metricsSnapshotId = metricsSnapshot.result.structuredContent.snapshot_id;
+  assert.match(metricsSnapshotId, /^fm_[0-9a-f]+$/);
+  assert.equal(metricsSnapshot.result.structuredContent.snapshot_complete, true);
+  writeFileSync(join(trusted, 'metrics-snapshot-z.txt'), 'new\none\ntwo\n', 'utf8');
+  const metricsSnapshotSecond = call(readState, 168, 'fs_file_metrics', { root: trusted, pattern: '**/metrics-snapshot-*.txt', offset: 1, limit: 1, snapshot_id: metricsSnapshotId });
+  assert.equal(metricsSnapshotSecond.result.structuredContent.requested_snapshot_id, metricsSnapshotId);
+  const snapshotFiles = [
+    ...metricsSnapshot.result.structuredContent.files,
+    ...metricsSnapshotSecond.result.structuredContent.files,
+  ];
+  assert.deepEqual(
+    new Set(snapshotFiles.map((file) => file.relative_path)),
+    new Set(['metrics-snapshot-a.txt', 'metrics-snapshot-z.txt']),
+  );
+  assert.equal(snapshotFiles.find((file) => file.relative_path === 'metrics-snapshot-z.txt')?.line_count, 1);
+
+  writeFileSync(join(other, 'metrics-outside-target.txt'), 'outside\n', 'utf8');
+  let outsideMetricsLinkCreated = false;
+  try {
+    symlinkSync(join(other, 'metrics-outside-target.txt'), join(trusted, 'metrics-outside-link.txt'));
+    outsideMetricsLinkCreated = true;
+  } catch {
+    outsideMetricsLinkCreated = false;
+  }
+  if (outsideMetricsLinkCreated) {
+    const outsideMetrics = call(readState, 169, 'fs_file_metrics', { root: trusted, pattern: '**/metrics-outside-link.txt', limit: 20, cache_policy: 'bypass' });
+    assert.equal(outsideMetrics.result.structuredContent.files.some((file) => file.relative_path === 'metrics-outside-link.txt'), false);
+    let outsideMetricsDirectoryLinkCreated = false;
+    try {
+      symlinkSync(other, join(trusted, 'metrics-outside-dir'), 'junction');
+      outsideMetricsDirectoryLinkCreated = true;
+    } catch {
+      outsideMetricsDirectoryLinkCreated = false;
+    }
+    if (outsideMetricsDirectoryLinkCreated) {
+      const outsideDirectoryMetrics = call(readState, 170, 'fs_file_metrics', { directory: join(trusted, 'metrics-outside-dir'), pattern: '**/*.txt', limit: 20, cache_policy: 'bypass' });
+      assert.equal(outsideDirectoryMetrics.error.data.code, 'file_metrics_directory_outside_allowed_root');
+    }
+  }
+
+  const ambiguousMetrics = call(readState, 158, 'fs_file_metrics', { directory: trusted, root: trusted, pattern: '**/*.txt' });
+  assert.equal(ambiguousMetrics.error.data.code, 'file_metrics_directory_ambiguous');
+
   const callerIgnoredGlob = call(readState, 152, 'fs_glob_search', { directory: ignoredRoot, pattern: '**/*.txt', ignore: ['**/custom-skip/**'], limit: 20 });
   const callerIgnoredMatches = callerIgnoredGlob.result.structuredContent.matches.map((match) => match.replace(/\\/g, '/'));
   assert.equal(callerIgnoredMatches.some((match) => match.endsWith('src/keep.txt')), true);
@@ -446,6 +549,9 @@ trust_level = "untrusted"
   const pagedGlobThird = call(readState, 171, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', offset: 10, limit: 5 });
   assert.equal(pagedGlobThird.result.structuredContent.cache_hit, true);
   assert.equal(pagedGlobThird.result.structuredContent.returned, 5);
+  const timeoutMetrics = call(readState, 160, 'fs_file_metrics', { directory: largeRoot, pattern: '**/*.txt', limit: 1, timeout_ms: 1, cache_policy: 'bypass' });
+  assert.ok(timeoutMetrics.error);
+  assert.equal(timeoutMetrics.error.data.details.timeout_ms, 1);
 
   const largeGlob = call(readState, 18, 'fs_glob_search', { directory: largeRoot, pattern: '**/*.txt', limit: 120 });
   assert.equal(largeGlob.result.structuredContent.schema, 'local.filesystem.glob.v1');
