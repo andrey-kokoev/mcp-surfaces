@@ -95,7 +95,30 @@ async function responsePayload(response: any, runtimeOptions: any, id: number) {
   void runtimeOptions;
   void id;
   if (response.error) throw new Error(`json_rpc_error: ${response.error.message ?? JSON.stringify(response.error)}`);
-  if (response.result.structuredContent) return response.result.structuredContent;
+  const structured = response.result.structuredContent;
+  if (structured?.output_ref) {
+    let offset = 0;
+    let outputText = '';
+    while (true) {
+      const pageResponse = await handleTaskLifecycleMcpRequest({
+        jsonrpc: '2.0',
+        id,
+        method: 'tools/call',
+        params: {
+          name: 'mcp_output_show',
+          arguments: { ref: structured.output_ref, offset, limit: 20000 },
+        },
+      }, runtimeOptions);
+      if (pageResponse.error) throw new Error('output_ref_read_error: ' + (pageResponse.error.message ?? JSON.stringify(pageResponse.error)));
+      const page = pageResponse.result?.structuredContent;
+      if (!page?.output_text) throw new Error('output_ref_page_missing_output_text');
+      outputText += page.output_text;
+      if (page.next_offset === null || page.next_offset === undefined) break;
+      offset = page.next_offset;
+    }
+    return JSON.parse(outputText);
+  }
+  if (structured) return structured;
   const initialPayload = JSON.parse(response.result.content[0].text);
   if (!initialPayload.output_ref) return initialPayload;
   throw new Error('unexpected_output_ref_without_structured_content');

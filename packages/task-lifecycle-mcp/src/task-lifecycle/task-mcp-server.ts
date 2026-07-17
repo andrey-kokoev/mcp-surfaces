@@ -44,14 +44,17 @@ import { runJsonRpcStdioServer } from '../kernel/stdio-json-rpc.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 import {
   attachPayloadSource,
+  buildBoundedToolResult,
   enforceInlinePayloadLimit,
   listOutputResources,
+  listOutputTools,
   listPayloadTools,
   payloadCreate,
   payloadDerive,
   payloadObjectFromArgs,
   payloadShow,
   payloadValidate,
+  outputShow,
   readOutputResource,
   resolveToolPayloadArgs,
 } from '../mcp-payload-file.js';
@@ -158,6 +161,7 @@ const TASK_LIFECYCLE_READ_ONLY_TOOLS = new Set([
   'task_lifecycle_recurring_runs',
   'task_lifecycle_chapter_show',
   'task_lifecycle_diagnose_task_ref',
+  'mcp_output_show',
 ]);
 
 const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS = new Set([
@@ -326,6 +330,10 @@ function taskLifecycleTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     ...listPayloadTools(),
+    ...listOutputTools().map((tool) => ({
+      ...patchLocalToolDefinition(tool),
+      outputSchema: { type: 'object', additionalProperties: true },
+    })),
   ];
 }
 
@@ -1161,6 +1169,7 @@ function getTaskLifecycleHandlerRegistry() {
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
         mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
+        mcp_output_show: (args) => jsonToolResult(outputShow({ siteRoot, args }), false, 'mcp_output_show'),
         task_lifecycle_chapter_add_task: (args) => jsonToolResult(taskLifecycleChapterAddTask(args)),
         task_lifecycle_chapter_show: (args) => jsonToolResult(taskLifecycleChapterShow(args)),
         task_lifecycle_submit_work: (args, context) => taskLifecycleSubmitWork(args, context),
@@ -1172,10 +1181,31 @@ function getTaskLifecycleHandlerRegistry() {
   return taskLifecycleHandlerRegistry;
 }
 
-async function dispatchTool(canonicalName, args, dispatchContext = {}) {
+async function dispatchTool(canonicalName, args, dispatchContext: Record<string, unknown> = {}) {
   const handler = getTaskLifecycleHandlerRegistry().get(canonicalName);
   if (!handler) throw new Error(`task_mcp_refused: ${canonicalName}`);
-  return handler(args, dispatchContext);
+  const result = await handler(args, dispatchContext);
+  return dispatchContext?.compound_tool ? unwrapInternalToolResult(result) : result;
+}
+
+function unwrapInternalToolResult(result) {
+  const structured = result?.structuredContent;
+  if (structured?.schema !== 'narada.producer_output_page.v1' || typeof structured.output_ref !== 'string') return result;
+  let offset = 0;
+  let outputText = '';
+  while (true) {
+    const page = outputShow({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
+    if (!page?.output_text) throw new Error('internal_output_ref_page_missing_output_text');
+    outputText += page.output_text;
+    if (page.next_offset === null || page.next_offset === undefined) break;
+    offset = page.next_offset;
+  }
+  const value = JSON.parse(outputText);
+  return {
+    ...result,
+    content: [{ type: 'text', text: JSON.stringify(value), annotations: { audience: ['assistant'] } }],
+    structuredContent: value,
+  };
 }
 
 function buildTaskLifecycleFreshness({ registeredTools }) {
@@ -2531,6 +2561,10 @@ function legacyTaskLifecycleToolsSnapshot() {
       }, ['payload_ref']),
     },
     ...listPayloadTools(),
+    ...listOutputTools().map((tool) => ({
+      ...patchLocalToolDefinition(tool),
+      outputSchema: { type: 'object', additionalProperties: true },
+    })),
     {
       name: 'task_lifecycle_set_routing',
       description: 'Route an opened task to a target role, preferred agent, and/or relative priority without claiming it as that agent.',
@@ -2898,6 +2932,16 @@ function jsonToolResult(value, isError = false, toolName = null) {
   void toolName;
   const text = JSON.stringify(value);
   const inlineLimit = 4000;
+  if (text.length > inlineLimit) {
+    return buildBoundedToolResult({
+      siteRoot,
+      toolName: toolName ?? 'task_lifecycle',
+      value,
+      isError,
+      limit: inlineLimit,
+      readerTool: 'mcp_output_show',
+    });
+  }
   const truncated = text.length > inlineLimit;
   const renderedText = truncated
     ? `Output truncated; use structuredContent for the complete payload. ${text.slice(0, inlineLimit)}`

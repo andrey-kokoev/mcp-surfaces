@@ -35,6 +35,24 @@ function structured(response: JsonRecord): JsonRecord {
   return (response.result as JsonRecord)?.structuredContent as JsonRecord ?? response.result as JsonRecord;
 }
 
+async function resolveStructured(response: JsonRecord, client: any): Promise<JsonRecord> {
+  const value = structured(response);
+  if (!value.output_ref) return value;
+  let offset = 0;
+  let outputText = '';
+  while (true) {
+    const page = structured(await client.request(1300, 'tools/call', {
+      name: 'mcp_output_show',
+      arguments: { ref: value.output_ref, offset, limit: 20000 },
+    }));
+    if (!page.output_text) throw new Error('output_ref_page_missing_output_text');
+    outputText += String(page.output_text);
+    if (page.next_offset === null || page.next_offset === undefined) break;
+    offset = Number(page.next_offset);
+  }
+  return JSON.parse(outputText) as JsonRecord;
+}
+
 try {
   await runMcpProtocolSmoke(server.client, {
     expectedServerName: 'narada-task-lifecycle-mcp',
@@ -103,7 +121,7 @@ try {
   }));
   assert.ok(['admitted', 'updated', 'already_present'].includes(String(reviewerAdmission.status)), JSON.stringify(reviewerAdmission));
 
-  const report = structured(await server.client.request(7, 'tools/call', {
+  const report = await resolveStructured(await server.client.request(7, 'tools/call', {
     name: 'task_lifecycle_finish',
     arguments: {
       task_number: taskNumber,
@@ -112,7 +130,7 @@ try {
       no_files_changed: true,
       reviewer: 'fixture.architect',
     },
-  }));
+  }), server.client);
   assert.ok(['success', 'finished', 'closed', 'review_required', 'submitted'].includes(String(report.status)), JSON.stringify(report));
 
   const reviewTask = (report.review_task ?? report.review_dependency ?? report.review_contract) as JsonRecord | undefined;
@@ -132,7 +150,7 @@ try {
       arguments: { task_number: reviewTaskNumber, agent_id: 'fixture.architect' },
     }));
     assert.equal(reviewClaim.status, 'claimed', JSON.stringify(reviewClaim));
-    const reviewFinish = structured(await reviewerServer.client.request(9, 'tools/call', {
+    const reviewFinish = await resolveStructured(await reviewerServer.client.request(9, 'tools/call', {
       name: 'task_lifecycle_finish',
       arguments: {
         task_number: reviewTaskNumber,
@@ -142,7 +160,7 @@ try {
         findings: [],
         no_files_changed: true,
       },
-    }));
+    }), reviewerServer.client);
     assert.ok(['success', 'finished', 'closed', 'submitted'].includes(String(reviewFinish.status)), JSON.stringify(reviewFinish));
 
     const admitted = structured(await server.client.request(10, 'tools/call', {
@@ -151,25 +169,25 @@ try {
     }));
     assert.equal(admitted.verdict, 'admitted', JSON.stringify(admitted));
 
-    const dependencyPreflight = structured(await server.client.request(11, 'tools/call', {
+    const dependencyPreflight = await resolveStructured(await server.client.request(11, 'tools/call', {
       name: 'task_lifecycle_evidence_preflight',
       arguments: { task_number: taskNumber },
-    }));
+    }), server.client);
     const dependencySatisfaction = dependencyPreflight.dependency_satisfaction as JsonRecord;
     assert.equal(dependencySatisfaction.all_satisfied, true, JSON.stringify(dependencyPreflight));
 
-    const closed = structured(await server.client.request(12, 'tools/call', {
+    const closed = await resolveStructured(await server.client.request(12, 'tools/call', {
       name: 'task_lifecycle_close',
       arguments: { task_number: taskNumber, agent_id: 'fixture.builder', mode: 'peer_reviewed' },
-    }));
+    }), server.client);
     assert.equal(closed.status, 'success', JSON.stringify(closed));
     assert.equal(closed.new_status, 'closed', JSON.stringify(closed));
   }
 
-  const shown = structured(await server.client.request(13, 'tools/call', {
+  const shown = await resolveStructured(await server.client.request(13, 'tools/call', {
     name: 'task_lifecycle_show',
     arguments: { task_number: taskNumber },
-  }));
+  }), server.client);
   const task = shown.lifecycle as JsonRecord;
   assert.equal(task.task_number, taskNumber);
   assert.equal(task.status, 'closed');

@@ -139,8 +139,30 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   };
 
   async function readToolPayload(response: any, id: number): Promise<any> {
-    void id;
-    if (response.result.structuredContent) return response.result.structuredContent;
+    const structured = response.result.structuredContent;
+    if (structured?.output_ref) {
+      let offset = 0;
+      let outputText = '';
+      while (true) {
+        const pageResponse = await handleTaskLifecycleMcpRequest({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: {
+            name: 'mcp_output_show',
+            arguments: { ref: structured.output_ref, offset, limit: 20000 },
+          },
+        }, runtimeOptions);
+        if (pageResponse.error) throw new Error('output_ref_read_error: ' + (pageResponse.error.message ?? JSON.stringify(pageResponse.error)));
+        const page = pageResponse.result?.structuredContent;
+        if (!page?.output_text) throw new Error('output_ref_page_missing_output_text');
+        outputText += page.output_text;
+        if (page.next_offset === null || page.next_offset === undefined) break;
+        offset = page.next_offset;
+      }
+      return JSON.parse(outputText);
+    }
+    if (structured) return structured;
     const inline = JSON.parse(response.result.content[0].text);
     if (!inline.output_ref) return inline;
     throw new Error('unexpected_output_ref_without_structured_content');
@@ -208,7 +230,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   }, runtimeOptions);
 
   assert.equal(response.error, undefined);
-  const payload = response.result.structuredContent;
+  const payload = await readToolPayload(response, 15);
   assert.equal(payload.status, 'prepared');
   assert.ok(payload.finish_result, JSON.stringify(payload, null, 2));
   assert.equal(payload.finish_result.status, 'success');
@@ -240,7 +262,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     },
   }, runtimeOptions);
   assert.equal(showResponse.error, undefined);
-  const showPayload = showResponse.result.structuredContent;
+  const showPayload = await readToolPayload(showResponse, 16);
   assert.equal(Object.hasOwn(showPayload, 'eligible_reviewers'), false);
   assert.ok(Array.isArray(showPayload.dependencies_blocking_this_task));
   assert.ok(Array.isArray(showPayload.dependency_context));
@@ -262,7 +284,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     },
   }, architectRuntimeOptions);
   assert.equal(reviewResponse.error, undefined);
-  const reviewPayload = reviewResponse.result.structuredContent;
+  const reviewPayload = await readToolPayload(reviewResponse, 17);
   assert.equal(reviewPayload.status, 'success');
   assert.equal(reviewPayload.completion_mode, 'review_compatibility_dependency_outcome');
   assert.equal(reviewPayload.close_action, 'skipped');

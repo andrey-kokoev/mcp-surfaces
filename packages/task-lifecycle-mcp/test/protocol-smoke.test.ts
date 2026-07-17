@@ -42,10 +42,35 @@ assert.equal(names.includes('task_lifecycle_next'), true);
 assert.equal(names.includes('task_lifecycle_doctor'), true);
 assert.equal(names.includes('task_lifecycle_chapter_add_task'), true);
 assert.equal(names.includes('task_lifecycle_chapter_show'), true);
-assert.equal(names.includes('mcp_output_show'), false);
+assert.equal(names.includes('mcp_output_show'), true);
 const payloadCreateTool = tools.result.tools.find((tool) => tool.name === 'mcp_payload_create');
 assert.equal(Boolean(payloadCreateTool?.inputSchema?.properties?.payload_json), true);
 assert.equal(tools.result.tools.find((tool) => tool.name === 'mcp_payload_validate')?.annotations?.readOnlyHint, true);
+
+const guidance = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 6,
+  method: 'tools/call',
+  params: {
+    name: 'task_lifecycle_guidance',
+    arguments: { workflow: 'all' },
+  },
+}, runtimeOptions);
+assert.equal(guidance.error, undefined);
+const guidanceRef = guidance.result?.structuredContent?.output_ref;
+assert.match(String(guidanceRef), /^mcp_output:/, JSON.stringify(guidance));
+const guidancePage = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 7,
+  method: 'tools/call',
+  params: {
+    name: 'mcp_output_show',
+    arguments: { ref: guidanceRef, offset: 0, limit: 800 },
+  },
+}, runtimeOptions);
+assert.equal(guidancePage.error, undefined);
+assert.equal(guidancePage.result?.structuredContent?.schema, 'narada.mcp_output_page.v1');
+assert.equal(guidancePage.result?.structuredContent?.ref, guidanceRef);
 
 const emptyPayloadCreate = await handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',
