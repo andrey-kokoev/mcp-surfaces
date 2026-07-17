@@ -193,7 +193,7 @@ try {
   assert.ok(operatorRouting);
   assert.equal(operatorRouting.injection_scope, 'user_site');
   assert.equal(operatorRouting.default_injection, 'all_site_bound_sessions');
-  assert.deepEqual(operatorRouting.tools, ['operator_route_doctor', 'operator_route_request']);
+  assert.deepEqual(operatorRouting.tools, ['operator_routing_guidance', 'operator_route_doctor', 'operator_route_request']);
   const artifacts = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'artifacts');
   assert.ok(artifacts);
   assert.equal(artifacts.injection_scope, 'local_site');
