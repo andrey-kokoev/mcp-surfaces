@@ -292,6 +292,9 @@ importers:
 
   packages/structured-command-mcp:
     dependencies:
+      '@narada2/mcp-transport':
+        specifier: workspace:*
+        version: link:../shared/mcp-transport
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
