@@ -477,7 +477,7 @@ try {
         transport: 'stdio',
         command: 'node',
         args: ['D:/code/mcp-surfaces/packages/git-mcp/dist/src/main.js'],
-        tools: ['git_guidance', 'git_add', 'git_changed_summary', 'git_commit', 'git_diff', 'git_log', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_repositories_summary', 'git_show', 'git_status', 'git_unstage', 'git_workflow_record'],
+        tools: ['git_add', 'git_branch_create', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_list', 'git_branch_rename', 'git_branch_set_upstream', 'git_branch_switch', 'git_branch_unset_upstream', 'git_changed_summary', 'git_commit', 'git_diff', 'git_guidance', 'git_log', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_repositories_summary', 'git_show', 'git_status', 'git_unstage', 'git_workflow_record'],
         surface_id: 'git',
       },
     },

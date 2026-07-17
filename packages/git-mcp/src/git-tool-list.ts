@@ -15,6 +15,15 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       }),
     },
     {
+      name: 'git_branch_list',
+      description: 'List local and/or remote branches with object ids, current-branch state, and upstream metadata.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        scope: { type: 'string', enum: ['local', 'remote', 'all'], default: 'all' },
+        limit: { type: 'integer', default: 100, minimum: 1, maximum: 500 },
+      }),
+    },
+    {
       name: 'git_output_show',
       description: 'Read a materialized Git MCP output_ref produced when a large structured result exceeds inline transport limits. Use the original git_diff next_offset inside the materialized result for diff paging; output_show offset pages the materialized JSON wrapper.',
       inputSchema: objectSchema({
@@ -148,6 +157,76 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
+    {
+      name: 'git_branch_create',
+      description: 'Create a local branch from HEAD or an explicit start point without checking it out.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        name: { type: 'string' },
+        start_point: { type: 'string', description: 'Optional commit, branch, or tag; defaults to HEAD.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['name']),
+    },
+    {
+      name: 'git_branch_switch',
+      description: 'Switch to an existing local branch without creating, discarding, or force-applying changes.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        branch: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['branch']),
+    },
+    {
+      name: 'git_branch_rename',
+      description: 'Rename an existing local branch to a new local branch name.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        old_name: { type: 'string' },
+        new_name: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['old_name', 'new_name']),
+    },
+    {
+      name: 'git_branch_delete',
+      description: 'Delete a local branch only after verifying it is merged into the selected base; force deletion is not supported.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        branch: { type: 'string' },
+        base: { type: 'string', description: 'Commit, branch, or tag used for the merged-only safety check; defaults to the current branch.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['branch']),
+    },
+    {
+      name: 'git_branch_delete_remote',
+      description: 'Delete a remote branch only after verifying its remote ref is merged into an explicit local base; force deletion is not supported.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        remote: { type: 'string' },
+        branch: { type: 'string' },
+        base: { type: 'string', description: 'Local commit, branch, or tag used for the merged-only safety check.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['remote', 'branch', 'base']),
+    },
+    {
+      name: 'git_branch_set_upstream',
+      description: 'Set a local branch upstream to an existing branch on a configured remote.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        local_branch: { type: 'string', description: 'Local branch; defaults to the current branch.' },
+        remote: { type: 'string' },
+        remote_branch: { type: 'string', description: 'Remote branch; defaults to local_branch.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['remote']),
+    },
+    {
+      name: 'git_branch_unset_upstream',
+      description: 'Remove upstream configuration from a local branch; defaults to the current branch.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        local_branch: { type: 'string', description: 'Local branch; defaults to the current branch.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }),
+    },
   ];
   const renderedWriteTools = mode === 'write'
     ? writeTools
@@ -164,12 +243,12 @@ function decorateTools(tools: Array<Record<string, any>>): Array<Record<string, 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /git_add|git_unstage|git_commit|git_push|git_workflow_record/.test(name);
+  const writes = /git_add|git_unstage|git_commit|git_push|git_workflow_record|git_branch_(create|switch|rename|delete|set_upstream|unset_upstream)/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: false,
-    idempotentHint: /guidance|inspect|status|summary|diff|log|show|output_show/.test(name),
+    idempotentHint: /guidance|inspect|status|branch_list|summary|diff|log|show|output_show/.test(name),
     openWorldHint: false,
   };
 }

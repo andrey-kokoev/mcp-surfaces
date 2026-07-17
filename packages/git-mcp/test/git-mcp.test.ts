@@ -6,6 +6,14 @@ import { join } from 'node:path';
 import {
   createServerState,
   gitAdd,
+  gitBranchCreate,
+  gitBranchDelete,
+  gitBranchDeleteRemote,
+  gitBranchList,
+  gitBranchRename,
+  gitBranchSetUpstream,
+  gitBranchSwitch,
+  gitBranchUnsetUpstream,
   gitChangedSummary,
   gitCommit,
   gitDiff,
@@ -71,6 +79,14 @@ const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {
 const toolNames = tools.result?.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_add',
+  'git_branch_create',
+  'git_branch_delete',
+  'git_branch_delete_remote',
+  'git_branch_list',
+  'git_branch_rename',
+  'git_branch_set_upstream',
+  'git_branch_switch',
+  'git_branch_unset_upstream',
   'git_changed_summary',
   'git_commit',
   'git_diff',
@@ -102,18 +118,41 @@ const guidance = await rpc({
 }, state);
 let guidanceContent = guidance.result?.structuredContent as Record<string, any>;
 if (guidanceContent.schema === 'narada.producer_output_page.v1') {
-  const shownGuidance = await rpc({
-    jsonrpc: '2.0',
-    id: 26,
-    method: 'tools/call',
-    params: { name: 'git_output_show', arguments: { ref: guidanceContent.output_ref, limit: 30000 } },
-  }, state);
-  guidanceContent = JSON.parse(shownGuidance.result?.structuredContent.output_text);
+  let guidanceText = '';
+  let guidanceOffset = 0;
+  while (true) {
+    const shownGuidance = await rpc({
+      jsonrpc: '2.0',
+      id: 26 + guidanceOffset,
+      method: 'tools/call',
+      params: { name: 'git_output_show', arguments: { ref: guidanceContent.output_ref, offset: guidanceOffset, limit: 4000 } },
+    }, state);
+    assert.equal(shownGuidance.error, undefined, JSON.stringify(shownGuidance));
+    const page = shownGuidance.result?.structuredContent as Record<string, any>;
+    assert.equal(page.schema, 'narada.mcp_output_page.v1', JSON.stringify(page));
+    guidanceText += String(page.output_text ?? '');
+    if (page.next_offset === null || page.next_offset === undefined) break;
+    guidanceOffset = Number(page.next_offset);
+  }
+  guidanceContent = JSON.parse(guidanceText);
 }
 assert.equal(guidanceContent.surface_id, 'git');
 assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('git_workflow_record')));
 assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('any unstaged, untracked, or conflict paths')));
-assert.deepEqual(guidanceContent.tool_inventory.write, ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_workflow_record']);
+assert.deepEqual(guidanceContent.tool_inventory.write, [
+  'git_add',
+  'git_unstage',
+  'git_commit',
+  'git_push',
+  'git_branch_create',
+  'git_branch_switch',
+  'git_branch_rename',
+  'git_branch_delete',
+  'git_branch_delete_remote',
+  'git_branch_set_upstream',
+  'git_branch_unset_upstream',
+  'git_workflow_record',
+]);
 
 const policy = await rpc({
   jsonrpc: '2.0',
@@ -123,6 +162,7 @@ const policy = await rpc({
 }, state);
 assert.equal(policy.result?.structuredContent.mode, 'write');
 assert.equal(policy.result?.structuredContent.max_output_bytes, 2 * 1024 * 1024);
+assert.equal(policy.result?.structuredContent.branch_policy, 'merged_only_no_force');
 const policyDocument = JSON.parse(policy.result?.content[0].text ?? '{}') as {
   schema?: string;
   mode?: string;
@@ -362,6 +402,47 @@ git(repo, ['restore', '--', 'big.txt']);
 const pushResult = await gitPush({ working_directory: repo, remote: 'origin', branch: currentBranch(repo) }, state);
 assert.match(pushResult.output, /(new branch|main -> main|master -> master)/);
 
+const initialBranchList = await gitBranchList({ working_directory: repo, scope: 'local' }, state);
+assert.equal(initialBranchList.schema, 'narada.git.branch_list.v1');
+const baseBranch = currentBranch(repo);
+assert.equal(initialBranchList.current_branch, baseBranch);
+assert.equal((initialBranchList.branches as any[]).some((branch) => branch.name === baseBranch && branch.type === 'local' && branch.current === true), true);
+
+const createdBranch = await gitBranchCreate({ working_directory: repo, name: 'feature/mcp' }, state);
+assert.equal(createdBranch.checked_out, false);
+assert.equal((createdBranch.post_status as any).branch, baseBranch);
+const switchedBranch = await gitBranchSwitch({ working_directory: repo, branch: 'feature/mcp' }, state);
+assert.equal((switchedBranch.post_status as any).branch, 'feature/mcp');
+const renamedBranch = await gitBranchRename({ working_directory: repo, old_name: 'feature/mcp', new_name: 'feature/renamed' }, state);
+assert.equal((renamedBranch.post_status as any).branch, 'feature/renamed');
+await gitBranchSwitch({ working_directory: repo, branch: baseBranch }, state);
+const deletedMergedBranch = await gitBranchDelete({ working_directory: repo, branch: 'feature/renamed', base: baseBranch }, state);
+assert.equal(deletedMergedBranch.merge_check, 'passed');
+
+await gitBranchCreate({ working_directory: repo, name: 'feature/unmerged', start_point: baseBranch }, state);
+await gitBranchSwitch({ working_directory: repo, branch: 'feature/unmerged' }, state);
+writeFileSync(join(repo, 'unmerged.txt'), 'unmerged branch\n', 'utf8');
+git(repo, ['add', 'unmerged.txt']);
+git(repo, ['commit', '-m', 'Unmerged branch test']);
+await gitBranchSwitch({ working_directory: repo, branch: baseBranch }, state);
+await assert.rejects(
+  () => gitBranchDelete({ working_directory: repo, branch: 'feature/unmerged', base: baseBranch }, state),
+  (error: any) => error.codeName === 'git_branch_not_merged',
+);
+git(repo, ['branch', '-D', 'feature/unmerged']);
+
+await gitBranchCreate({ working_directory: repo, name: 'remote/merged', start_point: baseBranch }, state);
+await gitPush({ working_directory: repo, remote: 'origin', branch: 'remote/merged' }, state);
+const setUpstream = await gitBranchSetUpstream({ working_directory: repo, local_branch: baseBranch, remote: 'origin', remote_branch: baseBranch }, state);
+assert.equal((setUpstream.post_status as any).upstream, `origin/${baseBranch}`);
+const unsetUpstream = await gitBranchUnsetUpstream({ working_directory: repo, local_branch: baseBranch }, state);
+assert.equal((unsetUpstream.post_status as any).upstream, null);
+const deletedRemoteBranch = await gitBranchDeleteRemote({ working_directory: repo, remote: 'origin', branch: 'remote/merged', base: baseBranch }, state);
+assert.equal(deletedRemoteBranch.merge_check, 'passed');
+await gitBranchDelete({ working_directory: repo, branch: 'remote/merged', base: baseBranch }, state);
+const remoteBranchList = await gitBranchList({ working_directory: repo, scope: 'remote' }, state);
+assert.equal((remoteBranchList.branches as any[]).some((branch) => branch.name === 'origin/remote/merged'), false);
+
 const repositoriesSummary = await gitRepositoriesSummary({
   working_directories: [repo, noRemoteRepo],
   scope_label: 'test-summary',
@@ -450,6 +531,14 @@ const readModeUnstage = await rpc({
   params: { name: 'git_unstage', arguments: { working_directory: repo, paths: ['RENAMED.md'] } },
 }, readState);
 assert.equal(readModeUnstage.error?.data.code, 'git_write_mode_required');
+
+const readModeBranchCreate = await rpc({
+  jsonrpc: '2.0',
+  id: 65,
+  method: 'tools/call',
+  params: { name: 'git_branch_create', arguments: { working_directory: repo, name: 'read-mode-branch' } },
+}, readState);
+assert.equal(readModeBranchCreate.error?.data.code, 'git_write_mode_required');
 
 writeFileSync(join(repo, 'summary.txt'), 'summary\n', 'utf8');
 await rpc({

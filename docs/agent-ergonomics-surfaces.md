@@ -7,6 +7,8 @@ This repository keeps mechanical MCP guarantees separate from agent intent.
 `git-mcp` owns repository evidence:
 
 - current branch, upstream, ahead/behind, dirty paths, and conflicts
+- local and remote branch inventory, branch lifecycle operations, and upstream configuration
+- merged-only local and remote branch deletion; force deletion and force push are unavailable
 - configured remotes and resolved or unresolved push target
 - latest commit per repository
 - caller-supplied `scope_label` on Git mutations

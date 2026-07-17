@@ -10,6 +10,7 @@ export type GitMcpPolicy = {
   maxOutputBytes: number;
   mutationAudit: 'mutations';
   pushPolicy: 'current_upstream_or_explicit_remote_branch';
+  branchPolicy: 'merged_only_no_force';
 };
 
 export class GitPolicyError extends Error {
@@ -45,6 +46,7 @@ export function createGitPolicy(options: Record<string, unknown> = {}): GitMcpPo
     maxOutputBytes: clampInteger(options.maxOutputBytes, 1, 20 * 1024 * 1024, DEFAULT_MAX_OUTPUT_BYTES),
     mutationAudit: 'mutations',
     pushPolicy: 'current_upstream_or_explicit_remote_branch',
+    branchPolicy: 'merged_only_no_force',
   };
 }
 
@@ -57,6 +59,7 @@ export function publicGitPolicy(policy: GitMcpPolicy) {
     max_output_bytes: policy.maxOutputBytes,
     mutation_audit: policy.mutationAudit,
     push_policy: policy.pushPolicy,
+    branch_policy: policy.branchPolicy,
   };
 }
 
@@ -165,6 +168,37 @@ export function optionalRefName(value: unknown, field: string): string | null {
   if (ref.startsWith('-')) throw new GitPolicyError(`git_leading_dash_${field}_not_allowed`, { [field]: ref });
   if (!/^[A-Za-z0-9._/-]+$/.test(ref) || ref.includes('..')) throw new GitPolicyError(`git_invalid_${field}`, { [field]: ref });
   return ref;
+}
+
+export function requiredBranchName(value: unknown, field: string = 'branch'): string {
+  const branch = String(value ?? '').trim();
+  if (!branch) throw new GitPolicyError(`git_${field}_required`, { [field]: branch });
+  return validateBranchName(branch, field);
+}
+
+export function optionalBranchName(value: unknown, field: string = 'branch'): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return validateBranchName(String(value).trim(), field);
+}
+
+function validateBranchName(branch: string, field: string): string {
+  if (!branch) throw new GitPolicyError(`git_${field}_required`, { [field]: branch });
+  if (branch.startsWith('-')) throw new GitPolicyError(`git_leading_dash_${field}_not_allowed`, { [field]: branch });
+  if (
+    !/^[A-Za-z0-9._/-]+$/.test(branch)
+    || branch === '.'
+    || branch === '..'
+    || branch.includes('..')
+    || branch.includes('@{')
+    || branch.includes('//')
+    || branch.startsWith('/')
+    || branch.endsWith('/')
+    || branch.endsWith('.')
+    || branch.includes('/.')
+  ) {
+    throw new GitPolicyError(`git_invalid_${field}`, { [field]: branch });
+  }
+  return branch;
 }
 
 function requiredNonEmptyString(value: unknown, code: string): string {

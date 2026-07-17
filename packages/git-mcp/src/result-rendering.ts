@@ -19,6 +19,7 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.mcp_surface.guidance.v0') return renderGuidance(record);
   if (record.schema === 'narada.git.policy.v1') return renderPolicy(record);
   if (record.schema === 'narada.git.status.v1') return renderStatus(record);
+  if (record.schema === 'narada.git.branch_list.v1') return renderBranchList(record);
   if (record.schema === 'narada.git.changed_summary.v1') return renderChangedSummary(record);
   if (record.schema === 'narada.git.repositories_summary.v1') return renderRepositoriesSummary(record);
   if (record.schema === 'narada.git.workflow_record.v1') return renderWorkflowRecord(record);
@@ -27,9 +28,52 @@ export function renderToolResultText(value: unknown): string {
   if (record.schema === 'narada.git.unstage.v1') return renderMutation('git_unstage', record);
   if (record.schema === 'narada.git.commit.v1') return renderMutation('git_commit', record);
   if (record.schema === 'narada.git.push.v1') return renderMutation('git_push', record);
+  if (record.schema === 'narada.git.branch_create.v1') return renderBranchMutation('git_branch_create', record);
+  if (record.schema === 'narada.git.branch_switch.v1') return renderBranchMutation('git_branch_switch', record);
+  if (record.schema === 'narada.git.branch_rename.v1') return renderBranchMutation('git_branch_rename', record);
+  if (record.schema === 'narada.git.branch_delete.v1') return renderBranchMutation('git_branch_delete', record);
+  if (record.schema === 'narada.git.branch_delete_remote.v1') return renderBranchMutation('git_branch_delete_remote', record);
+  if (record.schema === 'narada.git.branch_set_upstream.v1') return renderBranchMutation('git_branch_set_upstream', record);
+  if (record.schema === 'narada.git.branch_unset_upstream.v1') return renderBranchMutation('git_branch_unset_upstream', record);
   if (record.schema === 'narada.git.log.v1') return renderLog(record);
   if (record.schema === 'narada.git.show.v1') return renderPatchResult('git_show', record, 'patch');
   throw diagnosticError('git_unrenderable_result_schema', 'git_unrenderable_result_schema', { schema: record.schema ?? null });
+}
+
+function renderBranchList(record: Record<string, unknown>): string {
+  const branches = Array.isArray(record.branches) ? record.branches.map(asRecord) : [];
+  return compactLines([
+    `git_branch_list: ${record.status ?? 'ok'}`,
+    `working_directory: ${record.working_directory ?? ''}`,
+    `scope: ${record.scope ?? 'all'}`,
+    `current_branch: ${record.current_branch ?? 'null'}`,
+    `returned: ${record.returned ?? branches.length}`,
+    ...branches.map((branch) => {
+      const flags = [branch.current === true ? '*' : null, branch.type ?? null].filter(Boolean).join(' ');
+      return `${flags ? `${flags} ` : ''}${branch.name ?? ''} ${branch.object_id ?? ''}${branch.upstream ? ` -> ${branch.upstream}` : ''}`.trimEnd();
+    }),
+  ]);
+}
+
+function renderBranchMutation(label: string, record: Record<string, unknown>): string {
+  return compactLines([
+    `${label}: ${record.status ?? 'ok'}`,
+    `working_directory: ${record.working_directory ?? ''}`,
+    record.scope_label !== undefined ? `scope_label: ${record.scope_label ?? 'null'}` : null,
+    record.branch !== undefined ? `branch: ${record.branch ?? 'null'}` : null,
+    record.old_name !== undefined ? `old_name: ${record.old_name}` : null,
+    record.new_name !== undefined ? `new_name: ${record.new_name}` : null,
+    record.start_point !== undefined ? `start_point: ${record.start_point}` : null,
+    record.remote !== undefined ? `remote: ${record.remote}` : null,
+    record.remote_branch !== undefined ? `remote_branch: ${record.remote_branch}` : null,
+    record.local_branch !== undefined ? `local_branch: ${record.local_branch}` : null,
+    record.base !== undefined ? `base: ${record.base}` : null,
+    record.remote_object_id !== undefined ? `remote_object_id: ${record.remote_object_id}` : null,
+    record.merge_check !== undefined ? `merge_check: ${record.merge_check}` : null,
+    record.summary !== undefined ? `summary: ${record.summary}` : null,
+    record.output ? 'output:' : null,
+    record.output ? String(record.output).trimEnd() : null,
+  ]);
 }
 
 function renderGuidance(record: Record<string, unknown>): string {
@@ -204,6 +248,7 @@ function renderPolicy(record: Record<string, unknown>): string {
     `max_output_bytes: ${record.max_output_bytes ?? ''}`,
     `mutation_audit: ${record.mutation_audit ?? ''}`,
     `push_policy: ${record.push_policy ?? ''}`,
+    `branch_policy: ${record.branch_policy ?? ''}`,
   ]);
 }
 

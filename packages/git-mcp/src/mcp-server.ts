@@ -149,15 +149,15 @@ async function dispatchMethod(method: string, params: Record<string, unknown>, s
 }
 
 function listPrompts() {
-  return [{ name: 'git_mcp_workflow', title: 'Git MCP Workflow', description: 'Guidance for inspect-stage-commit-push workflows.', arguments: [] }];
+  return [{ name: 'git_mcp_workflow', title: 'Git MCP Workflow', description: 'Guidance for branch, inspect, stage, commit, and push workflows.', arguments: [] }];
 }
 
 function promptGet(params: Record<string, unknown>) {
   const name = String(params.name ?? '');
   if (name !== 'git_mcp_workflow') throw diagnosticError('unknown_prompt', `unknown_prompt:${name}`, { name });
   return {
-    description: 'Guidance for inspect-stage-commit-push workflows.',
-    messages: [{ role: 'user', content: { type: 'text', text: 'Use git_status and git_diff before git_add, git_commit, or git_push. Keep commits scoped and do not force push.' } }],
+    description: 'Guidance for branch, inspect, stage, commit, and push workflows.',
+    messages: [{ role: 'user', content: { type: 'text', text: 'Start with git_guidance, then use git_status and git_branch_list before branch or publication work. Use git_changed_summary and git_diff before git_add, git_commit, or git_push. Create, switch, and rename branches explicitly; delete local or remote branches only with a passed merged-only base check. Keep commits scoped and never force push or force-delete.' } }],
   };
 }
 
@@ -281,6 +281,7 @@ function errorDetails(code: string, message: string): Record<string, unknown> {
   }
   if (code.includes('path')) return { hint: 'Use an explicit repository-relative file path for git_add, or pathspec for read-only tools.' };
   if (code.includes('commitish')) return { hint: 'Use a commit hash, branch, tag, or HEAD-style revision that does not start with a dash.' };
+  if (code.includes('branch')) return { hint: 'Use git_branch_list to inspect local/remote branches, then retry with an explicit valid branch and merged-only base.' };
   return { classification: 'known_git_error' };
 }
 

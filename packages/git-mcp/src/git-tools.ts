@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  optionalBranchName,
   optionalRefName,
   publicGitPolicy,
+  requiredBranchName,
   requireCommitish,
   requireWriteMode,
   resolveWorkingDirectory as resolvePolicyWorkingDirectory,
@@ -32,6 +34,14 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   const runContext = { ...context, env: state.env };
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, runContext);
+  if (name === 'git_branch_list') return gitBranchList(args, state, runContext);
+  if (name === 'git_branch_create') return gitBranchCreate(args, state, runContext);
+  if (name === 'git_branch_switch') return gitBranchSwitch(args, state, runContext);
+  if (name === 'git_branch_rename') return gitBranchRename(args, state, runContext);
+  if (name === 'git_branch_delete') return gitBranchDelete(args, state, runContext);
+  if (name === 'git_branch_delete_remote') return gitBranchDeleteRemote(args, state, runContext);
+  if (name === 'git_branch_set_upstream') return gitBranchSetUpstream(args, state, runContext);
+  if (name === 'git_branch_unset_upstream') return gitBranchUnsetUpstream(args, state, runContext);
   if (name === 'git_changed_summary') return gitChangedSummary(args, state, runContext);
   if (name === 'git_repositories_summary') return gitRepositoriesSummary(args, state, runContext);
   if (name === 'git_workflow_record') return gitWorkflowRecord(args, state, runContext);
@@ -69,6 +79,127 @@ export async function gitUnstage(args: Record<string, unknown>, state: GitMcpSta
   };
   audit(state, payload);
   return payload;
+}
+
+async function requireLocalBranch(cwd: string, branch: string, state: GitMcpState, context: GitRequestContext): Promise<void> {
+  const result = await runGit(cwd, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], state.policy, context);
+  if (result.exit_code === 0 && !result.timed_out && !result.cancelled) return;
+  if (result.exit_code === 1 && !result.timed_out && !result.cancelled) {
+    throw diagnosticError('git_branch_not_found', 'git_branch_not_found', {
+      branch,
+      mutation_started: false,
+    });
+  }
+  throw diagnosticError('git_branch_lookup_failed', 'git_branch_lookup_failed', {
+    branch,
+    exit_code: result.exit_code,
+    timed_out: result.timed_out,
+    cancelled: result.cancelled,
+    diagnostic_text: combineOutput(result),
+    mutation_started: false,
+  });
+}
+
+async function requireLocalBranchAbsent(cwd: string, branch: string, state: GitMcpState, context: GitRequestContext): Promise<void> {
+  const result = await runGit(cwd, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], state.policy, context);
+  if (result.exit_code === 1 && !result.timed_out && !result.cancelled) return;
+  if (result.exit_code === 0 && !result.timed_out && !result.cancelled) {
+    throw diagnosticError('git_branch_already_exists', 'git_branch_already_exists', {
+      branch,
+      mutation_started: false,
+    });
+  }
+  throw diagnosticError('git_branch_lookup_failed', 'git_branch_lookup_failed', {
+    branch,
+    exit_code: result.exit_code,
+    timed_out: result.timed_out,
+    cancelled: result.cancelled,
+    diagnostic_text: combineOutput(result),
+    mutation_started: false,
+  });
+}
+
+function requiredRemoteName(value: unknown): string {
+  const remote = optionalRefName(value, 'remote');
+  if (!remote) throw diagnosticError('git_branch_remote_requires_remote');
+  return remote;
+}
+
+function requireConfiguredRemote(remotes: unknown, remote: string): void {
+  const configured = Array.isArray(remotes)
+    ? remotes.map((candidate) => String(asRemote(candidate).name ?? '')).filter(Boolean)
+    : [];
+  if (configured.includes(remote)) return;
+  throw diagnosticError('git_remote_not_configured', 'git_remote_not_configured', {
+    remote,
+    configured_remotes: configured,
+    mutation_started: false,
+  });
+}
+
+async function requireRemoteBranch(cwd: string, remote: string, branch: string, state: GitMcpState, context: GitRequestContext): Promise<string> {
+  const ref = `refs/heads/${branch}`;
+  const result = await runGit(cwd, ['ls-remote', '--heads', remote, ref], state.policy, context);
+  if (result.timed_out || result.cancelled || result.exit_code !== 0) {
+    throw diagnosticError('git_branch_remote_lookup_failed', 'git_branch_remote_lookup_failed', {
+      remote,
+      branch,
+      exit_code: result.exit_code,
+      timed_out: result.timed_out,
+      cancelled: result.cancelled,
+      diagnostic_text: combineOutput(result),
+      mutation_started: false,
+    });
+  }
+  const line = result.output_text.split(/\r?\n/).find(Boolean);
+  const match = line?.match(/^([0-9a-fA-F]+)\s+refs\/heads\/.+$/);
+  if (!match) {
+    throw diagnosticError('git_remote_branch_not_found', 'git_remote_branch_not_found', {
+      remote,
+      branch,
+      mutation_started: false,
+    });
+  }
+  return match[1];
+}
+
+async function requireMergedInto(
+  cwd: string,
+  source: string,
+  base: string,
+  state: GitMcpState,
+  context: GitRequestContext,
+  details: Record<string, unknown>,
+): Promise<void> {
+  const result = await runGit(cwd, ['merge-base', '--is-ancestor', source, base], state.policy, context);
+  if (result.exit_code === 0 && !result.timed_out && !result.cancelled) return;
+  if (result.exit_code === 1 && !result.timed_out && !result.cancelled) {
+    throw diagnosticError('git_branch_not_merged', 'git_branch_not_merged', {
+      ...details,
+      merge_check: 'failed',
+      mutation_started: false,
+      remediation: 'Choose a base that contains the branch history or preserve the branch; force deletion is not supported.',
+    });
+  }
+  throw diagnosticError('git_branch_merge_check_failed', 'git_branch_merge_check_failed', {
+    ...details,
+    exit_code: result.exit_code,
+    timed_out: result.timed_out,
+    cancelled: result.cancelled,
+    diagnostic_text: combineOutput(result),
+    mutation_started: false,
+  });
+}
+
+function resolveLocalBranchArgument(value: unknown, status: Record<string, unknown>): string {
+  const supplied = optionalBranchName(value, 'local_branch');
+  if (supplied) return supplied;
+  const current = optionalBranchName(status.branch, 'local_branch');
+  if (!current) throw diagnosticError('git_branch_requires_local_branch', 'git_branch_requires_local_branch', {
+    mutation_started: false,
+    remediation: 'Pass local_branch while on a detached HEAD or unborn branch.',
+  });
+  return current;
 }
 
 export async function gitChangedSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
@@ -133,6 +264,267 @@ export async function gitChangedSummary(args: Record<string, unknown>, state: Gi
     full_diffs_omitted: true,
     diff_tool: 'git_diff',
   };
+}
+
+export async function gitBranchList(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  const cwd = resolveWorkingDirectory(args, state);
+  const scope = stringEnum(args.scope, ['local', 'remote', 'all'], 'all');
+  const limit = clampInteger(args.limit, 1, 500, 100);
+  const currentResult = await runGit(cwd, ['branch', '--show-current'], state.policy, context);
+  const currentBranch = currentResult.exit_code === 0 ? currentResult.output_text.trim() || null : null;
+  const refs = scope === 'local'
+    ? ['refs/heads']
+    : scope === 'remote'
+      ? ['refs/remotes']
+      : ['refs/heads', 'refs/remotes'];
+  const result = await runGit(cwd, [
+    'for-each-ref',
+    '--sort=refname',
+    '--format=%(refname)\t%(refname:short)\t%(objectname)\t%(HEAD)\t%(upstream:short)\t%(upstream:trackshort)',
+    ...refs,
+  ], state.policy, context);
+  ensureGitOk(result, 'git_branch_list_failed');
+  const branches = result.output_text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, limit)
+    .map((line) => {
+      const [refName = '', name = '', objectId = '', head = '', upstream = '', tracking = ''] = line.split('\t');
+      const type = refName.startsWith('refs/remotes/') ? 'remote' : 'local';
+      return {
+        name,
+        type,
+        object_id: objectId || null,
+        current: type === 'local' && head === '*',
+        upstream: upstream || null,
+        tracking: tracking || null,
+      };
+    });
+  return {
+    schema: 'narada.git.branch_list.v1',
+    status: 'ok',
+    working_directory: cwd,
+    scope,
+    limit,
+    current_branch: currentBranch,
+    returned: branches.length,
+    branches,
+  };
+}
+
+export async function gitBranchCreate(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_create');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const branch = requiredBranchName(args.name);
+  const startPoint = args.start_point === undefined ? 'HEAD' : requireCommitish(args.start_point);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  await requireLocalBranchAbsent(cwd, branch, state, context);
+  const result = await runGit(cwd, ['branch', branch, startPoint], state.policy, context);
+  ensureGitOk(result, 'git_branch_create_failed');
+  const payload = {
+    schema: 'narada.git.branch_create.v1',
+    status: 'ok',
+    operation: 'create',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    branch,
+    start_point: startPoint,
+    checked_out: false,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `created local branch ${branch} from ${startPoint}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchSwitch(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_switch');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const branch = requiredBranchName(args.branch);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  await requireLocalBranch(cwd, branch, state, context);
+  const result = await runGit(cwd, ['switch', '--', branch], state.policy, context);
+  ensureGitOk(result, 'git_branch_switch_failed');
+  const payload = {
+    schema: 'narada.git.branch_switch.v1',
+    status: 'ok',
+    operation: 'switch',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    branch,
+    force: false,
+    discard_changes: false,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `switched to local branch ${branch}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchRename(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_rename');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const oldName = requiredBranchName(args.old_name, 'old_name');
+  const newName = requiredBranchName(args.new_name, 'new_name');
+  if (oldName === newName) throw diagnosticError('git_branch_rename_names_must_differ');
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  await requireLocalBranch(cwd, oldName, state, context);
+  await requireLocalBranchAbsent(cwd, newName, state, context);
+  const result = await runGit(cwd, ['branch', '-m', oldName, newName], state.policy, context);
+  ensureGitOk(result, 'git_branch_rename_failed');
+  const payload = {
+    schema: 'narada.git.branch_rename.v1',
+    status: 'ok',
+    operation: 'rename',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    old_name: oldName,
+    new_name: newName,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `renamed local branch ${oldName} to ${newName}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchDelete(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_delete');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const branch = requiredBranchName(args.branch);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  await requireLocalBranch(cwd, branch, state, context);
+  const currentBranch = typeof before.branch === 'string' ? before.branch : null;
+  if (currentBranch === branch) {
+    throw diagnosticError('git_branch_cannot_delete_current', 'git_branch_cannot_delete_current', {
+      branch,
+      current_branch: currentBranch,
+      mutation_started: false,
+    });
+  }
+  const base = args.base === undefined
+    ? currentBranch
+    : requireCommitish(args.base);
+  if (!base) throw diagnosticError('git_branch_delete_requires_base_on_detached_head');
+  await requireMergedInto(cwd, branch, base, state, context, { branch, base });
+  const result = await runGit(cwd, ['branch', '-d', branch], state.policy, context);
+  ensureGitOk(result, 'git_branch_delete_failed');
+  const payload = {
+    schema: 'narada.git.branch_delete.v1',
+    status: 'ok',
+    operation: 'delete',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    branch,
+    base,
+    merge_check: 'passed',
+    force: false,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `deleted merged local branch ${branch}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchDeleteRemote(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_delete_remote');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const remote = requiredRemoteName(args.remote);
+  const branch = requiredBranchName(args.branch);
+  const base = requireCommitish(args.base);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  requireConfiguredRemote(before.remotes, remote);
+  const remoteObjectId = await requireRemoteBranch(cwd, remote, branch, state, context);
+  await requireMergedInto(cwd, remoteObjectId, base, state, context, { remote, branch, base, remote_object_id: remoteObjectId });
+  const result = await runGit(cwd, ['push', remote, '--delete', branch], state.policy, context);
+  ensureGitOk(result, 'git_branch_delete_remote_failed');
+  const payload = {
+    schema: 'narada.git.branch_delete_remote.v1',
+    status: 'ok',
+    operation: 'delete_remote',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    remote,
+    branch,
+    base,
+    remote_object_id: remoteObjectId,
+    merge_check: 'passed',
+    force: false,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `deleted merged remote branch ${remote}/${branch}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchSetUpstream(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_set_upstream');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  const localBranch = resolveLocalBranchArgument(args.local_branch, before);
+  const remote = requiredRemoteName(args.remote);
+  const remoteBranch = optionalBranchName(args.remote_branch) ?? localBranch;
+  await requireLocalBranch(cwd, localBranch, state, context);
+  requireConfiguredRemote(before.remotes, remote);
+  await requireRemoteBranch(cwd, remote, remoteBranch, state, context);
+  const result = await runGit(cwd, ['branch', '--set-upstream-to', `${remote}/${remoteBranch}`, localBranch], state.policy, context);
+  ensureGitOk(result, 'git_branch_set_upstream_failed');
+  const payload = {
+    schema: 'narada.git.branch_set_upstream.v1',
+    status: 'ok',
+    operation: 'set_upstream',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    local_branch: localBranch,
+    remote,
+    remote_branch: remoteBranch,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `set ${localBranch} upstream to ${remote}/${remoteBranch}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitBranchUnsetUpstream(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_branch_unset_upstream');
+  const cwd = resolveWorkingDirectory(args, state);
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  const localBranch = resolveLocalBranchArgument(args.local_branch, before);
+  await requireLocalBranch(cwd, localBranch, state, context);
+  const result = await runGit(cwd, ['branch', '--unset-upstream', localBranch], state.policy, context);
+  ensureGitOk(result, 'git_branch_unset_upstream_failed');
+  const payload = {
+    schema: 'narada.git.branch_unset_upstream.v1',
+    status: 'ok',
+    operation: 'unset_upstream',
+    working_directory: cwd,
+    scope_label: scopeLabel,
+    local_branch: localBranch,
+    output: combineOutput(result),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `unset upstream for ${localBranch}`,
+  };
+  audit(state, payload);
+  return payload;
 }
 
 export async function gitStatus(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {

@@ -10,6 +10,14 @@ export {
 } from './mcp-server.js';
 export {
   gitAdd,
+  gitBranchCreate,
+  gitBranchDelete,
+  gitBranchDeleteRemote,
+  gitBranchList,
+  gitBranchRename,
+  gitBranchSetUpstream,
+  gitBranchSwitch,
+  gitBranchUnsetUpstream,
   gitChangedSummary,
   gitCommit,
   gitDiff,

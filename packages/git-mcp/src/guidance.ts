@@ -3,7 +3,7 @@ export type GuidanceToolDefinition = GuidanceRecord & { name: string; descriptio
 
 const SURFACE_ID = "git";
 const GUIDANCE_TOOL = "git_guidance";
-const PURPOSE = "Governed Git inspection, staging, commit, and push workflows.";
+const PURPOSE = "Governed Git inspection, branch lifecycle, staging, commit, and push workflows.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -41,18 +41,33 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       ],
       read_only_review: [
         'git_status for posture.',
+        'git_branch_list for local and remote branch discovery.',
         'git_log or git_show for commit detail.',
         'git_diff with pathspecs for bounded inspection.'
+      ],
+      branch_lifecycle: [
+        'git_branch_list before selecting a local branch target.',
+        'git_branch_create with an explicit name and optional start point; creation does not check out the branch.',
+        'git_branch_switch only for an existing branch; Git must preserve the worktree safely.',
+        'git_branch_rename with explicit old_name and new_name.',
+        'git_branch_delete only after the merged-only base check passes; force deletion is unavailable.'
+      ],
+      remote_administration: [
+        'git_branch_list with scope=remote or all before remote administration.',
+        'git_branch_set_upstream or git_branch_unset_upstream for local tracking configuration.',
+        'git_branch_delete_remote with explicit remote, branch, and base; the remote ref must be merged before deletion.',
+        'Use git_push separately to publish a newly created local branch.'
       ]
     },
     tool_inventory: {
-      read: ['git_policy_inspect', 'git_status', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show', 'git_output_show'],
-      write: ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_workflow_record'],
+      read: ['git_policy_inspect', 'git_status', 'git_branch_list', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show', 'git_output_show'],
+      write: ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_branch_create', 'git_branch_switch', 'git_branch_rename', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_set_upstream', 'git_branch_unset_upstream', 'git_workflow_record'],
       write_mode_note: 'Mutations require git-mcp mode=write and policy approval.'
     },
     examples: [
       { intent: 'First use', call: 'git_guidance({})' },
       { intent: 'Normal commit workflow', call: 'git_status -> git_changed_summary/git_diff -> git_add -> staged git_diff -> git_commit -> git_push -> git_workflow_record' },
+      { intent: 'Branch workflow', call: 'git_branch_list -> git_branch_create -> git_branch_switch -> git_branch_delete' },
       { intent: 'Tool-specific help', call: "git_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "git_guidance({ workflow: \"<workflow_name>\" })" }
     ],
@@ -61,13 +76,17 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.',
-      'Do not call git_commit without expected_staged_paths when git_status reports any unstaged, untracked, or conflict paths; scope_label alone does not isolate the index.'
+      'Do not call git_commit without expected_staged_paths when git_status reports any unstaged, untracked, or conflict paths; scope_label alone does not isolate the index.',
+      'Do not force-create, force-switch, force-delete, or force-push branches; these tools intentionally expose no force flags.',
+      'Do not delete a local or remote branch until the merged-only base check succeeds.'
     ],
     recovery: [
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
       'For git_commit_scope_required_for_mixed_worktree, inspect git_status, pass the exact intended expected_staged_paths, and retry; the refusal is atomic.',
+      'For branch deletion refusals, inspect git_branch_list and retry only with the correct merged base; force deletion is not available.',
+      'For remote branch errors, verify the configured remote and remote ref before retrying; the remote deletion tool does not fetch implicitly.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {
