@@ -1543,13 +1543,15 @@ function drainJsonRpcFrames(buffer: string) {
   const requests: JsonRecord[] = [];
   let remaining = buffer;
   while (true) {
-    const headerEnd = remaining.indexOf('\r\n\r\n');
+    const crlfHeaderEnd = remaining.indexOf('\r\n\r\n');
+    const lfHeaderEnd = remaining.indexOf('\n\n');
+    const headerEnd = crlfHeaderEnd !== -1 ? crlfHeaderEnd : lfHeaderEnd;
     if (headerEnd < 0) break;
     const header = remaining.slice(0, headerEnd);
     const match = /Content-Length:\s*(\d+)/i.exec(header);
     if (!match) break;
     const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
+    const bodyStart = headerEnd + (crlfHeaderEnd !== -1 ? 4 : 2);
     const bodyEnd = bodyStart + length;
     if (remaining.length < bodyEnd) break;
     requests.push(asRecord(JSON.parse(remaining.slice(bodyStart, bodyEnd))));
