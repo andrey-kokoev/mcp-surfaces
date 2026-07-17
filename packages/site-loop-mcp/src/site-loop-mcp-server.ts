@@ -69,6 +69,7 @@ const READ_ONLY_TOOL_NAMES = new Set([
 const MUTATING_TOOL_NAMES = new Set([
   'site_test_run',
   'site_loop_proof_run',
+  'site_loop_recovery_drill',
   'site_loop_attention_ack',
   'site_loop_control_set',
   'site_loop_run_once',
@@ -110,6 +111,14 @@ const TOOLS = [
     ensure_resident: { type: 'boolean', description: 'Ensure the configured resident carrier before dispatch.' },
     require_live_carrier: { type: 'boolean', description: 'Require live carrier rather than fixture simulation.' },
   }, ['proof_kind']),
+  tool('site_loop_recovery_drill', 'Retire the current resident carrier, require a replacement live carrier, run a production resident proof, and clean up the deterministic fixture.', {
+    id: { type: 'string', description: 'Deterministic recovery-drill fixture id.' },
+    reason: { type: 'string', description: 'Operator-approved reason for retiring the current resident carrier.' },
+    title: { type: 'string', description: 'Optional fixture title.' },
+    summary: { type: 'string', description: 'Optional fixture summary.' },
+    timeout_ms: { type: 'number', description: 'Maximum recovery proof wait in milliseconds.' },
+    poll_ms: { type: 'number', description: 'Recovery proof polling interval in milliseconds.' },
+  }, ['reason']),
   tool('site_loop_readiness', 'Evaluate unattended-operation readiness gates for the configured site loop.', {
     require_production: { type: 'boolean', description: 'Require production proof, not only transport proof.' },
   }),
@@ -428,6 +437,8 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       return (await loadSiteLoopModule()).siteLoopProofStatus(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_proof_run':
       return (await loadSiteLoopModule()).runSiteResidentE2E(siteRoot, normalizeProofRunOptions(args));
+    case 'site_loop_recovery_drill':
+      return (await loadSiteLoopModule()).runSiteResidentRecoveryDrill(siteRoot, normalizeRecoveryDrillOptions(args));
     case 'site_loop_readiness':
       return (await loadSiteLoopModule()).siteLoopReadiness(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_coherence':
@@ -763,6 +774,21 @@ function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {
     };
   }
   throw new Error(`unknown_proof_kind: ${proofKind ?? ''}`);
+}
+
+function normalizeRecoveryDrillOptions(args: SiteLoopToolArgs = {}) {
+  const timeoutMs = optionalNumber(args.timeout_ms) ?? optionalNumber(args.timeoutMs);
+  if (timeoutMs !== undefined && timeoutMs > 120_000) {
+    throw new Error('recovery_drill_timeout_exceeds_mcp_transport_budget');
+  }
+  return {
+    id: optionalString(args.id),
+    reason: optionalString(args.reason),
+    title: optionalString(args.title),
+    summary: optionalString(args.summary),
+    timeoutMs,
+    pollMs: optionalNumber(args.poll_ms) ?? optionalNumber(args.pollMs),
+  };
 }
 
 function normalizeLoopControl(args: LoopControlToolArgs = {}) {
