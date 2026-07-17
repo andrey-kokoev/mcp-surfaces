@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
+import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import {
   buildAllowedRoots,
   createExecutionPolicy,
@@ -257,6 +258,16 @@ export function listTools() {
       inputSchema: objectSchema({}),
     },
     {
+      name: 'structured_command_output_show',
+      description: 'Read a materialized structured-command MCP output ref with offset/limit paging.',
+      inputSchema: objectSchema({
+        ref: { type: 'string', description: 'Materialized output ref, e.g. mcp_output:<id>. Alias: output_ref.' },
+        output_ref: { type: 'string', description: 'Alias for ref.' },
+        offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
+        limit: { type: 'integer', default: 20000, minimum: 1, maximum: 20000, description: 'Maximum output characters to return; the transport hard-caps this value.' },
+      }),
+    },
+    {
       name: 'structured_command_execute',
       description: 'Execute a structured argv command under allowed-root and command policy.',
       inputSchema: objectSchema({
@@ -320,6 +331,16 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
     if (name === 'structured_command_guidance') result = buildGuidanceResult(args);
     else {
       enforceInputCharLimit(args);
+      if (name === 'structured_command_output_show') {
+        const page = structuredCommandOutputShow(args, state);
+        return buildBoundedToolResult({
+          siteRoot: state.siteRoot,
+          toolName: String(name),
+          value: page,
+          limit: TOOL_RESULT_CHAR_LIMIT,
+          readerTool: 'structured_command_output_show',
+        });
+      }
       if (name === 'structured_command_execution_policy_inspect') result = publicExecutionPolicy(state.policy);
       else if (name === 'structured_command_execute') result = await executeStructuredCommand(args, state, context);
       else if (name === 'structured_command_powershell_parse_check') result = await powershellParseCheck(args, state, context);
@@ -328,10 +349,31 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
       else throw diagnosticError('structured_command_unknown_tool', `structured_command_unknown_tool:${name}`, { tool_name: name ?? null });
     }
     emitStructuredCommandTelemetry(String(name ?? ''), asRecord(result), state, startedAt);
-    return toolResult(result, state);
+    return toolResult(result, state, String(name ?? 'unknown_tool'));
   } catch (error) {
     emitStructuredCommandTelemetry(String(name ?? ''), {}, state, startedAt, error);
     throw error;
+  }
+}
+
+function structuredCommandOutputShow(args, state) {
+  try {
+    const page = outputShow({ siteRoot: state.siteRoot, args });
+    return {
+      ...asRecord(page),
+      output_scope: {
+        reader_tool: 'structured_command_output_show',
+        server_output_root: state.siteRoot,
+        scope: 'bound_server_output_root',
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError('structured_command_output_ref_scope_unreadable', message, {
+      output_root: state.siteRoot,
+      requested_ref: args.ref ?? args.output_ref ?? null,
+      remediation: 'Use the same structured-command MCP site scope that created the output_ref; cross-site filesystem roots are not accepted by the shared transport reader.',
+    });
   }
 }
 
@@ -740,8 +782,17 @@ export function buildElevatedWindowBrokerCommand({ command, args, workingDirecto
   };
 }
 
-function toolResult(payload, state) {
+function toolResult(payload, state, toolName = 'structured_command') {
   const text = renderToolResultText(payload);
+  if (text.length > TOOL_RESULT_CHAR_LIMIT) {
+    return buildBoundedToolResult({
+      siteRoot: state.siteRoot,
+      toolName,
+      value: payload,
+      limit: TOOL_RESULT_CHAR_LIMIT,
+      readerTool: 'structured_command_output_show',
+    });
+  }
   const truncated = text.length > TOOL_RESULT_CHAR_LIMIT;
   const rendered = truncated ? text.slice(0, TOOL_RESULT_CHAR_LIMIT) : text;
   return {

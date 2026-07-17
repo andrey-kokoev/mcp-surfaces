@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildOutputRefToolContent } from '@narada2/mcp-transport';
 import { createServerState, executeStructuredCommand, handleRequest } from '../src/main.js';
 
 type ToolSummary = { name: string; annotations: Record<string, unknown>; outputSchema: Record<string, unknown> };
@@ -43,10 +44,61 @@ try {
   assert.equal(names.includes('structured_command_execute'), true);
   assert.equal(names.includes('structured_command_elevated_window_execute'), true);
   assert.equal(names.includes('structured_command_input_create'), true);
-  assert.equal(names.includes('structured_command_output_show'), false);
+  assert.equal(names.includes('structured_command_output_show'), true);
   const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
   assert.equal(executeTool.annotations.readOnlyHint, false);
   assert.equal(executeTool.outputSchema.type, 'object');
+
+  const materialized = buildOutputRefToolContent({
+    siteRoot: root,
+    toolName: 'task_lifecycle_list',
+    value: {
+      status: 'ok',
+      tasks: Array.from({ length: 100 }, (_, index) => ({
+        task_number: index,
+        title: 'task-' + index,
+        details: 'x'.repeat(80),
+      })),
+    },
+    limit: 4000,
+    readerTool: 'mcp_output_show',
+  });
+  const materializedRef = materialized.structuredContent.output_ref;
+  assert.match(String(materializedRef), /^mcp_output:/);
+  const shownMaterialized = await handleRequest({
+    jsonrpc: '2.0',
+    id: 'output-show',
+    method: 'tools/call',
+    params: {
+      name: 'structured_command_output_show',
+      arguments: { ref: materializedRef, offset: 0, limit: 4000 },
+    },
+  }, state) as any;
+  assert.equal(shownMaterialized.error, undefined);
+  assert.equal(shownMaterialized.result.structuredContent.schema, 'narada.mcp_output_page.v1');
+  assert.equal(shownMaterialized.result.structuredContent.ref, materializedRef);
+
+  const guidance = await handleRequest({
+    jsonrpc: '2.0',
+    id: 'guidance',
+    method: 'tools/call',
+    params: { name: 'structured_command_guidance', arguments: {} },
+  }, state) as any;
+  assert.equal(guidance.error, undefined);
+  const guidanceRef = guidance.result.structuredContent.output_ref;
+  assert.match(String(guidanceRef), /^mcp_output:/, JSON.stringify(guidance));
+  const shownGuidance = await handleRequest({
+    jsonrpc: '2.0',
+    id: 'guidance-show',
+    method: 'tools/call',
+    params: {
+      name: 'structured_command_output_show',
+      arguments: { ref: guidanceRef, offset: 0, limit: 4000 },
+    },
+  }, state) as any;
+  assert.equal(shownGuidance.error, undefined);
+  assert.equal(shownGuidance.result.structuredContent.schema, 'narada.mcp_output_page.v1');
+  assert.equal(shownGuidance.result.structuredContent.ref, guidanceRef);
 
   const prompts = await handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state) as any;
   assert.equal(prompts.result.prompts[0].name, 'structured_command_safe_execution');

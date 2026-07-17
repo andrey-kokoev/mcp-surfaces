@@ -155,6 +155,7 @@ assert.deepEqual(toolNames, [
   'structured_command_execute',
   'structured_command_execution_policy_inspect',
   'structured_command_input_create',
+  'structured_command_output_show',
   'structured_command_powershell_parse_check',
 ]);
 const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
