@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Socket } from 'node:net';
+import { connect as tlsConnect, type TLSSocket } from 'node:tls';
 import { resolveNaradaSitePaths } from '@narada2/site-paths';
 
 export type JsonRecord = Record<string, unknown>;
@@ -12,8 +13,10 @@ const INPUT_EVENT_SCHEMA = 'narada.carrier.input_event.v1';
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 const DEFAULT_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_MAX_SESSIONS = 50;
+const DEFAULT_HEARTBEAT_FRESH_MS = 30_000;
 const MAX_INLINE_CONTENT = 20_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{2,127}$/;
+const SEMANTIC_HEALTH_STATUSES = new Set(['starting', 'healthy', 'degraded', 'unhealthy', 'closing', 'unavailable']);
 
 export class NarsSessionMcpError extends Error {
   readonly code: string;
@@ -27,6 +30,11 @@ export class NarsSessionMcpError extends Error {
   }
 }
 
+function semanticHealthStatus(value: JsonRecord, fallback: string): string {
+  const status = optionalText(value.status)?.toLowerCase();
+  return status && SEMANTIC_HEALTH_STATUSES.has(status) ? status : fallback;
+}
+
 type SessionRecord = JsonRecord & {
   session_id: string;
   site_id?: string | null;
@@ -36,6 +44,8 @@ type SessionRecord = JsonRecord & {
   authority_epoch?: number | null;
   authority_runtime_id?: string | null;
   source_write_admission?: string | null;
+  heartbeat_path?: string | null;
+  session_dir?: string | null;
   terminal_state?: string | null;
   superseded_by_session_id?: string | null;
 };
@@ -212,8 +222,13 @@ export async function listSessions(config: ClientConfig, args: JsonRecord = {}) 
     schema: 'narada.nars_session_mcp.sessions.v1',
     status: 'ok',
     site_id: optionalText(args.site_id) ?? config.siteId ?? null,
+    authority_root: config.siteRoot,
+    scope_root: config.siteRoot,
     site_root: config.siteRoot,
     scope: config.scope,
+    scope_semantics: 'The envelope roots identify the bound discovery authority; each session.site_root identifies that session\'s admitted Site root.',
+    authority_count: authorities.length,
+    selected_site_ids: authorities.map((authority) => authority.siteId),
     count: sessions.length,
     sessions,
   };
@@ -225,6 +240,9 @@ export async function showSession(config: ClientConfig, args: JsonRecord = {}) {
   return {
     schema: 'narada.nars_session_mcp.session.v1',
     status: 'ok',
+    scope: config.scope,
+    authority_root: config.siteRoot,
+    scope_root: config.siteRoot,
     session: publicSession(record, health),
     authority: authoritySummary(record),
   };
@@ -299,19 +317,50 @@ export async function inputStatus(config: ClientConfig, args: JsonRecord = {}) {
     throw new NarsSessionMcpError('input_status_selector_required', 'input_event_id, request_id, or directive_id is required');
   }
   const readRequestId = `nars_input_status_${randomToken()}`;
+  const filters = {
+    any_of: Object.fromEntries([
+      ['input_event_id', inputEventId],
+      ['request_id', requestId],
+      ['directive_id', directiveId],
+    ].filter(([, value]) => Boolean(value))),
+  };
+  const limit = boundedNumber(args.limit, 100, 1, 200);
   const response = await requestWebSocket(record.event_endpoint, {
     id: readRequestId,
     method: 'session.events.read',
-    params: { direction: 'backward', limit: boundedNumber(args.limit, 100, 1, 200) },
+    params: { direction: 'backward', limit, filters },
   }, { timeoutMs: config.requestTimeoutMs, waitFor: (message) => eventNameOf(message) === 'session_events_read' && message.request_id === readRequestId });
-  const events = Array.isArray(response.events) ? response.events.filter((event) => eventMatches(event, { inputEventId, requestId, directiveId })).slice(0, 50) : [];
+  const events = Array.isArray(response.events) ? response.events.filter((event) => eventMatches(event, { inputEventId, requestId, directiveId })) : [];
+  const corruptLineCount = Number(response.corrupt_line_count ?? 0);
+  const hasMore = response.has_more === true;
+  const historyTruncated = response.truncated === true || corruptLineCount > 0;
+  const evidenceComplete = !hasMore && !historyTruncated;
+  const summary = summarizeInputEvents(events);
   return {
     schema: 'narada.nars_session_mcp.input_status.v1',
-    status: classifyInputStatus(events),
+    status: summary.status,
+    status_semantics: summary.status_semantics,
+    admission_status: summary.admission_status,
+    terminal_state: summary.terminal_state,
+    request_state: summary.request_state,
+    outcome: summary.outcome,
+    outcome_reason: summary.outcome_reason,
+    terminal_event: summary.terminal_event,
     site_id: record.site_id ?? config.siteId,
     session_id: record.session_id,
     selectors: { input_event_id: inputEventId, request_id: requestId, directive_id: directiveId },
     events,
+    evidence_complete: evidenceComplete,
+    history_truncated: historyTruncated,
+    corrupt_line_count: corruptLineCount,
+    evidence: {
+      source: response.source ?? 'events_jsonl',
+      complete: evidenceComplete,
+      has_more: hasMore,
+      event_count: response.event_count ?? events.length,
+      cursor: response.cursor ?? null,
+      filters,
+    },
     authority: authoritySummary(record),
   };
 }
@@ -427,6 +476,7 @@ function resolveSessionAuthority(config: ClientConfig, args: JsonRecord, session
 }
 
 function publicSession(record: SessionRecord, health: JsonRecord) {
+  const liveness = deriveSessionLiveness(record, health);
   return {
     session_id: record.session_id,
     carrier_session_id: record.carrier_session_id ?? record.session_id,
@@ -436,10 +486,25 @@ function publicSession(record: SessionRecord, health: JsonRecord) {
     agent_id: record.agent_id ?? null,
     runtime_kind: record.runtime_kind ?? null,
     launch_operator_surface_kind: record.launch_operator_surface_kind ?? null,
-    display_state: record.display_state ?? null,
+    display_state: liveness.display_state,
+    display_state_reason: liveness.display_state_reason,
+    persisted_display_state: record.display_state ?? null,
     status_hint: record.status_hint ?? null,
     started_at: record.started_at ?? null,
     last_seen_at: record.last_seen_at ?? null,
+    last_seen_source: 'session_index_projection',
+    heartbeat_at: liveness.heartbeat_at,
+    heartbeat_fresh: liveness.heartbeat_fresh,
+    heartbeat_age_ms: liveness.heartbeat_age_ms,
+    health_observed_at: liveness.health_observed_at,
+    liveness: {
+      source: liveness.source,
+      observed_at: liveness.health_observed_at,
+      heartbeat_path: liveness.heartbeat_path,
+      heartbeat_at: liveness.heartbeat_at,
+      heartbeat_age_ms: liveness.heartbeat_age_ms,
+      heartbeat_fresh: liveness.heartbeat_fresh,
+    },
     terminal_state: record.terminal_state ?? null,
     health,
     event_endpoint_available: Boolean(record.event_endpoint),
@@ -464,9 +529,24 @@ async function probeSession(config: ClientConfig, record: SessionRecord): Promis
     try {
       const response = await fetch(String(record.health_endpoint), { signal: AbortSignal.timeout(config.healthTimeoutMs) });
       const body = await response.json().catch(() => ({}));
-      return { status: response.ok ? 'healthy' : 'unhealthy', http_status: response.status, ...asRecord(body) };
+      const bodyRecord = asRecord(body);
+      return {
+        ...bodyRecord,
+        status: semanticHealthStatus(bodyRecord, response.ok ? 'healthy' : 'unhealthy'),
+        http_status: response.status,
+        http_ok: response.ok,
+        probe_status: 'reachable',
+        health_observed_at: new Date().toISOString(),
+        health_source: 'health_endpoint',
+      };
     } catch (error) {
-      return { status: 'unavailable', reason: error instanceof Error ? error.message : String(error) };
+      return {
+        status: 'unavailable',
+        probe_status: 'unreachable',
+        reason: error instanceof Error ? error.message : String(error),
+        health_observed_at: new Date().toISOString(),
+        health_source: 'health_endpoint',
+      };
     }
   }
   if (record.event_endpoint) {
@@ -476,12 +556,30 @@ async function probeSession(config: ClientConfig, record: SessionRecord): Promis
         timeoutMs: config.healthTimeoutMs,
         waitFor: (message) => message.request_id === requestId || eventNameOf(message) === 'session_health',
       });
-      return { status: isErrorMessage(response) ? 'unhealthy' : 'healthy', ...response };
+      return {
+        ...response,
+        status: semanticHealthStatus(response, isErrorMessage(response) ? 'unhealthy' : 'healthy'),
+        probe_status: 'reachable',
+        health_observed_at: new Date().toISOString(),
+        health_source: 'event_endpoint',
+      };
     } catch (error) {
-      return { status: 'unavailable', reason: error instanceof Error ? error.message : String(error) };
+      return {
+        status: 'unavailable',
+        probe_status: 'unreachable',
+        reason: error instanceof Error ? error.message : String(error),
+        health_observed_at: new Date().toISOString(),
+        health_source: 'event_endpoint',
+      };
     }
   }
-  return { status: 'unavailable', reason: 'session_health_endpoint_missing' };
+  return {
+    status: 'unavailable',
+    probe_status: 'unavailable',
+    reason: 'session_health_endpoint_missing',
+    health_observed_at: new Date().toISOString(),
+    health_source: 'endpoint_missing',
+  };
 }
 
 function assertWritableAuthority(config: ClientConfig, record: SessionRecord, args: JsonRecord) {
@@ -527,6 +625,8 @@ function inputDeliveryResponse(message: JsonRecord, requestId: string): boolean 
   if (messageRequestId !== requestId) return false;
   return event === 'input_event_queued'
     || event === 'input_event_started'
+    || event === 'input_admitted_to_turn'
+    || event === 'session_control_accepted'
     || event === 'input_completed'
     || event === 'user_message'
     || event === 'turn_started'
@@ -545,6 +645,46 @@ function eventMatches(event: unknown, selectors: { inputEventId: string | null; 
     || (selectors.directiveId && directiveId === selectors.directiveId);
 }
 
+export function summarizeInputEvents(events: unknown[]): JsonRecord {
+  const admissionStatus = classifyInputStatus(events);
+  const candidates = events.map((event) => terminalEvidence(event)).filter((candidate) => candidate !== null) as Array<{
+    state: string;
+    event: string;
+    reason: string | null;
+    rank: number;
+  }>;
+  const terminal = candidates
+    .sort((left, right) => right.rank - left.rank)
+    .at(0) ?? null;
+  const terminalReason = terminal?.reason
+    ?? candidates.find((candidate) => candidate.state === terminal?.state && candidate.reason)?.reason
+    ?? null;
+  const requestState = events
+    .map((event) => requestStateFromEvent(event))
+    .find((state) => state !== null)
+    ?? terminal?.state
+    ?? null;
+  const outcome = terminal
+    ? terminal.state === 'completed'
+      ? 'completed'
+      : terminal.state === 'rejected'
+        ? 'refused'
+        : terminal.state === 'interrupted'
+          ? 'interrupted'
+          : 'failed'
+    : admissionStatus === 'unknown' ? 'unknown' : 'pending';
+  return {
+    status: admissionStatus,
+    status_semantics: 'admission',
+    admission_status: admissionStatus,
+    terminal_state: terminal?.state ?? null,
+    request_state: requestState,
+    outcome,
+    outcome_reason: terminalReason,
+    terminal_event: terminal?.event ?? null,
+  };
+}
+
 function classifyInputStatus(events: unknown[]): string {
   if (events.some((event) => ['error', 'turn_failed', 'websocket_error'].includes(eventNameOf(asRecord(event))))) return 'refused_or_failed';
   if (events.some((event) => ['input_completed', 'input_event_completed', 'turn_complete'].includes(eventNameOf(asRecord(event))))) return 'processed';
@@ -553,12 +693,166 @@ function classifyInputStatus(events: unknown[]): string {
   return 'unknown';
 }
 
+function terminalEvidence(event: unknown): { state: string; event: string; reason: string | null; rank: number } | null {
+  const record = asRecord(event);
+  const payload = asRecord(record.payload);
+  const name = eventNameOf(record);
+  const fields = { ...payload, ...record };
+  const explicit = terminalStateFromValue(fields.terminal_state)
+    ?? terminalStateFromValue(fields.request_state)
+    ?? terminalStateFromValue(fields.turn_state)
+    ?? terminalStateFromValue(fields.state);
+  let state = explicit;
+  if (!state && name === 'session_control_rejected') {
+    state = optionalText(fields.code) === 'request_dispatch_failed' ? 'failed' : 'rejected';
+  }
+  if (!state && ['error', 'turn_failed', 'carrier_turn_failed', 'websocket_error', 'input_event_failed', 'runtime_request_failed'].includes(name)) state = 'failed';
+  if (!state && ['input_completed', 'input_event_completed', 'turn_complete'].includes(name)) state = 'completed';
+  if (!state) return null;
+  return {
+    state,
+    event: name,
+    reason: optionalText(fields.error) ?? optionalText(fields.message) ?? optionalText(fields.code),
+    rank: (state === 'completed' ? 1 : state === 'interrupted' ? 2 : 3)
+      + (name === 'runtime_request_state_transition' ? 1 : 0),
+  };
+}
+
+function requestStateFromEvent(event: unknown): string | null {
+  const record = asRecord(event);
+  const payload = asRecord(record.payload);
+  const state = optionalText(record.request_state) ?? optionalText(payload.request_state);
+  return state;
+}
+
+function terminalStateFromValue(value: unknown): string | null {
+  const normalized = optionalText(value)?.toLowerCase();
+  if (!normalized) return null;
+  if (['completed', 'complete', 'success', 'succeeded'].includes(normalized)) return 'completed';
+  if (['failed', 'error'].includes(normalized)) return 'failed';
+  if (['rejected', 'refused'].includes(normalized)) return 'rejected';
+  if (['interrupted', 'cancelled', 'canceled'].includes(normalized)) return 'interrupted';
+  return null;
+}
+
+function deriveSessionLiveness(record: SessionRecord, health: JsonRecord) {
+  const heartbeatPath = optionalText(record.heartbeat_path)
+    ?? (optionalText(record.session_dir) ? join(String(record.session_dir), 'heartbeat.json') : null);
+  const heartbeat = heartbeatPath ? readJson(heartbeatPath) : {};
+  const heartbeatValue = heartbeat.heartbeat_at ?? heartbeat.last_written_at ?? heartbeat.timestamp ?? null;
+  const heartbeatAtMs = timestampMs(heartbeatValue);
+  const heartbeatAgeMs = heartbeatAtMs === null ? null : Math.max(0, Date.now() - heartbeatAtMs);
+  const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs <= DEFAULT_HEARTBEAT_FRESH_MS;
+  const healthStatus = optionalText(health.status)?.toLowerCase();
+  const healthObservedAt = optionalText(health.health_observed_at);
+  if (healthStatus === 'healthy') {
+    return {
+      display_state: 'active',
+      display_state_reason: 'health_probe_succeeded',
+      source: 'health_probe',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (healthStatus === 'starting' || healthStatus === 'degraded') {
+    return {
+      display_state: 'starting_or_degraded',
+      display_state_reason: `health_probe_${healthStatus}`,
+      source: 'health_probe',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (healthStatus === 'closing') {
+    return {
+      display_state: 'closing',
+      display_state_reason: 'health_probe_closing',
+      source: 'health_probe',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (record.terminal_state === 'closed') {
+    return {
+      display_state: 'closed',
+      display_state_reason: 'terminal_state_closed',
+      source: 'session_index_and_heartbeat',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (healthStatus === 'unhealthy' || healthStatus === 'unavailable') {
+    return {
+      display_state: healthStatus,
+      display_state_reason: `health_probe_${healthStatus}`,
+      source: 'health_probe',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (heartbeatFresh) {
+    return {
+      display_state: 'starting_or_degraded',
+      display_state_reason: 'fresh_heartbeat_without_health',
+      source: 'heartbeat',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  if (heartbeatAtMs !== null || record.status_hint === 'alive') {
+    return {
+      display_state: 'stale',
+      display_state_reason: 'stale_or_missing_liveness',
+      source: 'session_index_and_heartbeat',
+      heartbeat_path: heartbeatPath,
+      heartbeat_at: heartbeatValue,
+      heartbeat_age_ms: heartbeatAgeMs,
+      heartbeat_fresh: heartbeatFresh,
+      health_observed_at: healthObservedAt,
+    };
+  }
+  return {
+    display_state: 'historical',
+    display_state_reason: 'historical_record_only',
+    source: 'session_index',
+    heartbeat_path: heartbeatPath,
+    heartbeat_at: heartbeatValue,
+    heartbeat_age_ms: heartbeatAgeMs,
+    heartbeat_fresh: heartbeatFresh,
+    health_observed_at: healthObservedAt,
+  };
+}
+
+export function websocketEndpointProtocol(endpoint: string): 'ws:' | 'wss:' {
+  const protocol = new URL(endpoint).protocol;
+  if (protocol !== 'ws:' && protocol !== 'wss:') throw new NarsSessionMcpError('websocket_protocol_unsupported', `unsupported_websocket_protocol:${protocol}`);
+  return protocol;
+}
+
 async function requestWebSocket(endpoint: unknown, request: JsonRecord, { timeoutMs, waitFor }: { timeoutMs: number; waitFor: (message: JsonRecord) => boolean }): Promise<JsonRecord> {
   const endpointText = optionalText(endpoint);
   if (!endpointText) throw new NarsSessionMcpError('session_event_endpoint_missing', 'session event endpoint is required');
   const url = new URL(endpointText);
-  if (url.protocol !== 'ws:') throw new NarsSessionMcpError('websocket_protocol_unsupported', `unsupported_websocket_protocol:${url.protocol}`);
-  const port = Number(url.port || 80);
+  const protocol = websocketEndpointProtocol(endpointText);
+  const port = Number(url.port || (protocol === 'wss:' ? 443 : 80));
   const path = `${url.pathname || '/'}${url.search || ''}`;
   const key = randomBytes(16).toString('base64');
   const handshake = [
@@ -573,7 +867,9 @@ async function requestWebSocket(endpoint: unknown, request: JsonRecord, { timeou
   ].join('\r\n');
   const expectedAccept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
   return new Promise((resolvePromise, rejectPromise) => {
-    const socket = new Socket();
+    const socket: Socket | TLSSocket = protocol === 'wss:'
+      ? tlsConnect({ host: url.hostname, port, servername: url.hostname })
+      : new Socket();
     let settled = false;
     let handshakeComplete = false;
     let actualRequestSent = false;
@@ -592,7 +888,9 @@ async function requestWebSocket(endpoint: unknown, request: JsonRecord, { timeou
     socket.once('close', () => {
       if (!settled) settle(new NarsSessionMcpError('websocket_closed_before_response', 'NARS websocket closed before response'));
     });
-    socket.connect(port, url.hostname, () => socket.write(handshake));
+    const sendHandshake = () => { if (!settled) socket.write(handshake); };
+    if (protocol === 'wss:') socket.once('secureConnect', sendHandshake);
+    else socket.connect(port, url.hostname, sendHandshake);
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (!handshakeComplete) {
@@ -744,6 +1042,12 @@ function requiredText(value: unknown, code: string): string {
 function optionalText(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text || null;
+}
+
+function timestampMs(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
