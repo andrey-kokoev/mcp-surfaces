@@ -40,7 +40,17 @@ try {
   assert.equal(view(doctor).task_lifecycle_health, 'unverified');
   assert.equal(view(doctor).task_lifecycle_integration, 'isolated_stdio_process');
   assert.equal(view(doctor).authority.site_id, 'andrey-user');
+  assert.equal(view(doctor).task_handoff_capability.available, true);
+  assert.equal(view(doctor).task_handoff_capability.scope, 'canonical_user_site_handoff');
+  assert.equal(view(doctor).capabilities.status, 'ready');
+  assert.equal(view(doctor).capabilities.read_scopes.all_authorized.available, true);
+  assert.equal(view(doctor).capabilities.task_handoff.available, true);
   assert.match(view(doctor).db_path, /surface-feedback\.db$/);
+
+  const guidance = await call('surface_feedback_guidance', {});
+  assert.equal(view(guidance).capabilities.status, 'ready');
+  assert.equal(view(guidance).capabilities.read_scopes.all_authorized.available, true);
+  assert.equal(view(guidance).capabilities.task_handoff.available, true);
 
   const liveProofTemplate = await call('surface_feedback_live_proof_template', {
     surface_id: 'cloudflare-carrier',
@@ -82,6 +92,18 @@ try {
   assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--feedback-root/.test(item)));
   const noncanonicalRead = await callWith(noncanonicalState, 'surface_feedback_list', { scope: 'all_authorized' });
   assert.equal(errorCode(noncanonicalRead), 'feedback_global_read_requires_canonical_store');
+  const noncanonicalSource = await callWith(noncanonicalState, 'surface_feedback_submit', {
+    surface_id: 'structured-command',
+    submitter_site_id: 'smart-scheduling',
+    submitter_principal: 'smart-scheduling.test',
+    kind: 'bug',
+    summary: 'Noncanonical handoff must be diagnosed before task creation',
+  });
+  const noncanonicalConversion = await callWith(noncanonicalState, 'surface_feedback_convert_to_task', {
+    feedback_id: view(noncanonicalSource).feedback_id,
+  });
+  assert.equal(errorCode(noncanonicalConversion), 'feedback_handoff_requires_canonical_store');
+  assert.match(noncanonicalConversion.error.data.remediation, /--feedback-root/);
   await closeServerState(noncanonicalState);
 
   const unconfiguredState = createServerState({
@@ -89,6 +111,11 @@ try {
     canonicalFeedbackRoot: join(root, 'unconfigured'),
     taskLifecycleRoot: root,
   });
+  const unconfiguredGuidance = await callWith(unconfiguredState, 'surface_feedback_guidance', {});
+  assert.equal(view(unconfiguredGuidance).capabilities.status, 'degraded');
+  assert.equal(view(unconfiguredGuidance).capabilities.read_scopes.all_authorized.available, false);
+  assert.match(view(unconfiguredGuidance).capabilities.read_scopes.all_authorized.remediation, /--site-id|NARADA_SITE_ID/);
+  assert.equal(view(unconfiguredGuidance).capabilities.task_handoff.available, false);
   const unconfiguredRead = await callWith(unconfiguredState, 'surface_feedback_list', { scope: 'all_authorized' });
   assert.equal(errorCode(unconfiguredRead), 'feedback_global_read_requires_server_authority');
   await closeServerState(unconfiguredState);
@@ -179,6 +206,7 @@ try {
   assert.equal(actionableData.count, 2);
   assert.equal(actionableData.has_more, false);
   assert.equal(actionableData.items.some((item: any) => item.feedback_id === crossSiteId), true);
+  assert.ok(actionableData.items.every((item: any) => item.task_handoff_capability.available === true));
   const actionableConverted = actionableData.items.find((item: any) => item.feedback_id === convertedId);
   assert.equal(actionableConverted.actionability, 'task_follow_up');
   assert.deepEqual(actionableConverted.task_link, {
@@ -214,7 +242,7 @@ try {
   const legacyActionable = await call('surface_feedback_actionable_queue', { caller_site_id: 'andrey-user' });
   assert.equal(errorCode(legacyActionable), 'feedback_read_scope_server_bound');
 
-  // --- convert_to_task: success, duplicate, visibility, and task-create failure ---
+  // --- convert_to_task: success, duplicate, canonical handoff, and task-create failure ---
   const handoffRoot = join(root, 'handoff');
   const handoffCalls: string[] = [];
   const handoffRequests: any[] = [];
@@ -466,17 +494,28 @@ try {
     assert.deepEqual(view(fallbackConversion).next_action.arguments, { query: '20260711-feedback-task-id', limit: 5 });
 
     const privateSource = await callWith(handoffState, 'surface_feedback_submit', {
-      surface_id: 'surface-feedback',
+      surface_id: 'structured-command',
       submitter_site_id: 'narada-sonar',
       submitter_principal: 'handoff-test',
       kind: 'bug',
-      summary: 'Inaccessible feedback must not convert',
+      summary: 'Cross-site feedback can convert through canonical handoff',
     });
-    const blockedConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
+    const blockedStatusMutation = await callWith(handoffState, 'surface_feedback_update_status', {
+      feedback_id: view(privateSource).feedback_id,
+      status: 'acknowledged',
+      resolution_note: 'Ordinary status mutation remains owner-scoped.',
+    });
+    assert.equal(errorCode(blockedStatusMutation), 'feedback_not_visible');
+    const crossSiteConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: view(privateSource).feedback_id,
       resolved_by: 'handoff-test',
     });
-    assert.equal(errorCode(blockedConversion), 'feedback_not_visible');
+    assert.equal(view(crossSiteConversion).status, 'converted');
+    assert.deepEqual(view(crossSiteConversion).handoff_authorization, {
+      scope: 'canonical_user_site_handoff',
+      authorization_basis: 'canonical_feedback_store_and_server_binding',
+      authority_site_id: 'andrey-user',
+    });
     const missingConversion = await callWith(handoffState, 'surface_feedback_convert_to_task', {
       feedback_id: 'sfb_missing_convert',
       resolved_by: 'handoff-test',
@@ -670,6 +709,8 @@ try {
   assert.equal(view(listAll).read_scope.scope_limited, false);
   assert.equal(view(listAll).store.feedback_root, root);
   assert.equal(view(listAll).store.uses_canonical_store, true);
+  assert.ok(view(listAll).items.every((item: any) => item.task_handoff_capability.available === true));
+  assert.ok(view(listAll).items.every((item: any) => item.task_handoff_capability.scope === 'canonical_user_site_handoff'));
 
   // --- list: by surface_id ---
   const listSop = await call('surface_feedback_list', { scope: 'all_authorized', surface_id: 'sop' });
@@ -738,6 +779,8 @@ try {
   const showCrossSite = await call('surface_feedback_show', { feedback_id: crossSiteId, scope: 'all_authorized' });
   assert.equal(view(showCrossSite).feedback_id, crossSiteId);
   assert.equal(view(showCrossSite).read_scope.mode, 'all_authorized');
+  assert.equal(view(showCrossSite).task_handoff_capability.available, true);
+  assert.equal(view(showCrossSite).task_handoff_capability.scope, 'canonical_user_site_handoff');
 
   const showMissing = await call('surface_feedback_show', { feedback_id: 'sfb_missing', scope: 'all_authorized' });
   assert.equal(errorCode(showMissing), 'feedback_not_found');

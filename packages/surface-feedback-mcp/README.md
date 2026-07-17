@@ -11,7 +11,7 @@ Provides a single durable feedback channel for MCP surfaces. Agents across all N
 | Tool | Description |
 |------|-------------|
 | `surface_feedback_submit` | Submit feedback (surface, declared submitter site, principal, kind, summary, details) |
-| `surface_feedback_convert_to_task` | Create and link one visible feedback entry through task-lifecycle; returns the next lifecycle action but does not execute the task |
+| `surface_feedback_convert_to_task` | Create and link one canonical feedback entry through task-lifecycle using server-bound User Site handoff authority; returns the next lifecycle action but does not execute the task |
 | `surface_feedback_list` | List entries with an explicit read scope and bounded metadata filters |
 | `surface_feedback_actionable_queue` | Read the bounded actionable queue with an explicit read scope |
 | `surface_feedback_show` | Show one entry by ID within an explicit read scope |
@@ -28,13 +28,17 @@ Every list, queue, show, and stats call must provide `scope` explicitly:
 | `owned_surfaces` | Entries for surfaces owned by the bound Site | Server-bound Site authority and owned surface IDs |
 | `authority_site_submissions` | Entries whose declared `submitter_site_id` matches the bound Site | Server-bound Site authority |
 
-`submitter_site_id_filter` is an optional metadata filter for list and queue. It does not authenticate the submitter, establish provenance, or expand authorization. The submitter site recorded in a feedback entry remains declarative submission metadata.
+`submitter_site_id_filter` is an optional metadata filter for list and queue. It does not authenticate the submitter, establish provenance, or expand authorization. The submitter site recorded in a feedback entry remains declarative submission metadata. Use canonical Site IDs for new submissions; generated server keys and session aliases are not Site IDs.
+
+`all_authorized` is both the canonical cross-site read scope and the discovery scope for maintainer task handoff. When the server is bound to a User Site authority and the feedback root is canonical, `surface_feedback_convert_to_task` may hand off any entry in that store. This does not broaden `surface_feedback_update_status` or its batch form: ordinary acknowledgement, routing, and closure mutations remain limited to entries submitted by the bound Site or attached to its owned surfaces. List, queue, and show results expose `task_handoff_capability` so callers can see whether the canonical handoff is ready before mutating.
+
+Scope names remain in `tools/list` for protocol stability, but availability is runtime state. Call `surface_feedback_guidance` or `surface_feedback_doctor` and inspect `capabilities.read_scopes[scope].available` before selecting a scope; unavailable scopes include a reason and remediation. Inspect `capabilities.task_handoff.available` before conversion. An unconfigured server therefore advertises the schema names without implying that `all_authorized` is callable.
 
 The canonical User Site projection should pass `--feedback-root`, `--canonical-feedback-root`, `--site-id`, and repeated `--owned-surface-id` arguments explicitly. Do not rely on the current directory or an ambient caller-supplied site filter. A scoped show of an entry outside the scope returns `feedback_not_found` so existence is not disclosed.
 
 `surface_feedback_convert_to_task` is idempotent per feedback entry. It uses an isolated task-lifecycle stdio process and a durable handoff ledger. The ledger preserves payload and task references across failures, excludes concurrent conversion with a lease, and links feedback only after successful task creation. Retry the same conversion after a retryable failure; it resumes from the last durable stage.
 
-Mutation authority and audit identity are server-bound. Configure the serving Site with `--site-id` or `NARADA_SITE_ID`, optionally set `NARADA_AGENT_ID` for the audit principal, and optionally repeat `--owned-surface-id` or set `NARADA_OWNED_SURFACE_IDS` for surfaces maintained by that Site. Without an explicit agent identity, the service principal is `surface-feedback@<site-id>`. Caller-supplied authority fields are rejected; legacy `resolved_by` fields are ignored.
+Mutation authority and audit identity are server-bound. Configure the serving Site with `--site-id` or `NARADA_SITE_ID`, optionally set `NARADA_AGENT_ID` for the audit principal, and optionally repeat `--owned-surface-id` or set `NARADA_OWNED_SURFACE_IDS` for surfaces maintained by that Site. Without an explicit agent identity, the service principal is `surface-feedback@<site-id>`. Caller-supplied authority fields are rejected; legacy `resolved_by` fields are ignored. Canonical task handoff requires the canonical feedback root and a valid task-lifecycle Site root.
 
 Task lifecycle root resolution is, in order: `--task-lifecycle-root`, `NARADA_TASK_LIFECYCLE_ROOT`, `NARADA_SITE_ROOT`, then the feedback root. The selected path must be a Site root containing `.ai`; `surface_feedback_doctor` reports static configuration validity separately from observed child health. Health starts `unverified`, becomes `healthy` after a valid lifecycle response, and becomes `unhealthy` after transport/startup failure. Prefer explicit configuration when feedback storage and task lifecycle belong to different roots.
 

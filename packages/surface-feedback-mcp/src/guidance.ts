@@ -5,7 +5,7 @@ const SURFACE_ID = "surface-feedback";
 const GUIDANCE_TOOL = "surface_feedback_guidance";
 const PURPOSE = "Cross-site MCP surface feedback intake and routing.";
 
-export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
+export function buildGuidanceResult(args: GuidanceRecord = {}, context: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
   const tool = typeof args.tool === 'string' && args.tool.trim() ? args.tool.trim() : null;
   return {
@@ -15,6 +15,17 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
+    capabilities: context.capabilities ?? {
+      status: 'unknown',
+      read_scopes: Object.fromEntries(['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'].map((scope) => [scope, {
+        available: null,
+        reason: 'Live server capability state was not provided.',
+      }])),
+      task_handoff: {
+        available: null,
+        reason: 'Live server capability state was not provided.',
+      },
+    },
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
@@ -24,10 +35,10 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
-      { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Use all_authorized only against the canonical feedback store with server-bound User Site authority; use authority_visible for the server-bound union of entries whose declared submitter site matches that Site and its owned surfaces, owned_surfaces for only owned surfaces, or authority_site_submissions for declared submitter-site metadata.' },
+      { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Check capabilities.read_scopes[scope].available before calling; unavailable scopes include a reason and remediation. The schema lists all scopes for protocol stability. all_authorized is the canonical feedback view and maintainer task-handoff discovery scope when available; authority_visible is the server-bound union of declared submitter-site and owned-surface entries, owned_surfaces is the owned-surface view, and authority_site_submissions is the declared submitter-site metadata view.' },
       { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for one bounded queue of submitted, acknowledged, routed, and converted feedback; it includes task links and projected task state when available.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
-      { step: 'convert', guidance: 'Use surface_feedback_convert_to_task for one visible feedback entry when a governed task handoff is intended; it creates and links through task-lifecycle and returns the next authoritative action.' },
+      { step: 'convert', guidance: 'Use surface_feedback_convert_to_task only when capabilities.task_handoff.available is true and a governed maintainer handoff is intended. Server-bound User Site authority may hand off any canonical entry; ordinary feedback status mutations remain owner-scoped. The tool creates and links through task-lifecycle and returns the next authoritative action.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],
@@ -42,6 +53,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not pass caller_site_id or owned_surface_ids to read tools; use the required explicit scope field. A zero result is only meaningful within the returned read_scope.',
       'Do not confuse submitter_site_id_filter with authorization: it filters declared metadata only and never establishes provenance or access.',
+      'Use canonical Site IDs in submitter_site_id. Do not record generated server keys, carrier names, or session aliases as submitter identities.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
@@ -66,7 +78,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
       'Task lifecycle state in actionable queue results is an optional feedback projection; it is not a replacement for authoritative task-lifecycle readback.',
       'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
-      'Read scope is explicit and server-bound: all_authorized requires the canonical feedback store plus server authority; authority_visible, owned_surfaces, and authority_site_submissions require configured server authority.',
+      'Capability gating is live server state: only call a read scope or task handoff when its capabilities entry reports available: true. The tools/list schema retains all scope names for protocol stability, and unavailable calls return an actionable refusal.',
+      'Read scope is explicit and server-bound: all_authorized requires the canonical feedback store plus server authority and enables the explicit User Site task handoff; authority_visible, owned_surfaces, and authority_site_submissions require configured server authority.',
+      'Canonical task handoff authority is distinct from owner-scoped feedback status authority.',
       'The submitter site recorded in feedback is declarative metadata supplied at submission time; authority_site_submissions is a metadata filter, not authenticated provenance.',
       'Mutation authority is bound when the server starts; callers must not supply caller_site_id or owned_surface_ids to mutation tools.',
       'Mutation audit identity is derived from server authority; caller-supplied resolved_by compatibility fields are ignored.',

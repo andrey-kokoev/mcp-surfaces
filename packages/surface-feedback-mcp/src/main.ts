@@ -219,7 +219,7 @@ export function listTools() {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Surface identifier, e.g. sop or scheduler.' },
-          submitter_site_id: { type: 'string', description: 'Site ID of the submitter, e.g. narada-sonar.' },
+          submitter_site_id: { type: 'string', description: 'Canonical Site ID of the submitter, e.g. narada-sonar. Do not use generated server keys or session aliases.' },
           submitter_principal: { type: 'string', description: 'Principal submitting the feedback.' },
           kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Feedback kind.' },
           summary: { type: 'string', description: 'One-line summary.' },
@@ -266,7 +266,7 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_convert_to_task',
-      description: 'Create or recover one authoritative task-lifecycle handoff using server-bound site authority. The durable handoff is idempotent per feedback entry and this tool never executes the task.',
+      description: 'Create or recover one authoritative task-lifecycle handoff from the canonical feedback store using server-bound User Site authority. This explicit maintainer handoff can route any canonical entry; ordinary status mutations remain owner-scoped. The durable handoff is idempotent per feedback entry and this tool never executes the task.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -330,7 +330,7 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_list',
-      description: 'List feedback entries using the required server-bound read scope. all_authorized is the canonical cross-site view; authority_visible, owned_surfaces, and authority_site_submissions are narrower server-bound views. Submitter-site visibility uses declared metadata, not authenticated provenance.',
+      description: 'List feedback entries using the required server-bound read scope. The scope enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound. Submitter-site visibility uses declared metadata, not authenticated provenance.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -338,7 +338,7 @@ export function listTools() {
           submitter_site_id_filter: { type: 'string', description: 'Optional metadata filter by declared submitter site ID; this never grants or changes authorization.' },
           kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Filter by feedback kind.' },
           status: { type: 'string', enum: FEEDBACK_STATUSES, description: 'Filter by status.' },
-          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. The enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound.' },
           since: { type: 'string', description: 'ISO 8601 start date.' },
           until: { type: 'string', description: 'ISO 8601 end date.' },
           limit: { type: 'number', default: 50 },
@@ -352,14 +352,14 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_actionable_queue',
-      description: 'Return one bounded actionable feedback queue using the required server-bound read scope. all_authorized is the canonical cross-site queue; narrower scopes are explicit. Submitter-site visibility uses declared metadata, not authenticated provenance.',
+      description: 'Return one bounded actionable feedback queue using the required server-bound read scope. The scope enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound. Submitter-site visibility uses declared metadata, not authenticated provenance.',
       inputSchema: {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Optional filter by surface identifier.' },
           submitter_site_id_filter: { type: 'string', description: 'Optional metadata filter by declared submitter site ID; this never grants or changes authorization.' },
           kind: { type: 'string', enum: FEEDBACK_KINDS, description: 'Optional filter by feedback kind.' },
-          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. The enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound.' },
           since: { type: 'string', description: 'ISO 8601 start date.' },
           until: { type: 'string', description: 'ISO 8601 end date.' },
           limit: { type: 'number', default: 50 },
@@ -373,12 +373,12 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_show',
-      description: 'Show one feedback entry by feedback_id using the required server-bound read scope. An entry outside that scope is reported as not found.',
+      description: 'Show one feedback entry by feedback_id using the required server-bound read scope. Inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling; an entry outside that scope is reported as not found.',
       inputSchema: {
         type: 'object',
         properties: {
           feedback_id: { type: 'string' },
-          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. The enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound.' },
         },
         required: ['feedback_id', 'scope'],
         additionalProperties: false,
@@ -388,12 +388,12 @@ export function listTools() {
     },
     {
       name: 'surface_feedback_stats',
-      description: 'Return aggregated feedback counts by surface, kind, and status using an explicit server-bound read scope.',
+      description: 'Return aggregated feedback counts by surface, kind, and status using an explicit server-bound read scope. Inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling.',
       inputSchema: {
         type: 'object',
         properties: {
           surface_id: { type: 'string', description: 'Optional surface ID filter.' },
-          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. all_authorized requires the canonical feedback store and server-bound authority; other scopes are narrower server-bound views.' },
+          scope: { type: 'string', enum: FEEDBACK_READ_SCOPES, description: 'Required read scope. The enum is protocol-stable; inspect surface_feedback_guidance or surface_feedback_doctor capabilities.read_scopes before calling because availability is server-bound.' },
         },
         required: ['scope'],
         additionalProperties: false,
@@ -410,7 +410,7 @@ async function callTool(params: JsonRecord, state: FeedbackState) {
   let result: JsonRecord;
   switch (name) {
     case 'surface_feedback_guidance':
-      result = buildGuidanceResult(args);
+      result = buildGuidanceResult(args, { capabilities: feedbackCapabilities(state) });
       break;
     case 'surface_feedback_doctor': result = feedbackDoctor(state); break;
     case 'surface_feedback_submit': result = feedbackSubmit(args, state); break;
@@ -505,6 +505,8 @@ function feedbackDoctor(state: FeedbackState): JsonRecord {
       principal: state.authorityPrincipal,
       owned_surface_ids: state.authorityOwnedSurfaceIds,
     },
+    task_handoff_capability: taskHandoffCapability(state),
+    capabilities: feedbackCapabilities(state),
     total_feedback_entries: Number(row.count ?? 0),
     diagnostics: [
       usesCanonicalStore ? null : 'The feedback store is noncanonical; cross-site feedback may be invisible.',
@@ -518,6 +520,82 @@ function feedbackDoctor(state: FeedbackState): JsonRecord {
       state.taskLifecycleHealth === 'unhealthy' ? 'Repair task-lifecycle startup/runtime configuration, then retry a lifecycle operation to refresh observed health.' : null,
       authorityConfigured ? null : 'Configure --site-id/NARADA_SITE_ID and optional --owned-surface-id values.',
     ].filter(Boolean),
+  };
+}
+
+function feedbackCapabilities(state: FeedbackState): JsonRecord {
+  const usesCanonicalStore = samePath(state.feedbackRoot, state.canonicalFeedbackRoot);
+  const readAuthorityConfigured = Boolean(state.authoritySiteId);
+  const authorityConfigured = Boolean(state.authoritySiteId && state.authorityPrincipal);
+  const authorityRemediation = 'Configure --site-id/NARADA_SITE_ID on the serving User Site projection.';
+  const unavailableScope = (available: boolean, reasonCode: string, reason: string, remediation: string, extra: JsonRecord = {}): JsonRecord => ({
+    available,
+    reason_code: available ? null : reasonCode,
+    reason: available ? null : reason,
+    remediation: available ? null : remediation,
+    ...extra,
+  });
+  const allAuthorizedAvailable = usesCanonicalStore && readAuthorityConfigured;
+  const allAuthorizedReasonCode = usesCanonicalStore
+    ? 'feedback_global_read_requires_server_authority'
+    : 'feedback_global_read_requires_canonical_store';
+  const allAuthorizedReason = usesCanonicalStore
+    ? 'Server-bound Site authority is not configured for the canonical cross-site read.'
+    : 'The configured feedback root is not the canonical feedback store.';
+  const allAuthorizedRemediation = usesCanonicalStore
+    ? authorityRemediation
+    : `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`;
+  return {
+    schema: 'narada.surface_feedback.capabilities.v1',
+    status: allAuthorizedAvailable ? 'ready' : 'degraded',
+    read_scopes: {
+      all_authorized: unavailableScope(
+        allAuthorizedAvailable,
+        allAuthorizedReasonCode,
+        allAuthorizedReason,
+        allAuthorizedRemediation,
+        { canonical_store_required: true, server_authority_required: true },
+      ),
+      authority_visible: unavailableScope(
+        readAuthorityConfigured,
+        'feedback_read_scope_requires_server_authority',
+        'Server-bound Site authority is not configured for authority-visible reads.',
+        authorityRemediation,
+        { server_authority_required: true },
+      ),
+      owned_surfaces: unavailableScope(
+        readAuthorityConfigured,
+        'feedback_read_scope_requires_server_authority',
+        'Server-bound Site authority is not configured for owned-surface reads.',
+        authorityRemediation,
+        {
+          server_authority_required: true,
+          owned_surface_ids_configured: state.authorityOwnedSurfaceIds.length > 0,
+          data_available: readAuthorityConfigured && state.authorityOwnedSurfaceIds.length > 0,
+        },
+      ),
+      authority_site_submissions: unavailableScope(
+        readAuthorityConfigured,
+        'feedback_read_scope_requires_server_authority',
+        'Server-bound Site authority is not configured for submitter-site reads.',
+        authorityRemediation,
+        { server_authority_required: true },
+      ),
+    },
+    task_handoff: taskHandoffCapability(state),
+    authority: {
+      read_configured: readAuthorityConfigured,
+      configured: authorityConfigured,
+      source: state.authoritySource,
+      site_id: state.authoritySiteId,
+      principal: state.authorityPrincipal,
+      owned_surface_ids: state.authorityOwnedSurfaceIds,
+    },
+    storage: {
+      uses_canonical_store: usesCanonicalStore,
+      feedback_root: state.feedbackRoot,
+      canonical_feedback_root: state.canonicalFeedbackRoot,
+    },
   };
 }
 
@@ -584,11 +662,11 @@ function feedbackUpdateStatus(args: JsonRecord, state: FeedbackState): JsonRecor
 
 async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Promise<JsonRecord> {
   const feedbackId = requiredString(args.feedback_id, 'feedback_requires_feedback_id');
-  const resolvedBy = mutationPrincipal(state);
   rejectClientAuthorityOverrides(args);
+  assertTaskHandoffAuthority(state);
+  const resolvedBy = mutationPrincipal(state);
   const row = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord | undefined;
   if (!row) throw feedbackNotFound(feedbackId, state);
-  assertMutationAuthority(row, state);
   requireTaskLifecycleRootReady(state);
 
   const existingTaskRef = optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note);
@@ -610,6 +688,7 @@ async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Pr
       optionalString(linkedHandoff.task_id),
       optionalString(linkedHandoff.payload_ref),
       linkedHandoff,
+      state.authoritySiteId,
     );
   }
 
@@ -626,6 +705,7 @@ async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Pr
       optionalString(handoff.task_id),
       optionalString(handoff.payload_ref),
       handoff,
+      state.authoritySiteId,
     );
   }
 
@@ -804,7 +884,7 @@ async function feedbackConvertToTask(args: JsonRecord, state: FeedbackState): Pr
   const updated = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?').get(feedbackId) as JsonRecord;
   handoff = readFeedbackTaskHandoff(state, feedbackId) ?? handoff;
   const resultStatus = Number(handoff.attempt_count ?? 1) > 1 ? 'recovered' : 'converted';
-  return buildTaskConversionResult(resultStatus, updated, taskRef, taskNumber, taskStatus, taskId, payloadRef, handoff);
+  return buildTaskConversionResult(resultStatus, updated, taskRef, taskNumber, taskStatus, taskId, payloadRef, handoff, state.authoritySiteId);
 }
 
 function claimFeedbackTaskHandoff(
@@ -1128,6 +1208,7 @@ function buildTaskConversionResult(
   taskId: string | null,
   payloadRef: string | null,
   handoff: JsonRecord | null,
+  authoritySiteId: string | null,
 ): JsonRecord {
   const resolvedTaskNumber = taskNumber ?? taskNumberFromRef(taskRef);
   const nextAction = resolvedTaskNumber !== null
@@ -1156,6 +1237,11 @@ function buildTaskConversionResult(
       status: status === 'already_linked' ? 'already_linked' : 'created_or_recovered',
       payload_ref: payloadRef,
       idempotency_key: handoff?.idempotency_key ?? `surface-feedback:${String(row.feedback_id)}`,
+    },
+    handoff_authorization: {
+      scope: 'canonical_user_site_handoff',
+      authorization_basis: 'canonical_feedback_store_and_server_binding',
+      authority_site_id: authoritySiteId,
     },
     handoff: handoff ? {
       status: handoff.status,
@@ -1286,6 +1372,64 @@ function rejectClientAuthorityOverrides(args: JsonRecord): void {
       forbidden_fields: ['caller_site_id', 'owned_surface_ids', 'idempotency_key'],
     });
   }
+}
+
+function taskHandoffCapability(state: FeedbackState): JsonRecord {
+  const base = {
+    operation: 'surface_feedback_convert_to_task',
+    scope: 'canonical_user_site_handoff',
+    authorization_basis: 'canonical_feedback_store_and_server_binding',
+    authority_site_id: state.authoritySiteId,
+  };
+  if (!state.authoritySiteId || !state.authorityPrincipal) {
+    return {
+      ...base,
+      available: false,
+      reason_code: 'feedback_handoff_requires_server_authority',
+      reason: 'Canonical User Site authority is not configured on this server.',
+    };
+  }
+  if (!samePath(state.feedbackRoot, state.canonicalFeedbackRoot)) {
+    return {
+      ...base,
+      available: false,
+      reason_code: 'feedback_handoff_requires_canonical_store',
+      reason: 'Task handoff is available only from the canonical feedback store.',
+      feedback_root: state.feedbackRoot,
+      canonical_feedback_root: state.canonicalFeedbackRoot,
+    };
+  }
+  if (state.taskLifecycleClient) {
+    const posture = taskLifecycleRootPosture(state);
+    if (posture.configuration_valid !== true) {
+      return {
+        ...base,
+        available: false,
+        reason_code: 'feedback_task_lifecycle_root_invalid',
+        reason: 'The configured task-lifecycle root is not a Site root containing .ai.',
+        task_lifecycle_root: state.taskLifecycleRoot,
+        task_lifecycle_root_source: state.taskLifecycleRootSource,
+        diagnostics: posture,
+      };
+    }
+  }
+  return { ...base, available: true, reason_code: null, reason: null };
+}
+
+function assertTaskHandoffAuthority(state: FeedbackState): void {
+  const capability = taskHandoffCapability(state);
+  if (capability.available === true) return;
+  const code = String(capability.reason_code ?? 'feedback_handoff_unavailable');
+  throw diagnosticError(code, String(capability.reason ?? code), {
+    ...capability,
+    remediation: code === 'feedback_handoff_requires_canonical_store'
+      ? `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical User Site handoff store.`
+      : code === 'feedback_handoff_requires_server_authority'
+        ? 'Configure --site-id or NARADA_SITE_ID on the serving User Site projection.'
+        : code === 'feedback_task_lifecycle_root_invalid'
+          ? 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.'
+          : undefined,
+  });
 }
 
 function assertMutationAuthority(row: JsonRecord, state: FeedbackState): void {
@@ -1614,7 +1758,14 @@ function feedbackList(args: JsonRecord, state: FeedbackState): JsonRecord {
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
   const rows = state.db.prepare(sql).all(...params) as JsonRecord[];
-  return { store: storeIdentity(state), read_scope: readScope.read_scope, items: rows.map(hydrateFeedback), count: rows.length, limit, offset };
+  return {
+    store: storeIdentity(state),
+    read_scope: readScope.read_scope,
+    items: rows.map((row) => ({ ...hydrateFeedback(row), task_handoff_capability: taskHandoffCapability(state) })),
+    count: rows.length,
+    limit,
+    offset,
+  };
 }
 
 function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRecord {
@@ -1645,6 +1796,7 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
     const taskStatus = optionalString(feedback.task_status);
     return {
       ...feedback,
+      task_handoff_capability: taskHandoffCapability(state),
       actionability: feedback.status === 'converted_to_task' ? 'task_follow_up' : 'feedback_action_required',
       task_link: taskRef ? {
         task_ref: taskRef,
@@ -1684,6 +1836,7 @@ function feedbackShow(args: JsonRecord, state: FeedbackState): JsonRecord {
     read_scope: readScope.read_scope,
     audit_events: feedbackEventHistory(state, feedbackId),
     task_handoff: buildTaskHandoffReadback(readFeedbackTaskHandoff(state, feedbackId)),
+    task_handoff_capability: taskHandoffCapability(state),
     store: storeIdentity(state),
   };
 }
@@ -1805,6 +1958,8 @@ function renderResult(result: JsonRecord): string {
     `authority_configured: ${asRecord(result.authority).configured ?? false}`,
     `authority_site_id: ${asRecord(result.authority).site_id ?? 'unconfigured'}`,
     `authority_principal: ${asRecord(result.authority).principal ?? 'unconfigured'}`,
+    `task_handoff_available: ${asRecord(result.task_handoff_capability).available ?? false}`,
+    ...(asRecord(result.task_handoff_capability).reason_code ? [`task_handoff_reason: ${asRecord(result.task_handoff_capability).reason_code}`] : []),
     `total_feedback_entries: ${result.total_feedback_entries}`,
     ...(Array.isArray(result.diagnostics) ? result.diagnostics.map((item) => `diagnostic: ${item}`) : []),
     ...(Array.isArray(result.remediation) ? result.remediation.map((item) => `remediation: ${item}`) : []),
