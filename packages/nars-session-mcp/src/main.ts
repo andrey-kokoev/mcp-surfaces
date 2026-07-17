@@ -49,7 +49,7 @@ export function listTools() {
     guidanceToolDefinition(),
     {
       name: 'nars_session_list',
-      description: 'List bounded NARS sessions in the bound Site scope.',
+      description: 'List bounded NARS sessions in the bound scope; the envelope authority_root is the discovery root and each session carries its actual Site root.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -107,7 +107,7 @@ export function listTools() {
     },
     {
       name: 'nars_session_input_status',
-      description: 'Read authoritative NARS session evidence for a submitted input without claiming provider completion.',
+      description: 'Read authoritative NARS admission, request-state, terminal-state, and outcome evidence for a submitted input. The backwards-compatible status field is admission-oriented; status_semantics identifies that meaning, and outcome is the delivery result.',
       inputSchema: {
         type: 'object',
         required: ['session_id'],
@@ -201,7 +201,7 @@ function renderResult(result: JsonRecord): string {
   if (schema.endsWith('.sessions.v1')) return `nars_session_list: ${result.count ?? 0} session(s)`;
   if (schema.endsWith('.session.v1')) return `nars_session_show: ${asRecord(result.session).session_id ?? ''}`;
   if (schema.endsWith('.input_delivery.v1')) return `nars_session_input_deliver: ${result.status ?? 'unknown'} ${result.admission ?? ''}`.trim();
-  if (schema.endsWith('.input_status.v1')) return `nars_session_input_status: ${result.status ?? 'unknown'}`;
+  if (schema.endsWith('.input_status.v1')) return `nars_session_input_status: ${result.outcome ?? result.status ?? 'unknown'}${result.terminal_state ? ` (${result.terminal_state})` : ''}`;
   if (schema.endsWith('.guidance.v1')) return 'nars_session_guidance: governed session input and authoritative readback';
   return JSON.stringify(result);
 }

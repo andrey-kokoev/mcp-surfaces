@@ -297,7 +297,18 @@ async function main(): Promise<void> {
     }
 
     status = 'passed';
-    console.log(JSON.stringify({ schema: 'narada.mcp.e2e.result.v1', test_id: TEST_ID, status, site_root: root, site_fabric_path: fabricPath, provider_profiles: providerEvidence.length, edit_verified: true }));
+    console.log(JSON.stringify({
+      schema: 'narada.mcp.e2e.result.v1',
+      test_id: TEST_ID,
+      status,
+      authority: 'A0',
+      external_authority: 'not_run',
+      provider_boundary: 'controlled_deterministic_fixture',
+      site_root: root,
+      site_fabric_path: fabricPath,
+      provider_profiles: providerEvidence.length,
+      edit_verified: true,
+    }));
   } catch (error) {
     failureReason = error instanceof Error ? error.stack ?? error.message : String(error);
     throw error;
@@ -329,6 +340,9 @@ async function main(): Promise<void> {
       started_at: startedAt,
       finished_at: new Date().toISOString(),
       site_root: root,
+      authority: 'A0',
+      external_authority: 'not_run',
+      provider_boundary: 'controlled_deterministic_fixture',
       site_fabric: { path: fabricPath, admission: status === 'passed' ? 'matches_shared_registry' : 'not_verified' },
       provider_profiles: providerEvidence,
       diagnostic_state: diagnosticState,

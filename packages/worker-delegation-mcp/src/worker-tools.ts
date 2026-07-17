@@ -5,7 +5,7 @@ import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partial
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, runCodexInvocation, type Invocation, type ResolvedWorkerConfig } from './codex-adapter.js';
 import { outputContractForMode, outputContractForRequest, parseLastMessage, resultStatus, workerOutputState, type WorkerOutput } from './output-contract.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationIdentity } from './policy.js';
+import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, assertWorkerImplementationFresh, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationGate, workerImplementationIdentity } from './policy.js';
 import { publicCognitionDefaults, updateCognitionDefault } from './cognition-defaults.js';
 import { projectWorkerProviderRuntimeEnvironment, redactWorkerProviderRuntimeBinding, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
@@ -106,6 +106,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const environment = environmentForWorker(state.env);
   delete environment.NARADA_WORKER_MCP_CONFIG;
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
+  const implementationGate = workerImplementationGate();
   const launchability = mcpToolLaunchability(request.constraints.required_mcp_tools ?? [], runtime);
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true, requiredMcpTools: request.constraints.required_mcp_tools ?? [] });
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
@@ -229,18 +230,21 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     ...(configResolution.model_source === 'runtime_default_opaque' ? ['model_delegated_to_runtime_default: concrete model is not knowable before launching this runtime'] : []),
     ...(configResolution.reasoning_effort_source === 'runtime_default_opaque' ? ['reasoning_effort_delegated_to_runtime_default: concrete reasoning effort is not knowable before launching this runtime'] : []),
     ...preflight.filter((check) => check.status === 'blocked').map((check) => `blocked_preflight: ${check.message}`),
+    ...(implementationGate.admitted === true ? [] : [`blocked_implementation_gate: ${String(implementationGate.blocking_status ?? implementationGate.reason_code ?? 'worker_implementation_stale')}`]),
   ];
+  const effectiveLaunchable = runtimeAvailability.available && launchability.launchable && implementationGate.admitted === true;
   return {
     schema: 'narada.worker.config_resolve.v1',
     status: 'ok',
     dry_run: true,
     requested_mode: requestedMode,
     resume_worker_session_id: resumeSessionId,
-    launchable: runtimeAvailability.available && launchability.launchable,
+    launchable: effectiveLaunchable,
     launchability: {
       ...launchability,
       runtime_available: runtimeAvailability.available,
-      effective_launchable: runtimeAvailability.available && launchability.launchable,
+      implementation_gate: implementationGate,
+      effective_launchable: effectiveLaunchable,
     },
     resolved_worker_config: resolvedWorkerConfig,
     invocation: invocationArtifact(invocation, resolvedWorkerConfig),
@@ -253,6 +257,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       : { available: false, reason: runtimeAvailability.reason ?? null, remediation: runtimeAvailability.remediation ?? null, command: runtimeAvailability.command ?? null },
     config_resolution: configResolution,
     implementation_identity: workerImplementationIdentity(),
+    implementation_gate: implementationGate,
     warnings,
   };
 }
@@ -361,6 +366,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     });
   }
   ensureRequiredMcpToolsProjectable(request.constraints.required_mcp_tools ?? [], runtime);
+  assertWorkerImplementationFresh();
 
   const prompt = buildWorkerPrompt({ intent: request.intent, cwd, mode: requestedMode, runtime, preflight, outputContract, exitInterview: request.constraints.exit_interview === true, requiredMcpTools: request.constraints.required_mcp_tools ?? [] });
   const resumable = resumeSessionId !== null || request.constraints.resumable === true;

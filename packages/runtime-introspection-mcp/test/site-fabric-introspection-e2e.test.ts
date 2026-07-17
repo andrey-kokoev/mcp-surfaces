@@ -12,7 +12,7 @@ import {
 
 const siteRoot = createTemporaryE2eRoot('runtime-introspection-site-fabric-e2e');
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', 'runtime-introspection.site-fabric.child-analysis-readback.json');
-const evidence = installE2eArtifactRecorder(resultPath, { test_id: 'runtime-introspection.site-fabric.child-analysis-readback', authority: 'A0' });
+const evidence = installE2eArtifactRecorder(resultPath, { test_id: 'runtime-introspection.site-fabric.child-analysis-readback', authority: 'A0', external_authority: 'not_run', runtime_boundary: 'controlled_fixture_event_log' });
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath], {
   cwd: siteRoot,
@@ -107,6 +107,8 @@ try {
     status: 'passed',
     test_id: 'runtime-introspection.site-fabric.child-analysis-readback',
     authority: 'A0',
+    external_authority: 'not_run',
+    runtime_boundary: 'controlled_fixture_event_log',
     cleanup: 'completed_after_finally',
   }));
   evidence.update({ status: 'passed' });

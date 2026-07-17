@@ -30,7 +30,7 @@ if (!existsSync(cliModulePath)) {
     cli_module_path: cliModulePath,
     cleanup: 'not_needed',
   }));
-  process.exit(0);
+  process.exit(2);
 }
 
 const naradaRoot = createTemporaryE2eRoot('site-registry-site-fabric-e2e');
@@ -80,13 +80,14 @@ try {
     name: 'site_registry_list',
     arguments: {},
   }));
-  assert.notEqual(listed.status, 'failed', JSON.stringify(listed));
+  assert.equal(listed.status, 'ok', JSON.stringify(listed));
   assert.equal(listed.mutation_performed, false, JSON.stringify(listed));
 
   const shown = structured(await server.client.request(4, 'tools/call', {
     name: 'site_registry_show',
     arguments: { reference: 'fixture-site' },
   }));
+  assert.equal(shown.status, 'ok', JSON.stringify(shown));
   assert.equal(shown.tool, 'site_registry_show', JSON.stringify(shown));
   assert.equal(shown.mutation_performed, false, JSON.stringify(shown));
 
@@ -94,7 +95,7 @@ try {
     name: 'site_registry_discover_plan',
     arguments: { source: 'all', root: naradaRoot, actor: 'site-registry-e2e' },
   }));
-  assert.notEqual(discoveryPlan.status, 'failed', JSON.stringify(discoveryPlan));
+  assert.equal(discoveryPlan.status, 'ok', JSON.stringify(discoveryPlan));
   assert.equal(discoveryPlan.mutation_performed, false, JSON.stringify(discoveryPlan));
 
   console.log(JSON.stringify({

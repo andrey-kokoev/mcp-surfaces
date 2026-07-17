@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkerImplementationIdentityReader, writeWorkerImplementationBuildManifest } from '../src/implementation-identity.js';
+import { workerImplementationGate } from '../src/policy.js';
 
 function createCompiledFixture(name: string): { root: string; sourcePath: string; artifactPath: string; dependencyPath: string } {
   const root = mkdtempSync(join(tmpdir(), `${name}-`));
@@ -42,6 +43,16 @@ assert.match(String(fresh.materialized_artifact_tree_sha256), /^[a-f0-9]{64}$/);
 assert.equal((fresh.expected_build as Record<string, unknown>).status, 'matched');
 assert.equal((fresh.runtime_dependencies as Record<string, unknown>).status, 'unchanged_since_materialization');
 assert.equal((fresh.stale_server_risk as Record<string, unknown>).status, 'not_observed');
+assert.equal(workerImplementationGate(fresh).status, 'admitted');
+
+const blockedGate = workerImplementationGate({
+  ...fresh,
+  stale_server_risk: { status: 'source_changed_since_build', remediation: 'rebuild fixture' },
+});
+assert.equal(blockedGate.status, 'blocked');
+assert.equal(blockedGate.admitted, false);
+assert.equal(blockedGate.blocking_status, 'source_changed_since_build');
+assert.equal(blockedGate.remediation, 'rebuild fixture');
 
 writeFileSync(freshFixture.sourcePath, 'export const value = 2;\n', 'utf8');
 const staleSource = readFreshIdentity();

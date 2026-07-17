@@ -304,6 +304,8 @@ function workerConfigResolveOutputSchema(): Record<string, unknown> {
     output_contract: { type: 'object', additionalProperties: true },
     runtime_availability: { type: 'object', additionalProperties: true },
     config_resolution: { type: 'object', additionalProperties: true },
+    implementation_identity: { type: 'object', additionalProperties: true },
+    implementation_gate: { type: 'object', additionalProperties: true },
     warnings: stringArraySchema(),
   }, ['schema', 'status', 'dry_run', 'requested_mode', 'resume_worker_session_id', 'launchable', 'launchability', 'resolved_worker_config', 'invocation', 'preflight', 'runtime_availability', 'config_resolution', 'warnings']);
 }
@@ -312,6 +314,8 @@ function workerPolicyOutputSchema(): Record<string, unknown> {
   return objectSchema({
     schema: { type: 'string', const: 'narada.worker.policy.v1' },
     status: { type: 'string' },
+    implementation_identity: { type: 'object', additionalProperties: true },
+    implementation_gate: { type: 'object', additionalProperties: true },
     default_runtime: { type: 'string' },
     default_authority: { type: 'string' },
     default_cognition: { type: 'string' },

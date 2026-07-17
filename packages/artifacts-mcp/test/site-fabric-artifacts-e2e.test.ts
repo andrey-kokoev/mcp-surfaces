@@ -75,7 +75,15 @@ try {
   assert.equal(presented.status, 'presented', JSON.stringify(presented));
   assert.equal((presented.event as JsonRecord).event, 'assistant_message');
   assert.equal(requests.length, 4);
-  console.log(JSON.stringify({ status: 'passed', test_id: 'artifacts.site-fabric.register-read-present', site_root: siteRoot, cleanup: 'pending_until_finally' }));
+  console.log(JSON.stringify({
+    status: 'passed',
+    test_id: 'artifacts.site-fabric.register-read-present',
+    authority: 'A0',
+    external_authority: 'not_run',
+    provider_boundary: 'controlled_nars_http_fixture',
+    site_root: siteRoot,
+    cleanup: 'pending_until_finally',
+  }));
 } finally {
   await server.close();
   await new Promise<void>((resolve) => nars.close(() => resolve()));

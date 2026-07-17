@@ -70,6 +70,9 @@ The result is a bounded receipt with:
 The result must not claim provider completion merely because transport returned.
 Unknown terminal state remains unknown and is read through
 `nars_session_input_status`.
+The status readback keeps `status` as a backwards-compatible admission alias
+and marks it with `status_semantics: "admission"`; `admission_status` is the
+explicit admission field, while `outcome` is the delivery result.
 
 ## Policy Boundary
 

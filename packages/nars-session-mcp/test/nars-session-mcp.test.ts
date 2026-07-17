@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveNaradaSitePaths } from '@narada2/site-paths';
 import { buildGuidanceResult } from '../src/guidance.js';
-import { buildInputEvent, createSessionClient, configFromEnv } from '../src/session-client.js';
+import { buildInputEvent, createSessionClient, configFromEnv, summarizeInputEvents, websocketEndpointProtocol } from '../src/session-client.js';
 import { handleRequest, listTools } from '../src/main.js';
 
 test('lists the governed NARS session tool boundary', () => {
@@ -91,6 +91,60 @@ test('discovers a bounded session from the canonical site-paths root', async () 
   }
 });
 
+test('reports terminal request failure separately from admission status', () => {
+  const summary = summarizeInputEvents([
+    { event: 'input_event_started', request_id: 'request-1', input_event_id: 'input-1' },
+    { event: 'session_control_rejected', request_id: 'request-1', code: 'request_dispatch_failed', error: 'provider unavailable' },
+    { event: 'runtime_request_state_transition', request_id: 'request-1', method: 'session.submit', request_state: 'failed', terminal_state: 'failed' },
+  ]);
+  assert.equal(summary.status, 'admitted_to_turn');
+  assert.equal(summary.status_semantics, 'admission');
+  assert.equal(summary.admission_status, 'admitted_to_turn');
+  assert.equal(summary.request_state, 'failed');
+  assert.equal(summary.terminal_state, 'failed');
+  assert.equal(summary.outcome, 'failed');
+  assert.equal(summary.terminal_event, 'runtime_request_state_transition');
+  assert.equal(summary.outcome_reason, 'provider unavailable');
+});
+
+test('accepts secure websocket authorities without weakening protocol validation', () => {
+  assert.equal(websocketEndpointProtocol('ws://127.0.0.1/events'), 'ws:');
+  assert.equal(websocketEndpointProtocol('wss://nars.example/events'), 'wss:');
+  assert.throws(
+    () => websocketEndpointProtocol('https://nars.example/events'),
+    (error: unknown) => record(error).code === 'websocket_protocol_unsupported',
+  );
+});
+
+test('derives stale display state from the bounded heartbeat without mutating the registry', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nars-session-mcp-stale-'));
+  try {
+    const paths = resolveNaradaSitePaths({ siteRoot: root });
+    const sessionDir = join(paths.narsSessionsRoot, 'session_stale');
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(join(paths.narsSessionsRoot, 'index.json'), JSON.stringify({ sessions: [{ session_id: 'session_stale' }] }));
+    writeFileSync(join(sessionDir, 'heartbeat.json'), JSON.stringify({ heartbeat_at: '2020-01-01T00:00:00.000Z' }));
+    writeFileSync(join(sessionDir, 'session-index-record.json'), JSON.stringify({
+      schema: 'narada.nars.session_index_record.v1',
+      session_id: 'session_stale',
+      site_root: root,
+      session_dir: sessionDir,
+      heartbeat_path: join(sessionDir, 'heartbeat.json'),
+      status_hint: 'alive',
+      last_seen_at: '2020-01-01T00:00:00.000Z',
+      event_endpoint: null,
+      health_endpoint: null,
+    }));
+    const result = await createSessionClient({ NARADA_SITE_ROOT: root, NARADA_AGENT_ID: 'reader.agent' }).list({ include_health: false });
+    assert.equal(result.sessions[0].display_state, 'stale');
+    assert.equal(result.sessions[0].heartbeat_fresh, false);
+    assert.equal(result.sessions[0].health_observed_at, null);
+    assert.equal(result.sessions[0].last_seen_at, '2020-01-01T00:00:00.000Z');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('user-site operator projection resolves sessions only through the admitted Site registry', async () => {
   const userRoot = mkdtempSync(join(tmpdir(), 'nars-session-mcp-user-site-'));
   const siteRoot = mkdtempSync(join(tmpdir(), 'nars-session-mcp-user-child-'));
@@ -120,6 +174,8 @@ test('user-site operator projection resolves sessions only through the admitted 
 
     const result = await createSessionClient({ USERPROFILE: userRoot }, argv).list({ include_health: false });
     assert.equal(result.count, 1);
+    assert.equal(result.authority_root, userRoot);
+    assert.equal(result.scope_root, userRoot);
     assert.equal(result.sessions[0].site_id, 'fixture-site');
     assert.equal(result.sessions[0].site_root, siteRoot);
   } finally {

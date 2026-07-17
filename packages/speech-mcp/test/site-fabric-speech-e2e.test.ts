@@ -81,6 +81,7 @@ try {
       local_listen_status: status.status,
       cleanup: 'completed_after_finally',
     }));
+    process.exitCode = 2;
   } else {
     const spoken = structured(await server.client.request(4, 'tools/call', {
       name: 'speech_speak',

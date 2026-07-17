@@ -30,7 +30,7 @@ if (!existsSync(cliModulePath)) {
     cli_module_path: cliModulePath,
     cleanup: 'not_needed',
   }));
-  process.exit(0);
+  process.exit(2);
 }
 
 const naradaRoot = createTemporaryE2eRoot('site-lifecycle-site-fabric-e2e');
@@ -69,7 +69,7 @@ try {
     name: 'site_create_presets_list',
     arguments: {},
   }));
-  assert.notEqual(presets.status, 'failed', JSON.stringify(presets));
+  assert.equal(presets.status, 'ok', JSON.stringify(presets));
 
   const plan = structured(await server.client.request(3, 'tools/call', {
     name: 'site_create_plan',
@@ -81,7 +81,7 @@ try {
     },
   }));
   assert.equal(plan.mutation_performed, false, JSON.stringify(plan));
-  assert.notEqual(plan.status, 'failed', JSON.stringify(plan));
+  assert.equal(plan.status, 'ok', JSON.stringify(plan));
 
   const initialized = structured(await server.client.request(4, 'tools/call', {
     name: 'site_init',
@@ -94,7 +94,7 @@ try {
       execute: true,
     },
   }));
-  assert.notEqual(initialized.status, 'failed', JSON.stringify(initialized));
+  assert.equal(initialized.status, 'ok', JSON.stringify(initialized));
   assert.equal(initialized.mutation_performed, true, JSON.stringify(initialized));
 
   const inspected = structured(await server.client.request(5, 'tools/call', {
@@ -110,7 +110,7 @@ try {
     name: 'site_list',
     arguments: {},
   }));
-  assert.notEqual(listed.status, 'failed', JSON.stringify(listed));
+  assert.equal(listed.status, 'ok', JSON.stringify(listed));
 
   console.log(JSON.stringify({
     status: 'passed',

@@ -170,6 +170,59 @@ export function workerImplementationIdentity(): Record<string, unknown> {
   return readWorkerImplementationIdentity();
 }
 
+const WORKER_IMPLEMENTATION_BLOCKING_STATUSES = new Set([
+  'artifact_changed_since_materialization',
+  'runtime_dependency_changed_since_materialization',
+  'loaded_artifact_not_declared_build',
+  'source_changed_since_build',
+  'runtime_dependency_changed_since_build',
+  'identity_unavailable',
+  'unavailable',
+  'artifact_mismatch',
+  'artifact_unavailable',
+  'runtime_dependencies_unavailable',
+  'source_unavailable',
+]);
+
+export function workerImplementationGate(identity: Record<string, unknown> = workerImplementationIdentity()): Record<string, unknown> {
+  const expectedBuild = asRecord(identity.expected_build);
+  const staleServerRisk = asRecord(identity.stale_server_risk);
+  const observations = [
+    { source: 'stale_server_risk', value: staleServerRisk },
+    { source: 'expected_build', value: expectedBuild },
+  ];
+  const blocking = observations
+    .map(({ source, value }) => ({ source, status: typeof value.status === 'string' ? value.status : null, value }))
+    .find(({ status }) => status !== null && WORKER_IMPLEMENTATION_BLOCKING_STATUSES.has(status));
+  const remediation = blocking
+    ? optionalString(blocking.value.remediation)
+      ?? 'Rebuild and restart the worker-delegation MCP surface before launching a worker.'
+    : null;
+  return {
+    schema: 'narada.worker.implementation_gate.v1',
+    status: blocking ? 'blocked' : 'admitted',
+    admitted: !blocking,
+    reason_code: blocking ? 'worker_implementation_stale' : null,
+    blocking_source: blocking?.source ?? null,
+    blocking_status: blocking?.status ?? null,
+    remediation,
+    implementation_identity: identity,
+  };
+}
+
+export function assertWorkerImplementationFresh(): Record<string, unknown> {
+  const gate = workerImplementationGate();
+  if (gate.admitted !== true) {
+    throw diagnosticError('worker_implementation_stale', 'worker_implementation_stale', {
+      blocking_source: gate.blocking_source,
+      blocking_status: gate.blocking_status,
+      remediation: gate.remediation,
+      implementation_identity: gate.implementation_identity,
+    });
+  }
+  return gate;
+}
+
 function naradaSiteRootMarker(path: string): string | null {
   if (isDirectory(join(path, '.narada'))) return '.narada/';
   if (isDirectory(join(path, '.ai', 'mcp'))) return '.ai/mcp/';
@@ -233,6 +286,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
     schema: 'narada.worker.policy.v1',
     status: 'ok',
     implementation_identity: workerImplementationIdentity(),
+    implementation_gate: workerImplementationGate(),
     default_runtime: policy.defaultRuntime,
     default_authority: policy.defaultAuthority,
     default_cognition: policy.defaultCognition,
@@ -639,6 +693,10 @@ function normalizePathComparisonKey(path: string): string {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function strictRecord(value: unknown, code: string, message: string): Record<string, unknown> {

@@ -67,7 +67,7 @@ An `A0` proof does not claim `A1` or `A2` authority. A `W1` proof may compose
 
 | Surface | Existing test | Honest classification | What it does not prove |
 | --- | --- | --- | --- |
-| `site-loop-mcp` | `test/site-loop-live-e2e.test.ts` | B1, isolated temporary Site | Production scheduler, resident carrier, real Site registry, and unattended recovery |
+| `site-loop-mcp` | [`test/site-loop-configured-surface-e2e.test.ts`](../packages/site-loop-mcp/test/site-loop-configured-surface-e2e.test.ts), [`test/site-loop-production-e2e.test.ts`](../packages/site-loop-mcp/test/site-loop-production-e2e.test.ts) | B1 configured-surface MCP proof plus opt-in production scheduler/resident/recovery proof | The default configured-surface test does not claim production authority; the production test is `not_run` without an explicitly admitted site root, scheduler, and live resident carrier |
 | `delegated-task-mcp` | [`test/site-fabric-worker-e2e.test.ts`](../packages/delegated-task-mcp/test/site-fabric-worker-e2e.test.ts), `test/live-worker-integration.test.ts`, Narada `packages/agent-web-ui/test/live-delegated-task-launcher-e2e.mjs` | B1-B3 Site-fabric delegation proof plus W1 launcher-to-carrier workflow through the actual launcher, NARS carrier, `nars-session-mcp`, delegated-task child, worker carrier, and controlled provider; verifies task/event persistence, review acceptance, binding evidence, negative admission, durable worker artifacts, and cleanup | External provider service behavior remains separate; both controlled tests use a bounded local HTTP provider fixture (A0) |
 | `worker-delegation-mcp` | [`test/live-edit-e2e.test.ts`](../packages/worker-delegation-mcp/test/live-edit-e2e.test.ts), [`test/site-fabric-provider-e2e.test.ts`](../packages/worker-delegation-mcp/test/site-fabric-provider-e2e.test.ts), [`test/real-carrier-e2e.test.ts`](../packages/worker-delegation-mcp/test/real-carrier-e2e.test.ts) | B1-B3 edit and Site-fabric proofs plus B4 real `narada-agent-runtime-server` carrier execution through the built MCP child; verifies provider request, model/reasoning binding, lifecycle events, durable run artifacts, refusal, and cleanup | External provider service behavior; the B4 test deliberately uses a bounded local HTTP fixture authority (A0) |
 | `surface-feedback-mcp` | [`test/site-fabric-feedback-e2e.test.ts`](../packages/surface-feedback-mcp/test/site-fabric-feedback-e2e.test.ts), `test/surface-feedback-task-lifecycle-integration.test.ts` | B1-B3 nested child handoff, durable feedback/task state, and idempotent conversion | External User Site authority remains separate |
@@ -115,9 +115,11 @@ and non-passing.
 
 The non-PC-host objective still excludes PC-host authority for boundaries not
 listed as passed below. The following remain explicitly excluded from that
-count: production Site Loop scheduling/resident delivery, standalone real NARS
+count: standalone real NARS
 session control, live host process introspection outside the launcher lifecycle,
-and real NARS artifact authority. Their local
+and real NARS artifact authority. The Site Loop boundary now has an opt-in
+production test, but it remains non-passing until run with explicit authority.
+Their local
 child-process contracts remain useful evidence, but they do not claim host
 authority.
 
@@ -150,7 +152,7 @@ live external-provider authority.
 
 | Priority | Surface | Boundary claim | Required proof | Debt status | Authority result |
 | --- | --- | --- | --- | --- | --- |
-| P0 | `site-loop-mcp` | Production Site Loop operation | Start the configured supervisor or sanctioned scheduler path, run one bounded pass, prove resident delivery, durable run outcome, recovery state, and cleanup | excluded_pc_host | excluded_pc_host |
+| P0 | `site-loop-mcp` | Production Site Loop operation | [`test/site-loop-production-e2e.test.ts`](../packages/site-loop-mcp/test/site-loop-production-e2e.test.ts) runs only with `NARADA_E2E_SITE_LOOP_PRODUCTION=1` and `NARADA_E2E_SITE_LOOP_SITE_ROOT`; through MCP it proves scheduler status, resident replacement, production proof, recovery drill, recovery plan, and fixture cleanup | complete | not_run |
 | P0 | `task-lifecycle-mcp` | Site-bound carrier lifecycle | [`test/site-fabric-lifecycle-e2e.test.ts`](../packages/task-lifecycle-mcp/test/site-fabric-lifecycle-e2e.test.ts) launches the actual child, claims/finishes/reviews a controlled task, and verifies SQLite plus Markdown closure evidence | complete | passed |
 | P0 | `mcp-registrar` | Registry-to-live-surface conformance | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts), [`test/site-fabric-catalog-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-catalog-e2e.test.ts), and `test/mcp-registrar.test.ts` prove live child handoff, the complete 26-entry catalog sweep, and drift checks | complete | passed |
 | P0 | `mcp-loader-mcp` | Runtime attachment workflow | [`test/site-fabric-loader-e2e.test.ts`](../packages/mcp-registrar/test/site-fabric-loader-e2e.test.ts) plus `test/mcp-loader-mcp.test.ts` attach/call/status/detach and replace/drift behavior through real children | complete | passed |

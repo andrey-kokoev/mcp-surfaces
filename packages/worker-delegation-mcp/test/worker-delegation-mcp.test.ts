@@ -400,8 +400,8 @@ assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.low, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.medium, { model: null, reasoning_effort: null });
 assert.deepEqual(policy.result?.structuredContent.cognition_defaults.high, { model: null, reasoning_effort: null });
-assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].low, { model: 'kimi-k2.7', reasoning_effort: 'low' });
-assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].medium, { model: 'kimi-k2.7', reasoning_effort: 'medium' });
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].low, { model: 'k3', reasoning_effort: 'low' });
+assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['kimi-code-api'].medium, { model: 'k3', reasoning_effort: 'medium' });
 assert.deepEqual(policy.result?.structuredContent.provider_cognition_defaults['openai-api'], {
   low: { model: 'gpt-5.6-luna', reasoning_effort: 'low' },
   medium: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
@@ -517,12 +517,12 @@ writeFileSync(providerRegistryPath, JSON.stringify({
   providers: {
     'deepseek-api': {
       base_url: 'https://api.deepseek.com',
-      default_model: 'deepseek-chat',
-      available_models: ['deepseek-chat', 'deepseek-reasoner'],
+      default_model: 'deepseek-v4-flash',
+      available_models: ['deepseek-v4-flash', 'deepseek-v4-pro'],
       cognition_defaults: {
-        low: { model: 'deepseek-chat', reasoning_effort: 'low' },
-        medium: { model: 'deepseek-chat', reasoning_effort: 'medium' },
-        high: { model: 'deepseek-reasoner', reasoning_effort: 'high' },
+        low: { model: 'deepseek-v4-flash', reasoning_effort: 'low' },
+        medium: { model: 'deepseek-v4-flash', reasoning_effort: 'medium' },
+        high: { model: 'deepseek-v4-pro', reasoning_effort: 'high' },
       },
       base_url_env_names: ['DEEPSEEK_API_BASE_URL'],
       credential_requirement: {
@@ -570,19 +570,19 @@ const providerPolicy = await rpc({ jsonrpc: '2.0', id: 197, method: 'tools/call'
 assert.equal(JSON.stringify(providerPolicy.result?.structuredContent).includes('deepseek-from-secret-store'), false);
 assert.equal(providerPolicy.result?.structuredContent.allowed_narada_agent_runtime_providers.includes('deepseek-api'), true);
 assert.equal(providerPolicy.result?.structuredContent.default_narada_agent_runtime_provider, 'deepseek-api');
-assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].low, { model: 'deepseek-chat', reasoning_effort: 'low' });
-assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high, { model: 'deepseek-reasoner', reasoning_effort: 'high' });
+assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].low, { model: 'deepseek-v4-flash', reasoning_effort: 'low' });
+assert.deepEqual(providerPolicy.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high, { model: 'deepseek-v4-pro', reasoning_effort: 'high' });
 const cognitionDefaultsBefore = await rpc({ jsonrpc: '2.0', id: 1971, method: 'tools/call', params: { name: 'worker_cognition_defaults_inspect', arguments: {} } }, providerState);
 assert.equal(cognitionDefaultsBefore.result?.structuredContent.version, 0);
 assert.equal(cognitionDefaultsBefore.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high.source, 'provider_registry');
 const invalidCognitionUpdate = await rpc({ jsonrpc: '2.0', id: 1972, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'not-a-deepseek-model', reasoning_effort: 'high' } } }, providerState);
 assert.equal(invalidCognitionUpdate.error?.data.code, 'worker_cognition_model_not_allowed');
-const malformedCognitionUpdate = await rpc({ jsonrpc: '2.0', id: 19721, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'deepseek-chat', reasoning_effort: 42 } } }, providerState);
+const malformedCognitionUpdate = await rpc({ jsonrpc: '2.0', id: 19721, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'deepseek-v4-flash', reasoning_effort: 42 } } }, providerState);
 assert.equal(malformedCognitionUpdate.error?.data.code, 'worker_cognition_reasoning_effort_required');
 assert.equal(malformedCognitionUpdate.error?.data.details.validation_issues[0].path, 'reasoning_effort');
-const cognitionUpdate = await rpc({ jsonrpc: '2.0', id: 1973, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'deepseek-chat', reasoning_effort: 'max', actor: 'worker-test' } } }, providerState);
+const cognitionUpdate = await rpc({ jsonrpc: '2.0', id: 1973, method: 'tools/call', params: { name: 'worker_cognition_defaults_update', arguments: { provider: 'deepseek-api', cognition: 'high', model: 'deepseek-v4-flash', reasoning_effort: 'max', actor: 'worker-test' } } }, providerState);
 assert.equal(cognitionUpdate.result?.structuredContent.version, 1);
-assert.equal(cognitionUpdate.result?.structuredContent.current.model, 'deepseek-chat');
+assert.equal(cognitionUpdate.result?.structuredContent.current.model, 'deepseek-v4-flash');
 assert.equal(cognitionUpdate.result?.structuredContent.current.provider, 'deepseek-api');
 assert.equal(existsSync(join(providerRoot, '.narada', 'worker-cognition-defaults.json')), true);
 assert.equal(existsSync(join(providerRoot, '.narada', 'worker-cognition-defaults.audit.jsonl')), true);
@@ -593,7 +593,7 @@ const deepseekResolve = await rpc({ jsonrpc: '2.0', id: 199, method: 'tools/call
 assert.equal(deepseekResolve.result?.structuredContent.runtime_availability.available, true);
 assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
 assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');
-assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-chat');
+assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
 assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 assert.equal(deepseekResolve.result?.structuredContent.config_resolution.model_source, 'cognition_default');
 assert.equal(deepseekResolve.result?.structuredContent.config_resolution.reasoning_effort_source, 'cognition_default');
@@ -601,18 +601,28 @@ assert.equal(JSON.stringify(deepseekResolve.result?.structuredContent).includes(
 const deepseekDefaultProviderResolve = await rpc({ jsonrpc: '2.0', id: 200, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek registry default provider check' }, constraints: { cwd: providerRoot, cognition: 'high', overrides: { runtime: 'narada-agent-runtime-server' } } } } }, providerState);
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_source, 'site_cognition_default');
-assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-chat');
+assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-flash');
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'max');
 assert.equal(deepseekDefaultProviderResolve.result?.structuredContent.config_resolution.cognition_default_source, 'site_runtime_override');
 assert.match(String(deepseekDefaultProviderResolve.result?.structuredContent.config_resolution.precedence), /request_override > site_runtime_override/);
-const reloadedProviderState = createServerState({ siteRoot: providerRoot, allowedRoot: providerRoot, runRoot: providerRunRoot, defaultRuntime: 'codex', codexCommand: process.execPath, agentRuntimeServerCommand: process.execPath, providerRegistryPath }, { PATH: process.env.PATH });
+const reloadedProviderState = createServerState({
+  siteRoot: providerRoot,
+  allowedRoot: providerRoot,
+  runRoot: providerRunRoot,
+  defaultRuntime: 'codex',
+  codexCommand: process.execPath,
+  agentRuntimeServerCommand: process.execPath,
+  providerRegistryPath,
+  secretLookupCommand: process.execPath,
+  secretLookupCommandArgs: [providerSecretLookupScript],
+}, { PATH: process.env.PATH });
 const reloadedCognitionDefaults = await rpc({ jsonrpc: '2.0', id: 2001, method: 'tools/call', params: { name: 'worker_cognition_defaults_inspect', arguments: {} } }, reloadedProviderState);
 assert.equal(reloadedCognitionDefaults.result?.structuredContent.version, 1);
 assert.equal(reloadedCognitionDefaults.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high.source, 'site_runtime_override');
 assert.equal(reloadedCognitionDefaults.result?.structuredContent.provider_cognition_defaults['deepseek-api'].high.reasoning_effort, 'max');
 assert.deepEqual(reloadedCognitionDefaults.result?.structuredContent.effective_cognition_defaults.high, {
   provider: 'deepseek-api',
-  model: 'deepseek-chat',
+  model: 'deepseek-v4-flash',
   reasoning_effort: 'max',
   source: 'site_runtime_override',
   precedence: 'per_run_override > site_effective_cognition_default > explicit_provider_registry_default > global_provider_registry_default > generic_cognition_default',
@@ -656,14 +666,14 @@ const explicitTupleOverride = await rpc({
         cwd: providerRoot,
         cognition: 'low',
         provider: 'deepseek-api',
-        overrides: { runtime: 'narada-agent-runtime-server', model: 'deepseek-reasoner', reasoning_effort: 'high' },
+        overrides: { runtime: 'narada-agent-runtime-server', model: 'deepseek-v4-pro', reasoning_effort: 'high' },
       },
     },
   },
 }, reloadedProviderState);
 assert.equal(explicitTupleOverride.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');
 assert.equal(explicitTupleOverride.result?.structuredContent.resolved_worker_config.provider_source, 'explicit_constraint');
-assert.equal(explicitTupleOverride.result?.structuredContent.resolved_worker_config.model, 'deepseek-reasoner');
+assert.equal(explicitTupleOverride.result?.structuredContent.resolved_worker_config.model, 'deepseek-v4-pro');
 assert.equal(explicitTupleOverride.result?.structuredContent.resolved_worker_config.reasoning_effort, 'high');
 assert.equal(explicitTupleOverride.result?.structuredContent.config_resolution.model_source, 'request_override');
 assert.equal(explicitTupleOverride.result?.structuredContent.config_resolution.reasoning_effort_source, 'request_override');
@@ -871,6 +881,8 @@ const agentRuntimeState = createServerState({
   agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
 }, {
   ...process.env,
+  NARADA_SITE_ROOT: '',
+  NARADA_WORKSPACE_ROOT: '',
   NARADA_PROVIDER_SECRET_STORE: 'disabled',
   KIMI_CODE_API_KEY: 'selected-kimi-worker-key',
   OPENAI_API_KEY: 'unrelated-openai-decoy',
@@ -921,7 +933,7 @@ assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_c
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.workspace_root, root);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider, 'kimi-code-api');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider_source, 'registry_default');
-assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.7');
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.model, 'k3');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider_id, 'kimi-code-api');
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.base_url, 'https://api.kimi.com/coding/');
@@ -1014,7 +1026,7 @@ assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.si
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.site_binding.source, 'nearest_parent_marker');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.provider, 'kimi-code-api');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.provider_source, 'registry_default');
-assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.model, 'kimi-k2.7');
+assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.model, 'k3');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.reasoning_effort, 'low');
 assert.equal(agentRuntimeRun.result?.structuredContent.resolved_worker_config.implementation_identity.surface_id, 'worker-delegation-mcp');
 assert.equal(agentRuntimeRun.result?.structuredContent.session_event_evidence.prompt_admission, 'turn_started_without_visible_send_frame');

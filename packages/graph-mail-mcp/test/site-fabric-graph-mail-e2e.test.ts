@@ -106,6 +106,7 @@ try {
       doctor_auth_mode: doctor.auth_mode,
       cleanup: 'completed_after_finally',
     }));
+    process.exitCode = 2;
   } else {
     const queried = structured(await server.client.request(4, 'tools/call', {
       name: 'graph_mail_query',

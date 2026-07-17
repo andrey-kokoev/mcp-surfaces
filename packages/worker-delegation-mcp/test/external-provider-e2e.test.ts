@@ -76,6 +76,7 @@ try {
       missing_prerequisites: missingPrerequisites,
       cleanup: 'completed_after_finally',
     }));
+    process.exitCode = 2;
   } else {
     const response = await server.client.request(4, 'tools/call', {
       name: 'worker_run',
