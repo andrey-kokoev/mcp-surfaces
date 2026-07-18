@@ -7,6 +7,14 @@ import { fileURLToPath } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
 
+async function waitForOutput(condition: () => boolean, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) throw new Error('wait_for_output_timeout');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 try {
   const childEntrypoint = join(root, 'failing-child.mjs');
   writeFileSync(childEntrypoint, "process.stderr.write('import failed: missing shared dist\\n'); process.exit(42);\n", 'utf8');
@@ -55,6 +63,8 @@ try {
     silentEntrypoint,
     '--request-timeout-ms',
     '100',
+    '--tool-timeout-grace-ms',
+    '50',
     '--diagnostics-dir',
     diagnosticsDir,
     '--',
@@ -75,6 +85,7 @@ try {
   assert.equal(timeoutResponse.error.data.surface_id, 'silent-surface');
   assert.equal(timeoutResponse.error.data.timeout_layer, 'mcp_runtime_proxy_watchdog');
   assert.equal(timeoutResponse.error.data.proxy_request_timeout_ms, 100);
+  assert.equal(timeoutResponse.error.data.effective_request_timeout_ms, 100);
   assert.equal(timeoutResponse.error.data.requested_tool_timeout_ms, 5);
   assert.equal(timeoutResponse.error.data.surface_timeout_expected_before_proxy, true);
   assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
@@ -100,11 +111,89 @@ try {
   assert.equal(artifact.request.args_summary.timeout_ms, 5);
   assert.equal(artifact.pending_requests.length, 0);
   assert.equal(artifact.proxy.request_timeout_ms, 100);
+  assert.equal(artifact.proxy.tool_timeout_grace_ms, 50);
   assert.equal(artifact.child_process.entrypoint, silentEntrypoint);
   assert.equal(typeof artifact.child_process.entrypoint_sha256, 'string');
   assert.equal(artifact.diagnostic.code, 'child_request_timeout');
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'proxy_timeout'));
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'child_termination_requested'));
+
+  // Regression for sfb_36762540-087: a tool that declares timeout_ms beyond
+  // the proxy watchdog must not get the shared child SIGTERMed. The watchdog
+  // honors the declared timeout plus the grace margin, the slow response
+  // arrives, and the transport stays usable for the next call.
+  const honoredChildEntrypoint = join(root, 'honored-child.mjs');
+  writeFileSync(honoredChildEntrypoint, [
+    "let buffer = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => {",
+    '  buffer += chunk;',
+    '  let index;',
+    "  while ((index = buffer.indexOf('\\n')) >= 0) {",
+    '    const line = buffer.slice(0, index);',
+    '    buffer = buffer.slice(index + 1);',
+    '    if (!line.trim()) continue;',
+    '    const request = JSON.parse(line);',
+    '    setTimeout(() => {',
+    "      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'slow-ok-' + request.id }] } }) + '\\n');",
+    '    }, 150);',
+    '  }',
+    '});',
+  ].join('\n'), 'utf8');
+  const honoredProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'honored-surface',
+    '--entrypoint',
+    honoredChildEntrypoint,
+    '--request-timeout-ms',
+    '100',
+    '--tool-timeout-grace-ms',
+    '50',
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let honoredStdout = '';
+  honoredProxy.stdout.setEncoding('utf8');
+  honoredProxy.stdout.on('data', (chunk) => { honoredStdout += chunk; });
+  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-1', method: 'tools/call', params: { name: 'slow_tool', arguments: { timeout_ms: 300 } } })}\n`);
+  await waitForOutput(() => honoredStdout.includes('"honored-1"'), 2000);
+  const honoredResponse = JSON.parse(honoredStdout.trim());
+  assert.equal(honoredResponse.id, 'honored-1');
+  assert.equal(honoredResponse.result.content[0].text, 'slow-ok-honored-1');
+  honoredStdout = '';
+  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-2', method: 'tools/call', params: { name: 'slow_tool', arguments: { timeout_ms: 300 } } })}\n`);
+  await waitForOutput(() => honoredStdout.includes('"honored-2"'), 2000);
+  assert.equal(JSON.parse(honoredStdout.trim()).result.content[0].text, 'slow-ok-honored-2');
+  honoredProxy.kill();
+  await new Promise<number | null>((resolve) => honoredProxy.on('close', resolve));
+
+  // A child that never responds is still terminated after the honored tool
+  // timeout plus grace: the watchdog remains the hung-child guard.
+  const honoredSilentProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'honored-silent-surface',
+    '--entrypoint',
+    silentEntrypoint,
+    '--request-timeout-ms',
+    '100',
+    '--tool-timeout-grace-ms',
+    '50',
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let honoredSilentStdout = '';
+  honoredSilentProxy.stdout.setEncoding('utf8');
+  honoredSilentProxy.stdout.on('data', (chunk) => { honoredSilentStdout += chunk; });
+  honoredSilentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-slow-1', method: 'tools/call', params: { name: 'slow_read', arguments: { timeout_ms: 200 } } })}\n`);
+  const honoredSilentExitCode = await new Promise<number | null>((resolve) => honoredSilentProxy.on('close', resolve));
+  assert.notEqual(honoredSilentExitCode, 0);
+  const honoredSilentResponse = JSON.parse(honoredSilentStdout.trim());
+  assert.equal(honoredSilentResponse.id, 'honored-slow-1');
+  assert.equal(honoredSilentResponse.error.data.code, 'child_request_timeout');
+  assert.equal(honoredSilentResponse.error.data.proxy_request_timeout_ms, 100);
+  assert.equal(honoredSilentResponse.error.data.requested_tool_timeout_ms, 200);
+  assert.equal(honoredSilentResponse.error.data.effective_request_timeout_ms, 250);
+  assert.equal(honoredSilentResponse.error.data.surface_timeout_expected_before_proxy, true);
 
   const contentLengthChildEntrypoint = join(root, 'json-line-content-length-child.mjs');
   writeFileSync(contentLengthChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { const request = JSON.parse(chunk.trim()); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'Content-Length: is data, not framing' }] } }) + String.fromCharCode(10)); });", 'utf8');

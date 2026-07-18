@@ -10,6 +10,7 @@
   "references": [
     { "path": "../shared/mcp-transport" },
     { "path": "../shared/mcp-telemetry" },
-    { "path": "../shared/mcp-e2e-harness" }
+    { "path": "../shared/mcp-e2e-harness" },
+    { "path": "../shared/mcp-runtime-proxy" }
   ]
 }

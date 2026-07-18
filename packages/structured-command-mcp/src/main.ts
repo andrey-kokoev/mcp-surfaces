@@ -583,6 +583,9 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
       cwd,
       shell: false,
       windowsHide: true,
+      // On POSIX the child leads its own process group so a timeout can signal
+      // the whole tree without touching the server process group.
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
     });
@@ -595,11 +598,11 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      killChildProcessTree(child);
     }, timeoutMs);
     const abortHandler = () => {
       cancelled = true;
-      child.kill();
+      killChildProcessTree(child);
     };
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout.on('data', (chunk) => {
@@ -643,6 +646,53 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
       });
     });
   });
+}
+
+// Bounded grace between process-group SIGTERM and the SIGKILL escalation for
+// descendants that ignore SIGTERM (POSIX only; Windows uses taskkill /T /F).
+const POSIX_KILL_GRACE_MS = 1_000;
+
+function killChildProcessTree(child: ReturnType<typeof spawn>): void {
+  const pid = child.pid;
+  if (pid === undefined) {
+    try { child.kill(); } catch { /* process already exited */ }
+    return;
+  }
+  if (process.platform === 'win32') {
+    // child.kill() terminates only the direct process on Windows; taskkill /T
+    // terminates the full descendant tree so a timed-out command cannot leave
+    // grandchildren running.
+    try {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer.on('error', () => { try { child.kill(); } catch { /* process already exited */ } });
+      killer.unref();
+    } catch {
+      try { child.kill(); } catch { /* process already exited */ }
+    }
+    return;
+  }
+  // The child was spawned detached, so it leads its own process group; signal
+  // the group to reach descendants without touching the server process group.
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    try { child.kill(); } catch { /* process already exited */ }
+    return;
+  }
+  // Descendants can ignore SIGTERM: after a bounded grace period escalate the
+  // whole group to SIGKILL, but only while the group still has members. The
+  // timer is unref'd so escalation never keeps this server process alive.
+  const escalation = setTimeout(() => {
+    try {
+      process.kill(-pid, 0);
+    } catch {
+      return; // Process group is gone; nothing left to escalate.
+    }
+    try {
+      process.kill(-pid, 'SIGKILL');
+    } catch { /* group exited between the probe and the kill */ }
+  }, POSIX_KILL_GRACE_MS);
+  escalation.unref();
 }
 
 export async function executeStructuredCommandElevatedWindow(args, state) {

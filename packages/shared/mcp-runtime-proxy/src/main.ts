@@ -23,6 +23,7 @@ type PendingRequest = {
   framed: boolean;
   timeoutTimer: NodeJS.Timeout;
   requestedToolTimeoutMs: number | null;
+  effectiveTimeoutMs: number;
   toolName: string | null;
   argsHash: string | null;
   argsSummary: JsonRecord;
@@ -36,6 +37,7 @@ type ProxyOptions = {
   childArgs: string[];
   surfaceId: string | null;
   requestTimeoutMs: number;
+  toolTimeoutGraceMs: number;
   diagnosticsDir: string | null;
 };
 
@@ -43,6 +45,8 @@ const STDERR_TAIL_LIMIT = 8000;
 const STDOUT_TAIL_LIMIT = 8000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
 const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
+const DEFAULT_TOOL_TIMEOUT_GRACE_MS = 15_000;
+const MAX_HONORED_TOOL_TIMEOUT_MS = 900_000;
 const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
 const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1';
 const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
@@ -51,6 +55,7 @@ function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
   let surfaceId: string | null = null;
   let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
+  let toolTimeoutGraceMs = DEFAULT_TOOL_TIMEOUT_GRACE_MS;
   let diagnosticsDir = process.env.NARADA_MCP_RUNTIME_PROXY_DIAGNOSTICS_DIR ?? '';
   let passthroughIndex = argv.indexOf('--');
   if (passthroughIndex < 0) passthroughIndex = argv.length;
@@ -60,6 +65,7 @@ function parseArgs(argv: string[]): ProxyOptions {
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
+    else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms');
     else if (arg === '--diagnostics-dir' && prelude[index + 1]) diagnosticsDir = prelude[++index];
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
@@ -68,8 +74,19 @@ function parseArgs(argv: string[]): ProxyOptions {
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
     surfaceId,
     requestTimeoutMs,
+    toolTimeoutGraceMs,
     diagnosticsDir: diagnosticsDir ? resolve(diagnosticsDir) : defaultDiagnosticsDir(),
   };
+}
+
+// The watchdog guards against a hung child; it must never preempt a tool's own
+// declared timeout. Honor timeout_ms carried on the request (plus a grace
+// margin for the surface to return its own timeout result), bounded so a
+// declared timeout cannot disable the watchdog unboundedly.
+function effectiveRequestTimeoutMs(proxyTimeoutMs: number, requestedToolTimeoutMs: number | null, toolTimeoutGraceMs: number): number {
+  if (requestedToolTimeoutMs === null) return proxyTimeoutMs;
+  const honoredTimeoutMs = requestedToolTimeoutMs + toolTimeoutGraceMs;
+  return Math.max(proxyTimeoutMs, Math.min(MAX_HONORED_TOOL_TIMEOUT_MS, honoredTimeoutMs));
 }
 
 function createStartupTrace(
@@ -172,6 +189,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       }
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
+        const requestedToolTimeoutMs = extractRequestedToolTimeoutMs(request);
+        const effectiveTimeoutMs = effectiveRequestTimeoutMs(options.requestTimeoutMs, requestedToolTimeoutMs, options.toolTimeoutGraceMs);
         const timeoutTimer = setTimeout(() => {
           const pendingRequest = pending.get(id);
           if (!pendingRequest) return;
@@ -179,6 +198,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           rememberTimedOutRequest(timedOutRequests, id);
           recordLifecycle(pendingRequest, 'proxy_timeout', {
             proxy_request_timeout_ms: options.requestTimeoutMs,
+            effective_request_timeout_ms: pendingRequest.effectiveTimeoutMs,
             requested_tool_timeout_ms: pendingRequest.requestedToolTimeoutMs,
           });
           recordLifecycle(pendingRequest, 'child_termination_requested', { signal: 'SIGTERM' });
@@ -194,14 +214,14 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
             childBuffer,
             diagnostic: {
               code: 'child_request_timeout',
-              message: `child_request_timeout:${request.method}:${options.requestTimeoutMs}ms`,
+              message: `child_request_timeout:${request.method}:${pendingRequest.effectiveTimeoutMs}ms`,
               exitCode: null,
               signal: null,
             },
           });
           writePendingError(pendingRequest, options, {
             code: 'child_request_timeout',
-            message: `child_request_timeout:${request.method}:${options.requestTimeoutMs}ms`,
+            message: `child_request_timeout:${request.method}:${pendingRequest.effectiveTimeoutMs}ms`,
             stderrTail,
             stdoutTail,
             exitCode: null,
@@ -211,14 +231,15 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           sendCancellationToChild(child, pendingRequest, 'request timed out in mcp runtime proxy');
           recordLifecycle(pendingRequest, 'cancellation_sent');
           terminateChildAfterRequestTimeout(child, childTerminationTimers, () => childClosed);
-        }, options.requestTimeoutMs);
+        }, effectiveTimeoutMs);
         const requestMetadata = requestMetadataFor(request);
         pending.set(id, {
           id,
           method: request.method,
           framed: drained.framed,
           timeoutTimer,
-          requestedToolTimeoutMs: extractRequestedToolTimeoutMs(request),
+          requestedToolTimeoutMs,
+          effectiveTimeoutMs,
           ...requestMetadata,
           startedAt: new Date().toISOString(),
           lastProgress: null,
@@ -349,20 +370,22 @@ type ProxyDiagnostic = {
 
 function writePendingError(
   request: PendingRequest,
-  options: { entrypoint: string; surfaceId: string | null; requestTimeoutMs?: number },
+  options: { entrypoint: string; surfaceId: string | null; requestTimeoutMs?: number; toolTimeoutGraceMs?: number },
   diagnostic: ProxyDiagnostic,
 ): void {
   clearTimeout(request.timeoutTimer);
   const proxyRequestTimeoutMs = typeof options.requestTimeoutMs === 'number' ? options.requestTimeoutMs : null;
+  const toolTimeoutGraceMs = typeof options.toolTimeoutGraceMs === 'number' ? options.toolTimeoutGraceMs : DEFAULT_TOOL_TIMEOUT_GRACE_MS;
   const proxyWatchdogData = diagnostic.code === 'child_request_timeout'
     ? {
       timeout_layer: 'mcp_runtime_proxy_watchdog',
       proxy_request_timeout_ms: proxyRequestTimeoutMs,
+      effective_request_timeout_ms: request.effectiveTimeoutMs,
       requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+      tool_timeout_grace_ms: toolTimeoutGraceMs,
       surface_timeout_expected_before_proxy:
         request.requestedToolTimeoutMs !== null &&
-        proxyRequestTimeoutMs !== null &&
-        request.requestedToolTimeoutMs < proxyRequestTimeoutMs,
+        request.requestedToolTimeoutMs + toolTimeoutGraceMs <= request.effectiveTimeoutMs,
       kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
     }
     : {};
@@ -434,7 +457,7 @@ function writeForensicArtifact(input: {
   event: string;
   request: PendingRequest;
   pending: Map<string | number, PendingRequest>;
-  options: { entrypoint: string; childArgs: string[]; surfaceId: string | null; requestTimeoutMs: number; diagnosticsDir: string | null };
+  options: ProxyOptions;
   child: ReturnType<typeof spawn>;
   childIdentity: JsonRecord;
   stderrTail: string;
@@ -456,6 +479,7 @@ function writeForensicArtifact(input: {
         argv: process.argv,
         cwd: process.cwd(),
         request_timeout_ms: input.options.requestTimeoutMs,
+        tool_timeout_grace_ms: input.options.toolTimeoutGraceMs,
         kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
       },
       surface: {
@@ -496,6 +520,7 @@ function serializeRequest(request: PendingRequest): JsonRecord {
     started_at: request.startedAt,
     age_ms: Date.now() - Date.parse(request.startedAt),
     requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+    effective_request_timeout_ms: request.effectiveTimeoutMs,
     progress_token: request.progressToken,
     last_progress: request.lastProgress,
     args_hash: request.argsHash,

@@ -247,6 +247,62 @@ assert.equal(timedOut.timed_out, true);
 assert.equal(timedOut.cancelled, false);
 assert.match(String(timedOut.execution_ref), /^structured_command_execution:/);
 
+// A timed-out command must not leave descendant processes running: the
+// timeout path kills the whole child tree, not just the direct process.
+const grandchildPidFile = join(root, 'grandchild.pid');
+const timedOutTree = await exec({
+  command: 'node',
+  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
+  working_directory: root,
+  timeout_ms: 50,
+}, state);
+assert.equal(timedOutTree.status, 'timed_out');
+assert.equal(timedOutTree.timed_out, true);
+const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
+assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0, `expected grandchild pid file, got ${readFileSync(grandchildPidFile, 'utf8')}`);
+{
+  const started = Date.now();
+  let alive = true;
+  while (alive && Date.now() - started < 5000) {
+    try { process.kill(grandchildPid, 0); } catch { alive = false; }
+    if (alive) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(alive, false, `grandchild process ${grandchildPid} survived the timed-out command`);
+}
+
+// A descendant that ignores SIGTERM must not survive either: on POSIX the
+// process group gets SIGTERM and a bounded-grace SIGKILL escalation, and on
+// Windows taskkill /T /F forces the tree down regardless.
+const stubbornPidFile = join(root, 'stubborn-grandchild.pid');
+const timedOutStubbornTree = await exec({
+  command: 'node',
+  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' }); writeFileSync(${JSON.stringify(stubbornPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
+  working_directory: root,
+  timeout_ms: 50,
+}, state);
+assert.equal(timedOutStubbornTree.status, 'timed_out');
+assert.equal(timedOutStubbornTree.timed_out, true);
+const stubbornGrandchildPid = Number(readFileSync(stubbornPidFile, 'utf8'));
+assert.ok(Number.isInteger(stubbornGrandchildPid) && stubbornGrandchildPid > 0, `expected stubborn grandchild pid file, got ${readFileSync(stubbornPidFile, 'utf8')}`);
+{
+  const started = Date.now();
+  let alive = true;
+  while (alive && Date.now() - started < 5000) {
+    try { process.kill(stubbornGrandchildPid, 0); } catch { alive = false; }
+    if (alive) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(alive, false, `stubborn grandchild process ${stubbornGrandchildPid} survived the timed-out command`);
+}
+
+// The surface stays usable on the same state after a timed-out call.
+const afterTimeout = await exec({
+  command: 'node',
+  args: ['--version'],
+  working_directory: root,
+  timeout_ms: 30_000,
+}, state);
+assert.equal(afterTimeout.status, 'ok');
+
 const stateWithTinyOutput = createServerState({
   allowedRoot: root,
   allowCommand: ['node'],
