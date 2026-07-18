@@ -1043,7 +1043,6 @@ export function listPayloadTools() {
           allow_empty: { type: 'boolean', description: 'Set true only when intentionally creating an empty payload object.' },
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
-        anyOf: [{ required: ['payload'] }, { required: ['payload_json'] }],
       },
     }),
     toolDefinition({
@@ -1071,7 +1070,6 @@ export function listPayloadTools() {
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
         required: ['source_ref'],
-        anyOf: [{ required: ['overlay'] }, { required: ['overlay_json'] }],
       },
     }),
     toolDefinition({

@@ -163,11 +163,12 @@ const TOOLS = [
   },
   {
     name: 'agent_context_rehydrate',
-    description: 'Retrieve the latest site-local checkpoint or checkpoint history for an agent.',
+    description: 'Retrieve the latest site-local checkpoint, an exact current or archived checkpoint, or bounded checkpoint history for an agent.',
     inputSchema: {
       type: 'object',
       properties: {
         agent_id: { type: 'string' },
+        checkpoint_id: { type: 'string', description: 'Optional exact checkpoint ID. Searches current and archived checkpoints scoped to this agent.' },
         history: { type: 'boolean' },
         limit: { type: 'integer' },
       },
@@ -189,21 +190,23 @@ const TOOLS = [
   },
   {
     name: 'agent_context_continuation_read',
-    description: 'Read the latest continuation and verify its portable Markdown projection against the checkpoint reference and canonical content hash.',
+    description: 'Read the latest or explicitly selected continuation and verify its portable Markdown projection against the checkpoint reference and canonical content hash.',
     inputSchema: {
       type: 'object',
       properties: {
         agent_id: { type: 'string' },
+        checkpoint_id: { type: 'string', description: 'Optional exact checkpoint ID. Searches current and archived checkpoints scoped to this agent.' },
       },
       required: ['agent_id'],
     },
   },
   {
     name: 'agent_context_hydrate_current',
-    description: 'Hydrate the current site-bound session from local identity, checkpoint, and session evidence.',
+    description: 'Hydrate the current site-bound session from local identity, the latest or explicitly selected checkpoint, and session evidence.',
     inputSchema: {
       type: 'object',
       properties: {
+        checkpoint_id: { type: 'string', description: 'Optional exact checkpoint ID. Searches current and archived checkpoints scoped to this agent.' },
         checkpoint_startup: { type: 'boolean' },
         output: { type: 'string' },
       },
@@ -211,10 +214,11 @@ const TOOLS = [
   },
   {
     name: 'agent_context_startup_sequence',
-    description: 'Canonical alias for agent_context_hydrate_current.',
+    description: 'Canonical alias for agent_context_hydrate_current, including optional exact checkpoint selection.',
     inputSchema: {
       type: 'object',
       properties: {
+        checkpoint_id: { type: 'string', description: 'Optional exact checkpoint ID. Searches current and archived checkpoints scoped to this agent.' },
         checkpoint_startup: { type: 'boolean' },
         output: { type: 'string' },
       },
@@ -255,6 +259,25 @@ function toolAnnotations(name: string) {
     idempotentHint: /doctor|whoami|rehydrate|hydrate|startup|list/.test(name),
     openWorldHint: false,
   };
+}
+
+function checkpointRowForAgent(db, agentId, checkpointId) {
+  if (checkpointId !== null) {
+    const current = db.prepare(`
+      SELECT * FROM agent_checkpoints
+      WHERE agent_id = ? AND checkpoint_id = ?
+      LIMIT 1
+    `).get(agentId, checkpointId);
+    if (current) return current;
+    return db.prepare(`
+      SELECT * FROM agent_checkpoint_history
+      WHERE agent_id = ? AND checkpoint_id = ?
+      ORDER BY archived_at DESC
+      LIMIT 1
+    `).get(agentId, checkpointId);
+  }
+
+  return db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
 }
 
 function normalizeContinuation(value, checkpointId, checkpointAt) {
@@ -957,9 +980,23 @@ function checkpoint(toolArgs) {
 function rehydrate(toolArgs) {
   const agentId = requiredString(toolArgs, 'agent_id');
   assertAgentContextIdentity(agentId);
+  const checkpointId = optionalCheckpointId(toolArgs);
   const limit = Math.min(Math.max(Number(toolArgs.limit ?? 1), 1), 50);
 
   return withDb((db) => {
+    if (checkpointId !== null) {
+      const row = checkpointRowForAgent(db, agentId, checkpointId);
+      if (!row) {
+        return {
+          status: 'checkpoint_not_found',
+          agent_id: agentId,
+          checkpoint_id: checkpointId,
+          message: 'No site-local current or archived checkpoint found for the requested checkpoint_id.',
+        };
+      }
+      return { status: 'ok', ...rowToCheckpoint(row) };
+    }
+
     if (toolArgs.history === true || limit > 1) {
       const rows = db.prepare(`
         SELECT * FROM agent_checkpoint_history
@@ -975,7 +1012,7 @@ function rehydrate(toolArgs) {
       };
     }
 
-    const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
+    const row = checkpointRowForAgent(db, agentId, null);
     if (!row) {
       return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
     }
@@ -1039,12 +1076,23 @@ function continuationRead(toolArgs) {
   const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
   if (!agentId) throw new Error('agent_id_required');
   assertAgentContextIdentity(agentId);
+  const checkpointId = optionalCheckpointId(toolArgs);
 
   return withDb((db) => {
-    const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
-    if (!row) return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
+    const row = checkpointRowForAgent(db, agentId, checkpointId);
+    if (!row) {
+      return checkpointId === null
+        ? { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' }
+        : {
+            status: 'checkpoint_not_found',
+            agent_id: agentId,
+            checkpoint_id: checkpointId,
+            message: 'No site-local current or archived checkpoint found for the requested checkpoint_id.',
+          };
+    }
 
     const checkpoint = rowToCheckpoint(row);
+    const checkpointLabel = checkpointId === null ? 'latest checkpoint' : `checkpoint ${checkpointId}`;
     const base = {
       site_id: siteId,
       site_root: siteRoot,
@@ -1059,8 +1107,8 @@ function continuationRead(toolArgs) {
         ...base,
         status: checkpoint.continuation ? 'unlinked' : 'no_continuation',
         message: checkpoint.continuation
-          ? 'Canonical continuation exists but has no portable Markdown reference.'
-          : 'The latest checkpoint has no canonical continuation state.',
+          ? `Canonical continuation exists in the ${checkpointLabel} but has no portable Markdown reference.`
+          : `The ${checkpointLabel} has no canonical continuation state.`,
       };
     }
 
@@ -1154,19 +1202,25 @@ function whoami(toolArgs = {}) {
 function hydrateCurrent(toolArgs = {}) {
   const identity = process.env.NARADA_AGENT_ID ?? whoami({}).identity;
   if (!identity) return { status: 'blocked', reason: 'agent_identity_unresolved' };
+  const checkpointId = optionalCheckpointId(toolArgs);
+  const checkpointSelection = checkpointId === null ? {} : { checkpoint_id: checkpointId };
   const resolved = whoami({ hint: identity });
-  const checkpointResult = rehydrate({ agent_id: identity });
-  const portableContinuationBefore = continuationRead({ agent_id: identity });
+  const checkpointResult = rehydrate({ agent_id: identity, ...checkpointSelection });
+  const portableContinuationBefore = continuationRead({ agent_id: identity, ...checkpointSelection });
   const hydratedAt = new Date().toISOString();
   let startupCheckpoint = null;
-  if (toolArgs.checkpoint_startup === true) {
+  if (toolArgs.checkpoint_startup === true && checkpointResult.status !== 'checkpoint_not_found') {
+    const selectedCheckpointId = checkpointResult.status === 'ok'
+      ? checkpointResult.checkpoint_id
+      : checkpointId;
+    const selectedCheckpointLabel = selectedCheckpointId ? `checkpoint ${selectedCheckpointId}` : 'the latest checkpoint';
     const startupArgs = {
       agent_id: identity,
       authority_basis: {
         kind: 'startup_hydration',
-        summary: `Startup hydration checkpoint recorded at ${hydratedAt}.`,
+        summary: `Startup hydration checkpoint recorded at ${hydratedAt} from ${selectedCheckpointLabel}.`,
       },
-      tactical_resume_notes: [`Hydrated from site-local checkpoint state at ${hydratedAt}.`],
+      tactical_resume_notes: [`Hydrated from ${selectedCheckpointLabel} at ${hydratedAt}.`],
     };
     if (checkpointResult.status === 'ok' && checkpointResult.continuation) {
       startupArgs.continuation = continuationInput(checkpointResult.continuation);
@@ -1176,9 +1230,9 @@ function hydrateCurrent(toolArgs = {}) {
     }
     startupCheckpoint = checkpoint(startupArgs);
   }
-  const portableContinuation = continuationRead({ agent_id: identity });
+  const portableContinuation = continuationRead({ agent_id: identity, ...checkpointSelection });
   return {
-    status: 'ok',
+    status: checkpointResult.status === 'checkpoint_not_found' ? 'checkpoint_not_found' : 'ok',
     site_id: siteId,
     site_root: siteRoot,
     hydrated_at: hydratedAt,
@@ -1264,6 +1318,15 @@ function requiredString(value, key) {
     throw new Error(`${key}_required`);
   }
   return result;
+}
+
+function optionalCheckpointId(value) {
+  const checkpointId = value?.checkpoint_id;
+  if (checkpointId == null) return null;
+  if (typeof checkpointId !== 'string' || checkpointId.trim() === '') {
+    throw new Error('checkpoint_id_invalid');
+  }
+  return checkpointId.trim();
 }
 
 function arrayValue(value) {

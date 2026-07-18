@@ -27,7 +27,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
       { step: 'checkpoint', guidance: 'Keep operational checkpoint state authoritative; when fresh-session handoff is needed, add one bounded narada.continuation.v1 object and optionally link its Markdown projection with continuation_ref.' },
       { step: 'export', guidance: 'After checkpointing canonical continuation state, use agent_context_continuation_export to create a Site-local Markdown projection under .ai/continuations and attach its verified reference.' },
-      { step: 'consume', guidance: 'Use agent_context_continuation_read or agent_context_hydrate_current to verify the projection; stale artifacts are resume warnings, not replacements for live checkpoint state.' },
+      { step: 'consume', guidance: 'Omit checkpoint_id to use the latest checkpoint, or pass an exact checkpoint_id to agent_context_rehydrate, agent_context_continuation_read, or agent_context_hydrate_current to select current or archived state. An explicit missing ID returns checkpoint_not_found without falling back; stale artifacts are resume warnings, not replacements for live checkpoint state.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
       { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
     ],

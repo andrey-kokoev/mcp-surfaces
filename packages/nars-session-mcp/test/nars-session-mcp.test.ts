@@ -107,6 +107,23 @@ test('reports terminal request failure separately from admission status', () => 
   assert.equal(summary.outcome_reason, 'provider unavailable');
 });
 
+test('reports the latest request state after admission completes', () => {
+  const summary = summarizeInputEvents([
+    { event: 'input_event_started', request_id: 'request-2', input_event_id: 'input-2' },
+    { event: 'runtime_request_state_transition', request_id: 'request-2', request_state: 'received' },
+    { event: 'runtime_request_state_transition', request_id: 'request-2', request_state: 'scheduled' },
+    { event: 'runtime_request_state_transition', request_id: 'request-2', request_state: 'running' },
+    { event: 'runtime_request_state_transition', request_id: 'request-2', request_state: 'completed', terminal_state: 'completed' },
+    { event: 'input_event_completed', request_id: 'request-2', input_event_id: 'input-2', terminal_state: 'completed' },
+  ]);
+  assert.equal(summary.status, 'processed');
+  assert.equal(summary.admission_status, 'processed');
+  assert.equal(summary.request_state, 'completed');
+  assert.equal(summary.terminal_state, 'completed');
+  assert.equal(summary.outcome, 'completed');
+  assert.equal(summary.terminal_event, 'runtime_request_state_transition');
+});
+
 test('accepts secure websocket authorities without weakening protocol validation', () => {
   assert.equal(websocketEndpointProtocol('ws://127.0.0.1/events'), 'ws:');
   assert.equal(websocketEndpointProtocol('wss://nars.example/events'), 'wss:');

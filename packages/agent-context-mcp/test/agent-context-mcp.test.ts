@@ -117,6 +117,15 @@ try {
   const checkpointTool = tools.result.tools.find((tool) => tool.name === 'agent_context_checkpoint');
   assert.equal(checkpointTool.inputSchema.properties.continuation_ref.properties.path.type, 'string');
   assert.equal(checkpointTool.inputSchema.properties.continuation.properties.schema.const, 'narada.continuation.v1');
+  for (const toolName of [
+    'agent_context_rehydrate',
+    'agent_context_continuation_read',
+    'agent_context_hydrate_current',
+    'agent_context_startup_sequence',
+  ]) {
+    const tool = tools.result.tools.find((candidate) => candidate.name === toolName);
+    assert.equal(tool.inputSchema.properties.checkpoint_id.type, 'string');
+  }
   writeMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, '\n\n');
   const lfTools = await waitFor(3);
   assert.equal(lfTools.error, undefined);
@@ -190,17 +199,86 @@ try {
   assert.equal(rehydrateBody.payload.site_id, 'narada.revolution');
   assert.deepEqual(rehydrateBody.continuation_ref, { ...continuationRef, sha256: continuationRef.sha256.toLowerCase() });
   assert.deepEqual(rehydrateBody.continuation, checkpointBody.continuation);
-  writeMessage({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation: { ...continuation, current_state: 'A later checkpoint keeps the same canonical continuation contract.' } } } });
-  const updatedCheckpoint = await waitFor(11);
+  writeMessage({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'agent_context_continuation_export', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const initialExport = await waitFor(11);
+  assert.equal(initialExport.error, undefined);
+  const initialExportBody = JSON.parse(initialExport.result.content[0].text);
+  assert.equal(initialExportBody.status, 'exported');
+  assert.equal(initialExportBody.checkpoint_id, checkpointBody.checkpoint_id);
+  assert.equal(initialExportBody.artifact.wrote, true);
+  writeMessage({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'agent_context_checkpoint', arguments: { agent_id: 'narada-revolution.resident', continuation: { ...continuation, current_state: 'A later checkpoint keeps the same canonical continuation contract.' } } } });
+  const updatedCheckpoint = await waitFor(12);
   assert.equal(updatedCheckpoint.error, undefined);
-  writeMessage({ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident', history: true, limit: 1 } } });
-  const history = await waitFor(12);
+  writeMessage({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident', history: true, limit: 1 } } });
+  const history = await waitFor(13);
   assert.equal(history.error, undefined);
   const historyBody = JSON.parse(history.result.content[0].text);
   assert.equal(historyBody.status, 'ok');
   assert.deepEqual(historyBody.checkpoints[0].continuation, checkpointBody.continuation);
-  writeMessage({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'agent_context_continuation_export', arguments: { agent_id: 'narada-revolution.resident' } } });
-  const exported = await waitFor(13);
+  const archivedCheckpointId = historyBody.checkpoints[0].checkpoint_id;
+  assert.equal(archivedCheckpointId, checkpointBody.checkpoint_id);
+  assert.deepEqual(historyBody.checkpoints[0].continuation_ref, initialExportBody.continuation_ref);
+
+  writeMessage({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident', checkpoint_id: archivedCheckpointId, history: false } } });
+  const exactRehydrate = await waitFor(14);
+  assert.equal(exactRehydrate.error, undefined);
+  const exactRehydrateBody = JSON.parse(exactRehydrate.result.content[0].text);
+  assert.equal(exactRehydrateBody.status, 'ok');
+  assert.equal(exactRehydrateBody.checkpoint_id, archivedCheckpointId);
+  assert.deepEqual(exactRehydrateBody.continuation, checkpointBody.continuation);
+
+  writeMessage({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident', checkpoint_id: archivedCheckpointId } } });
+  const exactContinuation = await waitFor(15);
+  assert.equal(exactContinuation.error, undefined);
+  const exactContinuationBody = JSON.parse(exactContinuation.result.content[0].text);
+  assert.equal(exactContinuationBody.status, 'ok');
+  assert.equal(exactContinuationBody.checkpoint_id, archivedCheckpointId);
+  assert.equal(exactContinuationBody.artifact.verified, true);
+
+  const missingCheckpointId = `chk_${'f'.repeat(32)}`;
+  writeMessage({ jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'agent_context_rehydrate', arguments: { agent_id: 'narada-revolution.resident', checkpoint_id: missingCheckpointId } } });
+  const missingRehydrate = await waitFor(16);
+  assert.equal(missingRehydrate.error, undefined);
+  const missingRehydrateBody = JSON.parse(missingRehydrate.result.content[0].text);
+  assert.equal(missingRehydrateBody.status, 'checkpoint_not_found');
+  assert.equal(missingRehydrateBody.checkpoint_id, missingCheckpointId);
+
+  writeMessage({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident', checkpoint_id: missingCheckpointId } } });
+  const missingContinuation = await waitFor(17);
+  assert.equal(missingContinuation.error, undefined);
+  const missingContinuationBody = JSON.parse(missingContinuation.result.content[0].text);
+  assert.equal(missingContinuationBody.status, 'checkpoint_not_found');
+  assert.equal(missingContinuationBody.checkpoint_id, missingCheckpointId);
+
+  writeMessage({ jsonrpc: '2.0', id: 18, method: 'tools/call', params: { name: 'agent_context_hydrate_current', arguments: { checkpoint_id: missingCheckpointId, checkpoint_startup: true } } });
+  const missingHydrated = await waitFor(18);
+  assert.equal(missingHydrated.error, undefined);
+  const missingHydratedBody = JSON.parse(missingHydrated.result.content[0].text);
+  assert.equal(missingHydratedBody.status, 'checkpoint_not_found');
+  assert.equal(missingHydratedBody.checkpoint.checkpoint_id, missingCheckpointId);
+  assert.equal(missingHydratedBody.startup_checkpoint, null);
+
+  writeMessage({ jsonrpc: '2.0', id: 19, method: 'tools/call', params: { name: 'agent_context_hydrate_current', arguments: { checkpoint_id: archivedCheckpointId } } });
+  const exactHydrated = await waitFor(19);
+  assert.equal(exactHydrated.error, undefined);
+  let exactHydratedBody = JSON.parse(exactHydrated.result.content[0].text);
+  if (exactHydratedBody.output_ref) {
+    writeMessage({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: exactHydratedBody.output_ref, offset: 0, limit: 12000 } } });
+    const exactHydratedPage = await waitFor(20);
+    assert.equal(exactHydratedPage.error, undefined);
+    const exactHydratedPageBody = JSON.parse(exactHydratedPage.result.content[0].text);
+    exactHydratedBody = typeof exactHydratedPageBody.output_text === 'string'
+      ? JSON.parse(exactHydratedPageBody.output_text)
+      : exactHydratedPageBody;
+  }
+  assert.equal(exactHydratedBody.status, 'ok');
+  assert.equal(exactHydratedBody.checkpoint.status, 'ok');
+  assert.equal(exactHydratedBody.checkpoint.checkpoint_id, archivedCheckpointId);
+  assert.equal(exactHydratedBody.portable_continuation.status, 'ok');
+  assert.equal(exactHydratedBody.portable_continuation.checkpoint_id, archivedCheckpointId);
+
+  writeMessage({ jsonrpc: '2.0', id: 21, method: 'tools/call', params: { name: 'agent_context_continuation_export', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const exported = await waitFor(21);
   assert.equal(exported.error, undefined);
   const exportedBody = JSON.parse(exported.result.content[0].text);
   assert.equal(exportedBody.status, 'exported');
@@ -212,8 +290,8 @@ try {
   assert.match(exportedMarkdown, /narada\.continuation\.handoff\.v1/);
   assert.match(exportedMarkdown, new RegExp(exportedBody.continuation.content_hash));
 
-  writeMessage({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
-  const consumed = await waitFor(14);
+  writeMessage({ jsonrpc: '2.0', id: 22, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const consumed = await waitFor(22);
   assert.equal(consumed.error, undefined);
   const consumedBody = JSON.parse(consumed.result.content[0].text);
   assert.equal(consumedBody.status, 'ok');
@@ -222,13 +300,13 @@ try {
   assert.equal(consumedBody.continuation_ref.sha256, exportedBody.continuation_ref.sha256);
   assert.match(consumedBody.artifact.markdown, /This file is a bounded projection/);
 
-  writeMessage({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'agent_context_hydrate_current', arguments: {} } });
-  const hydrated = await waitFor(15);
+  writeMessage({ jsonrpc: '2.0', id: 23, method: 'tools/call', params: { name: 'agent_context_hydrate_current', arguments: {} } });
+  const hydrated = await waitFor(23);
   assert.equal(hydrated.error, undefined);
   let hydratedBody = JSON.parse(hydrated.result.content[0].text);
   if (hydratedBody.output_ref) {
-    writeMessage({ jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: hydratedBody.output_ref, offset: 0, limit: 12000 } } });
-    const hydratedPage = await waitFor(16);
+    writeMessage({ jsonrpc: '2.0', id: 24, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: hydratedBody.output_ref, offset: 0, limit: 12000 } } });
+    const hydratedPage = await waitFor(24);
     assert.equal(hydratedPage.error, undefined);
     const hydratedPageBody = JSON.parse(hydratedPage.result.content[0].text);
     hydratedBody = typeof hydratedPageBody.output_text === 'string'
@@ -238,8 +316,8 @@ try {
   assert.equal(hydratedBody.portable_continuation.status, 'ok');
 
   writeFileSync(exportedPath, `${exportedMarkdown}\nmutated`, 'utf8');
-  writeMessage({ jsonrpc: '2.0', id: 17, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
-  const stale = await waitFor(17);
+  writeMessage({ jsonrpc: '2.0', id: 25, method: 'tools/call', params: { name: 'agent_context_continuation_read', arguments: { agent_id: 'narada-revolution.resident' } } });
+  const stale = await waitFor(25);
   assert.equal(stale.error, undefined);
   const staleBody = JSON.parse(stale.result.content[0].text);
   assert.equal(staleBody.status, 'stale');

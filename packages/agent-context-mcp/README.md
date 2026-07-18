@@ -33,11 +33,11 @@ node packages/agent-context-mcp/dist/src/main.js --site-root D:/code/site --site
 - `agent_context_whoami`: resolve current session identity.
 - `agent_context_start_session`: validate roster identity and write a start event.
 - `agent_context_checkpoint`: write a durable checkpoint and, when needed, one bounded canonical continuation state.
-- `agent_context_rehydrate`: read latest checkpoint or checkpoint history for an agent.
+- `agent_context_rehydrate`: read the latest checkpoint, an exact current or archived checkpoint, or bounded checkpoint history for an agent.
 - `agent_context_continuation_export`: render the latest canonical continuation to a Site-local Markdown projection and attach its verified reference.
-- `agent_context_continuation_read`: verify and read the latest canonical continuation and its Markdown projection.
-- `agent_context_hydrate_current`: hydrate current session from identity, checkpoint, and session evidence.
-- `agent_context_startup_sequence`: canonical alias for `agent_context_hydrate_current`.
+- `agent_context_continuation_read`: verify and read the latest or explicitly selected canonical continuation and its Markdown projection.
+- `agent_context_hydrate_current`: hydrate current session from identity, the latest or explicitly selected checkpoint, and session evidence.
+- `agent_context_startup_sequence`: canonical alias for `agent_context_hydrate_current`, including exact checkpoint selection.
 - `agent_context_list_sessions`: list local agent start sessions.
 
 ## Checkpoint and Continuation Content
@@ -50,7 +50,9 @@ An optional `continuation_ref` links the checkpoint to a portable Markdown proje
 
 Use `agent_context_continuation_export` after checkpointing to create a projection under `.ai/continuations`. The default filename is derived from the agent and checkpoint ID; an explicit path must remain under that directory and end in `.md`. Existing projections are reused when identical, refused when different unless `overwrite: true` is explicit, and never become a second authority.
 
-Use `agent_context_continuation_read` to verify the reference, artifact size, artifact SHA-256, and the embedded canonical continuation content hash. `agent_context_hydrate_current` includes the same result as `portable_continuation`; stale projections are reported with `status: stale` while live checkpoint hydration remains available.
+Omit `checkpoint_id` to use the latest current checkpoint. Pass an exact `checkpoint_id` to `agent_context_rehydrate`, `agent_context_continuation_read`, `agent_context_hydrate_current`, or `agent_context_startup_sequence` to select current or archived state scoped to the requested agent. An explicit ID that is absent returns `checkpoint_not_found` and never silently falls back to the latest checkpoint. `agent_context_continuation_export` remains latest-only.
+
+Use `agent_context_continuation_read` to verify the selected reference, artifact size, artifact SHA-256, and the embedded canonical continuation content hash. `agent_context_hydrate_current` includes the same result as `portable_continuation`; stale projections are reported with `status: stale` while live checkpoint hydration remains available.
 
 ## Agent Guidance
 

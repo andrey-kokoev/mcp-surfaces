@@ -27,6 +27,8 @@ Payload helpers support two inbound forms for tools that explicitly allow them:
 
 The helper enforces size limits, validates JSON objects, rejects paths outside the staging directory, and records payload source metadata. Package surfaces decide which tools accept payload refs and how resolved payloads merge with top-level tool arguments.
 
+The `mcp_payload_create` and `mcp_payload_derive` tool schemas intentionally advertise their object and JSON-string routes as optional sibling fields instead of using a root `anyOf`, because some MCP clients reject that JSON Schema shape. Runtime validation still requires a valid route: use `payload` or `payload_json` for creation, and `overlay` or `overlay_json` for derivation. A JSON-string route may be accompanied by an empty object placeholder; non-empty ambiguous combinations remain rejected.
+
 Default staging path:
 
 ```text

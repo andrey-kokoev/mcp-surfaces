@@ -659,9 +659,10 @@ export function summarizeInputEvents(events: unknown[]): JsonRecord {
   const terminalReason = terminal?.reason
     ?? candidates.find((candidate) => candidate.state === terminal?.state && candidate.reason)?.reason
     ?? null;
-  const requestState = events
+  const requestStates = events
     .map((event) => requestStateFromEvent(event))
-    .find((state) => state !== null)
+    .filter((state): state is string => state !== null);
+  const requestState = requestStates.at(-1)
     ?? terminal?.state
     ?? null;
   const outcome = terminal

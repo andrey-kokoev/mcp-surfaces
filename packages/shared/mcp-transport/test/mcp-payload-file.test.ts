@@ -64,6 +64,15 @@ assert.equal(payloadTool('mcp_payload_show')?.annotations.readOnlyHint, true);
 assert.equal(payloadTool('mcp_payload_derive')?.annotations.readOnlyHint, false);
 assert.equal(payloadTool('mcp_payload_validate')?.annotations.readOnlyHint, true);
 assert.equal(payloadTool('mcp_payload_validate')?.annotations.idempotentHint, true);
+for (const tool of payloadTools) {
+  assert.equal(tool.inputSchema.anyOf, undefined, `${tool.name} must not expose root anyOf to Moonshot clients`);
+  assert.equal(tool.inputSchema.oneOf, undefined, `${tool.name} must not expose root oneOf to Moonshot clients`);
+  assert.equal(tool.inputSchema.allOf, undefined, `${tool.name} must not expose root allOf to Moonshot clients`);
+}
+assert.equal(payloadTool('mcp_payload_create')?.inputSchema.properties.payload.type, 'object');
+assert.equal(payloadTool('mcp_payload_create')?.inputSchema.properties.payload_json.type, 'string');
+assert.equal(payloadTool('mcp_payload_derive')?.inputSchema.properties.overlay.type, 'object');
+assert.equal(payloadTool('mcp_payload_derive')?.inputSchema.properties.overlay_json.type, 'string');
 
 const retentionRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-payload-retention-'));
 try {
