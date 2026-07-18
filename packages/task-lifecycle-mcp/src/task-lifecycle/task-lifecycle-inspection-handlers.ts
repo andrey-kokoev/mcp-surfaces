@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { existsSync, readFileSync } from 'node:fs';
 import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
+import { parseStoredTaskTags, parseTaskTagsValue } from '@narada2/task-governance-core/task-tags';
 
 export const TASK_LIFECYCLE_INSPECTION_TOOL_NAMES = Object.freeze([
   'task_lifecycle_show',
@@ -58,14 +59,56 @@ export function createTaskLifecycleInspectionHandlers({
       const dependencyReadback = buildTaskDependencyReadback({ store, lifecycle });
       const reviewAuthority = buildReviewAuthorityReadback({ legacyReviewRows: reviews, dependencyReadback });
       let body = null;
+      const expectedTags = spec ? parseStoredTaskTags(spec.tags_json) : [];
+      let tagProjection: Record<string, unknown> | null = spec ? {
+        status: 'not_found',
+        expected_tags: expectedTags,
+        observed_tags: null,
+        repair_required: false,
+        repair_action: null,
+      } : null;
       try {
         const taskFile = await findTaskFile(siteRoot, String(taskNumber));
         if (taskFile) {
           const fileData = await readTaskFile(taskFile.path);
           body = fileData.body;
+          if (spec) {
+            try {
+              const observedTags = parseTaskTagsValue(fileData.frontMatter.tags);
+              const coherent = JSON.stringify(observedTags) === JSON.stringify(expectedTags);
+              tagProjection = {
+                status: coherent ? 'projected' : 'stale',
+                expected_tags: expectedTags,
+                observed_tags: observedTags,
+                repair_required: !coherent,
+                repair_action: coherent
+                  ? null
+                  : 'Retry task_lifecycle_tags_update with the complete expected tag set to repair the Markdown projection.',
+              };
+            } catch (error) {
+              tagProjection = {
+                status: 'invalid',
+                expected_tags: expectedTags,
+                observed_tags: null,
+                repair_required: true,
+                repair_action: 'Retry task_lifecycle_tags_update with the complete expected tag set to replace the invalid Markdown projection.',
+                error: error instanceof Error ? error.message : String(error),
+              };
+            }
+          }
         }
-      } catch {
+      } catch (error) {
         // Missing/unreadable task files should not block SQLite-backed show.
+        if (spec) {
+          tagProjection = {
+            status: 'unreadable',
+            expected_tags: expectedTags,
+            observed_tags: null,
+            repair_required: true,
+            repair_action: 'Retry task_lifecycle_tags_update after restoring readable task projection access.',
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
       }
       return jsonToolResult({
         status: 'ok',
@@ -73,7 +116,9 @@ export function createTaskLifecycleInspectionHandlers({
         task_id: lifecycle.task_id,
         lifecycle,
         closure_authority: deriveClosureAuthority(lifecycle),
-        spec: spec ? { ...spec, target_role: routing.target_role, preferred_agent_id: routing.preferred_agent_id } : null,
+        spec: spec ? { ...spec, tags: parseStoredTaskTags(spec.tags_json), target_role: routing.target_role, preferred_agent_id: routing.preferred_agent_id } : null,
+        tag_updates: store.listTaskTagUpdates ? store.listTaskTagUpdates(lifecycle.task_id) : [],
+        tag_projection: tagProjection,
         routing,
         active_assignment: assignment ?? null,
         assignment_intents: assignmentIntents,
@@ -312,12 +357,25 @@ export function createTaskLifecycleInspectionHandlers({
         FROM observation_artifacts
         WHERE created_at >= ? AND created_at <= ?
         UNION ALL
+        SELECT 'tag_update', CAST(task_number AS TEXT), actor_agent_id, updated_at, 'updated', update_id
+        FROM task_tag_updates
+        WHERE updated_at >= ? AND updated_at <= ?
+        UNION ALL
         SELECT 'close', CAST(task_number AS TEXT), closed_by, closed_at, closure_mode, task_id
         FROM task_lifecycle
         WHERE closed_at IS NOT NULL AND closed_at >= ? AND closed_at <= ?
         ORDER BY occurred_at DESC
       `;
-      const rows = store.db.prepare(sql).all(sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal, sinceVal, untilVal);
+      const rows = store.db.prepare(sql).all(
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+        sinceVal, untilVal,
+      );
       const events = rows.map((row) => row.event_type === 'legacy_review'
         ? {
             ...row,
@@ -359,7 +417,7 @@ export function createTaskLifecycleInspectionHandlers({
       const taskNumber = numberField(args, 'task_number');
       const limit = numberField(args, 'limit') ?? 8;
       if (!taskNumber) throw new Error('task_number_required');
-      const result = findRelatedTasks({ tasksDir: join(siteRoot, '.ai', 'do-not-open', 'tasks'), targetTaskNumber: taskNumber, limit });
+      const result = findRelatedTasks({ tasksDir: join(siteRoot, '.ai', 'do-not-open', 'tasks'), targetTaskNumber: taskNumber, limit, store });
       return jsonToolResult(result);
     },
   };

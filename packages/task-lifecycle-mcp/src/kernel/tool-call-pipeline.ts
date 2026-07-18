@@ -1,5 +1,6 @@
 import { resolve } from 'path';
 import { normalizeToolName, validateArgs, validationErrorResult } from './index.js';
+import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
 
 export function createTaskLifecycleToolCaller({
   toolAliases,
@@ -186,6 +187,7 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
     'required_work',
     'non_goals',
     'acceptance_criteria',
+    'tags',
     'preferred_role',
     'target_role',
     'idempotency_key',
@@ -209,7 +211,13 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
   if (!payloadResolution.payloadSource?.ref) throw new Error('task_lifecycle_create_requires_payload_ref');
   const normalizedArgs = normalizeTaskCreatePayload(payloadResolution.args);
   validateTaskCreatePayload(normalizedArgs);
-  return { ...payloadResolution, args: normalizedArgs };
+  return {
+    ...payloadResolution,
+    args: {
+      ...normalizedArgs,
+      tags: normalizedArgs.tags === undefined ? undefined : normalizeTaskTags(normalizedArgs.tags),
+    },
+  };
 }
 
 export function normalizeTaskCreatePayload(args) {
@@ -218,6 +226,9 @@ export function normalizeTaskCreatePayload(args) {
     ...input,
     required_work: normalizeOptionalMarkdownField(input, 'required_work'),
     non_goals: normalizeOptionalMarkdownField(input, 'non_goals'),
+    // Keep raw tags through validation so malformed payloads receive the
+    // stable task_lifecycle_create_payload_tags_invalid wrapper.
+    tags: input.tags,
   };
 }
 
@@ -229,6 +240,15 @@ export function validateTaskCreatePayload(args) {
   if (!title) throw new Error('task_lifecycle_create_payload_title_required');
   if (args.acceptance_criteria !== undefined && (!Array.isArray(args.acceptance_criteria) || args.acceptance_criteria.some((item) => typeof item !== 'string'))) {
     throw new Error('task_lifecycle_create_payload_acceptance_criteria_must_be_string_array');
+  }
+  if (args.tags !== undefined) {
+    try {
+      if (!Array.isArray(args.tags)) throw new Error('task_tags_must_be_array');
+      normalizeTaskTags(args.tags);
+    } catch (error) {
+      const diagnostic = error instanceof Error ? error.message : 'invalid_tags';
+      throw new Error(`task_lifecycle_create_payload_tags_invalid:${diagnostic}`);
+    }
   }
   for (const field of ['goal', 'context', 'required_work', 'non_goals', 'preferred_role', 'target_role', 'idempotency_key']) {
     if (args[field] !== undefined && args[field] !== null && typeof args[field] !== 'string') {

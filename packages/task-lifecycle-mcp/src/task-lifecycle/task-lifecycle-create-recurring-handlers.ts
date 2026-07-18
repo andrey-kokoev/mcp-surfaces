@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
+import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
 import {
   bindTaskExecution,
   ensureTaskExecutionTables,
@@ -117,6 +118,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const context = stringField(args, 'context') || null;
       const requiredWork = stringField(args, 'required_work') || '1. TBD';
       const nonGoals = stringField(args, 'non_goals') || null;
+      const tags = normalizeTaskTags(args.tags);
       const preferredRole = stringField(args, 'preferred_role') || null;
       const targetRole = stringField(args, 'target_role') || null;
       if ((preferredRole || targetRole) && !rolesAreObligationTargets()) {
@@ -162,6 +164,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           task_id: taskId,
           file_path: filePath,
           title,
+          tags,
           idempotency_key: idempotencyKey,
           execution_binding: executionBinding,
           recovered: false,
@@ -192,6 +195,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       }
       if (targetRole) {
         frontMatterLines.push(`target_role: ${targetRole}`);
+      }
+      if (tags.length > 0) {
+        frontMatterLines.push(`tags: ${tags.join(', ')}`);
       }
       if (payloadSource.ref) {
         frontMatterLines.push(`creation_payload_ref: ${payloadSource.ref}`);
@@ -232,6 +238,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           non_goals_markdown: nonGoals,
           acceptance_criteria_json: JSON.stringify(acceptanceCriteria),
           dependencies_json: '[]',
+          tags_json: JSON.stringify(tags),
           updated_at: now,
         });
         bindTaskExecution(store, { task_id: taskId, task_number: taskNumber }, executionBinding);
@@ -261,6 +268,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         task_id: taskId,
         file_path: filePath,
         title,
+        tags,
         idempotency_key: idempotencyKey,
         execution_binding: executionBinding,
         recovered: !reservationResult.created,
@@ -284,6 +292,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (!['draft', 'active'].includes(initialStatus)) throw new Error('invalid_initial_status');
       const targetRole = stringField(args, 'target_role') || null;
       const preferredRole = stringField(args, 'preferred_role') || targetRole;
+      const tags = normalizeTaskTags(args.tags);
       if ((targetRole || preferredRole) && !rolesAreObligationTargets()) {
         return jsonToolResult(roleObligationTargetsDisabledResult({ preferredRole, targetRole }), true);
       }
@@ -320,6 +329,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         required_work_markdown: stringField(args, 'required_work') || '1. Execute the recurring task instance.',
         non_goals_markdown: stringField(args, 'non_goals') || null,
         acceptance_criteria_json: JSON.stringify(arrayOfStrings(args.acceptance_criteria, ['Complete the recurring task instance with verification evidence.'])),
+        tags,
         evidence_requirements_json: JSON.stringify(arrayOfStrings(args.evidence_requirements, [])),
         created_by: actorAgentId,
         created_at: now,
@@ -431,6 +441,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
       const filePath = join(tasksDir, `${taskId}.md`);
       const evidenceRequirements = definition.evidence_requirements;
+      const tags = normalizeTaskTags(definition.tags);
       const recurrenceContext = [
         definition.context_markdown,
         '',
@@ -457,6 +468,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         'status: opened',
         `recurring_task_id: ${recurrenceId}`,
       ];
+      if (tags.length > 0) frontMatterLines.push(`tags: ${tags.join(', ')}`);
       if (rolesAreObligationTargets() && definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
       if (rolesAreObligationTargets() && definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
       frontMatterLines.push('---');
@@ -487,6 +499,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           non_goals_markdown: definition.non_goals_markdown,
           acceptance_criteria_json: JSON.stringify(definition.acceptance_criteria),
           dependencies_json: '[]',
+          tags_json: JSON.stringify(tags),
           updated_at: now,
         });
         ensureTaskRoutingTables(store);
@@ -506,8 +519,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           recurrence_id: recurrenceId,
           task_id: taskId,
           task_number: taskNumber,
+          due_key: null,
           trigger_mode: 'manual',
-          run_reason: runReason,
+          reason: runReason,
           actor_agent_id: actorAgentId,
           authority_basis_json: JSON.stringify(authorityBasis),
           created_at: now,

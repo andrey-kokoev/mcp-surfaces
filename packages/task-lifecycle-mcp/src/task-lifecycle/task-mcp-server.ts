@@ -6,8 +6,18 @@ import { closeTaskService } from '@narada2/task-governance-core/task-close-servi
 import { searchTasksService } from '@narada2/task-governance-core/task-search-service';
 import { continueTaskService } from '@narada2/task-governance-core/task-assignment-lifecycle-service';
 import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
-import { inspectTaskEvidence, findTaskFile, readTaskFile, writeTaskProjection, allocateTaskNumbers } from '@narada2/task-governance-core/task-governance';
-import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
+import {
+  inspectTaskEvidence,
+  findTaskFile,
+  readTaskFile,
+  writeTaskProjection,
+  allocateTaskNumbers,
+  parseFrontMatter,
+  isExecutableTaskFile,
+  extractTaskNumberFromFileName,
+} from '@narada2/task-governance-core/task-governance';
+import { parseTaskSpecFromMarkdown, renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
+import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
 import { buildWorkboard } from './workboard.js';
 import { buildNextWorkContract, buildUnifiedWorkboard, deriveNextRecommendation } from './unified-workboard.js';
 import {
@@ -23,7 +33,7 @@ import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-cor
 import { randomUUID } from 'crypto';
 import { relative, resolve, join, sep } from 'path';
 import { pathToFileURL } from 'url';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'child_process';
 import { pollInboxBridge, targetInboxEnvelope, readUnprocessedEnvelopes, evaluateEnvelopeSeverity } from './inbox-bridge.js';
 import { readAdmissionLog, resolveEnvelopeStatus } from '../inbox/admission-log.js';
@@ -128,6 +138,7 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_bridge_poll',
   'task_lifecycle_inbox_target',
   'task_lifecycle_create',
+  'task_lifecycle_tags_update',
   'task_lifecycle_set_routing',
   'task_lifecycle_dependency_declare',
   'task_lifecycle_dependency_disposition_record',
@@ -416,6 +427,8 @@ function ensureRecurringTaskTables(taskStore) {
       recurrence_id TEXT PRIMARY KEY,
       status TEXT NOT NULL,
       definition_json TEXT NOT NULL,
+      last_due_key TEXT,
+      last_auto_triggered_at TEXT,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS recurring_task_events (
@@ -441,24 +454,56 @@ function ensureRecurringTaskTables(taskStore) {
     CREATE INDEX IF NOT EXISTS idx_recurring_task_definitions_status ON recurring_task_definitions(status);
     CREATE INDEX IF NOT EXISTS idx_recurring_task_runs_recurrence ON recurring_task_runs(recurrence_id, created_at DESC);
   `);
+  const columns = taskStore.db.prepare('PRAGMA table_info(recurring_task_definitions)').all();
+  if (!columns.some((column) => column.name === 'last_due_key')) {
+    taskStore.db.exec('ALTER TABLE recurring_task_definitions ADD COLUMN last_due_key TEXT;');
+  }
+  if (!columns.some((column) => column.name === 'last_auto_triggered_at')) {
+    taskStore.db.exec('ALTER TABLE recurring_task_definitions ADD COLUMN last_auto_triggered_at TEXT;');
+  }
 }
 
 function insertRecurringDefinition(taskStore, definition) {
   ensureRecurringTaskTables(taskStore);
   taskStore.db.prepare(`
-    INSERT INTO recurring_task_definitions (recurrence_id, status, definition_json, updated_at)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO recurring_task_definitions (recurrence_id, status, definition_json, last_due_key, last_auto_triggered_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(recurrence_id) DO UPDATE SET
       status = excluded.status,
       definition_json = excluded.definition_json,
+      last_due_key = excluded.last_due_key,
+      last_auto_triggered_at = excluded.last_auto_triggered_at,
       updated_at = excluded.updated_at
-  `).run(definition.recurrence_id, definition.status, JSON.stringify(definition), definition.updated_at ?? new Date().toISOString());
+  `).run(
+    definition.recurrence_id,
+    definition.status,
+    JSON.stringify(definition),
+    definition.last_due_key ?? null,
+    definition.last_auto_triggered_at ?? null,
+    definition.updated_at ?? new Date().toISOString(),
+  );
 }
 
 function hydrateRecurringDefinition(row) {
   if (!row) return null;
-  const parsed = parseJsonOrNull(row.definition_json) ?? {};
-  return { ...parsed, recurrence_id: row.recurrence_id, status: row.status, updated_at: row.updated_at };
+  const parsed = typeof row.definition_json === 'string'
+    ? (parseJsonOrNull(row.definition_json) ?? {})
+    : row;
+  return {
+    ...parsed,
+    recurrence_id: row.recurrence_id ?? parsed.recurrence_id,
+    status: row.status ?? parsed.status,
+    updated_at: row.updated_at ?? parsed.updated_at,
+    last_due_key: row.last_due_key ?? parsed.last_due_key ?? null,
+    last_auto_triggered_at: row.last_auto_triggered_at ?? parsed.last_auto_triggered_at ?? null,
+    acceptance_criteria: Array.isArray(parsed.acceptance_criteria)
+      ? parsed.acceptance_criteria
+      : parseJsonStringArray(parsed.acceptance_criteria_json),
+    evidence_requirements: Array.isArray(parsed.evidence_requirements)
+      ? parsed.evidence_requirements
+      : parseJsonStringArray(parsed.evidence_requirements_json),
+    tags: normalizeTaskTags(parsed.tags),
+  };
 }
 
 function getRecurringDefinition(taskStore, recurrenceId) {
@@ -663,6 +708,80 @@ let store = null;
 let runtimeConfigured = false;
 let runtimeStderr = process.stderr;
 
+/**
+ * Reconcile legacy Markdown task specifications into the SQLite projection
+ * before handlers begin serving reads or mutations. SQLite remains
+ * authoritative once a spec exists: a non-empty Markdown tag set is imported
+ * only when the database row is missing/empty and has no tag-update history,
+ * which preserves an intentional audited clear.
+ */
+function backfillTaskSpecsFromTaskFiles() {
+  if (!siteRoot || !store) return 0;
+  const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
+  if (!existsSync(tasksDir)) return 0;
+
+  const filesByNumber = new Map();
+  for (const file of readdirSync(tasksDir)) {
+    if (!isExecutableTaskFile(file)) continue;
+    const taskNumber = extractTaskNumberFromFileName(file);
+    if (taskNumber === null) continue;
+    if (filesByNumber.has(taskNumber)) {
+      filesByNumber.set(taskNumber, null);
+    } else {
+      filesByNumber.set(taskNumber, file);
+    }
+  }
+
+  let backfilled = 0;
+  for (const [taskNumber, file] of filesByNumber) {
+    if (!file) continue;
+    const lifecycle = store.getLifecycleByNumber(taskNumber);
+    if (!lifecycle) continue;
+    try {
+      const { frontMatter, body } = parseFrontMatter(readFileSync(join(tasksDir, file), 'utf8'));
+      const parsed = parseTaskSpecFromMarkdown({
+        taskId: lifecycle.task_id,
+        taskNumber,
+        frontMatter,
+        body,
+      });
+      const existing = store.getTaskSpec(lifecycle.task_id);
+      if (!existing) {
+        store.upsertTaskSpec({
+          task_id: parsed.task_id,
+          task_number: parsed.task_number,
+          title: parsed.title,
+          chapter_markdown: parsed.chapter,
+          goal_markdown: parsed.goal,
+          context_markdown: parsed.context,
+          required_work_markdown: parsed.required_work,
+          non_goals_markdown: parsed.non_goals,
+          acceptance_criteria_json: JSON.stringify(parsed.acceptance_criteria),
+          dependencies_json: JSON.stringify(parsed.dependencies),
+          tags_json: JSON.stringify(parsed.tags),
+          updated_at: parsed.updated_at,
+        });
+        backfilled += 1;
+        continue;
+      }
+
+      const hasTagHistory = store.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
+      if (parseStoredTaskTags(existing.tags_json).length === 0 && parsed.tags.length > 0 && !hasTagHistory) {
+        // Import only the legacy projection's labels. Preserve all other
+        // SQLite-backed authored fields and its existing timestamp.
+        store.upsertTaskSpec({
+          ...existing,
+          tags_json: JSON.stringify(parsed.tags),
+        });
+        backfilled += 1;
+      }
+    } catch (error) {
+      runtimeStderr.write(`Task tag/spec backfill skipped ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+  return backfilled;
+}
+
 export function configureTaskLifecycleMcpRuntime({
   argv = process.argv.slice(2),
   cwd = process.cwd(),
@@ -683,6 +802,7 @@ export function configureTaskLifecycleMcpRuntime({
     store = openTaskLifecycleStore(siteRoot);
     ensureTaskExecutionTables(store);
     ensureDownstreamDependencyOutcomeContracts();
+    backfillTaskSpecsFromTaskFiles();
   } catch (error) {
     throw new Error(`Failed to open task lifecycle store: ${error.message}`);
   }
@@ -708,6 +828,7 @@ function refreshStore() {
     store = openTaskLifecycleStore(siteRoot);
     ensureTaskExecutionTables(store);
     ensureDownstreamDependencyOutcomeContracts();
+    backfillTaskSpecsFromTaskFiles();
     return true;
   } catch (error) {
     runtimeStderr.write(`Failed to refresh task lifecycle store: ${error.message}\n`);
@@ -3060,6 +3181,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
   const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
   const filePath = join(tasksDir, `${taskId}.md`);
   const evidenceRequirements = definition.evidence_requirements;
+  const tags = normalizeTaskTags(definition.tags);
   const triggerLabel = triggerMode === 'schedule' ? 'Scheduled run reason' : 'Manual run reason';
   const recurrenceContext = [
     definition.context_markdown,
@@ -3091,6 +3213,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
     `recurring_trigger_mode: ${triggerMode}`,
   ];
   if (dueKey) frontMatterLines.push(`recurring_due_key: ${dueKey}`);
+  if (tags.length > 0) frontMatterLines.push(`tags: ${tags.join(', ')}`);
   if (rolesAreObligationTargets && definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
   if (rolesAreObligationTargets && definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
   frontMatterLines.push('---');
@@ -3132,6 +3255,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
       non_goals_markdown: definition.non_goals_markdown,
       acceptance_criteria_json: JSON.stringify(definition.acceptance_criteria),
       dependencies_json: '[]',
+      tags_json: JSON.stringify(tags),
       updated_at: nowIso,
     });
     ensureTaskRoutingTables(store);
@@ -3151,8 +3275,9 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
       recurrence_id: definition.recurrence_id,
       task_id: taskId,
       task_number: taskNumber,
+      due_key: dueKey,
       trigger_mode: triggerMode,
-      run_reason: runReason,
+      reason: runReason,
       actor_agent_id: actorAgentId,
       authority_basis_json: JSON.stringify(authorityBasis),
       created_at: nowIso,

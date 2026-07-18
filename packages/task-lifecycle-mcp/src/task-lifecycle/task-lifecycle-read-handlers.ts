@@ -1,4 +1,5 @@
 import { DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT } from '../mcp-payload-file.js';
+import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
 
 export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
   'task_lifecycle_list',
@@ -18,11 +19,18 @@ export function createTaskLifecycleReadHandlers({
     task_lifecycle_list: (args) => {
       const statusFilter = stringField(args, 'status');
       const agentFilter = stringField(args, 'agent_id');
-      const limit = numberField(args, 'limit') ?? 50;
-      const rows = store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC LIMIT ?').all(limit);
+      const limit = Math.max(1, Math.min(numberField(args, 'limit') ?? 50, 200));
+      const tagFilter = normalizeTaskTags(args?.tags);
+      const tagMatch = stringField(args, 'tag_match') ?? 'all';
+      if (!['any', 'all'].includes(tagMatch)) throw new Error('tag_match_must_be_any_or_all');
+      const needsFullScan = Boolean(statusFilter || agentFilter || tagFilter.length > 0);
+      const rows = needsFullScan
+        ? store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC').all()
+        : store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC LIMIT ?').all(limit);
       const tasks = rows.map((row) => {
         const spec = store.getTaskSpec(row.task_id);
         const assignment = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(row.task_id);
+        const tags = parseStoredTaskTags(spec?.tags_json);
         return {
           task_number: row.task_number,
           task_id: row.task_id,
@@ -30,15 +38,21 @@ export function createTaskLifecycleReadHandlers({
           title: spec?.title ?? null,
           assigned_to: assignment?.agent_id ?? null,
           claimed_at: assignment?.claimed_at ?? null,
+          tags,
           updated_at: row.updated_at,
         };
       });
       const filtered = tasks.filter((task) => {
         if (statusFilter && task.status !== statusFilter) return false;
         if (agentFilter && task.assigned_to !== agentFilter) return false;
+        if (tagFilter.length > 0) {
+          const matches = tagFilter.filter((tag) => task.tags.includes(tag)).length;
+          if (tagMatch === 'all' && matches !== tagFilter.length) return false;
+          if (tagMatch === 'any' && matches === 0) return false;
+        }
         return true;
-      });
-      return jsonToolResult({ status: 'ok', count: filtered.length, tasks: filtered });
+      }).slice(0, limit);
+      return jsonToolResult({ status: 'ok', count: filtered.length, filters: { status: statusFilter ?? null, agent_id: agentFilter ?? null, tags: tagFilter, tag_match: tagMatch }, tasks: filtered });
     },
     task_lifecycle_roster: () => {
       const roster = store.getRoster();
@@ -83,6 +97,7 @@ function taskLifecycleGuidance({ workflow, tool, sitePolicy }) {
       'Call task_lifecycle_guidance when you first see a lifecycle task, when a refusal is unclear, or before recovering from incomplete task evidence.',
       'Inspect the task before mutation; claim only when authorized; submit execution notes, verification, changed-file evidence, and closeout through lifecycle tools.',
       'Use payload_ref for long companion fields and preserve structuredContent as authoritative lifecycle evidence.',
+      'Use task_lifecycle_tags_update for audited site-local labels; tags are descriptive and never replace routing, authorization, priority, dependency, review, or closure state.',
     ],
     sections: selectedSections,
     first_use_decision_tree: taskLifecycleFirstUseDecisionTree(),
@@ -186,6 +201,17 @@ function taskLifecycleHappyPathExamples() {
         changed_files: ['packages/example/src/main.ts'],
       },
     },
+    tags: {
+      intent: 'Maintain small, site-local descriptive labels for discovery and related-task suggestions.',
+      canonical_sequence: ['task_lifecycle_show or task_lifecycle_list', 'task_lifecycle_tags_update with the complete desired tag set and a reason', 're-read task_lifecycle_show to inspect the audited update'],
+      semantics: {
+        normalization: 'Tags are trimmed, lowercased, converted to kebab-case, deduplicated, and bounded to 20 tags of at most 64 characters each.',
+        scope: 'Tags belong to this Site only.',
+        authority: 'The active task owner or an architect/operator may update them.',
+        boundaries: 'Tags never affect authorization, routing, priority, dependencies, review, or closure.',
+        relatedness: 'Explicit overlap is preferred; derived title/goal/context terms are only a fallback for untagged or legacy tasks.',
+      },
+    },
     ordinary_submit_work_auto_materialized: {
       tool: 'task_lifecycle_submit_work',
       use_when: 'execution_notes, verification, summary, or changed_files are too long for inline transport and you want one governed call instead of a separate mcp_payload_create call',
@@ -230,6 +256,7 @@ function taskLifecycleAntiPatterns() {
     { mistake: 'Omitting changed_files and no_files_changed.', correction: 'Provide changed-file evidence or explicitly declare no_files_changed.' },
     { mistake: 'Treating generated reports, review artifacts, or model narration as self-authorizing closure.', correction: 'Use lifecycle readback: outcome, evidence verdict, dependencies, and closure status.' },
     { mistake: 'Forcing authority_basis to bypass routing without real operator/task-owner authority.', correction: 'Only use authority_basis when the authority exists and can be summarized truthfully.' },
+    { mistake: 'Using tags to imply ownership, urgency, dependency, review, or closure.', correction: 'Treat tags as descriptive site-local labels and use the authoritative lifecycle/routing fields for state and authority.' },
   ];
 }
 
@@ -240,6 +267,7 @@ function taskLifecycleRecoveryGuidance() {
     { failure: 'Evidence rejected or acceptance criteria unchecked.', action: 'Fix task notes, verification, changed-file/no-files evidence, and criteria proof before retrying finish.' },
     { failure: 'Review or dependency is blocking closure.', action: 'Find the dependency task or review obligation, finish it with the required outcome, then re-check parent dependency satisfaction.' },
     { failure: 'Tool result is ambiguous or live MCP seems stale after source edits.', action: 'Record the observed result exactly, verify source with focused tests, and request/rely on carrier restart before claiming live behavior changed.' },
+    { failure: 'Tag update is refused.', action: 'Re-read the task, use the active task owner or an architect/operator identity, pass the complete normalized tag set, and include a concise reason.' },
   ];
 }
 
@@ -376,6 +404,10 @@ function taskLifecycleToolGuidance(tool) {
       preferred_for: 'Taking responsibility for unassigned work.',
       caveat: 'Use authority_basis when crossing role, preferred-agent, or operator gates.',
     },
+    task_lifecycle_tags_update: {
+      preferred_for: 'Replacing a task\'s complete site-local tag set with an auditable before/after record.',
+      caveat: 'Pass the complete desired set, including [] to clear tags. Tags do not route, prioritize, authorize, review, or close work.',
+    },
   };
   return guidance[tool] ?? {
     preferred_for: null,
@@ -422,6 +454,7 @@ function taskLifecyclePayloadSchemas() {
         required_work: '<markdown string or string[] normalized to newline markdown>',
         non_goals: '<markdown string or string[] normalized to newline markdown>',
         acceptance_criteria: ['string criteria item'],
+        tags: ['incident', 'mcp-surface'],
         preferred_role: '<optional role>',
         target_role: '<optional role>',
         idempotency_key: '<stable retry key; omitted values derive from payload_ref>',
@@ -435,7 +468,7 @@ function taskLifecyclePayloadSchemas() {
         { payload: { title: 'Fix thing', required_work: ['Inspect failure.', 'Patch narrowly.'], non_goals: ['No unrelated refactor.'], acceptance_criteria: ['Focused test passes.'] } },
       ],
       payload_ref_required: true,
-      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'preferred_role', 'target_role', 'idempotency_key', 'execution_binding'],
+      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'tags', 'preferred_role', 'target_role', 'idempotency_key', 'execution_binding'],
       normalized_fields: { required_work: 'string[] joins with newline after trimming empty entries', non_goals: 'string[] joins with newline after trimming empty entries' },
     },
     task_lifecycle_admit_evidence: {

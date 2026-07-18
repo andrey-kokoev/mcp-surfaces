@@ -1,11 +1,13 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
 
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_submit_observation",
   "task_lifecycle_evidence_supersede",
   "task_lifecycle_bridge_poll",
   "task_lifecycle_inbox_target",
+  "task_lifecycle_tags_update",
   "task_lifecycle_set_routing",
   "task_lifecycle_test_mcp_tool",
   "task_lifecycle_run_tests"
@@ -155,6 +157,73 @@ export function createTaskLifecycleOperationsHandlers(context) {
       const reason = stringField(args, 'reason');
       const result = await targetInboxEnvelope(siteRoot, { envelopeId, dryRun, disposition, principal, reason });
       return jsonToolResult(result, result.status === 'not_found');
+    }
+
+    case 'task_lifecycle_tags_update': {
+      const taskNumber = numberField(args, 'task_number');
+      const agentId = stringField(args, 'agent_id');
+      const reason = stringField(args, 'reason');
+      if (!taskNumber) throw new Error('task_number_required');
+      if (!agentId) throw new Error('agent_id_required');
+      if (!reason) throw new Error('reason_required');
+      if (!Array.isArray(args.tags)) throw new Error('task_tags_must_be_array');
+      const tags = normalizeTaskTags(args.tags);
+      enforceSessionIdentity(agentId);
+      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+      const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+      const actorRole = roleResolution.role;
+      const activeAssignment = store.getActiveAssignment(lifecycle.task_id);
+      const isTaskOwner = activeAssignment?.agent_id === agentId;
+      const isOperator = actorRole === 'architect' || actorRole === 'operator';
+      if (!isTaskOwner && !isOperator) {
+        return jsonToolResult({
+          schema: 'narada.task.tags.v0',
+          status: 'blocked',
+          reason: 'tag_update_actor_not_authorized',
+          task_number: taskNumber,
+          task_id: lifecycle.task_id,
+          actor_agent_id: agentId,
+          actor_role: actorRole,
+          role_resolution: roleResolution,
+          active_assignment_agent_id: activeAssignment?.agent_id ?? null,
+          message: 'Tag updates are allowed for the active task owner or an architect/operator; tags do not alter task routing or authorization.',
+        }, true);
+      }
+      const result = store.replaceTaskTags({
+        taskId: lifecycle.task_id,
+        tags,
+        actorAgentId: agentId,
+        reason,
+        updateId: `tag-${randomUUID()}`,
+      });
+      let projectionStatus = 'not_found';
+      let projectionError = null;
+      try {
+        const taskFile = await findTaskFile(siteRoot, taskNumber);
+        if (taskFile) {
+          const { frontMatter, body } = await readTaskFile(taskFile.path);
+          if (result.tags.length > 0) frontMatter.tags = result.tags.join(', ');
+          else delete frontMatter.tags;
+          await writeTaskProjection(taskFile.path, frontMatter, body);
+          projectionStatus = 'projected';
+        }
+      } catch (error) {
+        projectionStatus = 'failed';
+        projectionError = error instanceof Error ? error.message : String(error);
+      }
+      return jsonToolResult({
+        schema: 'narada.task.tags.v0',
+        ...result,
+        actor_role: actorRole,
+        active_assignment_agent_id: activeAssignment?.agent_id ?? null,
+        projection_status: projectionStatus,
+        projection_repair_required: projectionStatus === 'failed',
+        projection_error: projectionError,
+        projection_repair_action: projectionStatus === 'failed'
+          ? 'Retry task_lifecycle_tags_update with the same complete tag set after resolving the projection error.'
+          : null,
+      });
     }
 
     case 'task_lifecycle_set_routing': {

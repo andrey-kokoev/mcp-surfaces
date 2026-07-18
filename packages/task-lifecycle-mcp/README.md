@@ -43,6 +43,13 @@ Inspection and workboard:
 - `task_lifecycle_search`
 - `task_lifecycle_related`
 
+Descriptive site-local tags:
+
+- `task_lifecycle_tags_update` replaces the complete tag set and records an audit event with the before/after values, actor, reason, and timestamp.
+- `task_lifecycle_list` accepts `tags` plus `tag_match: "any" | "all"`; `task_lifecycle_show` returns normalized `tags` and recent tag updates.
+- Tags are trimmed, lowercased kebab-case labels, limited to 20 per task and 64 characters per label. They are discovery metadata only: they never authorize, route, prioritize, create dependencies, affect review, or close work.
+- `task_lifecycle_related` prefers explicit tag overlap and falls back to derived title/goal/context terms for untagged or legacy tasks.
+
 Assignment and routing:
 
 - `task_lifecycle_roster_admit`
