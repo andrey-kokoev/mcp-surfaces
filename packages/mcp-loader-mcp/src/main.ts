@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { loaderRuntimeLifecycle, loaderSupervisorRestartAction } from './runtime-lifecycle.js';
-import { DEFAULT_TOOL_CALL_TIMEOUT_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
+import { DEFAULT_TOOL_CALL_TIMEOUT_MS, DEFAULT_TOOL_TIMEOUT_GRACE_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
 
 const MCP_SURFACES_ROOT = normalizePath(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..'));
 const MCP_WORKSPACE_ROOT = normalizePath(resolve(MCP_SURFACES_ROOT, '..'));
@@ -394,6 +394,7 @@ type LoaderPolicy = {
   maxResponseBytes: number;
   attachTimeoutMs: number;
   toolCallTimeoutMs: number;
+  toolCallGraceMs: number;
 };
 
 type ChildConnection = {
@@ -439,7 +440,8 @@ export function createServerState(options: JsonRecord = {}): LoaderState {
     maxRequestBytes: integer(options.maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES, 4096, 16 * 1024 * 1024),
     maxResponseBytes: integer(options.maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES, 4096, 64 * 1024 * 1024),
     attachTimeoutMs: integer(options.attachTimeoutMs, DEFAULT_ATTACH_TIMEOUT_MS, 1000, 300000),
-    toolCallTimeoutMs: integer(options.toolCallTimeoutMs, DEFAULT_TOOL_CALL_TIMEOUT_MS, 1000, 600000),
+    toolCallTimeoutMs: integer(options.toolCallTimeoutMs, DEFAULT_TOOL_CALL_TIMEOUT_MS, 1000, 900000),
+    toolCallGraceMs: integer(options.toolCallGraceMs, DEFAULT_TOOL_TIMEOUT_GRACE_MS, 0, 60000),
   };
   return { policy, connections: new Map() };
 }
@@ -519,7 +521,7 @@ export function listTools() {
     tool('mcp_loader_tool_discovery_manifest', 'Return canonical semantic tool names for an attached surface and flag generated aliases as non-authoritative.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
-    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface. If the nested arguments include timeout_ms, the loader honors it up to its bounded maximum.', {
+    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface. If the nested arguments include timeout_ms, the loader honors it up to its bounded maximum and waits an additional bounded grace (--tool-timeout-grace-ms, default 1000 ms) so the tool can return its own bounded timeout result.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       tool_name: { type: 'string', description: 'Tool name on the attached surface.' },
       arguments: { type: 'object', description: 'Arguments object for the tool call.' },
@@ -885,7 +887,7 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
   const toolName = requiredString(args.tool_name, 'missing_tool_name');
   const toolArgs = asRecord(args.arguments);
   enforceRequestSize(toolArgs, state.policy.maxRequestBytes);
-  const timeout = resolveToolCallTimeoutMs(toolArgs.timeout_ms, state.policy.toolCallTimeoutMs);
+  const timeout = resolveToolCallTimeoutMs(toolArgs.timeout_ms, state.policy.toolCallTimeoutMs, state.policy.toolCallGraceMs);
   if (timeout.status === 'refused') {
     const code = timeout.reason === 'exceeds_loader_max'
       ? 'tool_call_timeout_exceeds_loader_max'
@@ -895,7 +897,12 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
       max_timeout_ms: timeout.maxTimeoutMs,
     });
   }
-  const result = await sendChildRequest(connection, 'tools/call', { name: toolName, arguments: toolArgs }, timeout.timeoutMs);
+  const childParams = {
+    name: toolName,
+    arguments: toolArgs,
+    ...(timeout.source === 'tool_request' ? { _meta: { narada_request_timeout_ms: timeout.timeoutMs } } : {}),
+  };
+  const result = await sendChildRequest(connection, 'tools/call', childParams, timeout.outerTimeoutMs);
   const enrichedResult = enrichAttachedGuidanceResult(result, toolName, connection);
   enforceResponseSize(enrichedResult, state.policy.maxResponseBytes);
   return {
@@ -1584,6 +1591,7 @@ export function parseArgs(argv: string[]) {
     else if (arg === '--max-response-bytes') options.maxResponseBytes = argv[++i];
     else if (arg === '--attach-timeout-ms') options.attachTimeoutMs = argv[++i];
     else if (arg === '--tool-call-timeout-ms') options.toolCallTimeoutMs = argv[++i];
+    else if (arg === '--tool-timeout-grace-ms') options.toolCallGraceMs = argv[++i];
   }
   return options;
 }

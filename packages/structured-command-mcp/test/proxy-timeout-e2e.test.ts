@@ -55,6 +55,7 @@ try {
   // (1000ms + 3000ms grace) instead of the 1000ms proxy watchdog.
   const timedResponse = await proxy.client.request(3, 'tools/call', {
     name: 'structured_command_execute',
+    _meta: { narada_request_timeout_ms: 1000 },
     arguments: {
       command: 'node',
       args: ['-e', 'setTimeout(() => {}, 30000)'],

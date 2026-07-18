@@ -86,8 +86,8 @@ try {
   assert.equal(timeoutResponse.error.data.timeout_layer, 'mcp_runtime_proxy_watchdog');
   assert.equal(timeoutResponse.error.data.proxy_request_timeout_ms, 100);
   assert.equal(timeoutResponse.error.data.effective_request_timeout_ms, 100);
-  assert.equal(timeoutResponse.error.data.requested_tool_timeout_ms, 5);
-  assert.equal(timeoutResponse.error.data.surface_timeout_expected_before_proxy, true);
+  assert.equal(timeoutResponse.error.data.requested_transport_timeout_ms, null);
+  assert.equal(timeoutResponse.error.data.surface_timeout_expected_before_proxy, false);
   assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
   assert.equal(typeof timeoutResponse.error.data.forensic_artifact_path, 'string');
   assert.match(timeoutResponse.error.data.forensic_artifact_path, /silent-surface/);
@@ -106,7 +106,7 @@ try {
   assert.equal(artifact.request.id, 'slow-1');
   assert.equal(artifact.request.method, 'tools/call');
   assert.equal(artifact.request.tool_name, 'slow_read');
-  assert.equal(artifact.request.requested_tool_timeout_ms, 5);
+  assert.equal(artifact.request.requested_transport_timeout_ms, 5);
   assert.equal(typeof artifact.request.args_hash, 'string');
   assert.equal(artifact.request.args_summary.timeout_ms, 5);
   assert.equal(artifact.pending_requests.length, 0);
@@ -155,13 +155,13 @@ try {
   let honoredStdout = '';
   honoredProxy.stdout.setEncoding('utf8');
   honoredProxy.stdout.on('data', (chunk) => { honoredStdout += chunk; });
-  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-1', method: 'tools/call', params: { name: 'slow_tool', arguments: { timeout_ms: 300 } } })}\n`);
+  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-1', method: 'tools/call', params: { name: 'slow_tool', arguments: {}, _meta: { narada_request_timeout_ms: 300 } } })}\n`);
   await waitForOutput(() => honoredStdout.includes('"honored-1"'), 2000);
   const honoredResponse = JSON.parse(honoredStdout.trim());
   assert.equal(honoredResponse.id, 'honored-1');
   assert.equal(honoredResponse.result.content[0].text, 'slow-ok-honored-1');
   honoredStdout = '';
-  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-2', method: 'tools/call', params: { name: 'slow_tool', arguments: { timeout_ms: 300 } } })}\n`);
+  honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-2', method: 'tools/call', params: { name: 'slow_tool', arguments: {}, _meta: { narada_request_timeout_ms: 300 } } })}\n`);
   await waitForOutput(() => honoredStdout.includes('"honored-2"'), 2000);
   assert.equal(JSON.parse(honoredStdout.trim()).result.content[0].text, 'slow-ok-honored-2');
   honoredProxy.kill();
@@ -184,14 +184,14 @@ try {
   let honoredSilentStdout = '';
   honoredSilentProxy.stdout.setEncoding('utf8');
   honoredSilentProxy.stdout.on('data', (chunk) => { honoredSilentStdout += chunk; });
-  honoredSilentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-slow-1', method: 'tools/call', params: { name: 'slow_read', arguments: { timeout_ms: 200 } } })}\n`);
+  honoredSilentProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-slow-1', method: 'tools/call', params: { name: 'slow_read', arguments: {}, _meta: { narada_request_timeout_ms: 200 } } })}\n`);
   const honoredSilentExitCode = await new Promise<number | null>((resolve) => honoredSilentProxy.on('close', resolve));
   assert.notEqual(honoredSilentExitCode, 0);
   const honoredSilentResponse = JSON.parse(honoredSilentStdout.trim());
   assert.equal(honoredSilentResponse.id, 'honored-slow-1');
   assert.equal(honoredSilentResponse.error.data.code, 'child_request_timeout');
   assert.equal(honoredSilentResponse.error.data.proxy_request_timeout_ms, 100);
-  assert.equal(honoredSilentResponse.error.data.requested_tool_timeout_ms, 200);
+  assert.equal(honoredSilentResponse.error.data.requested_transport_timeout_ms, 200);
   assert.equal(honoredSilentResponse.error.data.effective_request_timeout_ms, 250);
   assert.equal(honoredSilentResponse.error.data.surface_timeout_expected_before_proxy, true);
 

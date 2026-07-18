@@ -596,13 +596,21 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
     let timedOut = false;
     let cancelled = false;
     let settled = false;
+    let terminationPromise: Promise<void> | null = null;
+    const terminate = () => {
+      terminationPromise ??= killChildProcessTree(child);
+      return terminationPromise;
+    };
     const timer = setTimeout(() => {
+      if (cancelled || settled) return;
       timedOut = true;
-      killChildProcessTree(child);
+      void terminate();
     }, timeoutMs);
     const abortHandler = () => {
+      if (timedOut || settled) return;
       cancelled = true;
-      killChildProcessTree(child);
+      clearTimeout(timer);
+      void terminate();
     };
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout.on('data', (chunk) => {
@@ -620,7 +628,7 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
       settled = true;
       clearTimeout(timer);
       abortSignal?.removeEventListener('abort', abortHandler);
-      resolvePromise({
+      const result = {
         exit_code: null,
         stdout,
         stderr: `${stderr}${stderr ? '\n' : ''}${error.message}`,
@@ -628,14 +636,15 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
         stderr_truncated: stderrTruncated,
         timed_out: timedOut,
         cancelled,
-      });
+      };
+      void (terminationPromise ?? Promise.resolve()).then(() => resolvePromise(result));
     });
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       abortSignal?.removeEventListener('abort', abortHandler);
-      resolvePromise({
+      const result = {
         exit_code: code,
         stdout,
         stderr,
@@ -643,7 +652,8 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
         stderr_truncated: stderrTruncated,
         timed_out: timedOut,
         cancelled,
-      });
+      };
+      void (terminationPromise ?? Promise.resolve()).then(() => resolvePromise(result));
     });
   });
 }
@@ -651,8 +661,9 @@ function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxO
 // Bounded grace between process-group SIGTERM and the SIGKILL escalation for
 // descendants that ignore SIGTERM (POSIX only; Windows uses taskkill /T /F).
 const POSIX_KILL_GRACE_MS = 1_000;
+const POSIX_KILL_FORCE_WAIT_MS = 5_000;
 
-function killChildProcessTree(child: ReturnType<typeof spawn>): void {
+async function killChildProcessTree(child: ReturnType<typeof spawn>): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) {
     try { child.kill(); } catch { /* process already exited */ }
@@ -662,13 +673,30 @@ function killChildProcessTree(child: ReturnType<typeof spawn>): void {
     // child.kill() terminates only the direct process on Windows; taskkill /T
     // terminates the full descendant tree so a timed-out command cannot leave
     // grandchildren running.
-    try {
-      const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-      killer.on('error', () => { try { child.kill(); } catch { /* process already exited */ } });
-      killer.unref();
-    } catch {
-      try { child.kill(); } catch { /* process already exited */ }
-    }
+    await new Promise<void>((resolve) => {
+      try {
+        const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
+        killer.once('error', () => {
+          try { child.kill(); } catch { /* process already exited */ }
+          finish();
+        });
+        killer.once('close', (code) => {
+          if (code !== 0) {
+            try { child.kill(); } catch { /* process already exited */ }
+          }
+          finish();
+        });
+      } catch {
+        try { child.kill(); } catch { /* process already exited */ }
+        resolve();
+      }
+    });
     return;
   }
   // The child was spawned detached, so it leads its own process group; signal
@@ -679,20 +707,32 @@ function killChildProcessTree(child: ReturnType<typeof spawn>): void {
     try { child.kill(); } catch { /* process already exited */ }
     return;
   }
-  // Descendants can ignore SIGTERM: after a bounded grace period escalate the
-  // whole group to SIGKILL, but only while the group still has members. The
-  // timer is unref'd so escalation never keeps this server process alive.
-  const escalation = setTimeout(() => {
-    try {
-      process.kill(-pid, 0);
-    } catch {
-      return; // Process group is gone; nothing left to escalate.
-    }
-    try {
-      process.kill(-pid, 'SIGKILL');
-    } catch { /* group exited between the probe and the kill */ }
-  }, POSIX_KILL_GRACE_MS);
-  escalation.unref();
+  // Descendants can ignore SIGTERM. Wait for the bounded grace period, then
+  // escalate the whole group and wait for the group to disappear before the
+  // structured timeout result is returned.
+  if (await waitForProcessGroupExit(pid, POSIX_KILL_GRACE_MS)) return;
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch { /* group exited between the probe and the kill */ }
+  await waitForProcessGroupExit(pid, POSIX_KILL_FORCE_WAIT_MS);
+}
+
+async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (processGroupExists(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
+function processGroupExists(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
 }
 
 export async function executeStructuredCommandElevatedWindow(args, state) {

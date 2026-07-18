@@ -22,7 +22,7 @@ type PendingRequest = {
   method: string;
   framed: boolean;
   timeoutTimer: NodeJS.Timeout;
-  requestedToolTimeoutMs: number | null;
+  requestedTransportTimeoutMs: number | null;
   effectiveTimeoutMs: number;
   toolName: string | null;
   argsHash: string | null;
@@ -46,7 +46,8 @@ const STDOUT_TAIL_LIMIT = 8000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 240_000;
 const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
 const DEFAULT_TOOL_TIMEOUT_GRACE_MS = 15_000;
-const MAX_HONORED_TOOL_TIMEOUT_MS = 900_000;
+const MAX_TRANSPORT_TIMEOUT_MS = 900_000;
+const MAX_TOOL_TIMEOUT_GRACE_MS = 60_000;
 const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
 const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1';
 const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
@@ -65,7 +66,7 @@ function parseArgs(argv: string[]): ProxyOptions {
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
-    else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms');
+    else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms', MAX_TOOL_TIMEOUT_GRACE_MS);
     else if (arg === '--diagnostics-dir' && prelude[index + 1]) diagnosticsDir = prelude[++index];
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
@@ -79,14 +80,15 @@ function parseArgs(argv: string[]): ProxyOptions {
   };
 }
 
-// The watchdog guards against a hung child; it must never preempt a tool's own
-// declared timeout. Honor timeout_ms carried on the request (plus a grace
-// margin for the surface to return its own timeout result), bounded so a
-// declared timeout cannot disable the watchdog unboundedly.
-function effectiveRequestTimeoutMs(proxyTimeoutMs: number, requestedToolTimeoutMs: number | null, toolTimeoutGraceMs: number): number {
-  if (requestedToolTimeoutMs === null) return proxyTimeoutMs;
-  const honoredTimeoutMs = requestedToolTimeoutMs + toolTimeoutGraceMs;
-  return Math.max(proxyTimeoutMs, Math.min(MAX_HONORED_TOOL_TIMEOUT_MS, honoredTimeoutMs));
+// The watchdog guards against a hung child. Callers that own a surface timeout
+// must carry it in the transport-level _meta field below; arbitrary tool
+// arguments remain domain data and are never interpreted here.
+function effectiveRequestTimeoutMs(proxyTimeoutMs: number, requestedTransportTimeoutMs: number | null, toolTimeoutGraceMs: number): number {
+  if (requestedTransportTimeoutMs === null) return proxyTimeoutMs;
+  const boundedRequestedTimeoutMs = Math.min(MAX_TRANSPORT_TIMEOUT_MS, requestedTransportTimeoutMs);
+  // The 15-minute bound applies to the admitted transport timeout. Grace is
+  // additive, so a timeout at the bound still receives the configured grace.
+  return Math.max(proxyTimeoutMs, boundedRequestedTimeoutMs + toolTimeoutGraceMs);
 }
 
 function createStartupTrace(
@@ -189,8 +191,8 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       }
       const id = request.id;
       if ((typeof id === 'string' || typeof id === 'number') && typeof request.method === 'string') {
-        const requestedToolTimeoutMs = extractRequestedToolTimeoutMs(request);
-        const effectiveTimeoutMs = effectiveRequestTimeoutMs(options.requestTimeoutMs, requestedToolTimeoutMs, options.toolTimeoutGraceMs);
+        const requestedTransportTimeoutMs = extractRequestedTransportTimeoutMs(request);
+        const effectiveTimeoutMs = effectiveRequestTimeoutMs(options.requestTimeoutMs, requestedTransportTimeoutMs, options.toolTimeoutGraceMs);
         const timeoutTimer = setTimeout(() => {
           const pendingRequest = pending.get(id);
           if (!pendingRequest) return;
@@ -199,7 +201,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           recordLifecycle(pendingRequest, 'proxy_timeout', {
             proxy_request_timeout_ms: options.requestTimeoutMs,
             effective_request_timeout_ms: pendingRequest.effectiveTimeoutMs,
-            requested_tool_timeout_ms: pendingRequest.requestedToolTimeoutMs,
+            requested_transport_timeout_ms: pendingRequest.requestedTransportTimeoutMs,
           });
           recordLifecycle(pendingRequest, 'child_termination_requested', { signal: 'SIGTERM' });
           const artifactPath = writeForensicArtifact({
@@ -238,7 +240,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
           method: request.method,
           framed: drained.framed,
           timeoutTimer,
-          requestedToolTimeoutMs,
+          requestedTransportTimeoutMs,
           effectiveTimeoutMs,
           ...requestMetadata,
           startedAt: new Date().toISOString(),
@@ -381,11 +383,11 @@ function writePendingError(
       timeout_layer: 'mcp_runtime_proxy_watchdog',
       proxy_request_timeout_ms: proxyRequestTimeoutMs,
       effective_request_timeout_ms: request.effectiveTimeoutMs,
-      requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+      requested_transport_timeout_ms: request.requestedTransportTimeoutMs,
       tool_timeout_grace_ms: toolTimeoutGraceMs,
       surface_timeout_expected_before_proxy:
-        request.requestedToolTimeoutMs !== null &&
-        request.requestedToolTimeoutMs + toolTimeoutGraceMs <= request.effectiveTimeoutMs,
+        request.requestedTransportTimeoutMs !== null &&
+        request.requestedTransportTimeoutMs + toolTimeoutGraceMs <= request.effectiveTimeoutMs,
       kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
     }
     : {};
@@ -412,14 +414,12 @@ function writePendingError(
   }, false);
 }
 
-function extractRequestedToolTimeoutMs(request: JsonRecord): number | null {
+function extractRequestedTransportTimeoutMs(request: JsonRecord): number | null {
   const params = request.params;
   if (!isJsonRecord(params)) return null;
-  const directTimeoutMs = normalizedPositiveInteger(params.timeout_ms);
-  if (directTimeoutMs !== null) return directTimeoutMs;
-  const toolArguments = params.arguments;
-  if (!isJsonRecord(toolArguments)) return null;
-  return normalizedPositiveInteger(toolArguments.timeout_ms);
+  const meta = params._meta;
+  if (!isJsonRecord(meta)) return null;
+  return normalizedPositiveInteger(meta.narada_request_timeout_ms);
 }
 
 function requestMetadataFor(request: JsonRecord): Pick<PendingRequest, 'toolName' | 'argsHash' | 'argsSummary' | 'progressToken'> {
@@ -519,7 +519,7 @@ function serializeRequest(request: PendingRequest): JsonRecord {
     tool_name: request.toolName,
     started_at: request.startedAt,
     age_ms: Date.now() - Date.parse(request.startedAt),
-    requested_tool_timeout_ms: request.requestedToolTimeoutMs,
+    requested_transport_timeout_ms: request.requestedTransportTimeoutMs,
     effective_request_timeout_ms: request.effectiveTimeoutMs,
     progress_token: request.progressToken,
     last_progress: request.lastProgress,
@@ -626,7 +626,7 @@ function summarizeJson(value: JsonRecord): JsonRecord {
 }
 
 function toArtifactTimestamp(date: Date): string {
-  return date.toISOString().replace(/[-:.]/g, '').replace('T', 'T').replace('Z', 'Z');
+  return date.toISOString().replace(/[-:.]/g, '');
 }
 
 function safeSegment(value: string): string {
@@ -686,9 +686,9 @@ function clearTimers(timers: Set<NodeJS.Timeout>): void {
   timers.clear();
 }
 
-function parsePositiveInteger(value: string, name: string): number {
+function parsePositiveInteger(value: string, name: string, maximum = Number.MAX_SAFE_INTEGER): number {
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`mcp_runtime_proxy_invalid_${name}:${value}`);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) throw new Error(`mcp_runtime_proxy_invalid_${name}:${value}`);
   return parsed;
 }
 

@@ -7,11 +7,17 @@ import { fileURLToPath } from 'node:url';
 import { payloadShow } from '@narada2/mcp-transport';
 import { resolveToolCallTimeoutMs } from '../src/tool-timeout.js';
 
-assert.deepEqual(resolveToolCallTimeoutMs(undefined), { status: 'ok', timeoutMs: 120000, source: 'policy_default' });
-assert.deepEqual(resolveToolCallTimeoutMs(240000), { status: 'ok', timeoutMs: 240000, source: 'tool_request' });
-assert.deepEqual(resolveToolCallTimeoutMs(1000), { status: 'ok', timeoutMs: 1000, source: 'tool_request' });
-assert.equal(resolveToolCallTimeoutMs(600001).status, 'refused');
+assert.deepEqual(resolveToolCallTimeoutMs(undefined), { status: 'ok', timeoutMs: 120000, outerTimeoutMs: 120000, graceMs: 0, source: 'policy_default' });
+assert.deepEqual(resolveToolCallTimeoutMs(240000), { status: 'ok', timeoutMs: 240000, outerTimeoutMs: 241000, graceMs: 1000, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(1000), { status: 'ok', timeoutMs: 1000, outerTimeoutMs: 2000, graceMs: 1000, source: 'tool_request' });
+assert.equal(resolveToolCallTimeoutMs(900001).status, 'refused');
 assert.equal(resolveToolCallTimeoutMs('not-a-number').status, 'refused');
+// Grace applies only to tool-requested timeouts and remains additive at the max.
+assert.deepEqual(resolveToolCallTimeoutMs(600000), { status: 'ok', timeoutMs: 600000, outerTimeoutMs: 601000, graceMs: 1000, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(900000), { status: 'ok', timeoutMs: 900000, outerTimeoutMs: 901000, graceMs: 1000, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(900000, 120000, 60000), { status: 'ok', timeoutMs: 900000, outerTimeoutMs: 960000, graceMs: 60000, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(5000, 120000, 250), { status: 'ok', timeoutMs: 5000, outerTimeoutMs: 5250, graceMs: 250, source: 'tool_request' });
+assert.deepEqual(resolveToolCallTimeoutMs(5000, 120000, 0), { status: 'ok', timeoutMs: 5000, outerTimeoutMs: 5000, graceMs: 0, source: 'tool_request' });
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-loader-mcp-behavior-'));
 mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
@@ -51,7 +57,7 @@ process.stdin.on('data', (chunk) => {
       write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }, ...guidanceTools] } });
     }
     else if (request.method === 'tools/call') {
-      const respond = () => write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
+      const respond = () => write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, request_meta: request.params?._meta ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
       const delayMs = Number(request.params?.arguments?.delay_ms ?? 0);
       if (Number.isFinite(delayMs) && delayMs > 0) setTimeout(respond, delayMs);
       else respond();
@@ -340,6 +346,15 @@ try {
   const propagatedTimeoutCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { delay_ms: 1050, timeout_ms: 1200 } } }, 191);
   assert.equal(propagatedTimeoutCall?.schema, 'narada.mcp_loader.tool_result.v1');
   assert.equal(propagatedTimeoutCall?.result?.structuredContent?.args?.timeout_ms, 1200);
+  assert.equal(propagatedTimeoutCall?.result?.structuredContent?.request_meta?.narada_request_timeout_ms, 1200);
+  // Regression: a nested timeout_ms must not double as the loader's outer wait deadline.
+  // The child answers at 250 ms; before the grace fix the loader rejected at 100 ms
+  // with child_timeout instead of waiting inner timeout + grace (100 + 1000 ms).
+  const graceCall = await call('tools/call', { name: 'mcp_loader_call_tool', arguments: { connection_id: fabricAttach?.connection_id, tool_name: 'echo', arguments: { delay_ms: 250, timeout_ms: 100 } } }, 192);
+  assert.equal(graceCall?.schema, 'narada.mcp_loader.tool_result.v1');
+  assert.equal(graceCall?.result?.structuredContent?.args?.timeout_ms, 100);
+  assert.equal(graceCall?.result?.structuredContent?.request_meta?.narada_request_timeout_ms, 100);
+  assert.equal(graceCall?.result?.structuredContent?.status, 'ok');
   const liveInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 37);
   const liveEntry = (liveInventory?.connections as Array<Record<string, any>>).find((entry) => entry.connection_id === fabricAttach?.connection_id);
   assert.equal(liveEntry?.status, 'live');

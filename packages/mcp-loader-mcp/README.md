@@ -10,6 +10,13 @@ Every loader lifecycle projection uses the `narada.mcp_loader.runtime_lifecycle.
 
 When a proxied child guidance tool is called, its `structuredContent` is augmented with `loader_runtime_lifecycle` and `loader_runtime_freshness`, so the attached surface guidance itself advertises loader ownership and recovery.
 
+## Tool Call Timeouts
+
+`mcp_loader_call_tool` forwards the nested `arguments` object unchanged. When `arguments` include `timeout_ms`, the child tool bounds itself at that value and the loader honors it up to its bounded maximum (`--tool-call-timeout-ms`, default 120000, max 900000). The loader's own outer wait deadline is the declared timeout plus a bounded grace (`--tool-timeout-grace-ms`, default 1000 ms, max 60000 ms), including at the maximum; the outer deadline may therefore reach 960000 ms. This lets a child return its own bounded timeout result instead of losing the race to the loader's `child_timeout` error. Calls without a nested `timeout_ms` are bounded by the policy default with no grace; the loader's deadline is the only timer.
+
+The full timeout stack, shortest to longest: the tool's own `timeout_ms` < the loader's outer deadline (tool timeout + grace) < the runtime proxy watchdog (`--request-timeout-ms`). The proxy never interprets tool arguments; a caller that owns a surface-level timeout carries it in the transport-level `params._meta.narada_request_timeout_ms` field, and the proxy waits for that transport timeout plus its own bounded grace (`--tool-timeout-grace-ms`). Each layer yields to the layer below it, so a bounded tool returns its own result and the transport survives.
+
+
 ## Loader Runtime Freshness
 
 A long-lived loader process can outlive a source, dependency, build-configuration, or runtime rebuild. Call `mcp_loader_runtime_status` to compare the running loader files with their source files and to inspect dependency/configuration evidence. `status: "stale"` means the loader process must be restarted through its carrier or runtime supervisor; use the machine-readable `reload_action` descriptor to route that operation. `mcp_loader_surface_restart` replaces only an attached child and does not hot-reload the loader. `status: "unknown"` means required freshness evidence is unavailable and should not be treated as current.

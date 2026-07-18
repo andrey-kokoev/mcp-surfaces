@@ -13,11 +13,13 @@ error to the carrier, sends `notifications/cancelled` to the child, terminates
 the child, and exits non-zero so the carrier can restart the surface cleanly.
 Use `--request-timeout-ms <ms>` before `--` to override the default timeout.
 
-The watchdog never preempts a tool's own declared timeout: when a request
-carries `timeout_ms` (top-level or in `arguments`), the per-request deadline is
-the declared timeout plus a grace margin (`--tool-timeout-grace-ms <ms>`,
-default 15000), capped at 15 minutes, whichever interacts with the configured
-proxy timeout to produce the later deadline. Only when the child outlives that
-effective deadline does the proxy terminate it, so a long-running
-`structured_command_execute` call returns the surface's own timeout result
-instead of losing the shared transport.
+The watchdog never interprets a surface's tool arguments. A caller that owns a
+surface-level timeout may carry the transport contract in
+`params._meta.narada_request_timeout_ms`; the proxy then waits for that
+transport timeout plus a bounded grace margin
+(`--tool-timeout-grace-ms <ms>`, default 15000) before declaring the child
+unresponsive. The admitted transport timeout is capped at 15 minutes and the
+grace is additive, so the effective watchdog deadline can be at most 15 minutes
+plus the configured grace. Callers that use a surface-owned timeout should
+forward this metadata so the surface can return its own bounded result without
+losing the shared transport.

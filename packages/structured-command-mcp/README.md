@@ -36,9 +36,28 @@ The server validates:
 ## Tools
 
 - `structured_command_execute`: execute one admitted command.
+- `structured_command_input_create`: create a scoped structured command input ref for later execution.
+- `structured_command_output_show`: page large stdout/stderr payloads by output ref.
 - `structured_command_execution_policy_inspect`: inspect roots, command admission, blocked commands, limits, and default allowed commands.
+- `structured_command_powershell_parse_check`: parse-check one `.ps1` file under an allowed root without admitting arbitrary `pwsh -Command` text.
+- `structured_command_elevated_window_execute`: launch a policy-approved command in a visible elevated UAC window (Windows only; output is not captured).
+
+## Timeouts and Process-Tree Cleanup
+
+`structured_command_execute` accepts an optional `timeout_ms`. When a command exceeds its bound, the call returns the surface's own bounded result (`status: "timed_out"`, `timed_out: true`) together with the `execution_ref`, so captured output remains pageable after a timeout — the MCP transport stays usable and subsequent calls on the same surface keep working.
+
+A timed-out command never leaves its descendant tree running:
+
+- Windows: the tree is terminated with `taskkill /pid <pid> /T /F`.
+- POSIX: the child leads its own process group; the group receives `SIGTERM`, then after a bounded grace period any remaining members are escalated to `SIGKILL`. Descendants that ignore `SIGTERM` are still reaped.
 
 ## Policy
+
+The default command timeout policy is bounded at 15 minutes. Sites may select
+a lower `maxTimeoutMs` in policy; the command-line form is
+`--max-timeout-ms <ms>`. The longer bound exists for governed known-slow
+workspace verification such as the serial root test; it does not broaden
+command admission or allowed roots.
 
 Policy is configured at server launch. Common flags include:
 
