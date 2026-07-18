@@ -24,6 +24,16 @@
     { "path": "./packages/runtime-introspection-mcp" },
     { "path": "./packages/nars-session-mcp" },
     { "path": "./packages/site-lifecycle-mcp" },
-    { "path": "./packages/artifacts-mcp" }
+    { "path": "./packages/artifacts-mcp" },
+    { "path": "./packages/sop-mcp" },
+    { "path": "./packages/scheduler-mcp" },
+    { "path": "./packages/mcp-registrar" },
+    { "path": "./packages/site-registry-mcp" },
+    { "path": "./packages/surface-feedback-mcp" },
+    { "path": "./packages/mcp-loader-mcp" },
+    { "path": "./packages/speech-mcp" },
+    { "path": "./packages/cloudflare-carrier-mcp" },
+    { "path": "./packages/site-coherence-mcp" },
+    { "path": "./packages/operator-routing-mcp" }
   ]
 }

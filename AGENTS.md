@@ -14,6 +14,7 @@ Current packages:
 - `@narada2/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
 - `@narada2/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
 - `@narada2/execution-contract`: shared typed execution binding and request fingerprint contract.
+- `@narada2/provider-registry`: shared typed, policy-neutral provider/model capability registry loading and resolution.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
 - `@narada2/structured-command-mcp`: policy-gated structured command MCP surface.
 - `@narada2/git-mcp`: governed Git inspection and publication MCP surface.
@@ -43,6 +44,15 @@ Current packages:
 - `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
 
 Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
+
+## Getting Started
+
+- Use `pnpm@10.9.0` (pinned via `packageManager` in the root `package.json`; `corepack enable` provides it).
+- Run `pnpm install` after cloning or pulling workspace changes, then `pnpm build`. Package test scripts compile through `tsc -b` into `dist/` and run the compiled output, so a successful build is a prerequisite for any test run.
+- After editing the root `tsconfig.json` (or any shared build configuration), run a full rebuild with `pnpm exec tsc -b --force`. Incremental builds will not re-emit unchanged packages, and the `mcp-loader-mcp` freshness test compares build-configuration mtimes against `dist/` and will fail until everything is re-emitted.
+- Layout: runnable MCP surfaces live in `packages/*`, shared libraries in `packages/shared/*`, design and doctrine docs in `docs/`, and the root UI-neutrality boundary test in `test/`.
+- The root `README.md` gives repo-level framing; each package has its own `README.md` with setup details.
+- Key docs: `docs/mcp-taxonomy.md` (generic versus Narada-specific split), `docs/mcp-wiring.md` and `docs/mcp-injection-scopes.md` (how surfaces reach carriers and sites), `docs/mcp-surfaces-target-shape.md` (target architecture), `docs/site-loop-doctrine.md` (Site Loop doctrine), `docs/mcp-output-refusal-conventions.md` (output-ref and refusal patterns).
 
 ## Carrier and Site MCP Fabric
 
@@ -92,7 +102,7 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 ## Development Rules
 
 - Use TypeScript sources under `packages/*/src` or `packages/shared/*/src` and tests under the matching package `test` directory.
-- Do not add new `.mjs` source files; this repo has migrated MCP package code to `.ts`.
+- Do not add new `.mjs` source files under `packages/*`; MCP package code and package tests are TypeScript. The root `test/ui-neutral-boundary.test.mjs` harness is a pre-existing exception, not a pattern to copy.
 - Preserve ESM/NodeNext package behavior.
 - Prefer package-local tests for narrow changes, then root tests when shared behavior changes.
 - Keep MCP tool schemas explicit and conservative: no broad shell strings, wildcard filesystem access, or implicit mutation paths.
@@ -100,6 +110,8 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 - Model-facing MCP tool output that can exceed a small inline envelope must pass through the shared `mcp-transport` output-ref boundary or an explicit package-owned equivalent. Large domain results should be materialized and returned with a bounded inline envelope plus a reader tool.
 - Keep shared transport readers bound to one site authority scope. Do not accept raw cross-site roots or infer cross-site authority from local filesystem reachability; explicit cross-site transfer belongs to an authorized User Site or artifact/export surface. See `docs/mcp-surfaces-target-shape.md`.
 - Shared libraries such as `@narada2/mcp-transport` live under `packages/shared/*`; runnable MCP surfaces remain top-level packages until the broader `packages/surfaces/*` migration is executed.
+- Register every package in the root `tsconfig.json` `references`; root `pnpm build` and `pnpm typecheck` only cover referenced packages.
+- When you add or rename a package, root test alias, command, or convention, update this `AGENTS.md` in the same change.
 
 ## Common Commands
 
@@ -110,8 +122,10 @@ pnpm test
 pnpm test:ui-boundary
 pnpm test:mcp-transport
 pnpm test:mcp-telemetry
-pnpm test:mcp-e2e-harness
+pnpm test:mcp-affordances
 pnpm test:mcp-runtime-proxy
+pnpm test:mcp-e2e-harness
+pnpm test:provider-registry
 pnpm test:local-filesystem
 pnpm test:structured-command
 pnpm test:git
@@ -123,25 +137,61 @@ pnpm test:calendar
 pnpm test:task-lifecycle
 pnpm test:site-loop
 pnpm test:site-registry
+pnpm test:site-lifecycle
 pnpm test:agent-context
 pnpm test:delegated-task
 pnpm test:sop
 pnpm test:scheduler
 pnpm test:registrar
+pnpm test:surface-feedback
 pnpm test:launcher
+pnpm test:mcp-loader
+pnpm test:operator-routing
+pnpm test:runtime-introspection
+pnpm test:speech
 pnpm test:cloudflare-carrier
 pnpm test:site-coherence
 pnpm test:artifacts
 pnpm test:nars-session
 ```
 
+The following variants require a live host, a live carrier, or explicit host authority. They are not part of `pnpm test`; do not run them without operator approval:
+
+```powershell
+pnpm test:worker-delegation:e2e
+pnpm test:worker-delegation:e2e:edit
+pnpm test:worker-delegation:e2e:site-fabric
+pnpm test:worker-delegation:e2e:carrier
+pnpm test:delegated-task:live
+pnpm test:delegated-task:e2e
+pnpm test:scheduler:e2e:host
+pnpm test:launcher:e2e:host
+```
+
 ## Verification Expectations
 
 Before handing off changes:
 
-- Run the most specific package test for the touched package.
-- Run `pnpm build` or `pnpm typecheck` when package exports, TypeScript config, or shared types change.
+- Run the most specific package test for the touched package (`pnpm test:<name>`).
+- Run `pnpm build` or `pnpm typecheck` when package exports, TypeScript config, or shared types change. These cover exactly the packages listed in the root `tsconfig.json` `references`; if a package is missing there, add it rather than working around the gap.
 - Run root `pnpm test` for changes affecting shared MCP behavior or package boundaries.
+
+## Adding a New Package
+
+Do all of the following in the same change:
+
+1. Create the package under `packages/<name>-mcp` (runnable surfaces) or `packages/shared/<name>` (shared libraries), with TypeScript sources in `src/` and tests in `test/`.
+2. Add the package to the root `tsconfig.json` `references` and verify `pnpm build` and `pnpm typecheck` pass.
+3. Add a root `package.json` `test:<name>` alias following the existing `pnpm --filter <package> test` pattern.
+4. Expose a read-only `<prefix>_guidance` tool on new surfaces.
+5. Register new surfaces in the registrar catalog and cover them in registrar carrier-config tests.
+6. Add the package to the inventory and boundary notes in this `AGENTS.md`.
+
+## Git Workflow
+
+- Do feature work on `agent/<topic>` branches.
+- This repo does not use changesets; the `narada` repo does — do not copy that convention here.
+- Stage only paths explicitly scoped to your change and leave unrelated worktree state untouched.
 
 ## Boundary Notes
 
