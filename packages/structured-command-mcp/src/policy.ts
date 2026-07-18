@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
-const DEFAULT_MAX_TIMEOUT_MS = 300_000;
+// The normal default policy is bounded at fifteen minutes. Sites may select a
+// lower maxTimeoutMs for more restrictive deployments.
+const DEFAULT_MAX_TIMEOUT_MS = 900_000;
 
 const DEFAULT_BLOCKED_COMMANDS = new Set([
   'cmd',

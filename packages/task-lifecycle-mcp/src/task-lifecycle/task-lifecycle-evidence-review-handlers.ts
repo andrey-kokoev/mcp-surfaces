@@ -21,6 +21,21 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function outcomeIsSingleOperatorReview(outcome: Record<string, unknown> | null | undefined): boolean {
+  if (!outcome || typeof outcome.findings_json !== 'string') return false;
+  try {
+    const findings = JSON.parse(outcome.findings_json);
+    return Array.isArray(findings) && findings.some((finding) => {
+      const record = asRecord(finding);
+      return record?.location === 'review_authority'
+        && typeof record.description === 'string'
+        && record.description.includes('single_operator_review');
+    });
+  } catch {
+    return false;
+  }
+}
+
 function siteRelativePath(siteRoot: string, filePath: string): string {
   const normalized = isAbsolute(filePath) ? relative(siteRoot, filePath) : filePath;
   return normalized.split('\\').join('/');
@@ -896,7 +911,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         reason: 'compatibility_review_outcome_admitted',
         toStatus: 'closed',
         resultStatus: 'closed',
-        closureMode: 'peer_reviewed',
+        closureMode: effectiveSingleOperatorReview ? 'operator_direct' : 'peer_reviewed',
         projectionMode: 'strict',
       });
       if (transition.status === 'error') {
@@ -1043,7 +1058,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           reason: 'compatibility_review_reconciliation',
           toStatus: 'closed',
           resultStatus: 'closed',
-          closureMode: 'peer_reviewed',
+          closureMode: outcomeIsSingleOperatorReview(latestOutcome) ? 'operator_direct' : 'peer_reviewed',
           projectionMode: 'strict',
         });
         if (transition.status === 'error') {
@@ -1054,7 +1069,8 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       } else if (latestOutcome && !closureComplete) {
         const closedAt = updatedLifecycle.closed_at ?? latestOutcome.admitted_at ?? new Date().toISOString();
         const closedBy = updatedLifecycle.closed_by ?? agentId;
-        const closureMode = updatedLifecycle.closure_mode ?? 'peer_reviewed';
+        const closureMode = updatedLifecycle.closure_mode
+          ?? (outcomeIsSingleOperatorReview(latestOutcome) ? 'operator_direct' : 'peer_reviewed');
         store.updateStatus(updatedLifecycle.task_id, 'closed', closedBy, {
           closed_at: closedAt,
           closed_by: closedBy,

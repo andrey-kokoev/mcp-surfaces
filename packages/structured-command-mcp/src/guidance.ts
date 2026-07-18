@@ -46,6 +46,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For a "Transport closed" error through mcp-loader, inspect mcp_loader_connection_inventory and mcp_loader_surface_status, then call mcp_loader_surface_restart({ connection_id, reason }) to replace only the child surface process; the agent session does not need to restart.',
       'After mcp_loader_surface_restart or detach plus reattach, treat input_ref and execution_ref from the old child as expired. Create a fresh structured_command_input_create result or send a new inline argv request before retrying. If the child stayed live after a timeout, page the existing execution_ref first.',
       'Use mcp_loader_list_tools({ connection_id: replacement_connection_id }) followed by mcp_loader_call_tool({ connection_id: replacement_connection_id, tool_name: "structured_command_execution_policy_inspect", arguments: {} }) as a small health check on the replacement connection. When calling through mcp-loader, pass timeout_ms in the nested structured-command arguments and stay within the loader and child policy caps.',
+      'For a governed command that may outlast the MCP request ceiling, declare test_scope: "known_slow" and set wait_for_completion: false. The call returns a running execution_ref immediately; poll structured_command_execute with that execution_ref until status is ok, failed, timed_out, or cancelled. The command remains bounded by policy and the ref is scoped to this surface process/storage.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     recovery_commands: [
@@ -67,6 +68,14 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
           'mcp_loader_call_tool({ connection_id, tool_name: "structured_command_execute", arguments: { input_ref: fresh_input_ref, timeout_ms: policy_max } })'
         ],
         note: 'Read back the existing execution_ref before rerunning. If the child was replaced, create a fresh input_ref and execution request.'
+      },
+      {
+        failure: 'Known-slow verification exceeds the MCP request ceiling',
+        sequence: [
+          'mcp_loader_call_tool({ connection_id, tool_name: "structured_command_execute", arguments: { command: "pnpm", args: ["test"], working_directory, timeout_ms: 900000, test_scope: "known_slow", wait_for_completion: false } })',
+          'mcp_loader_call_tool({ connection_id, tool_name: "structured_command_execute", arguments: { execution_ref } })'
+        ],
+        note: 'The first call is an admission/start operation. Poll the returned execution_ref; do not rerun the command while it is still running.'
       }
     ],
     feedback: {

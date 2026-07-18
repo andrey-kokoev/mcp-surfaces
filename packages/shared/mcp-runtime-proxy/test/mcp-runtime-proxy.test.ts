@@ -4,8 +4,13 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { effectiveRequestTimeoutMs } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
+
+assert.equal(effectiveRequestTimeoutMs(100, null, 60000), 100);
+assert.equal(effectiveRequestTimeoutMs(100, 300, 1000), 1300);
+assert.equal(effectiveRequestTimeoutMs(100, 900000, 60000), 960000);
 
 async function waitForOutput(condition: () => boolean, timeoutMs: number): Promise<void> {
   const started = Date.now();
@@ -106,7 +111,7 @@ try {
   assert.equal(artifact.request.id, 'slow-1');
   assert.equal(artifact.request.method, 'tools/call');
   assert.equal(artifact.request.tool_name, 'slow_read');
-  assert.equal(artifact.request.requested_transport_timeout_ms, 5);
+  assert.equal(artifact.request.requested_transport_timeout_ms, null);
   assert.equal(typeof artifact.request.args_hash, 'string');
   assert.equal(artifact.request.args_summary.timeout_ms, 5);
   assert.equal(artifact.pending_requests.length, 0);

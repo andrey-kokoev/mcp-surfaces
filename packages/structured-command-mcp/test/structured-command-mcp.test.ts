@@ -78,7 +78,7 @@ assert.ok(recoveryGuidance.some((entry) => entry.includes('Transport closed')));
 assert.ok(recoveryGuidance.some((entry) => entry.includes('input_ref') && entry.includes('execution_ref')));
 assert.ok(recoveryGuidance.some((entry) => entry.includes('mcp_loader_surface_restart')));
 
-assert.equal(state.policy.maxTimeoutMs, 300_000);
+assert.equal(state.policy.maxTimeoutMs, 900_000);
 assert.equal(stateFromSiteRoot.policy.allowedRoots.some((allowedRoot) => allowedRoot === outsideRoot), true);
 assert.equal(stateFromSiteRoot.env.STRUCTURED_COMMAND_TEST_SECRET, 'from-site-secret');
 assert.equal(originalStructuredCommandSecret === undefined ? process.env.STRUCTURED_COMMAND_TEST_SECRET === undefined : process.env.STRUCTURED_COMMAND_TEST_SECRET === originalStructuredCommandSecret, true);
@@ -145,6 +145,38 @@ const focusedTestPosture = await exec({
 assert.equal(focusedTestPosture.test_scope, 'focused');
 assert.equal(focusedTestPosture.expected_cost, 'low');
 
+const backgroundRefused = await (executeStructuredCommand as any)({
+  command: 'node',
+  args: ['--version'],
+  working_directory: root,
+  test_scope: 'focused',
+  wait_for_completion: false,
+}, state);
+assert.equal(backgroundRefused.status, 'refused');
+assert.ok(backgroundRefused.refusal_reasons.includes('background_requires_known_slow_test_scope'));
+
+const backgroundStarted = await (executeStructuredCommand as any)({
+  command: 'node',
+  args: ['-e', 'setTimeout(() => process.stdout.write("known-slow-ok"), 150)'],
+  working_directory: root,
+  timeout_ms: 1000,
+  test_scope: 'known_slow',
+  wait_for_completion: false,
+}, state);
+assert.equal(backgroundStarted.status, 'running');
+assert.equal(backgroundStarted.pending, true);
+assert.equal(backgroundStarted.wait_for_completion, false);
+assert.match(String(backgroundStarted.execution_ref), /^structured_command_execution:/);
+let backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, state);
+for (let attempt = 0; attempt < 40 && backgroundCompleted.status === 'running'; attempt++) {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, state);
+}
+assert.equal(backgroundCompleted.status, 'ok');
+assert.equal(backgroundCompleted.pending, false);
+assert.equal(backgroundCompleted.execution_mode, 'background');
+assert.equal(backgroundCompleted.stdout, 'known-slow-ok');
+
 const init = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }, state);
 assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
 
@@ -164,6 +196,7 @@ assert.equal(executeTool.annotations.canonicalName, 'structured_command_execute'
 assert.ok(executeTool.inputSchema.properties.execution_ref);
 assert.ok(executeTool.inputSchema.properties.stdout_offset);
 assert.ok(executeTool.inputSchema.properties.stdout_limit);
+assert.ok(executeTool.inputSchema.properties.wait_for_completion);
 assert.ok(executeTool.inputSchema.properties.test_scope);
 assert.ok(executeTool.inputSchema.properties.expected_cost);
 
@@ -247,6 +280,20 @@ assert.equal(timedOut.timed_out, true);
 assert.equal(timedOut.cancelled, false);
 assert.match(String(timedOut.execution_ref), /^structured_command_execution:/);
 
+// Timeout and cancellation may contend at the same boundary, but the result
+// state must remain mutually exclusive rather than reporting both causes.
+const timeoutCancellationRace = new AbortController();
+const raceAbortTimer = setTimeout(() => timeoutCancellationRace.abort(), 50);
+const raced = await (executeStructuredCommand as any)({
+  command: 'node',
+  args: ['-e', 'setTimeout(() => {}, 10000)'],
+  working_directory: root,
+  timeout_ms: 50,
+}, state, { abortSignal: timeoutCancellationRace.signal });
+clearTimeout(raceAbortTimer);
+assert.equal(raced.timed_out && raced.cancelled, false);
+assert.ok(raced.status === 'timed_out' || raced.status === 'cancelled');
+
 // A timed-out command must not leave descendant processes running: the
 // timeout path kills the whole child tree, not just the direct process.
 const grandchildPidFile = join(root, 'grandchild.pid');
@@ -260,15 +307,7 @@ assert.equal(timedOutTree.status, 'timed_out');
 assert.equal(timedOutTree.timed_out, true);
 const grandchildPid = Number(readFileSync(grandchildPidFile, 'utf8'));
 assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0, `expected grandchild pid file, got ${readFileSync(grandchildPidFile, 'utf8')}`);
-{
-  const started = Date.now();
-  let alive = true;
-  while (alive && Date.now() - started < 5000) {
-    try { process.kill(grandchildPid, 0); } catch { alive = false; }
-    if (alive) await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  assert.equal(alive, false, `grandchild process ${grandchildPid} survived the timed-out command`);
-}
+assert.throws(() => process.kill(grandchildPid, 0), `grandchild process ${grandchildPid} survived the timed-out command`);
 
 // A descendant that ignores SIGTERM must not survive either: on POSIX the
 // process group gets SIGTERM and a bounded-grace SIGKILL escalation, and on
@@ -284,15 +323,7 @@ assert.equal(timedOutStubbornTree.status, 'timed_out');
 assert.equal(timedOutStubbornTree.timed_out, true);
 const stubbornGrandchildPid = Number(readFileSync(stubbornPidFile, 'utf8'));
 assert.ok(Number.isInteger(stubbornGrandchildPid) && stubbornGrandchildPid > 0, `expected stubborn grandchild pid file, got ${readFileSync(stubbornPidFile, 'utf8')}`);
-{
-  const started = Date.now();
-  let alive = true;
-  while (alive && Date.now() - started < 5000) {
-    try { process.kill(stubbornGrandchildPid, 0); } catch { alive = false; }
-    if (alive) await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  assert.equal(alive, false, `stubborn grandchild process ${stubbornGrandchildPid} survived the timed-out command`);
-}
+assert.throws(() => process.kill(stubbornGrandchildPid, 0), `stubborn grandchild process ${stubbornGrandchildPid} survived the timed-out command`);
 
 // The surface stays usable on the same state after a timed-out call.
 const afterTimeout = await exec({

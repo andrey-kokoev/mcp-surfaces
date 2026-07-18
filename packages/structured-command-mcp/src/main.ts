@@ -277,6 +277,7 @@ export function listTools() {
         args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
         working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
         timeout_ms: { type: 'integer', description: 'Timeout in milliseconds.' },
+        wait_for_completion: { type: 'boolean', description: 'Defaults true. Set false only with test_scope "known_slow" to return an execution_ref immediately and poll it for completion.' },
         test_scope: { type: 'string', enum: ['focused', 'broad', 'known_slow', 'unknown'], description: 'Optional caller-declared verification scope/cost posture for test commands.' },
         expected_cost: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'], description: 'Optional caller-declared expected cost for this command.' },
         stdout_offset: { type: 'integer', description: 'Character offset for stdout page. Defaults 0.' },
@@ -303,6 +304,7 @@ export function listTools() {
         args: { type: 'array', items: { type: 'string' } },
         working_directory: { type: 'string' },
         timeout_ms: { type: 'integer' },
+        wait_for_completion: { type: 'boolean', description: 'Defaults true. Set false only with test_scope "known_slow" to return an execution_ref immediately.' },
         test_scope: { type: 'string', enum: ['focused', 'broad', 'known_slow', 'unknown'] },
         expected_cost: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
       }, ['command']),
@@ -429,6 +431,9 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
   const timeoutMs = Math.min(state.policy.maxTimeoutMs, Math.max(1, Number(effectiveArgs.timeout_ms ?? 60_000)));
   const workingDirectory = effectiveArgs.working_directory ? resolve(String(effectiveArgs.working_directory)) : state.policy.allowedRoots[0];
   const executionPosture = structuredCommandExecutionPosture(effectiveArgs);
+  const waitForCompletion = argsRecord.wait_for_completion !== undefined
+    ? argsRecord.wait_for_completion !== false
+    : effectiveArgs.wait_for_completion !== false;
   const decision = decideStructuredCommandExecution({
     command: effectiveArgs.command,
     args: Array.isArray(effectiveArgs.args) ? effectiveArgs.args : [],
@@ -452,17 +457,119 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     };
   }
 
+  if (!waitForCompletion && executionPosture.test_scope !== 'known_slow') {
+    return {
+      schema: 'narada.structured_command.execution_result.v0',
+      status: 'refused',
+      executed: false,
+      decision,
+      refusal_reasons: ['background_requires_known_slow_test_scope'],
+      remediation_hints: ['Set test_scope to "known_slow" when using wait_for_completion:false for a governed long-running verification command.'],
+      mcp_fallbacks: [],
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+      execution_posture: executionPosture,
+      test_scope: executionPosture.test_scope,
+      expected_cost: executionPosture.expected_cost,
+      wait_for_completion: false,
+    };
+  }
+
   const startedAt = new Date().toISOString();
   context.progress?.(0.1, 'executing');
-  const result = await spawnStructured(decision.command, decision.args, {
+  const spawnOptions = {
     cwd: decision.working_directory,
     timeoutMs,
     maxOutputBytes: state.policy.maxOutputBytes,
     env: state.env,
-    abortSignal: context.abortSignal,
+    ...(waitForCompletion ? { abortSignal: context.abortSignal } : {}),
+  };
+  if (!waitForCompletion) {
+    const pendingPayload = {
+      schema: 'narada.structured_command.execution_result.v0',
+      status: 'running',
+      executed: true,
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+      started_at: startedAt,
+      finished_at: null,
+      timeout_ms: timeoutMs,
+      execution_posture: executionPosture,
+      test_scope: executionPosture.test_scope,
+      expected_cost: executionPosture.expected_cost,
+      execution_mode: 'background',
+      wait_for_completion: false,
+      pending: true,
+      exit_code: null,
+      stdout: '',
+      stderr: '',
+      stdout_truncated: false,
+      stderr_truncated: false,
+      timed_out: false,
+      cancelled: false,
+      input_ref: argsRecord.input_ref ?? null,
+    };
+    const executionRef = createStructuredCommandExecution(pendingPayload, state);
+    audit(state, pendingPayload);
+    void spawnStructured(decision.command, decision.args, spawnOptions).then((result) => {
+      const payload = buildStructuredCommandExecutionPayload({
+        decision,
+        result,
+        startedAt,
+        timeoutMs,
+        executionPosture,
+        inputRef: argsRecord.input_ref ?? null,
+        executionMode: 'background',
+        waitForCompletion: false,
+      });
+      audit(state, payload);
+      if (executionRef) updateStructuredCommandExecution(executionRef, payload, state);
+    }).catch((error) => {
+      const payload = buildStructuredCommandExecutionPayload({
+        decision,
+        result: {
+          exit_code: null,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+          stdout_truncated: false,
+          stderr_truncated: false,
+          timed_out: false,
+          cancelled: false,
+        },
+        startedAt,
+        timeoutMs,
+        executionPosture,
+        inputRef: argsRecord.input_ref ?? null,
+        executionMode: 'background',
+        waitForCompletion: false,
+      });
+      audit(state, payload);
+      if (executionRef) updateStructuredCommandExecution(executionRef, payload, state);
+    });
+    return buildPagedExecutionResult(pendingPayload, argsRecord, executionRef);
+  }
+
+  const result = await spawnStructured(decision.command, decision.args, spawnOptions);
+  const payload = buildStructuredCommandExecutionPayload({
+    decision,
+    result,
+    startedAt,
+    timeoutMs,
+    executionPosture,
+    inputRef: argsRecord.input_ref ?? null,
+    executionMode: 'synchronous',
+    waitForCompletion: true,
   });
+  audit(state, payload);
+  const executionRef = createStructuredCommandExecution(payload, state);
+  return buildPagedExecutionResult(payload, argsRecord, executionRef);
+}
+
+function buildStructuredCommandExecutionPayload({ decision, result, startedAt, timeoutMs, executionPosture, inputRef, executionMode, waitForCompletion }) {
   const finishedAt = new Date().toISOString();
-  const payload = {
+  return {
     schema: 'narada.structured_command.execution_result.v0',
     status: result.cancelled ? 'cancelled' : result.timed_out ? 'timed_out' : result.exit_code === 0 ? 'ok' : 'failed',
     executed: true,
@@ -475,6 +582,9 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     execution_posture: executionPosture,
     test_scope: executionPosture.test_scope,
     expected_cost: executionPosture.expected_cost,
+    execution_mode: executionMode,
+    wait_for_completion: waitForCompletion,
+    pending: false,
     exit_code: result.exit_code,
     stdout: result.stdout,
     stderr: result.stderr,
@@ -482,11 +592,8 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     stderr_truncated: result.stderr_truncated,
     timed_out: result.timed_out,
     cancelled: result.cancelled,
-    input_ref: argsRecord.input_ref ?? null,
+    input_ref: inputRef,
   };
-  audit(state, payload);
-  const executionRef = createStructuredCommandExecution(payload, state);
-  return buildPagedExecutionResult(payload, argsRecord, executionRef);
 }
 
 export function createStructuredCommandInput(args, state) {
@@ -496,6 +603,7 @@ export function createStructuredCommandInput(args, state) {
     args: Array.isArray(args.args) ? args.args.map(String) : [],
     ...(args.working_directory ? { working_directory: String(args.working_directory) } : {}),
     ...(args.timeout_ms ? { timeout_ms: Number(args.timeout_ms) } : {}),
+    ...(args.wait_for_completion !== undefined ? { wait_for_completion: args.wait_for_completion === false ? false : true } : {}),
     ...structuredCommandInputPosture(args),
   };
   const record = {
@@ -978,6 +1086,8 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
     command: payload.command,
     args: payload.args,
     working_directory: payload.working_directory,
+    started_at: payload.started_at ?? null,
+    finished_at: payload.finished_at ?? null,
     timeout_ms: payload.timeout_ms,
     execution_posture: payload.execution_posture ?? null,
     test_scope: payload.test_scope ?? null,
@@ -985,6 +1095,9 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
     exit_code: payload.exit_code,
     timed_out: payload.timed_out,
     cancelled: payload.cancelled,
+    execution_mode: payload.execution_mode ?? 'synchronous',
+    wait_for_completion: payload.wait_for_completion ?? true,
+    pending: payload.pending ?? false,
     execution_ref: payload.execution_ref,
     page_source: payload.page_source,
     stdout,
@@ -1026,6 +1139,7 @@ function renderToolResultText(payload) {
       `structured_command_execute: ${payload.status}`,
       `exit_code: ${payload.exit_code}`,
     ];
+    if (payload.status === 'running' && payload.execution_ref) lines.push(`execution_pending: poll ${payload.execution_ref}`);
     const stdoutLines = renderStreamPreviewLines('stdout', payload.stdout, payload.stdout_truncated, payload.stdout_output_truncated);
     const stderrLines = renderStreamPreviewLines('stderr', payload.stderr, payload.stderr_truncated, payload.stderr_output_truncated);
     if (payload.status === 'ok') lines.push(...stdoutLines, ...stderrLines);
@@ -1149,6 +1263,20 @@ function createStructuredCommandExecution(result, state) {
   };
   writeJsonRecord(executionPath(state, executionId), record);
   return record.ref;
+}
+
+function updateStructuredCommandExecution(ref, result, state) {
+  const { id } = parseRef(ref, 'execution');
+  const path = executionPath(state, id);
+  const existing = readJsonRecord(path);
+  writeJsonRecord(path, {
+    schema: 'narada.structured_command.execution.v0',
+    ref,
+    created_at: existing.created_at ?? new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    sha256: sha256Json(result),
+    result,
+  });
 }
 
 function readStructuredCommandExecution(ref, state) {

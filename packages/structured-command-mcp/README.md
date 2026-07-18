@@ -9,6 +9,7 @@ This package executes commands as argv arrays, not shell strings. It is intended
 - Allowed: execute admitted commands with explicit argv arrays.
 - Allowed: inspect execution policy.
 - Allowed: page command stdout/stderr by re-calling the producing execution tool with its `execution_ref`.
+- Allowed: start a governed `known_slow` verification command without waiting for the MCP request to finish, then poll its `execution_ref`.
 - Not allowed: shell strings, shell interpolation, pipes, redirection, command separators, or wildcard expansion by this surface.
 - Not allowed: working directories outside admitted roots.
 - Not allowed: broad mutation authority; command admission must be explicit and narrow.
@@ -46,6 +47,8 @@ The server validates:
 
 `structured_command_execute` accepts an optional `timeout_ms`. When a command exceeds its bound, the call returns the surface's own bounded result (`status: "timed_out"`, `timed_out: true`) together with the `execution_ref`, so captured output remains pageable after a timeout — the MCP transport stays usable and subsequent calls on the same surface keep working.
 
+For a command that may outlast the MCP request ceiling, set `test_scope: "known_slow"` and `wait_for_completion: false`. The surface admits and starts the command, returns `status: "running"` plus an `execution_ref` immediately, and persists the final bounded result under that same ref. Poll by calling `structured_command_execute({ execution_ref })` until the status is `ok`, `failed`, `timed_out`, or `cancelled`. Background mode does not bypass command admission, allowed roots, output limits, or the 15-minute timeout; it exists so governed verification can complete without holding one MCP request open. The execution ref is scoped to the current surface storage and should be treated as expired after the surface is restarted.
+
 A timed-out command never leaves its descendant tree running:
 
 - Windows: the tree is terminated with `taskkill /pid <pid> /T /F`.
@@ -55,9 +58,9 @@ A timed-out command never leaves its descendant tree running:
 
 The default command timeout policy is bounded at 15 minutes. Sites may select
 a lower `maxTimeoutMs` in policy; the command-line form is
-`--max-timeout-ms <ms>`. The longer bound exists for governed known-slow
-workspace verification such as the serial root test; it does not broaden
-command admission or allowed roots.
+`--max-timeout-ms <ms>`. The longer bound and `known_slow` background path are
+for governed workspace verification such as the serial root test; they do not
+broaden command admission or allowed roots.
 
 Policy is configured at server launch. Common flags include:
 
@@ -70,7 +73,7 @@ Policy is configured at server launch. Common flags include:
 
 By default, selected deployment tools such as `railway` and `wrangler` may be admitted by policy. PowerShell Core script execution is admitted as `pwsh -File ...`, `pwsh -NoProfile -File ...`, or `pwsh -NoProfile -ExecutionPolicy Bypass -File ...`; `pwsh -Command` and Windows PowerShell remain disallowed unless site policy changes. All commands are still executed as argv arrays under the same root, timeout, and output controls.
 
-`structured_command_execute` accepts optional `test_scope` (`focused`, `broad`, `known_slow`, `unknown`) and `expected_cost` (`low`, `medium`, `high`, `unknown`) metadata. When omitted, simple test commands are classified conservatively in the result envelope so verification posture is explicit without expanding command admission.
+`structured_command_execute` accepts optional `test_scope` (`focused`, `broad`, `known_slow`, `unknown`), `expected_cost` (`low`, `medium`, `high`, `unknown`), and `wait_for_completion` metadata. When omitted, simple test commands are classified conservatively in the result envelope so verification posture is explicit without expanding command admission. `wait_for_completion:false` is accepted only for `known_slow` verification and returns a pollable execution ref.
 
 Use `structured_command_powershell_parse_check` to parse-check one `.ps1` file under an allowed root. The tool invokes the PowerShell parser internally and does not admit arbitrary `pwsh -Command` text from callers.
 

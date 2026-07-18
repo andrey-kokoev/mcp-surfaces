@@ -1982,7 +1982,9 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
       report_verification_count: countReportVerificationEntries(reports, sqliteReports),
       observation_artifact_count: observations.length,
     },
-    remediation: observations.length > 0
+    remediation: evidence.has_verification === true
+      ? 'Verification evidence is present and satisfies the gate.'
+      : observations.length > 0
       ? 'Structured observation artifacts are recorded context but do not satisfy the verification gate. Add substantive ## Verification notes, finish with a summary plus changed_files/no_files_changed, or attach a governed passed verification run.'
       : 'Add substantive ## Verification notes, finish with a summary plus changed_files/no_files_changed, or attach a governed passed verification run.',
   });

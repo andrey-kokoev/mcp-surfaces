@@ -83,7 +83,7 @@ function parseArgs(argv: string[]): ProxyOptions {
 // The watchdog guards against a hung child. Callers that own a surface timeout
 // must carry it in the transport-level _meta field below; arbitrary tool
 // arguments remain domain data and are never interpreted here.
-function effectiveRequestTimeoutMs(proxyTimeoutMs: number, requestedTransportTimeoutMs: number | null, toolTimeoutGraceMs: number): number {
+export function effectiveRequestTimeoutMs(proxyTimeoutMs: number, requestedTransportTimeoutMs: number | null, toolTimeoutGraceMs: number): number {
   if (requestedTransportTimeoutMs === null) return proxyTimeoutMs;
   const boundedRequestedTimeoutMs = Math.min(MAX_TRANSPORT_TIMEOUT_MS, requestedTransportTimeoutMs);
   // The 15-minute bound applies to the admitted transport timeout. Grace is

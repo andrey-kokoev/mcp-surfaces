@@ -1156,9 +1156,12 @@ compatibility_record: true
   assert.equal(compatibilityReviewInspect.evidence.all_criteria_checked, true);
   assert.equal(compatibilityReviewInspect.evidence_preflight.status, 'ready');
   assert.equal(compatibilityReviewInspect.evidence_preflight.blockers.length, 0);
+  const verificationRequirement = compatibilityReviewInspect.evidence_preflight.requirements.find((requirement: any) => requirement.id === 'verification');
+  assert.equal(verificationRequirement.satisfied, true);
+  assert.match(verificationRequirement.remediation, /Verification evidence is present/);
   assert.equal(compatibilityReviewInspect.lifecycle.closed_at !== null, true);
   assert.equal(compatibilityReviewInspect.lifecycle.closed_by, 'smart-scheduling.architect');
-  assert.equal(compatibilityReviewInspect.lifecycle.closure_mode, 'peer_reviewed');
+  assert.equal(compatibilityReviewInspect.lifecycle.closure_mode, 'operator_direct');
 
   const reconciliationStore = openTaskLifecycleStore(siteRoot);
   try {
