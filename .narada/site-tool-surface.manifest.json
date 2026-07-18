@@ -2,7 +2,7 @@
   "schema": "narada.site_tool_surface.manifest.v1",
   "site_root": "D:\\code\\mcp-surfaces\\.narada",
   "tool_root": "D:\\code\\mcp-surfaces\\.narada\\tools",
-  "generated_at": "2026-06-25T00:54:00.901Z",
+  "generated_at": "2026-07-18T19:01:09.726Z",
   "entries": [
     {
       "path": "tools/operator-surface-carriers/Start-AgentCliSession.ps1",
@@ -11,7 +11,7 @@
       "surface": "agent-cli",
       "package": "@narada2/agent-cli",
       "version": "2",
-      "hash": "a6450fcf3ae24fd72399308bd1be3f1882ea111d2a80dde5f777f64f2647d8c0",
+      "hash": "4f0c1f06f96cd84491f3a70a4fb68b956c5942d5b99fffad8249333fe0e995e7",
       "allowed_root_refs": [
         "NARADA_USER_SITE_ROOT",
         "NARADA_SITE_ROOT",

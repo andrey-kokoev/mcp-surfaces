@@ -1,8 +1,8 @@
 # Start-AgentCliSession.ps1
 # narada_template_id: narada.agent_cli.windows_wrapper
 # narada_template_version: 2
-# narada_template_source: @narada2/agent-cli ./windows-wrapper-template
-# narada_template_hash: a6450fcf3ae24fd72399308bd1be3f1882ea111d2a80dde5f777f64f2647d8c0
+# narada_template_source: @narada2/agent-runtime-server ./agent-cli-windows-wrapper-template
+# narada_template_hash: 4f0c1f06f96cd84491f3a70a4fb68b956c5942d5b99fffad8249333fe0e995e7
 
 param(
     [Parameter(Mandatory)]
@@ -40,13 +40,6 @@ param(
     [switch]$SessionInventoryEventsJson,
 
     [ValidateSet('mcp_state', 'recommended_action', 'recovery_kind')]
-    [string]$McpPreflightFilter,
-
-    [string]$McpPreflightMatch,
-
-    [ValidateSet('all', 'startup', 'runtime')]
-    [string]$McpPreflightDiagnosticsFilter = 'all',
-
     [ValidateSet('operational_posture', 'request_posture', 'mcp_state', 'heartbeat_status', 'recommended_action', 'recovery_kind')]
     [string]$SessionInventoryFilter,
 
@@ -83,28 +76,6 @@ param(
     [string]$SessionEventsFilter = 'all',
 
     [int]$SessionEventsCount = 20,
-
-    [switch]$McpPreflightJson,
-
-    [switch]$McpPreflightRead,
-
-    [switch]$McpPreflightReadJson,
-
-    [switch]$McpPreflightInventory,
-
-    [switch]$McpPreflightInventoryJson,
-
-    [switch]$McpPreflightActions,
-
-    [switch]$McpPreflightActionsJson,
-
-    [switch]$McpPreflightRecovery,
-
-    [switch]$McpPreflightRecoveryJson,
-
-    [switch]$McpPreflightDiagnostics,
-
-    [switch]$McpPreflightDiagnosticsJson,
 
     [switch]$AutoApprove
 )
@@ -212,7 +183,7 @@ function Resolve-NaradaPackageExport {
 
 $AgentCliPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-cli' -BinName 'narada-agent-cli'
 $AgentRuntimeServerPath = Resolve-NaradaPackageBin -PackageName '@narada2/agent-runtime-server' -BinName 'narada-agent-runtime-server'
-$ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/agent-cli' -ExportName './intelligence-providers'
+$ProviderMetadataPath = Resolve-NaradaPackageExport -PackageName '@narada2/carrier-provider-contract' -ExportName './provider-registry'
 $ProviderMetadata = (Get-Content $ProviderMetadataPath -Raw | ConvertFrom-Json).providers
 $providerDefault = $ProviderMetadata.PSObject.Properties[$IntelligenceProvider].Value
 if (-not $providerDefault) {
@@ -552,161 +523,18 @@ if ($SessionEventsJson) {
     exit $LASTEXITCODE
 }
 
-if ($McpPreflightJson) {
-    Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-json'
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightRead) {
-    Write-Host "MCP preflight review..." -ForegroundColor Cyan
-    Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read'
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightReadJson) {
-    Set-Location $WorkDir
-    & node $AgentCliPath '--identity' $IdentityName '--session' $SessionName '--mcp-preflight-read-json'
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightInventory) {
-    Write-Host "MCP preflight inventory..." -ForegroundColor Cyan
-    Set-Location $WorkDir
-    $preflightInventoryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-inventory')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightInventoryArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightInventoryArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightInventoryJson) {
-    Set-Location $WorkDir
-    $preflightInventoryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-inventory-json')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightInventoryJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightInventoryJsonArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightActions) {
-    Write-Host "MCP preflight actions..." -ForegroundColor Cyan
-    Set-Location $WorkDir
-    $preflightActionArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-actions')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightActionArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightActionArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightActionsJson) {
-    Set-Location $WorkDir
-    $preflightActionsJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-actions-json')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightActionsJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightActionsJsonArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightRecovery) {
-    Write-Host "MCP preflight recovery..." -ForegroundColor Cyan
-    Set-Location $WorkDir
-    $preflightRecoveryArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-recovery')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightRecoveryArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightRecoveryArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightRecoveryJson) {
-    Set-Location $WorkDir
-    $preflightRecoveryJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-recovery-json')
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightRecoveryJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightRecoveryJsonArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightDiagnostics) {
-    Write-Host "MCP preflight diagnostics..." -ForegroundColor Cyan
-    Set-Location $WorkDir
-    $preflightDiagnosticsArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-diagnostics', '--mcp-preflight-diagnostics-filter', $McpPreflightDiagnosticsFilter)
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightDiagnosticsArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightDiagnosticsArgs
-    exit $LASTEXITCODE
-}
-
-if ($McpPreflightDiagnosticsJson) {
-    Set-Location $WorkDir
-    $preflightDiagnosticsJsonArgs = @('--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-diagnostics-json', '--mcp-preflight-diagnostics-filter', $McpPreflightDiagnosticsFilter)
-    if ($McpPreflightFilter -and $McpPreflightMatch) {
-        $preflightDiagnosticsJsonArgs += @('--mcp-preflight-filter', $McpPreflightFilter, '--mcp-preflight-match', $McpPreflightMatch)
-    }
-    & node $AgentCliPath @preflightDiagnosticsJsonArgs
-    exit $LASTEXITCODE
-}
-
 $argList = @($AgentRuntimeServerPath, '--identity', $IdentityName, '--session', $SessionName)
 if ($AutoApprove) {
     $argList += '--auto-approve'
 }
 
-Write-Host "Starting NARS for $IdentityName..." -ForegroundColor Cyan
+Write-Host "Starting agent-runtime-server for $IdentityName..." -ForegroundColor Cyan
 Write-Host "  Session: $SessionName" -ForegroundColor DarkGray
 Write-Host "  WorkDir: $WorkDir" -ForegroundColor DarkGray
 $displayModel = if ($PrimaryModelEnvName) { [Environment]::GetEnvironmentVariable($PrimaryModelEnvName, 'Process') } else { $null }
 if (-not $displayModel) { $displayModel = $providerDefault.default_model }
 Write-Host "  Provider: $IntelligenceProvider" -ForegroundColor DarkGray
 Write-Host "  Model:   $displayModel" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "Preflight MCP fabric..." -ForegroundColor Cyan
-$preflightArgs = @($AgentCliPath, '--identity', $IdentityName, '--session', $SessionName, '--mcp-preflight-json')
-Set-Location $WorkDir
-$preflightRaw = & node @preflightArgs
-$preflightExitCode = $LASTEXITCODE
-$preflight = $null
-if ($preflightRaw) {
-    try {
-        $preflight = $preflightRaw | ConvertFrom-Json
-    } catch {
-        Write-Warning "MCP preflight returned non-JSON output; continuing with exit-code-only handling."
-    }
-}
-if ($preflight) {
-    Write-Host ("  MCP state: {0}" -f $preflight.mcp_operational_state) -ForegroundColor DarkGray
-    if ($preflight.mcp_startup_failure_count -gt 0 -and $preflight.mcp_startup_failure_summary) {
-        Write-Host ("  MCP startup failures: {0}" -f $preflight.mcp_startup_failure_summary) -ForegroundColor DarkYellow
-    }
-    if ($preflight.mcp_runtime_fault_count -gt 0 -and $preflight.mcp_runtime_fault_summary) {
-        Write-Host ("  MCP runtime faults:   {0}" -f $preflight.mcp_runtime_fault_summary) -ForegroundColor DarkYellow
-    }
-    Write-Host ("  Recommended action:  {0}" -f $preflight.recommended_action_display) -ForegroundColor DarkGray
-    if ($preflight.recommended_command) {
-        Write-Host ("  Recommended command: {0}" -f $preflight.recommended_command) -ForegroundColor DarkYellow
-    }
-    if ($preflight.handoffs -and $preflight.handoffs.mcp_preflight_read) {
-        Write-Host ("  Preflight review:    {0}" -f $preflight.handoffs.mcp_preflight_read) -ForegroundColor DarkGray
-    }
-    if ($preflight.artifact_path) {
-        Write-Host ("  Preflight artifact:  {0}" -f $preflight.artifact_path) -ForegroundColor DarkGray
-    }
-}
-if ($preflightExitCode -eq 1) {
-    Write-Error "MCP preflight failed."
-    exit 1
-}
-if ($preflightExitCode -eq 2) {
-    Write-Warning "MCP preflight reported degraded startup posture; continuing server attach."
-}
 Write-Host ""
 Set-Location $WorkDir
 & node @argList
