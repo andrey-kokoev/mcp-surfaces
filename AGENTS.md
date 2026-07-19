@@ -143,6 +143,7 @@ pnpm test:delegated-task
 pnpm test:sop
 pnpm test:scheduler
 pnpm test:registrar
+pnpm test:registrar:kimi-contract
 pnpm test:surface-feedback
 pnpm test:launcher
 pnpm test:mcp-loader
@@ -166,6 +167,7 @@ pnpm test:delegated-task:live
 pnpm test:delegated-task:e2e
 pnpm test:scheduler:e2e:host
 pnpm test:launcher:e2e:host
+pnpm test:registrar:kimi-live
 ```
 
 ## Verification Expectations
@@ -192,6 +194,23 @@ Do all of the following in the same change:
 - Do feature work on `agent/<topic>` branches.
 - This repo does not use changesets; the `narada` repo does — do not copy that convention here.
 - Stage only paths explicitly scoped to your change and leave unrelated worktree state untouched.
+
+### One Worktree per Agent Stream
+
+- The default for automated agent work is one dedicated Git worktree and one
+  `agent/<topic>` branch per independently active stream. Two live agent
+  streams must not share a physical worktree or Git index, even when their task
+  scopes appear disjoint.
+- Before claiming implementation work, call `git_status`. If the selected
+  worktree already contains changes not established as belonging to the current
+  stream, do not silently continue: use or create a separate worktree, or emit
+  an explicit shared-worktree warning and obtain an operator-directed exception.
+- A shared-worktree exception is temporary. Record it in task execution notes,
+  preserve all pre-existing paths, and scope every stage operation explicitly.
+  Before commit, call `git_commit` with `expected_staged_paths`; treat any
+  index divergence as a refusal requiring a fresh status/diff review.
+- This discipline applies to concurrent automated streams. It does not mandate
+  extra worktrees for ordinary human-only repository use.
 
 ## Boundary Notes
 
