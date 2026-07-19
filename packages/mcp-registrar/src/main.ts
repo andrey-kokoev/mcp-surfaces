@@ -387,6 +387,7 @@ const SURFACES: SurfaceDef[] = [
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}', '--site-id', '{site_id}'],
     tools: ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+    env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'],
     output_reader_closure: {
       agent_context_hydrate_current: 'agent_context_output_show',
       agent_context_startup_sequence: 'agent_context_output_show',
