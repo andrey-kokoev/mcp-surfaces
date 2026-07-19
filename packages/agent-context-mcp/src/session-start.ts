@@ -2,9 +2,16 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { synthesizeBootstrap } from './synthesize-bootstrap.js';
 import { isCodexSessionId } from './codex-session-evidence.js';
+
+// Package-bundled fallback migrations: dist/src/session-start.js -> package root -> migrations/.
+const PACKAGE_MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
+
+// Matches narada's legacy sqlite facade: concurrent role launches wait instead of failing with SQLITE_BUSY.
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
 const MIGRATIONS = [
   { table: 'agent_start_events', path: ['.ai', 'db', 'migrations', '001-agent-context-materializations.sql'] },
@@ -41,7 +48,10 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
 
   const rosterPath = join(siteRoot, '.ai', 'agents', 'roster.json');
   if (!existsSync(rosterPath)) {
-    return { valid: false, error: sqlRosterCheck.error ?? `roster_not_found: ${rosterPath}` };
+    return buildInferredRosterCheck(identity, {
+      reason: 'roster_unavailable_but_site_session_roster_enforcement_not_enabled',
+      prior_error: sqlRosterCheck.error ?? `roster_not_found: ${rosterPath}`,
+    });
   }
 
   let roster;
@@ -53,6 +63,12 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
 
   const agent = roster.agents?.find((candidate) => candidate.agent_id === identity);
   if (!agent) {
+    if (!siteEnforcesSessionRoster(roster)) {
+      return buildInferredRosterCheck(identity, {
+        reason: 'identity_not_in_roster_but_site_session_roster_enforcement_not_enabled',
+        prior_error: sqlRosterCheck.error ?? null,
+      });
+    }
     return { valid: false, error: `identity_not_in_roster: ${identity}` };
   }
 
@@ -69,6 +85,42 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
     capabilities,
     capability_policy: agent.capability_policy ?? defaultCapabilityPolicy(agent.role),
   };
+}
+
+function buildInferredRosterCheck(identity, { reason, prior_error = null } = {}) {
+  const role = inferRoleFromIdentity(identity);
+  return {
+    valid: true,
+    agent: {
+      agent_id: identity,
+      role,
+      capabilities: [],
+      roster_source: 'identity_inference_non_authoritative',
+    },
+    role,
+    role_binding: buildRoleBindingProjection({
+      agentId: identity,
+      role,
+      source: 'identity_inference_non_authoritative',
+      bindingAuthority: 'identity_inference_non_authoritative',
+    }),
+    capabilities: [],
+    capability_policy: defaultCapabilityPolicy(role),
+    roster_source: 'identity_inference_non_authoritative',
+    roster_enforcement: 'disabled',
+    reason,
+    prior_error,
+  };
+}
+
+function siteEnforcesSessionRoster(roster) {
+  return roster?.enforce_session_roster === true;
+}
+
+function inferRoleFromIdentity(identity) {
+  const suffix = String(identity ?? '').split('.').pop();
+  if (['architect', 'builder', 'builder2', 'resident'].includes(suffix)) return suffix;
+  return null;
 }
 
 function validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity) {
@@ -126,14 +178,16 @@ function parseCapabilitiesJson(value) {
   }
 }
 
-export function buildRoleBindingProjection({ agentId, role, source }) {
+export function buildRoleBindingProjection({ agentId, role, source, bindingAuthority = 'agent_roster' }) {
   return {
     schema: 'narada.agent.role_binding.v0',
     agent_id: agentId,
     role_name: role ?? null,
     binding_source: source ?? 'unknown',
-    binding_authority: 'agent_roster',
-    semantics: 'Roster role binding is used for identity read models, routing, and eligibility; it is not activation authority or a capability grant.',
+    binding_authority: bindingAuthority,
+    semantics: bindingAuthority === 'agent_roster'
+      ? 'Roster role binding is used for identity read models, routing, and eligibility; it is not activation authority or a capability grant.'
+      : 'Role was inferred from identity shape because the Site has not opted into session roster enforcement; this is a read-model hint, not activation authority or a capability grant.',
     capability_policy_ref: 'capability_policy',
   };
 }
@@ -166,6 +220,7 @@ export function openAgentContextDb(siteRoot, dbPath = join(siteRoot, '.ai', 'sta
   }
 
   const db = new DatabaseSync(dbPath);
+  db.exec(`PRAGMA busy_timeout = ${Math.trunc(DEFAULT_BUSY_TIMEOUT_MS)}`);
   applyAgentContextMigrations(db, siteRoot);
   ensureAgentStartEventCompatibility(db);
   ensureCodexAdmissionColumns(db);
@@ -487,12 +542,20 @@ export function applyAgentContextMigrations(db, siteRoot) {
       continue;
     }
 
-    const migrationPath = join(siteRoot, ...migration.path);
-    if (!existsSync(migrationPath)) {
-      throw new Error(`agent_context_migration_not_found: ${migrationPath}`);
+    const migrationPath = resolveMigrationPath(siteRoot, migration);
+    if (!migrationPath) {
+      throw new Error(`agent_context_migration_not_found: ${join(siteRoot, ...migration.path)}`);
     }
     db.exec(readFileSync(migrationPath, 'utf8'));
   }
+}
+
+function resolveMigrationPath(siteRoot, migration) {
+  const sitePath = join(siteRoot, ...migration.path);
+  if (existsSync(sitePath)) return sitePath;
+  const bundledPath = join(PACKAGE_MIGRATIONS_DIR, migration.path[migration.path.length - 1]);
+  if (existsSync(bundledPath)) return bundledPath;
+  return null;
 }
 
 export function ensureAgentStartEventCompatibility(db) {
