@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
+import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
 
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_submit_observation",
@@ -166,8 +166,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
       if (!taskNumber) throw new Error('task_number_required');
       if (!agentId) throw new Error('agent_id_required');
       if (!reason) throw new Error('reason_required');
-      if (!Array.isArray(args.tags)) throw new Error('task_tags_must_be_array');
-      const tags = normalizeTaskTags(args.tags);
+      const tags = requireTaskTagsArray(args.tags);
       enforceSessionIdentity(agentId);
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);

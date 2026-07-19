@@ -9,6 +9,7 @@
 
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { parseFrontMatter } from '@narada2/task-governance-core/task-governance';
 import { parseStoredTaskTags, parseTaskTagsValue } from '@narada2/task-governance-core/task-tags';
 
 const STOP_WORDS = new Set([
@@ -40,53 +41,21 @@ interface TaskTagInfo {
   title: string | null;
   explicit_tags: string[];
   derived_tags: string[];
-  tags: string[];
-}
-
-interface TaskFrontmatter {
-  number?: string;
-  tags?: string | string[];
-  title?: string;
-}
-
-function extractFrontmatter(text): TaskFrontmatter {
-  if (!text.startsWith('---')) return {};
-  const end = text.indexOf('---', 3);
-  if (end === -1) return {};
-  const fm = text.slice(3, end).trim();
-  const result: TaskFrontmatter = {};
-  const lines = fm.split('\n');
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const m = line.match(/^([a-z_]+):\s*(.*)$/);
-    if (!m || !['number', 'tags', 'title'].includes(m[1])) continue;
-    if (m[1] === 'tags' && !m[2].trim()) {
-      const listItems: string[] = [];
-      let nextIndex = index + 1;
-      while (nextIndex < lines.length) {
-        const item = lines[nextIndex].match(/^\s*-\s+(.+)$/);
-        if (!item) break;
-        listItems.push(item[1].trim());
-        nextIndex += 1;
-      }
-      if (listItems.length > 0) {
-        result.tags = listItems;
-        index = nextIndex - 1;
-        continue;
-      }
-    }
-    result[m[1]] = m[2].trim();
-  }
-  return result;
 }
 
 function extractTaskTags(taskPath): TaskTagInfo {
   const text = readFileSync(taskPath, 'utf8');
-  const fm = extractFrontmatter(text);
-  const body = text.replace(/^---[\s\S]*?---/, '').trim();
+  const { frontMatter, body: parsedBody } = parseFrontMatter(text);
+  const body = parsedBody.trim();
+  const frontmatterTitle = typeof frontMatter.title === 'string' ? frontMatter.title.trim() : '';
+  const frontmatterNumberValue = frontMatter.number ?? frontMatter.task_number;
+  const frontmatterNumber = typeof frontmatterNumberValue === 'string'
+    || typeof frontmatterNumberValue === 'number'
+    ? String(frontmatterNumberValue)
+    : '';
   const titleMatch = body.match(/^#\s+(.+)$/m);
   const sources = [];
-  if (fm.title) sources.push(fm.title);
+  if (frontmatterTitle) sources.push(frontmatterTitle);
   if (titleMatch) sources.push(titleMatch[1]);
   const goalMatch = body.match(/^##\s+Goal\s*$/m);
   if (goalMatch) {
@@ -105,16 +74,16 @@ function extractTaskTags(taskPath): TaskTagInfo {
   const derivedTags = deriveTags(sources);
   let explicitTags: string[] = [];
   try {
-    explicitTags = parseTaskTagsValue(fm.tags);
+    explicitTags = parseTaskTagsValue(frontMatter.tags);
   } catch {
     // A malformed legacy label is ignored; derived terms remain usable.
   }
+  const parsedNumber = Number.parseInt(frontmatterNumber, 10);
   return {
-    task_number: parseInt(fm.number, 10) || null,
-    title: fm.title || (titleMatch ? titleMatch[1] : null),
+    task_number: Number.isNaN(parsedNumber) ? null : parsedNumber,
+    title: frontmatterTitle || (titleMatch ? titleMatch[1] : null),
     explicit_tags: explicitTags,
     derived_tags: derivedTags,
-    tags: explicitTags.length > 0 ? explicitTags : derivedTags,
   };
 }
 
@@ -133,8 +102,11 @@ function infoFromStoredSpec(spec, fallback: TaskTagInfo | undefined): TaskTagInf
     // Markdown labels after a clear or a failed projection write.
     explicit_tags: explicitTags,
     derived_tags: derivedTags.length > 0 ? derivedTags : (fallback?.derived_tags ?? []),
-    tags: [],
   };
+}
+
+function effectiveTags(info: TaskTagInfo): string[] {
+  return info.explicit_tags.length > 0 ? info.explicit_tags : info.derived_tags;
 }
 
 function intersection(left: string[], right: string[]): string[] {
@@ -159,11 +131,9 @@ export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store 
   }
 
   const allTags = Array.from(byNumber.values());
-  for (const info of allTags) {
-    info.tags = info.explicit_tags.length > 0 ? info.explicit_tags : info.derived_tags;
-  }
   const target = byNumber.get(targetTaskNumber);
   if (!target) return { target: targetTaskNumber, related: [], schema: 'narada.task.relatedness.v0' };
+  const targetTags = effectiveTags(target);
 
   const scored = [];
   for (const other of allTags) {
@@ -173,7 +143,8 @@ export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store 
     const overlap = explicitOverlap.length > 0 ? explicitOverlap : derivedOverlap;
     if (overlap.length === 0) continue;
     const matchBasis = explicitOverlap.length > 0 ? 'explicit_tags' : 'derived_terms';
-    const score = overlap.length * (overlap.length / Math.max(target.tags.length, other.tags.length));
+    const otherTags = effectiveTags(other);
+    const score = overlap.length * (overlap.length / Math.max(targetTags.length, otherTags.length));
     scored.push({
       task_number: other.task_number,
       title: other.title,
@@ -187,7 +158,7 @@ export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store 
   scored.sort((a, b) => b.score - a.score || (a.task_number ?? 0) - (b.task_number ?? 0));
   return {
     target: targetTaskNumber,
-    target_tags: target.tags,
+    target_tags: targetTags,
     target_explicit_tags: target.explicit_tags,
     target_derived_tags: target.derived_tags,
     related: scored.slice(0, Math.max(0, limit)),

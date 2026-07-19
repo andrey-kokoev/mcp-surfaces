@@ -716,9 +716,9 @@ let runtimeStderr = process.stderr;
  * which preserves an intentional audited clear.
  */
 function backfillTaskSpecsFromTaskFiles() {
-  if (!siteRoot || !store) return 0;
+  if (!siteRoot || !store) return;
   const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
-  if (!existsSync(tasksDir)) return 0;
+  if (!existsSync(tasksDir)) return;
 
   const filesByNumber = new Map();
   for (const file of readdirSync(tasksDir)) {
@@ -732,7 +732,6 @@ function backfillTaskSpecsFromTaskFiles() {
     }
   }
 
-  let backfilled = 0;
   for (const [taskNumber, file] of filesByNumber) {
     if (!file) continue;
     const lifecycle = store.getLifecycleByNumber(taskNumber);
@@ -761,7 +760,6 @@ function backfillTaskSpecsFromTaskFiles() {
           tags_json: JSON.stringify(parsed.tags),
           updated_at: parsed.updated_at,
         });
-        backfilled += 1;
         continue;
       }
 
@@ -773,13 +771,19 @@ function backfillTaskSpecsFromTaskFiles() {
           ...existing,
           tags_json: JSON.stringify(parsed.tags),
         });
-        backfilled += 1;
       }
     } catch (error) {
       runtimeStderr.write(`Task tag/spec backfill skipped ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
-  return backfilled;
+}
+
+function prepareTaskLifecycleStore() {
+  store = openTaskLifecycleStore(siteRoot);
+  ensureTaskExecutionTables(store);
+  ensureDownstreamDependencyOutcomeContracts();
+  backfillTaskSpecsFromTaskFiles();
+  return store;
 }
 
 export function configureTaskLifecycleMcpRuntime({
@@ -799,10 +803,7 @@ export function configureTaskLifecycleMcpRuntime({
   SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
   siteRoot = resolve(String(options.siteRoot ?? cwd));
   try {
-    store = openTaskLifecycleStore(siteRoot);
-    ensureTaskExecutionTables(store);
-    ensureDownstreamDependencyOutcomeContracts();
-    backfillTaskSpecsFromTaskFiles();
+    prepareTaskLifecycleStore();
   } catch (error) {
     throw new Error(`Failed to open task lifecycle store: ${error.message}`);
   }
@@ -825,10 +826,7 @@ function refreshStore() {
     // This MCP process shares `store` across dispatch helpers. With node:sqlite,
     // closing a handle immediately invalidates helpers still holding it, so
     // refresh must be non-destructive.
-    store = openTaskLifecycleStore(siteRoot);
-    ensureTaskExecutionTables(store);
-    ensureDownstreamDependencyOutcomeContracts();
-    backfillTaskSpecsFromTaskFiles();
+    prepareTaskLifecycleStore();
     return true;
   } catch (error) {
     runtimeStderr.write(`Failed to refresh task lifecycle store: ${error.message}\n`);

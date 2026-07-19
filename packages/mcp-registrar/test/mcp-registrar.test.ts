@@ -275,6 +275,7 @@ try {
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_reply_all_to_last_in_thread_draft_create'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_submit_work'));
   assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_evidence_supersede'));
+  assert.ok((bySurface.get('task-lifecycle')?.tools as string[]).includes('task_lifecycle_tags_update'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_status'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_proof_run'));
   assert.ok((bySurface.get('site-loop')?.tools as string[]).includes('site_loop_output_show'));

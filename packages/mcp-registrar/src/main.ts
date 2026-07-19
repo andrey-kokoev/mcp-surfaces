@@ -159,7 +159,81 @@ const GIT_TOOLS = [
 ];
 const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
 const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
-const TASK_LIFECYCLE_TOOLS = ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_roster_admit', 'task_lifecycle_claim', 'task_lifecycle_continue', 'task_lifecycle_unclaim', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_admit_evidence', 'task_lifecycle_evidence_supersede', 'task_lifecycle_prove_criteria', 'task_lifecycle_disposition_closeout', 'task_lifecycle_closeout', 'task_lifecycle_audit', 'task_lifecycle_finish', 'task_lifecycle_submit_report', 'task_lifecycle_close', 'task_lifecycle_report_blocked', 'task_lifecycle_search', 'task_lifecycle_related', 'task_lifecycle_tags_update', 'task_lifecycle_defer', 'task_lifecycle_un_defer', 'task_lifecycle_reopen', 'task_lifecycle_review', 'task_lifecycle_compatibility_reconcile', 'task_lifecycle_submit_observation', 'task_lifecycle_record_observation', 'task_lifecycle_bridge_poll', 'task_lifecycle_inbox_target', 'task_lifecycle_create', 'mcp_payload_create', 'mcp_payload_show', 'mcp_output_show', 'mcp_payload_derive', 'mcp_payload_validate', 'task_lifecycle_set_routing', 'task_lifecycle_test_mcp_tool', 'task_lifecycle_run_tests', 'task_lifecycle_recurring_create', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_suspend', 'task_lifecycle_recurring_retire', 'task_lifecycle_recurring_trigger', 'task_lifecycle_recurring_run_due', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_add_task', 'task_lifecycle_chapter_show', 'task_lifecycle_submit_work', 'task_lifecycle_self_certification_preflight', 'task_lifecycle_restart', 'task_lifecycle_diagnose_task_ref', 'task_lifecycle_evidence_preflight', 'task_lifecycle_dependency_declare', 'task_lifecycle_dependency_disposition_record'];
+function defineToolInventory(definitions: readonly (readonly [string, boolean])[]) {
+  const names = definitions.map(([name]) => name);
+  if (new Set(names).size !== names.length) throw new Error('registrar_tool_inventory_duplicate');
+  return {
+    tools: names,
+    readOnlyTools: definitions.filter(([, readOnly]) => readOnly).map(([name]) => name),
+  };
+}
+
+const TASK_LIFECYCLE_INVENTORY = defineToolInventory([
+  ['task_lifecycle_guidance', true],
+  ['task_lifecycle_doctor', true],
+  ['task_lifecycle_list', true],
+  ['task_lifecycle_show', true],
+  ['task_lifecycle_roster', true],
+  ['task_lifecycle_payload_schema', true],
+  ['task_lifecycle_roster_admit', false],
+  ['task_lifecycle_claim', false],
+  ['task_lifecycle_continue', false],
+  ['task_lifecycle_unclaim', false],
+  ['task_lifecycle_next', true],
+  ['task_lifecycle_workboard_snapshot', true],
+  ['task_lifecycle_obligations', true],
+  ['task_lifecycle_inspect', true],
+  ['task_lifecycle_inspect_range', true],
+  ['task_lifecycle_admit_evidence', false],
+  ['task_lifecycle_evidence_supersede', false],
+  ['task_lifecycle_prove_criteria', false],
+  ['task_lifecycle_disposition_closeout', false],
+  ['task_lifecycle_closeout', false],
+  ['task_lifecycle_audit', true],
+  ['task_lifecycle_finish', false],
+  ['task_lifecycle_submit_report', false],
+  ['task_lifecycle_close', false],
+  ['task_lifecycle_report_blocked', false],
+  ['task_lifecycle_search', true],
+  ['task_lifecycle_related', true],
+  ['task_lifecycle_tags_update', false],
+  ['task_lifecycle_defer', false],
+  ['task_lifecycle_un_defer', false],
+  ['task_lifecycle_reopen', false],
+  ['task_lifecycle_review', false],
+  ['task_lifecycle_compatibility_reconcile', false],
+  ['task_lifecycle_submit_observation', false],
+  ['task_lifecycle_record_observation', false],
+  ['task_lifecycle_bridge_poll', false],
+  ['task_lifecycle_inbox_target', false],
+  ['task_lifecycle_create', false],
+  ['mcp_payload_create', false],
+  ['mcp_payload_show', true],
+  ['mcp_output_show', true],
+  ['mcp_payload_derive', false],
+  ['mcp_payload_validate', true],
+  ['task_lifecycle_set_routing', false],
+  ['task_lifecycle_test_mcp_tool', false],
+  ['task_lifecycle_run_tests', false],
+  ['task_lifecycle_recurring_create', false],
+  ['task_lifecycle_recurring_list', true],
+  ['task_lifecycle_recurring_show', true],
+  ['task_lifecycle_recurring_suspend', false],
+  ['task_lifecycle_recurring_retire', false],
+  ['task_lifecycle_recurring_trigger', false],
+  ['task_lifecycle_recurring_run_due', false],
+  ['task_lifecycle_recurring_runs', true],
+  ['task_lifecycle_chapter_add_task', false],
+  ['task_lifecycle_chapter_show', true],
+  ['task_lifecycle_submit_work', false],
+  ['task_lifecycle_self_certification_preflight', false],
+  ['task_lifecycle_restart', false],
+  ['task_lifecycle_diagnose_task_ref', true],
+  ['task_lifecycle_evidence_preflight', true],
+  ['task_lifecycle_dependency_declare', false],
+  ['task_lifecycle_dependency_disposition_record', false],
+]);
+const TASK_LIFECYCLE_TOOLS = TASK_LIFECYCLE_INVENTORY.tools;
 const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_cognition_defaults_update', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
 const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
 const MCP_LOADER_TOOLS = ['mcp_loader_guidance', 'mcp_loader_runtime_status', 'mcp_loader_policy_inspect', 'mcp_loader_connection_inventory', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
@@ -175,7 +249,7 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   mailbox: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
   'graph-mail': ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
   calendar: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show'],
-  'task-lifecycle': ['task_lifecycle_guidance', 'task_lifecycle_doctor', 'task_lifecycle_list', 'task_lifecycle_show', 'task_lifecycle_roster', 'task_lifecycle_payload_schema', 'task_lifecycle_evidence_preflight', 'task_lifecycle_next', 'task_lifecycle_workboard_snapshot', 'task_lifecycle_obligations', 'task_lifecycle_inspect', 'task_lifecycle_inspect_range', 'task_lifecycle_audit', 'task_lifecycle_search', 'task_lifecycle_related', 'mcp_output_show', 'mcp_payload_show', 'mcp_payload_validate', 'task_lifecycle_recurring_list', 'task_lifecycle_recurring_show', 'task_lifecycle_recurring_runs', 'task_lifecycle_chapter_show', 'task_lifecycle_diagnose_task_ref'],
+  'task-lifecycle': TASK_LIFECYCLE_INVENTORY.readOnlyTools,
   'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
   'site-lifecycle': ['site_lifecycle_guidance', 'site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
   'site-registry': ['site_registry_guidance', 'site_registry_doctor', 'site_registry_command_map', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan'],

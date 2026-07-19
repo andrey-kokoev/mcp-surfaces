@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
-import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
+import { normalizeTaskTags, requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
 import {
   bindTaskExecution,
   ensureTaskExecutionTables,
@@ -118,7 +118,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const context = stringField(args, 'context') || null;
       const requiredWork = stringField(args, 'required_work') || '1. TBD';
       const nonGoals = stringField(args, 'non_goals') || null;
-      const tags = normalizeTaskTags(args.tags);
+      const tags = args.tags === undefined ? [] : requireTaskTagsArray(args.tags);
       const preferredRole = stringField(args, 'preferred_role') || null;
       const targetRole = stringField(args, 'target_role') || null;
       if ((preferredRole || targetRole) && !rolesAreObligationTargets()) {
@@ -292,7 +292,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (!['draft', 'active'].includes(initialStatus)) throw new Error('invalid_initial_status');
       const targetRole = stringField(args, 'target_role') || null;
       const preferredRole = stringField(args, 'preferred_role') || targetRole;
-      const tags = normalizeTaskTags(args.tags);
+      const tags = args.tags === undefined ? [] : requireTaskTagsArray(args.tags);
       if ((targetRole || preferredRole) && !rolesAreObligationTargets()) {
         return jsonToolResult(roleObligationTargetsDisabledResult({ preferredRole, targetRole }), true);
       }

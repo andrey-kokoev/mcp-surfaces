@@ -169,6 +169,35 @@ try {
   assert.deepEqual(yamlRelated.target_explicit_tags, ['mcp-surface', 'yaml-tag']);
   assert.equal(yamlRelated.related.some((item: any) => item.task_number === 4), true);
 
+  writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-7-live-backfill.md'), `---\ntask_number: 7\nstatus: opened\ntags:\n  - live-label\n---\n\n# Live backfill\n\n## Goal\n\nVerify refresh discovers task files created after startup.\n`, 'utf8');
+  writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-8-duplicate-a.md'), `---\ntask_number: 8\nstatus: opened\ntags: duplicate-a\n---\n\n# Duplicate A\n`, 'utf8');
+  writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-8-duplicate-b.md'), `---\ntask_number: 8\nstatus: opened\ntags: duplicate-b\n---\n\n# Duplicate B\n`, 'utf8');
+  const refreshFixtureStore = openTaskLifecycleStore(siteRoot);
+  try {
+    for (const [taskId, taskNumber] of [['live-backfill', 7], ['duplicate-backfill', 8]] as const) {
+      refreshFixtureStore.upsertLifecycle({
+        task_id: taskId,
+        task_number: taskNumber,
+        status: 'opened',
+        governed_by: null,
+        closed_at: null,
+        closed_by: null,
+        reopened_at: null,
+        reopened_by: null,
+        continuation_packet_json: null,
+        updated_at: '2026-07-18T00:00:00.000Z',
+      });
+    }
+  } finally {
+    refreshFixtureStore.db.close();
+  }
+  await call(27, 'task_lifecycle_chapter_add_task', { chapter_id: 'refresh-backfill', task_number: 7 });
+  const liveBackfill = await call(28, 'task_lifecycle_show', { task_number: 7 });
+  assert.deepEqual(liveBackfill.spec.tags, ['live-label']);
+  await call(29, 'task_lifecycle_chapter_add_task', { chapter_id: 'duplicate-backfill', task_number: 8 });
+  const duplicateBackfill = await call(30, 'task_lifecycle_show', { task_number: 8 });
+  assert.equal(duplicateBackfill.spec, null);
+
   await call(11, 'task_lifecycle_tags_update', {
     task_number: 1,
     agent_id: 'tags.architect',

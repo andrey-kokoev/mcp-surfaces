@@ -1,6 +1,6 @@
 import { resolve } from 'path';
 import { normalizeToolName, validateArgs, validationErrorResult } from './index.js';
-import { normalizeTaskTags } from '@narada2/task-governance-core/task-tags';
+import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
 
 export function createTaskLifecycleToolCaller({
   toolAliases,
@@ -215,7 +215,7 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
     ...payloadResolution,
     args: {
       ...normalizedArgs,
-      tags: normalizedArgs.tags === undefined ? undefined : normalizeTaskTags(normalizedArgs.tags),
+      tags: normalizedArgs.tags === undefined ? undefined : requireTaskTagsArray(normalizedArgs.tags),
     },
   };
 }
@@ -243,8 +243,7 @@ export function validateTaskCreatePayload(args) {
   }
   if (args.tags !== undefined) {
     try {
-      if (!Array.isArray(args.tags)) throw new Error('task_tags_must_be_array');
-      normalizeTaskTags(args.tags);
+      requireTaskTagsArray(args.tags);
     } catch (error) {
       const diagnostic = error instanceof Error ? error.message : 'invalid_tags';
       throw new Error(`task_lifecycle_create_payload_tags_invalid:${diagnostic}`);
