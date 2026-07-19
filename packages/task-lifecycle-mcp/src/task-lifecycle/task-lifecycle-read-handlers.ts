@@ -1,5 +1,7 @@
 import { DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT } from '../mcp-payload-file.js';
 import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance-core/task-tags';
+import { withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
+import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 
 export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
   'task_lifecycle_list',
@@ -10,49 +12,113 @@ export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
 
 export function createTaskLifecycleReadHandlers({
   store,
+  siteRoot,
   jsonToolResult,
   stringField,
   numberField,
   getSitePolicy,
 }) {
   return {
-    task_lifecycle_list: (args) => {
+    task_lifecycle_list: async (args) => {
       const statusFilter = stringField(args, 'status');
       const agentFilter = stringField(args, 'agent_id');
       const limit = Math.max(1, Math.min(numberField(args, 'limit') ?? 50, 200));
       const tagFilter = normalizeTaskTags(args?.tags);
       const tagMatch = stringField(args, 'tag_match') ?? 'all';
       if (!['any', 'all'].includes(tagMatch)) throw new Error('tag_match_must_be_any_or_all');
-      const needsFullScan = Boolean(statusFilter || agentFilter || tagFilter.length > 0);
-      const rows = needsFullScan
-        ? store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC').all()
-        : store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC LIMIT ?').all(limit);
-      const tasks = rows.map((row) => {
-        const spec = store.getTaskSpec(row.task_id);
-        const assignment = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(row.task_id);
-        const tags = parseStoredTaskTags(spec?.tags_json);
-        return {
-          task_number: row.task_number,
-          task_id: row.task_id,
-          status: row.status,
-          title: spec?.title ?? null,
-          assigned_to: assignment?.agent_id ?? null,
-          claimed_at: assignment?.claimed_at ?? null,
-          tags,
-          updated_at: row.updated_at,
-        };
+      const snapshot = await withSqliteBusyRetry(() => withStoreSavepoint(store, () => {
+        const needsFullScan = Boolean(statusFilter || agentFilter || tagFilter.length > 0);
+        const rows = needsFullScan
+          ? store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC').all()
+          : store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC LIMIT ?').all(limit);
+        const tasks = rows.map((row) => {
+          const spec = store.getTaskSpec(row.task_id);
+          const assignment = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(row.task_id);
+          const tags = parseStoredTaskTags(spec?.tags_json);
+          const projectionConsistency = classifyTaskListProjectionConsistency({
+            lifecycle: row,
+            latestOutcome: store.getLatestTaskOutcome?.(row.task_id) ?? null,
+            activeAssignment: assignment ?? null,
+          });
+          return {
+            task_number: row.task_number,
+            task_id: row.task_id,
+            status: row.status,
+            title: spec?.title ?? null,
+            assigned_to: assignment?.agent_id ?? null,
+            claimed_at: assignment?.claimed_at ?? null,
+            tags,
+            updated_at: row.updated_at,
+            projection_consistency: projectionConsistency,
+            executability_posture: buildCompactExecutabilityPosture({ store, taskId: row.task_id, siteRoot }),
+          };
+        });
+        const filtered = tasks.filter((task) => {
+          if (statusFilter && task.status !== statusFilter) return false;
+          if (agentFilter && task.assigned_to !== agentFilter) return false;
+          if (tagFilter.length > 0) {
+            const matches = tagFilter.filter((tag) => task.tags.includes(tag)).length;
+            if (tagMatch === 'all' && matches !== tagFilter.length) return false;
+            if (tagMatch === 'any' && matches === 0) return false;
+          }
+          return true;
+        }).slice(0, limit);
+        const staleTasks = filtered.filter((task) => task.projection_consistency.status === 'stale');
+        return { tasks, filtered, staleTasks };
+      }));
+      const consistencyStatus = snapshot.value.staleTasks.length > 0
+        ? 'stale'
+        : snapshot.retries > 0
+          ? 'contention_observed'
+          : 'snapshot_coherent';
+      return jsonToolResult({
+        status: 'ok',
+        count: snapshot.value.filtered.length,
+        filters: { status: statusFilter ?? null, agent_id: agentFilter ?? null, tags: tagFilter, tag_match: tagMatch },
+        projection_consistency: {
+          status: consistencyStatus,
+          stale: snapshot.value.staleTasks.length > 0,
+          snapshot_isolation: 'sqlite_savepoint',
+          scanned_count: snapshot.value.tasks.length,
+          returned_count: snapshot.value.filtered.length,
+          stale_count: snapshot.value.staleTasks.length,
+          contention: { attempts: snapshot.attempts, retries: snapshot.retries },
+          stale_tasks: snapshot.value.staleTasks.map((task) => ({
+            task_number: task.task_number,
+            task_id: task.task_id,
+            reasons: task.projection_consistency.reasons,
+            expected_status: task.projection_consistency.expected_status,
+          })),
+          authoritative_detail_tool: 'task_lifecycle_show',
+          repair_tool: snapshot.value.staleTasks.length > 0 ? 'task_lifecycle_compatibility_reconcile' : null,
+        },
+        tasks: snapshot.value.filtered,
       });
-      const filtered = tasks.filter((task) => {
-        if (statusFilter && task.status !== statusFilter) return false;
-        if (agentFilter && task.assigned_to !== agentFilter) return false;
-        if (tagFilter.length > 0) {
-          const matches = tagFilter.filter((tag) => task.tags.includes(tag)).length;
-          if (tagMatch === 'all' && matches !== tagFilter.length) return false;
-          if (tagMatch === 'any' && matches === 0) return false;
-        }
-        return true;
-      }).slice(0, limit);
-      return jsonToolResult({ status: 'ok', count: filtered.length, filters: { status: statusFilter ?? null, agent_id: agentFilter ?? null, tags: tagFilter, tag_match: tagMatch }, tasks: filtered });
+    },
+    review_contract_defaults: {
+      ordinary_finish: 'Every ordinary task finish creates or reuses one review-contract dependency. An explicit reviewer is optional; routing defaults to the first reviewer-capable roster agent and then the reviewer role.',
+      review_execution: 'Claim the generated review task and finish it with task_lifecycle_finish outcome plus findings. Do not call task_lifecycle_review for tasks that already have a review dependency.',
+      compatibility_migration: 'task_lifecycle_review remains only for pre-existing tasks with no review-contract dependency.',
+      singleton_reviewer: 'When the site has exactly one reviewer-capable agent, same-operator review is admitted and annotated automatically. No boolean flag is required; multi-reviewer conflict policy still requires explicit authorization.',
+    },
+    runtime_freshness_discovery: {
+      tool: 'mcp_runtime_proxy_status',
+      statuses: ['current', 'stale', 'unknown'],
+      restart_action_path: 'runtime_freshness.reload_action',
+      note: 'This proxy-owned tool is advertised alongside task-lifecycle tools on carrier-bound sessions. It is distinct from task_lifecycle_restart request markers and does not restart automatically.',
+    },
+    fresh_server_recovery: {
+      tool: 'task_lifecycle_test_mcp_tool',
+      use_when: 'The session-bound task-lifecycle server is wedged or demonstrably stale and a one-shot fresh-process verification is needed without restarting the session.',
+      path_policy: 'server_path may be site-root-relative, or absolute only under the site root, the running task-lifecycle package root, or NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
+      payload_route: 'Pass payload_ref on task_lifecycle_test_mcp_tool and put required child identity/routing fields in arguments. The parent resolves the immutable payload and passes merged arguments to the fresh child; arguments wins for fields such as task_number and agent_id.',
+      warning: 'A fresh one-shot result is recovery evidence, not proof that the carrier-bound server has reloaded. Use mcp_runtime_proxy_status for that process.',
+    },
+    restart_lifecycle: {
+      request_tool: 'task_lifecycle_restart',
+      modes: ['request', 'status', 'acknowledge', 'clear'],
+      completion: 'A real replacement task-lifecycle child automatically acknowledges and clears a pending marker from post-request self-observed boot evidence. acknowledge and clear are idempotent after automatic reconciliation.',
+      build_pinning: 'A session-bound MCP server runs the build loaded when its child process started. Source or build fixes do not appear in that process until the carrier/runtime supervisor performs a real child restart; task_lifecycle_test_mcp_tool is only a one-shot recovery route.',
     },
     task_lifecycle_roster: () => {
       const roster = store.getRoster();
@@ -77,6 +143,37 @@ export function createTaskLifecycleReadHandlers({
   };
 }
 
+export function classifyTaskListProjectionConsistency({ lifecycle, latestOutcome, activeAssignment }) {
+  const compatibilityReview = lifecycle?.governed_by === 'review'
+    && String(lifecycle?.task_id ?? '').includes('-legacy-review-');
+  const reasons: string[] = [];
+  let expectedStatus: string | null = null;
+  if (compatibilityReview && latestOutcome && lifecycle?.status !== 'closed') {
+    reasons.push('admitted_review_outcome_not_projected_to_lifecycle');
+    expectedStatus = 'closed';
+  }
+  if (compatibilityReview && latestOutcome && lifecycle?.status === 'closed'
+    && !(lifecycle.closed_at && lifecycle.closed_by && lifecycle.closure_mode)) {
+    reasons.push('closed_lifecycle_missing_closure_evidence');
+    expectedStatus = 'closed';
+  }
+  if (compatibilityReview && lifecycle?.status === 'closed' && activeAssignment) {
+    reasons.push('closed_lifecycle_retains_active_assignment');
+    expectedStatus = 'closed';
+  }
+  return {
+    status: reasons.length > 0 ? 'stale' : 'coherent',
+    checked: compatibilityReview,
+    reasons,
+    expected_status: expectedStatus,
+    observed_status: lifecycle?.status ?? null,
+    latest_outcome: latestOutcome?.outcome ?? null,
+    remediation: reasons.length > 0
+      ? 'Inspect with task_lifecycle_show, then run task_lifecycle_compatibility_reconcile for the affected task.'
+      : null,
+  };
+}
+
 function taskLifecycleGuidance({ workflow, tool, sitePolicy }) {
   const sections = taskLifecycleGuidanceSections();
   const normalizedWorkflow = sections[workflow] ? workflow : 'all';
@@ -98,6 +195,7 @@ function taskLifecycleGuidance({ workflow, tool, sitePolicy }) {
       'Inspect the task before mutation; claim only when authorized; submit execution notes, verification, changed-file evidence, and closeout through lifecycle tools.',
       'Use payload_ref for long companion fields and preserve structuredContent as authoritative lifecycle evidence.',
       'Use task_lifecycle_tags_update for audited site-local labels; tags are descriptive and never replace routing, authorization, priority, dependency, review, or closure state.',
+      'Call mcp_runtime_proxy_status when this carrier-bound surface may be running an old build; inspect runtime_freshness.status and execute only the machine-readable carrier/supervisor reload_action.',
     ],
     sections: selectedSections,
     first_use_decision_tree: taskLifecycleFirstUseDecisionTree(),
@@ -152,6 +250,10 @@ function taskLifecycleFirstUseDecisionTree() {
     {
       condition: 'You are completing review/dependency work.',
       sequence: ['task_lifecycle_show to read outcome contract', 'task_lifecycle_finish with outcome and findings'],
+    },
+    {
+      condition: 'The carrier-bound server is stale or wedged.',
+      sequence: ['mcp_runtime_proxy_status', 'task_lifecycle_test_mcp_tool with an admitted server_path for one-shot recovery evidence', 'route runtime_freshness.reload_action to the carrier/runtime supervisor'],
     },
     {
       condition: 'Your summary, verification, findings, or blocker details are too long for inline fields.',
@@ -225,6 +327,16 @@ function taskLifecycleHappyPathExamples() {
         auto_materialize_payload: true,
       },
       result_contract: 'payload_source.kind=auto_materialized_payload and long_field_transport=auto_materialized_payload',
+    },
+    resume_existing_submit_work: {
+      tool: 'task_lifecycle_submit_work',
+      use_when: 'A prior submit_work already recorded substantive task notes and admitted a report, but a later lifecycle gate or restart requires continuing the same closeout.',
+      arguments: {
+        task_number: 123,
+        agent_id: '<same submitting agent id>',
+        resume_existing_work: true,
+      },
+      result_contract: 'Existing Execution Notes and Verification are validated and reused; latest same-agent report summary and changed-file evidence are reused; proof and admission are skipped unless explicitly requested.',
     },
     no_files_changed_finish: {
       tool: 'task_lifecycle_finish',
@@ -390,7 +502,7 @@ function taskLifecycleToolGuidance(tool) {
   const guidance = {
     task_lifecycle_submit_work: {
       preferred_for: 'Ordinary task completion with execution notes, verification, evidence admission, and finish/report in one call.',
-      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Inline companion fields are accepted up to the governed threshold; use payload_ref or opt in with auto_materialize_payload:true for larger artifacts.',
+      caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Use resume_existing_work:true only to continue prior same-agent admitted work without rewriting notes or duplicating proof/admission. Inline companion fields are accepted up to the governed threshold; use payload_ref or opt in with auto_materialize_payload:true for larger artifacts.',
     },
     task_lifecycle_finish: {
       preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
@@ -418,10 +530,16 @@ function taskLifecycleToolGuidance(tool) {
 function taskLifecyclePayloadSchemas() {
   return {
     task_lifecycle_submit_work: {
-      payload_ref_shape: { summary: '<finish summary>', execution_notes: '<Execution Notes replacement>', verification: '<Verification replacement>', changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
+      payload_ref_shape: { summary: '<finish summary>', execution_notes: '<Execution Notes replacement>', verification: '<Verification replacement>', changed_files: ['path/to/file'], no_files_changed: false, resume_existing_work: false, self_certification: {}, recovery_truthfulness: {} },
       inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['summary', 'execution_notes', 'verification', 'changed_files'], remediation: 'Inline fields are accepted up to the governed threshold. Larger inline fields are refused with mcp_payload_create plus payload_ref remediation. For one governed submit_work call, pass auto_materialize_payload:true; the result must include payload_source.kind=auto_materialized_payload.' },
       one_call_fallback: { field: 'auto_materialize_payload', value: true, audit_contract: 'Creates an immutable transient payload artifact and reports it in payload_source.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
+    },
+    task_lifecycle_test_mcp_tool: {
+      payload_ref_shape: { summary: '<long child-tool field>', findings: [], changed_files: ['path/to/file'] },
+      payload_route: 'payload_ref is resolved by the parent and merged into arguments before spawning the fresh child.',
+      top_level_wins: 'Fields in arguments override payload fields, including task_number and agent_id.',
+      control_fields_remain_top_level: ['server_path', 'tool_name', 'timeout_seconds'],
     },
     task_lifecycle_review: {
       compatibility_only: true,
@@ -457,9 +575,12 @@ function taskLifecyclePayloadSchemas() {
         tags: ['incident', 'mcp-surface'],
         preferred_role: '<optional role>',
         target_role: '<optional role>',
+        recovery_truthfulness_required: false,
         idempotency_key: '<stable retry key; omitted values derive from payload_ref>',
         execution_binding: {
           workspace_root: '<absolute workspace root; defaults to this Site root>',
+          repository_root: '<absolute repository root when the task executes repository work>',
+          site_root: '<absolute destination Site root; defaults to this task-lifecycle surface Site>',
           executor_kind: 'manual | operator | worker_delegation | delegated_task | site_loop',
           correlation_key: '<stable result correlation key; defaults to idempotency_key>',
         },
@@ -468,7 +589,7 @@ function taskLifecyclePayloadSchemas() {
         { payload: { title: 'Fix thing', required_work: ['Inspect failure.', 'Patch narrowly.'], non_goals: ['No unrelated refactor.'], acceptance_criteria: ['Focused test passes.'] } },
       ],
       payload_ref_required: true,
-      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'tags', 'preferred_role', 'target_role', 'idempotency_key', 'execution_binding'],
+      inline_definition_fields_refused: ['title', 'goal', 'context', 'required_work', 'non_goals', 'acceptance_criteria', 'tags', 'preferred_role', 'target_role', 'recovery_truthfulness_required', 'idempotency_key', 'execution_binding'],
       normalized_fields: { required_work: 'string[] joins with newline after trimming empty entries', non_goals: 'string[] joins with newline after trimming empty entries' },
     },
     task_lifecycle_admit_evidence: {

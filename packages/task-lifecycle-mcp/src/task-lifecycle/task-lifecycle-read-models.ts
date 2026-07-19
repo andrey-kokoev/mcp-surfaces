@@ -147,6 +147,7 @@ function summarizeWorkboardTask(task) {
     pre_claim_warnings: task.pre_claim_warnings ?? [],
     relative_priority: task.relative_priority ?? null,
     updated_at: task.updated_at ?? null,
+    executability_posture: task.executability_posture ?? null,
   };
 }
 
@@ -413,4 +414,4 @@ function sectionHasSubstantiveContent(body, heading) {
 function normalizeLinkText(value) { return String(value ?? '').toLowerCase().replace(/[^a-z0-9_\-]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 function finiteNumber(value, fallback) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
 function stringOrNull(value) { return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null; }
-function compactNextActionTask(task) { if (!task) return null; return { task_number: task.task_number ?? null, title: task.title ?? null, status: task.status ?? null, target_role: task.target_role ?? null, assigned_agent: task.assigned_agent ?? null, claim_authority: task.claim_authority ?? null }; }
+function compactNextActionTask(task) { if (!task) return null; return { task_number: task.task_number ?? null, title: task.title ?? null, status: task.status ?? null, target_role: task.target_role ?? null, assigned_agent: task.assigned_agent ?? null, claim_authority: task.claim_authority ?? null, executability_posture: task.executability_posture ?? null }; }

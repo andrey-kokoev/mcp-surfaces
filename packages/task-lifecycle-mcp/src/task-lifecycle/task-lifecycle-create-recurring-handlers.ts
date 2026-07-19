@@ -1,7 +1,11 @@
 import { existsSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
 import { normalizeTaskTags, requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
+import {
+  enqueueTaskExecutabilityRequest,
+  taskSpecDigest,
+} from '@narada2/task-governance-core/task-executability-service';
 import {
   bindTaskExecution,
   ensureTaskExecutionTables,
@@ -17,17 +21,24 @@ function asPayload(value: unknown): TaskLifecyclePayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
 }
 
-function assertExecutionBindingScope(binding: ExecutionBinding, siteRoot: string): void {
+export function assertExecutionBindingScope(binding: ExecutionBinding, siteRoot: string): void {
   const currentSiteRoot = resolve(siteRoot);
   if (binding.site_root && resolve(binding.site_root) !== currentSiteRoot) {
     throw new Error('task_lifecycle_execution_binding_site_root_mismatch');
   }
-  if (!pathWithinRoot(binding.workspace_root, currentSiteRoot)) {
+  if (!executionRootAuthorizedForSite(binding.workspace_root, currentSiteRoot)) {
     throw new Error('task_lifecycle_execution_binding_workspace_outside_site_root');
   }
-  if (binding.repository_root && !pathWithinRoot(binding.repository_root, currentSiteRoot)) {
+  if (binding.repository_root && !executionRootAuthorizedForSite(binding.repository_root, currentSiteRoot)) {
     throw new Error('task_lifecycle_execution_binding_repository_outside_site_root');
   }
+}
+
+function executionRootAuthorizedForSite(candidateRoot: string, siteRoot: string): boolean {
+  if (pathWithinRoot(candidateRoot, siteRoot)) return true;
+  if (basename(siteRoot).toLowerCase() !== '.narada') return false;
+  const projectRoot = dirname(siteRoot);
+  return resolve(candidateRoot) === projectRoot && existsSync(resolve(projectRoot, '.git'));
 }
 
 function pathWithinRoot(path: string, root: string): boolean {
@@ -121,6 +132,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const tags = args.tags === undefined ? [] : requireTaskTagsArray(args.tags);
       const preferredRole = stringField(args, 'preferred_role') || null;
       const targetRole = stringField(args, 'target_role') || null;
+      const recoveryTruthfulnessRequired = args.recovery_truthfulness_required === true;
       if ((preferredRole || targetRole) && !rolesAreObligationTargets()) {
         return jsonToolResult(roleObligationTargetsDisabledResult({ preferredRole, targetRole }), true);
       }
@@ -199,6 +211,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       if (tags.length > 0) {
         frontMatterLines.push(`tags: ${tags.join(', ')}`);
       }
+      if (recoveryTruthfulnessRequired) {
+        frontMatterLines.push('recovery_truthfulness_required: true');
+      }
       if (payloadSource.ref) {
         frontMatterLines.push(`creation_payload_ref: ${payloadSource.ref}`);
       }
@@ -261,6 +276,29 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         throw error;
       }
 
+      // Enqueue an executability request for every newly created task. The call
+      // is idempotent and superseded older in-flight requests automatically.
+      try {
+        enqueueTaskExecutabilityRequest({
+          store,
+          siteRoot,
+          taskId,
+          taskNumber,
+          spec: {
+            title,
+            goal,
+            context,
+            required_work: requiredWork,
+            non_goals: nonGoals,
+            acceptance_criteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria : [],
+            dependencies: [],
+          },
+        });
+      } catch {
+        // Executability enqueue is best-effort on creation; failures are surfaced
+        // by the dedicated executability tools and do not block task creation.
+      }
+
       return jsonToolResult(attachPayloadSource({
         schema: 'narada.task.create.v0',
         status: reservationResult.created ? 'created' : 'recovered',
@@ -274,6 +312,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         recovered: !reservationResult.created,
         target_role: targetRole || preferredRole,
         preferred_role: preferredRole,
+        recovery_truthfulness_required: recoveryTruthfulnessRequired,
         payload_ref: payloadSource.ref ?? null,
         payload_sha256: payloadSource.sha256 ?? null,
       }, payloadSource));

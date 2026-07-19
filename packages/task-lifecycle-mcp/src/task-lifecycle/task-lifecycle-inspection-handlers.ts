@@ -2,6 +2,8 @@ import { join } from 'path';
 import { existsSync, readFileSync } from 'node:fs';
 import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
 import { parseStoredTaskTags, parseTaskTagsValue } from '@narada2/task-governance-core/task-tags';
+import { readTaskExecutionBinding } from './task-execution-state.js';
+import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 
 export const TASK_LIFECYCLE_INSPECTION_TOOL_NAMES = Object.freeze([
   'task_lifecycle_show',
@@ -123,6 +125,7 @@ export function createTaskLifecycleInspectionHandlers({
         active_assignment: assignment ?? null,
         assignment_intents: assignmentIntents,
         observations: observations ?? [],
+        execution_binding: readTaskExecutionBinding(store, lifecycle.task_id),
         current_execution_evidence: currentExecutionEvidence,
         legacy_review_rows: reviews ?? [],
         review_authority: reviewAuthority,
@@ -131,6 +134,7 @@ export function createTaskLifecycleInspectionHandlers({
         dependency_context: dependencyReadback.dependency_context,
         outcome_contract: dependencyReadback.outcome_contract,
         latest_task_outcome: dependencyReadback.latest_task_outcome,
+        executability_posture: buildCompactExecutabilityPosture({ store, siteRoot, taskId: lifecycle.task_id }),
         body,
       });
     },
@@ -194,6 +198,7 @@ export function createTaskLifecycleInspectionHandlers({
         reports: reports || [],
         observations: observations || [],
         observation_artifact_count: observations.length,
+        execution_binding: readTaskExecutionBinding(store, lifecycle.task_id),
         current_execution_evidence: currentExecutionEvidence,
         legacy_review_rows: reviews || [],
         review_authority: reviewAuthority,
@@ -249,6 +254,7 @@ export function createTaskLifecycleInspectionHandlers({
             updated_at: lifecycle.updated_at,
           },
           closure_authority: closureAuthority,
+          execution_binding: readTaskExecutionBinding(store, lifecycle.task_id),
           closure_evidence_posture: closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight }),
           evidence: evidence ? {
             verdict: evidence.verdict,

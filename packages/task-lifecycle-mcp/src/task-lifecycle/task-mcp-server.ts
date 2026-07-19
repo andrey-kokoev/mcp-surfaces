@@ -30,6 +30,7 @@ import {
 } from './task-lifecycle-read-models.js';
 import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
 import { evaluateTaskDependencySatisfaction } from '@narada2/task-governance-core/task-dependency-satisfaction';
+import { defineSurface, type DefinedSurface, type ToolEffect } from '@narada2/mcp-fabric-contracts';
 import { randomUUID } from 'crypto';
 import { relative, resolve, join, sep } from 'path';
 import { pathToFileURL } from 'url';
@@ -88,6 +89,7 @@ import { createTaskLifecycleInspectionHandlers } from './task-lifecycle-inspecti
 import { createTaskLifecycleEvidenceReviewHandlers } from './task-lifecycle-evidence-review-handlers.js';
 import { createTaskLifecycleOperationsHandlers } from './task-lifecycle-operations-handlers.js';
 import { createTaskLifecycleCreateRecurringHandlers } from './task-lifecycle-create-recurring-handlers.js';
+import { createTaskLifecycleExecutabilityHandlers } from './task-lifecycle-executability-handlers.js';
 import { ensureTaskExecutionTables } from './task-execution-state.js';
 import { readTaskLifecycleSitePolicy } from './task-lifecycle-site-policy.js';
 import {
@@ -293,13 +295,14 @@ function taskLifecycleTools() {
         summary: stringSchema('Finish/report summary.'),
         execution_notes: stringSchema('Substantive authored ## Execution Notes replacement text.'),
         verification: stringSchema('Substantive authored ## Verification replacement text.'),
-        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias for generated review-contract dependency work.'),
+        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias. Ordinary task finish defaults to the first reviewer-capable roster agent, then to the reviewer role, and always generates review-contract dependency work.'),
         changed_files: { type: 'array', items: { type: 'string' }, description: 'Changed-file evidence for finish. Mutually exclusive with no_files_changed.' },
         no_files_changed: { type: 'boolean', description: 'Declare no files changed for legitimate no-edit work. Mutually exclusive with changed_files.' },
         claim: { type: 'boolean', description: 'When true, call task_lifecycle_claim first. Defaults true unless task is already claimed.' },
         prove_criteria: { type: 'boolean', description: 'When true, call task_lifecycle_prove_criteria after writing notes. Defaults true.' },
         admit_evidence: { type: 'boolean', description: 'When true, call task_lifecycle_admit_evidence before finish. Defaults true.' },
         finish: { type: 'boolean', description: 'When true, call task_lifecycle_finish after evidence admission. Defaults true.' },
+        resume_existing_work: { type: 'boolean', description: 'Resume a prior submit_work attempt without rewriting notes or duplicating proof/admission. Reuses the latest report by this agent and the existing substantive task sections, then performs remaining requested lifecycle transitions.' },
         payload_ref: stringSchema('Optional immutable payload ref for long execution_notes, verification, summary, changed_files, or guard packets. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
         auto_materialize_payload: { type: 'boolean', description: 'Opt-in fallback for one-call long-field submit_work. When true and payload_ref is absent, the surface creates an immutable payload artifact from companion fields before executing; default false preserves inline length refusal.' },
         authority_basis: authorityBasisSchema('Required by underlying claim when crossing role/preferred-agent gates.'),
@@ -346,6 +349,62 @@ function taskLifecycleTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     })),
   ];
+}
+
+let taskLifecycleSurfaceCache: DefinedSurface | null = null;
+
+export function taskLifecycleSurfaceDefinition(): DefinedSurface {
+  if (taskLifecycleSurfaceCache) return taskLifecycleSurfaceCache;
+  const definitions = taskLifecycleTools();
+  taskLifecycleSurfaceCache = defineSurface({
+    surface_id: 'task-lifecycle',
+    surface_version: '0.1.0',
+    package: '@narada2/task-lifecycle-mcp',
+    tools: definitions.map((definition) => ({
+      definition,
+      effect: taskLifecycleToolEffect(String(definition.name)),
+    })),
+    projections: [{
+      id: 'stdio',
+      transport: {
+        kind: 'stdio',
+        command: 'node',
+        args: [
+          '{mcp_surfaces_root}/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js',
+          '--site-root',
+          '{site_root}',
+        ],
+        env: ['NARADA_AGENT_ID'],
+      },
+      injection_scope: 'local_site',
+      default_injection: 'enabled',
+      runtime_requirements: [],
+      authority_requirements: ['scope.local_site'],
+      lifecycle: {
+        mode: 'restart_required',
+        restart_owner: 'mcp-loader',
+        reason: 'Tool and runtime changes require mcp_loader_surface_restart for the bound task-lifecycle surface.',
+      },
+    }],
+  });
+  return taskLifecycleSurfaceCache;
+}
+
+function taskLifecycleToolEffect(name: string): ToolEffect {
+  if (TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name)) {
+    return { class: 'read', idempotency: 'replayable', confirmation: 'never' };
+  }
+  if (name === 'task_lifecycle_restart') {
+    return { class: 'runtime_admin', idempotency: 'idempotent', confirmation: 'policy' };
+  }
+  if (name === 'task_lifecycle_test_mcp_tool') {
+    return { class: 'command', idempotency: 'non_idempotent', confirmation: 'policy' };
+  }
+  return {
+    class: 'local_write',
+    idempotency: TASK_LIFECYCLE_DESTRUCTIVE_TOOLS.has(name) ? 'non_idempotent' : 'idempotent',
+    confirmation: TASK_LIFECYCLE_DESTRUCTIVE_TOOLS.has(name) ? 'always' : 'policy',
+  };
 }
 
 function ensureDownstreamDependencyOutcomeContracts() {
@@ -951,7 +1010,7 @@ async function dispatchMethod(method, params) {
       };
     case 'tools/list':
       return {
-        tools: taskLifecycleTools()
+        tools: taskLifecycleSurfaceDefinition().tools
       };
     case 'tools/call':
       return await callTool(params);
@@ -1086,9 +1145,11 @@ function getTaskLifecycleHandlerRegistry() {
           buildTaskLifecycleFreshness,
           buildLifecycleTargetLocusStatus,
           taskLifecycleRestart,
+          getSurfaceLifecycle: () => taskLifecycleSurfaceDefinition().descriptor.projections[0]?.lifecycle,
         }),
         ...createTaskLifecycleReadHandlers({
           store,
+          siteRoot,
           jsonToolResult,
           stringField,
           numberField,
@@ -1283,6 +1344,14 @@ function getTaskLifecycleHandlerRegistry() {
           createRecurringTaskInstance,
           insertRecurringRun,
           getSitePolicy: getTaskLifecycleSitePolicy,
+        }),
+        ...createTaskLifecycleExecutabilityHandlers({
+          store,
+          siteRoot,
+          jsonToolResult,
+          stringField,
+          numberField,
+          enforceSessionIdentity,
         }),
         mcp_payload_create: (args) => jsonToolResult(taskLifecyclePayloadCreate(args)),
         mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
@@ -1511,12 +1580,16 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   const changedFiles = stringArrayField(args, 'changed_files');
   const noFilesChanged = booleanField(args, 'no_files_changed') === true;
   const autoMaterializePayload = booleanField(args, 'auto_materialize_payload') === true;
+  const resumeExistingWork = booleanField(args, 'resume_existing_work') === true;
   let payloadSource = dispatchContext.payloadSource;
   if (!taskNumber) throw new Error('task_number_required');
   if (!agentId) throw new Error('agent_id_required');
-  if (!summary) throw new Error('summary_required');
-  assertSubstantiveSubmitWorkText(executionNotes, 'execution_notes');
-  assertSubstantiveSubmitWorkText(verification, 'verification');
+  if (resumeExistingWork && (executionNotes || verification)) throw new Error('task_lifecycle_submit_work_resume_existing_work_conflicts_with_replacement_notes');
+  if (!resumeExistingWork) {
+    if (!summary) throw new Error('summary_required');
+    assertSubstantiveSubmitWorkText(executionNotes, 'execution_notes');
+    assertSubstantiveSubmitWorkText(verification, 'verification');
+  }
   if (changedFiles && noFilesChanged) throw new Error('changed_files_conflicts_with_no_files_changed');
   enforceSessionIdentity(agentId);
   if (autoMaterializePayload && !payloadSource) {
@@ -1526,6 +1599,34 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   const primitiveResults = [];
+  let effectiveSummary = summary;
+  let effectiveChangedFiles = changedFiles;
+  let effectiveNoFilesChanged = noFilesChanged;
+  let effectiveOutcome = null;
+  let resumeTaskFile = null;
+  if (resumeExistingWork) {
+    const previousReport = latestSubmitWorkReport(lifecycle.task_id, agentId);
+    if (!previousReport) throw new Error('task_lifecycle_submit_work_resume_existing_work_report_not_found');
+    resumeTaskFile = await findTaskFile(siteRoot, String(taskNumber));
+    if (!resumeTaskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
+    const existingBody = readFileSync(resumeTaskFile.path, 'utf8');
+    assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Execution Notes'), 'existing_execution_notes');
+    assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Verification'), 'existing_verification');
+    effectiveSummary ||= previousReport.summary;
+    if (!effectiveChangedFiles && !effectiveNoFilesChanged) {
+      effectiveChangedFiles = previousReport.changed_files;
+      effectiveNoFilesChanged = previousReport.no_files_changed;
+    }
+    if (!effectiveSummary) throw new Error('task_lifecycle_submit_work_resume_existing_work_summary_not_found');
+    if ((!effectiveChangedFiles || effectiveChangedFiles.length === 0) && !effectiveNoFilesChanged) {
+      throw new Error('task_lifecycle_submit_work_resume_existing_work_changed_file_evidence_not_found');
+    }
+    const previousOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
+    const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
+    const satisfyingOutcomes = parseStringArrayJson(outcomeContract?.satisfying_outcomes_json);
+    if (previousOutcome?.outcome && satisfyingOutcomes.includes(previousOutcome.outcome)) effectiveOutcome = previousOutcome.outcome;
+    if (outcomeContract && !effectiveOutcome) throw new Error('task_lifecycle_submit_work_resume_existing_work_satisfying_outcome_not_found');
+  }
   const agentRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
   if (!agentRoleResolution.role) {
     const rosterResult = {
@@ -1550,25 +1651,35 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if (claimResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_claim', payloadSource }, true);
   }
 
-  const taskFile = await findTaskFile(siteRoot, String(taskNumber));
+  const taskFile = resumeTaskFile ?? await findTaskFile(siteRoot, String(taskNumber));
   if (!taskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
-  const original = readFileSync(taskFile.path, 'utf8');
-  const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
-  const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
-  writeFileSync(taskFile.path, withVerification, 'utf8');
-  primitiveResults.push({
-    tool: 'task_lifecycle_submit_work.write_task_notes',
-    result: { status: 'written', task_number: taskNumber, path: relativeSitePath(siteRoot, taskFile.path), sections: ['Execution Notes', 'Verification'] },
-    is_error: false,
-  });
+  if (resumeExistingWork) {
+    primitiveResults.push({
+      tool: 'task_lifecycle_submit_work.reuse_existing_task_notes',
+      result: { status: 'reused', task_number: taskNumber, path: relativeSitePath(siteRoot, taskFile.path), sections: ['Execution Notes', 'Verification'], source: 'existing_task_projection' },
+      is_error: false,
+    });
+  } else {
+    const original = readFileSync(taskFile.path, 'utf8');
+    const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
+    const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
+    writeFileSync(taskFile.path, withVerification, 'utf8');
+    primitiveResults.push({
+      tool: 'task_lifecycle_submit_work.write_task_notes',
+      result: { status: 'written', task_number: taskNumber, path: relativeSitePath(siteRoot, taskFile.path), sections: ['Execution Notes', 'Verification'] },
+      is_error: false,
+    });
+  }
 
-  if (args.prove_criteria !== false) {
+  const shouldProveCriteria = args.prove_criteria === undefined ? !resumeExistingWork : args.prove_criteria !== false;
+  if (shouldProveCriteria) {
     const proveResult = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_prove_criteria', result: proveResult.structuredContent ?? null, is_error: proveResult.isError === true });
     if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria', payloadSource }, true);
   }
 
-  if (args.admit_evidence !== false) {
+  const shouldAdmitEvidence = args.admit_evidence === undefined ? !resumeExistingWork : args.admit_evidence !== false;
+  if (shouldAdmitEvidence) {
     const admitArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
     const selfCertification = objectField(args, 'self_certification');
     if (selfCertification) admitArgs.self_certification = selfCertification;
@@ -1578,10 +1689,11 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   }
 
   if (args.finish !== false) {
-    const finishArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId, summary };
+    const finishArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId, summary: effectiveSummary };
+    if (effectiveOutcome) finishArgs.outcome = effectiveOutcome;
     if (reviewer) finishArgs.reviewer = reviewer;
-    if (changedFiles) finishArgs.changed_files = changedFiles;
-    if (noFilesChanged) finishArgs.no_files_changed = true;
+    if (effectiveChangedFiles) finishArgs.changed_files = effectiveChangedFiles;
+    if (effectiveNoFilesChanged) finishArgs.no_files_changed = true;
     const recoveryTruthfulness = objectField(args, 'recovery_truthfulness');
     const selfCertification = objectField(args, 'self_certification');
     if (recoveryTruthfulness) finishArgs.recovery_truthfulness = recoveryTruthfulness;
@@ -1589,14 +1701,9 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     const finishResult = await dispatchTool('task_lifecycle_finish', finishArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_finish', result: finishResult.structuredContent ?? null, is_error: finishResult.isError === true });
     if (finishResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_finish', payloadSource }, true);
-    if (reviewer) {
-      const finishPayload = finishResult.structuredContent && typeof finishResult.structuredContent === 'object' && !Array.isArray(finishResult.structuredContent) ? finishResult.structuredContent as Record<string, unknown> : null;
-      const reviewDependency = finishPayload?.review_dependency ?? await ensureReviewContractDependencyForSubmitWork({
-        parentLifecycle: lifecycle,
-        parentTaskNumber: taskNumber,
-        reviewer,
-        createdBy: agentId,
-      });
+    const finishPayload = finishResult.structuredContent && typeof finishResult.structuredContent === 'object' && !Array.isArray(finishResult.structuredContent) ? finishResult.structuredContent as Record<string, unknown> : null;
+    const reviewDependency = finishPayload?.review_dependency;
+    if (reviewDependency) {
       primitiveResults.push({ tool: 'task_lifecycle_submit_work.create_review_dependency', result: reviewDependency, is_error: false });
     }
   }
@@ -1604,9 +1711,46 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   return submitWorkResult({ status: 'submitted', taskNumber, agentId, primitiveResults, blockedAt: null, payloadSource }, false);
 }
 
+function parseStringArrayJson(value) {
+  if (Array.isArray(value)) return value.filter((item) => typeof item === 'string');
+  try {
+    const parsed = JSON.parse(typeof value === 'string' ? value : '[]');
+    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function latestSubmitWorkReport(taskId, agentId) {
+  const tableExists = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
+  if (!tableExists) return null;
+  const row = store.db.prepare(`
+    SELECT report_id, summary, changed_files_json, submitted_at
+    FROM task_reports
+    WHERE task_id = ? AND agent_id = ?
+    ORDER BY submitted_at DESC, report_id DESC
+    LIMIT 1
+  `).get(taskId, agentId);
+  if (!row) return null;
+  let evidence = [];
+  try {
+    const parsed = JSON.parse(row.changed_files_json ?? '[]');
+    if (Array.isArray(parsed)) evidence = parsed.filter((value) => typeof value === 'string' && value.trim());
+  } catch {
+    evidence = [];
+  }
+  return {
+    report_id: row.report_id,
+    summary: typeof row.summary === 'string' && row.summary.trim() ? row.summary.trim() : null,
+    changed_files: evidence.filter((value) => value !== NO_FILES_CHANGED_MARKER),
+    no_files_changed: evidence.includes(NO_FILES_CHANGED_MARKER),
+    submitted_at: row.submitted_at ?? null,
+  };
+}
+
 function autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args }) {
   const payload: Record<string, unknown> = {};
-  for (const field of ['summary', 'execution_notes', 'verification', 'changed_files', 'no_files_changed', 'recovery_truthfulness', 'self_certification']) {
+  for (const field of ['summary', 'execution_notes', 'verification', 'changed_files', 'no_files_changed', 'resume_existing_work', 'recovery_truthfulness', 'self_certification']) {
     if (Object.prototype.hasOwnProperty.call(args, field)) payload[field] = args[field];
   }
   const created = payloadCreate({
@@ -1750,6 +1894,7 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
     parentTaskNumber,
     updatedBy: createdBy,
     updatedAt: now,
+    targetStatus: 'in_review',
   });
 
   return {
@@ -1776,8 +1921,8 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
   };
 }
 
-async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumber, updatedBy, updatedAt }) {
-  store.updateStatus(parentLifecycle.task_id, 'awaiting_dependencies', updatedBy, {
+async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumber, updatedBy, updatedAt, targetStatus = 'awaiting_dependencies' }) {
+  store.updateStatus(parentLifecycle.task_id, targetStatus, updatedBy, {
     governed_by: 'dependencies',
     updated_at: updatedAt,
   });
@@ -1788,7 +1933,7 @@ async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumbe
       const fileData = await readTaskFile(taskFile.path);
       await writeTaskProjection(taskFile.path, {
         ...fileData.frontMatter,
-        status: 'awaiting_dependencies',
+        status: targetStatus,
         governed_by: 'dependencies',
       }, fileData.body);
       projection_updated = true;
@@ -1800,7 +1945,7 @@ async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumbe
     task_id: parentLifecycle.task_id,
     task_number: parentTaskNumber,
     old_status: parentLifecycle.status,
-    new_status: 'awaiting_dependencies',
+    new_status: targetStatus,
     blocked_by: 'dependencies',
     projection_updated,
   };
@@ -2387,7 +2532,7 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_list',
-      description: 'List tasks with optional status and agent filters.',
+      description: 'List tasks with optional status and agent filters, one bounded SQLite snapshot, and explicit projection-consistency/contention signals.',
       inputSchema: objectSchema({
         status: stringSchema('Filter by status: draft, opened, claimed, in_review, closed, confirmed, etc.'),
         agent_id: stringSchema('Filter by assigned agent_id.'),
@@ -2550,7 +2695,7 @@ function legacyTaskLifecycleToolsSnapshot() {
         outcome: stringSchema('Structured outcome for tasks with an outcome contract. Allowed values are inferred from the task contract, for example accepted, accepted_with_notes, rejected, completed, or blocked.'),
         findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Structured findings for outcome-contract tasks. Use [] when there are no findings.' },
         evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional evidence references supporting the structured outcome.' },
-        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias for generated review-contract dependency work.'),
+        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias. Ordinary task finish defaults to the first reviewer-capable roster agent, then to the reviewer role, and always generates review-contract dependency work.'),
         changed_files: { type: 'array', items: { type: 'string' }, description: 'Explicit changed-file evidence for this finish report.' },
         no_files_changed: { type: 'boolean', description: 'Explicitly declare that this finish legitimately changed no files.' },
         authority_basis: authorityBasisSchema('Required when conflict-of-interest policy allows explicit operator override for an outcome-contract dependency task.'),
@@ -2632,14 +2777,14 @@ function legacyTaskLifecycleToolsSnapshot() {
     },
     {
       name: 'task_lifecycle_review',
-      description: 'Compatibility migration tool for legacy review calls. Normal review work should be a review-contract dependency task finished with task_lifecycle_finish. This tool preserves old review-row readback while admitting dependency/outcome authority.',
+      description: 'Compatibility migration tool only for pre-existing tasks without a review-contract dependency. New ordinary finishes create review dependency work by default. Singleton reviewer sites are admitted and annotated automatically without a flag; multi-reviewer conflicts require conflict_policy_authorization.',
       inputSchema: objectSchema({
         task_number: numberSchema('Legacy parent task number being reviewed.'),
         agent_id: stringSchema('Reviewer agent id for compatibility migration.'),
         verdict: stringSchema('Legacy verdict mapped to a review outcome: accepted, accepted_with_notes, rejected.'),
         findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
         conflict_policy_authorization: { type: 'object', additionalProperties: true, description: 'Generic conflict-policy authorization basis for admitting an outcome when the dependency worker shares an operator_identity with gated work.' },
-        single_operator_review: { type: 'boolean', description: 'Compatibility alias for conflict_policy_authorization on legacy same-operator review calls.' },
+        single_operator_review: { type: 'boolean', description: 'Deprecated input compatibility field. Singleton reviewer sites need no flag; this field never bypasses multi-reviewer conflict policy. Existing single_operator_review annotations remain readable.' },
       }, ['task_number', 'agent_id', 'verdict']),
     },
     {
@@ -2702,7 +2847,7 @@ function legacyTaskLifecycleToolsSnapshot() {
       name: 'task_lifecycle_test_mcp_tool',
       description: 'Spawn a fresh MCP server process and invoke a single tool to verify code changes without restarting the live session server.',
       inputSchema: objectSchema({
-        server_path: stringSchema('Path to the MCP server script relative to site root (e.g., "tools/task-lifecycle/task-mcp-server.js").'),
+        server_path: stringSchema('MCP server script path. Relative paths resolve under the site root. Absolute paths are admitted only under the site root, the running @narada2/task-lifecycle-mcp package root, or roots explicitly configured by NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS. Only existing .js, .mjs, or .cjs files are accepted.'),
         tool_name: stringSchema('Tool name to invoke on the spawned server.'),
         arguments: { type: 'object', additionalProperties: true, description: 'Tool arguments object.' },
         timeout_seconds: numberSchema('Fresh server invocation timeout in seconds. Defaults to 10, max 300.'),

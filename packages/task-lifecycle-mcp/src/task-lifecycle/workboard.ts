@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { detectSameOperatorReview, detectSelfReview } from './operator-identity.js';
 import { deriveClosureAuthority } from './closure-authority.js';
+import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
@@ -70,9 +71,19 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       preferred_agent_id: preferredAgentId,
       updated_at: task.updated_at,
       relative_priority: task.relative_priority ?? 0,
+      executability_posture: siteRoot
+        ? buildCompactExecutabilityPosture({ store, siteRoot, taskId: task.task_id })
+        : { executable: false, currency: 'stale', verdict: null, reason: 'site_root_not_available' },
     };
     const dependencyContext = buildDependencyTaskContext({ store, task, agentId });
     if (dependencyContext) Object.assign(item, dependencyContext);
+    let hasOpenParentDependencies = false;
+    try {
+      hasOpenParentDependencies = (store.listTaskDependenciesForParent?.(task.task_id) ?? [])
+        .some((dependency) => dependency.status !== 'satisfied');
+    } catch {
+      hasOpenParentDependencies = false;
+    }
     item.preferred_agent_relation = preferredAgentRelation(preferredAgentId, agentId);
     item.routing_policy = 'preferred_agent_id_is_soft_affinity_target_role_is_role_gate';
     item.parent_coordinator_actionability = deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber });
@@ -100,13 +111,15 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
       continue;
     }
 
-    if (task.status === 'awaiting_dependencies') {
+    if (task.status === 'awaiting_dependencies' || (task.status === 'in_review' && hasOpenParentDependencies)) {
       dependency_waiting_parents.push({
         ...item,
         visibility: 'dependency_waiting_parent',
         blocked_by: 'dependencies',
         claim_authority: 'not_claimable_waiting_on_dependencies',
-        reason: 'Parent task is waiting for one or more dependency tasks to admit satisfying outcomes.',
+        reason: task.status === 'in_review'
+          ? 'Submitted work is in review and waiting for its review-contract dependency to admit a satisfying outcome.'
+          : 'Parent task is waiting for one or more dependency tasks to admit satisfying outcomes.',
       });
     } else if (task.status === 'in_review') {
       // Detect if the requesting agent would face a single-operator review

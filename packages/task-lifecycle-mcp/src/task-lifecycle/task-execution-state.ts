@@ -1,4 +1,4 @@
-import { executionRequestFingerprint, type ExecutionBinding } from '@narada2/execution-contract';
+import { executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
 
 type SqliteStoreLike = {
   db: {
@@ -135,6 +135,34 @@ export function bindTaskExecution(
       correlation_key = excluded.correlation_key,
       updated_at = excluded.updated_at
   `).run(task.task_id, task.task_number, bindingJson, binding.correlation_key, now, now);
+}
+
+export function readTaskExecutionBinding(store: SqliteStoreLike, taskId: string): {
+  status: 'bound' | 'unbound' | 'invalid';
+  binding: ExecutionBinding | null;
+  created_at?: string;
+  updated_at?: string;
+  error?: string;
+} {
+  ensureTaskExecutionTables(store);
+  const row = store.db.prepare('SELECT binding_json, created_at, updated_at FROM narada_task_execution_bindings WHERE task_id = ?').get(taskId) as Record<string, unknown> | undefined;
+  if (!row) return { status: 'unbound', binding: null };
+  try {
+    return {
+      status: 'bound',
+      binding: normalizeExecutionBinding(JSON.parse(String(row.binding_json))),
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+    };
+  } catch (error) {
+    return {
+      status: 'invalid',
+      binding: null,
+      created_at: String(row.created_at),
+      updated_at: String(row.updated_at),
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function assertReservationMatches(
