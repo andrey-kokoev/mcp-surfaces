@@ -203,6 +203,14 @@ try {
   assert.ok((guidance?.runtime_freshness?.dependency_files as Array<Record<string, unknown>>).some((file) => file.name === 'mcp_transport'));
   assert.ok((guidance?.runtime_freshness?.config_files as Array<Record<string, unknown>>).some((file) => file.name === 'workspace_lockfile'));
   assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
+  assert.equal(guidance?.tool_call_timeout?.tool, 'mcp_loader_call_tool');
+  assert.equal(guidance?.tool_call_timeout?.nested_argument, 'arguments.timeout_ms');
+  assert.equal(guidance?.tool_call_timeout?.policy_default_ms, 120000);
+  assert.equal(guidance?.tool_call_timeout?.request_max_ms, 900000);
+  assert.equal(guidance?.tool_call_timeout?.default_grace_ms, 1000);
+  assert.equal(guidance?.tool_call_timeout?.grace_max_ms, 60000);
+  assert.match(String(guidance?.tool_call_timeout?.semantics), /timeout_ms plus bounded grace/);
+  assert.ok((guidance?.first_use as string[]).some((item) => item.includes('nested arguments object')));
 
   const runtimeStatus = await call('tools/call', { name: 'mcp_loader_runtime_status', arguments: {} }, 351);
   assert.equal(runtimeStatus?.schema, 'narada.mcp_loader.runtime_freshness.v1');

@@ -1973,6 +1973,29 @@ function renderResult(result: JsonRecord): string {
       return `  ${item.feedback_id} [${item.status}] ${String(item.summary ?? '').slice(0, 80)}${link?.task_ref ? ` -> ${link.task_ref} (${link.lifecycle_state ?? 'state unavailable'})` : ''}`;
     })),
   ]);
+  if (result.schema === 'narada.surface_feedback.status_batch.v1') {
+    const updates = Array.isArray(result.updates) ? result.updates.map(asRecord) : [];
+    const failures = Array.isArray(result.failures) ? result.failures.map(asRecord) : [];
+    return compactLines([
+      `feedback status batch: ${result.status}`,
+      `updated: ${result.updated_count ?? updates.length} of ${result.requested_count ?? updates.length + failures.length}`,
+      `failed: ${result.failed_count ?? failures.length}`,
+      ...updates.map((update) => `  ${update.feedback_id} [${update.status}]${update.task_ref ? ` -> ${update.task_ref} (${update.task_status ?? 'state unavailable'})` : ''}`),
+      ...failures.map((failure) => `  ${failure.feedback_id ?? 'unknown feedback'} failed: ${failure.code ?? 'unknown_error'}`),
+    ]);
+  }
+  if (result.schema === 'narada.surface_feedback.convert_to_task.v1') {
+    const feedback = asRecord(result.feedback);
+    return compactLines([
+      `feedback task handoff: ${result.status}`,
+      `feedback_id: ${result.feedback_id}`,
+      ...(feedback.summary ? [`feedback_summary: ${feedback.summary}`] : []),
+      `task_ref: ${result.task_ref}`,
+      `task_number: ${result.task_number}`,
+      `task_status: ${result.task_status}`,
+      `next_action: ${asRecord(result.next_action).tool ?? 'task_lifecycle_show'}`,
+    ]);
+  }
   if (result.items !== undefined) {
     const items = result.items as JsonRecord[];
     return [`feedback: ${result.count ?? 0} entries`, ...items.map((i) => `  ${i.feedback_id} [${i.kind}] ${String(i.summary ?? '').slice(0, 80)} (${i.surface_id} <- ${i.submitter_site_id})`)].join('\n');

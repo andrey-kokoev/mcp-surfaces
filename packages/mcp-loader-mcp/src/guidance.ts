@@ -1,4 +1,10 @@
 import { loaderRuntimeLifecycle } from './runtime-lifecycle.js';
+import {
+  DEFAULT_TOOL_CALL_TIMEOUT_MS,
+  DEFAULT_TOOL_TIMEOUT_GRACE_MS,
+  MAX_TOOL_CALL_TIMEOUT_MS,
+  MAX_TOOL_TIMEOUT_GRACE_MS,
+} from './tool-timeout.js';
 
 export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & {
@@ -24,12 +30,23 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     purpose: PURPOSE,
     requested: { workflow, tool },
     runtime_lifecycle: loaderRuntimeLifecycle(),
+    tool_call_timeout: {
+      tool: 'mcp_loader_call_tool',
+      nested_argument: 'arguments.timeout_ms',
+      policy_default_ms: DEFAULT_TOOL_CALL_TIMEOUT_MS,
+      request_max_ms: MAX_TOOL_CALL_TIMEOUT_MS,
+      grace_flag: '--tool-timeout-grace-ms',
+      default_grace_ms: DEFAULT_TOOL_TIMEOUT_GRACE_MS,
+      grace_max_ms: MAX_TOOL_TIMEOUT_GRACE_MS,
+      semantics: 'When nested timeout_ms is present, it is forwarded to the child and the loader waits timeout_ms plus bounded grace for the child timeout result. When absent, the loader policy default is the outer deadline and no grace is added.',
+    },
     first_use: [
       'Call mcp_loader_policy_inspect before relying on loader capabilities or allowed roots.',
       'Call mcp_loader_connection_inventory before attachment when recovering from capacity errors or an earlier interrupted session.',
       'Call mcp_loader_list_site_surfaces and mcp_loader_site_fabric_diagnostics for the explicit Site root.',
       'Use mcp_loader_attach_surface with an explicit surface_id and runtime_kind when the projection requires one.',
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
+      'For mcp_loader_call_tool, place timeout_ms inside the nested arguments object. The loader forwards it to the child and adds bounded outer grace so the child can return its own timeout result.',
       'Call mcp_loader_runtime_status when the loader process may have out-of-date source, dependency, or build-configuration evidence; inspect runtime_freshness.reload_action for the machine-readable carrier/runtime-supervisor restart operation.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.',
     ],
@@ -40,7 +57,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'attach', guidance: 'Attach the exact declared surface and provide runtime_kind explicitly when the projection requires it.' },
       { step: 'discover', guidance: 'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest; use the child tools/list definitions for exact input and output shape.' },
       { step: 'observe_live', guidance: 'Use mcp_loader_site_tool_inventory_check to compare declared tools with fresh child tools/list responses; a skipped runtime-affined surface makes the aggregate status partial, so retain its immutable observation_ref and rerun with the required runtime_kind for complete coverage.' },
-      { step: 'operate', guidance: 'Call a child tool only after selecting the intended connection and honoring the child surface policy.' },
+      { step: 'operate', guidance: 'Call a child tool only after selecting the intended connection and honoring the child surface policy. For bounded calls, pass arguments.timeout_ms; the loader outer deadline is that child timeout plus --tool-timeout-grace-ms.' },
       { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; when mcp_loader_runtime_status reports stale, execute the structured runtime_freshness.reload_action through the carrier/runtime supervisor rather than restarting only a child.' },
     ],
     examples: [
@@ -50,6 +67,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { intent: 'Inspect a Site', call: 'mcp_loader_list_site_surfaces({ site_root: "<site_root>" })' },
       { intent: 'Inspect loader freshness', call: 'mcp_loader_runtime_status({})' },
       { intent: 'Observe live tools', call: 'mcp_loader_site_tool_inventory_check({ site_root: "<site_root>", runtime_kind: "<runtime_kind>" })' },
+      { intent: 'Call with a bounded child timeout', call: 'mcp_loader_call_tool({ connection_id: "<connection_id>", tool_name: "<tool_name>", arguments: { timeout_ms: 120000 } })' },
     ],
     anti_patterns: [
       'Do not infer a Site or runtime from the current directory, process name, server name, or entrypoint path.',

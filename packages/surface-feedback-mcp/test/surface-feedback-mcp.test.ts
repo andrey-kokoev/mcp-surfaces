@@ -340,6 +340,11 @@ try {
     assert.equal(successData.next_action.surface_id, 'task-lifecycle');
     assert.equal(successData.next_action.tool, 'task_lifecycle_show');
     assert.deepEqual(successData.next_action.arguments, { task_number: 1983 });
+    const successText = String(successConversion.result.content?.[0]?.text ?? '');
+    assert.match(successText, /feedback task handoff: converted/);
+    assert.match(successText, new RegExp(`feedback_id: ${successFeedbackId}`));
+    assert.match(successText, /task_ref: task #1983/);
+    assert.doesNotMatch(successText, /undefined/);
     assert.deepEqual(handoffCalls, ['mcp_payload_create', 'task_lifecycle_create']);
     assert.equal(handoffRequests[handoffRequests.length - 2].params.arguments.payload.idempotency_key, `surface-feedback:${successFeedbackId}`);
 
@@ -354,6 +359,10 @@ try {
     });
     assert.equal(view(duplicateConversion).status, 'already_linked');
     assert.equal(view(duplicateConversion).task_ref, 'task #1983');
+    const duplicateText = String(duplicateConversion.result.content?.[0]?.text ?? '');
+    assert.match(duplicateText, /feedback task handoff: already_linked/);
+    assert.match(duplicateText, /task_ref: task #1983/);
+    assert.doesNotMatch(duplicateText, /undefined/);
     assert.deepEqual(handoffCalls, []);
 
     const linkFailureSource = await callWith(handoffState, 'surface_feedback_submit', {
@@ -661,8 +670,15 @@ try {
   assert.equal(batchData.failed_count, 1);
   assert.equal(batchData.updates[0].task_ref, 'task #1276');
   assert.match(batchData.updates[0].feedback.resolution_note, /Task: task #1276/);
-    assert.equal(batchData.updates[1].feedback.resolved_by, 'surface-feedback@andrey-user');
+  assert.equal(batchData.updates[1].feedback.resolved_by, 'surface-feedback@andrey-user');
   assert.equal(batchData.failures[0].code, 'feedback_not_found');
+  const batchText = String(batchUpdate.result.content?.[0]?.text ?? '');
+  assert.match(batchText, /feedback status batch: partial/);
+  assert.match(batchText, /updated: 2 of 3/);
+  assert.match(batchText, /failed: 1/);
+  assert.match(batchText, new RegExp(`${view(batchA).feedback_id} \\[converted_to_task\\] -> task #1276`));
+  assert.match(batchText, /sfb_missing_batch failed: feedback_not_found/);
+  assert.doesNotMatch(batchText, /^updated:\s*$/);
 
   // --- invalid status still rejected ---
   const invalidStatus = await call('surface_feedback_update_status', {

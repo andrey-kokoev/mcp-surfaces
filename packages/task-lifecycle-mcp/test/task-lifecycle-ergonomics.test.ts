@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
+import { withSqliteBusyRetry, withStoreSavepoint } from '../src/task-lifecycle/sqlite-contention.js';
 
 process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE = '1';
 
@@ -123,6 +124,45 @@ async function responsePayload(response: any, runtimeOptions: any, id: number) {
   if (!initialPayload.output_ref) return initialPayload;
   throw new Error('unexpected_output_ref_without_structured_content');
 }
+
+async function verifySqliteContentionRecovery() {
+  let attempts = 0;
+  const recovered = await withSqliteBusyRetry(() => {
+    attempts += 1;
+    if (attempts < 3) throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    return 'recovered';
+  }, { retryDelaysMs: [0, 0], sleep: async () => undefined });
+  assert.deepEqual(recovered, { value: 'recovered', attempts: 3, retries: 2 });
+
+  let nonBusyAttempts = 0;
+  await assert.rejects(
+    withSqliteBusyRetry(() => {
+      nonBusyAttempts += 1;
+      throw new Error('validation failed');
+    }, { retryDelaysMs: [0], sleep: async () => undefined }),
+    /validation failed/,
+  );
+  assert.equal(nonBusyAttempts, 1);
+
+  const statements: string[] = [];
+  let releaseCalls = 0;
+  const fakeStore = {
+    db: {
+      exec(sql: string) {
+        statements.push(sql);
+        if (sql.startsWith('RELEASE SAVEPOINT') && releaseCalls++ === 0) {
+          throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+        }
+      },
+    },
+  };
+  await assert.rejects(withStoreSavepoint(fakeStore, () => 'value'), /database is locked/);
+  assert.equal(statements.filter((sql) => sql.startsWith('ROLLBACK TO SAVEPOINT')).length, 1);
+  assert.equal(statements.filter((sql) => sql.startsWith('RELEASE SAVEPOINT')).length, 2);
+  assert.equal(await withStoreSavepoint(fakeStore, () => 'next call succeeds'), 'next call succeeds');
+}
+
+await verifySqliteContentionRecovery();
 
 try {
   mkdirSync(join(siteRoot, '.ai', 'agents'), { recursive: true });
