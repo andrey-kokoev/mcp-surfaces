@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
+import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
@@ -101,21 +102,6 @@ function restoreCompatibilityProjectionSnapshot(snapshot: CompatibilityProjectio
     return;
   }
   if (existsSync(snapshot.path)) unlinkSync(snapshot.path);
-}
-
-function withStoreSavepoint<T>(store, action: () => Promise<T> | T): Promise<T> {
-  const name = `narada_compatibility_${randomUUID().replaceAll('-', '')}`;
-  store.db.exec(`SAVEPOINT ${name}`);
-  return Promise.resolve()
-    .then(action)
-    .then((result) => {
-      store.db.exec(`RELEASE SAVEPOINT ${name}`);
-      return result;
-    }, (error) => {
-      try { store.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
-      try { store.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
-      throw error;
-    });
 }
 
 class CompatibilityReviewTransactionError extends Error {
@@ -734,40 +720,70 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
   async function admitReviewMigrationOutcome(options) {
     let projectionSnapshot: CompatibilityProjectionSnapshot | null = null;
     let preallocatedReviewTaskNumber: number | undefined;
+    let lastRollback = { sqlite: 'rolled_back', projection: 'unchanged' };
     const parentLifecycle = store.getLifecycleByNumber(options.taskNumber);
     const existingDependency = parentLifecycle
       ? (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? []).find((candidate) => candidate.kind === 'review')
       : null;
     const existingRequiredLifecycle = existingDependency ? store.getLifecycle?.(existingDependency.required_task_id) : undefined;
-    if (parentLifecycle && (!existingDependency || !existingRequiredLifecycle)) {
-      const maxTaskRow = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
-      const maxTaskNumber = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : options.taskNumber;
-      store.ensureTaskNumberFloor?.(maxTaskNumber);
-      // Task-number allocation owns its own SQLite transaction. Reserve the number
-      // before opening the compatibility savepoint; a failed migration may leave a
-      // harmless sequence gap, but never an orphaned task record.
-      preallocatedReviewTaskNumber = store.allocateTaskNumber();
-    }
     try {
-      return await withStoreSavepoint(store, async () => {
-        const result = await admitReviewMigrationOutcomeUnsafe({
-          ...options,
-          preallocatedReviewTaskNumber,
-          captureProjectionSnapshot: (taskId: string) => {
-            if (!projectionSnapshot) projectionSnapshot = captureCompatibilityProjectionSnapshot(siteRoot, taskId);
-          },
-        });
-        if (!result) {
-          throw new CompatibilityReviewTransactionError({
-            status: 'error',
-            error: 'compatibility_review_migration_not_admitted',
-            remediation: 'The compatibility review requires an existing review dependency and outcome contract, or a valid generated compatibility record.',
+      const migration = await withSqliteBusyRetry(async () => {
+        projectionSnapshot = null;
+        try {
+          if (parentLifecycle && (!existingDependency || !existingRequiredLifecycle) && preallocatedReviewTaskNumber === undefined) {
+            const maxTaskRow = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
+            const maxTaskNumber = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : options.taskNumber;
+            store.ensureTaskNumberFloor?.(maxTaskNumber);
+            // Task-number allocation owns its own SQLite transaction. Reserve the number
+            // before opening the compatibility savepoint; a failed migration may leave a
+            // harmless sequence gap, but never an orphaned task record.
+            preallocatedReviewTaskNumber = store.allocateTaskNumber();
+          }
+          return await withStoreSavepoint(store, async () => {
+            const result = await admitReviewMigrationOutcomeUnsafe({
+              ...options,
+              preallocatedReviewTaskNumber,
+              captureProjectionSnapshot: (taskId: string) => {
+                if (!projectionSnapshot) projectionSnapshot = captureCompatibilityProjectionSnapshot(siteRoot, taskId);
+              },
+            });
+            if (!result) {
+              throw new CompatibilityReviewTransactionError({
+                status: 'error',
+                error: 'compatibility_review_migration_not_admitted',
+                remediation: 'The compatibility review requires an existing review dependency and outcome contract, or a valid generated compatibility record.',
+              });
+            }
+            const resultRecord = asRecord(result);
+            if (resultRecord?.status === 'error') throw new CompatibilityReviewTransactionError(resultRecord);
+            return result;
           });
+        } catch (error) {
+          if (projectionSnapshot) {
+            try {
+              restoreCompatibilityProjectionSnapshot(projectionSnapshot);
+              lastRollback = { sqlite: 'rolled_back', projection: 'restored' };
+            } catch {
+              lastRollback = { sqlite: 'rolled_back', projection: 'restore_failed' };
+            }
+          } else {
+            lastRollback = { sqlite: 'rolled_back', projection: 'unchanged' };
+          }
+          projectionSnapshot = null;
+          throw error;
         }
-        const resultRecord = asRecord(result);
-        if (resultRecord?.status === 'error') throw new CompatibilityReviewTransactionError(resultRecord);
-        return result;
       });
+      const resultRecord = asRecord(migration.value);
+      return migration.retries > 0 && resultRecord
+        ? {
+            ...resultRecord,
+            sqlite_contention_recovery: {
+              status: 'recovered',
+              attempts: migration.attempts,
+              retries: migration.retries,
+            },
+          }
+        : migration.value;
     } catch (error) {
       let payload = error instanceof CompatibilityReviewTransactionError
         ? error.payload
@@ -776,24 +792,16 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
             error: 'compatibility_review_migration_failed',
             message: error instanceof Error ? error.message : String(error),
           };
-      if (projectionSnapshot) {
-        try {
-          restoreCompatibilityProjectionSnapshot(projectionSnapshot);
-          payload = { ...payload, rollback: { sqlite: 'rolled_back', projection: 'restored' } };
-        } catch (restoreError) {
-          payload = {
-            ...payload,
-            rollback: {
-              sqlite: 'rolled_back',
-              projection: 'restore_failed',
-              restore_error: restoreError instanceof Error ? restoreError.message : String(restoreError),
-            },
-          };
-        }
-      } else {
-        payload = { ...payload, rollback: { sqlite: 'rolled_back', projection: 'unchanged' } };
+      if (isSqliteBusyError(error)) {
+        payload = {
+          status: 'error',
+          error: 'compatibility_review_migration_busy',
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+          remediation: 'The migration exhausted bounded SQLite busy retries. Retry the same task_lifecycle_review call; the failed savepoint was rolled back and no server restart is required.',
+        };
       }
-      return payload;
+      return { ...payload, rollback: lastRollback };
     }
   }
 

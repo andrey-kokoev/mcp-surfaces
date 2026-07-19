@@ -221,7 +221,7 @@ try {
 
   const audit = await call(13, 'task_lifecycle_audit', {
     since: '2026-07-17T00:00:00.000Z',
-    until: '2026-07-19T00:00:00.000Z',
+    until: '2099-01-01T00:00:00.000Z',
   });
   assert.equal(audit.events.some((event: any) => event.event_type === 'tag_update' && event.task === '1'), true);
 
