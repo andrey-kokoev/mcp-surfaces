@@ -7,6 +7,7 @@ import {
   createTemporaryE2eRoot,
   runMcpProtocolSmoke,
   removeTemporaryE2eRoot,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   structured,
   tomlPath,
@@ -156,7 +157,7 @@ async function main(): Promise<void> {
 
     const loader = spawnJsonlMcpServer(process.execPath, [loaderServerPath, '--allowed-site-root', root], {
       cwd: root,
-      env: { ...process.env, NARADA_PROVIDER_SECRET_STORE: 'disabled' },
+      env: siteFabricChildEnv(root, { NARADA_PROVIDER_SECRET_STORE: 'disabled' }),
       label: 'mcp-loader',
     });
     loaderClient = loader.client;

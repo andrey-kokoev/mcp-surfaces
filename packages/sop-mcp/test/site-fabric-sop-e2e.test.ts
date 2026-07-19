@@ -4,6 +4,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -12,7 +13,7 @@ const siteRoot = createTemporaryE2eRoot('sop-site-fabric-e2e');
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--sop-root', siteRoot], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_SITE_ID: 'fixture-site' },
+  env: siteFabricChildEnv(siteRoot, { NARADA_SITE_ID: 'fixture-site' }),
   label: 'sop Site-fabric e2e',
 });
 
@@ -58,7 +59,7 @@ try {
 
   const resumedServer = spawnJsonlMcpServer(process.execPath, [serverPath, '--sop-root', siteRoot], {
     cwd: siteRoot,
-    env: { ...process.env, NARADA_SITE_ID: 'fixture-site' },
+    env: siteFabricChildEnv(siteRoot, { NARADA_SITE_ID: 'fixture-site' }),
     label: 'sop Site-fabric resume e2e',
   });
   try {

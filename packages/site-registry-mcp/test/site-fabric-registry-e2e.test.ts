@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import {
+  createSiteFabricIsolation,
   createTemporaryE2eRoot,
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -34,6 +37,7 @@ if (!existsSync(cliModulePath)) {
 }
 
 const naradaRoot = createTemporaryE2eRoot('site-registry-site-fabric-e2e');
+const userSiteIsolation = createSiteFabricIsolation(naradaRoot);
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [
   serverPath,
@@ -41,7 +45,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--cli-module-path', cliModulePath,
 ], {
   cwd: naradaRoot,
-  env: { ...process.env, NARADA_ROOT: naradaRoot },
+  env: siteFabricChildEnv(naradaRoot, { NARADA_ROOT: naradaRoot }),
   label: 'site-registry Site fabric e2e',
 });
 
@@ -82,6 +86,13 @@ try {
   }));
   assert.equal(listed.status, 'ok', JSON.stringify(listed));
   assert.equal(listed.mutation_performed, false, JSON.stringify(listed));
+
+  // Seed the isolated registry so site_registry_show has a fixture record;
+  // the isolated DB starts empty and the real User Site registry is off-limits.
+  const seedDb = new DatabaseSync(join(userSiteIsolation.userSiteRoot, 'registry.db'));
+  seedDb.prepare('INSERT INTO site_registry (site_id, variant, site_root, substrate) VALUES (?, ?, ?, ?)')
+    .run('fixture-site', 'native', join(naradaRoot, 'sites', 'fixture-site'), 'windows-native');
+  seedDb.close();
 
   const shown = structured(await server.client.request(4, 'tools/call', {
     name: 'site_registry_show',

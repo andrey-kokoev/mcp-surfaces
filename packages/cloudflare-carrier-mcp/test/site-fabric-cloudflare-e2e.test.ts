@@ -8,6 +8,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -53,7 +54,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--worker-url', workerUrl,
   '--session-file', sessionFile,
   '--health-file', healthFile,
-], { cwd: siteRoot, label: 'cloudflare-carrier Site fabric e2e' });
+], { cwd: siteRoot, env: siteFabricChildEnv(siteRoot), label: 'cloudflare-carrier Site fabric e2e' });
 
 function structured(response: JsonRecord): JsonRecord {
   assert.equal(response.error, undefined, JSON.stringify(response));

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -410,6 +410,99 @@ export function removeTemporaryE2eRoot(root: string): boolean {
   return false;
 }
 
+export type SiteFabricIsolation = {
+  userSiteRoot: string;
+  env: { NARADA_USER_SITE_ROOT: string };
+};
+
+/**
+ * Create an isolated User Site root inside the e2e temporary root.
+ *
+ * Narada site tooling resolves the User Site registry from NARADA_USER_SITE_ROOT
+ * and falls back to the real profile path (`%USERPROFILE%\Narada\registry.db` on
+ * Windows). Spreading `isolation.env` into a child environment after
+ * `process.env` redirects that resolution into the temporary root so e2e tests
+ * can never create or modify the real User Site registry.
+ */
+export function createSiteFabricIsolation(e2eRoot: string): SiteFabricIsolation {
+  const root = resolve(e2eRoot);
+  const userSiteRoot = join(root, 'user-site');
+  if (!isPathInside(root, userSiteRoot)) {
+    throw new Error(`site fabric isolation root escapes the e2e root: ${userSiteRoot}`);
+  }
+  mkdirSync(userSiteRoot, { recursive: true });
+  return { userSiteRoot, env: { NARADA_USER_SITE_ROOT: userSiteRoot } };
+}
+
+/**
+ * Assert that a child environment redirects User Site resolution into the e2e
+ * temporary root. Call with the final merged env passed to a spawned server.
+ */
+export function assertSiteFabricEnvIsolated(env: NodeJS.ProcessEnv, e2eRoot: string): void {
+  const configured = env.NARADA_USER_SITE_ROOT;
+  if (!configured) {
+    throw new Error('site fabric e2e env is missing NARADA_USER_SITE_ROOT; the server would resolve the real User Site registry');
+  }
+  if (!isPathInside(resolve(e2eRoot), resolve(configured))) {
+    throw new Error(`site fabric e2e NARADA_USER_SITE_ROOT escapes the temporary root: ${configured}`);
+  }
+}
+
+/**
+ * Build a child environment for a site fabric e2e server: the caller's base env,
+ * an isolated NARADA_USER_SITE_ROOT inside the e2e root, then caller overrides.
+ * The merged result is verified to stay inside the e2e root before it is returned.
+ */
+export function siteFabricChildEnv(
+  e2eRoot: string,
+  overrides: NodeJS.ProcessEnv = {},
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const isolation = createSiteFabricIsolation(e2eRoot);
+  const env: NodeJS.ProcessEnv = { ...baseEnv, ...isolation.env, ...overrides };
+  assertSiteFabricEnvIsolated(env, e2eRoot);
+  return env;
+}
+
+/**
+ * Resolve the platform-default User Site registry path, deliberately ignoring
+ * NARADA_USER_SITE_ROOT. This is the real path an e2e test must never touch.
+ */
+export function resolveDefaultUserSiteRegistryPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (process.platform === 'win32') {
+    const userProfile = env.USERPROFILE;
+    if (!userProfile) throw new Error('Cannot resolve default User Site registry path: USERPROFILE not set');
+    return join(userProfile, 'Narada', 'registry.db');
+  }
+  return join(homedir(), 'Narada', 'registry.db');
+}
+
+export type E2eFileStateSnapshot = {
+  path: string;
+  exists: boolean;
+  mtimeMs: number | null;
+  size: number | null;
+};
+
+export function snapshotFileState(path: string): E2eFileStateSnapshot {
+  try {
+    const stats = statSync(path);
+    return { path, exists: true, mtimeMs: stats.mtimeMs, size: stats.size };
+  } catch {
+    return { path, exists: false, mtimeMs: null, size: null };
+  }
+}
+
+export function assertFileStateUnchanged(snapshot: E2eFileStateSnapshot): void {
+  const after = snapshotFileState(snapshot.path);
+  if (after.exists !== snapshot.exists) {
+    throw new Error(`file existence changed during e2e: ${snapshot.path} (${snapshot.exists} -> ${after.exists})`);
+  }
+  if (after.exists && (after.mtimeMs !== snapshot.mtimeMs || after.size !== snapshot.size)) {
+    throw new Error(`file modified during e2e: ${snapshot.path} (mtimeMs ${snapshot.mtimeMs} -> ${after.mtimeMs}, size ${snapshot.size} -> ${after.size})`);
+  }
+}
+
 export function tomlPath(value: string): string {
   return value.replaceAll('\\', '/').replaceAll('"', '\\"');
 }
@@ -501,4 +594,9 @@ function requireNonNegativeOffset(value: number, name: string): number {
 
 function safeSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'e2e';
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }

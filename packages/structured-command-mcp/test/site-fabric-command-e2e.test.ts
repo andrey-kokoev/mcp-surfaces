@@ -4,6 +4,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -18,6 +19,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--max-output-bytes', '120',
 ], {
   cwd: siteRoot,
+  env: siteFabricChildEnv(siteRoot),
   label: 'structured-command Site fabric e2e',
 });
 

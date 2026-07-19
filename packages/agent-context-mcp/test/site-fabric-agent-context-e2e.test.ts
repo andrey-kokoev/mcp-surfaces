@@ -7,6 +7,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
 } from '@narada2/mcp-e2e-harness';
 
@@ -42,12 +43,11 @@ db.close();
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot, '--site-id', 'fixture-site'], {
   cwd: siteRoot,
-  env: {
-    ...process.env,
+  env: siteFabricChildEnv(siteRoot, {
     NARADA_AGENT_ID: 'fixture.resident',
     NARADA_SITE_ROOT: siteRoot,
     NARADA_AGENT_CONTEXT_DB: dbPath,
-  },
+  }),
   label: 'agent-context Site-fabric e2e',
 });
 

@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import {
   installE2eArtifactRecorder,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   structured,
   type JsonRecord,
@@ -107,7 +108,7 @@ async function main(): Promise<void> {
 
     scheduler = spawnJsonlMcpServer(process.execPath, [serverPath], {
       cwd: temporaryRoot,
-      env: { ...process.env, NARADA_SITE_ROOT: temporaryRoot },
+      env: siteFabricChildEnv(temporaryRoot, { NARADA_SITE_ROOT: temporaryRoot }),
       label: 'scheduler PC-host lifecycle e2e',
       timeoutMs: TIMEOUT_MS,
       closeTimeoutMs: CLOSE_TIMEOUT_MS,

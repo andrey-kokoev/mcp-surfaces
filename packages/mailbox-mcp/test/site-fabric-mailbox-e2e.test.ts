@@ -5,6 +5,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -59,7 +60,7 @@ writeFileSync(`${mailboxDir}/messages.jsonl`, [
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_SITE_ID: 'fixture-site' },
+  env: siteFabricChildEnv(siteRoot, { NARADA_SITE_ID: 'fixture-site' }),
   label: 'mailbox site-fabric e2e',
 });
 

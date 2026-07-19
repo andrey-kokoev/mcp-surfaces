@@ -6,6 +6,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -20,12 +21,11 @@ const apiKey = process.env.NARADA_E2E_SPEECH_OPENAI_API_KEY;
 const inputWav = process.env.NARADA_E2E_SPEECH_INPUT_WAV;
 const listenAdapterPath = process.env.NARADA_E2E_SPEECH_LISTEN_ADAPTER_PATH;
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const childEnv: NodeJS.ProcessEnv = {
-  ...process.env,
+const childEnv: NodeJS.ProcessEnv = siteFabricChildEnv(siteRoot, {
   OPENAI_API_KEY: liveRequested ? apiKey : undefined,
   NARADA_SPEECH_ALLOW_REMOTE_AUDIO_EGRESS: liveRequested ? '1' : undefined,
   NARADA_PROVIDER_REGISTRY_PATH: undefined,
-};
+});
 const serverArgs = [
   serverPath,
   '--provider-registry-path', registryPath,

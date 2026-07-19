@@ -9,6 +9,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -171,13 +172,12 @@ writeFileSync(`${sessionsRoot}/carrier_fixture/session-index-record.json`, JSON.
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath], {
   cwd: siteRoot,
-  env: {
-    ...process.env,
+  env: siteFabricChildEnv(siteRoot, {
     NARADA_SITE_ROOT: siteRoot,
     NARADA_SITE_ID: 'fixture-site',
     NARADA_AGENT_ID: 'fixture-agent',
     NARADA_CARRIER_SESSION_ID: 'carrier_fixture',
-  },
+  }),
   label: 'nars-session Site fabric e2e',
 });
 

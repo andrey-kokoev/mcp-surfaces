@@ -7,6 +7,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -23,6 +24,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--output-root', siteRoot,
 ], {
   cwd: siteRoot,
+  env: siteFabricChildEnv(siteRoot),
   label: 'local-filesystem Site fabric e2e',
 });
 const blockedServer = spawnJsonlMcpServer(process.execPath, [
@@ -32,7 +34,7 @@ const blockedServer = spawnJsonlMcpServer(process.execPath, [
   '--output-root', siteRoot,
 ], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS: '60000' },
+  env: siteFabricChildEnv(siteRoot, { NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS: '60000' }),
   label: 'local-filesystem blocked-read Site fabric e2e',
 });
 

@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import {
   asRecord,
+  assertFileStateUnchanged,
+  assertSiteFabricEnvIsolated,
   createJsonlClient,
+  createSiteFabricIsolation,
   createTemporaryE2eRoot,
   readMcpOutputText,
   removeTemporaryE2eRoot,
+  resolveDefaultUserSiteRegistryPath,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
+  snapshotFileState,
   spawnContentLengthMcpServer,
   spawnJsonlMcpServer,
   structured,
@@ -94,6 +102,32 @@ assert.equal(tomlPath('C:\\tmp\\value\"x'), 'C:/tmp/value\\"x');
 
 const root = createTemporaryE2eRoot('shared harness test');
 assert.equal(removeTemporaryE2eRoot(root), true);
+
+const isolationRoot = createTemporaryE2eRoot('shared harness isolation');
+const isolation = createSiteFabricIsolation(isolationRoot);
+assert.ok(isolation.userSiteRoot.startsWith(isolationRoot));
+assert.equal(isolation.env.NARADA_USER_SITE_ROOT, isolation.userSiteRoot);
+const childEnv = siteFabricChildEnv(isolationRoot, { FIXTURE_FLAG: '1' });
+assert.equal(childEnv.NARADA_USER_SITE_ROOT, isolation.userSiteRoot);
+assert.equal(childEnv.FIXTURE_FLAG, '1');
+assertSiteFabricEnvIsolated(childEnv, isolationRoot);
+assert.throws(() => assertSiteFabricEnvIsolated({}, isolationRoot), /missing NARADA_USER_SITE_ROOT/);
+assert.throws(() => siteFabricChildEnv(isolationRoot, { NARADA_USER_SITE_ROOT: process.cwd() }), /escapes the temporary root/);
+assert.ok(resolveDefaultUserSiteRegistryPath().endsWith('registry.db'));
+if (process.platform === 'win32') {
+  assert.throws(() => resolveDefaultUserSiteRegistryPath({}), /USERPROFILE not set/);
+}
+
+const missingSnapshot = snapshotFileState(join(isolationRoot, 'missing.db'));
+assert.equal(missingSnapshot.exists, false);
+assertFileStateUnchanged(missingSnapshot);
+const snapshotPath = join(isolation.userSiteRoot, 'registry.db');
+writeFileSync(snapshotPath, 'fixture', 'utf8');
+const presentSnapshot = snapshotFileState(snapshotPath);
+assertFileStateUnchanged(presentSnapshot);
+writeFileSync(snapshotPath, 'fixture-with-more-content', 'utf8');
+assert.throws(() => assertFileStateUnchanged(presentSnapshot), /file modified during e2e/);
+assert.equal(removeTemporaryE2eRoot(isolationRoot), true);
 
 const rawChild = spawn(process.execPath, [
   '-e',

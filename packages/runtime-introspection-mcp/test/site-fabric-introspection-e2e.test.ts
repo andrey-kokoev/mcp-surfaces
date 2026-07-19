@@ -6,6 +6,7 @@ import {
   createTemporaryE2eRoot,
   installE2eArtifactRecorder,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -16,7 +17,7 @@ const evidence = installE2eArtifactRecorder(resultPath, { test_id: 'runtime-intr
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_SITE_ROOT: siteRoot },
+  env: siteFabricChildEnv(siteRoot, { NARADA_SITE_ROOT: siteRoot }),
   label: 'runtime-introspection Site fabric e2e',
 });
 

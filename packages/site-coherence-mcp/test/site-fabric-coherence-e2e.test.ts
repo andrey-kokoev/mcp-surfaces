@@ -8,6 +8,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -47,6 +48,7 @@ assert.ok(address && typeof address === 'object');
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--repo-root', siteRoot, '--worker-url', `http://127.0.0.1:${address.port}`], {
   cwd: siteRoot,
+  env: siteFabricChildEnv(siteRoot),
   label: 'site-coherence Site fabric e2e',
 });
 

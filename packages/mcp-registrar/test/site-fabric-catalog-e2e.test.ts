@@ -7,6 +7,7 @@ import {
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   structured,
   type JsonRecord,
@@ -19,7 +20,7 @@ const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const loaderPath = fileURLToPath(new URL('../../../mcp-loader-mcp/dist/src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--narada-root', siteRoot], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_ROOT: siteRoot },
+  env: siteFabricChildEnv(siteRoot, { NARADA_ROOT: siteRoot }),
   label: 'mcp-registrar catalog Site fabric e2e',
 });
 let loader: ReturnType<typeof spawnJsonlMcpServer> | null = null;
@@ -81,6 +82,7 @@ try {
     '--attach-timeout-ms', '120000',
   ], {
     cwd: siteRoot,
+    env: siteFabricChildEnv(siteRoot),
     label: 'registrar catalog-to-loader Site fabric e2e',
     timeoutMs: 180_000,
     closeTimeoutMs: 5_000,

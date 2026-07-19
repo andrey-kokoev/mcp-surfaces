@@ -3,10 +3,15 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  assertFileStateUnchanged,
+  createSiteFabricIsolation,
   createTemporaryE2eRoot,
   installE2eArtifactRecorder,
   removeTemporaryE2eRoot,
+  resolveDefaultUserSiteRegistryPath,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
+  snapshotFileState,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -34,6 +39,8 @@ if (!existsSync(cliModulePath)) {
 }
 
 const naradaRoot = createTemporaryE2eRoot('site-lifecycle-site-fabric-e2e');
+const userSiteIsolation = createSiteFabricIsolation(naradaRoot);
+const realRegistryBefore = snapshotFileState(resolveDefaultUserSiteRegistryPath());
 const siteRoot = join(naradaRoot, 'sites', 'fixture-site');
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [
@@ -42,7 +49,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--cli-module-path', cliModulePath,
 ], {
   cwd: naradaRoot,
-  env: { ...process.env, NARADA_ROOT: naradaRoot },
+  env: siteFabricChildEnv(naradaRoot, { NARADA_ROOT: naradaRoot }),
   label: 'site-lifecycle Site fabric e2e',
 });
 
@@ -96,6 +103,11 @@ try {
   }));
   assert.equal(initialized.status, 'ok', JSON.stringify(initialized));
   assert.equal(initialized.mutation_performed, true, JSON.stringify(initialized));
+  assert.equal(
+    existsSync(join(userSiteIsolation.userSiteRoot, 'registry.db')),
+    true,
+    'site_init must write the Site Registry inside the isolated temp User Site root',
+  );
 
   const inspected = structured(await server.client.request(5, 'tools/call', {
     name: 'site_doctor',
@@ -122,6 +134,7 @@ try {
   evidence.update({ status: 'passed' });
 } finally {
   await server.close();
+  assertFileStateUnchanged(realRegistryBefore);
   const cleanupOk = removeTemporaryE2eRoot(naradaRoot);
   evidence.finalize({ status: cleanupOk ? 'passed' : 'failed', cleanup: { status: cleanupOk ? 'completed_after_finally' : 'failed' } });
   assert.equal(cleanupOk, true);

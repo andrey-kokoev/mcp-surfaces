@@ -6,6 +6,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   writeE2eResultArtifact,
   type JsonRecord,
@@ -34,14 +35,13 @@ writeFileSync(join(siteRoot, '.ai', 'calendar-mcp.json'), JSON.stringify({
 
 if (accessToken) writeFileSync(join(siteRoot, '.env'), `MS_GRAPH_ACCESS_TOKEN=${accessToken}\n`, 'utf8');
 
-const childEnv: NodeJS.ProcessEnv = {
-  ...process.env,
+const childEnv: NodeJS.ProcessEnv = siteFabricChildEnv(siteRoot, {
   MS_GRAPH_ACCESS_TOKEN: undefined,
   GRAPH_ACCESS_TOKEN: undefined,
   GRAPH_TENANT_ID: undefined,
   GRAPH_CLIENT_ID: undefined,
   GRAPH_CLIENT_SECRET: undefined,
-};
+});
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
   env: childEnv,

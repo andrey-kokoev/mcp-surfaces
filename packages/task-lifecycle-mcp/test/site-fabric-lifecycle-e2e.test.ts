@@ -5,6 +5,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -25,7 +26,7 @@ writeFileSync(`${siteRoot}/.ai/agents/roster.json`, JSON.stringify({
 
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_AGENT_ID: 'fixture.builder', NARADA_SITE_ID: 'fixture-site' },
+  env: siteFabricChildEnv(siteRoot, { NARADA_AGENT_ID: 'fixture.builder', NARADA_SITE_ID: 'fixture-site' }),
   label: 'task-lifecycle site-fabric e2e',
 });
 let reviewerServer: ReturnType<typeof spawnJsonlMcpServer> | null = null;
@@ -138,7 +139,7 @@ try {
   if (Number.isInteger(reviewTaskNumber) && reviewTaskNumber > 0) {
     reviewerServer = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot], {
       cwd: siteRoot,
-      env: { ...process.env, NARADA_AGENT_ID: 'fixture.architect', NARADA_SITE_ID: 'fixture-site' },
+      env: siteFabricChildEnv(siteRoot, { NARADA_AGENT_ID: 'fixture.architect', NARADA_SITE_ID: 'fixture-site' }),
       label: 'task-lifecycle reviewer site-fabric e2e',
     });
     await runMcpProtocolSmoke(reviewerServer.client, {

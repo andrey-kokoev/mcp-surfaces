@@ -7,6 +7,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -25,6 +26,7 @@ writeFileSync(join(repo, 'README.md'), 'site fabric git e2e\n', 'utf8');
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--allowed-root', siteRoot, '--mode', 'write'], {
   cwd: siteRoot,
+  env: siteFabricChildEnv(siteRoot),
   label: 'git Site fabric e2e',
 });
 

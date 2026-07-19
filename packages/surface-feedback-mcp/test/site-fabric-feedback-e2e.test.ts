@@ -5,6 +5,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -21,7 +22,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
   '--owned-surface-id', 'surface-feedback',
 ], {
   cwd: siteRoot,
-  env: { ...process.env, NARADA_AGENT_ID: 'fixture.architect', NARADA_SITE_ROOT: siteRoot },
+  env: siteFabricChildEnv(siteRoot, { NARADA_AGENT_ID: 'fixture.architect', NARADA_SITE_ROOT: siteRoot }),
   label: 'surface-feedback Site-fabric e2e',
 });
 

@@ -5,6 +5,7 @@ import {
   createTemporaryE2eRoot,
   removeTemporaryE2eRoot,
   runMcpProtocolSmoke,
+  siteFabricChildEnv,
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
@@ -33,6 +34,7 @@ const loader = spawnJsonlMcpServer(process.execPath, [
   '--allowed-entrypoint-prefix', fileURLToPath(new URL('../../../', import.meta.url)),
 ], {
   cwd: siteRoot,
+  env: siteFabricChildEnv(siteRoot),
   label: 'registrar-to-loader Site fabric e2e',
 });
 
