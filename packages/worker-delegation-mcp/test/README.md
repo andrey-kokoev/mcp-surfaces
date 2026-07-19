@@ -10,3 +10,4 @@
 - `prompt.test.ts` owns worker prompt assembly, mode-specific guidance, runtime-specific completion guards, and exit-interview prompt requirements.
 - `worker-delegation-mcp.test.ts` owns end-to-end MCP tool flows, policy/config resolution, run lifecycle behavior, status/list/wait/batch behavior, and compatibility coverage that has not yet been split into narrower subsystem tests.
 - `protocol-smoke.test.ts` owns MCP JSON-RPC protocol smoke coverage.
+- `diagnostic-canary-e2e.test.ts` owns the opt-in direct-stdio read-only canary, earliest-stage failure classification, child stdout/stderr capture, bounded wait, output-ref readback, durable run-artifact checks, and failure-root preservation.

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const TREE_HASH_ALGORITHM = 'sha256-tree-v1';
 const BUILD_MANIFEST_SCHEMA = 'narada.worker.build_identity.v2';
@@ -146,6 +146,49 @@ export function createWorkerImplementationIdentityReader(options: IdentityOption
     };
     return cachedObservation;
   }
+}
+
+function resolveRuntimeDependency(name: string, resolveFromPackage: NodeRequire, packageRoot: string): string {
+  try {
+    return resolveFromPackage.resolve(name);
+  } catch (requireError) {
+    const dependencyRoot = join(packageRoot, 'node_modules', name);
+    const dependencyManifestPath = join(dependencyRoot, 'package.json');
+    if (existsSync(dependencyManifestPath)) {
+      const dependencyManifest = readPackageJson(dependencyManifestPath);
+      const exportTarget = resolvePackageExportTarget(dependencyManifest);
+      if (exportTarget) return join(dependencyRoot, exportTarget);
+    }
+    const importResolve = (import.meta as ImportMeta & {
+      resolve?: (specifier: string, parent?: string) => string;
+    }).resolve;
+    if (typeof importResolve !== 'function') throw requireError;
+    return fileURLToPath(importResolve(name, pathToFileURL(join(packageRoot, 'package.json')).href));
+  }
+}
+
+function resolvePackageExportTarget(manifest: Record<string, unknown>): string | null {
+  const exportsValue = manifest.exports;
+  const exportsRecord = asRecord(exportsValue);
+  const rootExport = Object.prototype.hasOwnProperty.call(exportsRecord, '.') ? exportsRecord['.'] : exportsValue;
+  return resolveConditionalPackageTarget(rootExport);
+}
+
+function resolveConditionalPackageTarget(value: unknown): string | null {
+  if (typeof value === 'string') return value.startsWith('./') ? value : null;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const target = resolveConditionalPackageTarget(candidate);
+      if (target) return target;
+    }
+    return null;
+  }
+  const record = asRecord(value);
+  for (const condition of ['import', 'node', 'default']) {
+    const target = resolveConditionalPackageTarget(record[condition]);
+    if (target) return target;
+  }
+  return null;
 }
 
 export function writeWorkerImplementationBuildManifest(options: ManifestWriteOptions = {}): BuildIdentityManifest {
@@ -296,7 +339,7 @@ function runtimeDependencyGraph(packageRoot: string): RuntimeDependencyGraph {
     const packageManifest = readPackageJson(join(packageRoot, 'package.json'));
     const dependencyNames = Object.keys(asRecord(packageManifest.dependencies)).sort((left, right) => left.localeCompare(right));
     const resolveFromPackage = createRequire(join(packageRoot, 'package.json'));
-    const dependencies = dependencyNames.map((name) => runtimeDependencyIdentity(name, resolveFromPackage));
+    const dependencies = dependencyNames.map((name) => runtimeDependencyIdentity(name, resolveFromPackage, packageRoot));
     if (dependencies.some((dependency) => dependency === null)) return { status: 'unavailable', dependencies: [], sha256: null, error_code: 'runtime_dependency_identity_unavailable' };
     const resolved = dependencies.filter((dependency): dependency is RuntimeDependencyIdentity => dependency !== null);
     return { status: 'ok', dependencies: resolved, sha256: hashJson(resolved), error_code: null };
@@ -305,9 +348,9 @@ function runtimeDependencyGraph(packageRoot: string): RuntimeDependencyGraph {
   }
 }
 
-function runtimeDependencyIdentity(name: string, resolveFromPackage: NodeRequire): RuntimeDependencyIdentity | null {
+function runtimeDependencyIdentity(name: string, resolveFromPackage: NodeRequire, packageRoot: string): RuntimeDependencyIdentity | null {
   try {
-    const entrypoint = resolveFromPackage.resolve(name);
+    const entrypoint = resolveRuntimeDependency(name, resolveFromPackage, packageRoot);
     const dependencyRoot = findPackageRoot(dirname(entrypoint));
     const packageManifest = readPackageJson(join(dependencyRoot, 'package.json'));
     const runtimeTree = fingerprintTree(dependencyRoot, includeRuntimePackagePath);

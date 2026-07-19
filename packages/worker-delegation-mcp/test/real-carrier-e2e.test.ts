@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   let failureReason: string | null = null;
   let runId: string | null = null;
   let runDir: string | null = null;
-  let cleanupStatus: 'passed' | 'failed' = 'passed';
+  let cleanupStatus: 'passed' | 'failed' | 'preserved_for_diagnostics' = 'passed';
 
   try {
     const missing = [workerServerPath, runtimeServerPath].find((path) => !existsSync(path));
@@ -151,6 +151,11 @@ async function main(): Promise<void> {
         },
       },
     });
+    const responseError = asRecord(response.error);
+    const errorData = asRecord(responseError.data);
+    const errorDetails = asRecord(errorData.details);
+    if (typeof errorDetails.run_id === 'string') runId = errorDetails.run_id;
+    if (typeof errorDetails.run_dir === 'string') runDir = errorDetails.run_dir;
     assert.equal(response.error, undefined, JSON.stringify(response));
     const firstPage = structured(response);
     let run = firstPage;
@@ -211,7 +216,11 @@ async function main(): Promise<void> {
     if (provider) {
       try { await provider.close(); } catch { cleanupStatus = 'failed'; }
     }
-    if (!removeTemporaryE2eRoot(root)) cleanupStatus = 'failed';
+    if (status === 'passed') {
+      if (!removeTemporaryE2eRoot(root)) cleanupStatus = 'failed';
+    } else if (cleanupStatus === 'passed') {
+      cleanupStatus = 'preserved_for_diagnostics';
+    }
     if (cleanupStatus === 'failed') {
       status = 'failed';
       failureReason ??= 'cleanup_failed';
@@ -223,6 +232,7 @@ async function main(): Promise<void> {
       status,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
+      site_root: root,
       carrier: 'narada-agent-runtime-server',
       provider_boundary: 'controlled_http_fixture',
       run_id: runId,

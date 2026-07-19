@@ -14,7 +14,12 @@ function createCompiledFixture(name: string): { root: string; sourcePath: string
   mkdirSync(artifactRoot, { recursive: true });
   mkdirSync(join(dependencyRoot, 'dist'), { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'identity-fixture', dependencies: { 'fixture-dependency': '1.0.0' } }), 'utf8');
-  writeFileSync(join(dependencyRoot, 'package.json'), JSON.stringify({ name: 'fixture-dependency', version: '1.0.0', main: './dist/index.js' }), 'utf8');
+  writeFileSync(join(dependencyRoot, 'package.json'), JSON.stringify({
+    name: 'fixture-dependency',
+    version: '1.0.0',
+    type: 'module',
+    exports: { '.': { import: './dist/index.js' } },
+  }), 'utf8');
   const sourcePath = join(sourceRoot, 'policy.ts');
   const artifactPath = join(artifactRoot, 'policy.js');
   const dependencyPath = join(dependencyRoot, 'dist', 'index.js');
