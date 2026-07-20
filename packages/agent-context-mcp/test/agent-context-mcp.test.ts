@@ -263,7 +263,7 @@ try {
   assert.equal(exactHydrated.error, undefined);
   let exactHydratedBody = JSON.parse(exactHydrated.result.content[0].text);
   if (exactHydratedBody.output_ref) {
-    writeMessage({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: exactHydratedBody.output_ref, offset: 0, limit: 12000 } } });
+    writeMessage({ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'mcp_output_show', arguments: { ref: exactHydratedBody.output_ref, offset: 0, limit: 12000 } } });
     const exactHydratedPage = await waitFor(20);
     assert.equal(exactHydratedPage.error, undefined);
     const exactHydratedPageBody = JSON.parse(exactHydratedPage.result.content[0].text);
@@ -305,7 +305,7 @@ try {
   assert.equal(hydrated.error, undefined);
   let hydratedBody = JSON.parse(hydrated.result.content[0].text);
   if (hydratedBody.output_ref) {
-    writeMessage({ jsonrpc: '2.0', id: 24, method: 'tools/call', params: { name: 'agent_context_output_show', arguments: { ref: hydratedBody.output_ref, offset: 0, limit: 12000 } } });
+    writeMessage({ jsonrpc: '2.0', id: 24, method: 'tools/call', params: { name: 'mcp_output_show', arguments: { ref: hydratedBody.output_ref, offset: 0, limit: 12000 } } });
     const hydratedPage = await waitFor(24);
     assert.equal(hydratedPage.error, undefined);
     const hydratedPageBody = JSON.parse(hydratedPage.result.content[0].text);

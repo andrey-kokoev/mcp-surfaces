@@ -236,7 +236,7 @@ const TOOLS = [
     },
   },
   {
-    name: 'agent_context_output_show',
+    name: 'mcp_output_show',
     description: 'Read a materialized Agent Context MCP output ref with offset/limit paging.',
     inputSchema: {
       type: 'object',
@@ -735,7 +735,7 @@ function handleMessage(message) {
         toolName: String(name ?? 'unknown_tool'),
         value: result,
         limit: 6000,
-        readerTool: 'agent_context_output_show',
+        readerTool: 'mcp_output_show',
       }));
       return;
     }
@@ -801,7 +801,7 @@ function callTool(name, toolArgs) {
       return buildGuidanceResult(toolArgs);
     case 'agent_context_doctor':
       return doctor();
-    case 'agent_context_output_show':
+    case 'mcp_output_show':
       return outputShow({ siteRoot, args: toolArgs });
     case 'agent_context_whoami':
       return whoami(toolArgs);

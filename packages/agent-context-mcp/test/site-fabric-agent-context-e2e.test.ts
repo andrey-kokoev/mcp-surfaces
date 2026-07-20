@@ -60,7 +60,7 @@ function structured(response: Record<string, unknown>): Record<string, unknown> 
 try {
   await runMcpProtocolSmoke(server.client, {
     expectedServerName: 'fixture-site-agent-context-mcp',
-    requiredTools: ['agent_context_doctor', 'agent_context_startup_sequence', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_output_show'],
+    requiredTools: ['agent_context_doctor', 'agent_context_startup_sequence', 'agent_context_checkpoint', 'agent_context_rehydrate', 'mcp_output_show'],
   });
 
   const doctor = structured(await server.client.request(1, 'tools/call', { name: 'agent_context_doctor', arguments: {} }));
@@ -96,7 +96,7 @@ try {
   assert.match(String(rehydrated.output_ref), /^mcp_output:/, JSON.stringify(rehydrated));
 
   const outputPage = structured(await server.client.request(6, 'tools/call', {
-    name: 'agent_context_output_show',
+    name: 'mcp_output_show',
     arguments: { ref: rehydrated.output_ref, offset: 0, limit: 1000 },
   }));
   assert.equal(outputPage.schema, 'narada.mcp_output_page.v1', JSON.stringify(outputPage));
