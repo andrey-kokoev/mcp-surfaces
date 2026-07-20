@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
@@ -20,18 +20,21 @@ const TOOL_RESULT_CHAR_LIMIT = 4000;
 const STREAM_PREVIEW_CHAR_LIMIT = 1000;
 const TOOL_OUTPUT_SHOW_MAX_LIMIT = 20000;
 const TOOL_INPUT_CHAR_LIMIT = 20000;
+const MAX_SYNCHRONOUS_TIMEOUT_MS = 240_000;
 const REF_PATTERN = /^structured_command_(input|execution):([A-Za-z0-9_-]{8,80})$/;
 const ROOTS_LIST_REQUEST_PREFIX = 'structured_command_roots_';
 const SURFACE_ID = 'structured-command';
 const STRUCTURED_COMMAND_TELEMETRY_TOOL_NAMES = new Set([
   'structured_command_execution_policy_inspect',
   'structured_command_execute',
+  'structured_command_start',
+  'structured_command_execution_show',
   'structured_command_powershell_parse_check',
   'structured_command_input_create',
   'structured_command_elevated_window_execute',
 ]);
 
-type StructuredCommandState = Record<string, unknown> & {
+export type StructuredCommandState = Record<string, unknown> & {
   siteRoot: string;
   policy: ReturnType<typeof createExecutionPolicy>;
   auditLogDir: string | null;
@@ -65,6 +68,21 @@ type SpawnStructuredResult = {
 type RequestContext = {
   abortSignal?: AbortSignal;
   progress?: (progress: number, message: string) => void;
+};
+
+type BackgroundExecutionRequest = {
+  schema: 'narada.structured_command.background_request.v0';
+  execution_ref: string;
+  storage_root: string;
+  audit_log_dir: string | null;
+  command: string;
+  args: string[];
+  working_directory: string;
+  timeout_ms: number;
+  max_output_bytes: number;
+  started_at: string;
+  execution_posture: Record<string, unknown>;
+  input_ref: unknown;
 };
 
 class StructuredCommandError extends Error {
@@ -252,6 +270,7 @@ function completeArgument(params: Record<string, unknown>, state: StructuredComm
 
 export function listTools() {
   return decorateTools([
+    guidanceToolDefinition(),
     {
       name: 'structured_command_execution_policy_inspect',
       description: 'Inspect the policy governing structured command execution.',
@@ -269,7 +288,7 @@ export function listTools() {
     },
     {
       name: 'structured_command_execute',
-      description: 'Execute a structured argv command under allowed-root and command policy.',
+      description: `Execute a structured argv command under allowed-root and command policy. Synchronous execution is capped at ${MAX_SYNCHRONOUS_TIMEOUT_MS}ms; use structured_command_start for longer work.`,
       inputSchema: objectSchema({
         input_ref: { type: 'string', description: 'Structured command input ref from structured_command_input_create.' },
         execution_ref: { type: 'string', description: 'Prior execution ref returned by structured_command_execute; use to read later stdout/stderr pages without re-running.' },
@@ -285,6 +304,30 @@ export function listTools() {
         stdout_limit: { type: 'integer', description: `Stdout page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
         stderr_limit: { type: 'integer', description: `Stderr page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
       }),
+    },
+    {
+      name: 'structured_command_start',
+      description: 'Start a durable asynchronous structured argv command and return an execution_ref immediately. Completion survives MCP surface process restart.',
+      inputSchema: objectSchema({
+        input_ref: { type: 'string', description: 'Structured command input ref from structured_command_input_create.' },
+        command: { type: 'string', description: 'Executable name or absolute executable path admitted by policy.' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Argument vector. No shell parsing is performed.' },
+        working_directory: { type: 'string', description: 'Working directory under an allowed root.' },
+        timeout_ms: { type: 'integer', description: 'Timeout in milliseconds, bounded by surface policy.' },
+        test_scope: { type: 'string', enum: ['focused', 'broad', 'known_slow', 'unknown'] },
+        expected_cost: { type: 'string', enum: ['low', 'medium', 'high', 'unknown'] },
+      }),
+    },
+    {
+      name: 'structured_command_execution_show',
+      description: 'Read one durable structured command execution by execution_ref without rerunning it.',
+      inputSchema: objectSchema({
+        execution_ref: { type: 'string', description: 'Execution ref returned by structured_command_start or structured_command_execute.' },
+        stdout_offset: { type: 'integer', description: 'Character offset for stdout page. Defaults 0.' },
+        stderr_offset: { type: 'integer', description: 'Character offset for stderr page. Defaults 0.' },
+        stdout_limit: { type: 'integer', description: `Stdout page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
+        stderr_limit: { type: 'integer', description: `Stderr page size. Default ${STREAM_PREVIEW_CHAR_LIMIT}, max ${TOOL_OUTPUT_SHOW_MAX_LIMIT}.` },
+      }, ['execution_ref']),
     },
     {
       name: 'structured_command_powershell_parse_check',
@@ -345,6 +388,8 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
       }
       if (name === 'structured_command_execution_policy_inspect') result = publicExecutionPolicy(state.policy);
       else if (name === 'structured_command_execute') result = await executeStructuredCommand(args, state, context);
+      else if (name === 'structured_command_start') result = await executeStructuredCommand({ ...args, wait_for_completion: false, test_scope: args.test_scope ?? 'known_slow' }, state, context, true);
+      else if (name === 'structured_command_execution_show') result = await executeStructuredCommand(args, state, context);
       else if (name === 'structured_command_powershell_parse_check') result = await powershellParseCheck(args, state, context);
       else if (name === 'structured_command_input_create') result = createStructuredCommandInput(args, state);
       else if (name === 'structured_command_elevated_window_execute') result = await executeStructuredCommandElevatedWindow(args, state);
@@ -420,7 +465,7 @@ function structuredCommandTelemetryDeclaration(toolName: string): TelemetryDecla
   });
 }
 
-export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}): Promise<unknown> {
+export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}, explicitStart = false): Promise<unknown> {
   const argsRecord = asRecord(args);
   enforceInputCharLimit(argsRecord);
   if (argsRecord.execution_ref) {
@@ -457,7 +502,7 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     };
   }
 
-  if (!waitForCompletion && executionPosture.test_scope !== 'known_slow') {
+  if (!waitForCompletion && !explicitStart && executionPosture.test_scope !== 'known_slow') {
     return {
       schema: 'narada.structured_command.execution_result.v0',
       status: 'refused',
@@ -473,6 +518,22 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
       test_scope: executionPosture.test_scope,
       expected_cost: executionPosture.expected_cost,
       wait_for_completion: false,
+    };
+  }
+
+  if (waitForCompletion && timeoutMs > MAX_SYNCHRONOUS_TIMEOUT_MS) {
+    return {
+      schema: 'narada.structured_command.execution_result.v0',
+      status: 'refused',
+      executed: false,
+      decision,
+      refusal_reasons: ['synchronous_timeout_exceeds_reliable_bound'],
+      remediation_hints: [`Use structured_command_start for commands requiring more than ${MAX_SYNCHRONOUS_TIMEOUT_MS}ms, then poll structured_command_execution_show.`],
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+      timeout_ms: timeoutMs,
+      max_synchronous_timeout_ms: MAX_SYNCHRONOUS_TIMEOUT_MS,
     };
   }
 
@@ -513,41 +574,21 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
     };
     const executionRef = createStructuredCommandExecution(pendingPayload, state);
     audit(state, pendingPayload);
-    void spawnStructured(decision.command, decision.args, spawnOptions).then((result) => {
-      const payload = buildStructuredCommandExecutionPayload({
-        decision,
-        result,
-        startedAt,
-        timeoutMs,
-        executionPosture,
-        inputRef: argsRecord.input_ref ?? null,
-        executionMode: 'background',
-        waitForCompletion: false,
-      });
-      audit(state, payload);
-      if (executionRef) updateStructuredCommandExecution(executionRef, payload, state);
-    }).catch((error) => {
-      const payload = buildStructuredCommandExecutionPayload({
-        decision,
-        result: {
-          exit_code: null,
-          stdout: '',
-          stderr: error instanceof Error ? error.message : String(error),
-          stdout_truncated: false,
-          stderr_truncated: false,
-          timed_out: false,
-          cancelled: false,
-        },
-        startedAt,
-        timeoutMs,
-        executionPosture,
-        inputRef: argsRecord.input_ref ?? null,
-        executionMode: 'background',
-        waitForCompletion: false,
-      });
-      audit(state, payload);
-      if (executionRef) updateStructuredCommandExecution(executionRef, payload, state);
-    });
+    if (!executionRef) throw diagnosticError('structured_command_execution_persistence_unavailable', 'structured_command_execution_persistence_unavailable');
+    startDetachedBackgroundRunner({
+      schema: 'narada.structured_command.background_request.v0',
+      execution_ref: executionRef,
+      storage_root: state.storageRoot,
+      audit_log_dir: state.auditLogDir,
+      command: decision.command,
+      args: decision.args,
+      working_directory: decision.working_directory,
+      timeout_ms: timeoutMs,
+      max_output_bytes: state.policy.maxOutputBytes,
+      started_at: startedAt,
+      execution_posture: executionPosture,
+      input_ref: argsRecord.input_ref ?? null,
+    }, state);
     return buildPagedExecutionResult(pendingPayload, argsRecord, executionRef);
   }
 
@@ -567,7 +608,50 @@ export async function executeStructuredCommand(args: unknown, state: StructuredC
   return buildPagedExecutionResult(payload, argsRecord, executionRef);
 }
 
-function buildStructuredCommandExecutionPayload({ decision, result, startedAt, timeoutMs, executionPosture, inputRef, executionMode, waitForCompletion }) {
+function startDetachedBackgroundRunner(request: BackgroundExecutionRequest, state: StructuredCommandState): void {
+  const { id } = parseRef(request.execution_ref, 'execution');
+  const requestPath = join(state.storageRoot, 'background-requests', `${id}.json`);
+  writeJsonRecord(requestPath, request);
+  const runnerPath = fileURLToPath(new URL('./background-runner.js', import.meta.url));
+  const requestSha256 = sha256Json(request);
+  const child = spawn(process.execPath, [runnerPath, requestPath, requestSha256, request.execution_ref, request.storage_root, request.audit_log_dir ?? ''], {
+    cwd: request.working_directory,
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+    env: state.env,
+  });
+  child.once('error', (error) => {
+    const payload = buildStructuredCommandExecutionPayload({
+      decision: {
+        command: request.command,
+        args: request.args,
+        working_directory: request.working_directory,
+      },
+      result: {
+        exit_code: null,
+        stdout: '',
+        stderr: error.message,
+        stdout_truncated: false,
+        stderr_truncated: false,
+        timed_out: false,
+        cancelled: false,
+      },
+      startedAt: request.started_at,
+      timeoutMs: request.timeout_ms,
+      executionPosture: request.execution_posture,
+      inputRef: request.input_ref,
+      executionMode: 'background',
+      waitForCompletion: false,
+    });
+    audit(state, payload);
+    updateStructuredCommandExecution(request.execution_ref, payload, state);
+    rmSync(requestPath, { force: true });
+  });
+  child.unref();
+}
+
+export function buildStructuredCommandExecutionPayload({ decision, result, startedAt, timeoutMs, executionPosture, inputRef, executionMode, waitForCompletion }) {
   const finishedAt = new Date().toISOString();
   return {
     schema: 'narada.structured_command.execution_result.v0',
@@ -673,7 +757,7 @@ async function powershellParseCheck(args: Record<string, unknown>, state: Struct
   return payload;
 }
 
-function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, env, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
+export function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, env, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
   return new Promise((resolvePromise) => {
     if (abortSignal?.aborted) {
       resolvePromise({
@@ -1245,7 +1329,7 @@ function stringEnumValue(value: unknown, allowed: string[], fallback: string): s
   return text;
 }
 
-function audit(state, payload) {
+export function audit(state, payload) {
   if (!state.auditLogDir) return;
   mkdirSync(state.auditLogDir, { recursive: true });
   appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
@@ -1265,7 +1349,7 @@ function createStructuredCommandExecution(result, state) {
   return record.ref;
 }
 
-function updateStructuredCommandExecution(ref, result, state) {
+export function updateStructuredCommandExecution(ref, result, state) {
   const { id } = parseRef(ref, 'execution');
   const path = executionPath(state, id);
   const existing = readJsonRecord(path);
@@ -1279,7 +1363,7 @@ function updateStructuredCommandExecution(ref, result, state) {
   });
 }
 
-function readStructuredCommandExecution(ref, state) {
+export function readStructuredCommandExecution(ref, state) {
   const { id } = parseRef(ref, 'execution');
   return readJsonRecord(executionPath(state, id));
 }
@@ -1333,7 +1417,9 @@ function structuredCommandExecutionRefFromUri(uri) {
 
 function writeJsonRecord(path, record) {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  renameSync(temporaryPath, path);
 }
 
 function readJsonRecord(path) {
@@ -1390,7 +1476,7 @@ function decorateTools(tools) {
 function toolAnnotations(name) {
   return {
     title: String(name),
-    readOnlyHint: !/execute|create/.test(String(name)),
+    readOnlyHint: !/execute|create|start/.test(String(name)),
     destructiveHint: false,
     idempotentHint: /inspect|show/.test(String(name)),
     openWorldHint: true,

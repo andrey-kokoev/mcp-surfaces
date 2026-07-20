@@ -167,10 +167,18 @@ assert.equal(backgroundStarted.status, 'running');
 assert.equal(backgroundStarted.pending, true);
 assert.equal(backgroundStarted.wait_for_completion, false);
 assert.match(String(backgroundStarted.execution_ref), /^structured_command_execution:/);
-let backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, state);
-for (let attempt = 0; attempt < 40 && backgroundCompleted.status === 'running'; attempt++) {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, state);
+// A replacement server state bound to the same storage root can observe the
+// detached runner's completion; the originating state owns no completion promise.
+const replacementState = createServerState({
+  allowedRoot: root,
+  allowCommand: ['node'],
+  allowPrefix: ['git status'],
+  auditLogDir,
+});
+let backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, replacementState);
+for (let attempt = 0; attempt < 100 && backgroundCompleted.status === 'running'; attempt++) {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  backgroundCompleted = await (executeStructuredCommand as any)({ execution_ref: backgroundStarted.execution_ref }, replacementState);
 }
 assert.equal(backgroundCompleted.status, 'ok');
 assert.equal(backgroundCompleted.pending, false);
@@ -186,9 +194,12 @@ assert.deepEqual(toolNames, [
   'structured_command_elevated_window_execute',
   'structured_command_execute',
   'structured_command_execution_policy_inspect',
+  'structured_command_execution_show',
+  'structured_command_guidance',
   'structured_command_input_create',
   'structured_command_output_show',
   'structured_command_powershell_parse_check',
+  'structured_command_start',
 ]);
 const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
 assert.equal(executeTool.canonical_name, 'structured_command_execute');
@@ -199,6 +210,19 @@ assert.ok(executeTool.inputSchema.properties.stdout_limit);
 assert.ok(executeTool.inputSchema.properties.wait_for_completion);
 assert.ok(executeTool.inputSchema.properties.test_scope);
 assert.ok(executeTool.inputSchema.properties.expected_cost);
+const startTool = tools.result.tools.find((tool) => tool.name === 'structured_command_start');
+assert.equal(startTool.annotations.canonicalName, 'structured_command_start');
+const showTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execution_show');
+assert.deepEqual(showTool.inputSchema.required, ['execution_ref']);
+
+const tooLongForSync = await (executeStructuredCommand as any)({
+  command: 'node',
+  args: ['--version'],
+  working_directory: root,
+  timeout_ms: 240_001,
+}, state);
+assert.equal(tooLongForSync.status, 'refused');
+assert.ok(tooLongForSync.refusal_reasons.includes('synchronous_timeout_exceeds_reliable_bound'));
 
 const broker = buildElevatedWindowBrokerCommand({
   command: 'pwsh.exe',
