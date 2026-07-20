@@ -18,6 +18,7 @@ type SiteLoopPhaseDeps = {
   emitScheduledSopTriggers: (siteRoot: string, config: SiteLoopConfig, options: SiteLoopPayload) => unknown;
   runInboxBridge: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   runTicketTaskReconcile: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
+  runTaskExecutabilityReconciliation: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
   getResidentStatus: (siteRoot: string) => unknown;
   runAgentOutcomeReconciliation: (siteRoot: string, options: SiteLoopPayload) => unknown;
   reconcileReportedResidentTaskLifecycleState: (siteRoot: string, options: SiteLoopPayload) => Promise<unknown> | unknown;
@@ -153,6 +154,35 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
       execute: (context) => bridgeResult(context),
       outputRefs: (result) => deps.materializedTaskRefs(result),
       evidence: (result) => deps.summarizeTaskMaterialization(result),
+    },
+    {
+      id: 'task_executability_reconciliation',
+      shouldRun: (context) => !context.dryRun && !context.drain,
+      skipStep: (context) => ({
+        stepId: 'task_executability_reconciliation',
+        status: 'skipped',
+        inputRefs: [{ kind: 'task_lifecycle', ref: 'executability_requests' }],
+        outputRefs: [],
+        evidence: {
+          schema: schemaName(context.siteLoopConfig, 'task_executability_reconciliation'),
+          status: 'skipped',
+          reason: context.dryRun ? 'dry_run' : 'drain',
+        },
+      }),
+      inputRefs: () => [{ kind: 'task_lifecycle', ref: 'executability_requests' }],
+      execute: (context) => deps.runTaskExecutabilityReconciliation(context.siteRoot, {
+        store: context.store,
+        limit: context.limit,
+        orchestrator: context.options.taskExecutabilityOrchestrator,
+        max_attempts: context.options.taskExecutabilityMaxAttempts,
+        max_run_ms: context.options.taskExecutabilityMaxRunMs,
+      }),
+      outputRefs: (result) => items(record(result).results).map((item) => ({
+        kind: 'task_executability_request',
+        ref: item.request_id,
+        outcome: item.outcome,
+      })),
+      evidence: (result) => result,
     },
     {
       id: 'resident_directive_emission',

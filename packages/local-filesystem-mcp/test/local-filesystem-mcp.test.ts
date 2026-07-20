@@ -183,6 +183,9 @@ trust_level = "untrusted"
   assert.equal(readToolNames.includes('fs_write_file'), false);
   assert.equal(readToolNames.includes('fs_apply_patch'), false);
   assert.equal(readToolNames.includes('fs_patch_outcome_show'), true);
+  const patchOutcomeTool = listTools('read').find((tool) => tool.name === 'fs_patch_outcome_show') as DynamicTestValue;
+  assert.equal(patchOutcomeTool.annotations.readOnlyHint, false);
+  assert.equal(patchOutcomeTool.annotations.idempotentHint, true);
   const recoveryGuidance = buildGuidanceResult({ workflow: 'bounded_reads_and_patch_recovery' }) as DynamicTestValue;
   assert.equal(Array.isArray(recoveryGuidance.patch_recovery.sequence), true);
   assert.match(String(recoveryGuidance.patch_recovery.sequence[2]), /fs_patch_outcome_show/);
@@ -923,6 +926,75 @@ trust_level = "untrusted"
   assert.equal(timeoutPatch.error.data.code, 'fs_apply_patch_timed_out');
   assert.equal(timeoutPatch.error.data.details.timeout_kind, 'filesystem_operation_timeout');
   assert.equal(timeoutPatch.error.data.details.timeout_ms, 1);
+  const patchOutcomeDirectory = join(tempRoot, '.narada', 'local-filesystem-mcp', 'patch-outcomes');
+  mkdirSync(patchOutcomeDirectory, { recursive: true });
+  const writeInterruptedPatchOutcome = (
+    operationId: string,
+    patch: string,
+    beforeState: Array<{ path: string; exists: boolean; sha256: string | null }>,
+    afterState: Array<{ path: string; exists: boolean; sha256: string | null }>,
+  ) => {
+    writeFileSync(join(patchOutcomeDirectory, `${operationId}.json`), `${JSON.stringify({
+      schema: 'local.filesystem.apply_patch.outcome.v1',
+      status: 'applying',
+      operation_id: operationId,
+      patch_sha256: sha256(patch),
+      mutation_started: true,
+      owner_pid: 2147483647,
+      deadline_at: new Date(0).toISOString(),
+      recovery_plan: { before_state: beforeState, after_state: afterState, changed_files: [] },
+    }, null, 2)}\n`, 'utf8');
+  };
+
+  const retryRecoveryPath = join(trusted, 'patch-recovery-retry.txt');
+  const retryRecoveryPatch = `--- patch-recovery-retry.txt\n+++ patch-recovery-retry.txt\n@@ -1 +1 @@\n-before\n+after\n`;
+  writeFileSync(retryRecoveryPath, 'before\n', 'utf8');
+  writeInterruptedPatchOutcome(
+    'patch-recovery-retry',
+    retryRecoveryPatch,
+    [{ path: retryRecoveryPath, exists: true, sha256: sha256('before\n') }],
+    [{ path: retryRecoveryPath, exists: true, sha256: sha256('after\n') }],
+  );
+  const retryRecoveryOutcome = call(writeState, 325, 'fs_patch_outcome_show', { operation_id: 'patch-recovery-retry' });
+  assert.equal(retryRecoveryOutcome.result.structuredContent.status, 'interrupted_before_mutation');
+  assert.equal(retryRecoveryOutcome.result.structuredContent.retry_safe, true);
+  const recoveredRetry = call(writeState, 326, 'fs_apply_patch', { operation_id: 'patch-recovery-retry', patch: retryRecoveryPatch });
+  assert.equal(recoveredRetry.result.structuredContent.status, 'patched');
+  assert.equal(recoveredRetry.result.structuredContent.recovery_count, 1);
+  assert.equal(readFileSync(retryRecoveryPath, 'utf8'), 'after\n');
+
+  const completedRecoveryPath = join(trusted, 'patch-recovery-complete.txt');
+  const completedRecoveryPatch = `--- patch-recovery-complete.txt\n+++ patch-recovery-complete.txt\n@@ -1 +1 @@\n-before\n+after\n`;
+  writeFileSync(completedRecoveryPath, 'after\n', 'utf8');
+  writeInterruptedPatchOutcome(
+    'patch-recovery-complete',
+    completedRecoveryPatch,
+    [{ path: completedRecoveryPath, exists: true, sha256: sha256('before\n') }],
+    [{ path: completedRecoveryPath, exists: true, sha256: sha256('after\n') }],
+  );
+  const completedRecoveryOutcome = call(writeState, 327, 'fs_patch_outcome_show', { operation_id: 'patch-recovery-complete' });
+  assert.equal(completedRecoveryOutcome.result.structuredContent.status, 'patched_recovered');
+  assert.equal(completedRecoveryOutcome.result.structuredContent.retry_safe, false);
+
+  const partialRecoveryA = join(trusted, 'patch-recovery-partial-a.txt');
+  const partialRecoveryB = join(trusted, 'patch-recovery-partial-b.txt');
+  writeFileSync(partialRecoveryA, 'after-a\n', 'utf8');
+  writeFileSync(partialRecoveryB, 'before-b\n', 'utf8');
+  writeInterruptedPatchOutcome(
+    'patch-recovery-partial',
+    'synthetic-partial-patch',
+    [
+      { path: partialRecoveryA, exists: true, sha256: sha256('before-a\n') },
+      { path: partialRecoveryB, exists: true, sha256: sha256('before-b\n') },
+    ],
+    [
+      { path: partialRecoveryA, exists: true, sha256: sha256('after-a\n') },
+      { path: partialRecoveryB, exists: true, sha256: sha256('after-b\n') },
+    ],
+  );
+  const partialRecoveryOutcome = call(writeState, 328, 'fs_patch_outcome_show', { operation_id: 'patch-recovery-partial' });
+  assert.equal(partialRecoveryOutcome.result.structuredContent.status, 'interrupted_partial');
+  assert.equal(partialRecoveryOutcome.result.structuredContent.retry_safe, false);
 
   writeFileSync(join(trusted, 'patch-header.txt'), 'old\n', 'utf8');
   const headerPatchResponse = call(writeState, 34, 'fs_apply_patch', {

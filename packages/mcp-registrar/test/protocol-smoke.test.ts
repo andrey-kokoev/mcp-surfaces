@@ -72,7 +72,10 @@ try {
 
   const proxyResponses = await exchangeThroughProxy();
   assert.equal(proxyResponses.find((message) => message.id === 11)?.result?.serverInfo?.name, 'mcp-registrar');
-  assert.equal(proxyResponses.find((message) => message.id === 12)?.result?.tools?.length, expected.length);
+  assert.deepEqual(
+    proxyResponses.find((message) => message.id === 12)?.result?.tools?.map((tool: { name: string }) => tool.name),
+    [...expected, 'mcp_runtime_proxy_status'],
+  );
 
   console.log('mcp-registrar protocol smoke ok');
 } finally {

@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -20,6 +24,7 @@
     "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-transport": "workspace:*"
   },
   "devDependencies": {

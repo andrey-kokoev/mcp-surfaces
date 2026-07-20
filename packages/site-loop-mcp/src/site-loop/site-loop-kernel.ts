@@ -63,6 +63,7 @@ export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
   'scheduled_sop_triggers',
   'inbox_bridge',
   'task_materialization',
+  'task_executability_reconciliation',
   'resident_directive_emission',
   'ticket_task_reconciliation',
   'pre_backlog_outcome_reconciliation',

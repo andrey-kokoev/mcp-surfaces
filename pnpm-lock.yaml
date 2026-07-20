@@ -15,6 +15,19 @@ importers:
         specifier: ^5.8.3
         version: 5.9.3
 
+  ../narada-core/packages/task-executability-orchestrator:
+    dependencies:
+      '@narada2/task-governance-core':
+        specifier: workspace:*
+        version: link:../task-governance-core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
   ../narada-core/packages/task-governance-core:
     devDependencies:
       '@types/node':
@@ -31,6 +44,9 @@ importers:
 
   packages/agent-context-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -40,6 +56,10 @@ importers:
         version: link:../shared/mcp-e2e-harness
 
   packages/artifacts-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -47,6 +67,9 @@ importers:
 
   packages/calendar-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -63,12 +86,21 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
 
   packages/delegated-task-mcp:
     dependencies:
       '@narada2/execution-contract':
         specifier: workspace:*
         version: link:../shared/execution-contract
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+      '@narada2/task-governance-core':
+        specifier: workspace:*
+        version: link:../../../narada-core/packages/task-governance-core
       '@narada2/worker-delegation-mcp':
         specifier: workspace:*
         version: link:../worker-delegation-mcp
@@ -82,6 +114,9 @@ importers:
 
   packages/git-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -92,6 +127,9 @@ importers:
 
   packages/graph-mail-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -105,6 +143,9 @@ importers:
 
   packages/launcher-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -115,6 +156,9 @@ importers:
 
   packages/local-filesystem-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -125,6 +169,9 @@ importers:
 
   packages/mailbox-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -135,6 +182,9 @@ importers:
 
   packages/mcp-loader-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -145,12 +195,93 @@ importers:
 
   packages/mcp-registrar:
     dependencies:
+      '@narada2/agent-context-mcp':
+        specifier: workspace:*
+        version: link:../agent-context-mcp
+      '@narada2/artifacts-mcp':
+        specifier: workspace:*
+        version: link:../artifacts-mcp
+      '@narada2/calendar-mcp':
+        specifier: workspace:*
+        version: link:../calendar-mcp
+      '@narada2/cloudflare-carrier-mcp':
+        specifier: workspace:*
+        version: link:../cloudflare-carrier-mcp
+      '@narada2/delegated-task-mcp':
+        specifier: workspace:*
+        version: link:../delegated-task-mcp
+      '@narada2/git-mcp':
+        specifier: workspace:*
+        version: link:../git-mcp
+      '@narada2/graph-mail-mcp':
+        specifier: workspace:*
+        version: link:../graph-mail-mcp
+      '@narada2/launcher-mcp':
+        specifier: workspace:*
+        version: link:../launcher-mcp
+      '@narada2/local-filesystem-mcp':
+        specifier: workspace:*
+        version: link:../local-filesystem-mcp
+      '@narada2/mailbox-mcp':
+        specifier: workspace:*
+        version: link:../mailbox-mcp
+      '@narada2/mcp-fabric-compiler':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-compiler
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+      '@narada2/mcp-loader-mcp':
+        specifier: workspace:*
+        version: link:../mcp-loader-mcp
       '@narada2/mcp-runtime-proxy':
         specifier: workspace:*
         version: link:../shared/mcp-runtime-proxy
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+      '@narada2/nars-session-mcp':
+        specifier: workspace:*
+        version: link:../nars-session-mcp
+      '@narada2/operator-routing-mcp':
+        specifier: workspace:*
+        version: link:../operator-routing-mcp
+      '@narada2/scheduler-mcp':
+        specifier: workspace:*
+        version: link:../scheduler-mcp
+      '@narada2/site-coherence-mcp':
+        specifier: workspace:*
+        version: link:../site-coherence-mcp
+      '@narada2/site-inbox-mcp':
+        specifier: workspace:*
+        version: link:../site-inbox-mcp
+      '@narada2/site-lifecycle-mcp':
+        specifier: workspace:*
+        version: link:../site-lifecycle-mcp
+      '@narada2/site-loop-mcp':
+        specifier: workspace:*
+        version: link:../site-loop-mcp
+      '@narada2/site-registry-mcp':
+        specifier: workspace:*
+        version: link:../site-registry-mcp
+      '@narada2/sop-mcp':
+        specifier: workspace:*
+        version: link:../sop-mcp
+      '@narada2/speech-mcp':
+        specifier: workspace:*
+        version: link:../speech-mcp
+      '@narada2/structured-command-mcp':
+        specifier: workspace:*
+        version: link:../structured-command-mcp
+      '@narada2/surface-feedback-mcp':
+        specifier: workspace:*
+        version: link:../surface-feedback-mcp
+      '@narada2/task-lifecycle-mcp':
+        specifier: workspace:*
+        version: link:../task-lifecycle-mcp
+      '@narada2/worker-delegation-mcp':
+        specifier: workspace:*
+        version: link:../worker-delegation-mcp
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -161,6 +292,9 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -169,6 +303,10 @@ importers:
         version: link:../../../narada/packages/site-paths
 
   packages/operator-routing-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -184,6 +322,10 @@ importers:
         version: link:../shared/mcp-telemetry
 
   packages/scheduler-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -195,7 +337,37 @@ importers:
 
   packages/shared/mcp-e2e-harness: {}
 
-  packages/shared/mcp-runtime-proxy: {}
+  packages/shared/mcp-fabric-compiler:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../mcp-fabric-contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/shared/mcp-fabric-contracts:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.3
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+
+  packages/shared/mcp-runtime-proxy:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../mcp-fabric-contracts
 
   packages/shared/mcp-telemetry: {}
 
@@ -216,12 +388,18 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
 
   packages/site-inbox-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -235,15 +413,27 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
 
   packages/site-loop-mcp:
     dependencies:
+      '@narada2/delegated-task-mcp':
+        specifier: workspace:*
+        version: link:../delegated-task-mcp
       '@narada2/mcp-affordances':
         specifier: workspace:*
         version: link:../shared/mcp-affordances
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+      '@narada2/task-executability-orchestrator':
+        specifier: workspace:*
+        version: link:../../../narada-core/packages/task-executability-orchestrator
       '@narada2/task-governance-core':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-governance-core
@@ -263,9 +453,15 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
 
   packages/sop-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
@@ -282,6 +478,9 @@ importers:
 
   packages/speech-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/provider-registry':
         specifier: workspace:*
         version: link:../shared/provider-registry
@@ -292,12 +491,15 @@ importers:
 
   packages/structured-command-mcp:
     dependencies:
-      '@narada2/mcp-transport':
+      '@narada2/mcp-fabric-contracts':
         specifier: workspace:*
-        version: link:../shared/mcp-transport
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
+      '@narada2/mcp-transport':
+        specifier: workspace:*
+        version: link:../shared/mcp-transport
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -305,6 +507,9 @@ importers:
 
   packages/surface-feedback-mcp:
     dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/task-lifecycle-mcp':
         specifier: workspace:*
         version: link:../task-lifecycle-mcp
@@ -318,6 +523,9 @@ importers:
       '@narada2/execution-contract':
         specifier: workspace:*
         version: link:../shared/execution-contract
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
@@ -334,6 +542,9 @@ importers:
       '@narada2/mcp-affordances':
         specifier: workspace:*
         version: link:../shared/mcp-affordances
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport

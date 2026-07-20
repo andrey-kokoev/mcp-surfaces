@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -24,7 +28,9 @@
     "test:e2e:site-fabric": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/worker-delegation-mcp build && pnpm --filter @narada2/mcp-loader-mcp build && pnpm build && node dist/test/site-fabric-worker-e2e.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/execution-contract": "workspace:*",
+    "@narada2/task-governance-core": "workspace:*",
     "@narada2/worker-delegation-mcp": "workspace:*"
   },
   "files": [

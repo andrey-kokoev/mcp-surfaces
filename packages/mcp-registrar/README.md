@@ -6,6 +6,13 @@ MCP surface registrar for binding/unbinding surfaces across Narada sites and car
 
 Manages the surface-to-site-to-carrier weave so carrier and Site MCP config is generated rather than hand-maintained.
 
+## V2 native catalog
+Every registered surface resolves from a package-owned `SurfaceDescriptorV2`.
+
+## V2 native catalog details
+`registrar_surface_list` reports the native descriptor, descriptor/tool-contract digests, lifecycle class, and explicit projections.
+Materialized Site fabric stores the selected descriptor under `surface_projection` so mcp-loader can compare it with fresh `tools/list` output.
+The registrar is native-only; projection selection requires `projection_id` or unambiguous runtime context.
 ## Tools
 
 | Tool | Description |
@@ -34,6 +41,19 @@ Conformance is a four-layer proof, not a tool-name allowlist check:
 4. Pass `observation_ref` unchanged to `registrar_site_registry_conformance_check`; Registrar resolves it only under the target Site root.
 
 The proof fails on missing live evidence, absent boolean `readOnlyHint`, duplicate tools, incomplete or overlapping semantics, external refusal lists, fabric/catalog/live drift, projection/provenance drift, and missing output-reader closure. Tool names never determine behavior.
+
+## Recurring Fabric Drift Hygiene
+
+The cross-site declared-versus-live tool check is documented in
+[`sops/mcp-fabric-drift-hygiene.sop.yaml`](sops/mcp-fabric-drift-hygiene.sop.yaml)
+and is intended to run through a daily Site Loop or task-lifecycle recurrence.
+Each run calls `registrar_site_list`, captures a fresh
+`mcp_loader_site_tool_inventory_check` result for every returned root, validates
+the declared fabric, and classifies each finding before proposing a repair.
+Loader capacity, stale-runtime, entrypoint, site-id, duplicate-surface, and
+runtime-selection failures remain explicit probe findings. Registry
+materialization is dry-run evidence until the owning Site fabric has been
+validated; the check never regenerates config merely to conceal drift.
 
 ## Site Catalog Boundary
 
@@ -67,8 +87,17 @@ Use the registrar when you want to inject a standalone MCP surface into Codex, o
 
 For a concrete example, `@narada2/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
 
+## Kimi Carrier Contract
+
+`pnpm test:registrar:kimi-contract` materializes the real `kimi-andrey` configuration, launches every emitted stdio server with its generated command and arguments, performs MCP initialization and `tools/list`, and validates every tool `inputSchema` against the strict contract from [MoonshotAI/walle v0.1.13](https://github.com/MoonshotAI/walle). This deterministic test requires no Kimi account or provider call and is included in the registrar package test.
+
+`pnpm test:registrar:kimi-live` adds one real non-interactive Kimi provider turn with the complete materialized MCP config. It is skipped unless `NARADA_KIMI_CARRIER_LIVE_E2E=1`; running it requires operator approval and an authenticated Kimi installation. Set `NARADA_KIMI_COMMAND` to override the executable and `NARADA_KIMI_LIVE_TIMEOUT_MS` to override the 120-second timeout.
+
+The successful live turn is provider-level evidence that Moonshot accepted the complete advertised tool set. The deterministic layer remains responsible for proving that every configured server starts and every returned schema was inspected.
+
 ## Quick Start
 
 ```
 pnpm --filter @narada2/mcp-registrar test
+pnpm test:registrar:kimi-contract
 ```

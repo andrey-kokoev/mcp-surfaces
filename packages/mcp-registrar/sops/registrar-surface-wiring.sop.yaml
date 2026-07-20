@@ -16,9 +16,12 @@ steps:
     instructions: |
       Confirm the surface package builds (`pnpm build`), typechecks
       (`pnpm typecheck`), and passes its tests (`pnpm test:<surface>`).
-      Verify the SurfaceDef in registrar/src/main.ts is complete:
-      id, package, entrypoint, kind, args, tools, env_vars (if needed),
-      and sops_dir (if the surface owns SOPs).
+      Verify the package-owned native SurfaceDescriptorV2 in the
+      registrar's native catalog is complete. Confirm its id, package,
+      stdio projection entrypoint/args, tool registry, projection authority,
+      lifecycle requirement, env vars (if needed), and sops_dir (if the
+      surface owns SOPs). The registrar must not use a parallel legacy
+      catalog or hand-maintained tool inventory.
 
   - id: list_current_bindings
     executor: engine
@@ -130,7 +133,7 @@ steps:
 
 acceptance_criteria:
   - Surface builds, typechecks, and tests pass
-  - SurfaceDef is complete in registrar/src/main.ts
+  - Native SurfaceDescriptorV2 is complete in the registrar catalog
   - Surface is bound to all target sites
   - Surface is bound to all target carriers
   - No site-specific carrier profile is created for ordinary Site launches

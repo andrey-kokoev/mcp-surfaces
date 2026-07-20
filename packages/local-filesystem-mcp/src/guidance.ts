@@ -14,17 +14,22 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'Choose a stable operation_id before calling fs_apply_patch.',
         'Call fs_apply_patch once with that operation_id and the intended patch.',
         'After timeout or transport loss, call fs_patch_outcome_show with the same operation_id.',
-        'Retry fs_apply_patch with the same operation_id only when necessary; a matching patch hash replays the durable outcome without mutation, while a different hash is rejected.'
+        'If recovery reports deadline_exceeded_owner_alive, restart only the owning MCP surface and call fs_patch_outcome_show again.',
+        'Retry with the same operation_id and identical patch only when retry_safe is true; every other terminal recovery status requires no retry or manual reconciliation.'
       ],
       statuses: {
-        accepted: 'The request is durable but parsing/planning has not completed.',
+        accepted: 'The request is durable but parsing/planning has not completed; owner loss reconciles this to interrupted_before_mutation.',
         checked: 'Dry-run validation completed without mutation.',
-        applying: 'Mutation has started; inspect the outcome again rather than submitting a different patch.',
+        applying: 'Mutation has started and carries durable before/after fingerprints for owner-loss reconciliation.',
         patched: 'Mutation completed and changed-file hashes are durable.',
+        patched_recovered: 'The owner exited, but the filesystem matches the complete planned after-state; treat the operation as complete.',
+        interrupted_before_mutation: 'The owner exited and the filesystem matches the captured before-state; retry_safe is true for the identical operation_id and patch.',
+        interrupted_partial: 'The owner exited and files match neither complete state; retry is unsafe and manual reconciliation is required.',
+        interrupted_unknown: 'The owner exited without sufficient recovery evidence; retry is unsafe and manual reconciliation is required.',
         failed_before_mutation: 'Parsing, validation, or planning failed and no mutation started.',
         failed_rolled_back: 'Mutation started, failed, and rollback evidence is included.'
       },
-      read_mode: 'fs_patch_outcome_show is available in both read and write modes.',
+      read_mode: 'fs_patch_outcome_show is available in both read and write modes and persists terminal owner-loss reconciliation.',
     }
   } : {};
   const repositoryInventory = workflow === 'repository_inventory' || tool === 'fs_repository_inventory' ? {

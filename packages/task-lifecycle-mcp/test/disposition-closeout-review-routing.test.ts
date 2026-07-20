@@ -22,6 +22,7 @@ try {
         {
           agent_id: 'smart-scheduling.builder',
           role: 'builder',
+          operator_identity: 'single-test-operator',
           capabilities: ['implementation_work'],
           first_seen_at: '2026-06-04T00:00:00Z',
           last_active_at: '2026-06-04T00:00:00Z',
@@ -29,6 +30,7 @@ try {
         {
           agent_id: 'smart-scheduling.architect',
           role: 'architect',
+          operator_identity: 'single-test-operator',
           capabilities: ['review'],
           first_seen_at: '2026-06-04T00:00:00Z',
           last_active_at: '2026-06-04T00:00:00Z',
@@ -72,6 +74,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     store.upsertRosterEntry({
       agent_id: 'smart-scheduling.builder',
       role: 'builder',
+      operator_identity: 'single-test-operator',
       capabilities_json: JSON.stringify(['implementation_work']),
       first_seen_at: '2026-06-04T00:00:00Z',
       last_active_at: '2026-06-04T00:00:00Z',
@@ -83,6 +86,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     store.upsertRosterEntry({
       agent_id: 'smart-scheduling.architect',
       role: 'architect',
+      operator_identity: 'single-test-operator',
       capabilities_json: JSON.stringify(['review']),
       first_seen_at: '2026-06-04T00:00:00Z',
       last_active_at: '2026-06-04T00:00:00Z',
@@ -235,7 +239,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.ok(payload.finish_result, JSON.stringify(payload, null, 2));
   assert.equal(payload.finish_result.status, 'success');
   assert.equal(payload.finish_result.close_action, 'skipped');
-  assert.equal(payload.finish_result.new_status, 'awaiting_dependencies');
+  assert.equal(payload.finish_result.new_status, 'in_review');
   assert.equal(payload.finish_result.review_action, 'dependency_requested');
   assert.equal(payload.finish_result.blocked_by, 'dependencies');
   assert.equal(payload.finish_result.review_dependency.dependency_kind, 'review');
@@ -269,29 +273,60 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(showPayload.dependency_satisfaction.all_satisfied, false);
   assert.equal(showPayload.dependency_satisfaction.unsatisfied_count, 1);
 
-  const reviewResponse = await handleTaskLifecycleMcpRequest({
+  const generatedReviewTaskNumber = payload.finish_result.review_dependency.required_task_number;
+  assert.equal(typeof generatedReviewTaskNumber, 'number');
+  const reviewClaimResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
     params: {
-      name: 'task_lifecycle_review',
+      name: 'task_lifecycle_claim',
       arguments: {
-        task_number: 9001,
+        task_number: generatedReviewTaskNumber,
         agent_id: 'smart-scheduling.architect',
-        verdict: 'accepted',
-        auto_accept_single_operator: true,
+      },
+    },
+  }, architectRuntimeOptions);
+  assert.equal(reviewClaimResponse.error, undefined);
+  const operatorIdentityStore = openTaskLifecycleStore(siteRoot);
+  try {
+    operatorIdentityStore.db.prepare(
+      'update agent_roster set operator_identity = ? where agent_id in (?, ?)',
+    ).run('single-test-operator', 'smart-scheduling.builder', 'smart-scheduling.architect');
+    const identities = operatorIdentityStore.db.prepare(
+      'select agent_id, operator_identity from agent_roster where agent_id in (?, ?) order by agent_id',
+    ).all('smart-scheduling.builder', 'smart-scheduling.architect') as Array<Record<string, unknown>>;
+    assert.deepEqual(identities.map((row) => row.operator_identity), ['single-test-operator', 'single-test-operator']);
+  } finally {
+    operatorIdentityStore.db.close();
+  }
+
+  const reviewResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 6,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: generatedReviewTaskNumber,
+        agent_id: 'smart-scheduling.architect',
+        outcome: 'accepted',
+        summary: 'Dependency-native review accepted the submitted work.',
+        findings: [],
+        no_files_changed: true,
       },
     },
   }, architectRuntimeOptions);
   assert.equal(reviewResponse.error, undefined);
   const reviewPayload = await readToolPayload(reviewResponse, 17);
   assert.equal(reviewPayload.status, 'success');
-  assert.equal(reviewPayload.completion_mode, 'review_compatibility_dependency_outcome');
-  assert.equal(reviewPayload.close_action, 'skipped');
-  const reviewCompatibilityOutcome = reviewPayload.review_compatibility_dependency_outcome;
-  assert.equal(reviewCompatibilityOutcome.outcome_contract.outcome_type, 'review');
-  assert.equal(reviewCompatibilityOutcome.task_outcome.outcome, 'accepted');
-  assert.equal(reviewCompatibilityOutcome.dependency_satisfaction.all_satisfied, true);
+  assert.equal(reviewPayload.completion_mode, 'outcome_contract');
+  assert.equal(reviewPayload.close_action, 'closed');
+  assert.equal(reviewPayload.outcome_contract.outcome_type, 'review');
+  assert.equal(reviewPayload.task_outcome.outcome, 'accepted');
+  assert.equal(Object.hasOwn(reviewPayload, 'review_compatibility_dependency_outcome'), false);
+  assert.equal(reviewPayload.conflict_policy_evidence[0].policy_mode, 'single_operator_review');
+  assert.equal(reviewPayload.conflict_policy_evidence[0].authorization_required, false);
 
   const verifyStore = openTaskLifecycleStore(siteRoot);
   try {

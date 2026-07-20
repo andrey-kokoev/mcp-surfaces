@@ -79,29 +79,6 @@ function text(value) {
   return String(value);
 }
 
-function textMatches(packet, pattern) {
-  const haystack = [
-    packet.title,
-    packet.summary,
-    packet.context,
-    packet.claim,
-    packet.closeout_text,
-    packet.operator_summary,
-    packet.evidence,
-    packet.remaining_work,
-    packet.changed,
-    packet.not_changed,
-    packet.original_authorization_evidence,
-    packet.authorization_evidence,
-  ].map(text).join('\n');
-  return pattern.test(haystack);
-}
-
-function boolOrText(packet, key, pattern) {
-  if (packet[key] === true) return true;
-  return textMatches(packet, pattern);
-}
-
 function unique(values) {
   return [...new Set(values)];
 }
@@ -163,6 +140,12 @@ function parseRecoveryTruthfulnessSection(section) {
   return packet;
 }
 
+function recoveryTruthfulnessRequiredFromFrontMatter(body) {
+  const match = String(body).match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/);
+  if (!match) return false;
+  return /^recovery_truthfulness_required\s*:\s*true\s*$/mi.test(match[1]);
+}
+
 export function recoveryTruthfulnessTriggerContract() {
   return {
     schema: 'narada.recovery_truthfulness.trigger_contract.v0',
@@ -173,7 +156,8 @@ export function recoveryTruthfulnessTriggerContract() {
     required_truthfulness_fields: REQUIRED_TRUTHFULNESS_FIELDS,
     trigger_surfaces: TRIGGER_SURFACES,
     trigger_definitions: TRIGGER_DEFINITIONS,
-    non_trigger_rule: 'Routine low-risk work does not trigger this packet unless it asserts serious-failure recovery, CAPA correction, operator-trust recovery, authority/locus repair, or terminal completion for corrective work.',
+    activation_rule: 'Activation is structured-only: recovery_truthfulness_required, serious_failure_recovery, an explicit recovery state, structured CAPA severity/recurrence, or one of the named boolean trigger fields.',
+    non_trigger_rule: 'Prose, titles, summaries, and ordinary task vocabulary never activate this guard. Routine work remains outside the guard unless structured metadata explicitly opts in.',
   };
 }
 
@@ -181,30 +165,31 @@ export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload
   const triggers = [];
   const capa = packet.capa && typeof packet.capa === 'object' ? packet.capa as TaskLifecyclePayload : {};
 
+  if (packet.recovery_truthfulness_required === true) triggers.push('explicit_recovery_truthfulness_required');
   if (packet.serious_failure_recovery === true) triggers.push('explicit_serious_failure_recovery');
   if (typeof packet.state === 'string' && SERIOUS_FAILURE_STATES.includes(packet.state)) triggers.push('explicit_recovery_state');
   if (capa.severity === 'high' || capa.severity === 'critical' || (typeof capa.recurrence_count === 'number' && capa.recurrence_count > 1) || packet.recurrent_capa === true) {
     triggers.push('high_severity_or_recurrent_capa');
   }
-  if (boolOrText(packet, 'operator_trust_or_deception_concern', /\b(deceiv|mislead|trust|false\s+complete|hidden\s+uncertainty|overstat(?:e|ed|ing))\b/i)) {
+  if (packet.operator_trust_or_deception_concern === true) {
     triggers.push('operator_trust_or_deception_concern');
   }
-  if (packet.authority_or_locus_boundary_error === true || textMatches(packet, /\b(authority|locus|user-locus|pc-locus|identity|principal|crossing|durable\s+state)\b.{0,80}\b(error|failure|confusion|mismatch|repair|recovery|violation|wrong|false|misleading)\b/i) || textMatches(packet, /\b(error|failure|confusion|mismatch|repair|recovery|violation|wrong|false|misleading)\b.{0,80}\b(authority|locus|user-locus|pc-locus|identity|principal|crossing|durable\s+state)\b/i)) {
+  if (packet.authority_or_locus_boundary_error === true) {
     triggers.push('authority_or_locus_boundary_error');
   }
-  if (packet.false_completion_claim === true || textMatches(packet, /\b(complete|fixed|corrected|resolved|closed)\b/i) && textMatches(packet, /\b(only\s+created|created\s+(?:a\s+)?tasks?|planned|inventor(?:y|ied)|captured\s+evidence|proposal|checklist|future\s+work|queued)\b/i)) {
+  if (packet.false_completion_claim === true) {
     triggers.push('false_completion_claim');
   }
-  if (boolOrText(packet, 'missing_evidence_recovery', /\b(missing|fabricated|stale|insufficient|unverified)\s+evidence\b/i)) {
+  if (packet.missing_evidence_recovery === true) {
     triggers.push('missing_evidence_recovery');
   }
-  if (packet.task_created_only_remediation === true || textMatches(packet, /\b(created|opened|materialized|published)\b.{0,40}(tasks?|#\d+|artifact|checklist|dashboard|proposal).*\b(corrected|fixed|resolved|complete)\b/i)) {
+  if (packet.task_created_only_remediation === true) {
     triggers.push('task_created_only_remediation');
   }
-  if (packet.unqualified_504_claim === true || textMatches(packet, /\b(?:504(?:-item)?|gapless\s+504)\b/i) && !textMatches(packet, /\b492\b|\bfka\s+504\b|formerly\s+(?:called\s+)?504|missing\s+labels/i)) {
+  if (packet.unqualified_504_claim === true) {
     triggers.push('unqualified_504_claim');
   }
-  if (packet.remediation_evidence_authorization_conflation === true || claimsRemediationEvidenceAsAuthorization(packet)) {
+  if (packet.remediation_evidence_authorization_conflation === true) {
     triggers.push('remediation_evidence_authorization_conflation');
     triggers.push('authority_or_locus_boundary_error');
   }
@@ -227,6 +212,7 @@ export function validateRecoveryTruthfulnessBody({ body = '', summary = '', cont
   const parsedPacket = parseRecoveryTruthfulnessSection(recoverySection);
   const packet = {
     ...parsedPacket,
+    recovery_truthfulness_required: recoveryTruthfulnessRequiredFromFrontMatter(body),
     summary,
     context,
     closeout_text: body,
@@ -242,28 +228,6 @@ export function validateRecoveryTruthfulnessBody({ body = '', summary = '', cont
 
 function normalizedText(value) {
   return text(value).toLowerCase();
-}
-
-function claimsRemediationEvidenceAsAuthorization(packet) {
-  const haystack = [
-    packet.summary,
-    packet.operator_summary,
-    packet.closeout_text,
-    packet.evidence,
-    packet.known_facts,
-    packet.inferences,
-  ].map(text).join('\n');
-  const citesRemediationEvidence = /\b(?:rollback|rolled\s+back|remediation|remediated|closure\s+evidence|repair\s+evidence|bg_\d+[A-Za-z0-9_]*)\b/i.test(haystack);
-  const claimsOriginalAuthorization = /\b(?:original|initial|startup|prior)\b.{0,80}\b(?:authori[sz]ed|authority|allowed|approved)\b/i.test(haystack)
-    || /\b(?:authori[sz]ed|authority|allowed|approved)\b.{0,80}\b(?:original|initial|startup|prior)\b/i.test(haystack);
-  return citesRemediationEvidence && claimsOriginalAuthorization && !hasSeparateOriginalAuthorizationEvidence(packet);
-}
-
-function hasSeparateOriginalAuthorizationEvidence(packet) {
-  const evidence = text(packet.original_authorization_evidence ?? packet.authorization_evidence).trim();
-  if (!evidence) return false;
-  if (/\b(?:rollback|rolled\s+back|remediation|remediated|closure\s+evidence|repair\s+evidence|bg_\d+[A-Za-z0-9_]*)\b/i.test(evidence)) return false;
-  return /\b(?:operator|direct|explicit|instruction|authorization|approved|allowed)\b/i.test(evidence);
 }
 
 function claimsNoRemainingWork(value) {

@@ -8,6 +8,7 @@
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "references": [
+    { "path": "../../../narada-core/packages/task-governance-core" },
     { "path": "../shared/mcp-e2e-harness" },
     { "path": "../worker-delegation-mcp" },
     { "path": "../shared/execution-contract" }

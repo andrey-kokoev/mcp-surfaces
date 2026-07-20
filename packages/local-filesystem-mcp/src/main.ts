@@ -533,7 +533,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_patch_outcome_show',
-      description: 'Read the durable outcome for an fs_apply_patch operation_id after a timeout or transport interruption.',
+      description: 'Read and durably reconcile the outcome for an fs_apply_patch operation_id after a timeout or transport interruption.',
       inputSchema: objectSchema({ operation_id: { type: 'string' } }, ['operation_id']),
     },
   ];
@@ -2078,15 +2078,33 @@ function applyPatchTool(args, state) {
   const dryRun = booleanField(args, 'dry_run') ?? false;
   const operationId = stringField(args, 'operation_id') ?? randomUUID();
   const patchSha256 = sha256(patch);
+  const timeoutMs = filesystemOperationTimeoutMs(args);
   const priorOutcome = readPatchOutcome(state, operationId);
+  let recoveryCount = 0;
   if (priorOutcome) {
     if (priorOutcome.patch_sha256 !== patchSha256) throw diagnosticError('patch_operation_id_conflict', 'patch_operation_id_conflict', { operation_id: operationId, existing_patch_sha256: priorOutcome.patch_sha256, requested_patch_sha256: patchSha256 });
-    return { ...priorOutcome, operation_replayed: true, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
+    if (priorOutcome.status === 'interrupted_before_mutation' && priorOutcome.retry_safe === true) {
+      recoveryCount = Number.isInteger(priorOutcome.recovery_count) ? priorOutcome.recovery_count + 1 : 1;
+    } else {
+      return { ...priorOutcome, operation_replayed: true, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
+    }
   }
-  writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'accepted', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, accepted_at: new Date().toISOString() });
+  const acceptedAt = new Date();
+  const deadlineAt = new Date(acceptedAt.getTime() + timeoutMs).toISOString();
+  writePatchOutcome(state, operationId, {
+    schema: 'local.filesystem.apply_patch.outcome.v1',
+    status: 'accepted',
+    operation_id: operationId,
+    patch_sha256: patchSha256,
+    mutation_started: false,
+    owner_pid: process.pid,
+    timeout_ms: timeoutMs,
+    deadline_at: deadlineAt,
+    accepted_at: acceptedAt.toISOString(),
+    recovery_count: recoveryCount,
+  });
   const expectedSha256 = expectedSha256Map(args);
   const matchedExpectedSha256Keys = new Set();
-  const timeoutMs = filesystemOperationTimeoutMs(args);
   const checkTimeout = createOperationTimeoutChecker('fs_apply_patch', timeoutMs);
   checkTimeout('parse_patch_start');
   let files;
@@ -2098,35 +2116,36 @@ function applyPatchTool(args, state) {
   }
   checkTimeout('parse_patch_complete');
   if (files.length === 0) {
-    throw patchDiagnosticError('patch_contains_no_files', patch, {
+    const error = patchDiagnosticError('patch_contains_no_files', patch, {
       expected_format: 'unified_diff_or_codex_apply_patch',
       expected_headers: ['--- <path>', '+++ <path>', '@@ -old,+new @@', '*** Begin Patch', '*** Update File: <path>'],
     });
+    writePatchFailureBeforeMutation(state, operationId, patchSha256, error);
+    throw error;
   }
   let planned;
   try {
-  planned = files.map((filePatch) => {
-    checkTimeout('plan_file_start');
-    const source = resolvePatchSource(filePatch, state);
-    const target = resolvePatchTarget(filePatch, state);
-    if (filePatch.oldPath !== '/dev/null' && !existsSync(source.path)) {
-      throw diagnosticError('patch_source_not_found', `patch_source_not_found: ${source.path}`, {
-        ...pathMetadata(source.path, source.root),
-        expected_format_for_new_files: 'unified diff with --- /dev/null or Codex *** Add File',
-      });
-    }
-    const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
-    const matchedKey = assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before);
-    if (matchedKey) matchedExpectedSha256Keys.add(matchedKey);
-    checkTimeout('apply_file_patch_start');
-    const patchContext = { diagnosticError, checkTimeout };
-    const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
-    checkTimeout('apply_file_patch_complete');
-    return { filePatch, source, target, before, after };
-  });
+    planned = files.map((filePatch) => {
+      checkTimeout('plan_file_start');
+      const source = resolvePatchSource(filePatch, state);
+      const target = resolvePatchTarget(filePatch, state);
+      if (filePatch.oldPath !== '/dev/null' && !existsSync(source.path)) {
+        throw diagnosticError('patch_source_not_found', `patch_source_not_found: ${source.path}`, {
+          ...pathMetadata(source.path, source.root),
+          expected_format_for_new_files: 'unified diff with --- /dev/null or Codex *** Add File',
+        });
+      }
+      const before = existsSync(source.path) ? readFileSync(source.path, 'utf8') : '';
+      const matchedKey = assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before);
+      if (matchedKey) matchedExpectedSha256Keys.add(matchedKey);
+      checkTimeout('apply_file_patch_start');
+      const patchContext = { diagnosticError, checkTimeout };
+      const after = filePatch.deleteFile ? applyParsedDeletePatch(before, filePatch, patchContext) : applyParsedFilePatch(before, filePatch, patchContext);
+      checkTimeout('apply_file_patch_complete');
+      return { filePatch, source, target, before, after };
+    });
   } catch (error) {
-    const diagnostic = errorDiagnostic(error);
-    writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_before_mutation', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, rollback_performed: false, finished_at: new Date().toISOString(), error: diagnostic });
+    writePatchFailureBeforeMutation(state, operationId, patchSha256, error);
     throw error;
   }
   checkTimeout('planned_all_files');
@@ -2143,6 +2162,7 @@ function applyPatchTool(args, state) {
       operation_id: operationId,
       dry_run: true,
       timeout_ms: timeoutMs,
+      recovery_count: recoveryCount,
       changed_files: planned.map((item) => ({
         ...pathMetadata(item.target.path, item.target.root),
         operation: patchOperation(item.filePatch, item.source, item.target),
@@ -2156,13 +2176,26 @@ function applyPatchTool(args, state) {
     return outcome;
   }
   const changed = [];
-  writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'applying', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, started_at: new Date().toISOString() });
   const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
   const backups = backupPaths.map((path) => ({
     path,
     existed: existsSync(path),
     content: existsSync(path) ? readFileSync(path, 'utf8') : null,
   }));
+  const recoveryPlan = buildPatchRecoveryPlan(planned, backups);
+  writePatchOutcome(state, operationId, {
+    schema: 'local.filesystem.apply_patch.outcome.v1',
+    status: 'applying',
+    operation_id: operationId,
+    patch_sha256: patchSha256,
+    mutation_started: true,
+    owner_pid: process.pid,
+    timeout_ms: timeoutMs,
+    deadline_at: deadlineAt,
+    started_at: new Date().toISOString(),
+    recovery_count: recoveryCount,
+    recovery_plan: recoveryPlan,
+  });
   try {
     for (const item of planned) {
       checkTimeout('write_file_start');
@@ -2182,26 +2215,175 @@ function applyPatchTool(args, state) {
   } catch (error) {
     rollbackPatch(backups);
     const diagnostic = errorDiagnostic(error);
-    writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: true, rollback_succeeded: true, finished_at: new Date().toISOString(), error: diagnostic });
+    writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_rolled_back', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: true, rollback_succeeded: true, recovery_count: recoveryCount, finished_at: new Date().toISOString(), error: diagnostic });
     throw error;
   }
-  const outcome = { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'patched', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: false, finished_at: new Date().toISOString(), changed_files: changed };
+  const outcome = { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'patched', operation_id: operationId, patch_sha256: patchSha256, mutation_started: true, rollback_performed: false, recovery_count: recoveryCount, finished_at: new Date().toISOString(), changed_files: changed };
   writePatchOutcome(state, operationId, outcome);
-  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', operation_id: operationId, changed_files: changed, timeout_ms: timeoutMs, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
+  return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', operation_id: operationId, changed_files: changed, recovery_count: recoveryCount, timeout_ms: timeoutMs, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
 }
 
 function patchOutcomeShowTool(args, state) {
   const operationId = stringField(args, 'operation_id');
   if (!operationId || !/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_required', 'patch_operation_id_required');
-  const path = patchOutcomePath(state, operationId);
-  if (!existsSync(path)) throw diagnosticError('patch_outcome_not_found', 'patch_outcome_not_found', { operation_id: operationId });
-  return JSON.parse(readFileSync(path, 'utf8'));
+  const outcome = readPatchOutcome(state, operationId);
+  if (!outcome) throw diagnosticError('patch_outcome_not_found', 'patch_outcome_not_found', { operation_id: operationId });
+  return outcome;
 }
 
 function readPatchOutcome(state, operationId) {
   const path = patchOutcomePath(state, operationId);
   if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, 'utf8'));
+  return reconcilePatchOutcome(state, JSON.parse(readFileSync(path, 'utf8')));
+}
+
+function reconcilePatchOutcome(state, outcome) {
+  if (!outcome || !['accepted', 'applying'].includes(outcome.status)) return outcome;
+  const ownerAlive = patchOwnerIsAlive(outcome.owner_pid);
+  const deadlineExceeded = typeof outcome.deadline_at === 'string' && Date.now() >= Date.parse(outcome.deadline_at);
+  if (ownerAlive) {
+    return {
+      ...outcome,
+      recovery: {
+        status: deadlineExceeded ? 'deadline_exceeded_owner_alive' : 'owner_active',
+        terminal: false,
+        retry_safe: false,
+        remediation: deadlineExceeded
+          ? 'Restart the owning MCP surface, then call fs_patch_outcome_show again.'
+          : 'Wait for the owning MCP surface to finish, then call fs_patch_outcome_show again.',
+      },
+    };
+  }
+
+  if (outcome.status === 'accepted') {
+    return writeRecoveredPatchOutcome(state, outcome, {
+      status: 'interrupted_before_mutation',
+      mutation_effect_present: false,
+      retry_safe: true,
+      reason: 'owner_exited_before_mutation_started',
+    });
+  }
+
+  const plan = outcome.recovery_plan;
+  if (!plan || !Array.isArray(plan.before_state) || plan.before_state.length === 0 || !Array.isArray(plan.after_state) || plan.after_state.length === 0) {
+    return writeRecoveredPatchOutcome(state, outcome, {
+      status: 'interrupted_unknown',
+      mutation_effect_present: null,
+      retry_safe: false,
+      reason: 'recovery_plan_missing',
+    });
+  }
+
+  const afterMatches = patchFilesystemStateMatches(state, plan.after_state);
+  const beforeMatches = patchFilesystemStateMatches(state, plan.before_state);
+  if (afterMatches) {
+    return writeRecoveredPatchOutcome(state, outcome, {
+      status: 'patched_recovered',
+      mutation_effect_present: true,
+      retry_safe: false,
+      changed_files: Array.isArray(plan.changed_files) ? plan.changed_files : [],
+      reason: 'filesystem_matches_planned_after_state',
+    });
+  }
+  if (beforeMatches) {
+    return writeRecoveredPatchOutcome(state, outcome, {
+      status: 'interrupted_before_mutation',
+      mutation_effect_present: false,
+      retry_safe: true,
+      reason: 'filesystem_matches_captured_before_state',
+    });
+  }
+  return writeRecoveredPatchOutcome(state, outcome, {
+    status: 'interrupted_partial',
+    mutation_effect_present: true,
+    retry_safe: false,
+    reason: 'filesystem_matches_neither_captured_state',
+  });
+}
+
+function writeRecoveredPatchOutcome(state, outcome, recovery) {
+  const terminal = {
+    ...outcome,
+    status: recovery.status,
+    finished_at: new Date().toISOString(),
+    recovered_at: new Date().toISOString(),
+    mutation_effect_present: recovery.mutation_effect_present,
+    retry_safe: recovery.retry_safe,
+    changed_files: recovery.changed_files ?? outcome.changed_files,
+    recovery: {
+      status: recovery.status,
+      terminal: true,
+      retry_safe: recovery.retry_safe,
+      reason: recovery.reason,
+      remediation: recovery.retry_safe
+        ? 'Retry fs_apply_patch with the same operation_id and identical patch.'
+        : recovery.status === 'patched_recovered'
+          ? 'Treat the operation as complete; do not retry it.'
+          : 'Inspect the affected files and use a new operation_id only after manual reconciliation.',
+    },
+  };
+  writePatchOutcome(state, outcome.operation_id, terminal);
+  return terminal;
+}
+
+function patchOwnerIsAlive(ownerPid) {
+  if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
+  try {
+    process.kill(ownerPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function patchFilesystemStateMatches(state, entries) {
+  return entries.every((entry) => {
+    if (!entry || typeof entry.path !== 'string' || typeof entry.exists !== 'boolean') return false;
+    try {
+      const resolved = resolveAllowedToolPath(entry.path, state.allowedRoots, { operation: 'fs_patch_outcome_show', field: 'recovery_plan.path' });
+      const exists = existsSync(resolved.path);
+      if (exists !== entry.exists) return false;
+      if (!exists) return true;
+      if (typeof entry.sha256 !== 'string') return false;
+      return sha256(readFileSync(resolved.path, 'utf8')) === entry.sha256;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function buildPatchRecoveryPlan(planned, backups) {
+  const beforeState = backups.map((backup) => ({
+    path: backup.path,
+    exists: backup.existed,
+    sha256: backup.existed ? sha256(backup.content) : null,
+  }));
+  const afterState = beforeState.map((entry) => ({ ...entry }));
+  const setAfterState = (entry) => {
+    const existingIndex = afterState.findIndex((candidate) => samePath(candidate.path, entry.path));
+    if (existingIndex >= 0) afterState[existingIndex] = entry;
+    else afterState.push(entry);
+  };
+  const changedFiles = [];
+  for (const item of planned) {
+    setAfterState({
+      path: item.target.path,
+      exists: item.filePatch.deleteFile !== true,
+      sha256: item.filePatch.deleteFile ? null : sha256(item.after),
+    });
+    if (!samePath(item.source.path, item.target.path)) {
+      setAfterState({ path: item.source.path, exists: false, sha256: null });
+    }
+    changedFiles.push({
+      ...pathMetadata(item.target.path, item.target.root),
+      operation: patchOperation(item.filePatch, item.source, item.target),
+      hunks: item.filePatch.hunks.length,
+      deleted: item.filePatch.deleteFile === true,
+      before_sha256: sha256(item.before),
+      after_sha256: item.filePatch.deleteFile ? null : sha256(item.after),
+    });
+  }
+  return { before_state: beforeState, after_state: afterState, changed_files: changedFiles };
 }
 
 function writePatchFailureBeforeMutation(state, operationId, patchSha256, error) {
@@ -2215,7 +2397,6 @@ function writePatchOutcome(state, operationId, outcome) {
   writeFileSync(temporary, `${JSON.stringify(outcome, null, 2)}\n`, 'utf8');
   renameSync(temporary, path);
 }
-
 function patchOutcomePath(state, operationId) {
   if (!/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_invalid', 'patch_operation_id_invalid');
   return join(state.outputRoot, '.narada', 'local-filesystem-mcp', 'patch-outcomes', `${operationId}.json`);
@@ -2761,16 +2942,23 @@ function objectSchema(properties, required = []) {
 }
 
 function decorateTools(tools) {
-  return tools.map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+  return tools.map((tool) => ({
+    ...tool,
+    canonical_name: tool.name,
+    annotations: { ...toolAnnotations(tool.name), canonicalName: tool.name },
+    outputSchema: genericToolOutputSchema(),
+  }));
 }
 
 function toolAnnotations(name) {
-  const write = /^fs_(write|str_replace|replace|apply|move|create|rename|delete)/.test(String(name));
+  const toolName = String(name);
+  const reconcilesPatchOutcome = toolName === 'fs_patch_outcome_show';
+  const write = /^fs_(write|str_replace|replace|apply|move|create|rename|delete)/.test(toolName) || reconcilesPatchOutcome;
   return {
-    title: String(name),
+    title: toolName,
     readOnlyHint: !write,
-    destructiveHint: /^fs_(str_replace|replace|apply|move|rename|delete)/.test(String(name)),
-    idempotentHint: /^fs_(read|stat|glob|grep|repository_inventory|file_metrics)/.test(String(name)),
+    destructiveHint: /^fs_(str_replace|replace|apply|move|rename|delete)/.test(toolName),
+    idempotentHint: /^fs_(read|stat|glob|grep|repository_inventory|file_metrics)/.test(toolName) || reconcilesPatchOutcome,
     openWorldHint: false,
   };
 }

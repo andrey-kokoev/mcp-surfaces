@@ -42,7 +42,8 @@ export function listTools(): WorkerToolDefinition[] {
       instruction: { type: 'string' },
       required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Exact MCP tool names to project for narada-agent-runtime-server workers. Other runtimes report the request as unprojectable.' },
       resumable: { type: 'boolean' },
-      wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
+      wait_for_completion: { type: 'boolean', description: 'When true, wait boundedly for completion. Defaults to false so delegation returns promptly with run_id.' },
+      wait_timeout_ms: { type: 'integer', minimum: 1, maximum: 180000, description: 'Maximum synchronous wait before returning the recoverable running run_id. Defaults to 180000.' },
       exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
       overrides: constraintOverrideSchema(),
     }, ['cwd', 'instruction']) },
@@ -171,6 +172,7 @@ function intentSchema(): Record<string, unknown> {
   return objectSchema({
     instruction: { type: 'string' },
     mode: { type: 'string', enum: ['audit_only', 'plan_only', 'implement', 'implement_and_verify'], description: 'Non-mechanical task mode. Defaults to audit_only for read authority and implement for write/command authority.' },
+    output_contract: { type: 'object', additionalProperties: true, description: 'Optional caller-owned structured output contract merged into the worker output contract.' },
   }, ['instruction']);
 }
 
@@ -182,7 +184,9 @@ function constraintRequestSchema(): Record<string, unknown> {
     authority: { type: 'string', enum: ['read', 'write', 'command'] },
     cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
     resumable: { type: 'boolean' },
-    wait_for_completion: { type: 'boolean', description: 'When true, block until completion. Defaults to false so delegation returns promptly with run_id.' },
+    wait_for_completion: { type: 'boolean', description: 'When true, wait boundedly for completion. Defaults to false so delegation returns promptly with run_id.' },
+    wait_timeout_ms: { type: 'integer', minimum: 1, maximum: 180000, description: 'Maximum synchronous wait before returning the recoverable running run_id. Defaults to 180000.' },
+    max_run_ms: { type: 'integer', minimum: 1, maximum: 1800000, description: 'Maximum worker runtime. The effective value is capped by the worker policy.' },
     exit_interview: { type: 'boolean', description: 'Ask the worker to include ergonomics feedback in its final output.' },
     verification_budget: budgetSchema('Advisory verification budget. Workers classify commands as focused or broad, respect stop discipline, and report budget adherence.'),
     test_budget: budgetSchema('Advisory test budget. Use for focused package-local checks before broader suites; workers report broad unrelated failures separately.'),

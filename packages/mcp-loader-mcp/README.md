@@ -10,6 +10,10 @@ Every loader lifecycle projection uses the `narada.mcp_loader.runtime_lifecycle.
 
 When a proxied child guidance tool is called, its `structuredContent` is augmented with `loader_runtime_lifecycle` and `loader_runtime_freshness`, so the attached surface guidance itself advertises loader ownership and recovery.
 
+## Runtime observation
+
+Call `mcp_loader_runtime_observation({ connection_id, carrier_kind })` after attach to obtain `RuntimeObservationV2`. The result includes stable logical identity, active generation state, heartbeat/lease freshness, descriptor and live tool-contract digests, lifecycle eligibility, and one bounded recovery actuator. A replayable child names `mcp_loader_surface_restart`; a session-pinned or restart-required projection names the carrier supervisor capability. The loader reports `runtime_state_root: null` because persistent observation records belong to the generic runtime-proxy observation store or another explicitly configured owner.
+
 ## Tool Call Timeouts
 
 `mcp_loader_call_tool` forwards the nested `arguments` object unchanged. When `arguments` include `timeout_ms`, the child tool bounds itself at that value and the loader honors it up to its bounded maximum (`--tool-call-timeout-ms`, default 120000, max 900000). The loader's own outer wait deadline is the declared timeout plus a bounded grace (`--tool-timeout-grace-ms`, default 1000 ms, max 60000 ms), including at the maximum; the outer deadline may therefore reach 960000 ms. This lets a child return its own bounded timeout result instead of losing the race to the loader's `child_timeout` error. Calls without a nested `timeout_ms` are bounded by the policy default with no grace; the loader's deadline is the only timer.
@@ -25,9 +29,11 @@ The default allowed roots and entrypoint prefixes derive from the loader's resol
 
 ## Live Tool Inventory
 
-`mcp_loader_site_tool_inventory_check` starts fresh child surfaces, compares each live `tools/list` response with the Site fabric, and materializes the complete observation as an immutable `mcp_payload` ref. Pass the returned `observation_ref` to `registrar_site_registry_conformance_check`; do not copy the three observation maps into a new request.
+`mcp_loader_site_tool_inventory_check` starts fresh child surfaces, compares each live `tools/list` response with the Site fabric, and materializes the complete observation as an immutable `mcp_payload` ref. Its compact model-facing result includes each finding's status plus bounded missing, extra, duplicate, and unclassified tool names; probe failures include their diagnostic. Pass the returned `observation_ref` to `registrar_site_registry_conformance_check`; do not copy the observation maps into a new request.
 
 Inventory observations use the `site-tools-` payload-id namespace. Loader retains at most 32 observations per Site and removes observations older than seven days. Each result includes `observation_retention` with the applied limits and removals. If a runtime-affined surface is skipped because no compatible `runtime_kind` was supplied, the overall observation status is `partial`, never `ok`; pass the required runtime kind for complete coverage.
+
+Site fabric resolution prefers a non-empty `.ai/mcp/config.json`. When that compatibility path exists but declares no MCP servers, the loader falls through to the canonical Site aggregate or fragments; the empty file is used only when no aggregate exists. This prevents retired empty sidecars from shadowing the active fabric while preserving intentionally empty Sites.
 
 ## Runtime-Affined Projections
 

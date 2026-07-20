@@ -7,6 +7,8 @@ const testFiles = [
   'delegated-task-mcp.test.js',
   'execution-boundary.test.js',
   'protocol-smoke.test.js',
+  'task-executability-assessment.test.js',
+  'task-executability-dispatch.test.js',
 ];
 
 for (const testFile of testFiles) {

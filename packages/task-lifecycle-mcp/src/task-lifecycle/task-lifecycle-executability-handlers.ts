@@ -19,6 +19,7 @@ import {
   buildTaskExecutabilityPosture,
   checkTaskExecutabilityDispatch,
   computeDispatchFingerprint,
+  createExecutabilityOverride,
   declaredEnvironmentDigest,
   enqueueTaskExecutabilityRequest,
   recordTaskExecutabilityFailure,
@@ -32,6 +33,7 @@ export const TASK_LIFECYCLE_EXECUTABILITY_TOOL_NAMES = Object.freeze([
   'task_lifecycle_executability_status',
   'task_lifecycle_executability_requests_next',
   'task_lifecycle_executability_complete',
+  'task_lifecycle_executability_override',
   'task_lifecycle_executability_dispatch_check',
 ]);
 
@@ -303,6 +305,58 @@ export function createTaskLifecycleExecutabilityHandlers(context) {
           basis: result.basis,
           assessment_id: result.assessment?.assessment_id ?? null,
           override_consumed: result.override_consumed ?? false,
+          dispatch_fingerprint: dispatchFingerprint,
+          task_spec_digest: taskSpecDigest(digestable),
+          environment_digest: declaredEnvironmentDigest(environment),
+        });
+      }
+
+      case 'task_lifecycle_executability_override': {
+        const taskNumber = numberField(args, 'task_number');
+        const agentId = stringField(args, 'agent_id');
+        const reason = stringField(args, 'reason');
+        if (!taskNumber) throw new Error('task_number_required');
+        if (!agentId) throw new Error('agent_id_required');
+        if (!reason) throw new Error('override_reason_required');
+        enforceSessionIdentity(agentId);
+        const basisInput = args.authority_basis;
+        if (!basisInput || typeof basisInput !== 'object' || Array.isArray(basisInput)) throw new Error('override_authority_basis_required');
+        const basis = basisInput as Record<string, unknown>;
+        const kind = stringField(basis, 'kind');
+        const summary = stringField(basis, 'summary');
+        if (!kind || !summary) throw new Error('override_authority_basis_requires_kind_and_summary');
+        const { lifecycle, spec } = requireLifecycleAndSpec(taskNumber);
+        const digestable = buildDigestableSpec(spec);
+        const environment = currentEnvironmentDigest();
+        const taskSpecDigestValue = taskSpecDigest(digestable);
+        const environmentDigest = declaredEnvironmentDigest(environment);
+        const dispatchFingerprint = stringField(args, 'dispatch_fingerprint') ?? computeDispatchFingerprint({
+          taskId: lifecycle.task_id,
+          taskSpecDigest: taskSpecDigestValue,
+          environmentDigest,
+        });
+        const override = createExecutabilityOverride({
+          store,
+          taskId: lifecycle.task_id,
+          taskSpecDigest: taskSpecDigestValue,
+          dispatchFingerprint,
+          actor: agentId,
+          reason,
+          authorityBasis: { kind, summary },
+        });
+        return jsonToolResult({
+          schema: 'narada.task_executability.override.v0',
+          status: 'admitted',
+          task_number: taskNumber,
+          task_id: lifecycle.task_id,
+          override_id: override.override_id,
+          task_spec_digest: taskSpecDigestValue,
+          environment_digest: environmentDigest,
+          dispatch_fingerprint: dispatchFingerprint,
+          actor: agentId,
+          reason,
+          authority_basis: { kind, summary },
+          consumed_at: null,
         });
       }
 

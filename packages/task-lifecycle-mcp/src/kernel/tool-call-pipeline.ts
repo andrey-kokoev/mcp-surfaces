@@ -40,13 +40,20 @@ export function createTaskLifecycleToolCaller({
 
     const tools = taskLifecycleTools();
     const registeredToolNames = tools.map((tool) => tool.name);
-    const payloadResolution = resolveToolPayloadArgs({
-      siteRoot,
-      toolName: canonicalName,
-      args,
-      allowedTools: registeredToolNames,
-      payloadRefMode: canonicalName === 'task_lifecycle_submit_work' ? 'merge_args_prefer_payload_placeholders' : 'merge_args',
-    });
+    const payloadResolution = canonicalName === 'task_lifecycle_test_mcp_tool'
+      ? resolveFreshServerInvocationPayload({
+          args,
+          siteRoot,
+          registeredToolNames,
+          resolveToolPayloadArgs,
+        })
+      : resolveToolPayloadArgs({
+          siteRoot,
+          toolName: canonicalName,
+          args,
+          allowedTools: registeredToolNames,
+          payloadRefMode: canonicalName === 'task_lifecycle_submit_work' ? 'merge_args_prefer_payload_placeholders' : 'merge_args',
+        });
     const effectiveArgs = payloadResolution.args;
 
     const surfaceMismatch = detectReviewSurfaceMismatch(canonicalName, effectiveArgs);
@@ -75,6 +82,45 @@ export function createTaskLifecycleToolCaller({
       dispatchTool,
       refreshStore,
     });
+  };
+}
+
+export function resolveFreshServerInvocationPayload({
+  args,
+  siteRoot,
+  registeredToolNames,
+  resolveToolPayloadArgs,
+}) {
+  const input = asRecord(args);
+  const payloadRef = stringField(input, 'payload_ref');
+  if (!payloadRef) {
+    return {
+      args: input,
+      payloadSource: null,
+    };
+  }
+  const targetToolName = stringField(input, 'tool_name');
+  if (!targetToolName) throw new Error('tool_name_required');
+  if (!registeredToolNames.includes(targetToolName)) {
+    throw new Error(`fresh_server_payload_target_tool_not_registered: ${targetToolName}`);
+  }
+  const childResolution = resolveToolPayloadArgs({
+    siteRoot,
+    toolName: targetToolName,
+    args: {
+      ...asRecord(input.arguments),
+      payload_ref: payloadRef,
+    },
+    allowedTools: registeredToolNames,
+    payloadRefMode: 'merge_args',
+  });
+  const { payload_ref: _payloadRef, ...controlArgs } = input;
+  return {
+    args: {
+      ...controlArgs,
+      arguments: childResolution.args,
+    },
+    payloadSource: childResolution.payloadSource,
   };
 }
 
@@ -170,10 +216,10 @@ export function guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env =
   const status = buildLifecycleTargetLocusStatus({ siteRoot, env });
   if (status.status === 'clear') return status;
   return {
+    ...status,
     status: 'refused',
     refusal_code: 'target_locus_preflight_required',
     tool_name: canonicalName,
-    ...status,
     remediation: 'Relaunch the task lifecycle MCP for the intended Site, clear the operator-stated locus after explicit correction, or use a mutation surface that accepts explicit target_site_root.',
   };
 }

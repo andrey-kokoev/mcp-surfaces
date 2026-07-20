@@ -13,6 +13,7 @@ import {
   listOutputTools,
   outputShow,
   payloadCreate,
+  payloadDerive,
   payloadShow,
   prunePayloadWorkspaces,
   readOutputResource,
@@ -73,6 +74,7 @@ assert.equal(payloadTool('mcp_payload_create')?.inputSchema.properties.payload.t
 assert.equal(payloadTool('mcp_payload_create')?.inputSchema.properties.payload_json.type, 'string');
 assert.equal(payloadTool('mcp_payload_derive')?.inputSchema.properties.overlay.type, 'object');
 assert.equal(payloadTool('mcp_payload_derive')?.inputSchema.properties.overlay_json.type, 'string');
+assert.equal(payloadTool('mcp_payload_derive')?.inputSchema.properties.delete_paths.type, 'array');
 
 const retentionRoot = mkdtempSync(join(tmpdir(), 'narada-mcp-payload-retention-'));
 try {
@@ -292,6 +294,54 @@ assert.equal(firstResourcePage.resources.length, 1);
   assert.throws(
     () => payloadCreate({ siteRoot: tempRoot, args: { payload_json: '[]' } }),
     /payload_create_payload_json_must_be_object/
+  );
+
+  const deletionSource = payloadCreate({
+    siteRoot: tempRoot,
+    args: {
+      payload_id: 'derive_delete_paths',
+      payload: {
+        preferred_role: 'worker',
+        nullable: 'before',
+        constraints: { model: 'old-model', keep: true },
+        escaped: { 'a/b': 1, '~key': 2, '': 3 },
+      },
+    },
+  });
+  const deletionDerived = payloadDerive({
+    siteRoot: tempRoot,
+    args: {
+      source_ref: deletionSource.ref,
+      overlay: { nullable: null, constraints: { added: true } },
+      delete_paths: ['/preferred_role', '/constraints/model', '/escaped/a~1b', '/escaped/~0key', '/escaped/'],
+    },
+  });
+  assert.equal(deletionDerived.status, 'derived');
+  assert.deepEqual(payloadShow({ siteRoot: tempRoot, args: { ref: deletionDerived.ref } }).payload, {
+    nullable: null,
+    constraints: { keep: true, added: true },
+    escaped: {},
+  });
+  assert.equal(payloadShow({ siteRoot: tempRoot, args: { ref: deletionSource.ref } }).payload.preferred_role, 'worker');
+  const deleteOnlyDerived = payloadDerive({
+    siteRoot: tempRoot,
+    args: { source_ref: deletionDerived.ref, delete_paths: ['/nullable'] },
+  });
+  assert.deepEqual(payloadShow({ siteRoot: tempRoot, args: { ref: deleteOnlyDerived.ref } }).payload, {
+    constraints: { keep: true, added: true },
+    escaped: {},
+  });
+  assert.throws(
+    () => payloadDerive({ siteRoot: tempRoot, args: { source_ref: deletionSource.ref, delete_paths: ['/missing'] } }),
+    /payload_derive_delete_path_not_found/
+  );
+  assert.throws(
+    () => payloadDerive({ siteRoot: tempRoot, args: { source_ref: deletionSource.ref } }),
+    /payload_derive_requires_overlay_or_delete_paths/
+  );
+  assert.throws(
+    () => payloadDerive({ siteRoot: tempRoot, args: { source_ref: deletionSource.ref, overlay_json: '', delete_paths: ['/preferred_role'] } }),
+    /payload_derive_overlay_must_be_object/
   );
 
   const mergePayload = payloadCreate({ siteRoot: tempRoot, args: { payload: { task_number: 1, agent_id: 'payload.agent', summary: 'from payload' } } });

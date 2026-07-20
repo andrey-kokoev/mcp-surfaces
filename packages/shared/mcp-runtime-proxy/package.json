@@ -6,14 +6,25 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/mcp-runtime-proxy.test.js"
+    "test": "pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
+    },
+    "./generation-manager": {
+      "types": "./dist/src/generation-manager.d.ts",
+      "default": "./dist/src/generation-manager.js"
+    },
+    "./runtime-observation": {
+      "types": "./dist/src/runtime-observation.d.ts",
+      "default": "./dist/src/runtime-observation.js"
     }
+  },
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
   },
   "files": [
     "dist/",

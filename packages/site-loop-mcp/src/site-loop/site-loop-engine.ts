@@ -52,6 +52,7 @@ import {
   SITE_LOOP_ADAPTER_PHASE_PLAN,
   type SiteLoopPhaseState,
 } from './site-loop-phase-adapters.js';
+import { runTaskExecutabilityReconciliation } from './task-executability-reconciliation.js';
 
 type SiteLoopPayload = Record<string, unknown>;
 type SiteLoopOptions = SiteLoopPayload;
@@ -185,6 +186,7 @@ const ALL_SITE_LOOP_PHASE_ADAPTERS = createSiteLoopPhaseAdapters({
   emitScheduledSopTriggers,
   runInboxBridge: (siteRoot, options) => pollInboxBridge(siteRoot, options),
   runTicketTaskReconcile,
+  runTaskExecutabilityReconciliation,
   getResidentStatus,
   runAgentOutcomeReconciliation,
   reconcileReportedResidentTaskLifecycleState,

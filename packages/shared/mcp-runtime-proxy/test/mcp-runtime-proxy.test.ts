@@ -1,16 +1,89 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveRequestTimeoutMs } from '../src/main.js';
+import {
+  captureRuntimeFreshness,
+  classifyRuntimeInstance,
+  evaluateRuntimeFreshness,
+  listRuntimeInstances,
+  runtimeInstancePath,
+  writeRuntimeInstance,
+  type RuntimeInstanceRecord,
+} from '../src/runtime-lifecycle.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
 
 assert.equal(effectiveRequestTimeoutMs(100, null, 60000), 100);
 assert.equal(effectiveRequestTimeoutMs(100, 300, 1000), 1300);
 assert.equal(effectiveRequestTimeoutMs(100, 900000, 60000), 960000);
+
+const freshnessPackageRoot = join(root, 'freshness-package');
+const freshnessRuntimeRoot = join(freshnessPackageRoot, 'dist', 'src');
+const freshnessSourceRoot = join(freshnessPackageRoot, 'src');
+mkdirSync(freshnessRuntimeRoot, { recursive: true });
+mkdirSync(freshnessSourceRoot, { recursive: true });
+const freshnessProxyRuntime = join(freshnessRuntimeRoot, 'proxy.js');
+const freshnessChildRuntime = join(freshnessRuntimeRoot, 'child.js');
+writeFileSync(freshnessProxyRuntime, 'export {};\n', 'utf8');
+writeFileSync(freshnessChildRuntime, 'export {};\n', 'utf8');
+const freshnessTracker = captureRuntimeFreshness({
+  proxyRuntimePath: freshnessProxyRuntime,
+  childEntrypoint: freshnessChildRuntime,
+});
+assert.equal(evaluateRuntimeFreshness({
+  tracker: freshnessTracker,
+  surfaceId: 'freshness-test',
+}).status, 'current');
+await new Promise((resolve) => setTimeout(resolve, 20));
+writeFileSync(join(freshnessSourceRoot, 'child.ts'), 'export const changed = true;\n', 'utf8');
+const staleFreshness = evaluateRuntimeFreshness({
+  tracker: freshnessTracker,
+  surfaceId: 'freshness-test',
+});
+assert.equal(staleFreshness.status, 'stale');
+assert.ok((staleFreshness.reasons as Array<Record<string, unknown>>).some((reason) => reason.code === 'source_newer_than_runtime_build'));
+assert.equal((staleFreshness.reload_action as Record<string, unknown>).operation, 'restart');
+const unknownFreshness = evaluateRuntimeFreshness({
+  tracker: {
+    ...freshnessTracker,
+    source_files: [],
+    proxy_runtime: {
+      path: join(root, 'missing-proxy-runtime.js'),
+      exists: false,
+      mtime_ms: null,
+      size: null,
+    },
+  },
+  surfaceId: 'freshness-test',
+});
+assert.equal(unknownFreshness.status, 'unknown');
+
+const instanceRoot = join(root, 'instance-registry');
+const now = new Date();
+const liveInstance: RuntimeInstanceRecord = {
+  schema: 'narada.mcp_runtime_proxy.instance.v1',
+  surface_id: 'live-surface',
+  proxy_pid: process.pid,
+  parent_pid: process.ppid,
+  child_pid: null,
+  entrypoint: freshnessChildRuntime,
+  started_at: now.toISOString(),
+  heartbeat_at: now.toISOString(),
+  lease_expires_at: new Date(now.getTime() + 10_000).toISOString(),
+  state: 'live',
+  liveness_evidence: { parent_pid_alive: true },
+};
+writeRuntimeInstance(runtimeInstancePath(instanceRoot, process.pid), liveInstance);
+assert.equal(classifyRuntimeInstance(liveInstance, { isPidAlive: () => true }).observed_state, 'live');
+assert.equal(classifyRuntimeInstance(liveInstance, { isPidAlive: (pid) => pid === process.pid }).observed_state, 'stale');
+const deadChildInstance = { ...liveInstance, child_pid: 424242 };
+assert.ok(classifyRuntimeInstance(deadChildInstance, { isPidAlive: (pid) => pid !== 424242 }).stale_reasons.includes('child_pid_not_alive'));
+const instanceListing = listRuntimeInstances(instanceRoot, { isPidAlive: () => true });
+assert.equal((instanceListing.counts as Record<string, unknown>).live, 1);
 
 async function waitForOutput(condition: () => boolean, timeoutMs: number): Promise<void> {
   const started = Date.now();
@@ -96,7 +169,7 @@ try {
   assert.equal(timeoutResponse.error.data.kill_grace_ms, 5000);
   assert.equal(typeof timeoutResponse.error.data.forensic_artifact_path, 'string');
   assert.match(timeoutResponse.error.data.forensic_artifact_path, /silent-surface/);
-  const artifacts = readdirSync(diagnosticsDir).filter((file) => file.endsWith('.json') && !file.startsWith('startup-'));
+  const artifacts = readdirSync(diagnosticsDir).filter((file) => file.endsWith('.json') && !file.startsWith('startup-') && !file.startsWith('instance-'));
   assert.equal(artifacts.length, 1);
   const startupTrace = JSON.parse(readFileSync(join(diagnosticsDir, 'startup-silent-surface.json'), 'utf8'));
   assert.equal(startupTrace.schema, 'narada.mcp_runtime_proxy.startup_trace.v1');
@@ -122,6 +195,51 @@ try {
   assert.equal(artifact.diagnostic.code, 'child_request_timeout');
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'proxy_timeout'));
   assert.ok(artifact.request.lifecycle.some((event: Record<string, unknown>) => event.event === 'child_termination_requested'));
+
+  const statusChildEntrypoint = join(root, 'status-child.mjs');
+  writeFileSync(statusChildEntrypoint, [
+    "let buffer = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => {",
+    "  buffer += chunk;",
+    "  let index;",
+    "  while ((index = buffer.indexOf('\\n')) >= 0) {",
+    "    const line = buffer.slice(0, index);",
+    "    buffer = buffer.slice(index + 1);",
+    "    if (!line.trim()) continue;",
+    "    const request = JSON.parse(line);",
+    "    if (request.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }) + '\\n');",
+    "  }",
+    "});",
+  ].join('\n'), 'utf8');
+  const statusDiagnosticsDir = join(root, 'status-diagnostics');
+  const statusProxy = spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id', 'status-surface',
+    '--entrypoint', statusChildEntrypoint,
+    '--diagnostics-dir', statusDiagnosticsDir,
+    '--liveness-check-ms', '20',
+    '--orphan-grace-ms', '25',
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let statusStdout = '';
+  statusProxy.stdout.setEncoding('utf8');
+  statusProxy.stdout.on('data', (chunk) => { statusStdout += chunk; });
+  statusProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'tools', method: 'tools/list', params: {} })}\n`);
+  await waitForOutput(() => statusStdout.includes('mcp_runtime_proxy_status'), 2_000);
+  const toolsResponse = JSON.parse(statusStdout.trim().split(/\r?\n/)[0]);
+  assert.ok(toolsResponse.result.tools.some((tool: Record<string, unknown>) => tool.name === 'mcp_runtime_proxy_status'));
+  statusStdout = '';
+  statusProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'status', method: 'tools/call', params: { name: 'mcp_runtime_proxy_status', arguments: {} } })}\n`);
+  await waitForOutput(() => statusStdout.includes('"id":"status"'), 2_000);
+  const statusResponse = JSON.parse(statusStdout.trim());
+  assert.equal(statusResponse.result.structuredContent.runtime_freshness.schema, 'narada.mcp_runtime_proxy.runtime_freshness.v1');
+  assert.equal(statusResponse.result.structuredContent.runtime_freshness.reload_action.kind, 'restart_carrier_bound_surface');
+  assert.equal(statusResponse.result.structuredContent.liveness.observed_state, 'live');
+  statusProxy.stdin.end();
+  await new Promise<number | null>((resolve) => statusProxy.on('close', resolve));
+  const reclaimedListing = listRuntimeInstances(statusDiagnosticsDir, { isPidAlive: () => false });
+  assert.equal((reclaimedListing.counts as Record<string, unknown>).reclaimed, 1);
 
   // Regression for sfb_36762540-087: a tool that declares timeout_ms beyond
   // the proxy watchdog must not get the shared child SIGTERMed. The watchdog

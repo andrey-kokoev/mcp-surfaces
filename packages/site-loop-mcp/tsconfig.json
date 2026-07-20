@@ -10,6 +10,9 @@
     { "path": "../shared/mcp-e2e-harness" },
     { "path": "../shared/mcp-affordances" },
     { "path": "../shared/mcp-transport" },
+    { "path": "../delegated-task-mcp" },
+    { "path": "../../../narada-core/packages/task-governance-core" },
+    { "path": "../../../narada-core/packages/task-executability-orchestrator" },
     { "path": "../task-lifecycle-mcp" }
   ],
   "include": ["src/**/*.ts", "test/**/*.ts"]

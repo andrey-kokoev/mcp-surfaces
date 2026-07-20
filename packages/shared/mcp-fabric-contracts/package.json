@@ -1,0 +1,35 @@
+{
+  "name": "@narada2/mcp-fabric-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./http-fixture": {
+      "types": "./dist/src/http-fixture.d.ts",
+      "import": "./dist/src/http-fixture.js"
+    },
+    "./schema/*": "./dist/schema/*"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "build:postcompile": "node dist/src/emit-json-schema.js",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && pnpm run build:postcompile && node dist/test/mcp-fabric-contracts.test.js"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

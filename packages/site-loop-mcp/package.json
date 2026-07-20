@@ -9,6 +9,10 @@
     "site-loop-runner": "./dist/src/site-loop/site-loop-engine.js"
   },
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": { "default": "./dist/src/site-loop-mcp-server.js" },
     "./site-loop-mcp-server": { "default": "./dist/src/site-loop-mcp-server.js" },
     "./site-loop/site-loop-boundary": { "default": "./dist/src/site-loop/site-loop-boundary.js" },
@@ -23,15 +27,18 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/task-executability-reconciliation.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:configured": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:production": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-production-e2e.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "ajv": "^8.20.0",
     "@narada2/mcp-affordances": "workspace:*",
     "@narada2/mcp-transport": "workspace:*",
+    "@narada2/delegated-task-mcp": "workspace:*",
     "@narada2/task-governance-core": "workspace:*",
+    "@narada2/task-executability-orchestrator": "workspace:*",
     "@narada2/task-lifecycle-mcp": "workspace:*"
   },
   "files": ["dist/", "schemas/", "README.md"],

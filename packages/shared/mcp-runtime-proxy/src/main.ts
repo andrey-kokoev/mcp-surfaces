@@ -3,7 +3,19 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  RUNTIME_STATUS_TOOL_NAME,
+  captureRuntimeFreshness,
+  classifyRuntimeInstance,
+  evaluateRuntimeFreshness,
+  listRuntimeInstances,
+  processIsAlive,
+  runtimeInstancePath,
+  runtimeStatusToolDefinition,
+  writeRuntimeInstance,
+  type RuntimeInstanceRecord,
+} from './runtime-lifecycle.js';
 
 type JsonRecord = Record<string, unknown>;
 type RequestLifecycleEvent = {
@@ -39,6 +51,8 @@ type ProxyOptions = {
   requestTimeoutMs: number;
   toolTimeoutGraceMs: number;
   diagnosticsDir: string | null;
+  livenessCheckMs: number;
+  orphanGraceMs: number;
 };
 
 const STDERR_TAIL_LIMIT = 8000;
@@ -48,6 +62,10 @@ const DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS = 5_000;
 const DEFAULT_TOOL_TIMEOUT_GRACE_MS = 15_000;
 const MAX_TRANSPORT_TIMEOUT_MS = 900_000;
 const MAX_TOOL_TIMEOUT_GRACE_MS = 60_000;
+const DEFAULT_LIVENESS_CHECK_MS = 5_000;
+const DEFAULT_ORPHAN_GRACE_MS = 15_000;
+const MAX_LIVENESS_CHECK_MS = 60_000;
+const MAX_ORPHAN_GRACE_MS = 120_000;
 const SUPPRESSED_RESPONSE_TTL_MS = 60_000;
 const FORENSIC_ARTIFACT_SCHEMA = 'narada.mcp_runtime_proxy.forensic_artifact.v1';
 const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
@@ -58,6 +76,8 @@ function parseArgs(argv: string[]): ProxyOptions {
   let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
   let toolTimeoutGraceMs = DEFAULT_TOOL_TIMEOUT_GRACE_MS;
   let diagnosticsDir = process.env.NARADA_MCP_RUNTIME_PROXY_DIAGNOSTICS_DIR ?? '';
+  let livenessCheckMs = DEFAULT_LIVENESS_CHECK_MS;
+  let orphanGraceMs = DEFAULT_ORPHAN_GRACE_MS;
   let passthroughIndex = argv.indexOf('--');
   if (passthroughIndex < 0) passthroughIndex = argv.length;
   const prelude = argv.slice(0, passthroughIndex);
@@ -68,6 +88,8 @@ function parseArgs(argv: string[]): ProxyOptions {
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
     else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms', MAX_TOOL_TIMEOUT_GRACE_MS);
     else if (arg === '--diagnostics-dir' && prelude[index + 1]) diagnosticsDir = prelude[++index];
+    else if (arg === '--liveness-check-ms' && prelude[index + 1]) livenessCheckMs = parsePositiveInteger(prelude[++index], 'liveness_check_ms', MAX_LIVENESS_CHECK_MS);
+    else if (arg === '--orphan-grace-ms' && prelude[index + 1]) orphanGraceMs = parsePositiveInteger(prelude[++index], 'orphan_grace_ms', MAX_ORPHAN_GRACE_MS);
   }
   if (!entrypoint) throw new Error('mcp_runtime_proxy_missing_entrypoint');
   return {
@@ -77,6 +99,8 @@ function parseArgs(argv: string[]): ProxyOptions {
     requestTimeoutMs,
     toolTimeoutGraceMs,
     diagnosticsDir: diagnosticsDir ? resolve(diagnosticsDir) : defaultDiagnosticsDir(),
+    livenessCheckMs,
+    orphanGraceMs,
   };
 }
 
@@ -148,6 +172,14 @@ function startsWithJsonRpcFrame(buffer: string): boolean {
 }
 
 export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
+  if (argv.includes('--list-runtime-instances')) {
+    const diagnosticsIndex = argv.indexOf('--diagnostics-dir');
+    const diagnosticsDir = diagnosticsIndex >= 0 && argv[diagnosticsIndex + 1]
+      ? resolve(argv[diagnosticsIndex + 1])
+      : defaultDiagnosticsDir();
+    process.stdout.write(`${JSON.stringify(listRuntimeInstances(diagnosticsDir), null, 2)}\n`);
+    return;
+  }
   const options = parseArgs(argv);
   if (!existsSync(options.entrypoint)) {
     process.stderr.write(`mcp_runtime_proxy_entrypoint_not_found:${options.entrypoint}\n`);
@@ -171,6 +203,88 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     windowsHide: true,
   });
   const startupTrace = createStartupTrace(options, child, childIdentity);
+  const parentPid = process.ppid;
+  const freshnessTracker = captureRuntimeFreshness({
+    proxyRuntimePath: fileURLToPath(import.meta.url),
+    childEntrypoint: options.entrypoint,
+  });
+  const instancePath = runtimeInstancePath(options.diagnosticsDir ?? defaultDiagnosticsDir());
+  let reclamationReason: string | null = null;
+  let orphanTerminationTimer: NodeJS.Timeout | null = null;
+  let orphanForceKillTimer: NodeJS.Timeout | null = null;
+  const writeInstance = (
+    state: RuntimeInstanceRecord['state'],
+    evidence: JsonRecord,
+    closedAt: string | null = null,
+  ) => {
+    const now = new Date();
+    const runtimeFreshness = evaluateRuntimeFreshness({
+      tracker: freshnessTracker,
+      surfaceId: options.surfaceId,
+      proxyPid: process.pid,
+      childPid: child.pid ?? null,
+    });
+    const record: RuntimeInstanceRecord = {
+      schema: 'narada.mcp_runtime_proxy.instance.v1',
+      surface_id: options.surfaceId,
+      proxy_pid: process.pid,
+      parent_pid: parentPid,
+      child_pid: child.pid ?? null,
+      entrypoint: options.entrypoint,
+      started_at: freshnessTracker.started_at,
+      heartbeat_at: now.toISOString(),
+      lease_expires_at: new Date(now.getTime() + options.livenessCheckMs * 3).toISOString(),
+      state,
+      liveness_evidence: evidence,
+      runtime_freshness: runtimeFreshness,
+      closed_at: closedAt,
+    };
+    writeRuntimeInstance(instancePath, record);
+    return record;
+  };
+  let runtimeInstance = writeInstance('live', {
+    parent_pid_alive: processIsAlive(parentPid),
+    carrier_stdin_open: true,
+  });
+  const scheduleOrphanReclamation = (reason: string) => {
+    if (childClosed || reclamationReason) return;
+    reclamationReason = reason;
+    runtimeInstance = writeInstance('stale', {
+      reason,
+      parent_pid_alive: processIsAlive(parentPid),
+      carrier_stdin_open: reason !== 'carrier_stdin_closed',
+      grace_ms: options.orphanGraceMs,
+    });
+    if (!child.stdin.destroyed) child.stdin.end();
+    orphanTerminationTimer = setTimeout(() => {
+      if (childClosed) return;
+      runtimeInstance = writeInstance('reclaiming', {
+        reason,
+        signal: 'SIGTERM',
+        grace_ms: options.orphanGraceMs,
+      });
+      child.kill('SIGTERM');
+      orphanForceKillTimer = setTimeout(() => {
+        if (!childClosed) child.kill('SIGKILL');
+      }, Math.min(options.orphanGraceMs, 5_000));
+      orphanForceKillTimer.unref();
+    }, options.orphanGraceMs);
+    orphanTerminationTimer.unref();
+  };
+  const livenessTimer = setInterval(() => {
+    const parentAlive = processIsAlive(parentPid);
+    if (!parentAlive) {
+      scheduleOrphanReclamation('parent_carrier_pid_not_alive');
+      return;
+    }
+    if (!reclamationReason && !childClosed) {
+      runtimeInstance = writeInstance('live', {
+        parent_pid_alive: true,
+        carrier_stdin_open: !process.stdin.readableEnded,
+      });
+    }
+  }, options.livenessCheckMs);
+  livenessTimer.unref();
 
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
@@ -182,6 +296,35 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     parentBuffer = drained.remaining;
     if (drained.requests.length > 0) parentFramed = drained.framed;
     for (const request of drained.requests) {
+      const params = isJsonRecord(request.params) ? request.params : {};
+      if (request.method === 'tools/call' && params.name === RUNTIME_STATUS_TOOL_NAME) {
+        const id = request.id;
+        if (typeof id === 'string' || typeof id === 'number') {
+          const runtimeFreshness = evaluateRuntimeFreshness({
+            tracker: freshnessTracker,
+            surfaceId: options.surfaceId,
+            proxyPid: process.pid,
+            childPid: child.pid ?? null,
+          });
+          const liveness = classifyRuntimeInstance(runtimeInstance);
+          const payload = {
+            schema: 'narada.mcp_runtime_proxy.status.v1',
+            status: 'ok',
+            surface_id: options.surfaceId,
+            liveness,
+            runtime_freshness: runtimeFreshness,
+          };
+          writeJsonRpcMessage({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `mcp_runtime_proxy_status: ${runtimeFreshness.status}\nproxy_pid: ${process.pid}\nchild_pid: ${child.pid ?? 'unknown'}\nrestart_owner: carrier_or_runtime_supervisor` }],
+              structuredContent: payload,
+            },
+          }, drained.framed);
+        }
+        continue;
+      }
       if (!child.stdin.destroyed) writeJsonRpcMessageToStream(child.stdin, request, false);
       if (request.method === 'initialize' || request.method === 'tools/list') {
         recordStartupTrace(startupTrace, options, child, childIdentity, 'request_forwarded', {
@@ -252,7 +395,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   process.stdin.on('end', () => {
-    if (!child.stdin.destroyed) child.stdin.end();
+    scheduleOrphanReclamation('carrier_stdin_closed');
   });
 
   child.stdout.on('data', (chunk) => {
@@ -276,6 +419,11 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
             }, request.method === 'tools/list');
           }
           clearTimeout(request.timeoutTimer);
+          if (request.method === 'tools/list' && isJsonRecord(response.result) && Array.isArray(response.result.tools)) {
+            if (!response.result.tools.some((tool) => isJsonRecord(tool) && tool.name === RUNTIME_STATUS_TOOL_NAME)) {
+              response.result.tools.push(runtimeStatusToolDefinition());
+            }
+          }
         }
         pending.delete(id);
         if (timedOutRequests.has(id)) continue;
@@ -310,6 +458,15 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       });
     }
     childClosed = true;
+    clearInterval(livenessTimer);
+    if (orphanTerminationTimer) clearTimeout(orphanTerminationTimer);
+    if (orphanForceKillTimer) clearTimeout(orphanForceKillTimer);
+    runtimeInstance = writeInstance(reclamationReason ? 'reclaimed' : 'closed', {
+      reason: reclamationReason ?? 'child_closed',
+      exit_code: code,
+      signal,
+      parent_pid_alive: processIsAlive(parentPid),
+    }, new Date().toISOString());
     process.stdin.pause();
     if (pending.size > 0) {
       flushPendingErrors(pending, options, {

@@ -2,6 +2,8 @@
   "files": [],
   "references": [
     { "path": "./packages/shared/mcp-e2e-harness" },
+    { "path": "./packages/shared/mcp-fabric-contracts" },
+    { "path": "./packages/shared/mcp-fabric-compiler" },
     { "path": "./packages/shared/execution-contract" },
     { "path": "./packages/shared/mcp-transport" },
     { "path": "./packages/shared/mcp-telemetry" },

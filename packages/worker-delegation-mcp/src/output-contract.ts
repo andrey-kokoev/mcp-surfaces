@@ -7,7 +7,7 @@ export type WorkerVerificationCommandClassification = 'focused' | 'broad' | 'not
 export type WorkerVerification = { tool: string | null; command: string | null; status: string; summary: string; command_classification: WorkerVerificationCommandClassification };
 export type WorkerBroadUnrelatedFailure = { command: string | null; status: string; summary: string };
 export type WorkerExitInterview = { ergonomics_feedback: string; friction_points: string[]; missing_affordances: string[]; observed_incoherencies: string[]; suggested_improvements: string[] };
-export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null; review_verdict: string | null; acceptance_verdict: string | null; verdict: string | null };
+export type WorkerOutput = { summary: string; deliverables: { path: string; description: string }[]; open_questions: string[]; next_actions: string[]; edits_performed: boolean; target_state_changed: boolean; changes: WorkerChange[]; verification: WorkerVerification[]; verification_budget_respected: boolean | null; broad_unrelated_failures: WorkerBroadUnrelatedFailure[]; exit_interview: WorkerExitInterview | null; review_verdict: string | null; acceptance_verdict: string | null; verdict: string | null; structured_outputs?: Record<string, unknown> };
 export type WorkerOutputParseResult =
   | { ok: true; data: WorkerOutput }
   | { ok: false; reason: 'missing_file' | 'invalid_json' | 'invalid_shape'; message: string };
@@ -92,7 +92,7 @@ export function workerOutputSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict', 'structured_outputs'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -119,6 +119,7 @@ export function workerOutputSchema(): Record<string, unknown> {
       review_verdict: { type: ['string', 'null'] },
       acceptance_verdict: { type: ['string', 'null'] },
       verdict: { type: ['string', 'null'] },
+      structured_outputs: { type: 'object', additionalProperties: true },
     },
   };
 }
@@ -133,6 +134,7 @@ export function outputContractForRequest(request: WorkerRunToolInput, mode: Work
   const authority = request.constraints.authority ?? 'read';
   return {
     ...base,
+    ...(request.intent.output_contract ?? {}),
     effective_authority: authority,
     tool_capability_note: authority === 'read' ? 'If a raw MCP surface advertises write-capable roots or mutation tools, treat them as unavailable for this delegation unless the requested authority is escalated by the caller.' : null,
     target_paths: targetPaths,
@@ -238,6 +240,9 @@ function normalizeWorkerOutput(value: unknown, options: { strict: boolean }): Wo
       review_verdict: reviewVerdict,
       acceptance_verdict: acceptanceVerdict,
       verdict,
+      structured_outputs: record.structured_outputs && typeof record.structured_outputs === 'object' && !Array.isArray(record.structured_outputs)
+        ? record.structured_outputs as Record<string, unknown>
+        : undefined,
     },
   };
 }

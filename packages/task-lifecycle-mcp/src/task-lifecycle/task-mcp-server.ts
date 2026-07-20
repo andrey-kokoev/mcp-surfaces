@@ -956,12 +956,26 @@ export async function runTaskLifecycleMcpStdioServer({
 } = {}) {
   const configured = configureTaskLifecycleMcpRuntime({ argv, cwd, env, stdout, stderr });
   if (configured.status === 'help') return;
-  await runJsonRpcStdioServer({
-    stdin,
-    stdout,
-    handleRequest,
-    parseJsonRpcInput,
-  });
+  try {
+    await runJsonRpcStdioServer({
+      stdin,
+      stdout,
+      handleRequest,
+      parseJsonRpcInput,
+    });
+  } finally {
+    // The stdio process owns the shared lifecycle store. Close it after the
+    // input stream and all in-flight requests are drained so the process can
+    // terminate cleanly instead of retaining a SQLite handle indefinitely.
+    if (store) {
+      try {
+        store.db.close();
+      } finally {
+        store = null;
+        runtimeConfigured = false;
+      }
+    }
+  }
 }
 
 export async function handleTaskLifecycleMcpRequest(request, runtimeOptions = null) {

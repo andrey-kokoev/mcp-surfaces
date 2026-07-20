@@ -1,0 +1,96 @@
+sop_id: mcp-fabric-drift-hygiene
+title: MCP Fabric Tool-List Drift Hygiene
+description: |
+  Recurring cross-site hygiene for declared MCP fabric tools versus fresh
+  child tools/list observations. The check is evidence-first and proposal-only:
+  it classifies drift before any fabric or registry regeneration.
+status: active
+trigger_kind: schedule
+steps:
+  - id: enumerate_sites
+    executor: agent
+    blocking: true
+    title: Enumerate registrar sites
+    depends_on: []
+    instructions: |
+      Call registrar_site_list and retain the complete site_id/site_root set.
+      The inventory must cover every returned registrar site, including sites
+      whose live probe fails or whose root is intentionally outside the live
+      Loader allow-list.
+
+  - id: observe_live_tools
+    executor: agent
+    blocking: true
+    title: Capture fresh live tool inventories
+    depends_on: [enumerate_sites]
+    instructions: |
+      For each site root, call mcp_loader_site_tool_inventory_check with the
+      explicit site_root and preserve structuredContent, observation_ref,
+      observation_sha256, coverage, and per-surface findings. Recover Loader
+      capacity first by inspecting connection inventory and detaching only
+      closed connections. If the Loader runtime is stale, record the
+      supervisor restart action and do not claim that a child restart reloaded
+      the Loader.
+
+  - id: validate_declared_fabric
+    executor: agent
+    blocking: true
+    title: Validate declared fabric
+    depends_on: [enumerate_sites]
+    instructions: |
+      Call registrar_site_mcp_fabric_validate for every site. Keep the
+      validation result paired with the same site_id and site_root as the
+      live inventory.
+
+  - id: classify_findings
+    executor: agent
+    blocking: true
+    title: Classify every finding
+    depends_on: [observe_live_tools, validate_declared_fabric]
+    instructions: |
+      Assign every status=drift finding one disposition:
+      regenerated_fabric when the live child package is newer than the
+      generated Site fabric or materialized registry; intentional_difference
+      only when the difference is an explicit runtime/fixture compatibility
+      boundary with a written rationale; probe_runtime_failure when no live
+      comparison is possible because of a Loader, entrypoint, site-id,
+      duplicate-surface, or runtime-selection failure. Never hide a probe
+      failure by regenerating the registry.
+
+  - id: propose_repair
+    executor: agent
+    blocking: true
+    title: Propose owning-layer repair
+    depends_on: [classify_findings]
+    instructions: |
+      For regenerated_fabric findings, validate the fabric and produce a dry
+      run of the registrar's materialized registry sync. Repair the owning
+      Site fabric or shared catalog first; only then materialize the action
+      registry and rerun conformance. Do not write Site or carrier config as a
+      side effect of this recurring check.
+
+  - id: record_evidence
+    executor: agent
+    blocking: true
+    title: Record the hygiene result
+    depends_on: [propose_repair]
+    instructions: |
+      Attach the site inventory refs, validation summaries, classifications,
+      unresolved probe causes, and proposed owning-layer repairs to the
+      generated task instance. The run is complete only when every registrar
+      site has a result and every drift finding has a disposition.
+
+acceptance_criteria:
+  - A fresh inventory result exists for every registrar site
+  - Every live drift finding is classified as regenerated_fabric or intentional_difference with rationale
+  - Probe/runtime failures are preserved as explicit unresolved findings
+  - Proposed repairs identify the owning layer before any regeneration
+  - Evidence contains immutable Loader observation refs and validation results
+
+evidence_requirements:
+  - registrar_site_list result
+  - Per-site mcp_loader_site_tool_inventory_check result and observation_ref
+  - Per-site registrar_site_mcp_fabric_validate result
+  - Drift classification and rationale per surface
+  - Loader capacity/runtime recovery evidence where applicable
+  - Dry-run registry materialization evidence for regenerated_fabric findings

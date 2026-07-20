@@ -27,6 +27,8 @@ export type WorkerRequestContext = {
   abortSignal?: AbortSignal;
 };
 
+const MAX_SYNCHRONOUS_WAIT_MS = 180_000;
+
 export async function callWorkerTool(name: string, args: Record<string, unknown>, state: WorkerMcpState, context: WorkerRequestContext = {}): Promise<unknown> {
   if (name === 'worker_operator_affordances') return workerOperatorAffordances(state);
   if (name === 'worker_policy_inspect') return publicWorkerPolicy(state.policy);
@@ -99,6 +101,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
   overrides = request.constraints.overrides ?? {};
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
+  const maxRunMs = boundedInteger(request.constraints.max_run_ms, state.policy.maxRunMs, 1, state.policy.maxRunMs, 'worker_max_run_ms_invalid');
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
@@ -177,7 +180,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
+      max_run_ms: maxRunMs,
       max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
@@ -216,7 +219,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
+      max_run_ms: maxRunMs,
       max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
@@ -348,6 +351,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
   overrides = request.constraints.overrides ?? {};
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
+  const maxRunMs = boundedInteger(request.constraints.max_run_ms, state.policy.maxRunMs, 1, state.policy.maxRunMs, 'worker_max_run_ms_invalid');
   const requestedMode = request.intent.mode ?? defaultModeForAuthority(authority);
   request.intent.mode = requestedMode;
   const preflight = buildPreflight({ cwd, authority, mode: requestedMode, waitForCompletion: request.constraints.wait_for_completion === true, isResume: resumeSessionId !== null, preflightPaths: request.constraints.preflight_paths ?? [], requiredMcpTools: request.constraints.required_mcp_tools ?? [], allowedRoots: state.policy.allowedRoots });
@@ -438,7 +442,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
+      max_run_ms: maxRunMs,
       max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
@@ -478,7 +482,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       implementation_identity: workerImplementationIdentity(),
       prompt_byte_length: promptBytes,
       max_output_bytes: state.policy.maxOutputBytes,
-      max_run_ms: state.policy.maxRunMs,
+      max_run_ms: maxRunMs,
       max_tool_rounds: state.policy.maxToolRounds,
       environment_keys: Object.keys(environment).sort(),
     };
@@ -509,6 +513,13 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   writeText(runRecord.diagnosticPath, '');
 
   const waitForCompletion = request.constraints.wait_for_completion === true;
+  const waitTimeoutMs = boundedInteger(
+    request.constraints.wait_timeout_ms,
+    MAX_SYNCHRONOUS_WAIT_MS,
+    1,
+    MAX_SYNCHRONOUS_WAIT_MS,
+    'worker_wait_timeout_invalid',
+  );
   const launchedAt = new Date();
   const runningPayload = buildWorkerRunPayload({
     status: 'running',
@@ -566,11 +577,43 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     });
     return runningPayload;
   }
-  state.activeRunCompletions.set(runRecord.runId, completion());
+  const activeCompletion = completion();
+  state.activeRunCompletions.set(runRecord.runId, activeCompletion);
+  let continuedAsynchronously = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await state.activeRunCompletions.get(runRecord.runId)!;
+    const outcome = await Promise.race([
+      activeCompletion.then((result) => ({ status: 'completed' as const, result })),
+      new Promise<{ status: 'running' }>((resolvePromise) => {
+        timer = setTimeout(() => resolvePromise({ status: 'running' }), waitTimeoutMs);
+      }),
+    ]);
+    if (outcome.status === 'completed') return outcome.result;
+
+    continuedAsynchronously = true;
+    slot.deferRelease();
+    void activeCompletion.catch(() => {
+      // The failure payload has already been written by completeWorkerRun.
+    }).finally(() => {
+      cleanupActiveRun();
+      slot.releaseSlot();
+    });
+    return {
+      ...runningPayload,
+      wait_for_completion: {
+        requested: true,
+        status: 'continued_asynchronously',
+        wait_timeout_ms: waitTimeoutMs,
+        reason: 'bounded_synchronous_wait_elapsed',
+      },
+      next_action: {
+        tool: 'worker_run_wait',
+        arguments: { run_id: runRecord.runId },
+      },
+    };
   } finally {
-    cleanupActiveRun();
+    if (timer) clearTimeout(timer);
+    if (!continuedAsynchronously) cleanupActiveRun();
   }
 }
 
@@ -1476,6 +1519,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
   copyString(constraints, 'cognition', constraintsInput.cognition ?? args.cognition);
   if (constraintsInput.resumable !== undefined || args.resumable !== undefined) constraints.resumable = Boolean(constraintsInput.resumable ?? args.resumable);
   if (constraintsInput.wait_for_completion !== undefined || args.wait_for_completion !== undefined) constraints.wait_for_completion = Boolean(constraintsInput.wait_for_completion ?? args.wait_for_completion);
+  if (constraintsInput.wait_timeout_ms !== undefined || args.wait_timeout_ms !== undefined) constraints.wait_timeout_ms = Number(constraintsInput.wait_timeout_ms ?? args.wait_timeout_ms);
   if (constraintsInput.exit_interview !== undefined || args.exit_interview !== undefined) constraints.exit_interview = Boolean(constraintsInput.exit_interview ?? args.exit_interview);
   const verificationBudget = normalizeBudget(constraintsInput.verification_budget ?? args.verification_budget);
   if (verificationBudget) constraints.verification_budget = verificationBudget;

@@ -83,7 +83,9 @@ Configured site loop:
 
 ## Site Loop Notes
 
-`site_loop_run_once` runs a bounded configured site loop pass. It can request configured `source_sync`, bridge inbox envelopes to task lifecycle work, reconcile configured ticket projection refs, and dispatch configured resident directives through the site loop logic. Source sync delegates to the configured command; this package does not itself implement mailbox sync.
+`site_loop_run_once` runs a bounded configured site loop pass. It can request configured `source_sync`, bridge inbox envelopes to task lifecycle work, reconcile configured ticket projection refs, reconcile pending Task Executability Assessment requests, and dispatch configured resident directives through the site loop logic. Source sync delegates to the configured command; this package does not itself implement mailbox sync.
+
+The `task_executability_reconciliation` phase is a recovery coordinator, not a second authority. Task Lifecycle owns request, lease, attempt, and assessment state; the Site Loop only leases a bounded batch and invokes the shared task-executability orchestrator. The phase is capped at ten requests per pass, reclaims expired leases after restart, and uses the same Task Lifecycle database as the other task phases. Its result is `deferred` with warning attention when the store/orchestrator binding is absent, `ok` when work is idle/progressing without execution failures, and `attention` when bounded evaluator/delegation failures require review. It never turns evaluator execution failure into a task verdict and never hardcodes a provider or model.
 
 The target shape is “just config”: if site behavior differs, express it in `site-loop-config.json`. If behavior cannot be expressed there, add a generic config primitive or delegate to an existing MCP/tool command that is itself referenced by config. Do not add a new site-specific adapter branch.
 

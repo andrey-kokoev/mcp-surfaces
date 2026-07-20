@@ -6,5 +6,8 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
+  "references": [
+    { "path": "../mcp-fabric-contracts" }
+  ],
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

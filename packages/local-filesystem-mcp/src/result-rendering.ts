@@ -1,6 +1,8 @@
 export function renderToolResultText(value, renderContext: Record<string, unknown> = {}) {
   const record = asRecord(value);
   if (record.schema === 'narada.mcp_output_page.v1') return String(record.output_text ?? '');
+  if (record.schema === 'narada.mcp_surface.guidance.v0') return renderGuidanceResult(record);
+  if (record.schema === 'local.filesystem.doctor.v1') return renderDoctorResult(record);
   if (record.schema === 'narada.mcp_output_locator.v1' || typeof record.output_ref === 'string') {
     return compactLines([
       `status: ${record.status ?? 'ok'}`,
@@ -37,6 +39,34 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
   }
   if (record.schema || record.status || record.path || record.relative_path || record.type) return renderCompactRecord(record);
   return JSON.stringify(value, null, 2);
+}
+
+function renderGuidanceResult(record) {
+  const firstUse = Array.isArray(record.first_use) ? record.first_use.map(String) : [];
+  const recovery = Array.isArray(record.recovery) ? record.recovery.map(String) : [];
+  return compactLines([
+    `fs_guidance: ${record.status ?? 'ok'}`,
+    `purpose: ${record.purpose ?? ''}`,
+    `surface_id: ${record.surface_id ?? 'local-filesystem'}`,
+    'first_use:',
+    ...firstUse.map((item) => `- ${item}`),
+    'recovery:',
+    ...recovery.map((item) => `- ${item}`),
+  ]);
+}
+
+function renderDoctorResult(record) {
+  const roots = Array.isArray(record.allowed_roots) ? record.allowed_roots.map(String) : [];
+  const permissions = asRecord(record.effective_permissions);
+  return compactLines([
+    `fs_doctor: ${record.status ?? 'ok'}`,
+    `mode: ${record.mode ?? 'unknown'}`,
+    `output_root: ${record.output_root ?? 'none'}`,
+    `can_read: ${permissions.can_read ?? false}`,
+    `can_write: ${permissions.can_write ?? false}`,
+    'allowed_roots:',
+    ...roots.map((root) => `- ${root}`),
+  ]);
 }
 
 function renderFileMetricsResult(record) {

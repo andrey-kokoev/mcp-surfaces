@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { validateMcpRestartAcknowledgement } from '../src/mcp-freshness-service.js';
+import { acknowledgeMcpRestartRequest, validateMcpRestartAcknowledgement, writeMcpRestartRequest } from '../src/mcp-freshness-service.js';
 
 const pcSiteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-freshness-'));
 
@@ -76,6 +76,60 @@ try {
   });
   assert.equal(verifierProcess.status, 'rejected');
   assert.equal(verifierProcess.reason, 'post_request_boot_evidence_missing');
+
+  const siteRoot = join(pcSiteRoot, 'site');
+  const restartRequestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  const baselinePath = join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json');
+  const requested = writeMcpRestartRequest({
+    siteRoot,
+    serverName: 'task-lifecycle-mcp',
+    targetSurface: 'task-lifecycle-mcp.local',
+    targetEntrypoint: 'tools/task-lifecycle/task-mcp-server.js',
+    restartRequestPath,
+    baselinePath,
+    requestedBy: 'test-agent',
+    reason: 'Exercise the complete restart lifecycle.',
+    note: 'Test replacement child requested.',
+  });
+  assert.equal(requested.status, 'restart_requested');
+  assert.equal(existsSync(restartRequestPath), true);
+  const replacementBootedAt = new Date(Date.parse(requested.requested_at) + 1_000).toISOString();
+  const restarted = acknowledgeMcpRestartRequest({
+    siteRoot,
+    pcSiteRoot,
+    serverName: 'task-lifecycle-mcp',
+    targetSurface: 'task-lifecycle-mcp.local',
+    targetEntrypoint: 'tools/task-lifecycle/task-mcp-server.js',
+    restartRequestPath,
+    baselinePath,
+    acknowledgedBy: 'test-agent',
+    reason: 'Test replacement child acknowledgement.',
+    note: 'Test restart marker cleared.',
+    watchedPaths: [],
+    expectedTools: ['task_lifecycle_doctor'],
+    registeredTools: ['task_lifecycle_doctor'],
+    liveProcessEvidence: {
+      pid: process.pid + 1,
+      booted_at: replacementBootedAt,
+      evidence_source: 'live_mcp_process_self_observation',
+    },
+  });
+  assert.equal(restarted.status, 'restart_acknowledged');
+  assert.equal(existsSync(restartRequestPath), false);
+  const alreadyClear = acknowledgeMcpRestartRequest({
+    siteRoot,
+    pcSiteRoot,
+    serverName: 'task-lifecycle-mcp',
+    targetSurface: 'task-lifecycle-mcp.local',
+    targetEntrypoint: 'tools/task-lifecycle/task-mcp-server.js',
+    restartRequestPath,
+    baselinePath,
+    acknowledgedBy: 'test-agent',
+    reason: 'Idempotent acknowledgement check.',
+    note: 'Already clear.',
+  });
+  assert.equal(alreadyClear.status, 'no_restart_request');
+  assert.equal(alreadyClear.already_cleared, true);
 
   console.log('mcp-freshness-service tests passed');
 } finally {

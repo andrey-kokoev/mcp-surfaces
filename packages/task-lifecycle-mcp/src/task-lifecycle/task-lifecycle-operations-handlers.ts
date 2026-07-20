@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
+import { resolveFreshServerPath } from './fresh-server-path.js';
 
 export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_submit_observation",
@@ -420,8 +422,25 @@ export function createTaskLifecycleOperationsHandlers(context) {
       if (!serverPath) throw new Error('server_path_required');
       if (!toolName) throw new Error('tool_name_required');
 
-      const result = await testMcpTool(siteRoot, serverPath, toolName, toolArgs, { timeoutSeconds });
-      return jsonToolResult(result);
+      const admission = resolveFreshServerPath({
+        siteRoot,
+        serverPath,
+        runtimeModulePath: fileURLToPath(import.meta.url),
+      });
+      if (admission.status === 'refused') {
+        return jsonToolResult({
+          schema: 'narada.task_lifecycle.fresh_server_path_admission.v1',
+          status: 'refused',
+          error: admission.reason,
+          server_path_admission: admission,
+          remediation: 'Use a site-root-relative MCP server script, a script under the running @narada2/task-lifecycle-mcp package root, or configure an explicit root with NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
+        }, true);
+      }
+      const result = await testMcpTool(siteRoot, admission.resolved_path, toolName, toolArgs, { timeoutSeconds });
+      const payload = result && typeof result === 'object' && !Array.isArray(result)
+        ? { ...result, server_path_admission: admission }
+        : { status: 'ok', result, server_path_admission: admission };
+      return jsonToolResult(payload);
     }
     case 'task_lifecycle_run_tests': {
       const selector = stringField(args, 'selector') || 'task-lifecycle';

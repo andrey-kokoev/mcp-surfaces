@@ -874,6 +874,28 @@ assert.equal(managedCancellation.result?.structuredContent.evidence.cancellation
 assert.equal(managedCancellation.result?.structuredContent.run.status, 'cancelled');
 assert.equal(managedCancellationState.activeRunCount, 0);
 
+const boundedWaitState = createServerState({ allowedRoot: root, runRoot: join(root, 'bounded-wait'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const boundedWait = await rpc({
+  jsonrpc: '2.0',
+  id: 504,
+  method: 'tools/call',
+  params: {
+    name: 'worker_run',
+    arguments: {
+      intent: { instruction: 'bounded synchronous wait' },
+      constraints: { cwd: root, wait_for_completion: true, wait_timeout_ms: 1 },
+    },
+  },
+}, boundedWaitState);
+assert.equal(boundedWait.result?.structuredContent.status, 'running');
+assert.equal(boundedWait.result?.structuredContent.wait_for_completion.status, 'continued_asynchronously');
+assert.equal(boundedWait.result?.structuredContent.wait_for_completion.wait_timeout_ms, 1);
+assert.equal(boundedWait.result?.structuredContent.next_action.tool, 'worker_run_wait');
+const boundedWaitRunId = String(boundedWait.result?.structuredContent.run_id);
+const boundedWaitFinished = await rpc({ jsonrpc: '2.0', id: 505, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: boundedWaitRunId, timeout_ms: 15_000, poll_ms: 25 } } }, boundedWaitState);
+assert.equal(boundedWaitFinished.result?.structuredContent.wait.status, 'finished');
+assert.equal(boundedWaitState.activeRunCount, 0);
+
 const agentRuntimeState = createServerState({
   allowedRoot: root,
   runRoot: join(root, 'agent-runtime-runs'),

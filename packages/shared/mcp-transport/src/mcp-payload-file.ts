@@ -512,14 +512,21 @@ export function payloadDerive({ scope, siteRoot, args, maxBytes, payloadDir }: P
   payloadDir = transportScope.payloadDir;
   const input = parseArgumentRecord(args);
   const source = readPayloadRevision({ scope: transportScope, ref: requireRef(input, 'payload_derive_requires_source_ref', 'source_ref') });
-  const overlay = payloadObjectFromArgs(input, {
-    objectField: 'overlay',
-    jsonField: 'overlay_json',
-    objectMessage: 'payload_derive_overlay_must_be_object',
-    jsonMessage: 'payload_derive_overlay_json_must_be_object',
-    ambiguityMessage: 'payload_derive_must_choose_one_of_overlay_or_overlay_json: send either non-empty overlay object or overlay_json string; empty overlay object may accompany overlay_json only as a client placeholder',
-  });
-  const payload = overlayObject(source.payload, overlay);
+  const deletePaths = payloadDeletePaths(input.delete_paths);
+  const hasOverlayRoute = input.overlay !== undefined || input.overlay_json !== undefined;
+  if (!hasOverlayRoute && deletePaths.length === 0) {
+    throw new Error('payload_derive_requires_overlay_or_delete_paths');
+  }
+  const overlay = hasOverlayRoute
+    ? payloadObjectFromArgs(input, {
+      objectField: 'overlay',
+      jsonField: 'overlay_json',
+      objectMessage: 'payload_derive_overlay_must_be_object',
+      jsonMessage: 'payload_derive_overlay_json_must_be_object',
+      ambiguityMessage: 'payload_derive_must_choose_one_of_overlay_or_overlay_json: send either non-empty overlay object or overlay_json string; empty overlay object may accompany overlay_json only as a client placeholder',
+    })
+    : {};
+  const payload = deleteObjectPaths(overlayObject(source.payload, overlay), deletePaths);
   const revision = source.revision + 1;
   const ref = buildPayloadRef(source.payload_id, revision);
   const createdAt = new Date().toISOString();
@@ -529,7 +536,7 @@ export function payloadDerive({ scope, siteRoot, args, maxBytes, payloadDir }: P
     payload,
     createdAt,
     createdBy: stringOrNull(input.created_by),
-    source: { kind: 'derive', source_ref: source.ref, overlay_sha256: sha256(stableJson(overlay)) },
+    source: { kind: 'derive', source_ref: source.ref, overlay_sha256: sha256(stableJson(overlay)), delete_paths: deletePaths },
     maxBytes,
   });
   const written = writeRevision({ scope: transportScope, record });
@@ -1058,15 +1065,16 @@ export function listPayloadTools() {
     }),
     toolDefinition({
       name: 'mcp_payload_derive',
-      description: 'Derive a new immutable payload revision by applying a constrained object overlay.',
+      description: 'Derive a new immutable payload revision by applying an optional object overlay and explicit JSON Pointer deletions.',
       behavior: { readOnly: false, destructive: false, idempotent: false },
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           source_ref: { type: 'string', description: 'Source payload ref, e.g. mcp_payload:<id>@v1.' },
-          overlay: { type: 'object', additionalProperties: true, description: 'Normal route for clients that can transmit nested objects: recursive object overlay. No deletion semantics. Do not send with overlay_json unless overlay is exactly {} as a client placeholder.' },
-          overlay_json: { type: 'string', description: 'String route for clients that cannot transmit free-form nested objects, especially OpenCode: JSON object text for the overlay. Authoritative when present; may be accompanied only by overlay:{} as a placeholder.' },
+          overlay: { type: 'object', additionalProperties: true, description: 'Optional recursive object overlay. Null remains a value and never means deletion. Do not send with overlay_json unless overlay is exactly {} as a client placeholder.' },
+          overlay_json: { type: 'string', description: 'Optional JSON-string overlay route for clients that cannot transmit free-form nested objects. Authoritative when present; may be accompanied only by overlay:{} as a placeholder.' },
+          delete_paths: { type: 'array', items: { type: 'string' }, description: 'Optional RFC 6901-encoded object-field paths to delete after applying the overlay, e.g. ["/preferred_role", "/constraints/model"]. Array traversal is not supported. At least one overlay route or delete path is required.' },
           created_by: { type: 'string', description: 'Optional agent/principal for audit metadata.' },
         },
         required: ['source_ref'],
@@ -1280,6 +1288,44 @@ function overlayObject(base, overlay) {
   }
   return output;
 }
+
+function payloadDeletePaths(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length === 0 || value.some((path) => typeof path !== 'string')) {
+    throw new Error('payload_derive_delete_paths_must_be_non_empty_string_array');
+  }
+  const unique = [...new Set(value)];
+  if (unique.length !== value.length) throw new Error('payload_derive_delete_paths_must_be_unique');
+  return unique.map((path) => {
+    if (!path.startsWith('/')) throw new Error(`payload_derive_delete_path_invalid: ${path}`);
+    return path;
+  });
+}
+
+function deleteObjectPaths(payload, paths) {
+  return paths.reduce((current, path) => deleteObjectPath(current, decodeJsonPointer(path), path), payload);
+}
+
+function decodeJsonPointer(path) {
+  return path.slice(1).split('/').map((segment) => {
+    if (/~(?:[^01]|$)/.test(segment)) throw new Error(`payload_derive_delete_path_invalid_escape: ${path}`);
+    return segment.replace(/~1/g, '/').replace(/~0/g, '~');
+  });
+}
+
+function deleteObjectPath(value, segments, originalPath) {
+  if (!isPlainObject(value)) throw new Error(`payload_derive_delete_path_parent_not_object: ${originalPath}`);
+  const [head, ...tail] = segments;
+  if (!Object.prototype.hasOwnProperty.call(value, head)) throw new Error(`payload_derive_delete_path_not_found: ${originalPath}`);
+  const output = { ...value };
+  if (tail.length === 0) {
+    delete output[head];
+    return output;
+  }
+  output[head] = deleteObjectPath(output[head], tail, originalPath);
+  return output;
+}
+
 
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);

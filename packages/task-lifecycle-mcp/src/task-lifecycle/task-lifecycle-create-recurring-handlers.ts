@@ -4,7 +4,6 @@ import { normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execu
 import { normalizeTaskTags, requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
 import {
   enqueueTaskExecutabilityRequest,
-  taskSpecDigest,
 } from '@narada2/task-governance-core/task-executability-service';
 import {
   bindTaskExecution,
@@ -19,6 +18,26 @@ type TaskLifecyclePayload = Record<string, unknown>;
 
 function asPayload(value: unknown): TaskLifecyclePayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
+}
+
+const TASK_EXECUTABILITY_FOLLOW_UP_SCHEMA = 'narada.task.executability.follow_up.v1';
+
+function taskExecutabilityFollowUp(request: Record<string, unknown> | null, status: 'enqueued' | 'existing'): Record<string, unknown> | null {
+  if (!request) return null;
+  return {
+    schema: TASK_EXECUTABILITY_FOLLOW_UP_SCHEMA,
+    version: 1,
+    source: { surface: 'task_lifecycle', operation: 'task_lifecycle_create' },
+    trigger: 'on_create',
+    status,
+    request_id: request.request_id,
+    task_id: request.task_id,
+    task_number: request.task_number,
+    task_spec_digest: request.task_spec_digest,
+    environment_digest: request.environment_digest,
+    evaluator_profile: request.evaluator_profile,
+    evaluator_profile_version: request.evaluator_profile_version,
+  };
 }
 
 export function assertExecutionBindingScope(binding: ExecutionBinding, siteRoot: string): void {
@@ -169,6 +188,27 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
       const taskId = reservation.task_id;
       const filePath = reservation.file_path;
       if (reservation.status === 'created') {
+        let executabilityRequest: Record<string, unknown> | null = null;
+        try {
+          executabilityRequest = enqueueTaskExecutabilityRequest({
+            store,
+            siteRoot,
+            taskId,
+            taskNumber,
+            spec: {
+              title,
+              goal,
+              context,
+              required_work: requiredWork,
+              non_goals: nonGoals,
+              acceptance_criteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria : [],
+              dependencies: [],
+            },
+          }) as unknown as Record<string, unknown>;
+        } catch {
+          // A later Site Loop reconciliation can recover an existing task without
+          // making an idempotent create retry fail for this secondary concern.
+        }
         return jsonToolResult(attachPayloadSource({
           schema: 'narada.task.create.v0',
           status: 'already_exists',
@@ -180,6 +220,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
           idempotency_key: idempotencyKey,
           execution_binding: executionBinding,
           recovered: false,
+          follow_up: taskExecutabilityFollowUp(executabilityRequest, 'existing'),
         }, payloadSource));
       }
 
@@ -278,8 +319,9 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
 
       // Enqueue an executability request for every newly created task. The call
       // is idempotent and superseded older in-flight requests automatically.
+      let executabilityRequest: Record<string, unknown> | null = null;
       try {
-        enqueueTaskExecutabilityRequest({
+        executabilityRequest = enqueueTaskExecutabilityRequest({
           store,
           siteRoot,
           taskId,
@@ -293,7 +335,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
             acceptance_criteria: Array.isArray(acceptanceCriteria) ? acceptanceCriteria : [],
             dependencies: [],
           },
-        });
+        }) as unknown as Record<string, unknown>;
       } catch {
         // Executability enqueue is best-effort on creation; failures are surfaced
         // by the dedicated executability tools and do not block task creation.
@@ -315,6 +357,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
         recovery_truthfulness_required: recoveryTruthfulnessRequired,
         payload_ref: payloadSource.ref ?? null,
         payload_sha256: payloadSource.sha256 ?? null,
+        follow_up: taskExecutabilityFollowUp(executabilityRequest, 'enqueued'),
       }, payloadSource));
     }
 

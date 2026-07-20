@@ -15,6 +15,7 @@ export function workerEditRunArgs(args: Record<string, unknown>): Record<string,
       ...(editInput.required_mcp_tools !== undefined ? { required_mcp_tools: editInput.required_mcp_tools } : {}),
       ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
       ...(editInput.wait_for_completion !== undefined ? { wait_for_completion: editInput.wait_for_completion } : {}),
+      ...(editInput.wait_timeout_ms !== undefined ? { wait_timeout_ms: editInput.wait_timeout_ms } : {}),
       ...(editInput.exit_interview !== undefined ? { exit_interview: editInput.exit_interview } : {}),
       ...(editInput.overrides && Object.keys(editInput.overrides).length > 0 ? { overrides: editInput.overrides } : {}),
     },
@@ -32,6 +33,7 @@ function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEdit
   if (args.required_mcp_tools !== undefined) editInput.required_mcp_tools = normalizeStringList(args.required_mcp_tools);
   if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);
   if (args.wait_for_completion !== undefined) editInput.wait_for_completion = Boolean(args.wait_for_completion);
+  if (args.wait_timeout_ms !== undefined) editInput.wait_timeout_ms = Number(args.wait_timeout_ms);
   if (args.exit_interview !== undefined) editInput.exit_interview = Boolean(args.exit_interview);
   const overrides: NonNullable<WorkerEditToolInput['overrides']> = {};
   copyString(overrides, 'runtime', overridesInput.runtime);

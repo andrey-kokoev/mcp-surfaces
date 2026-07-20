@@ -55,6 +55,7 @@ Behavior notes:
 - `fs_replace_range` supports an `expected_sha256` guard for stale-file detection.
 - `fs_create_directory` is idempotent for existing directories and returns `status: "exists"`.
 - `fs_apply_patch` accepts unified diffs and Codex-style `*** Begin Patch` patches, including add, update, delete, and move targets. It supports `dry_run: true`, operation labels per changed file, and an `expected_sha256` map keyed by patch path or resolved path; unmatched expected-hash keys fail instead of being ignored.
+- Supply a stable `operation_id` for durable patch recovery. `accepted` and `applying` outcomes record the owner, deadline, and captured filesystem fingerprints. After an owner-surface exit, `fs_patch_outcome_show` persists a terminal `interrupted_before_mutation`, `patched_recovered`, `interrupted_partial`, or `interrupted_unknown` result. Retry the identical operation only when `retry_safe: true`; if the deadline has elapsed while the owner is alive, restart that MCP surface and read the outcome again.
 - `fs_move_path`, `fs_rename_directory`, and `fs_delete_directory` support optional expected metadata guards for stale-path detection. Callers can use structured `expected`, `expected_from`, and `expected_to` objects with `mtime`, `size`, `sha256`, `tree_sha256`, and `entry_count` fields, while older flat expected fields remain accepted.
 - Tool errors use `schema: "local.filesystem.error.v1"` and normalize `details.operation` when the active tool is known.
 

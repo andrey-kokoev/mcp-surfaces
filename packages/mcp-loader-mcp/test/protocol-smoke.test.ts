@@ -57,6 +57,7 @@ try {
     'mcp_loader_runtime_status',
     'mcp_loader_policy_inspect',
     'mcp_loader_connection_inventory',
+    'mcp_loader_runtime_observation',
     'mcp_loader_list_site_surfaces',
     'mcp_loader_site_fabric_diagnostics',
     'mcp_loader_site_tool_inventory_check',

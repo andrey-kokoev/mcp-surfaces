@@ -356,6 +356,8 @@ type DependencyConflictTaskDependency = {
   dependency_id: string;
   parent_task_id: string;
   required_task_id: string;
+  kind?: string;
+  created_by?: string;
 };
 
 type DependencyConflictRosterEntry = {
@@ -441,10 +443,16 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
 }) {
   const dependencies = store.listTaskDependenciesForRequired?.(lifecycle.task_id) ?? [];
   const agentOperatorIdentity = rosterOperatorIdentity(store, agentId);
+  const eligibleReviewers = findReviewerCapableAgents(store);
+  const singletonReviewerAgentId = eligibleReviewers.length === 1
+    ? (eligibleReviewers[0] as { agent_id?: unknown }).agent_id
+    : null;
   const evaluations: DependencyConflictEvaluation[] = dependencies.map((dependency) => {
-    const gatedAgentId = latestReportAgentId(store, dependency.parent_task_id);
+    const gatedAgentId = latestReportAgentId(store, dependency.parent_task_id)
+      ?? (dependency.kind === 'review' ? dependency.created_by ?? null : null);
     const gatedOperatorIdentity = rosterOperatorIdentity(store, gatedAgentId);
     const conflictDetected = Boolean(agentOperatorIdentity && gatedOperatorIdentity && agentOperatorIdentity === gatedOperatorIdentity);
+    const singleOperatorReview = conflictDetected && singletonReviewerAgentId === agentId;
     const evidence = {
       evidence_id: `conflict_${randomUUID()}`,
       dependency_id: dependency.dependency_id,
@@ -454,16 +462,16 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
       effective_operator_identity: agentOperatorIdentity,
       gated_work_operator_identity: gatedOperatorIdentity,
       conflict_detected: conflictDetected,
-      policy_mode: conflictDetected ? 'operator_override_allowed' : 'not_applicable',
-      authorization_required: conflictDetected,
-      authorization_basis_json: conflictDetected && authorityBasis ? JSON.stringify(authorityBasis) : null,
-      annotation_recorded: !conflictDetected || Boolean(authorityBasis),
+      policy_mode: singleOperatorReview ? 'single_operator_review' : conflictDetected ? 'operator_override_allowed' : 'not_applicable',
+      authorization_required: conflictDetected && !singleOperatorReview,
+      authorization_basis_json: conflictDetected && !singleOperatorReview && authorityBasis ? JSON.stringify(authorityBasis) : null,
+      annotation_recorded: !conflictDetected || singleOperatorReview || Boolean(authorityBasis),
       created_at: new Date().toISOString(),
     };
     return {
       dependency,
       evidence,
-      satisfied: !conflictDetected || Boolean(authorityBasis),
+      satisfied: !conflictDetected || singleOperatorReview || Boolean(authorityBasis),
     };
   });
   const blocked = evaluations.filter((evaluation) => !evaluation.satisfied);
@@ -484,7 +492,7 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
         gated_work_operator_identity: evaluation.evidence.gated_work_operator_identity,
         policy_mode: evaluation.evidence.policy_mode,
       })),
-      eligible_alternatives: findReviewerCapableAgents(store),
+      eligible_alternatives: eligibleReviewers,
       override_allowed: true,
       example_args: {
         task_number: '<current-task-number>',
@@ -1217,8 +1225,8 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       });
       if (result.status !== 'error' && asRecord(result.finish_result)?.new_status === 'in_review' && typeof ensureReviewContractDependency === 'function') {
         const parentLifecycle = store.getLifecycleByNumber(taskNumber);
-        const reviewer = stringField(args, 'reviewer') ?? findReviewerCapableAgents(store)?.[0]?.agent_id;
-        if (parentLifecycle && reviewer) {
+        const reviewer = stringField(args, 'reviewer') ?? findReviewerCapableAgents(store)?.[0]?.agent_id ?? 'reviewer';
+        if (parentLifecycle) {
           const reviewDependency = await ensureReviewContractDependency({
             parentLifecycle,
             parentTaskNumber: taskNumber,
@@ -1246,7 +1254,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const outcome = stringField(args, 'outcome');
       const findings = Array.isArray(args.findings) ? args.findings : undefined;
       const evidenceRefs = stringArrayField(args, 'evidence_refs') ?? [];
-      const reviewer = stringField(args, 'reviewer');
+      let reviewer = stringField(args, 'reviewer');
       const changedFiles = stringArrayField(args, 'changed_files');
       const noFilesChanged = booleanField(args, 'no_files_changed') === true;
       const recoveryTruthfulness = objectField(args, 'recovery_truthfulness');
@@ -1331,6 +1339,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       }
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       const outcomeContract = lifecycle ? store.getLatestTaskOutcomeContract?.(lifecycle.task_id) : undefined;
+      if (!outcomeContract && !reviewer) {
+        reviewer = findReviewerCapableAgents(store)?.[0]?.agent_id ?? 'reviewer';
+      }
       if (outcomeContract && !outcome) {
         return jsonToolResult({
           status: 'blocked',
@@ -2006,10 +2017,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       }
 
       let isStructuralReview = structuralReviewInfo?.sameOperator || structuralReviewInfo?.selfReview;
-      const autoAcceptSingleOperator = booleanField(args, 'auto_accept_single_operator') === true;
       const reviewerCapableAgents = findReviewerCapableAgents(store);
       const isSingletonReviewer = reviewerCapableAgents.length === 1 && reviewerCapableAgents[0].agent_id === agentId;
-      if (autoAcceptSingleOperator && !isStructuralReview && isSingletonReviewer) {
+      if (!isStructuralReview && isSingletonReviewer) {
         isStructuralReview = true;
         structuralReviewInfo = {
           selfReview: true,
@@ -2019,18 +2029,21 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         };
       }
       const conflictPolicyAuthorization = asRecord(args.conflict_policy_authorization);
-      if (isStructuralReview && !args.single_operator_review && !conflictPolicyAuthorization && !autoAcceptSingleOperator) {
+      const singletonPolicyApplies = Boolean(isStructuralReview && isSingletonReviewer);
+      if (isStructuralReview && !singletonPolicyApplies && !conflictPolicyAuthorization) {
         return jsonToolResult({
           status: 'error',
           error: 'dependency_conflict_policy_authorization_required',
           compatibility_error: 'single_operator_review_blocked',
           message: structuralReviewInfo.warning,
-          hint: 'Pass conflict_policy_authorization with an authority basis to admit this dependency outcome, or use compatibility alias single_operator_review: true.',
+          hint: 'Pass conflict_policy_authorization with an authority basis. Singleton reviewer sites are admitted and annotated automatically; compatibility flags never bypass multi-reviewer conflict policy.',
         }, true);
       }
 
-      // Prepend annotation when single-operator review is explicitly requested or auto-accepted
-      const effectiveSingleOperatorReview = args.single_operator_review === true || (autoAcceptSingleOperator && isStructuralReview);
+      // Singleton reviewer sites need no flag. Both historical booleans remain
+      // accepted as input compatibility only; annotations retain their legacy
+      // single_operator_review readback shape.
+      const effectiveSingleOperatorReview = singletonPolicyApplies;
       let parsedFindings = null;
       if (findings) {
         try {

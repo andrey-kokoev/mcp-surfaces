@@ -1,0 +1,30 @@
+{
+  "name": "@narada2/mcp-fabric-compiler",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./moonshot-schema": {
+      "types": "./dist/src/moonshot-schema.d.ts",
+      "import": "./dist/src/moonshot-schema.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/mcp-fabric-compiler.test.js"
+  },
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  }
+}

@@ -7,6 +7,8 @@ import { payloadShow } from '@narada2/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada2/mcp-fabric-contracts';
+import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
 
 const SERVER_NAME = 'mcp-registrar';
 const SERVER_VERSION = '0.1.0';
@@ -24,18 +26,20 @@ type ValidationFinding = {
 
 type JsonRecord = Record<string, unknown>;
 
-type McpInjectionScope = 'host' | 'user_site' | 'local_site';
+export type McpInjectionScope = 'host' | 'user_site' | 'local_site';
 type McpRestartOwner = McpInjectionScope;
 type McpRuntimeKind = 'nars';
 type McpDefaultInjection = 'all_site_bound_sessions' | 'all_carrier_sessions' | 'runtime_selected_sessions';
 
-type McpSurfaceProjection = {
+export type McpSurfaceProjection = {
   id: string;
   injection_scope: McpInjectionScope;
   default_injection?: McpDefaultInjection;
   restart_owner?: McpRestartOwner;
   runtime_requirements?: McpRuntimeKind[];
   env_vars?: string[];
+  entrypoint?: string;
+  args?: string[];
 };
 
 type McpAuthorityLocus =
@@ -43,7 +47,7 @@ type McpAuthorityLocus =
   | { kind: 'user_site'; site_root: string }
   | { kind: 'local_site'; site_root: string };
 
-type SurfaceDef = {
+export type RegistrarSurfaceRecord = {
   id: string;
   package: string;
   entrypoint: string;
@@ -114,7 +118,7 @@ type MaterializedServer = {
   entrypoint: string;
   command?: string;
   args: string[];
-  surface?: SurfaceDef;
+  surface?: RegistrarSurfaceRecord;
   projection?: McpSurfaceProjection;
   local?: SiteLocalSurface;
   env_vars?: string[];
@@ -135,6 +139,7 @@ type CarrierDef = {
 
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
+const MCP_REGISTRAR_ENTRYPOINT = 'D:/code/mcp-surfaces/packages/mcp-registrar/dist/src/main.js';
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 const USER_OPERATOR_ID = 'andrey';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
@@ -150,382 +155,89 @@ const SURFACE_FEEDBACK_USER_SITE_ARGS = [
   '--owned-surface-id', 'operator-routing',
 ];
 
-const GIT_TOOLS = [
-  'git_guidance', 'git_policy_inspect', 'git_status', 'git_branch_list', 'git_output_show',
-  'git_changed_summary', 'git_repositories_summary', 'git_workflow_record', 'git_diff',
-  'git_log', 'git_show', 'git_add', 'git_unstage', 'git_commit', 'git_push',
-  'git_branch_create', 'git_branch_switch', 'git_branch_rename', 'git_branch_delete',
-  'git_branch_delete_remote', 'git_branch_set_upstream', 'git_branch_unset_upstream',
-];
-const GRAPH_MAIL_TOOLS = ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_device_code_start', 'graph_mail_auth_device_code_poll', 'graph_mail_auth_status', 'graph_mail_auth_clear', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_folder_create', 'graph_mail_message_move', 'graph_mail_attachment_list', 'graph_mail_attachment_get', 'graph_mail_attachment_add', 'graph_mail_attachment_upload_session_create', 'graph_mail_attachment_upload_chunk', 'graph_mail_attachment_upload_file', 'graph_mail_attachment_delete', 'graph_mail_draft_create', 'graph_mail_reply_draft_create', 'graph_mail_reply_all_draft_create', 'graph_mail_forward_draft_create', 'graph_mail_reply_all_to_last_in_thread_draft_create', 'graph_mail_draft_update', 'graph_mail_draft_discard', 'graph_mail_draft_send'];
-const SITE_INBOX_TOOLS = ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_submit', 'inbox_acknowledge', 'inbox_dismiss', 'inbox_promote_capa', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'];
-function defineToolInventory(definitions: readonly (readonly [string, boolean])[]) {
-  const names = definitions.map(([name]) => name);
-  if (new Set(names).size !== names.length) throw new Error('registrar_tool_inventory_duplicate');
+function nativeEntrypoint(value: string): string {
+  return value.replace('{mcp_surfaces_root}', MCP_SURFACES_ROOT);
+}
+
+function nativeProjectionToRegistrarProjection(
+  projection: SurfaceDescriptorV2['projections'][number],
+): McpSurfaceProjection {
+  if (projection.transport.kind !== 'stdio') {
+    throw new Error(`mcp_fabric_transport_unsupported: ${projection.id}`);
+  }
+  const [entrypoint, ...args] = projection.transport.args;
+  if (!entrypoint) {
+    throw new Error(`mcp_fabric_entrypoint_missing: ${projection.id}`);
+  }
   return {
-    tools: names,
-    readOnlyTools: definitions.filter(([, readOnly]) => readOnly).map(([name]) => name),
+    id: projection.id,
+    injection_scope: projection.injection_scope,
+    default_injection: projection.default_injection === 'enabled'
+      ? projection.injection_scope === 'host' ? 'all_carrier_sessions' : 'all_site_bound_sessions'
+      : projection.runtime_requirements.length > 0 ? 'runtime_selected_sessions' : undefined,
+    restart_owner: projection.lifecycle.restart_owner && (
+      projection.lifecycle.restart_owner === 'host'
+      || projection.lifecycle.restart_owner === 'user_site'
+      || projection.lifecycle.restart_owner === 'local_site'
+    ) ? projection.lifecycle.restart_owner : projection.injection_scope,
+    runtime_requirements: projection.runtime_requirements.filter((value): value is McpRuntimeKind => value === 'nars'),
+    env_vars: projection.transport.env,
+    entrypoint: nativeEntrypoint(entrypoint),
+    args,
   };
 }
 
-const TASK_LIFECYCLE_INVENTORY = defineToolInventory([
-  ['task_lifecycle_guidance', true],
-  ['task_lifecycle_doctor', true],
-  ['task_lifecycle_list', true],
-  ['task_lifecycle_show', true],
-  ['task_lifecycle_roster', true],
-  ['task_lifecycle_payload_schema', true],
-  ['task_lifecycle_roster_admit', false],
-  ['task_lifecycle_claim', false],
-  ['task_lifecycle_continue', false],
-  ['task_lifecycle_unclaim', false],
-  ['task_lifecycle_next', true],
-  ['task_lifecycle_workboard_snapshot', true],
-  ['task_lifecycle_obligations', true],
-  ['task_lifecycle_inspect', true],
-  ['task_lifecycle_inspect_range', true],
-  ['task_lifecycle_admit_evidence', false],
-  ['task_lifecycle_evidence_supersede', false],
-  ['task_lifecycle_prove_criteria', false],
-  ['task_lifecycle_disposition_closeout', false],
-  ['task_lifecycle_closeout', false],
-  ['task_lifecycle_audit', true],
-  ['task_lifecycle_finish', false],
-  ['task_lifecycle_submit_report', false],
-  ['task_lifecycle_close', false],
-  ['task_lifecycle_report_blocked', false],
-  ['task_lifecycle_search', true],
-  ['task_lifecycle_related', true],
-  ['task_lifecycle_tags_update', false],
-  ['task_lifecycle_defer', false],
-  ['task_lifecycle_un_defer', false],
-  ['task_lifecycle_reopen', false],
-  ['task_lifecycle_review', false],
-  ['task_lifecycle_compatibility_reconcile', false],
-  ['task_lifecycle_submit_observation', false],
-  ['task_lifecycle_record_observation', false],
-  ['task_lifecycle_bridge_poll', false],
-  ['task_lifecycle_inbox_target', false],
-  ['task_lifecycle_create', false],
-  ['mcp_payload_create', false],
-  ['mcp_payload_show', true],
-  ['mcp_output_show', true],
-  ['mcp_payload_derive', false],
-  ['mcp_payload_validate', true],
-  ['task_lifecycle_set_routing', false],
-  ['task_lifecycle_test_mcp_tool', false],
-  ['task_lifecycle_run_tests', false],
-  ['task_lifecycle_recurring_create', false],
-  ['task_lifecycle_recurring_list', true],
-  ['task_lifecycle_recurring_show', true],
-  ['task_lifecycle_recurring_suspend', false],
-  ['task_lifecycle_recurring_retire', false],
-  ['task_lifecycle_recurring_trigger', false],
-  ['task_lifecycle_recurring_run_due', false],
-  ['task_lifecycle_recurring_runs', true],
-  ['task_lifecycle_chapter_add_task', false],
-  ['task_lifecycle_chapter_show', true],
-  ['task_lifecycle_submit_work', false],
-  ['task_lifecycle_self_certification_preflight', false],
-  ['task_lifecycle_restart', false],
-  ['task_lifecycle_diagnose_task_ref', true],
-  ['task_lifecycle_evidence_preflight', true],
-  ['task_lifecycle_dependency_declare', false],
-  ['task_lifecycle_dependency_disposition_record', false],
-]);
-const TASK_LIFECYCLE_TOOLS = TASK_LIFECYCLE_INVENTORY.tools;
-const WORKER_DELEGATION_TOOLS = ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_cognition_defaults_update', 'worker_run', 'worker_edit', 'worker_resume', 'worker_run_status', 'worker_run_reap', 'worker_runs_list', 'worker_run_wait', 'worker_run_batch', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'];
-const DELEGATED_TASK_TOOLS = ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_run', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_advance', 'delegated_task_events', 'delegated_task_cancel', 'delegated_task_acknowledge', 'delegated_task_parent_takeover', 'delegated_tasks_list'];
-const MCP_LOADER_TOOLS = ['mcp_loader_guidance', 'mcp_loader_runtime_status', 'mcp_loader_policy_inspect', 'mcp_loader_connection_inventory', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_attach_surface', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest', 'mcp_loader_call_tool', 'mcp_loader_detach', 'mcp_loader_surface_restart'];
-const REGISTRAR_TOOLS = ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_site_bind', 'registrar_site_unbind', 'registrar_carrier_list', 'registrar_carrier_bind', 'registrar_carrier_unbind', 'registrar_sync', 'registrar_carrier_materialize', 'registrar_carrier_apply', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_site_surface_registry_sync', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'];
-const ARTIFACTS_TOOLS = ['artifacts_guidance', 'artifacts_doctor', 'artifact_register_file', 'artifact_list', 'artifact_read', 'artifact_present', 'artifact_message_part_create'];
-const NARS_SESSION_TOOLS = ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_deliver', 'nars_session_input_status'];
-
-const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
-  'local-filesystem': ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_repository_inventory', 'fs_file_metrics', 'fs_doctor', 'fs_patch_outcome_show'],
-  'structured-command': ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check', 'structured_command_output_show'],
-  git: ['git_guidance', 'git_policy_inspect', 'git_status', 'git_branch_list', 'git_output_show', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show'],
-  'site-inbox': ['inbox_guidance', 'inbox_doctor', 'inbox_list', 'inbox_show', 'inbox_audit', 'inbox_next', 'capa_queue', 'inbox_output_show'],
-  mailbox: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
-  'graph-mail': ['graph_mail_guidance', 'graph_mail_doctor', 'graph_mail_auth_status', 'graph_mail_query', 'graph_mail_message_show', 'graph_mail_output_show', 'graph_mail_folder_list', 'graph_mail_attachment_list', 'graph_mail_attachment_get'],
-  calendar: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show'],
-  'task-lifecycle': TASK_LIFECYCLE_INVENTORY.readOnlyTools,
-  'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
-  'site-lifecycle': ['site_lifecycle_guidance', 'site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
-  'site-registry': ['site_registry_guidance', 'site_registry_doctor', 'site_registry_command_map', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan'],
-  'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'mcp_output_show'],
-  'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
-  'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
-  sop: ['sop_guidance', 'sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_status', 'sop_run_list', 'sop_run_events', 'sop_run_coverage_since'],
-  scheduler: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_history'],
-  'mcp-loader': ['mcp_loader_guidance', 'mcp_loader_runtime_status', 'mcp_loader_policy_inspect', 'mcp_loader_connection_inventory', 'mcp_loader_list_site_surfaces', 'mcp_loader_site_fabric_diagnostics', 'mcp_loader_site_tool_inventory_check', 'mcp_loader_list_tools', 'mcp_loader_surface_status', 'mcp_loader_tool_discovery_manifest'],
-  'mcp-registrar': ['registrar_guidance', 'registrar_surface_list', 'registrar_site_list', 'registrar_site_surfaces', 'registrar_carrier_list', 'registrar_carrier_validate', 'registrar_carrier_diff', 'registrar_surface_usage', 'registrar_site_mcp_fabric_validate', 'registrar_surface_tool_inventory_check', 'registrar_site_registry_conformance_check', 'registrar_site_output_reader_closure_check'],
-  'surface-feedback': ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
-  launcher: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
-  speech: ['speech_guidance', 'speech_voices', 'speech_listen_status'],
-  'operator-routing': ['operator_routing_guidance', 'operator_route_doctor'],
-  artifacts: ['artifacts_guidance', 'artifacts_doctor', 'artifact_list', 'artifact_read', 'artifact_message_part_create'],
-  'nars-session': ['nars_session_guidance', 'nars_session_list', 'nars_session_show', 'nars_session_input_status'],
-  'cloudflare-carrier': ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor', 'cloudflare_carrier_health'],
-  'site-coherence': ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor'],
+const SURFACE_OUTPUT_READER_CLOSURES: Readonly<Record<string, Record<string, string>>> = {
+  git: { git_status: 'git_output_show', git_diff: 'git_output_show', git_log: 'git_output_show', git_show: 'git_output_show' },
+  'site-inbox': { inbox_list: 'inbox_output_show', inbox_show: 'inbox_output_show', inbox_audit: 'inbox_output_show' },
+  mailbox: { mailbox_messages_list: 'mailbox_output_show', mailbox_message_show: 'mailbox_output_show', mailbox_search: 'mailbox_output_show', mailbox_thread_show: 'mailbox_output_show' },
+  'graph-mail': { graph_mail_query: 'graph_mail_output_show', graph_mail_message_show: 'graph_mail_output_show' },
+  calendar: { calendar_list: 'calendar_output_show', calendar_event_query: 'calendar_output_show', calendar_event_show: 'calendar_output_show' },
+  'site-loop': { site_loop_guidance: 'site_loop_output_show' },
+  'agent-context': { agent_context_hydrate_current: 'mcp_output_show', agent_context_startup_sequence: 'mcp_output_show' },
 };
 
-const REFUSED_TOOLS_BY_SURFACE: Record<string, string[]> = {};
+function nativeSurfaceToRegistrarRecord(native: DefinedSurface): RegistrarSurfaceRecord {
+  const descriptor = native.descriptor;
+  const projections = descriptor.projections.map(nativeProjectionToRegistrarProjection);
+  const first = projections[0];
+  if (!first?.entrypoint) {
+    throw new Error(`mcp_fabric_surface_projection_missing: ${descriptor.surface_id}`);
+  }
+  const singleProjection = projections.length === 1 ? first : undefined;
+  const startupTimeout = descriptor.metadata?.codex_startup_timeout_sec;
+  return {
+    id: descriptor.surface_id,
+    package: descriptor.package.replace('@narada2/', ''),
+    entrypoint: first.entrypoint,
+    kind: 'mcp_surface',
+    args: descriptor.surface_id === 'surface-feedback'
+      ? [...SURFACE_FEEDBACK_USER_SITE_ARGS]
+      : (first.args ?? []).map(nativeEntrypoint),
+    tools: descriptor.tools.map((tool) => tool.name),
+    output_reader_closure: SURFACE_OUTPUT_READER_CLOSURES[descriptor.surface_id],
+    projections,
+    ...(singleProjection
+      ? {
+          injection_scope: singleProjection.injection_scope,
+          default_injection: singleProjection.default_injection,
+          restart_owner: singleProjection.restart_owner,
+          env_vars: singleProjection.env_vars,
+        }
+      : {}),
+    ...(typeof startupTimeout === 'number' ? { codex_startup_timeout_sec: startupTimeout } : {}),
+  };
+}
 
-const SURFACES: SurfaceDef[] = [
-  {
-    id: 'local-filesystem', package: 'local-filesystem-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/local-filesystem-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--mode', 'write', '--allowed-root', '{workspace_root}', '--anchored-allowed-root', 'user_home:.codex', '--output-root', '{site_root}'],
-    tools: ['fs_guidance', 'fs_read_file', 'fs_read_file_range', 'fs_stat', 'fs_glob_search', 'fs_grep_search', 'fs_repository_inventory', 'fs_file_metrics', 'fs_doctor', 'fs_patch_outcome_show', 'fs_write_file', 'fs_str_replace_file', 'fs_replace_range', 'fs_apply_patch', 'fs_move_path', 'fs_create_directory', 'fs_rename_directory', 'fs_delete_directory'],
-  },
-  {
-    id: 'structured-command', package: 'structured-command-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/structured-command-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--allowed-root', '{workspace_root}', '--allow-command', 'node', '--allow-command', 'pnpm', '--allow-command', 'npm'],
-    tools: ['structured_command_execution_policy_inspect', 'structured_command_powershell_parse_check', 'structured_command_output_show', 'structured_command_execute', 'structured_command_elevated_window_execute', 'structured_command_input_create'],
-  },
-  {
-    id: 'git', package: 'git-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/git-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--allowed-root', '{workspace_root}', '--mode', 'write'],
-    tools: GIT_TOOLS,
-    output_reader_closure: {
-      git_status: 'git_output_show',
-      git_diff: 'git_output_show',
-      git_log: 'git_output_show',
-      git_show: 'git_output_show',
-    },
-  },
-  {
-    id: 'site-inbox', package: 'site-inbox-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/site-inbox-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: SITE_INBOX_TOOLS,
-    output_reader_closure: {
-      inbox_list: 'inbox_output_show',
-      inbox_show: 'inbox_output_show',
-      inbox_audit: 'inbox_output_show',
-    },
-  },
-  {
-    id: 'mailbox', package: 'mailbox-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/mailbox-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: ['mailbox_guidance', 'mailbox_doctor', 'mailbox_accounts_list', 'mailbox_messages_list', 'mailbox_message_show', 'mailbox_output_show', 'mailbox_search', 'mailbox_thread_show'],
-    output_reader_closure: {
-      mailbox_messages_list: 'mailbox_output_show',
-      mailbox_message_show: 'mailbox_output_show',
-      mailbox_search: 'mailbox_output_show',
-      mailbox_thread_show: 'mailbox_output_show',
-    },
-  },
-  {
-    id: 'graph-mail', package: 'graph-mail-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/graph-mail-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: GRAPH_MAIL_TOOLS,
-    output_reader_closure: {
-      graph_mail_query: 'graph_mail_output_show',
-      graph_mail_message_show: 'graph_mail_output_show',
-    },
-  },
-  {
-    id: 'calendar', package: 'calendar-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/calendar-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: ['calendar_guidance', 'calendar_doctor', 'calendar_list', 'calendar_event_query', 'calendar_event_show', 'calendar_output_show', 'calendar_event_create', 'calendar_event_update', 'calendar_event_delete'],
-    codex_startup_timeout_sec: 60,
-    output_reader_closure: {
-      calendar_list: 'calendar_output_show',
-      calendar_event_query: 'calendar_output_show',
-      calendar_event_show: 'calendar_output_show',
-    },
-  },
-  {
-    id: 'task-lifecycle', package: 'task-lifecycle-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: TASK_LIFECYCLE_TOOLS,
-  },
-  {
-    id: 'site-loop', package: 'site-loop-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_test_run', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_proof_run', 'site_loop_recovery_drill', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show', 'site_loop_attention_ack', 'site_loop_control_set', 'site_loop_run_once'],
-    output_reader_closure: {
-      site_loop_guidance: 'site_loop_output_show',
-    },
-  },
-  {
-    id: 'site-lifecycle', package: 'site-lifecycle-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--narada-root', 'D:/code/narada'],
-    tools: ['site_lifecycle_guidance', 'site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_init', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight', 'site_deps_sync'],
-  },
-  {
-    id: 'site-registry', package: 'site-registry-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/site-registry-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--narada-root', 'D:/code/narada'],
-    tools: ['site_registry_guidance', 'site_registry_doctor', 'site_registry_command_map', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan'],
-    injection_scope: 'user_site',
-  },
-  {
-    id: 'agent-context', package: 'agent-context-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}', '--site-id', '{site_id}'],
-    tools: ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'mcp_output_show'],
-    env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'],
-    output_reader_closure: {
-      agent_context_hydrate_current: 'mcp_output_show',
-      agent_context_startup_sequence: 'mcp_output_show',
-    },
-  },
-  {
-    id: 'worker-delegation', package: 'worker-delegation-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}', '--allowed-root', '{workspace_root}', '--run-root', '{site_runtime_root}/worker-delegation'],
-    tools: WORKER_DELEGATION_TOOLS,
-    env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
-  },
-  {
-    id: 'delegated-task', package: 'delegated-task-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}', '--task-root', '{site_root}', '--allowed-root', '{workspace_root}'],
-    tools: DELEGATED_TASK_TOOLS,
-  },
-  {
-    id: 'sop', package: 'sop-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'],
-    tools: ['sop_guidance', 'sop_doctor', 'sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_import_yaml', 'sop_template_unimport', 'sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_cancel', 'sop_run_events', 'sop_run_coverage_since'],
-    sops_dir: `${MCP_SURFACES_ROOT}/sop-mcp/sops`,
-  },
-  {
-    id: 'scheduler', package: 'scheduler-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: [],
-    tools: ['scheduler_guidance', 'scheduler_task_list', 'scheduler_task_show', 'scheduler_task_create', 'scheduler_task_delete', 'scheduler_task_update_action', 'scheduler_task_enable', 'scheduler_task_disable', 'scheduler_task_run', 'scheduler_task_history'],
-  },
-  {
-    id: 'mcp-loader', package: 'mcp-loader-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/mcp-loader-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--allowed-site-root', 'D:/code', '--allowed-site-root', USER_NARADA_ROOT, '--allowed-entrypoint-prefix', `${MCP_SURFACES_ROOT}/`, '--allowed-entrypoint-prefix', `${USER_NARADA_ROOT}/tools/`, '--allowed-entrypoint-prefix', '{site_root}/tools/'],
-    tools: MCP_LOADER_TOOLS,
-    injection_scope: 'user_site',
-    default_injection: 'all_site_bound_sessions',
-    restart_owner: 'user_site',
-  },
-  {
-    id: 'mcp-registrar', package: 'mcp-registrar',
-    entrypoint: `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: [],
-    tools: REGISTRAR_TOOLS,
-    injection_scope: 'user_site',
-    sops_dir: `${MCP_SURFACES_ROOT}/mcp-registrar/sops`,
-  },
-  {
-    id: 'surface-feedback', package: 'surface-feedback-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: SURFACE_FEEDBACK_USER_SITE_ARGS,
-    tools: ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_update_status', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_convert_to_task', 'surface_feedback_show', 'surface_feedback_stats', 'surface_feedback_live_proof_template'],
-    injection_scope: 'user_site',
-  },
-  {
-    id: 'launcher', package: 'launcher-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/launcher-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--narada-root', 'C:/Users/Andrey/Narada'],
-    tools: ['launcher_guidance', 'launcher_doctor', 'launcher_options_list', 'launcher_registry_list', 'launcher_plan', 'launcher_option_matrix', 'launcher_coherence_check'],
-    injection_scope: 'user_site',
-  },
-  {
-    id: 'speech', package: 'speech-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--provider-registry-path', SPEECH_PROVIDER_REGISTRY_PATH],
-    tools: ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
-    injection_scope: 'host',
-    default_injection: 'all_carrier_sessions',
-    env_vars: ['OPENAI_API_KEY'],
-  },
-  {
-    id: 'operator-routing', package: 'operator-routing-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/operator-routing-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', 'C:/Users/Andrey/Narada'],
-    tools: ['operator_routing_guidance', 'operator_route_doctor', 'operator_route_request'],
-    injection_scope: 'user_site',
-    default_injection: 'all_site_bound_sessions',
-  },
-  {
-    id: 'artifacts', package: 'artifacts-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: [],
-    tools: ARTIFACTS_TOOLS,
-    injection_scope: 'local_site',
-    default_injection: 'all_site_bound_sessions',
-    env_vars: ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL'],
-  },
-  {
-    id: 'nars-session', package: 'nars-session-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/nars-session-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: [],
-    tools: NARS_SESSION_TOOLS,
-    projections: [
-      {
-        id: 'user-site-operator',
-        injection_scope: 'user_site',
-        default_injection: 'all_site_bound_sessions',
-        restart_owner: 'user_site',
-        runtime_requirements: [],
-      },
-      {
-        id: 'local-site-nars-runtime',
-        injection_scope: 'local_site',
-        default_injection: 'runtime_selected_sessions',
-        restart_owner: 'local_site',
-        runtime_requirements: ['nars'],
-      },
-    ],
-    env_vars: ['NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_SESSION_ALLOW_STEER'],
-  },
-  {
-    id: 'cloudflare-carrier', package: 'cloudflare-carrier-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--site-root', '{site_root}'],
-    tools: ['cloudflare_carrier_guidance', 'cloudflare_product_read', 'cloudflare_session_status', 'cloudflare_health', 'cloudflare_doctor', 'cloudflare_carrier_health'],
-  },
-  {
-    id: 'site-coherence', package: 'site-coherence-mcp',
-    entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`,
-    kind: 'mcp_surface',
-    args: ['--repo-root', 'D:/code/narada'],
-    tools: ['site_coherence_guidance', 'site_coherence_check', 'site_coherence_doctor'],
-  },
-];
+function nativeSurfaceCatalog(): RegistrarSurfaceRecord[] {
+  const definitions: DefinedSurface[] = [
+    ...Object.values(NATIVE_SURFACE_DEFINITIONS),
+    registrarSurfaceDefinition(),
+  ];
+  return definitions.map(nativeSurfaceToRegistrarRecord);
+}
+
+export const SURFACES: RegistrarSurfaceRecord[] = nativeSurfaceCatalog();
 
 const KNOWN_SITES: SiteDef[] = [
   { site_id: 'andrey-user', root: 'C:/Users/Andrey/Narada', config_path: 'C:/Users/Andrey/Narada/config.json', surfaces: [] },
@@ -565,7 +277,7 @@ function projectionLaunchArgs(projection: McpSurfaceProjection): string[] {
   ];
 }
 
-function projectionEnvVars(surface: SurfaceDef, projection: McpSurfaceProjection): string[] {
+function projectionEnvVars(surface: RegistrarSurfaceRecord, projection: McpSurfaceProjection): string[] {
   if (projection.id === 'user-site-operator') {
     return uniqueStrings([
       'NARADA_OPERATOR_ID',
@@ -680,9 +392,7 @@ const CARRIERS: CarrierDef[] = [
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
-    surface_overrides: {
-      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
-    },
+    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
   },
   {
     carrier_id: 'kimi-andrey', kind: 'kimi', config_path: 'C:/Users/Andrey/.kimi-code/mcp.json', surfaces: [],
@@ -718,9 +428,7 @@ const CARRIERS: CarrierDef[] = [
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
-    surface_overrides: {
-      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
-    },
+    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
   },
   {
     carrier_id: 'codex-andrey', kind: 'codex', config_path: 'C:/Users/Andrey/.codex/config.toml', surfaces: [],
@@ -756,9 +464,7 @@ const CARRIERS: CarrierDef[] = [
       extra_allowed_roots: ['D:/code'],
     }],
     extra_allowed_roots: ['D:/code'],
-    surface_overrides: {
-      'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS },
-    },
+    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
   },
 ];
 
@@ -1165,6 +871,37 @@ export function listTools() {
   ];
 }
 
+export function registrarSurfaceDefinition(): DefinedSurface {
+  return defineNativeSurface({
+    surface_id: 'mcp-registrar',
+    surface_version: SERVER_VERSION,
+    package: '@narada2/mcp-registrar',
+    entrypoint: MCP_REGISTRAR_ENTRYPOINT,
+    tools: listTools() as McpToolDefinition[],
+    read_only_tools: listTools()
+      .filter((tool) => tool.annotations?.readOnlyHint === true)
+      .map((tool) => tool.name),
+    default_effect: 'local_write',
+    projections: [{
+      id: 'default',
+      transport: {
+        kind: 'stdio',
+        command: 'node',
+        args: [],
+        env: [],
+      },
+      injection_scope: 'user_site',
+      default_injection: 'enabled',
+      runtime_requirements: [],
+      authority_requirements: ['scope.user_site'],
+      lifecycle: {
+        mode: 'replayable',
+        reason: 'Registrar mutations are persisted config operations and the registrar process owns no client session.',
+      },
+    }],
+  });
+}
+
 async function callTool(params: JsonRecord, _state: RegistrarState) {
   const name = String(params.name ?? '');
   const args = asRecord(params.arguments);
@@ -1197,7 +934,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
   return { content: [{ type: 'text', text: renderResult(result) }], structuredContent: result };
 }
 
-function lookupSurface(surfaceId: string): SurfaceDef {
+function lookupSurface(surfaceId: string): RegistrarSurfaceRecord {
   const surface = SURFACES.find((s) => s.id === surfaceId);
   if (!surface) throw diagnosticError('registrar_unknown_surface', `registrar_unknown_surface:${surfaceId}`, { known: SURFACES.map((s) => s.id) });
   return surface;
@@ -1249,6 +986,7 @@ function interpolateArgs(args: string[], siteId: string, siteRoot: string): stri
 function interpolateArg(value: string, siteId: string, paths: SitePathInterpolation | string): string {
   const resolvedPaths = typeof paths === 'string' ? sitePathInterpolation(paths) : paths;
   return value
+    .replace(/\{mcp_surfaces_root\}/g, MCP_SURFACES_ROOT)
     .replace(/\{site_root\}/g, resolvedPaths.siteRoot)
     .replace(/\{site_control_root\}/g, resolvedPaths.siteControlRoot)
     .replace(/\{site_runtime_root\}/g, resolvedPaths.siteRuntimeRoot)
@@ -1313,29 +1051,56 @@ function readSiteConfig(site: SiteDef): SiteLocalSurface[] {
   }
 }
 
-function catalogSurfaceForLocalSurface(site: SiteDef, localSurfaceId: string): SurfaceDef | undefined {
+function catalogSurfaceForLocalSurface(site: SiteDef, localSurfaceId: string): RegistrarSurfaceRecord | undefined {
   const serverKey = localSurfaceId.replace(/\.local$/, '').replace(/-mcp$/, '');
   const canonicalSurfaceId = fabricSurfaceId(serverKey, site);
   return catalogSurface(canonicalSurfaceId) ?? catalogSurfaceAlias(canonicalSurfaceId);
 }
 
-function resolveEntrypoint(surface: SurfaceDef, siteId: string, siteRoot: string): string {
-  const interpolated = interpolateArg(surface.entrypoint, siteId, siteRoot);
+function resolveEntrypoint(surface: RegistrarSurfaceRecord, siteId: string, siteRoot: string, projection?: McpSurfaceProjection): string {
+  const interpolated = interpolateArg(projection?.entrypoint ?? surface.entrypoint, siteId, siteRoot);
   return resolve(interpolated);
 }
 
-function catalogSurface(surfaceId: string): SurfaceDef | undefined {
+function catalogSurface(surfaceId: string): RegistrarSurfaceRecord | undefined {
   return SURFACES.find((surface) => surface.id === surfaceId);
 }
 
-function surfaceProjections(surface: SurfaceDef): McpSurfaceProjection[] {
-  if (surface.projections && surface.projections.length > 0) return surface.projections;
-  return [{
-    id: 'default',
-    injection_scope: surface.injection_scope ?? 'local_site',
-    default_injection: surface.default_injection,
-    restart_owner: surface.restart_owner,
-  }];
+export function nativeSurfaceDescriptor(surfaceId: string): SurfaceDescriptorV2 {
+  if (surfaceId === 'mcp-registrar') return registrarSurfaceDefinition().descriptor;
+  const native = NATIVE_SURFACE_DEFINITIONS[surfaceId];
+  if (!native) {
+    throw diagnosticError('registrar_native_descriptor_missing', 'registrar_native_descriptor_missing:' + surfaceId, {
+      surface_id: surfaceId,
+      known: Object.keys(NATIVE_SURFACE_DEFINITIONS).sort(),
+    });
+  }
+  return native.descriptor;
+}
+function nativeToolNames(surfaceId: string): string[] {
+  return nativeSurfaceDescriptor(surfaceId).tools.map((tool) => tool.name);
+}
+function surfaceProjections(surface: RegistrarSurfaceRecord): McpSurfaceProjection[] {
+  return nativeSurfaceDescriptor(surface.id).projections.map((projection) => ({
+    id: projection.id,
+    injection_scope: projection.injection_scope,
+    default_injection: projection.default_injection === 'enabled'
+      ? projection.injection_scope === 'host' ? 'all_carrier_sessions' : 'all_site_bound_sessions'
+      : projection.runtime_requirements.length > 0 ? 'runtime_selected_sessions' : undefined,
+    restart_owner: projection.lifecycle.restart_owner && (
+      projection.lifecycle.restart_owner === 'host'
+      || projection.lifecycle.restart_owner === 'user_site'
+      || projection.lifecycle.restart_owner === 'local_site'
+    ) ? projection.lifecycle.restart_owner : projection.injection_scope,
+    runtime_requirements: projection.runtime_requirements.filter((value): value is McpRuntimeKind => value === 'nars'),
+    env_vars: projection.transport.kind === 'stdio' ? projection.transport.env : [],
+    ...(projection.transport.kind === 'stdio'
+      ? {
+        entrypoint: nativeEntrypoint(projection.transport.args[0] ?? ''),
+        args: projection.transport.args.slice(1),
+      }
+      : {}),
+  }));
 }
 
 function projectionSupportsRuntime(projection: McpSurfaceProjection, runtimeKind: McpRuntimeKind | undefined): boolean {
@@ -1348,7 +1113,7 @@ function selectSurfaceProjection(
   projectionId?: string,
   runtimeKind?: McpRuntimeKind,
   options: { requireExplicit?: boolean } = {},
-): { surface: SurfaceDef; projection: McpSurfaceProjection } {
+): { surface: RegistrarSurfaceRecord; projection: McpSurfaceProjection } {
   const surface = catalogSurface(surfaceId);
   if (!surface) throw diagnosticError('registrar_unknown_surface', `registrar_unknown_surface:${surfaceId}`);
   const projections = surfaceProjections(surface);
@@ -1410,6 +1175,7 @@ function selectSurfaceProjection(
 
 function projectionMetadata(surfaceId: string, projectionId?: string, runtimeKind?: McpRuntimeKind): JsonRecord {
   const { projection } = selectSurfaceProjection(surfaceId, projectionId, runtimeKind);
+  const descriptor = nativeSurfaceDescriptor(surfaceId);
   return {
     surface_id: surfaceId,
     projection_id: projection.id,
@@ -1417,6 +1183,10 @@ function projectionMetadata(surfaceId: string, projectionId?: string, runtimeKin
     ...(projection.default_injection ? { default_injection: projection.default_injection } : {}),
     runtime_requirements: projection.runtime_requirements ?? [],
     ...(runtimeKind ? { runtime_kind: runtimeKind } : {}),
+    descriptor_digest: surfaceDescriptorDigest(descriptor),
+    tool_contract_digest: surfaceToolContractDigest(descriptor),
+    surface_descriptor: descriptor,
+    lifecycle: descriptor.projections.find((candidate) => candidate.id === projection.id)?.lifecycle,
   };
 }
 
@@ -1482,8 +1252,8 @@ function rootsNeedingAllowedRoot(surfaceId: string): boolean {
   return ['local-filesystem', 'git', 'structured-command', 'delegated-task', 'worker-delegation'].includes(surfaceId);
 }
 
-function resolveSurfaceArgs(surface: SurfaceDef, siteId: string, siteRoot: string, extraRoots: string[]): string[] {
-  const args = interpolateArgs(surface.args, siteId, siteRoot);
+function resolveSurfaceArgs(surface: RegistrarSurfaceRecord, siteId: string, siteRoot: string, extraRoots: string[], projection?: McpSurfaceProjection): string[] {
+  const args = interpolateArgs(projection?.args ?? surface.args, siteId, siteRoot);
   if (extraRoots.length === 0 || !rootsNeedingAllowedRoot(surface.id)) return args;
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1554,10 +1324,10 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
   const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
   const projection = selected.projection;
   const resolvedArgs = [
-    ...resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots),
+    ...resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots, projection),
     ...projectionLaunchArgs(projection),
   ];
-  const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root);
+  const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root, projection);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
   const naradaScope = naradaScopeMetadata(surfaceId, site.root, site.site_id, projection.id);
@@ -1613,7 +1383,7 @@ function materializeLocalSurface(binding: SiteBinding, site: SiteDef, local: Sit
   };
 }
 
-function automaticProjectionForBinding(surface: SurfaceDef, binding: SiteBinding): McpSurfaceProjection | null {
+function automaticProjectionForBinding(surface: RegistrarSurfaceRecord, binding: SiteBinding): McpSurfaceProjection | null {
   const projections = surfaceProjections(surface);
   if (binding.runtime_kind !== undefined) {
     const runtimeMatches = projections.filter((projection) => (projection.runtime_requirements ?? []).includes(binding.runtime_kind as McpRuntimeKind));
@@ -1672,7 +1442,7 @@ function collectCarrierServers(carrier: CarrierDef): Record<string, Materialized
 function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): string[] {
   return Object.entries(collectCarrierServers(carrier))
     .filter(([, server]) => {
-      const serverSurfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+      const serverSurfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
       return serverSurfaceId === surfaceId;
     })
     .map(([key]) => key);
@@ -1681,7 +1451,7 @@ function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): st
 function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
   const counts: Record<McpInjectionScope, number> = { host: 0, user_site: 0, local_site: 0 };
   const servers = Object.entries(collectCarrierServers(carrier)).map(([serverKey, server]) => {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     counts[server.injection_scope]++;
     return {
       server_key: serverKey,
@@ -1755,7 +1525,7 @@ type RuntimeDependencyCheck = {
   exists: boolean;
 };
 
-function sharedRuntimeDependencyChecks(surface: SurfaceDef): RuntimeDependencyCheck[] {
+function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): RuntimeDependencyCheck[] {
   const packageRoot = `${MCP_SURFACES_ROOT}/${surface.package}`;
   const packagePath = `${packageRoot}/package.json`;
   if (!existsSync(packagePath)) return [];
@@ -1809,7 +1579,7 @@ function addRuntimePreflightFindings(
   add: (severity: ValidationFinding['severity'], code: string, message: string, detail?: JsonRecord) => void,
   includeOk: boolean,
   detail: JsonRecord,
-  surface: SurfaceDef | null,
+  surface: RegistrarSurfaceRecord | null,
   usesRuntimeProxy: boolean,
 ): void {
   if (usesRuntimeProxy) {
@@ -1848,7 +1618,7 @@ function emitOpencodeConfig(carrier: CarrierDef): { content: string; structured:
   const rawServers = collectCarrierServers(carrier);
   const mcp: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const launch = carrierLaunchCommand(overridden, surfaceId);
     mcp[key] = {
@@ -1866,7 +1636,7 @@ function emitKimiConfig(carrier: CarrierDef): { content: string; structured: Jso
   const rawServers = collectCarrierServers(carrier);
   const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
     const launch = carrierLaunchCommand(overridden, surfaceId);
@@ -1897,7 +1667,7 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
   }
   const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const launch = carrierLaunchCommand(overridden, surfaceId);
     const carrierAvailableTools = codexCarrierAvailableTools(server);
@@ -1933,7 +1703,7 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
 }
 
 function codexCarrierAvailableTools(server: MaterializedServer): string[] {
-  if (server.kind === 'shared') return uniqueStrings((server.surface as SurfaceDef).tools);
+  if (server.kind === 'shared') return uniqueStrings((server.surface as RegistrarSurfaceRecord).tools);
   return [];
 }
 
@@ -2004,7 +1774,7 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
   const seenKeys = new Map<string, string>();
   const rawServers = collectCarrierServers(carrier);
   for (const [key, server] of Object.entries(rawServers)) {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const scopeDetail = scopeFindingDetail(server.narada_scope);
     if (seenKeys.has(key)) {
       add('error', 'registrar_duplicate_server_key', `Server key '${key}' is produced by both '${seenKeys.get(key)}' and '${surfaceId}'`, { server_key: key, surface_id: surfaceId, ...scopeDetail });
@@ -2016,7 +1786,7 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
 
   // Entrypoint existence and required flags
   for (const [key, server] of Object.entries(rawServers)) {
-    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as SurfaceDef).id;
+    const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const scopeDetail = scopeFindingDetail(server.narada_scope);
     const launch = carrierLaunchCommand(overridden, surfaceId);
@@ -2025,7 +1795,7 @@ function registrarCarrierValidate(args: JsonRecord): JsonRecord {
     } else if (includeOk) {
       add('info', 'registrar_entrypoint_exists', `Entrypoint for '${key}' exists: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     }
-    addRuntimePreflightFindings(add, includeOk, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail }, server.kind === 'shared' ? server.surface as SurfaceDef : null, launch.uses_runtime_proxy);
+    addRuntimePreflightFindings(add, includeOk, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail }, server.kind === 'shared' ? server.surface as RegistrarSurfaceRecord : null, launch.uses_runtime_proxy);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -2239,13 +2009,23 @@ function registrarSurfaceList(_args: JsonRecord): JsonRecord {
   return {
     items: SURFACES.map((surface) => {
       const projections = surfaceProjections(surface);
+      const descriptor = nativeSurfaceDescriptor(surface.id);
       const scope = projections.length === 1
         ? {
           ...surfaceScopeMetadata(surface.id, '{site_root}', projections[0].id),
           narada_scope: naradaScopeMetadata(surface.id, '{site_root}', undefined, projections[0].id),
         }
         : {};
-      return { ...surface, projections, ...scope };
+      return {
+        ...surface,
+        tools: nativeToolNames(surface.id),
+        projections,
+        descriptor_source: descriptor.source,
+        descriptor_digest: surfaceDescriptorDigest(descriptor),
+        tool_contract_digest: surfaceToolContractDigest(descriptor),
+        descriptor,
+        ...scope,
+      };
     }),
     count: SURFACES.length,
   };
@@ -2256,7 +2036,7 @@ function registrarSurfaceToolInventoryCheck(args: JsonRecord): JsonRecord {
   const includeOk = args.include_ok === true;
   const surfaces = SURFACES.filter((surface) => Object.hasOwn(observedInput, surface.id));
   const findings = surfaces.flatMap((surface) => {
-    const registered = uniqueStrings(surface.tools);
+    const registered = nativeToolNames(surface.id);
     const observed = uniqueStrings(Array.isArray(observedInput[surface.id]) ? (observedInput[surface.id] as unknown[]).map(String) : []);
     const missing_from_registrar = observed.filter((tool) => !registered.includes(tool));
     const extra_in_registrar = registered.filter((tool) => !observed.includes(tool));
@@ -2863,22 +2643,24 @@ function siteSurfacePrefix(siteId: string): string {
   return siteId.startsWith('narada-') ? siteId : 'narada-' + siteId;
 }
 
-export function buildSiteBindConfig(site: SiteDef, surface: SurfaceDef, projectionId?: string, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
+export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceRecord, projectionId?: string, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
   const siteId = site.site_id;
   const surfaceId = surface.id;
   const selected = selectSurfaceProjection(surfaceId, projectionId, runtimeKind, {
     requireExplicit: Boolean(surface.projections && surface.projections.length > 1) && projectionId === undefined && runtimeKind === undefined,
   });
-  const projection = selected.projection;
+  const projection = surface.projections?.length
+    ? selected.projection
+    : { ...selected.projection, args: undefined };
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
   const workspaceRoot = siteWorkspaceRoot(site);
   const paths = sitePathInterpolation(site.root, workspaceRoot);
   const resolvedArgs = [
-    ...surface.args.map((arg) => interpolateArg(arg, siteId, paths)),
+    ...(projection.args ?? surface.args).map((arg) => interpolateArg(arg, siteId, paths)),
     ...projectionLaunchArgs(projection),
   ];
-  const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root);
+  const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root, projection);
   const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root, projection.id);
   const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId, projection.id);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
@@ -3186,12 +2968,12 @@ function fabricSurfaceId(serverKey: string, site: SiteDef): string {
   return serverKey;
 }
 
-function catalogSurfaceAlias(surfaceId: string): SurfaceDef | undefined {
+function catalogSurfaceAlias(surfaceId: string): RegistrarSurfaceRecord | undefined {
   if (surfaceId === 'inbox') return catalogSurface('site-inbox');
   return undefined;
 }
 
-function catalogSurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SurfaceDef | undefined {
+function catalogSurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServer): RegistrarSurfaceRecord | undefined {
   const declaredSurfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
   const declaredSurface = catalogSurface(declaredSurfaceId) ?? catalogSurfaceAlias(declaredSurfaceId);
   if (declaredSurface) return declaredSurface;
@@ -3265,7 +3047,7 @@ function registrySurfaceForFabricServer(site: SiteDef, server: SiteMcpFabricServ
       runtime_requirements: server.runtime_requirements ?? [],
       ...(server.runtime_kind ? { runtime_kind: server.runtime_kind } : {}),
     };
-  const registeredTools = uniqueStrings(catalog?.tools ?? readConfiguredServerTools(site, server));
+  const registeredTools = uniqueStrings(catalog ? nativeToolNames(catalog.id) : readConfiguredServerTools(site, server));
   const toolContract = surfaceToolContract(catalog?.id ?? surfaceId, registeredTools);
   return {
     surface_id: `${server.server_key}.local`,
@@ -3307,10 +3089,13 @@ function readConfiguredServerTools(site: SiteDef, server: SiteMcpFabricServer): 
 }
 
 function surfaceToolContract(surfaceId: string, registeredTools: string[]): SiteSurfaceRegistrySurface['tool_contract'] {
-  const readOnlyTools = uniqueStrings(READ_ONLY_TOOLS_BY_SURFACE[surfaceId] ?? [])
-    .filter((tool) => registeredTools.includes(tool));
-  const refusedTools = uniqueStrings(REFUSED_TOOLS_BY_SURFACE[surfaceId] ?? [])
-    .filter((tool) => registeredTools.includes(tool));
+  const descriptor = nativeSurfaceDescriptor(surfaceId);
+  const readOnlyTools = descriptor.tools
+    .filter((tool) => tool.effect.class === 'read' && registeredTools.includes(tool.name))
+    .map((tool) => tool.name);
+  const refusedTools = descriptor.tools
+    .filter((tool) => tool.annotations?.legacy_policy === 'refused' && registeredTools.includes(tool.name))
+    .map((tool) => tool.name);
   const classified = new Set([...readOnlyTools, ...refusedTools]);
   return {
     exposed_tools: [...registeredTools],
@@ -3563,8 +3348,8 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
   const projection = selected.projection;
   const siteRoot = lookupSite(defaultSiteId).root;
 
-  const resolvedArgs = interpolateArgs(surface.args, defaultSiteId, siteRoot);
-  const resolvedEntrypoint = interpolateArg(surface.entrypoint, defaultSiteId, siteRoot);
+  const resolvedArgs = interpolateArgs(projection.args ?? surface.args, defaultSiteId, siteRoot);
+  const resolvedEntrypoint = resolveEntrypoint(surface, defaultSiteId, siteRoot, projection);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
 
   const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);

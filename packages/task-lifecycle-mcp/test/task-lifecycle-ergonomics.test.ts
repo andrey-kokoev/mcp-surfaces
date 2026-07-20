@@ -7,8 +7,20 @@ import { spawnSync } from 'node:child_process';
 import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
 import { withSqliteBusyRetry, withStoreSavepoint } from '../src/task-lifecycle/sqlite-contention.js';
+import { evaluateRecoveryTruthfulnessTrigger, recoveryTruthfulnessTriggerContract, validateRecoveryTruthfulnessBody } from '../src/task-lifecycle/recovery-truthfulness-guard.js';
 
 process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE = '1';
+
+const ordinaryRecoveryVocabulary = evaluateRecoveryTruthfulnessTrigger({
+  title: 'Fix consistency failure recovery authority mismatch',
+  summary: 'Completed ordinary implementation and verified the durable state.',
+});
+assert.equal(ordinaryRecoveryVocabulary.triggered, false);
+assert.match(recoveryTruthfulnessTriggerContract().non_trigger_rule, /Prose.*never activate/i);
+const explicitRecoveryOptIn = evaluateRecoveryTruthfulnessTrigger({ recovery_truthfulness_required: true });
+assert.equal(explicitRecoveryOptIn.triggered, true);
+assert.deepEqual(explicitRecoveryOptIn.triggers, ['explicit_recovery_truthfulness_required']);
+assert.equal(evaluateRecoveryTruthfulnessTrigger({ capa: { severity: 'critical' } }).triggered, true);
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-ergonomics-'));
 
@@ -1131,7 +1143,6 @@ compatibility_record: true
         task_number: 9231,
         agent_id: 'smart-scheduling.architect',
         verdict: 'accepted',
-        auto_accept_single_operator: true,
       },
     },
   }, architectRuntime);
@@ -1150,7 +1161,8 @@ compatibility_record: true
   assert.doesNotMatch(repairedExistingCompatibilityFile, /- \[ \] Existing criterion/);
   reviewInvariantStore.db.close();
 
-  // 3. Review compatibility by the sole reviewer admits a dependency outcome in one call.
+  // 3. Review compatibility by the sole reviewer needs no flag and records the
+  // existing single_operator_review annotation shape.
   const autoAcceptResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 5,
@@ -1161,7 +1173,6 @@ compatibility_record: true
         task_number: 9224,
         agent_id: 'smart-scheduling.architect',
         verdict: 'accepted',
-        auto_accept_single_operator: true,
       },
     },
   }, architectRuntime);
@@ -1336,6 +1347,88 @@ compatibility_record: true
   assert.equal(finishSchemaPayload.schemas.task_lifecycle_finish.payload_ref_shape.outcome, '<contract outcome when applicable>');
   assert.deepEqual(finishSchemaPayload.schemas.task_lifecycle_finish.payload_ref_shape.findings, []);
   assert.match(finishSchemaPayload.schemas.task_lifecycle_finish.inline_payload_limit.remediation, /findings/);
+
+  const freshServerSchemaResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10143,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_payload_schema',
+      arguments: { tool: 'task_lifecycle_test_mcp_tool' },
+    },
+  }, builderRuntime);
+  const freshServerSchemaPayload = await responsePayload(freshServerSchemaResponse, builderRuntime, 10144);
+  assert.match(freshServerSchemaPayload.schemas.task_lifecycle_test_mcp_tool.payload_route, /merged into arguments/);
+  assert.match(freshServerSchemaPayload.schemas.task_lifecycle_test_mcp_tool.top_level_wins, /task_number and agent_id/);
+
+  const echoServerPath = fileURLToPath(new URL('./fixtures/fresh-payload-echo-mcp.js', import.meta.url));
+  const longFinishSummary = 'finish-payload-'.repeat(500);
+  const finishPayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10145,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload_id: 'fresh-finish-payload',
+        payload: { task_number: 1, agent_id: 'payload-agent', summary: longFinishSummary, no_files_changed: true },
+      },
+    },
+  }, builderRuntime);
+  const finishPayload = await responsePayload(finishPayloadResponse, builderRuntime, 10146);
+  const freshFinishResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10147,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_test_mcp_tool',
+      arguments: {
+        server_path: echoServerPath,
+        tool_name: 'task_lifecycle_finish',
+        payload_ref: finishPayload.ref,
+        arguments: { task_number: 41, agent_id: 'top-level-agent' },
+      },
+    },
+  }, builderRuntime);
+  const freshFinish = await responsePayload(freshFinishResponse, builderRuntime, 10148);
+  assert.equal(freshFinish.invoked_tool, 'task_lifecycle_finish');
+  assert.equal(freshFinish.received_arguments.task_number, 41);
+  assert.equal(freshFinish.received_arguments.agent_id, 'top-level-agent');
+  assert.equal(freshFinish.received_arguments.summary, longFinishSummary);
+
+  const longReviewFinding = 'review-payload-'.repeat(500);
+  const reviewPayloadResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10149,
+    method: 'tools/call',
+    params: {
+      name: 'mcp_payload_create',
+      arguments: {
+        payload_id: 'fresh-review-payload',
+        payload: { task_number: 2, agent_id: 'payload-reviewer', findings: [{ severity: 'note', description: longReviewFinding }] },
+      },
+    },
+  }, builderRuntime);
+  const reviewPayload = await responsePayload(reviewPayloadResponse, builderRuntime, 10150);
+  const freshReviewResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 10151,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_test_mcp_tool',
+      arguments: {
+        server_path: echoServerPath,
+        tool_name: 'task_lifecycle_review',
+        payload_ref: reviewPayload.ref,
+        arguments: { task_number: 42, agent_id: 'top-level-reviewer', verdict: 'accepted' },
+      },
+    },
+  }, builderRuntime);
+  const freshReview = await responsePayload(freshReviewResponse, builderRuntime, 10152);
+  assert.equal(freshReview.invoked_tool, 'task_lifecycle_review');
+  assert.equal(freshReview.received_arguments.task_number, 42);
+  assert.equal(freshReview.received_arguments.agent_id, 'top-level-reviewer');
+  assert.equal(freshReview.received_arguments.findings[0].description, longReviewFinding);
 
   const closeoutSchemaResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -1863,7 +1956,7 @@ compatibility_record: true
   }, builderRuntime);
   const submitWorkPayload = await responsePayload(submitWorkResponse, builderRuntime, 1058);
   assert.equal(submitWorkPayload.status, 'submitted', JSON.stringify(submitWorkPayload));
-  assert.equal(submitWorkPayload.final_lifecycle_status, 'awaiting_dependencies');
+  assert.equal(submitWorkPayload.final_lifecycle_status, 'in_review');
   assert.equal(submitWorkPayload.closure_status, 'submitted_for_review_not_closed');
   assert.equal(submitWorkPayload.submitted_for_review_not_closed, true);
   assert.deepEqual(submitWorkPayload.primitive_results.map((entry: any) => entry.tool), [
@@ -1876,7 +1969,7 @@ compatibility_record: true
   ]);
   const submitWorkFinishResult = submitWorkPayload.primitive_results.find((entry: any) => entry.tool === 'task_lifecycle_finish').result;
   assert.equal(submitWorkFinishResult.status, 'success');
-  assert.equal(submitWorkFinishResult.new_status, 'awaiting_dependencies');
+  assert.equal(submitWorkFinishResult.new_status, 'in_review');
   assert.equal(submitWorkFinishResult.legacy_review_routing_suppressed, true);
   assert.equal(submitWorkFinishResult.dependency_native_review_routing, true);
   assert.equal(submitWorkFinishResult.obligation_id, null);
@@ -1887,7 +1980,7 @@ compatibility_record: true
   assert.equal(generatedReviewDependency.status, 'created');
   assert.equal(generatedReviewDependency.dependency_kind, 'review');
   assert.equal(generatedReviewDependency.parent_task_id, submitWorkTaskId);
-  assert.equal(generatedReviewDependency.parent_dependency_wait_status.new_status, 'awaiting_dependencies');
+  assert.equal(generatedReviewDependency.parent_dependency_wait_status.new_status, 'in_review');
   assert.equal(generatedReviewDependency.parent_dependency_wait_status.blocked_by, 'dependencies');
   assert.equal(generatedReviewDependency.outcome_contract.outcome_type, 'review');
   assert.deepEqual(generatedReviewDependency.outcome_contract.allowed_outcomes, ['accepted', 'accepted_with_notes', 'rejected']);
@@ -1895,6 +1988,7 @@ compatibility_record: true
   const submitWorkSchemaTool = submitWorkToolList.result.tools.find((tool: any) => tool.name === 'task_lifecycle_submit_work');
   assert.match(submitWorkSchemaTool.inputSchema.properties.payload_ref.description, /long execution_notes/);
   assert.equal(submitWorkSchemaTool.inputSchema.properties.auto_materialize_payload.type, 'boolean');
+  assert.equal(submitWorkSchemaTool.inputSchema.properties.resume_existing_work.type, 'boolean');
   assert.deepEqual(submitWorkSchemaTool.inputSchema.required, ['task_number', 'agent_id']);
   const ordinaryInlineExecutionNotes = `Implemented a detailed submit_work note that is comfortably larger than the old tiny threshold while remaining ordinary inline closeout prose. ${'This sentence adds realistic operational detail without requiring payload transport. '.repeat(12)}`;
   const ordinaryInlineSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
@@ -2114,7 +2208,7 @@ compatibility_record: true
   }, builderRuntime);
   const recoveryTruthfulnessFinish = await responsePayload(recoveryTruthfulnessFinishResponse, builderRuntime, 10596);
   assert.equal(recoveryTruthfulnessFinish.status, 'success', JSON.stringify(recoveryTruthfulnessFinish));
-  assert.equal(recoveryTruthfulnessFinish.new_status, 'awaiting_dependencies');
+  assert.equal(recoveryTruthfulnessFinish.new_status, 'in_review');
   const submitWorkReviewStore = openTaskLifecycleStore(siteRoot);
   try {
     const dependencies = submitWorkReviewStore.listTaskDependenciesForParent(submitWorkTaskId);
@@ -2171,7 +2265,7 @@ compatibility_record: true
     params: { name: 'task_lifecycle_show', arguments: { task_number: 9208 } },
   }, builderRuntime);
   const parentDependencyShow = await responsePayload(parentDependencyShowResponse, builderRuntime, 105625);
-  assert.equal(parentDependencyShow.lifecycle.status, 'awaiting_dependencies');
+  assert.equal(parentDependencyShow.lifecycle.status, 'in_review');
   assert.equal(parentDependencyShow.dependency_satisfaction.unsatisfied_count, 1);
   assert.equal(parentDependencyShow.dependencies_blocking_this_task[0].dependency_kind, 'review');
   assert.equal(parentDependencyShow.dependencies_blocking_this_task[0].required_task_number, generatedReviewDependency.required_task_number);
@@ -2321,6 +2415,29 @@ compatibility_record: true
   const satisfiedDependencyPreflight = await responsePayload(satisfiedDependencyPreflightResponse, builderRuntime, 10568);
   assert.equal(satisfiedDependencyPreflight.dependency_satisfaction.all_satisfied, true);
   assert.equal(satisfiedDependencyPreflight.requirements.find((item: any) => item.id === 'dependencies').satisfied, true);
+
+  const resumeExistingSubmitWorkResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 105671,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_submit_work',
+      arguments: {
+        task_number: 9208,
+        agent_id: 'smart-scheduling.builder',
+        resume_existing_work: true,
+      },
+    },
+  }, builderRuntime);
+  const resumeExistingSubmitWork = await responsePayload(resumeExistingSubmitWorkResponse, builderRuntime, 105672);
+  assert.equal(resumeExistingSubmitWork.status, 'submitted', JSON.stringify(resumeExistingSubmitWork));
+  assert.deepEqual(resumeExistingSubmitWork.primitive_results.map((entry: any) => entry.tool), [
+    'task_lifecycle_submit_work.reuse_existing_task_notes',
+    'task_lifecycle_finish',
+  ]);
+  assert.equal(resumeExistingSubmitWork.primitive_results[0].result.status, 'reused');
+  assert.equal(resumeExistingSubmitWork.primitive_results.some((entry: any) => entry.tool === 'task_lifecycle_prove_criteria'), false);
+  assert.equal(resumeExistingSubmitWork.primitive_results.some((entry: any) => entry.tool === 'task_lifecycle_admit_evidence'), false);
 
   const declareGenericDependencyResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -2712,7 +2829,7 @@ compatibility_record: true
   assert.notEqual(reopenedFinishPayload.report_id, 'report-reopened-stale-pre-reopen');
   assert.equal(reopenedFinishPayload.review_action, 'dependency_requested');
   assert.equal(reopenedFinishPayload.close_action, 'skipped');
-  assert.equal(reopenedFinishPayload.new_status, 'awaiting_dependencies');
+  assert.equal(reopenedFinishPayload.new_status, 'in_review');
   assert.equal(reopenedFinishPayload.blocked_by, 'dependencies');
   assert.equal(reopenedFinishPayload.review_dependency.dependency_kind, 'review');
 
@@ -2971,6 +3088,10 @@ try {
     stdout: { write: () => true },
     stderr: { write: () => true },
   };
+  const scopedReviewerRuntime = {
+    ...scopedRuntime,
+    env: { ...scopedRuntime.env, NARADA_AGENT_ID: 'scoped.architect' },
+  };
 
   const scopedResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -3085,6 +3206,42 @@ try {
   }, scopedRuntime);
   const payloadRefFinishPayload = await responsePayload(payloadRefFinishResponse, scopedRuntime, 22);
   assert.equal(payloadRefFinishPayload.status, 'success');
+  assert.equal(payloadRefFinishPayload.new_status, 'in_review');
+  assert.equal(payloadRefFinishPayload.review_dependency.dependency_kind, 'review');
+  const payloadRefReviewTaskNumber = payloadRefFinishPayload.review_dependency.required_task_number;
+  const claimPayloadRefReviewResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 2201,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_claim',
+      arguments: {
+        task_number: payloadRefReviewTaskNumber,
+        agent_id: 'scoped.architect',
+      },
+    },
+  }, scopedReviewerRuntime);
+  const claimPayloadRefReviewPayload = await responsePayload(claimPayloadRefReviewResponse, scopedReviewerRuntime, 2202);
+  assert.equal(claimPayloadRefReviewPayload.status, 'claimed', JSON.stringify(claimPayloadRefReviewPayload));
+  const finishPayloadRefReviewResponse = await handleTaskLifecycleMcpRequest({
+    jsonrpc: '2.0',
+    id: 2203,
+    method: 'tools/call',
+    params: {
+      name: 'task_lifecycle_finish',
+      arguments: {
+        task_number: payloadRefReviewTaskNumber,
+        agent_id: 'scoped.architect',
+        summary: 'Accepted through the dependency outcome contract.',
+        outcome: 'accepted',
+        findings: [],
+        no_files_changed: true,
+      },
+    },
+  }, scopedReviewerRuntime);
+  const finishPayloadRefReviewPayload = await responsePayload(finishPayloadRefReviewResponse, scopedReviewerRuntime, 2204);
+  assert.equal(finishPayloadRefReviewPayload.status, 'success', JSON.stringify(finishPayloadRefReviewPayload));
+  assert.equal(finishPayloadRefReviewPayload.review_compatibility_dependency_outcome, undefined);
 
   const companionPayloadCreateResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -3146,6 +3303,7 @@ try {
           non_goals: ['Do not loosen routing validation.'],
           acceptance_criteria: ['Task is created with normalized markdown fields.'],
           target_role: 'builder',
+          recovery_truthfulness_required: true,
         },
       },
     },
@@ -3160,6 +3318,10 @@ try {
   }, scopedRuntime);
   const createdTask = await responsePayload(createResponse, scopedRuntime, 213);
   assert.equal(createdTask.status, 'created');
+  assert.equal(createdTask.recovery_truthfulness_required, true);
+  const createdTaskBody = readFileSync(createdTask.file_path, 'utf8');
+  assert.match(createdTaskBody, /^recovery_truthfulness_required: true$/m);
+  assert.equal(validateRecoveryTruthfulnessBody({ body: createdTaskBody }).evaluation.triggered, true);
   const createdShowResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 214,

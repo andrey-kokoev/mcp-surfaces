@@ -3,6 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import {
   affordanceToolAction,
@@ -75,7 +76,7 @@ const MUTATING_TOOL_NAMES = new Set([
   'site_loop_run_once',
 ]);
 
-const TOOLS = [
+export const TOOLS = [
   guidanceToolDefinition(),
   tool('site_loop_doctor', 'Inspect configured Site Loop MCP readiness.', {}),
   tool('site_docs_list', 'List configured read-only documentation paths exposed to agents.', {}),
@@ -200,11 +201,14 @@ function genericToolOutputSchema() {
 
 let inputBuffer = '';
 const activeRequests = new Map<string, AbortController>();
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-  inputBuffer += chunk;
-  processInputBuffer();
-});
+const isMainModule = process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    inputBuffer += chunk;
+    processInputBuffer();
+  });
+}
 
 function parseArgs(argv) {
   const parsed: SiteOpsServerArgs = {};
@@ -1058,6 +1062,10 @@ function respondError(id, error) {
     id,
     error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
   });
+}
+
+export function listTools() {
+  return TOOLS;
 }
 
 function sendProgress(message, progress, progressMessage) {

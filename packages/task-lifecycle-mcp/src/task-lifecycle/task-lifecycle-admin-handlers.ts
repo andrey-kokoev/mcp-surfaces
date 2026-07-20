@@ -12,6 +12,7 @@ export function createTaskLifecycleAdminHandlers({
   buildTaskLifecycleFreshness,
   buildLifecycleTargetLocusStatus,
   taskLifecycleRestart,
+  getSurfaceLifecycle,
 }) {
   return {
     task_lifecycle_doctor: (args: any = {}) => {
@@ -29,6 +30,7 @@ export function createTaskLifecycleAdminHandlers({
           site_root: getSiteRoot(),
           authority_posture: 'facade_only',
           surface_type: 'task_lifecycle_mcp',
+          fabric_lifecycle: getSurfaceLifecycle(),
           tool_posture: {
             canonical_count: registeredTools.length,
             deprecated_alias_count: Object.keys(deprecatedAliases).length,
@@ -66,6 +68,7 @@ export function createTaskLifecycleAdminHandlers({
         site_root: getSiteRoot(),
         authority_posture: 'facade_only',
         surface_type: 'task_lifecycle_mcp',
+        fabric_lifecycle: getSurfaceLifecycle(),
         canonical_tools: registeredTools,
         deprecated_aliases: deprecatedAliases,
         allowed_tools: registeredTools,

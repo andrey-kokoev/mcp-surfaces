@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
+import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
+import { handleTaskLifecycleMcpRequest, taskLifecycleSurfaceDefinition } from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-mcp-protocol-'));
 mkdirSync(join(siteRoot, '.ai'), { recursive: true });
@@ -31,6 +32,14 @@ const tools = await handleTaskLifecycleMcpRequest({
   params: {},
 });
 assert.equal(tools.error, undefined);
+const surface = taskLifecycleSurfaceDefinition();
+assertLiveToolsConform(surface.descriptor, tools.result.tools);
+assert.equal(surface.descriptor.guidance_tool, 'task_lifecycle_guidance');
+assert.deepEqual(surface.descriptor.projections[0]?.lifecycle, {
+  mode: 'restart_required',
+  restart_owner: 'mcp-loader',
+  reason: 'Tool and runtime changes require mcp_loader_surface_restart for the bound task-lifecycle surface.',
+});
 const names = tools.result.tools.map((tool) => tool.name);
 assert.equal(new Set(names).size, names.length, 'task-lifecycle tools/list must not contain duplicate tool names');
 assert.deepEqual(
@@ -46,6 +55,15 @@ assert.equal(names.includes('mcp_output_show'), true);
 const payloadCreateTool = tools.result.tools.find((tool) => tool.name === 'mcp_payload_create');
 assert.equal(Boolean(payloadCreateTool?.inputSchema?.properties?.payload_json), true);
 assert.equal(tools.result.tools.find((tool) => tool.name === 'mcp_payload_validate')?.annotations?.readOnlyHint, true);
+
+const doctor = await handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 5,
+  method: 'tools/call',
+  params: { name: 'task_lifecycle_doctor', arguments: {} },
+}, runtimeOptions);
+assert.equal(doctor.error, undefined);
+assert.equal(doctor.result.structuredContent.fabric_lifecycle.restart_owner, 'mcp-loader');
 
 const guidance = await handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',

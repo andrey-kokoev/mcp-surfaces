@@ -456,6 +456,20 @@ export function acknowledgeMcpRestartRequest({
   const acknowledgedAt = new Date().toISOString();
   const sourceEvidence = collectSourceEvidence({ siteRoot, watchedPaths });
   const restartRequest = readJsonFile(restartRequestPath);
+  if (!restartRequest) {
+    return {
+      status: 'no_restart_request',
+      schema: 'narada.mcp.restart_acknowledgement.v0',
+      already_cleared: true,
+      can_self_restart: false,
+      restart_mechanism: 'external_stdio_mcp_restart_required',
+      request_path: restartRequestPath,
+      baseline_path: baselinePath,
+      target_surface: targetSurface,
+      target_entrypoint: targetEntrypoint,
+      message: 'No restart request is pending; the marker is already clear.',
+    };
+  }
   const acknowledgementGate = validateMcpRestartAcknowledgement({
     pcSiteRoot,
     targetSurface,

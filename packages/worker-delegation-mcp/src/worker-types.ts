@@ -3,6 +3,7 @@ import type { PrimitiveConfigValue, SandboxMode, WorkerAuthority, WorkerCognitio
 export type WorkerIntent = {
   instruction: string;
   mode?: WorkerDelegationMode;
+  output_contract?: Record<string, unknown>;
 };
 
 export type WorkerDelegationMode = 'audit_only' | 'plan_only' | 'implement' | 'implement_and_verify';
@@ -57,6 +58,8 @@ export type WorkerConstraintRequest = {
   cognition?: string;
   resumable?: boolean;
   wait_for_completion?: boolean;
+  wait_timeout_ms?: number;
+  max_run_ms?: number;
   exit_interview?: boolean;
   verification_budget?: WorkerVerificationBudget;
   test_budget?: WorkerVerificationBudget;
@@ -87,6 +90,7 @@ export type WorkerEditToolInput = {
   required_mcp_tools?: string[];
   resumable?: boolean;
   wait_for_completion?: boolean;
+  wait_timeout_ms?: number;
   exit_interview?: boolean;
   overrides?: WorkerConstraintOverrides;
 };

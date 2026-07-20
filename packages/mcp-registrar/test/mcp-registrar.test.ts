@@ -188,7 +188,7 @@ try {
   assert.equal((speech.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.equal(speech.default_injection, 'all_carrier_sessions');
   assert.deepEqual(speech.args, ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
-  assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
+  assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
   const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
   assert.equal(operatorRouting.injection_scope, 'user_site');
@@ -200,6 +200,9 @@ try {
   assert.equal(artifacts.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(artifacts.env_vars, ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL']);
   assert.ok(artifacts.tools.includes('artifact_register_file'));
+  const agentContextSurface = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'agent-context');
+  assert.ok(agentContextSurface);
+  assert.deepEqual(agentContextSurface.env_vars, ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT']);
   const narsSession = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'nars-session');
   assert.ok(narsSession);
   assert.equal(narsSession.injection_scope, undefined);
@@ -228,6 +231,9 @@ try {
     config_path: join(root, 'config.json'),
     surfaces: [],
   };
+  const agentContextBindConfig = buildSiteBindConfig(fixtureSite, agentContextSurface as any);
+  const agentContextBoundServer = (agentContextBindConfig.config.mcpServers as Record<string, any>)[agentContextBindConfig.serverKey];
+  assert.deepEqual(agentContextBoundServer.env_vars, ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT']);
   assert.throws(
     () => buildSiteBindConfig(fixtureSite, narsSession as any),
     /registrar_surface_projection_required:nars-session/,

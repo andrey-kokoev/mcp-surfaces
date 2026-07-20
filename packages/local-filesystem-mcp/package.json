@@ -6,10 +6,14 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/local-filesystem-mcp.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-fabric-filesystem-e2e.test.js"
+    "test": "pnpm build && node dist/test/local-filesystem-mcp.test.js && node dist/test/result-rendering-feedback.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-fabric-filesystem-e2e.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -20,6 +24,7 @@
     }
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-transport": "workspace:*"
   },
   "files": [

@@ -60,6 +60,7 @@ Assignment and routing:
 
 Evidence and closeout:
 
+- `task_lifecycle_submit_work` performs ordinary notes, proof, admission, and finish. If an earlier call already admitted the same agent's report but a restart or later gate interrupted closeout, call it with `resume_existing_work: true`; existing substantive task sections, report evidence, and a previously satisfying outcome are reused, while proof and admission are not duplicated unless explicitly requested.
 - `task_lifecycle_admit_evidence`
 - `task_lifecycle_prove_criteria`
 - `task_lifecycle_disposition_closeout`
@@ -93,11 +94,32 @@ Transport helpers:
 
 ## Payload Refs
 
-Some tools accept `payload_ref` for large structured companion payloads. `task_lifecycle_create` requires an immutable payload ref carrying the task definition. Payload transport is generic and comes from `@narada2/mcp-transport`; task lifecycle tools remain responsible for domain validation.
+Some tools accept `payload_ref` for large structured companion payloads. `task_lifecycle_create` requires an immutable payload ref carrying the task definition. `task_lifecycle_test_mcp_tool` also accepts a payload ref for the child call: keep `server_path`, `tool_name`, and `timeout_seconds` at the outer level, put required child fields in `arguments`, and the parent merges the immutable payload into those arguments with explicit `arguments` fields winning. Payload transport is generic and comes from `@narada2/mcp-transport`; task lifecycle tools remain responsible for domain validation.
+
+The special completion-truthfulness guard is activated only by structured fields, never by words found in titles, summaries, or task prose. Set `recovery_truthfulness_required: true` in a task creation payload to project the opt-in into task front matter, or supply an explicit structured trigger in a completion packet.
 
 ## Agent Guidance
 
-Agents should call `task_lifecycle_next` for work selection, claim before doing task work when required, and use `task_lifecycle_finish` to submit work reports or complete outcome-contract tasks. Review work is represented as ordinary dependency work with a review outcome contract, so new review outcomes should be admitted with `task_lifecycle_finish` using `outcome`, `summary`, and `findings`. `task_lifecycle_review` remains compatibility migration for legacy callers. Closeout and closure can be blocked by evidence, unsatisfied dependencies, conflict-policy gates, or undisposed blocking outcomes; do not treat a successful tool call as authority to skip those gates.
+Agents should call `task_lifecycle_next` for work selection, claim before doing task work when required, and use `task_lifecycle_finish` to submit work reports or complete outcome-contract tasks. Every ordinary finish now creates or reuses one review-contract dependency by default; callers may name `reviewer`, otherwise routing uses the first reviewer-capable roster agent and then the `reviewer` role. Reviewers claim that generated task and admit its outcome with `task_lifecycle_finish` using `outcome`, `summary`, and `findings`. `task_lifecycle_review` remains compatibility migration only for pre-existing tasks without a review dependency. Singleton reviewer sites need no boolean flag: same-operator review is annotated automatically, while multi-reviewer conflict policy still requires explicit authorization. Existing `single_operator_review` annotations retain their readback shape. Closeout and closure can be blocked by evidence, unsatisfied dependencies, conflict-policy gates, or undisposed blocking outcomes; do not treat a successful tool call as authority to skip those gates.
+
+`task_lifecycle_test_mcp_tool` is the bounded one-shot recovery route when the
+session-bound task-lifecycle server is stale or wedged. Its `server_path`
+contract is explicit: relative paths resolve under the Site root; absolute
+paths are admitted only under the Site root, the running
+`@narada2/task-lifecycle-mcp` package root, or roots configured through
+`NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS`. Only existing
+`.js`, `.mjs`, and `.cjs` scripts are accepted. A one-shot result proves
+the fresh child call, not that the carrier-bound process reloaded. Carrier-bound
+sessions should discover `mcp_runtime_proxy_status` through `tools/list` and
+inspect `runtime_freshness.reload_action` for the supervisor-owned restart.
+
+A session-bound task-lifecycle child pins the build it loaded at process start.
+Source or build fixes therefore require a real child restart by the carrier/runtime
+supervisor; a one-shot fresh call does not update the bound child. A pending
+`task_lifecycle_restart` marker is automatically acknowledged and cleared when
+the replacement child starts with post-request self-observed boot evidence.
+`acknowledge` and `clear` remain idempotent confirmation modes after that
+automatic reconciliation, so manual marker deletion is never part of recovery.
 
 ## Verification
 
