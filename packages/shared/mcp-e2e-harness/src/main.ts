@@ -134,6 +134,7 @@ export function createJsonlClient(
   const label = options.label ?? 'MCP child';
   let buffer = '';
   let stderrTail = '';
+  let childClosed = false;
   const pending = new Map<string, {
     resolve: (response: JsonRpcResponse) => void;
     reject: (error: Error) => void;
@@ -168,6 +169,7 @@ export function createJsonlClient(
 
   child.on('error', (error) => rejectAll(error instanceof Error ? error : new Error(String(error))));
   child.on('close', (code, signal) => {
+    childClosed = true;
     const detail = stderrTail ? ', stderr=' + JSON.stringify(stderrTail) : '';
     rejectAll(new Error(label + ' exited before all responses were received (code=' + (code ?? 'null') + ', signal=' + (signal ?? 'null') + detail + ')'));
   });
@@ -196,20 +198,24 @@ export function createJsonlClient(
     },
     async close() {
       if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
-      if (child.exitCode !== null) return;
+      if (childClosed) return;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
+        let closeTimer: NodeJS.Timeout;
+        let killTimer: NodeJS.Timeout | null = null;
+        const finish = () => {
+          clearTimeout(closeTimer);
+          if (killTimer) clearTimeout(killTimer);
+          resolve();
+        };
+        closeTimer = setTimeout(() => {
           try {
             child.kill();
           } catch {
             // Cleanup remains best effort after the bounded grace period.
           }
-          resolve();
+          if (!childClosed) killTimer = setTimeout(finish, closeTimeoutMs);
         }, closeTimeoutMs);
-        child.once('close', () => {
-          clearTimeout(timer);
-          resolve();
-        });
+        child.once('close', finish);
       });
     },
   };
@@ -260,6 +266,7 @@ export function createContentLengthClient(
   const label = options.label ?? 'MCP Content-Length child';
   let buffer = Buffer.alloc(0);
   let stderrTail = '';
+  let childClosed = false;
   const pending = new Map<string, {
     resolve: (response: JsonRpcResponse) => void;
     reject: (error: Error) => void;
@@ -312,6 +319,7 @@ export function createContentLengthClient(
 
   child.on('error', (error) => rejectAll(error instanceof Error ? error : new Error(String(error))));
   child.on('close', (code, signal) => {
+    childClosed = true;
     const detail = stderrTail ? ', stderr=' + JSON.stringify(stderrTail) : '';
     rejectAll(new Error(label + ' exited before all responses were received (code=' + (code ?? 'null') + ', signal=' + (signal ?? 'null') + detail + ')'));
   });
@@ -341,20 +349,24 @@ export function createContentLengthClient(
     },
     async close() {
       if (!child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
-      if (child.exitCode !== null) return;
+      if (childClosed) return;
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
+        let closeTimer: NodeJS.Timeout;
+        let killTimer: NodeJS.Timeout | null = null;
+        const finish = () => {
+          clearTimeout(closeTimer);
+          if (killTimer) clearTimeout(killTimer);
+          resolve();
+        };
+        closeTimer = setTimeout(() => {
           try {
             child.kill();
           } catch {
             // Cleanup remains best effort after the bounded grace period.
           }
-          resolve();
+          if (!childClosed) killTimer = setTimeout(finish, closeTimeoutMs);
         }, closeTimeoutMs);
-        child.once('close', () => {
-          clearTimeout(timer);
-          resolve();
-        });
+        child.once('close', finish);
       });
     },
   };
@@ -401,7 +413,7 @@ export function createTemporaryE2eRoot(testId: string): string {
 export function removeTemporaryE2eRoot(root: string): boolean {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
       return true;
     } catch {
       if (attempt === 4) return false;
