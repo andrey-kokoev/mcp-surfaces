@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerState, handleRequest } from '../src/main.js';
+import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
+import { createServerState, handleRequest, launcherSurfaceDefinition } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'launcher-mcp-'));
 const registryPath = join(root, 'agents.psd1');
@@ -21,6 +22,14 @@ writeFileSync(registryPath, `@{
 
 try {
   const state = createServerState({ naradaRoot: root, registryPath });
+  const surface = launcherSurfaceDefinition();
+  assert.equal(surface.descriptor.projections[0]!.lifecycle.mode, 'replayable');
+  assert.equal(surface.descriptor.guidance_tool, 'launcher_guidance');
+  const liveList = await handleRequest(
+    { jsonrpc: '2.0', id: 99, method: 'tools/list', params: {} },
+    state,
+  ) as Record<string, any>;
+  assertLiveToolsConform(surface.descriptor, liveList.result.tools);
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
   }
@@ -29,6 +38,8 @@ try {
   const doctor = view(await call('launcher_doctor', {}));
   assert.equal(doctor.registry_exists, true);
   assert.equal(doctor.execution_posture, 'read_only_no_launch_no_shell');
+  assert.equal(doctor.fabric_lifecycle.mode, 'replayable');
+  assert.equal(doctor.fabric_lifecycle.reconnect, 'start_fresh_stdio_process');
   assert.deepEqual(doctor.mcp_injection_scope_doctrine.scopes, ['host', 'user_site', 'local_site']);
   assert.equal(doctor.mcp_injection_scope_doctrine.canonical_host_example, 'speech');
 

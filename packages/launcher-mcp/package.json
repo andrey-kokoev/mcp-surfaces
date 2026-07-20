@@ -21,6 +21,7 @@
     "test:e2e:host": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/pc-host-launcher-lifecycle-e2e.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-telemetry": "workspace:*"
   },
   "files": [

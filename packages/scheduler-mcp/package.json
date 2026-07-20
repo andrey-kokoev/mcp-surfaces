@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -20,7 +24,9 @@
     "test": "pnpm build && node dist/test/scheduler-mcp.test.js && node dist/test/protocol-smoke.test.js",
     "test:e2e:host": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/site-fabric-scheduler-e2e.test.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
+  },
   "devDependencies": {
     "@narada2/mcp-e2e-harness": "workspace:*"
   },

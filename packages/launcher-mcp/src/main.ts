@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildPathMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
+import { defineSurface, type DefinedSurface } from '@narada2/mcp-fabric-contracts';
 
 const SERVER_NAME = 'launcher-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -92,7 +93,41 @@ function dispatchMethod(method: string, params: JsonRecord, state: LauncherState
   }
 }
 
+export function launcherSurfaceDefinition(): DefinedSurface {
+  const definitions = launcherToolDefinitions();
+  return defineSurface({
+    surface_id: SURFACE_ID,
+    surface_version: SERVER_VERSION,
+    package: '@narada2/launcher-mcp',
+    tools: definitions.map((definition) => ({
+      definition,
+      effect: { class: 'read', idempotency: 'replayable', confirmation: 'never' },
+    })),
+    projections: [{
+      id: 'stdio',
+      transport: {
+        kind: 'stdio',
+        command: 'node',
+        args: ['{mcp_surfaces_root}/launcher-mcp/dist/src/main.js', '--narada-root', 'C:/Users/Andrey/Narada'],
+        env: [],
+      },
+      injection_scope: 'user_site',
+      default_injection: 'disabled',
+      runtime_requirements: [],
+      authority_requirements: ['scope.user_site'],
+      lifecycle: {
+        mode: 'replayable',
+        reason: 'Launcher tools are read-only plans and registry reads; reconnecting to a fresh stdio process is safe.',
+      },
+    }],
+  });
+}
+
 export function listTools() {
+  return launcherSurfaceDefinition().tools;
+}
+
+function launcherToolDefinitions() {
   return [
     guidanceToolDefinition(),
     {
@@ -246,6 +281,11 @@ function launcherDoctor(state: LauncherState): JsonRecord {
     option_matrix_script: matrixScript,
     option_matrix_script_exists: existsSync(matrixScript),
     execution_posture: 'read_only_no_launch_no_shell',
+    fabric_lifecycle: {
+      ...launcherSurfaceDefinition().descriptor.projections[0]?.lifecycle,
+      reconnect: 'start_fresh_stdio_process',
+      restart_actuator: null,
+    },
     mcp_injection_scope_doctrine: {
       scopes: ['host', 'user_site', 'local_site'],
       ownership_rule: 'Session visibility is not ownership; launcher diagnostics must preserve the surface authority locus and restart owner.',

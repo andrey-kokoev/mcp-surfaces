@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -23,6 +27,9 @@
     "dist/",
     "README.md"
   ],
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
+  },
   "devDependencies": {
     "@narada2/mcp-e2e-harness": "workspace:*"
   }
