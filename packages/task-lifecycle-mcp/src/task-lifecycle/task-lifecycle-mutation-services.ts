@@ -4,18 +4,18 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { findTaskFile, readTaskFile, writeTaskProjection, isValidTransition } from '@narada2/task-governance-core/task-governance';
 import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admission';
 import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
-import { deriveClosureAuthority } from './closure-authority.js';
+import { deriveClosureAuthority, terminalTaskMutationGuard } from './closure-authority.js';
 
 export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId }) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const closureAuthority = deriveClosureAuthority(lifecycle);
-  if (closureAuthority.closure_dominates) {
+  const terminalGuard = terminalTaskMutationGuard(lifecycle, 'claim');
+  if (terminalGuard) {
     return {
       status: 'closure_authority_blocks_claim',
       task_number: taskNumber,
       task_id: lifecycle.task_id,
-      closure_authority: closureAuthority,
+      ...terminalGuard,
       remediation: 'Use a valid reopen/continue transition before claiming this task.',
     };
   }
@@ -60,13 +60,13 @@ export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentI
   const existing = store.getActiveAssignment(lifecycle.task_id);
   if (!existing) return { status: 'not_claimed', task_number: taskNumber };
   if (agentId && existing.agent_id !== agentId) return { status: 'claimed_by_other', claimed_by: existing.agent_id };
-  const closureAuthority = deriveClosureAuthority(lifecycle);
-  if (closureAuthority.closure_dominates) {
+  const terminalGuard = terminalTaskMutationGuard(lifecycle, 'unclaim');
+  if (terminalGuard) {
     return {
       status: 'closure_authority_blocks_unclaim',
       task_number: taskNumber,
       task_id: lifecycle.task_id,
-      closure_authority: closureAuthority,
+      ...terminalGuard,
       remediation: 'Use a valid reopen transition before releasing a stale active assignment into opened state.',
     };
   }

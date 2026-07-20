@@ -48,7 +48,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Use mcp_loader_list_tools or mcp_loader_tool_discovery_manifest after attachment; the child tools/list response owns exact tool schemas.',
       'Call mcp_loader_runtime_observation with connection_id and carrier_kind to obtain the V2 normalized observation; it reports the stable logical connection id, generation, lifecycle, digests, and bounded recovery actuator.',
       'For mcp_loader_call_tool, place timeout_ms inside the nested arguments object. The loader forwards it to the child and adds bounded outer grace so the child can return its own timeout result.',
-      'Call mcp_loader_runtime_status when the loader process may have out-of-date source, dependency, or build-configuration evidence; inspect runtime_freshness.reload_action for the machine-readable carrier/runtime-supervisor restart operation.',
+      'Call mcp_loader_runtime_status when the loader process may have out-of-date source, dependency, or build-configuration evidence; inspect runtime_freshness.reload_action.next_call for the machine-readable carrier/runtime-supervisor restart operation.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.',
     ],
     tool_preference: [
@@ -60,7 +60,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       { step: 'observe_live', guidance: 'Use mcp_loader_site_tool_inventory_check to compare declared tools with fresh child tools/list responses. Read the compact per-finding status and missing/extra/unclassified tool lists first; retain the immutable observation_ref for full evidence. A skipped runtime-affined surface makes the aggregate status partial, so rerun with the required runtime_kind for complete coverage.' },
       { step: 'observe_runtime', guidance: 'Call mcp_loader_runtime_observation({ connection_id, carrier_kind }) after attachment. Treat its structuredContent as the V2 runtime observation; runtime_state_root is null because the loader reports but does not own durable observation persistence.' },
       { step: 'operate', guidance: 'Call a child tool only after selecting the intended connection and honoring the child surface policy. For bounded calls, pass arguments.timeout_ms; the loader outer deadline is that child timeout plus --tool-timeout-grace-ms.' },
-      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; when mcp_loader_runtime_status reports stale, execute the structured runtime_freshness.reload_action through the carrier/runtime supervisor rather than restarting only a child.' },
+      { step: 'finish', guidance: 'Use mcp_loader_detach or mcp_loader_surface_restart deliberately and inspect the returned termination or replacement evidence; when mcp_loader_runtime_status reports stale, invoke runtime_freshness.reload_action.next_call through the carrier/runtime supervisor rather than restarting only a child.' },
     ],
     examples: [
       { intent: 'First use', call: 'mcp_loader_guidance({})' },
@@ -90,7 +90,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For child failures, inspect mcp_loader_surface_status and stderr evidence, then use mcp_loader_surface_restart({ connection_id, reason }) when the attached child should be replaced.',
       'For a replayable generation, invoke mcp_loader_surface_restart with the connection_id. For session_pinned or restart_required lifecycle, the observation names carrier-supervisor as the actuator; invoke the carrier supervisor capability restart_mcp_loader_process before reconnecting.',
       'For max_connections_reached, call mcp_loader_connection_inventory, detach stale or closed connection ids, and retry only after capacity is available.',
-      'For stale loader runtime, call mcp_loader_runtime_status and restart the mcp-loader process through its carrier or runtime supervisor; child restart cannot reload the loader.',
+      'For stale loader runtime, call mcp_loader_runtime_status and invoke reload_action.next_call (restart_mcp_loader_process) through its carrier or runtime supervisor; child restart cannot reload the loader.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
     ],
     feedback: {

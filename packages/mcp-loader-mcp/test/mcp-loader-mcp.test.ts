@@ -208,6 +208,9 @@ try {
   assert.equal(guidance?.runtime_lifecycle?.restart_tool, 'mcp_loader_surface_restart');
   assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
   assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.owner, 'carrier_or_runtime_supervisor');
+  assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.tool_name, 'restart_mcp_loader_process');
+  assert.equal(guidance?.runtime_lifecycle?.loader_restart_action?.actuator_scope, 'external_supervisor_capability');
+  assert.deepEqual(guidance?.runtime_lifecycle?.loader_restart_action?.next_call, { tool_name: 'restart_mcp_loader_process', arguments: {} });
   assert.equal(guidance?.runtime_freshness?.schema, 'narada.mcp_loader.runtime_freshness.v1');
   assert.equal(guidance?.runtime_freshness?.status, 'current');
   assert.equal(guidance?.runtime_freshness?.runtime_entrypoint?.exists, true);
@@ -215,6 +218,7 @@ try {
   assert.equal(guidance?.runtime_freshness?.reload_action?.kind, 'restart_loader_process');
   assert.equal(guidance?.runtime_freshness?.reload_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
   assert.equal(guidance?.runtime_freshness?.reload_action?.operation, 'restart');
+  assert.deepEqual(guidance?.runtime_freshness?.reload_action?.next_call, { tool_name: 'restart_mcp_loader_process', arguments: {} });
   assert.ok((guidance?.runtime_freshness?.dependency_files as Array<Record<string, unknown>>).some((file) => file.name === 'mcp_transport'));
   assert.ok((guidance?.runtime_freshness?.config_files as Array<Record<string, unknown>>).some((file) => file.name === 'workspace_lockfile'));
   assert.ok((guidance?.tool_preference as Array<Record<string, unknown>>).some((step) => step.step === 'discover'));
@@ -235,6 +239,8 @@ try {
   assert.equal(runtimeStatus?.reload_action?.kind, 'restart_loader_process');
   assert.equal(runtimeStatus?.reload_action?.schema, 'narada.mcp_loader.supervisor_restart_action.v1');
   assert.equal(runtimeStatus?.reload_action?.owner, 'carrier_or_runtime_supervisor');
+  assert.equal(runtimeStatus?.reload_action?.tool_name, 'restart_mcp_loader_process');
+  assert.deepEqual(runtimeStatus?.reload_action?.next_call, { tool_name: 'restart_mcp_loader_process', arguments: {} });
   assert.ok((guidance?.boundaries as string[]).some((boundary) => boundary.includes('does not own attached-surface domain policy')));
 
   const emptyInventory = await call('tools/call', { name: 'mcp_loader_connection_inventory', arguments: {} }, 36);

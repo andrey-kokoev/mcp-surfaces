@@ -237,7 +237,7 @@ function taskLifecycleFirstUseDecisionTree() {
   return [
     {
       condition: 'You have a task number.',
-      sequence: ['task_lifecycle_show', 'task_lifecycle_claim if unclaimed and claimable', 'do the work', 'task_lifecycle_submit_work'],
+      sequence: ['task_lifecycle_show', 'task_lifecycle_reopen or task_lifecycle_continue if terminal', 'task_lifecycle_claim if unclaimed and claimable', 'do the work', 'task_lifecycle_submit_work'],
     },
     {
       condition: 'You do not have a task number.',
@@ -249,7 +249,7 @@ function taskLifecycleFirstUseDecisionTree() {
     },
     {
       condition: 'You are completing review/dependency work.',
-      sequence: ['task_lifecycle_show to read outcome contract', 'task_lifecycle_finish with outcome and findings'],
+      sequence: ['task_lifecycle_show to read outcome contract and terminal state', 'task_lifecycle_reopen or task_lifecycle_continue if terminal', 'task_lifecycle_finish with outcome and findings'],
     },
     {
       condition: 'The carrier-bound server is stale or wedged.',
@@ -265,13 +265,13 @@ function taskLifecycleFirstUseDecisionTree() {
 function taskLifecycleStateTruthTable() {
   return {
     opened: 'Task exists and is available or waiting; no current agent responsibility is implied.',
-    claimed: 'An agent has accepted responsibility; no completion is implied.',
+    claimed: 'An agent has accepted responsibility; no completion is implied. A closed or confirmed task must not enter this state without an explicit reopen/continue trace.',
     submitted: 'A report or evidence packet was recorded by a tool call; closure is not implied.',
     completed_outcome: 'A task_outcome was admitted as completed; closure may still be gated by review or dependencies.',
     in_review: 'Submitted work awaits review or dependency satisfaction; do not report this as closed.',
     awaiting_dependencies: 'Parent work is not closed because one or more dependencies must satisfy outcomes first.',
-    closed: 'Closure authority has been recorded; this is the normal terminal claim for task completion.',
-    confirmed: 'A stronger finalization state when supported by local policy; treat as at least closed.',
+    closed: 'Closure authority has been recorded; this is the normal terminal claim for task completion. Claiming or submitting a new outcome requires task_lifecycle_reopen or task_lifecycle_continue first.',
+    confirmed: 'A stronger finalization state when supported by local policy; treat as at least closed and require an explicit reopen/continue trace before new work or outcomes.',
     deferred: 'Work is intentionally paused; do not treat as completed.',
     blocked: 'Known blocker prevents truthful completion until resolved or explicitly dispositioned.',
   };

@@ -8,8 +8,13 @@ export type LoaderSupervisorRestartAction = {
   owner: 'carrier_or_runtime_supervisor';
   operation: 'restart';
   capability: 'restart_mcp_loader_process';
-  tool_name: null;
+  tool_name: 'restart_mcp_loader_process';
   arguments: Record<string, never>;
+  actuator_scope: 'external_supervisor_capability';
+  next_call: {
+    tool_name: 'restart_mcp_loader_process';
+    arguments: Record<string, never>;
+  };
   connection_id_required: false;
   session_restart_required: false;
 };
@@ -22,8 +27,13 @@ export function loaderSupervisorRestartAction(): LoaderSupervisorRestartAction {
     owner: 'carrier_or_runtime_supervisor',
     operation: 'restart',
     capability: 'restart_mcp_loader_process',
-    tool_name: null,
+    tool_name: 'restart_mcp_loader_process',
     arguments: {},
+    actuator_scope: 'external_supervisor_capability',
+    next_call: {
+      tool_name: 'restart_mcp_loader_process',
+      arguments: {},
+    },
     connection_id_required: false,
     session_restart_required: false,
   };

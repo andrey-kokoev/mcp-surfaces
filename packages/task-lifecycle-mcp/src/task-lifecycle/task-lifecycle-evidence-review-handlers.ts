@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { isAbsolute, join, relative } from 'node:path';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
+import { terminalTaskMutationGuard } from './closure-authority.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
@@ -872,6 +873,15 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     if (!contract) return null;
     const allowedOutcomes = parseStringArrayJson(contract.allowed_outcomes_json);
     if (!allowedOutcomes.includes(normalizedOutcome)) return null;
+    const terminalGuard = terminalTaskMutationGuard(requiredLifecycle, 'outcome_admission');
+    if (terminalGuard) {
+      return {
+        status: 'error',
+        ...terminalGuard,
+        task_number: requiredLifecycle.task_number,
+        task_id: requiredLifecycle.task_id,
+      };
+    }
     captureProjectionSnapshot?.(requiredLifecycle.task_id);
     const reviewTaskProjection = ensureCompatibilityReviewTaskProjection({
       siteRoot,
@@ -1338,6 +1348,10 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         return jsonToolResult(payload, true);
       }
       const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const terminalGuard = lifecycle ? terminalTaskMutationGuard(lifecycle, 'finish') : null;
+      if (terminalGuard) {
+        return jsonToolResult({ status: 'blocked', ...terminalGuard }, true);
+      }
       const outcomeContract = lifecycle ? store.getLatestTaskOutcomeContract?.(lifecycle.task_id) : undefined;
       if (!outcomeContract && !reviewer) {
         reviewer = findReviewerCapableAgents(store)?.[0]?.agent_id ?? 'reviewer';
@@ -1945,6 +1959,11 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (!verdict) throw new Error('verdict_required');
       enforceSessionIdentity(agentId);
       const identityWarning = verifySessionIdentity(agentId);
+      const parentLifecycle = store.getLifecycleByNumber(taskNumber);
+      const terminalGuard = parentLifecycle ? terminalTaskMutationGuard(parentLifecycle, 'review_submission') : null;
+      if (terminalGuard) {
+        return jsonToolResult({ status: 'blocked', ...terminalGuard }, true);
+      }
 
       const reviewerCapabilityPolicy = getReviewerCapabilityPolicy ? getReviewerCapabilityPolicy() : { mode: 'advisory', source: 'default' };
       const reviewerHasCapability = isReviewerCapable(store, agentId);
