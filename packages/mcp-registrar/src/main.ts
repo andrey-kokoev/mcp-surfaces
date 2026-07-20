@@ -253,7 +253,7 @@ const READ_ONLY_TOOLS_BY_SURFACE: Record<string, string[]> = {
   'site-loop': ['site_loop_guidance', 'site_loop_doctor', 'site_loop_config_validate', 'site_loop_output_show', 'site_loop_operator_affordances', 'site_docs_list', 'site_docs_show', 'site_test_list', 'site_loop_status', 'site_loop_unified_status', 'site_loop_recovery_plan', 'site_loop_health', 'site_loop_operating_status', 'site_loop_proof_status', 'site_loop_readiness', 'site_loop_coherence', 'site_loop_runs_list', 'site_loop_run_show', 'site_loop_attention_list', 'site_loop_attention_show'],
   'site-lifecycle': ['site_lifecycle_guidance', 'site_lifecycle_doctor', 'site_lifecycle_command_map', 'site_create_presets_list', 'site_create_plan', 'site_list', 'site_discover', 'site_show', 'site_doctor', 'site_lifecycle_kinds', 'site_lifecycle_preflight', 'site_relation_list', 'site_relation_validate', 'site_authority_preflight'],
   'site-registry': ['site_registry_guidance', 'site_registry_doctor', 'site_registry_command_map', 'site_registry_list', 'site_registry_show', 'site_registry_discover_plan'],
-  'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+  'agent-context': ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'mcp_output_show'],
   'worker-delegation': ['worker_guidance', 'worker_policy_inspect', 'worker_config_resolve', 'worker_cognition_defaults_inspect', 'worker_run_status', 'worker_runs_list', 'worker_run_wait', 'worker_run_wait_batch', 'worker_runs_synthesize', 'worker_dashboard_describe', 'worker_output_show', 'worker_operator_affordances'],
   'delegated-task': ['delegated_task_guidance', 'delegated_task_policy_inspect', 'delegated_task_template_catalog', 'delegated_task_validate', 'delegated_task_status', 'delegated_task_summary', 'delegated_task_result', 'delegated_task_wait', 'delegated_task_events', 'delegated_tasks_list'],
   sop: ['sop_guidance', 'sop_doctor', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_run_status', 'sop_run_list', 'sop_run_events', 'sop_run_coverage_since'],
@@ -386,11 +386,11 @@ const SURFACES: SurfaceDef[] = [
     entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`,
     kind: 'mcp_surface',
     args: ['--site-root', '{site_root}', '--site-id', '{site_id}'],
-    tools: ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'agent_context_output_show'],
+    tools: ['agent_context_guidance', 'agent_context_doctor', 'agent_context_whoami', 'agent_context_continuation_export', 'agent_context_continuation_read', 'agent_context_start_session', 'agent_context_checkpoint', 'agent_context_rehydrate', 'agent_context_hydrate_current', 'agent_context_startup_sequence', 'agent_context_list_sessions', 'mcp_output_show'],
     env_vars: ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT'],
     output_reader_closure: {
-      agent_context_hydrate_current: 'agent_context_output_show',
-      agent_context_startup_sequence: 'agent_context_output_show',
+      agent_context_hydrate_current: 'mcp_output_show',
+      agent_context_startup_sequence: 'mcp_output_show',
     },
   },
   {

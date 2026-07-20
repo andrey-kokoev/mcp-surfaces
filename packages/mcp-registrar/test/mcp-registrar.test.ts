@@ -295,6 +295,12 @@ try {
   assert.equal((bySurface.get('worker-delegation')?.tools as string[]).includes('worker_output_show'), true);
   assert.ok((bySurface.get('delegated-task')?.tools as string[]).includes('delegated_task_result'));
   assert.ok((bySurface.get('agent-context')?.tools as string[]).includes('agent_context_list_sessions'));
+  assert.ok((bySurface.get('agent-context')?.tools as string[]).includes('mcp_output_show'));
+  assert.equal((bySurface.get('agent-context')?.tools as string[]).includes('agent_context_output_show'), false);
+  assert.deepEqual(bySurface.get('agent-context')?.output_reader_closure, {
+    agent_context_hydrate_current: 'mcp_output_show',
+    agent_context_startup_sequence: 'mcp_output_show',
+  });
   assert.ok((bySurface.get('sop')?.tools as string[]).includes('sop_doctor'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_fabric_diagnostics'));
   assert.ok((bySurface.get('mcp-loader')?.tools as string[]).includes('mcp_loader_site_tool_inventory_check'));
