@@ -27,7 +27,7 @@ lines.on('line', (line) => {
   }
   if (count === 1 && mode === 'timeout') return;
   if (count === 1 && mode === 'stale') {
-    spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('stale-not-json\\\\n'), 360)"], { stdio: ['ignore', process.stdout, process.stderr] });
+    spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('stale-not-json\\\\n'), 1_100)"], { stdio: ['ignore', process.stdout, process.stderr] });
     return;
   }
   if (count === 2 && mode === 'stale') {
@@ -48,7 +48,8 @@ lines.on('line', (line) => {
         FAKE_COUNT_PATH: countPath,
         FAKE_MODE: mode,
       },
-      requestTimeoutMs: mode === 'stale' ? 300 : 75,
+      // Fresh child startup can exceed sub-100ms under the workspace suite; keep the timeout intentionally short relative to the production default without racing process launch.
+      requestTimeoutMs: 1_000,
     });
     try {
       await assert.rejects(
