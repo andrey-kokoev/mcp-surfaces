@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -20,6 +24,7 @@
     "test": "pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/surface-feedback-mcp.test.js && node dist/test/task-lifecycle-client.test.js && node dist/test/surface-feedback-task-lifecycle-integration.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-feedback-e2e.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/task-lifecycle-mcp": "workspace:*"
   },
   "devDependencies": {

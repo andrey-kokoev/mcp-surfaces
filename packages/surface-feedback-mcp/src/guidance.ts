@@ -17,7 +17,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}, context: Guidance
     requested: { workflow, tool },
     capabilities: context.capabilities ?? {
       status: 'unknown',
-      read_scopes: Object.fromEntries(['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'].map((scope) => [scope, {
+      read_scopes: Object.fromEntries(['all_authorized', 'store_reconciliation', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'].map((scope) => [scope, {
         available: null,
         reason: 'Live server capability state was not provided.',
       }])),
@@ -35,8 +35,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}, context: Guidance
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
-      { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Check capabilities.read_scopes[scope].available before calling; unavailable scopes include a reason and remediation. The schema lists all scopes for protocol stability. all_authorized is the canonical feedback view and maintainer task-handoff discovery scope when available; authority_visible is the server-bound union of declared submitter-site and owned-surface entries, owned_surfaces is the owned-surface view, and authority_site_submissions is the declared submitter-site metadata view.' },
-      { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for one bounded queue of submitted, acknowledged, routed, and converted feedback; it includes task links and projected task state when available.' },
+      { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Check capabilities.read_scopes[scope].available before calling; unavailable scopes include a reason and remediation. The schema lists all scopes for protocol stability. store_reconciliation reads every row physically present in the canonical store for existence/linkage checks without broadening mutation authority; all_authorized is the canonical feedback view and maintainer task-handoff discovery scope; authority_visible is the server-bound union of declared submitter-site and owned-surface entries, owned_surfaces is the owned-surface view, and authority_site_submissions is the declared submitter-site metadata view. submitter_site_id is declared metadata, not authenticated provenance.' },
+      { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for the bounded unprocessed queue: submitted and acknowledged feedback only, filtered before pagination. Inspect queue_selection and excluded_status_counts; use list/stats for routed, converted, or closed history.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
       { step: 'convert', guidance: 'Use surface_feedback_convert_to_task only when capabilities.task_handoff.available is true and a governed maintainer handoff is intended. Server-bound User Site authority may hand off any canonical entry; ordinary feedback status mutations remain owner-scoped. The tool creates and links through task-lifecycle and returns the next authoritative action.' },
       { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },

@@ -13,7 +13,7 @@ Provides a single durable feedback channel for MCP surfaces. Agents across all N
 | `surface_feedback_submit` | Submit feedback (surface, declared submitter site, principal, kind, summary, details) |
 | `surface_feedback_convert_to_task` | Create and link one canonical feedback entry through task-lifecycle using server-bound User Site handoff authority; returns the next lifecycle action but does not execute the task |
 | `surface_feedback_list` | List entries with an explicit read scope and bounded metadata filters |
-| `surface_feedback_actionable_queue` | Read the bounded actionable queue with an explicit read scope |
+| `surface_feedback_actionable_queue` | Read submitted and acknowledged (unprocessed) feedback with an explicit read scope; selection occurs before pagination and the response reports included statuses plus excluded-status counts |
 | `surface_feedback_show` | Show one entry by ID within an explicit read scope |
 | `surface_feedback_stats` | Aggregate visible entries within an explicit read scope |
 
@@ -24,13 +24,16 @@ Every list, queue, show, and stats call must provide `scope` explicitly:
 | Scope | Meaning | Required server posture |
 |------|---------|-------------------------|
 | `all_authorized` | Canonical cross-site feedback view | `feedback_root` must equal `canonical_feedback_root` and server-bound Site authority must be configured |
+| `store_reconciliation` | Every row physically present in the canonical store, for existence and task-linkage reconciliation | Same canonical-store and server-authority requirements; read-only and does not broaden mutation authority |
 | `authority_visible` | Entries whose declared submitter site matches the bound Site or that are attached to its owned surfaces | Server-bound Site authority |
 | `owned_surfaces` | Entries for surfaces owned by the bound Site | Server-bound Site authority and owned surface IDs |
 | `authority_site_submissions` | Entries whose declared `submitter_site_id` matches the bound Site | Server-bound Site authority |
 
 `submitter_site_id_filter` is an optional metadata filter for list and queue. It does not authenticate the submitter, establish provenance, or expand authorization. The submitter site recorded in a feedback entry remains declarative submission metadata. Use canonical Site IDs for new submissions; generated server keys and session aliases are not Site IDs.
 
-`all_authorized` is both the canonical cross-site read scope and the discovery scope for maintainer task handoff. When the server is bound to a User Site authority and the feedback root is canonical, `surface_feedback_convert_to_task` may hand off any entry in that store. This does not broaden `surface_feedback_update_status` or its batch form: ordinary acknowledgement, routing, and closure mutations remain limited to entries submitted by the bound Site or attached to its owned surfaces. List, queue, and show results expose `task_handoff_capability` so callers can see whether the canonical handoff is ready before mutating.
+`store_reconciliation` is the explicit read route for verifying every row and task link in the canonical DB, including rows whose declared submitter Site and surface ownership are outside the bound authority's ordinary visibility. Results mark `submitter_site_id` as declared metadata rather than authenticated provenance. This scope is read-only: `surface_feedback_update_status` and its batch form remain limited to entries submitted by the bound Site or attached to its owned surfaces.
+
+`all_authorized` is both the canonical cross-site read scope and the discovery scope for maintainer task handoff. When the server is bound to a User Site authority and the feedback root is canonical, `surface_feedback_convert_to_task` may hand off any entry in that store. List, queue, and show results expose `task_handoff_capability` so callers can see whether the canonical handoff is ready before mutating.
 
 Scope names remain in `tools/list` for protocol stability, but availability is runtime state. Call `surface_feedback_guidance` or `surface_feedback_doctor` and inspect `capabilities.read_scopes[scope].available` before selecting a scope; unavailable scopes include a reason and remediation. Inspect `capabilities.task_handoff.available` before conversion. An unconfigured server therefore advertises the schema names without implying that `all_authorized` is callable.
 

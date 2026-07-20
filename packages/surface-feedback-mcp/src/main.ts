@@ -14,8 +14,8 @@ const PROTOCOL_VERSION = '2024-11-05';
 
 const FEEDBACK_KINDS = ['bug', 'improvement', 'gap', 'observation'] as const;
 const FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task', 'closed'] as const;
-const ACTIONABLE_FEEDBACK_STATUSES = ['submitted', 'acknowledged', 'routed', 'converted_to_task'] as const;
-const FEEDBACK_READ_SCOPES = ['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'] as const;
+const UNPROCESSED_FEEDBACK_STATUSES = ['submitted', 'acknowledged'] as const;
+const FEEDBACK_READ_SCOPES = ['all_authorized', 'store_reconciliation', 'authority_visible', 'owned_surfaces', 'authority_site_submissions'] as const;
 const HANDOFF_LEASE_MS = 120_000;
 const HANDOFF_LEASE_RENEW_MS = 30_000;
 
@@ -555,6 +555,18 @@ function feedbackCapabilities(state: FeedbackState): JsonRecord {
         allAuthorizedReason,
         allAuthorizedRemediation,
         { canonical_store_required: true, server_authority_required: true },
+      ),
+      store_reconciliation: unavailableScope(
+        allAuthorizedAvailable,
+        allAuthorizedReasonCode,
+        allAuthorizedReason,
+        allAuthorizedRemediation,
+        {
+          canonical_store_required: true,
+          server_authority_required: true,
+          purpose: 'read_every_row_physically_present_for_store_reconciliation',
+          mutation_authority_unchanged: true,
+        },
       ),
       authority_visible: unavailableScope(
         readAuthorityConfigured,
@@ -1620,7 +1632,7 @@ function feedbackReadScope(args: JsonRecord): FeedbackReadScope {
       forbidden_fields: legacyFields,
       required_field: 'scope',
       allowed_scopes: [...FEEDBACK_READ_SCOPES],
-      remediation: 'Use the required explicit scope: all_authorized, authority_visible, owned_surfaces, or authority_site_submissions. Site identity and owned surfaces are bound by the server.',
+      remediation: 'Use the required explicit scope: all_authorized, store_reconciliation, authority_visible, owned_surfaces, or authority_site_submissions. Site identity and owned surfaces are bound by the server.',
     });
   }
   if (args.submitter_site_id !== undefined) {
@@ -1654,7 +1666,7 @@ function feedbackReadScope(args: JsonRecord): FeedbackReadScope {
 
 function feedbackReadScopeQuery(args: JsonRecord, state: FeedbackState): { sql: string; params: string[]; read_scope: JsonRecord } {
   const scope = feedbackReadScope(args);
-  if (scope === 'all_authorized') {
+  if (scope === 'all_authorized' || scope === 'store_reconciliation') {
     if (!samePath(state.feedbackRoot, state.canonicalFeedbackRoot)) {
       throw diagnosticError('feedback_global_read_requires_canonical_store', 'feedback_global_read_requires_canonical_store', {
         scope,
@@ -1676,8 +1688,13 @@ function feedbackReadScopeQuery(args: JsonRecord, state: FeedbackState): { sql: 
       read_scope: {
         mode: scope,
         scope_limited: false,
-        authorization_basis: 'canonical_feedback_store_and_server_binding',
+        authorization_basis: scope === 'store_reconciliation'
+          ? 'canonical_feedback_store_reconciliation_and_server_binding'
+          : 'canonical_feedback_store_and_server_binding',
         authority_site_id: state.authoritySiteId,
+        reconciliation_read: scope === 'store_reconciliation',
+        submitter_site_id_semantics: 'declared_metadata_not_authenticated_provenance',
+        mutation_authority_unchanged: true,
       },
     };
   }
@@ -1777,18 +1794,22 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
   const since = optionalString(args.since);
   const until = optionalString(args.until);
   const readScope = feedbackReadScopeQuery(args, state);
-  const statusPlaceholders = ACTIONABLE_FEEDBACK_STATUSES.map(() => '?').join(', ');
-  let fromWhere = `FROM feedback_entries WHERE status IN (${statusPlaceholders})`;
-  const params: (string | number)[] = [...ACTIONABLE_FEEDBACK_STATUSES];
-  if (surfaceId) { fromWhere += ' AND surface_id = ?'; params.push(surfaceId); }
-  if (siteId) { fromWhere += ' AND submitter_site_id = ?'; params.push(siteId); }
-  if (kind) { fromWhere += ' AND kind = ?'; params.push(kind); }
-  if (since) { fromWhere += ' AND created_at >= ?'; params.push(since); }
-  if (until) { fromWhere += ' AND created_at <= ?'; params.push(until); }
-  fromWhere += readScope.sql;
-  params.push(...readScope.params);
-  const countRow = state.db.prepare(`SELECT COUNT(*) AS total ${fromWhere}`).get(...params) as JsonRecord;
-  const rows = state.db.prepare(`SELECT * ${fromWhere} ORDER BY updated_at DESC, created_at DESC, feedback_id ASC LIMIT ? OFFSET ?`).all(...params, limit, offset) as JsonRecord[];
+  const statusPlaceholders = UNPROCESSED_FEEDBACK_STATUSES.map(() => '?').join(', ');
+  let baseWhere = 'FROM feedback_entries WHERE 1=1';
+  const filterParams: (string | number)[] = [];
+  if (surfaceId) { baseWhere += ' AND surface_id = ?'; filterParams.push(surfaceId); }
+  if (siteId) { baseWhere += ' AND submitter_site_id = ?'; filterParams.push(siteId); }
+  if (kind) { baseWhere += ' AND kind = ?'; filterParams.push(kind); }
+  if (since) { baseWhere += ' AND created_at >= ?'; filterParams.push(since); }
+  if (until) { baseWhere += ' AND created_at <= ?'; filterParams.push(until); }
+  baseWhere += readScope.sql;
+  filterParams.push(...readScope.params);
+  const includedWhere = `${baseWhere} AND status IN (${statusPlaceholders})`;
+  const includedParams = [...filterParams, ...UNPROCESSED_FEEDBACK_STATUSES];
+  const countRow = state.db.prepare(`SELECT COUNT(*) AS total ${includedWhere}`).get(...includedParams) as JsonRecord;
+  const rows = state.db.prepare(`SELECT * ${includedWhere} ORDER BY updated_at DESC, created_at DESC, feedback_id ASC LIMIT ? OFFSET ?`).all(...includedParams, limit, offset) as JsonRecord[];
+  const excludedRows = state.db.prepare(`SELECT status, COUNT(*) AS total ${baseWhere} AND status NOT IN (${statusPlaceholders}) GROUP BY status ORDER BY status`).all(...filterParams, ...UNPROCESSED_FEEDBACK_STATUSES) as JsonRecord[];
+  const excludedStatusCounts = Object.fromEntries(excludedRows.map((row) => [String(row.status), Number(row.total ?? 0)]));
   const totalCount = Number(countRow.total ?? 0);
   const items = rows.map((row) => {
     const feedback = hydrateFeedback(row);
@@ -1797,7 +1818,7 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
     return {
       ...feedback,
       task_handoff_capability: taskHandoffCapability(state),
-      actionability: feedback.status === 'converted_to_task' ? 'task_follow_up' : 'feedback_action_required',
+      actionability: 'feedback_action_required',
       task_link: taskRef ? {
         task_ref: taskRef,
         lifecycle_state: taskStatus,
@@ -1815,7 +1836,13 @@ function feedbackActionableQueue(args: JsonRecord, state: FeedbackState): JsonRe
     status: 'ok',
     store: storeIdentity(state),
     read_scope: readScope.read_scope,
-    actionable_statuses: [...ACTIONABLE_FEEDBACK_STATUSES],
+    actionable_statuses: [...UNPROCESSED_FEEDBACK_STATUSES],
+    queue_selection: {
+      mode: 'unprocessed',
+      included_statuses: [...UNPROCESSED_FEEDBACK_STATUSES],
+      filtering_stage: 'before_pagination',
+    },
+    excluded_status_counts: excludedStatusCounts,
     items,
     count: items.length,
     total_count: totalCount,
@@ -1918,6 +1945,10 @@ function hydrateFeedback(row: JsonRecord): JsonRecord {
     feedback_id: String(row.feedback_id),
     surface_id: String(row.surface_id),
     submitter_site_id: String(row.submitter_site_id),
+    submitter_site_metadata: {
+      declared: true,
+      authenticated_provenance: false,
+    },
     submitter_principal: String(row.submitter_principal),
     kind: String(row.kind),
     summary: String(row.summary),

@@ -44,12 +44,14 @@ try {
   assert.equal(view(doctor).task_handoff_capability.scope, 'canonical_user_site_handoff');
   assert.equal(view(doctor).capabilities.status, 'ready');
   assert.equal(view(doctor).capabilities.read_scopes.all_authorized.available, true);
+  assert.equal(view(doctor).capabilities.read_scopes.store_reconciliation.available, true);
   assert.equal(view(doctor).capabilities.task_handoff.available, true);
   assert.match(view(doctor).db_path, /surface-feedback\.db$/);
 
   const guidance = await call('surface_feedback_guidance', {});
   assert.equal(view(guidance).capabilities.status, 'ready');
   assert.equal(view(guidance).capabilities.read_scopes.all_authorized.available, true);
+  assert.equal(view(guidance).capabilities.read_scopes.store_reconciliation.available, true);
   assert.equal(view(guidance).capabilities.task_handoff.available, true);
 
   const liveProofTemplate = await call('surface_feedback_live_proof_template', {
@@ -133,6 +135,41 @@ try {
   assert.ok(subData.feedback_id);
   assert.equal(subData.surface_id, 'sop');
 
+  const foreign = await call('surface_feedback_submit', {
+    surface_id: 'foreign-surface',
+    submitter_site_id: 'other-site',
+    submitter_principal: 'other-site.agent',
+    kind: 'observation',
+    summary: 'Canonical-store reconciliation fixture',
+    details: 'This row is intentionally outside ordinary authority visibility.',
+  });
+  const foreignId = view(foreign).feedback_id;
+  const foreignOrdinaryRead = await call('surface_feedback_show', {
+    feedback_id: foreignId,
+    scope: 'authority_visible',
+  });
+  assert.equal(errorCode(foreignOrdinaryRead), 'feedback_not_found');
+  const foreignReconciliationRead = await call('surface_feedback_show', {
+    feedback_id: foreignId,
+    scope: 'store_reconciliation',
+  });
+  assert.equal(view(foreignReconciliationRead).feedback_id, foreignId);
+  assert.equal(view(foreignReconciliationRead).read_scope.mode, 'store_reconciliation');
+  assert.equal(view(foreignReconciliationRead).read_scope.reconciliation_read, true);
+  assert.equal(view(foreignReconciliationRead).submitter_site_metadata.declared, true);
+  assert.equal(view(foreignReconciliationRead).submitter_site_metadata.authenticated_provenance, false);
+  const reconciliationList = await call('surface_feedback_list', {
+    scope: 'store_reconciliation',
+    submitter_site_id_filter: 'other-site',
+  });
+  assert.ok(view(reconciliationList).items.some((entry: any) => entry.feedback_id === foreignId));
+  const foreignMutation = await call('surface_feedback_update_status', {
+    feedback_id: foreignId,
+    status: 'closed',
+    resolution_note: 'Must remain unauthorized.',
+  });
+  assert.equal(errorCode(foreignMutation), 'feedback_not_visible');
+
   state.db.exec("CREATE TRIGGER reject_status_audit BEFORE INSERT ON feedback_events WHEN NEW.event_type = 'status_updated' BEGIN SELECT RAISE(ABORT, 'simulated_status_audit_failure'); END");
   const atomicStatusFailure = await call('surface_feedback_update_status', {
     feedback_id: subData.feedback_id,
@@ -207,29 +244,30 @@ try {
   assert.equal(actionableData.has_more, false);
   assert.equal(actionableData.items.some((item: any) => item.feedback_id === crossSiteId), true);
   assert.ok(actionableData.items.every((item: any) => item.task_handoff_capability.available === true));
-  const actionableConverted = actionableData.items.find((item: any) => item.feedback_id === convertedId);
-  assert.equal(actionableConverted.actionability, 'task_follow_up');
-  assert.deepEqual(actionableConverted.task_link, {
-    task_ref: 'task #999',
-    lifecycle_state: 'in_review',
-    lifecycle_state_source: 'feedback_projection',
+  assert.equal(actionableData.items.some((item: any) => item.feedback_id === convertedId), false);
+  assert.deepEqual(actionableData.actionable_statuses, ['submitted', 'acknowledged']);
+  assert.deepEqual(actionableData.queue_selection, {
+    mode: 'unprocessed',
+    included_statuses: ['submitted', 'acknowledged'],
+    filtering_stage: 'before_pagination',
   });
+  assert.equal(actionableData.excluded_status_counts.converted_to_task, 1);
 
   const actionableMine = await call('surface_feedback_actionable_queue', {
     scope: 'authority_site_submissions',
     limit: 10,
   });
   assert.equal(view(actionableMine).read_scope.mode, 'authority_site_submissions');
-  assert.equal(view(actionableMine).total_count, 1);
-  assert.equal(view(actionableMine).items[0].feedback_id, convertedId);
+  assert.equal(view(actionableMine).total_count, 0);
+  assert.equal(view(actionableMine).excluded_status_counts.converted_to_task, 1);
 
   const actionableOwned = await call('surface_feedback_actionable_queue', {
     scope: 'owned_surfaces',
     limit: 10,
   });
   assert.equal(view(actionableOwned).read_scope.mode, 'owned_surfaces');
-  assert.equal(view(actionableOwned).total_count, 1);
-  assert.equal(view(actionableOwned).items[0].feedback_id, convertedId);
+  assert.equal(view(actionableOwned).total_count, 0);
+  assert.equal(view(actionableOwned).excluded_status_counts.converted_to_task, 1);
 
   const actionableAuthorityVisible = await call('surface_feedback_actionable_queue', {
     scope: 'authority_visible',
@@ -720,7 +758,7 @@ try {
   const missingReadScope = await call('surface_feedback_list', {});
   assert.equal(errorCode(missingReadScope), 'feedback_read_scope_required');
   const listAll = await call('surface_feedback_list', { scope: 'all_authorized' });
-  assert.equal(view(listAll).count, 8);
+  assert.equal(view(listAll).count, 9);
   assert.equal(view(listAll).read_scope.mode, 'all_authorized');
   assert.equal(view(listAll).read_scope.scope_limited, false);
   assert.equal(view(listAll).store.feedback_root, root);
@@ -865,7 +903,7 @@ try {
   // --- stats: explicit canonical cross-site scope ---
   const statsAll = await call('surface_feedback_stats', { scope: 'all_authorized' });
   const statsAllData = view(statsAll);
-  assert.equal(statsAllData.total, 9);
+  assert.equal(statsAllData.total, 10);
   assert.equal(statsAllData.read_scope.mode, 'all_authorized');
   assert.ok(statsAllData.by_surface.sop >= 2);
   assert.ok(statsAllData.by_kind.improvement >= 1);

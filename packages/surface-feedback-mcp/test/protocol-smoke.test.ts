@@ -29,7 +29,7 @@ try {
 
   const listTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_list');
   assert.equal(listTool.annotations.readOnlyHint, true);
-  assert.deepEqual(listTool.inputSchema.properties.scope.enum, ['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions']);
+  assert.deepEqual(listTool.inputSchema.properties.scope.enum, ['all_authorized', 'store_reconciliation', 'authority_visible', 'owned_surfaces', 'authority_site_submissions']);
   assert.deepEqual(listTool.inputSchema.required, ['scope']);
   assert.equal(listTool.inputSchema.properties.submitter_site_id, undefined);
   assert.match(listTool.inputSchema.properties.submitter_site_id_filter.description, /metadata/);
@@ -38,7 +38,7 @@ try {
 
   const queueTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_actionable_queue');
   assert.equal(queueTool.annotations.readOnlyHint, true);
-  assert.deepEqual(queueTool.inputSchema.properties.scope.enum, ['all_authorized', 'authority_visible', 'owned_surfaces', 'authority_site_submissions']);
+  assert.deepEqual(queueTool.inputSchema.properties.scope.enum, ['all_authorized', 'store_reconciliation', 'authority_visible', 'owned_surfaces', 'authority_site_submissions']);
   assert.deepEqual(queueTool.inputSchema.required, ['scope']);
   assert.equal(queueTool.inputSchema.properties.submitter_site_id, undefined);
   assert.match(queueTool.inputSchema.properties.submitter_site_id_filter.description, /metadata/);
