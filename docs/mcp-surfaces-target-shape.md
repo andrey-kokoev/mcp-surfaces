@@ -190,6 +190,54 @@ A helper must not:
 - collapse draft, send, execution, and confirmation into one unreviewable act;
 - replace explicit payload refs with larger ad hoc inline limits.
 
+## MCP Fabric V2 Compilation Boundary
+
+MCP Fabric V2 treats surface declarations as versioned inputs to a deterministic
+compiler rather than as carrier configuration fragments:
+
+1. A surface descriptor declares tool schemas, effects, projections, transport
+   requirements, and lifecycle semantics.
+2. Site policy selects descriptors and produces a normalized fabric manifest.
+3. A pure compiler projects that manifest into carrier-neutral server records
+   and then into carrier-specific configuration documents.
+4. Runtime observation is recorded separately from desired state.
+5. Reconciliation compares desired and observed state and returns explicit
+   start, stop, restart, or reconfigure actions for the owning actuator.
+
+`@narada2/mcp-fabric-contracts` owns the Zod/TypeScript/JSON Schema contracts,
+canonicalization rules, and stable digests for these documents. It does not own
+Site discovery, authority decisions, process lifecycle, or carrier files.
+`@narada2/mcp-fabric-compiler` consumes those contracts and purely produces
+Codex TOML, Kimi MCP JSON with effect-derived approvals, and OpenCode JSONC
+documents. Guarded apply and rollback remain control-plane adapter concerns.
+
+The registrar is native-only: every registered entry is compiled from its
+package-owned descriptor, and there is no legacy catalog or adapter in the
+production path. Native descriptor disagreement is therefore a compile-time
+failure rather than a source-selection decision.
+
+Schema major versions are explicit. Unsupported majors, duplicate identities,
+invalid effect declarations, and incoherent lifecycle requirements are refused
+before compilation. Declaration ordering and object-key ordering do not affect
+digests, while order-sensitive transport argv remains preserved.
+
+### Stable logical endpoints and generations
+
+Eligible replayable stdio and session-pinned Streamable HTTP surfaces may be
+replaced behind a stable logical endpoint. A replacement progresses through
+starting and warming before it can become active. Warm-up proves initialize,
+initialized notification where applicable, tools/list contract digest, and an
+optional declared read-only health call. Failure leaves the old generation
+active.
+
+After atomic activation, new stdio calls route to the replacement while old
+in-flight calls drain. Existing HTTP session IDs remain pinned to the old
+generation while new sessions select the replacement. At bounded drain expiry,
+old work receives `session_generation_retired` with deterministic reconnect
+guidance and the old adapter terminates its process tree. Descriptors marked
+`restart_required` never enter this path; the named carrier/session actuator
+must restart them.
+
 ## Gap Map From Current State
 
 The current dirty tree and `defects.md` indicate these implementation themes:
@@ -283,3 +331,15 @@ These candidates are intentionally phrased as task payload material. Before crea
 - Tests: package-local tests for touched surfaces plus root `pnpm test` if shared transport helpers change.
 
 The reference implementation uses Zod at the transport boundary for scope, page, and argument-shape validation. Validation is part of the authority boundary, not an optional convenience for individual surfaces. Compatibility entry points may accept legacy root fields temporarily, but an explicit scope and legacy overrides are mutually exclusive.
+
+## Fabric V2 Native Descriptors and Runtime Observation
+Every registered surface resolves from a package-owned `SurfaceDescriptorV2`. The package's actual `tools/list` registry is the input to descriptor emission, so schemas, guidance identity, effects, projection authority, runtime requirements, and lifecycle requirements cannot silently diverge in the registrar.
+The registrar does not retain a legacy catalog or compatibility adapter in the
+production path. Native descriptors are the sole source for registered surface
+identity, live tool contracts, effects, projections, and lifecycle semantics.
+Carrier and Site materialization embeds the selected native descriptor plus its descriptor and tool-contract digests in `surface_projection`. This gives the loader a declared contract it can compare with fresh child `tools/list` output.
+Projection selection remains explicit: a surface with multiple projections requires `projection_id` or a runtime context that selects exactly one; current directory and server-name heuristics are not valid selectors.
+Runtime observations use `RuntimeObservationV2`. A generation record reports logical connection identity, generation state, heartbeat, lease expiry, freshness, health, descriptor/tool digests, and lifecycle-specific recovery actions. Atomic runtime records belong under the configured runtime-state root; a generic observation sink may emit events without taking Narada persistence authority.
+Reconciliation is pure planning. It returns exactly one bounded action: `no_op`, `replace_generation`, `reconnect_required`, `rematerialize_carrier_config`, or `unsupported`. Mutation plans carry one responsible actuator, required authority, operation ID, expected-state guards, and a durable outcome lookup.
+Registrar applies config, mcp-loader replaces eligible child generations, and carrier supervisors restart restart-required surfaces. No layer implicitly performs another layer's actuation.
+A stale or missing observation refuses application before mutation. Guidance and refusal messages name the responsible actuator and exact next call, including `mcp_loader_surface_restart` and the carrier-supervisor capability for loader or restart-required recovery.

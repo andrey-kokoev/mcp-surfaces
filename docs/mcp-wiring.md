@@ -72,3 +72,9 @@ Generated shape:
 - `packages/local-filesystem-mcp/README.md` explains standalone usage.
 
 The surface itself does not need Narada. The wiring workflow may.
+
+## V2 Descriptor And Runtime Boundaries
+
+The registrar catalog is materialized from each package's native V2 descriptor. The descriptor owns the live `tools/list` contract, effect metadata, projection transport, injection scope, runtime requirements, and lifecycle requirement. Carrier-specific files are projections of that descriptor; they are not a second source of tool or scope truth.
+
+Runtime observation is separate from config wiring. The runtime proxy records generation, heartbeat, lease, freshness, health, and contract-digest state. `mcp-loader_runtime_observation` reports the loader's stable logical connection and active/draining generations. A child replacement is requested through `mcp_loader_surface_restart`; a loader-process restart belongs to the carrier or runtime supervisor. Registrar config apply, loader generation replacement, and carrier restart remain separate actuators.

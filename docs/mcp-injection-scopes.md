@@ -271,3 +271,9 @@ Inference is a compatibility bridge, not the target state. New bindings should
 declare scope through `narada_scope`, and readers should prefer that object over
 flattened fields.
 
+## V2 Projection And Lifecycle Authority
+
+Native V2 descriptors make the scope and lifecycle boundary explicit before a carrier config is generated. A projection declares its transport, injection scope, authority requirements, runtime requirements, and lifecycle requirement. Runtime-neutral projections are eligible without a runtime kind; runtime-affined projections require an explicit matching runtime such as `nars`.
+
+Lifecycle ownership follows the projection rather than the session alias. A replayable child may be replaced by `mcp-loader`; a session-pinned or non-replayable runtime requires the carrier or runtime supervisor. Reconciliation must report the responsible actuator and required authority, not silently apply a repair from the observing surface.
+

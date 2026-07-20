@@ -8,9 +8,18 @@ This repository mixes reusable substrate surfaces with Narada-specific control-p
 - `@narada2/mcp-telemetry`
 - `@narada2/mcp-affordances`
 - `@narada2/mcp-runtime-proxy`
+- `@narada2/mcp-fabric-contracts`
+- `@narada2/mcp-fabric-compiler`
 - `@narada2/local-filesystem-mcp`
 - `@narada2/structured-command-mcp`
 - `@narada2/git-mcp`
+
+`mcp-fabric-contracts` is generic because it defines transport-neutral document
+contracts and deterministic digests. Narada-specific discovery, authority,
+binding policy, carrier materialization, and runtime actuation remain in their
+own control-plane surfaces.
+
+The V2 runtime observation and reconciliation contracts are also transport-neutral. They describe observed generations and bounded plans; the registrar, loader, and carrier supervisors remain the authorities that apply config, replace children, or restart carriers.
 
 ## Narada-Specific
 

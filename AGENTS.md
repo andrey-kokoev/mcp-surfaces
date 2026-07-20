@@ -13,6 +13,8 @@ Current packages:
 - `@narada2/mcp-affordances`: shared UI-neutral MCP affordance schema and validation helpers.
 - `@narada2/mcp-runtime-proxy`: shared carrier stdio proxy for MCP startup diagnostics.
 - `@narada2/mcp-e2e-harness`: shared bounded mechanics for real MCP end-to-end tests.
+- `@narada2/mcp-fabric-contracts`: shared versioned MCP descriptor, manifest, carrier projection, observation, and reconciliation contracts.
+- `@narada2/mcp-fabric-compiler`: pure manifest and Codex/Kimi/OpenCode carrier projection compiler with strict Moonshot schema validation.
 - `@narada2/execution-contract`: shared typed execution binding and request fingerprint contract.
 - `@narada2/provider-registry`: shared typed, policy-neutral provider/model capability registry loading and resolution.
 - `@narada2/local-filesystem-mcp`: governed filesystem MCP surface.
@@ -125,6 +127,8 @@ pnpm test:mcp-telemetry
 pnpm test:mcp-affordances
 pnpm test:mcp-runtime-proxy
 pnpm test:mcp-e2e-harness
+pnpm test:mcp-fabric-contracts
+pnpm test:mcp-fabric-compiler
 pnpm test:provider-registry
 pnpm test:local-filesystem
 pnpm test:structured-command
@@ -191,7 +195,7 @@ Do all of the following in the same change:
 
 ## Git Workflow
 
-- Do feature work on `agent/<topic>` branches.
+- Do not create a new branch unless the operator explicitly instructs it. Use the current branch by default; do not infer branch creation from task scope.
 - This repo does not use changesets; the `narada` repo does — do not copy that convention here.
 - Stage only paths explicitly scoped to your change and leave unrelated worktree state untouched.
 
@@ -227,8 +231,10 @@ Do all of the following in the same change:
 - `mcp-transport` owns reusable payload/output reference mechanics.
 - `mcp-telemetry` owns optional site-policy-gated telemetry helpers; it must not replace mandatory audit logs or persist raw args/results by default.
 - `mcp-affordances` owns UI-neutral MCP affordance document types, builders, and validation helpers. It must not encode renderer-specific components or bypass MCP tool schemas and policy checks.
-- `mcp-runtime-proxy` owns carrier-facing stdio proxy diagnostics for MCP startup. It must not authorize tools, mutate policy, or interpret surface domain behavior.
+- `mcp-runtime-proxy` owns carrier-facing startup diagnostics and transport-neutral generation replacement for eligible stdio and Streamable HTTP surfaces. It must not authorize tools, mutate policy, interpret surface domain behavior, or hot-replace `restart_required` surfaces.
 - `mcp-e2e-harness` owns bounded child-process transport (JSONL and Content-Length), temporary roots, cleanup, and result artifacts for real MCP E2E tests. It must not create Site fabric, define surface policy, or encode domain assertions.
+- `mcp-fabric-contracts` owns policy-neutral, versioned fabric document schemas, canonicalization, and digests. It must not discover Sites, authorize tools, launch runtimes, or own carrier configuration.
+- `mcp-fabric-compiler` owns deterministic manifest resolution, carrier projection documents, effect-derived approvals, and semantics-preserving carrier schema transforms. It must not write host files or actuate carrier/runtime lifecycle.
 - `execution-contract` owns shared execution binding and request fingerprint types only. It must not launch runtimes, authorize paths, or acquire task/domain behavior.
 - `nars-session-mcp` owns only the MCP adapter for concrete existing NARS sessions; NARS carrier protocol and session authority remain in Narada proper.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
