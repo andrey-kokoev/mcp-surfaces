@@ -767,6 +767,18 @@ let store = null;
 let runtimeConfigured = false;
 let runtimeStderr = process.stderr;
 
+function closeTaskLifecycleStore(): void {
+  const current = store;
+  if (!current) return;
+  store = null;
+  try {
+    current.db.close();
+  } catch (error) {
+    store = current;
+    throw error;
+  }
+}
+
 /**
  * Reconcile legacy Markdown task specifications into the SQLite projection
  * before handlers begin serving reads or mutations. SQLite remains
@@ -838,11 +850,18 @@ function backfillTaskSpecsFromTaskFiles() {
 }
 
 function prepareTaskLifecycleStore() {
-  store = openTaskLifecycleStore(siteRoot);
-  ensureTaskExecutionTables(store);
-  ensureDownstreamDependencyOutcomeContracts();
-  backfillTaskSpecsFromTaskFiles();
-  return store;
+  closeTaskLifecycleStore();
+  const next = openTaskLifecycleStore(siteRoot);
+  store = next;
+  try {
+    ensureTaskExecutionTables(next);
+    ensureDownstreamDependencyOutcomeContracts();
+    backfillTaskSpecsFromTaskFiles();
+    return next;
+  } catch (error) {
+    closeTaskLifecycleStore();
+    throw error;
+  }
 }
 
 export function configureTaskLifecycleMcpRuntime({
@@ -882,9 +901,9 @@ function ensureRuntimeConfigured() {
 function refreshStore() {
   ensureRuntimeConfigured();
   try {
-    // This MCP process shares `store` across dispatch helpers. With node:sqlite,
-    // closing a handle immediately invalidates helpers still holding it, so
-    // refresh must be non-destructive.
+    // Refresh is an ownership boundary: close the old shared handle before
+    // installing the replacement so repeated refreshes cannot retain SQLite
+    // locks after the MCP process exits.
     prepareTaskLifecycleStore();
     return true;
   } catch (error) {
@@ -967,13 +986,10 @@ export async function runTaskLifecycleMcpStdioServer({
     // The stdio process owns the shared lifecycle store. Close it after the
     // input stream and all in-flight requests are drained so the process can
     // terminate cleanly instead of retaining a SQLite handle indefinitely.
-    if (store) {
-      try {
-        store.db.close();
-      } finally {
-        store = null;
-        runtimeConfigured = false;
-      }
+    try {
+      closeTaskLifecycleStore();
+    } finally {
+      runtimeConfigured = false;
     }
   }
 }
