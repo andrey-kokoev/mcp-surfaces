@@ -74,6 +74,7 @@ export async function taskLifecycleDispositionCloseout({
   finish,
   changedFiles: finishChangedFiles,
   noFilesChanged,
+  reviewer,
   includeUnrelatedChangedFiles = false,
   findTaskFile,
   buildTaskFileResolutionFailure,
@@ -150,7 +151,7 @@ export async function taskLifecycleDispositionCloseout({
       const proved = afterNotes.replace(/^(\s*)- \[ \](.*)$/gm, '$1- [x]$2');
       if (proved !== afterNotes) writeFileSync(taskFile.path, proved, 'utf8');
       const evidenceMethods = ['criteria_proof'];
-      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: evidenceMethods });
+      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: evidenceMethods, store });
       criteriaResult = {
         status: admission.blockers.length === 0 ? 'proved' : 'proved_with_blockers',
         admission_id: admission.result.admission_id,
@@ -165,7 +166,11 @@ export async function taskLifecycleDispositionCloseout({
       const rawAutoDetectedChangedFiles = !finishChangedFiles && !noFilesChanged ? detectGitChangedFiles(siteRoot) : [];
       const scopedChangedFiles = scopeChangedFiles(siteRoot, rawAutoDetectedChangedFiles, { includeUnrelated: includeUnrelatedChangedFiles });
       const autoDetectedChangedFiles = scopedChangedFiles.files;
-      const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true };
+      const finishOptions: Record<string, unknown> = { cwd: siteRoot, taskNumber, agent: agentId, summary: summary ?? `Disposition close-out: ${inferredDisposition}`, close: true, store };
+      if (reviewer) {
+        finishOptions.reviewer = reviewer;
+        finishOptions.suppressLegacyReviewRouting = true;
+      }
       if (proveCriteria) finishOptions.proveCriteria = true;
       if (finishChangedFiles) finishOptions.changedFiles = JSON.stringify(finishChangedFiles);
       if (!finishChangedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(autoDetectedChangedFiles);

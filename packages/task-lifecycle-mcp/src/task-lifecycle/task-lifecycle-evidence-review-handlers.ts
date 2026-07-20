@@ -1218,6 +1218,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (!taskNumber) throw new Error('task_number_required');
       if (!agentId) throw new Error('agent_id_required');
       enforceSessionIdentity(agentId);
+      const reviewer = stringField(args, 'reviewer') ?? findReviewerCapableAgents(store)?.[0]?.agent_id ?? 'reviewer';
       const result = await taskLifecycleDispositionCloseout({
         siteRoot,
         store,
@@ -1232,10 +1233,14 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         changedFiles: stringArrayField(args, 'changed_files'),
         noFilesChanged: booleanField(args, 'no_files_changed') === true,
         includeUnrelatedChangedFiles: booleanField(args, 'include_unrelated_changed_files') === true,
+        reviewer,
       });
-      if (result.status !== 'error' && asRecord(result.finish_result)?.new_status === 'in_review' && typeof ensureReviewContractDependency === 'function') {
+      const finishResultPayload = asRecord(result.finish_result);
+      const finishNewStatus = finishResultPayload?.new_status;
+      if (result.status !== 'error'
+        && (finishNewStatus === 'in_review' || finishNewStatus === 'awaiting_dependencies')
+        && typeof ensureReviewContractDependency === 'function') {
         const parentLifecycle = store.getLifecycleByNumber(taskNumber);
-        const reviewer = stringField(args, 'reviewer') ?? findReviewerCapableAgents(store)?.[0]?.agent_id ?? 'reviewer';
         if (parentLifecycle) {
           const reviewDependency = await ensureReviewContractDependency({
             parentLifecycle,

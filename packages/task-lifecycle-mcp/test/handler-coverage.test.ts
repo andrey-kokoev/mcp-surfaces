@@ -4,7 +4,7 @@ import {
   createTaskLifecycleHandlerRegistry,
   PAYLOAD_OUTPUT_TOOL_NAMES,
 } from '../src/task-lifecycle/task-lifecycle-handler-registry.js';
-import { isStoreRetrySafe, validateTaskCreatePayload } from '../src/kernel/tool-call-pipeline.js';
+import { createTaskLifecycleToolCaller, isStoreRetrySafe, validateTaskCreatePayload } from '../src/kernel/tool-call-pipeline.js';
 
 const domainTools = ['task_lifecycle_status', 'task_lifecycle_claim', 'task_lifecycle_close'];
 const toolNames = [...domainTools, ...PAYLOAD_OUTPUT_TOOL_NAMES];
@@ -29,5 +29,33 @@ assert.throws(() => validateTaskCreatePayload({ title: 'Reject malformed tags', 
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_claim', args: {}, toolDef: { annotations: { readOnlyHint: false, idempotentHint: false } } }), false);
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_claim', args: { idempotency_key: 'claim-1' }, toolDef: { annotations: { readOnlyHint: false, idempotentHint: false } } }), true);
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_status', args: {}, toolDef: { annotations: { readOnlyHint: true, idempotentHint: false } } }), true);
+
+const pipelineCaller = createTaskLifecycleToolCaller({
+  toolAliases: {},
+  taskLifecycleTools: () => [{
+    name: 'task_lifecycle_claim',
+    description: 'test',
+    inputSchema: { type: 'object' },
+    annotations: { readOnlyHint: false, idempotentHint: false },
+  }],
+  siteRoot: 'D:\\code\\mcp-surfaces',
+  dispatchTool: async () => {
+    throw new Error('database is not open');
+  },
+  refreshStore: () => true,
+  jsonToolResult: (payload: unknown, isError = false) => ({ payload, isError }),
+  resolveToolPayloadArgs: ({ args }: { args: Record<string, unknown> }) => ({ args, payloadSource: null }),
+  enforceInlinePayloadLimit: () => {},
+  locusGuardedMutationTools: new Set(),
+});
+
+await assert.rejects(
+  pipelineCaller({ name: 'task_lifecycle_claim', arguments: {} }),
+  (error: unknown) => {
+    assert.match(String(error instanceof Error ? error.message : error), /store_unavailable_after_attempt/);
+    assert.match(String(error instanceof Error ? error.message : error), /original_error=database is not open/);
+    return true;
+  },
+);
 
 console.log('task-lifecycle-mcp handler coverage ok');

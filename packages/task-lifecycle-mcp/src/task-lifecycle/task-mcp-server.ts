@@ -696,7 +696,9 @@ function readIndexedEnvelope(root, envelopeId, refreshIndex, severityEvaluator) 
 }
 
 function buildPostCloseoutContinuation({ agentId, result }) {
-  refreshStore();
+  // Keep the request-owned store open. The caller may continue routing
+  // dependencies after this read model is built, and the current handle
+  // already sees the lifecycle writes made by the just-completed operation.
   const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
   const agentRole = roleResolution.role;
   const all = store.getAllLifecycle();
@@ -2705,6 +2707,7 @@ function legacyTaskLifecycleToolsSnapshot() {
         finish: { type: 'boolean', description: 'Finish the task after writing/proving. Default false.' },
         changed_files: { type: 'array', items: { type: 'string' }, description: 'Explicit changed-file evidence for the optional finish report.' },
         no_files_changed: { type: 'boolean', description: 'Explicitly declare that the optional finish legitimately changed no files.' },
+        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias. Defaults to the first reviewer-capable roster agent and routes the closeout through a review-contract dependency.'),
       }, ['task_number', 'agent_id']),
     },
     {

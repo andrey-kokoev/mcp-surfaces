@@ -129,18 +129,31 @@ async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, t
     return await dispatchTool(canonicalName, args, { payloadSource });
   } catch (error) {
     if (!isStoreError(error)) throw error;
+    const diagnostic = describeStoreError(error);
     if (!isStoreRetrySafe({ canonicalName, args, toolDef })) {
-      throw new Error(`store_unavailable_after_attempt: mutation_not_retried; tool=${canonicalName}; retry_safe=false; inspect operation state before retrying`);
+      throw new Error(`store_unavailable_after_attempt: mutation_not_retried; tool=${canonicalName}; retry_safe=false; inspect operation state before retrying; original_error=${diagnostic}`);
     }
     const refreshed = refreshStore();
-    if (!refreshed) throw new Error(`store_unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    if (!refreshed) throw new Error(`store_unavailable: ${diagnostic}`);
     try {
       return await dispatchTool(canonicalName, args, { payloadSource });
     } catch (retryError) {
-      if (isStoreError(retryError)) throw new Error(`store_unavailable: ${retryError instanceof Error ? retryError.message : String(retryError)}`);
+      if (isStoreError(retryError)) throw new Error(`store_unavailable: ${describeStoreError(retryError)}`);
       throw retryError;
     }
   }
+}
+
+function describeStoreError(error) {
+  if (error instanceof Error) {
+    const errorCode = (error as Error & { code?: unknown }).code;
+    const code = typeof errorCode === 'string' ? `; code=${errorCode}` : '';
+    const stack = typeof error.stack === 'string'
+      ? error.stack.split(/\r?\n/).slice(1, 9).map((line) => line.trim()).join(' <- ')
+      : '';
+    return `${error.message}${code}${stack ? `; stack=${stack}` : ''}`;
+  }
+  return String(error);
 }
 
 export function isStoreRetrySafe({ canonicalName, args, toolDef }) {
