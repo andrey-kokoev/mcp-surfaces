@@ -13,6 +13,7 @@ import { guidanceToolDefinition } from './guidance.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildBoundedToolResult,
   listOutputResources,
@@ -25,6 +26,7 @@ import {
   openAgentContextDb,
   validateIdentityAgainstRoster,
 } from './session-start.js';
+import { continuationProjectionState } from './continuation-projection.js';
 
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2026-04-18';
@@ -76,7 +78,7 @@ process.on('unhandledRejection', (error) => {
 
 traceStartup('process_start');
 
-const TOOLS = [
+export const TOOLS = [
   guidanceToolDefinition(),
   {
     name: 'agent_context_doctor',
@@ -502,22 +504,24 @@ function genericToolOutputSchema() {
   return { type: 'object', additionalProperties: true };
 }
 
-assertSiteRoot();
-traceStartup('site_root_ok');
-
 let inputBuffer = '';
 let transportMode = 'content-length';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => {
-  if (inputBuffer.length === 0) {
-    traceStartup('first_stdin_chunk', {
-      bytes: Buffer.byteLength(chunk, 'utf8'),
-      sample: JSON.stringify(chunk.slice(0, 300)),
-    });
-  }
-  inputBuffer += chunk;
-  processInputBuffer();
-});
+const isMainModule = process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) {
+  assertSiteRoot();
+  traceStartup('site_root_ok');
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    if (inputBuffer.length === 0) {
+      traceStartup('first_stdin_chunk', {
+        bytes: Buffer.byteLength(chunk, 'utf8'),
+        sample: JSON.stringify(chunk.slice(0, 300)),
+      });
+    }
+    inputBuffer += chunk;
+    processInputBuffer();
+  });
+}
 
 function parseArgs(argv) {
   const parsed = {};
@@ -694,6 +698,10 @@ function sendProgress(message, progress, progressMessage) {
     method: 'notifications/progress',
     params: { progressToken, progress, total: 1, message: progressMessage },
   });
+}
+
+export function listTools() {
+  return TOOLS;
 }
 
 function handleMessage(message) {
@@ -916,8 +924,15 @@ function checkpoint(toolArgs) {
   return withDb((db) => {
     const now = new Date().toISOString();
     const checkpointId = `chk_${randomUUID().replace(/-/g, '')}`;
-    const payload = checkpointPayload(toolArgs, agentId, now, checkpointId);
     const existing = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ?').get(agentId);
+    const previousCheckpoint = existing ? rowToCheckpoint(existing) : null;
+    const payload = checkpointPayload(toolArgs, agentId, now, checkpointId);
+    payload.continuation_projection = continuationProjectionState({
+      agentId,
+      continuation: payload.continuation,
+      continuationRef: payload.continuation_ref,
+      previousCheckpoint,
+    });
     if (existing) {
       db.prepare(`
         INSERT INTO agent_checkpoint_history (
@@ -973,6 +988,7 @@ function checkpoint(toolArgs) {
       site_root: siteRoot,
       continuation: payload.continuation ?? null,
       continuation_ref: payload.continuation_ref ?? null,
+      continuation_projection: payload.continuation_projection ?? null,
     };
   });
 }
@@ -1050,7 +1066,15 @@ function continuationExport(toolArgs) {
       sha256: createHash('sha256').update(artifactBytes).digest('hex'),
       created_at: new Date().toISOString(),
     });
-    const nextPayload = { ...checkpoint.payload, continuation_ref: reference };
+    const nextPayload = {
+      ...checkpoint.payload,
+      continuation_ref: reference,
+      continuation_projection: continuationProjectionState({
+        agentId,
+        continuation: checkpoint.continuation,
+        continuationRef: reference,
+      }),
+    };
     db.prepare('UPDATE agent_checkpoints SET payload_json = ? WHERE checkpoint_id = ?')
       .run(JSON.stringify(nextPayload), checkpoint.checkpoint_id);
 
@@ -1063,6 +1087,7 @@ function continuationExport(toolArgs) {
       checkpoint_at: checkpoint.checkpoint_at,
       continuation: checkpoint.continuation,
       continuation_ref: reference,
+      continuation_projection: nextPayload.continuation_projection,
       artifact: {
         path: relativePath,
         bytes: artifactBytes.length,
@@ -1101,6 +1126,7 @@ function continuationRead(toolArgs) {
       checkpoint_at: checkpoint.checkpoint_at,
       continuation: checkpoint.continuation,
       continuation_ref: checkpoint.continuation_ref,
+      continuation_projection: checkpoint.continuation_projection ?? null,
     };
     if (!checkpoint.continuation_ref) {
       return {
@@ -1109,6 +1135,7 @@ function continuationRead(toolArgs) {
         message: checkpoint.continuation
           ? `Canonical continuation exists in the ${checkpointLabel} but has no portable Markdown reference.`
           : `The ${checkpointLabel} has no canonical continuation state.`,
+        next_action: checkpoint.continuation_projection?.next_action ?? null,
       };
     }
 
@@ -1299,6 +1326,7 @@ function rowToCheckpoint(row) {
     tactical_resume_notes: payload.tactical_resume_notes ?? [],
     continuation: payload.continuation ?? null,
     continuation_ref: payload.continuation_ref ?? null,
+    continuation_projection: payload.continuation_projection ?? null,
     payload,
   };
 }
@@ -1345,4 +1373,3 @@ function parseJson(value, fallback) {
     return fallback;
   }
 }
-

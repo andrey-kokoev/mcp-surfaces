@@ -9,6 +9,10 @@
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
@@ -22,9 +26,10 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-roster.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-migrations.test.js"
+    "test": "pnpm build && node --disable-warning=ExperimentalWarning dist/test/agent-context-mcp.test.js && node --disable-warning=ExperimentalWarning dist/test/continuation-projection.test.js && node --disable-warning=ExperimentalWarning dist/test/protocol-smoke.test.js && node --disable-warning=ExperimentalWarning dist/test/site-fabric-agent-context-e2e.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-roster.test.js && node --disable-warning=ExperimentalWarning dist/test/session-start-migrations.test.js"
   },
   "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-transport": "workspace:*"
   },
   "files": [
