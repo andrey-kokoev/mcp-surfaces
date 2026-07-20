@@ -64,6 +64,8 @@ Local Site MCP fabric is injected by Narada launch/session materialization, not 
 
 Registrar tests must cover generated carrier configs for all supported carrier kinds and prove that shared surfaces use shared package entrypoints and current tool metadata. Generated carrier configs must not preserve legacy Site-local entrypoints or obsolete tool names after a surface migrates to a shared package.
 
+Every registered surface package must expose a package-owned `./surface-definition` export. The registrar native catalog imports those exports as the descriptor authority; loader fallback entries must remain aligned with the same built entrypoint and descriptor argument placeholders. Descriptor paths must remain portable by using fabric interpolation placeholders rather than operator-specific absolute roots.
+
 ## MCP Guidance Commands
 
 Most MCP surface packages should expose a read-only `_guidance` command using the surface's normal tool prefix, for example `task_lifecycle_guidance`, `git_guidance`, `fs_guidance`, or `graph_mail_guidance`.

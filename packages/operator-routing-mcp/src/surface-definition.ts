@@ -14,7 +14,7 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'local_write',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: ["--site-root","C:/Users/Andrey/Narada"], env: [] },
+      transport: { kind: 'stdio', command: 'node', args: ["--site-root","{site_root}"], env: [] },
       injection_scope: 'user_site',
       default_injection: 'enabled',
       runtime_requirements: [],

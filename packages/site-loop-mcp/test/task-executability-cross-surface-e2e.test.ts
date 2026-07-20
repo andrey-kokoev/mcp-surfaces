@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createTemporaryE2eRoot,
   readMcpOutputText,
@@ -46,6 +47,17 @@ import { runTaskExecutabilityReconciliation } from '../src/site-loop/task-execut
 
 type AnyRecord = Record<string, any>;
 
+const narsDispatchModulePath = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../../narada/packages/agent-runtime-server/src/task-executability-dispatch.mjs',
+);
+assert.ok(existsSync(narsDispatchModulePath), `missing real NARS dispatch hook: ${narsDispatchModulePath}`);
+const {
+  createNarsLifecycleHookDispatcher,
+  dispatchNarsLifecycleHooksForEvent,
+} = await import(pathToFileURL(resolve(narsDispatchModulePath, '..', 'lifecycle-hooks.mjs')).href);
+const { createNarsTaskExecutabilityDispatchHook } = await import(pathToFileURL(narsDispatchModulePath).href);
+
 const siteRoot = createTemporaryE2eRoot('site-loop-task-executability-cross-surface-e2e');
 const originalSiteId = process.env.NARADA_SITE_ID;
 process.env.NARADA_SITE_ID = 'fixture-site';
@@ -72,6 +84,10 @@ function taskServer(): ReturnType<typeof spawnJsonlMcpServer> {
     env: siteFabricChildEnv(siteRoot, { NARADA_AGENT_ID: 'fixture.builder', NARADA_SITE_ID: 'fixture-site' }),
     label: 'task-executability cross-surface lifecycle',
   });
+}
+
+function requestIdFromIdempotencyKey(idempotencyKey: string): string {
+  return idempotencyKey.replace(/^task-executability-assessment:/, '');
 }
 
 function closeStore(store: SqliteTaskLifecycleStore): void {
@@ -116,7 +132,7 @@ async function toolJson(client: JsonlMcpClient, id: number, name: string, args: 
   return JSON.parse(materialized.text) as JsonRecord;
 }
 
-async function createTask(client: JsonlMcpClient, id: number, taskKey: string, dangling = false): Promise<{ taskId: string; taskNumber: number }> {
+async function createTask(client: JsonlMcpClient, id: number, taskKey: string, dangling = false): Promise<{ taskId: string; taskNumber: number; followUp: AnyRecord }> {
   const payload = await toolJson(client, id, 'mcp_payload_create', {
     payload_id: `task-executability-cross-surface-${taskKey}`,
     payload: {
@@ -140,7 +156,7 @@ async function createTask(client: JsonlMcpClient, id: number, taskKey: string, d
   const taskId = String(created.task_id ?? followUp.task_id);
   assert.ok(Number.isInteger(taskNumber) && taskNumber > 0, JSON.stringify(created));
   assert.ok(taskId, JSON.stringify(created));
-  return { taskId, taskNumber };
+  return { taskId, taskNumber, followUp };
 }
 
 function jsonArray(value: string | null | undefined): unknown[] {
@@ -186,7 +202,7 @@ function makeLifecyclePort(
         lease_expires_at: row.lease_expires_at ?? new Date(Date.now() + lease_duration_minutes * 60_000).toISOString(),
         task_packet: taskPacket(row, spec),
         environment: assembleDeclaredEnvironment(siteRoot),
-        ...(attempt && attempt.state !== 'leased'
+        ...(attempt && (attempt.state !== 'leased' || attempt.delegated_task_id !== null || attempt.worker_run_id !== null)
           ? {
               latest_attempt: {
                 delegated_task_id: attempt.delegated_task_id,
@@ -270,26 +286,29 @@ function assessmentForInvocation(invocation: DelegatedTaskInvocation, delegatedT
 function makeDelegatedPort(
   contexts: Map<string, TaskExecutabilityRequest>,
   counters: { runs: number; polls: number },
+  options: { beforeRun?: () => Promise<void> | void } = {},
 ): DelegatedTaskPort {
   return {
     async run(invocation) {
+      await options.beforeRun?.();
       counters.runs += 1;
       const delegatedTaskId = `fixture-delegated-${invocation.task_number}`;
       const workerRunId = `fixture-worker-${counters.runs}`;
+      const request = contexts.get(requestIdFromIdempotencyKey(invocation.idempotency_key));
       return {
         status: 'completed',
         delegated_task_id: delegatedTaskId,
         worker_run_id: workerRunId,
         output: {
           ...assessmentForInvocation(invocation, delegatedTaskId, workerRunId),
-          task_spec_digest: contexts.get(invocation.idempotency_key)?.task_spec_digest ?? '',
-          environment_digest: contexts.get(invocation.idempotency_key)?.environment_digest ?? '',
+          task_spec_digest: request?.task_spec_digest ?? '',
+          environment_digest: request?.environment_digest ?? '',
         },
       };
     },
     async poll(args) {
       counters.polls += 1;
-      const request = contexts.get(args.idempotency_key);
+      const request = contexts.get(requestIdFromIdempotencyKey(args.idempotency_key));
       assert.ok(request, `missing recovery request context for ${args.idempotency_key}`);
       const invocation = {
         idempotency_key: args.idempotency_key,
@@ -316,15 +335,39 @@ function makeDelegatedPort(
   };
 }
 
-function makeOrchestrator(store: SqliteTaskLifecycleStore, consumerId: string, counters: { runs: number; polls: number }) {
+function makeOrchestrator(
+  store: SqliteTaskLifecycleStore,
+  consumerId: string,
+  counters: { runs: number; polls: number },
+  options: { beforeRun?: () => Promise<void> | void } = {},
+) {
   const contexts = new Map<string, TaskExecutabilityRequest>();
   return {
     contexts,
     orchestrator: new TaskExecutabilityOrchestrator(
       makeLifecyclePort(store, contexts),
-      makeDelegatedPort(contexts, counters),
+      makeDelegatedPort(contexts, counters, options),
       { consumer_id: consumerId, max_attempts: 2, max_run_ms: 1_000 },
     ),
+  };
+}
+
+function narsToolResultPayload(followUp: AnyRecord): AnyRecord {
+  return {
+    source_event: {
+      event: 'item.completed',
+      item: {
+        type: 'mcp_tool_call',
+        status: 'completed',
+        result: {
+          structuredContent: {
+            schema: 'narada.task.create.v0',
+            status: 'created',
+            follow_up: followUp,
+          },
+        },
+      },
+    },
   };
 }
 
@@ -341,27 +384,28 @@ async function delegatedDispatchCheck(store: SqliteTaskLifecycleStore, task: { t
         objective: 'Dispatch the current executable fixture.',
         request_id: 'task-executability-cross-surface-dispatch',
         source_task_ref: { kind: 'task_lifecycle', task_id: task.taskId, task_number: task.taskNumber },
-        constraints: { authority: 'read', cwd: siteRoot, site_root: siteRoot },
+        constraints: { cwd: siteRoot, site_root: siteRoot },
         workflow: { steps: [{ id: 'note', kind: 'note' }] },
         execution: { start: false },
       },
     },
   }, state);
   assert.equal(response?.error, undefined, JSON.stringify(response));
-  const ownedStore = ((state as AnyRecord).taskLifecycleStore ?? null) as AnyRecord | null;
-  if (ownedStore) closeStore(ownedStore as unknown as SqliteTaskLifecycleStore);
   return ((response?.result as AnyRecord)?.structuredContent ?? response?.result ?? {}) as JsonRecord;
 }
+
+let store: SqliteTaskLifecycleStore | null = null;
 
 try {
   const firstServer = await openLifecycleServer();
   const executableTask = await createTask(firstServer.client, 10, 'executable');
   const danglingTask = await createTask(firstServer.client, 20, 'dangling', true);
+  const narsTask = await createTask(firstServer.client, 25, 'nars-real');
   const pendingExecutable = await toolJson(firstServer.client, 30, 'task_lifecycle_executability_status', { task_number: executableTask.taskNumber });
   assert.equal((pendingExecutable.request as AnyRecord).state, 'pending', JSON.stringify(pendingExecutable));
   await closeLifecycleServer();
 
-  let store = openTaskLifecycleStore(siteRoot);
+  store = openTaskLifecycleStore(siteRoot);
   const initialCounters = { runs: 0, polls: 0 };
   const initial = makeOrchestrator(store, 'site-loop-initial', initialCounters);
   const initialResult = await runTaskExecutabilityReconciliation(siteRoot, {
@@ -371,6 +415,74 @@ try {
   assert.equal(initialResult.status, 'ok', JSON.stringify(initialResult));
   assert.equal((initialResult.counts as AnyRecord).completed, 2, JSON.stringify(initialResult));
   assert.equal(initialCounters.runs, 2);
+
+  const narsCounters = { runs: 0, polls: 0 };
+  let releaseNarsEvaluator!: () => void;
+  const narsEvaluatorReleased = new Promise<void>((resolve) => {
+    releaseNarsEvaluator = resolve;
+  });
+  let resolveNarsLeaseStarted!: () => void;
+  const narsLeaseStarted = new Promise<void>((resolve) => {
+    resolveNarsLeaseStarted = resolve;
+  });
+  let resolveNarsCompleted!: () => void;
+  const narsCompleted = new Promise<void>((resolve) => {
+    resolveNarsCompleted = resolve;
+  });
+  let resolveNarsHookCompleted!: () => void;
+  const narsHookCompleted = new Promise<void>((resolve) => {
+    resolveNarsHookCompleted = resolve;
+  });
+  const narsEvents: AnyRecord[] = [];
+  const narsScheduled: Array<() => void> = [];
+  const nars = makeOrchestrator(store, 'nars-runtime-task-executability', narsCounters, {
+    beforeRun: async () => {
+      resolveNarsLeaseStarted();
+      await narsEvaluatorReleased;
+    },
+  });
+  const narsHook = createNarsTaskExecutabilityDispatchHook({
+    emit: (event: AnyRecord) => {
+      narsEvents.push(event);
+      if (event.event === 'task_executability_assessment_completed') resolveNarsHookCompleted();
+    },
+    schedule: (callback: () => void) => narsScheduled.push(callback),
+    dispatch: async ({ follow_up }: AnyRecord) => {
+      assert.equal(follow_up.request_id, narsTask.followUp.request_id);
+      const result = await nars.orchestrator.reconcileAll(1);
+      resolveNarsCompleted();
+      return { source: 'narada-agent-runtime-server', result };
+    },
+  });
+  const narsLifecycleDispatcher = createNarsLifecycleHookDispatcher({ taskExecutabilityDispatch: narsHook });
+  const narsDispatchEvent = {
+    ...narsToolResultPayload(narsTask.followUp).source_event,
+    agent_id: 'fixture.builder',
+    session_id: 'fixture-nars-session',
+    request_id: narsTask.followUp.request_id,
+    turn_id: 'fixture-nars-turn',
+    timestamp: '2026-07-20T00:00:00.000Z',
+  };
+  const narsLifecycleDispatchResult = await dispatchNarsLifecycleHooksForEvent(narsLifecycleDispatcher, narsDispatchEvent);
+  assert.deepEqual(narsLifecycleDispatchResult.failures, []);
+  assert.equal(narsScheduled.length, 1);
+  narsScheduled.shift()!();
+  await narsLeaseStarted;
+
+  const siteLoopDuringNarsCounters = { runs: 0, polls: 0 };
+  const siteLoopDuringNars = makeOrchestrator(store, 'site-loop-during-nars', siteLoopDuringNarsCounters);
+  const siteLoopDuringNarsResult = await siteLoopDuringNars.orchestrator.reconcileAll(1);
+  assert.equal(siteLoopDuringNarsResult.results[0].outcome, 'idle', JSON.stringify(siteLoopDuringNarsResult));
+  assert.equal(siteLoopDuringNarsCounters.runs, 0);
+  releaseNarsEvaluator();
+  await narsCompleted;
+  assert.equal(narsCounters.runs, 1);
+  await narsHookCompleted;
+  assert.deepEqual(narsEvents.map((event) => event.event), [
+    'task_executability_assessment_accepted',
+    'task_executability_assessment_dispatched',
+    'task_executability_assessment_completed',
+  ]);
 
   const executableSpec = store.getTaskSpec(executableTask.taskId);
   assert.ok(executableSpec);
@@ -405,7 +517,6 @@ try {
 
   const secondServer = await openLifecycleServer();
   const raceTask = await createTask(secondServer.client, 40, 'race');
-  const restartTask = await createTask(secondServer.client, 50, 'restart');
   await closeLifecycleServer();
 
   store = openTaskLifecycleStore(siteRoot);
@@ -425,6 +536,12 @@ try {
   assert.equal(concurrentCounters.runs, 1, JSON.stringify({ raceA, raceB }));
   assert.equal([raceA.results[0].outcome, raceB.results[0].outcome].filter((value) => value === 'completed').length, 1);
   assert.equal([raceA.results[0].outcome, raceB.results[0].outcome].filter((value) => value === 'idle').length, 1);
+
+  closeStore(store);
+  const restartServer = await openLifecycleServer();
+  const restartTask = await createTask(restartServer.client, 50, 'restart');
+  await closeLifecycleServer();
+  store = openTaskLifecycleStore(siteRoot);
 
   const crashed = store.listExecutabilityRequestsForTask(restartTask.taskId, 10)[0];
   const leased = store.leaseExecutabilityRequest(crashed.request_id, 'crashed-site-loop', 10);
@@ -455,18 +572,25 @@ try {
   const finalServer = await openLifecycleServer();
   const finalExecutable = await toolJson(finalServer.client, 60, 'task_lifecycle_executability_status', { task_number: executableTask.taskNumber });
   const finalDangling = await toolJson(finalServer.client, 70, 'task_lifecycle_executability_status', { task_number: danglingTask.taskNumber });
+  const finalNars = await toolJson(finalServer.client, 75, 'task_lifecycle_executability_status', { task_number: narsTask.taskNumber });
   assert.equal(finalExecutable.currency, 'current', JSON.stringify(finalExecutable));
   assert.equal(finalExecutable.verdict, 'executable', JSON.stringify(finalExecutable));
   assert.equal(finalDangling.currency, 'current', JSON.stringify(finalDangling));
   assert.equal(finalDangling.verdict, 'needs_revision', JSON.stringify(finalDangling));
   assert.ok((finalDangling.findings as AnyRecord[]).some((finding) => finding.ref === 'findings-1-8'), JSON.stringify(finalDangling));
+  assert.equal(finalNars.currency, 'current', JSON.stringify(finalNars));
+  assert.equal(finalNars.verdict, 'executable', JSON.stringify(finalNars));
   await closeLifecycleServer();
 
   console.log(JSON.stringify({
     schema: 'narada.task_executability.cross_surface_e2e.v1',
     status: 'passed',
     deterministic: true,
-    no_nars_creation_recovered_by_site_loop: true,
+    nars_integration_path: 'agent-runtime-server.task-executability-dispatch',
+    nars_creation_observed: true,
+    nars_vs_site_loop_concurrency: { admitted_executions: 1, site_loop_during_nars: 'idle' },
+    fake_delegated_port_coverage: 'site-loop-and-nars-bounded-evaluator',
+    no_nars_site_loop_recovery: true,
     restart_recovered_via_persisted_worker_identity: true,
     concurrent_execution_count: 1,
     dangling_reference_verdict: 'needs_revision',
@@ -474,16 +598,15 @@ try {
   }));
 } finally {
   await closeLifecycleServer();
+  try {
+    store?.db.close();
+  } catch {
+    // The normal path closes each store before the next server phase; this is
+    // a final safety net for assertion failures during cleanup.
+  }
   if (originalSiteId === undefined) delete process.env.NARADA_SITE_ID;
   else process.env.NARADA_SITE_ID = originalSiteId;
   const removed = removeTemporaryE2eRoot(siteRoot);
-  if (!removed) {
-    console.error(JSON.stringify({
-      schema: 'narada.task_executability.cross_surface_e2e.cleanup_failure.v1',
-      site_root: siteRoot,
-      ai_entries: readdirSync(join(siteRoot, '.ai'), { withFileTypes: true }).map((entry) => entry.name),
-    }));
-  }
   assert.equal(removed, true);
 }
 

@@ -108,7 +108,7 @@ export function launcherSurfaceDefinition(): DefinedSurface {
       transport: {
         kind: 'stdio',
         command: 'node',
-        args: ['{mcp_surfaces_root}/launcher-mcp/dist/src/main.js', '--narada-root', 'C:/Users/Andrey/Narada'],
+        args: ['{mcp_surfaces_root}/launcher-mcp/dist/src/main.js', '--narada-root', '{site_root}'],
         env: [],
       },
       injection_scope: 'user_site',

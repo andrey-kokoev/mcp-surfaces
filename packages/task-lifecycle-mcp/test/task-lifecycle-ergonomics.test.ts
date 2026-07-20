@@ -2434,6 +2434,7 @@ compatibility_record: true
   assert.deepEqual(resumeExistingSubmitWork.primitive_results.map((entry: any) => entry.tool), [
     'task_lifecycle_submit_work.reuse_existing_task_notes',
     'task_lifecycle_finish',
+    'task_lifecycle_submit_work.create_review_dependency',
   ]);
   assert.equal(resumeExistingSubmitWork.primitive_results[0].result.status, 'reused');
   assert.equal(resumeExistingSubmitWork.primitive_results.some((entry: any) => entry.tool === 'task_lifecycle_prove_criteria'), false);

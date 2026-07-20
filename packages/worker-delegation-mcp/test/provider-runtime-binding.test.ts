@@ -5,6 +5,7 @@ import {
   providerRuntimeMetadataFromRegistry,
   redactWorkerProviderRuntimeBinding,
   resolveWorkerProviderRuntimeBinding,
+  resolveWorkerProviderRuntimeBindingFromRegistry,
 } from '../src/provider-runtime-binding.js';
 
 const metadata = providerRuntimeMetadataFromRegistry({
@@ -79,6 +80,72 @@ test('worker provider binding fails closed when the selected credential is absen
     reasoningEffort: null,
   }), (error: unknown) => {
     assert.equal((error as { codeName?: string }).codeName, 'worker_provider_credential_missing');
+    return true;
+  });
+});
+
+const authorityRegistry = {
+  schema: 'narada.carrier.provider_registry.v1',
+  default_provider: 'kimi-code-api',
+  providers: {
+    'kimi-code-api': {
+      adapter_kind: 'openai-compatible-chat-completions',
+      base_url: 'https://registry.example/kimi',
+      default_model: 'kimi-default',
+      available_models: ['kimi-low', 'kimi-override'],
+      cognition_defaults: { low: { model: 'kimi-low', reasoning_effort: 'low' } },
+      credential_requirement: { kind: 'api_key_secret', env_names: ['KIMI_CODE_API_KEY'] },
+    },
+  },
+};
+
+test('provider registry facade exposes override precedence and worker binding authority', () => {
+  const resolved = resolveWorkerProviderRuntimeBindingFromRegistry({
+    registry: authorityRegistry,
+    env: {
+      NARADA_INTELLIGENCE_PROVIDER: 'unrelated-provider',
+      NARADA_AI_API_KEY: 'canonical-decoy',
+      NARADA_AI_BASE_URL: 'https://canonical-decoy.invalid',
+      NARADA_AI_MODEL: 'canonical-decoy-model',
+      KIMI_CODE_API_KEY: 'provider-decoy',
+    },
+    providerOverride: 'kimi-code-api',
+    modelOverride: 'kimi-override',
+    baseUrlOverride: 'https://override.example/kimi',
+    apiKeyOverride: 'explicit-secret',
+    reasoningEffortOverride: 'high',
+  });
+  assert.equal(resolved.provider_source, 'test_override');
+  assert.equal(resolved.model_source, 'test_override');
+  assert.equal(resolved.base_url_source, 'test_override');
+  assert.equal(resolved.reasoning_effort_source, 'test_override');
+  assert.equal(resolved.binding.provider_id, 'kimi-code-api');
+  assert.equal(resolved.binding.model, 'kimi-override');
+  assert.equal(resolved.binding.base_url, 'https://override.example/kimi');
+  assert.equal(resolved.binding.reasoning_effort, 'high');
+  assert.equal(resolved.binding.credential_source, 'explicit_override');
+  assert.equal(JSON.stringify(resolved.redacted_binding).includes('explicit-secret'), false);
+});
+
+test('provider registry facade rejects malformed, unsupported-adapter, and missing-model registries', () => {
+  assert.throws(() => resolveWorkerProviderRuntimeBindingFromRegistry({ registry: {}, env: {} }), (error: unknown) => {
+    assert.equal((error as { codeName?: string }).codeName, 'worker_provider_registry_malformed');
+    return true;
+  });
+
+  const unsupported = structuredClone(authorityRegistry) as Record<string, unknown>;
+  (unsupported.providers as Record<string, Record<string, unknown>>)['kimi-code-api'].adapter_kind = 'unsupported-adapter';
+  assert.throws(() => resolveWorkerProviderRuntimeBindingFromRegistry({ registry: unsupported, env: { KIMI_CODE_API_KEY: 'key' } }), (error: unknown) => {
+    assert.equal((error as { codeName?: string }).codeName, 'worker_provider_adapter_unsupported');
+    return true;
+  });
+
+  const missingModel = structuredClone(authorityRegistry) as Record<string, unknown>;
+  const missingMetadata = (missingModel.providers as Record<string, Record<string, unknown>>)['kimi-code-api'];
+  missingMetadata.default_model = '';
+  missingMetadata.cognition_defaults = {};
+  assert.throws(() => resolveWorkerProviderRuntimeBindingFromRegistry({ registry: missingModel, env: { KIMI_CODE_API_KEY: 'key' } }), (error: unknown) => {
+    assert.equal((error as { codeName?: string }).codeName, 'worker_provider_model_missing');
     return true;
   });
 });

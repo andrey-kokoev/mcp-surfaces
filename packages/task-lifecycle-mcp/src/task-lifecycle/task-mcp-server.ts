@@ -52,6 +52,7 @@ import {
   createTaskLifecycleToolCaller,
 } from '../kernel/tool-call-pipeline.js';
 import { runJsonRpcStdioServer } from '../kernel/stdio-json-rpc.js';
+import { RuntimeStoreOwnership } from '../kernel/runtime-store-ownership.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 import {
   attachPayloadSource,
@@ -407,9 +408,9 @@ function taskLifecycleToolEffect(name: string): ToolEffect {
   };
 }
 
-function ensureDownstreamDependencyOutcomeContracts() {
-  if (!store) return;
-  const dependencies = store.db.prepare(`
+function ensureDownstreamDependencyOutcomeContracts(taskStore = store) {
+  if (!taskStore) return;
+  const dependencies = taskStore.db.prepare(`
     SELECT dependency_id, required_task_id, satisfying_outcomes_json, created_by, created_at
     FROM task_dependencies
     WHERE kind = 'downstream_work'
@@ -417,13 +418,13 @@ function ensureDownstreamDependencyOutcomeContracts() {
   for (const dependency of dependencies) {
     const requiredTaskId = String(dependency.required_task_id);
     const contractId = `contract-downstream_work-${requiredTaskId}`;
-    const latestContract = store.getLatestTaskOutcomeContract?.(requiredTaskId);
-    const existingDownstreamContract = store.listTaskOutcomeContracts?.(requiredTaskId)
+    const latestContract = taskStore.getLatestTaskOutcomeContract?.(requiredTaskId);
+    const existingDownstreamContract = taskStore.listTaskOutcomeContracts?.(requiredTaskId)
       .some((contract) => contract.contract_id === contractId) ?? false;
     if (existingDownstreamContract || latestContract?.outcome_type === 'completion') continue;
     const satisfyingOutcomes = parseJsonStringArray(dependency.satisfying_outcomes_json);
     const allowedOutcomes = [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])];
-    store.upsertTaskOutcomeContract({
+    taskStore.upsertTaskOutcomeContract({
       contract_id: contractId,
       task_id: requiredTaskId,
       outcome_type: 'completion',
@@ -768,17 +769,20 @@ let siteRoot = null;
 let store = null;
 let runtimeConfigured = false;
 let runtimeStderr = process.stderr;
+const runtimeStoreOwnership = new RuntimeStoreOwnership<{ db: { close: () => void } }>((taskStore) => taskStore.db.close());
 
 function closeTaskLifecycleStore(): void {
-  const current = store;
-  if (!current) return;
+  if (!runtimeStoreOwnership.currentStore() && !store) return;
+  runtimeStoreOwnership.closeCurrent();
   store = null;
-  try {
-    current.db.close();
-  } catch (error) {
-    store = current;
-    throw error;
-  }
+}
+
+function publishTaskLifecycleRuntime(nextRoot, nextStore): void {
+  siteRoot = nextRoot;
+  store = nextStore;
+  taskLifecycleToolCaller = null;
+  taskLifecycleHandlerRegistry = null;
+  setTaskLifecycleReadModelContext({ siteRoot, store });
 }
 
 /**
@@ -788,9 +792,9 @@ function closeTaskLifecycleStore(): void {
  * only when the database row is missing/empty and has no tag-update history,
  * which preserves an intentional audited clear.
  */
-function backfillTaskSpecsFromTaskFiles() {
-  if (!siteRoot || !store) return;
-  const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
+function backfillTaskSpecsFromTaskFiles(root = siteRoot, taskStore = store) {
+  if (!root || !taskStore) return;
+  const tasksDir = join(root, '.ai', 'do-not-open', 'tasks');
   if (!existsSync(tasksDir)) return;
 
   const filesByNumber = new Map();
@@ -807,7 +811,7 @@ function backfillTaskSpecsFromTaskFiles() {
 
   for (const [taskNumber, file] of filesByNumber) {
     if (!file) continue;
-    const lifecycle = store.getLifecycleByNumber(taskNumber);
+    const lifecycle = taskStore.getLifecycleByNumber(taskNumber);
     if (!lifecycle) continue;
     try {
       const { frontMatter, body } = parseFrontMatter(readFileSync(join(tasksDir, file), 'utf8'));
@@ -817,9 +821,9 @@ function backfillTaskSpecsFromTaskFiles() {
         frontMatter,
         body,
       });
-      const existing = store.getTaskSpec(lifecycle.task_id);
+      const existing = taskStore.getTaskSpec(lifecycle.task_id);
       if (!existing) {
-        store.upsertTaskSpec({
+        taskStore.upsertTaskSpec({
           task_id: parsed.task_id,
           task_number: parsed.task_number,
           title: parsed.title,
@@ -836,11 +840,11 @@ function backfillTaskSpecsFromTaskFiles() {
         continue;
       }
 
-      const hasTagHistory = store.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
+      const hasTagHistory = taskStore.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
       if (parseStoredTaskTags(existing.tags_json).length === 0 && parsed.tags.length > 0 && !hasTagHistory) {
         // Import only the legacy projection's labels. Preserve all other
         // SQLite-backed authored fields and its existing timestamp.
-        store.upsertTaskSpec({
+        taskStore.upsertTaskSpec({
           ...existing,
           tags_json: JSON.stringify(parsed.tags),
         });
@@ -851,17 +855,20 @@ function backfillTaskSpecsFromTaskFiles() {
   }
 }
 
-function prepareTaskLifecycleStore() {
-  closeTaskLifecycleStore();
-  const next = openTaskLifecycleStore(siteRoot);
-  store = next;
+function prepareTaskLifecycleStore(root = siteRoot) {
+  if (!root) throw new Error('task_lifecycle_site_root_required');
+  const next = openTaskLifecycleStore(root);
   try {
     ensureTaskExecutionTables(next);
-    ensureDownstreamDependencyOutcomeContracts();
-    backfillTaskSpecsFromTaskFiles();
+    ensureDownstreamDependencyOutcomeContracts(next);
+    backfillTaskSpecsFromTaskFiles(root, next);
     return next;
   } catch (error) {
-    closeTaskLifecycleStore();
+    try {
+      next.db.close();
+    } catch {
+      // Preserve the initialization failure; the candidate is never published.
+    }
     throw error;
   }
 }
@@ -880,33 +887,59 @@ export function configureTaskLifecycleMcpRuntime({
   }
 
   runtimeStderr = stderr;
-  SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
-  siteRoot = resolve(String(options.siteRoot ?? cwd));
+  const nextRoot = resolve(String(options.siteRoot ?? cwd));
+  const hadPublishedRuntime = runtimeConfigured;
+  if (hadPublishedRuntime && (runtimeStoreOwnership.activeRequestCount > 0 || runtimeStoreOwnership.isTransitioning)) {
+    throw new Error('task_lifecycle_runtime_reconfigure_active_requests');
+  }
+
+  let nextStore;
   try {
-    prepareTaskLifecycleStore();
+    nextStore = prepareTaskLifecycleStore(nextRoot);
   } catch (error) {
     throw new Error(`Failed to open task lifecycle store: ${error.message}`);
   }
+
+  try {
+    if (hadPublishedRuntime) {
+      runtimeStoreOwnership.replaceSync(nextStore);
+    } else {
+      runtimeStoreOwnership.initialize(nextStore);
+    }
+  } catch (error) {
+    try {
+      nextStore.db.close();
+    } catch {
+      // The ownership coordinator may already have closed a failed candidate.
+    }
+    throw new Error(`Failed to publish task lifecycle store: ${error.message}`);
+  }
+
+  SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
+  publishTaskLifecycleRuntime(nextRoot, nextStore);
   runtimeConfigured = true;
-  taskLifecycleToolCaller = null;
-  taskLifecycleHandlerRegistry = null;
-  setTaskLifecycleReadModelContext({ siteRoot, store });
   recordTaskLifecycleRuntimeObservation();
   reconcileTaskLifecycleRestartAfterBoot();
-  return { status: 'configured', siteRoot };
+  return { status: 'configured', siteRoot: nextRoot };
 }
 
 function ensureRuntimeConfigured() {
   if (!runtimeConfigured) configureTaskLifecycleMcpRuntime();
 }
 
-function refreshStore() {
+async function refreshStore(requestContext: { requestId?: unknown } = {}) {
   ensureRuntimeConfigured();
+  const requestId = String(requestContext?.requestId ?? '').trim() || undefined;
   try {
-    // Refresh is an ownership boundary: close the old shared handle before
-    // installing the replacement so repeated refreshes cannot retain SQLite
-    // locks after the MCP process exits.
-    prepareTaskLifecycleStore();
+    if (runtimeStoreOwnership.activeRequestCount > 0 && !requestId) {
+      throw new Error('task_lifecycle_store_refresh_request_id_required');
+    }
+    const nextRoot = siteRoot;
+    const nextStore = await runtimeStoreOwnership.replace({
+      requestId,
+      open: () => prepareTaskLifecycleStore(nextRoot),
+    });
+    publishTaskLifecycleRuntime(nextRoot, nextStore);
     return true;
   } catch (error) {
     runtimeStderr.write(`Failed to refresh task lifecycle store: ${error.message}\n`);
@@ -1002,14 +1035,18 @@ export async function handleTaskLifecycleMcpRequest(request, runtimeOptions = nu
   return handleRequest(request);
 }
 
-async function handleRequest(request) {
+async function handleRequest(request, requestContext: { requestId?: unknown } = {}) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   // Pass through transport-level parse errors directly
   if (request?.error) {
     return { jsonrpc: '2.0', id: request.id ?? null, error: request.error };
   }
+  const requestId = String(requestContext.requestId ?? request.id ?? `direct-${randomUUID()}`);
+  let requestLease: { release: () => void } | null = null;
   try {
-    const result = await dispatchMethod(request.method, request.params ?? {});
+    requestLease = runtimeStoreOwnership.acquire(requestId);
+    const dispatchContext = { ...requestContext, requestId };
+    const result = await dispatchMethod(request.method, request.params ?? {}, dispatchContext);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     return {
@@ -1020,10 +1057,12 @@ async function handleRequest(request) {
         message: error instanceof Error ? error.message : String(error),
       },
     };
+  } finally {
+    requestLease?.release();
   }
 }
 
-async function dispatchMethod(method, params) {
+async function dispatchMethod(method, params, requestContext = {}) {
   switch (method) {
     case 'initialize':
       return {
@@ -1045,7 +1084,7 @@ async function dispatchMethod(method, params) {
         tools: taskLifecycleSurfaceDefinition().tools
       };
     case 'tools/call':
-      return await callTool(params);
+      return await callTool(params, requestContext);
     case 'resources/list':
       return listOutputResources({ siteRoot });
     case 'resources/read':
@@ -1139,8 +1178,8 @@ function getTaskLifecycleToolCaller() {
   return taskLifecycleToolCaller;
 }
 
-async function callTool(params) {
-  return getTaskLifecycleToolCaller()(params);
+async function callTool(params, requestContext = {}) {
+  return getTaskLifecycleToolCaller()(params, requestContext);
 }
 
 function buildLifecycleTargetLocusStatus() {
@@ -1279,7 +1318,6 @@ function getTaskLifecycleHandlerRegistry() {
             withAuthoredRosterJsonPreserved: withAuthoredRosterJsonPreservedCore,
             finishTaskService,
             evaluatePostTransitionFollowups,
-            buildPostCloseoutContinuation,
             detectGitChangedFiles: detectGitChangedFilesCore,
             scopeChangedFiles: scopeChangedFilesCore,
           }),
@@ -1390,7 +1428,7 @@ function getTaskLifecycleHandlerRegistry() {
         mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
         mcp_output_show: (args) => jsonToolResult(outputShow({ siteRoot, args }), false, 'mcp_output_show'),
-        task_lifecycle_chapter_add_task: (args) => jsonToolResult(taskLifecycleChapterAddTask(args)),
+        task_lifecycle_chapter_add_task: async (args, context) => jsonToolResult(await taskLifecycleChapterAddTask(args, context)),
         task_lifecycle_chapter_show: (args) => jsonToolResult(taskLifecycleChapterShow(args)),
         task_lifecycle_submit_work: (args, context) => taskLifecycleSubmitWork(args, context),
         task_lifecycle_dependency_declare: (args) => taskLifecycleDependencyDeclare(args),
@@ -1548,8 +1586,9 @@ function taskLifecyclePayloadCreate(args) {
   return payloadCreate({ siteRoot, args });
 }
 
-function taskLifecycleChapterAddTask(args) {
-  refreshStore();
+async function taskLifecycleChapterAddTask(args, requestContext = {}) {
+  const refreshed = await refreshStore(requestContext);
+  if (!refreshed) throw new Error('task_lifecycle_store_refresh_failed');
   const chapterId = normalizeChapterId(args.chapter_id);
   const taskNumber = normalizeChapterTaskNumber(args.task_number);
   const taskSpec = store.getTaskSpecByNumber(taskNumber);
@@ -2552,353 +2591,6 @@ function countReportVerificationEntries(reportRecords, sqliteReports) {
   return count;
 }
 
-function legacyTaskLifecycleToolsSnapshot() {
-  return [
-    {
-      name: 'task_lifecycle_doctor',
-      description: 'Inspect Task Lifecycle MCP readiness without mutating. Defaults to a concise startup-safe summary; pass verbose=true or detail=full for full diagnostics.',
-      inputSchema: objectSchema({
-        verbose: { type: 'boolean', description: 'Return full diagnostics. Defaults false.' },
-        detail: stringSchema('Optional detail level. Use full for full diagnostics; default returns summary.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_list',
-      description: 'List tasks with optional status and agent filters, one bounded SQLite snapshot, and explicit projection-consistency/contention signals.',
-      inputSchema: objectSchema({
-        status: stringSchema('Filter by status: draft, opened, claimed, in_review, closed, confirmed, etc.'),
-        agent_id: stringSchema('Filter by assigned agent_id.'),
-        limit: numberSchema('Maximum results; defaults to 50.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_show',
-      description: 'Show full task details: lifecycle, spec, assignment, and observations.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to inspect.'),
-      }, ['task_number']),
-    },
-    {
-      name: 'task_lifecycle_roster',
-      description: 'List the agent roster.',
-      inputSchema: objectSchema({}),
-    },
-    {
-      name: 'task_lifecycle_guidance',
-      description: 'Show canonical operating guidance for task lifecycle workflows: ordinary work, blocked work, payloads, review/dependency state, and truthful closeout reporting.',
-      inputSchema: objectSchema({
-        workflow: stringSchema('Optional guidance section: ordinary_task, blocked_task, payloads, review_and_dependencies, closeout_truthfulness, or all.'),
-        tool: stringSchema('Optional lifecycle tool name for tool-specific guidance, such as task_lifecycle_submit_work or task_lifecycle_report_blocked.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_payload_schema',
-      description: 'Show accepted payload_ref shapes, inline length thresholds, and examples for lifecycle create, finish, closeout, blocked-report, review, and evidence payloads.',
-      inputSchema: objectSchema({
-        tool: stringSchema('Optional lifecycle tool name such as task_lifecycle_review or task_lifecycle_finish.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_roster_admit',
-      description: 'Append an admitted roster identity event and project it into the agent_roster read model.',
-      inputSchema: objectSchema({
-        agent_id: stringSchema('Canonical agent identity to admit into task lifecycle roster authority.'),
-        role: stringSchema('Canonical role for the agent.'),
-        actor_agent_id: stringSchema('Verified session agent recording the roster admission.'),
-        capabilities: { type: 'array', items: stringSchema('Capability name.'), description: 'Capabilities to project for this roster identity.' },
-        operator_identity: stringSchema('Optional operator identity associated with the agent.'),
-        authority_basis: authorityBasisSchema('Required authority basis for roster admission.'),
-        reason: stringSchema('Optional admission reason.'),
-        dry_run: { type: 'boolean', description: 'Plan only; do not append event or project roster.' },
-      }, ['agent_id', 'role', 'actor_agent_id', 'authority_basis']),
-    },
-    {
-      name: 'task_lifecycle_claim',
-      description: 'Claim an unassigned task for an agent. If the claiming agent differs from preferred_agent_id, include authority_basis { kind, summary }.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to claim.'),
-        agent_id: stringSchema('Agent id claiming the task.'),
-        authority_basis: authorityBasisSchema('Required when the task has a different preferred_agent_id.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_continue',
-      description: 'Continue a task that is in needs_continuation or evidence_repair state.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to continue.'),
-        agent_id: stringSchema('Agent id continuing the task.'),
-        reason: stringSchema('Continuation reason: evidence_repair, review_fix, handoff, blocked_agent, operator_override.'),
-      }, ['task_number', 'agent_id', 'reason']),
-    },
-    {
-      name: 'task_lifecycle_unclaim',
-      description: 'Release an active task assignment.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to unclaim.'),
-        agent_id: stringSchema('Optional agent_id guard; must match current claimant.'),
-        reason: stringSchema('Release reason.'),
-      }, ['task_number']),
-    },
-    {
-      name: 'task_lifecycle_next',
-      description: 'Get the next recommended action for an agent: active work, directed dependency work, dependency-waiting context, or claimable tasks.',
-      inputSchema: objectSchema({
-        agent_id: stringSchema('Agent id to query workboard for.'),
-        limit: numberSchema('Maximum results per category; defaults to 8.'),
-        last_workboard_check_at: stringSchema('ISO timestamp of the agent\'s last workboard check. Enables state_freshness computation.'),
-      }, ['agent_id']),
-    },
-    {
-      name: 'task_lifecycle_workboard_snapshot',
-      description: 'Return a read-only, trace-ready workboard evidence packet for IS movement. Does not claim, route, rank, or reconcile tasks.',
-      inputSchema: objectSchema({
-        agent_id: stringSchema('Agent id to query workboard evidence for.'),
-        limit: numberSchema('Maximum sample items per category; defaults to 8.'),
-        last_workboard_check_at: stringSchema('ISO timestamp of the agent\'s last workboard check. Enables freshness evidence.'),
-        previous_snapshot: { type: 'object', description: 'Optional prior snapshot payload for drift comparison.', additionalProperties: true },
-      }, ['agent_id']),
-    },
-    {
-      name: 'task_lifecycle_obligations',
-      description: 'List directed obligations and ordinary dependency work for an agent.',
-      inputSchema: objectSchema({
-        agent_id: stringSchema('Agent id to query obligations for.'),
-        status: stringSchema('Filter by status: open, completed, rejected. Defaults to open.'),
-        limit: numberSchema('Maximum dependency work items to include; defaults to 50.'),
-      }, ['agent_id']),
-    },
-    {
-      name: 'task_lifecycle_inspect',
-      description: 'Deep-inspect a task: lifecycle state, evidence summary, assignment, obligations, and reports.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to inspect.'),
-      }, ['task_number']),
-    },
-    {
-      name: 'task_lifecycle_admit_evidence',
-      description: 'Admit evidence for a task through the admission gate (report, verification, criteria).',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to admit evidence for.'),
-        agent_id: stringSchema('Agent id performing the admission.'),
-        self_certification: { type: 'object', description: 'Optional self-certification guard metadata for closure-sensitive evidence.', additionalProperties: true },
-        payload_ref: stringSchema('Optional immutable payload ref carrying self_certification guard metadata. Evidence is read from the lifecycle store.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_prove_criteria',
-      description: 'Auto-check all acceptance criteria in the task body and run evidence admission.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to prove criteria for.'),
-        agent_id: stringSchema('Agent id performing the proof.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_disposition_closeout',
-      description: 'Prepare or complete a lightweight inbox-disposition close-out: resolve envelope status, write execution/verification notes, optionally prove criteria and finish, and return task-owned changed files. For long summaries, create a payload and call with payload_ref plus top-level task_number and agent_id.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to close out.'),
-        agent_id: stringSchema('Agent id performing the close-out.'),
-        envelope_id: stringSchema('Optional envelope id. If omitted, the task body is scanned for env_<id>.'),
-        disposition: stringSchema('Optional disposition label, e.g. already_promoted, acknowledged, dismissed, no_code.'),
-        summary: stringSchema('Optional close-out summary. Inline strings over the governed inline threshold should be carried in payload_ref.'),
-        payload_ref: stringSchema('Optional immutable payload ref carrying long summary, changed_files, or no_files_changed. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
-        dry_run: { type: 'boolean', description: 'Plan without writing task notes or finishing.' },
-        prove_criteria: { type: 'boolean', description: 'Auto-check criteria after writing notes. Default false.' },
-        finish: { type: 'boolean', description: 'Finish the task after writing/proving. Default false.' },
-        changed_files: { type: 'array', items: { type: 'string' }, description: 'Explicit changed-file evidence for the optional finish report.' },
-        no_files_changed: { type: 'boolean', description: 'Explicitly declare that the optional finish legitimately changed no files.' },
-        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias. Defaults to the first reviewer-capable roster agent and routes the closeout through a review-contract dependency.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_audit',
-      description: 'Timeline of recent task lifecycle events: claims, reports, dependency outcomes, admissions, closes.',
-      inputSchema: objectSchema({
-        since: stringSchema('ISO timestamp start. Defaults to 24 hours ago.'),
-        until: stringSchema('ISO timestamp end. Defaults to now.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_finish',
-      description: 'Finish a claimed task by submitting a report. If the task has an outcome contract, include outcome and optional findings; contract_id is inferred from the task. Use payload_ref only for long companion fields; top-level task_number and agent_id remain authoritative.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to finish.'),
-        agent_id: stringSchema('Agent id finishing the task.'),
-        summary: stringSchema('Finish summary.'),
-        outcome: stringSchema('Structured outcome for tasks with an outcome contract. Allowed values are inferred from the task contract, for example accepted, accepted_with_notes, rejected, completed, or blocked.'),
-        findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Structured findings for outcome-contract tasks. Use [] when there are no findings.' },
-        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional evidence references supporting the structured outcome.' },
-        reviewer: stringSchema('Optional admitted reviewer agent id or unique reviewer role alias. Ordinary task finish defaults to the first reviewer-capable roster agent, then to the reviewer role, and always generates review-contract dependency work.'),
-        changed_files: { type: 'array', items: { type: 'string' }, description: 'Explicit changed-file evidence for this finish report.' },
-        no_files_changed: { type: 'boolean', description: 'Explicitly declare that this finish legitimately changed no files.' },
-        authority_basis: authorityBasisSchema('Required when conflict-of-interest policy allows explicit operator override for an outcome-contract dependency task.'),
-        payload_ref: stringSchema('Optional immutable payload ref carrying long finish/report companion fields such as summary, changed_files, outcome, findings, recovery_truthfulness, or self_certification. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_close',
-      description: 'Close a task. Requires the task to be in a closable state.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to close.'),
-        agent_id: stringSchema('Agent id closing the task.'),
-        mode: stringSchema('Closure mode: operator_direct, peer_reviewed, agent_finish, emergency. Defaults to agent_finish.'),
-        no_continuation_needed: stringSchema('Rationale for closing without a continuation task (for design-only/spike tasks).'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_dependency_disposition_record',
-      description: 'Record explicit disposition for a blocking dependency outcome. Use after dependency satisfaction reports disposition_required=true; required_outcome_id is inferred from the latest outcome when omitted.',
-      inputSchema: objectSchema({
-        dependency_id: stringSchema('Dependency id whose blocking outcome is being dispositioned.'),
-        agent_id: stringSchema('Agent id recording the disposition.'),
-        kind: stringSchema('Disposition kind: remediation_task, covered_by_existing_task, routed_obligation, operator_decision_required, operator_deferred, or out_of_scope_or_rejected.'),
-        summary: stringSchema('Concise disposition summary and authority rationale.'),
-        required_outcome_id: stringSchema('Optional specific task_outcomes.outcome_id. Defaults to latest outcome on the required task.'),
-        status: stringSchema('Disposition status. Defaults to open, or deferred for operator_deferred/out_of_scope_or_rejected.'),
-        target_task_id: stringSchema('Optional task_id for remediation_task or covered_by_existing_task disposition.'),
-        routed_obligation_id: stringSchema('Optional directed obligation id for routed_obligation disposition.'),
-        authority_basis: authorityBasisSchema('Required authority basis for operator_deferred and out_of_scope_or_rejected dispositions; optional otherwise.'),
-      }, ['dependency_id', 'agent_id', 'kind', 'summary']),
-    },
-    {
-      name: 'task_lifecycle_report_blocked',
-      description: 'Record exact blockers for claimed work without implying finish/completion. Defaults to deferring the task after writing a blocked report. For long next_action/blocker details, create a payload and call with payload_ref plus top-level task_number and agent_id.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to report blocked.'),
-        agent_id: stringSchema('Agent id reporting the blocker.'),
-        reason: stringSchema('Concise blocker summary.'),
-        blockers: { type: 'array', items: { type: ['string', 'object'] }, description: 'Specific blockers, including evidence limits or required external decisions.' },
-        next_action: stringSchema('Concrete action needed to unblock continuation. Inline strings over the governed inline threshold should be carried in payload_ref.'),
-        payload_ref: stringSchema('Optional immutable payload ref carrying long reason, blockers, next_action, or defer. Payload fields are merged with top-level arguments; top-level task_number and agent_id win.'),
-        defer: { type: 'boolean', description: 'When false, record the blocked report without transitioning to deferred. Defaults true.' },
-      }, ['task_number', 'agent_id', 'reason']),
-    },
-    {
-      name: 'task_lifecycle_search',
-      description: 'Search tasks by title or content.',
-      inputSchema: objectSchema({
-        query: stringSchema('Search query string.'),
-        status: stringSchema('Optional status filter.'),
-        limit: numberSchema('Maximum results; defaults to 20.'),
-      }, ['query']),
-    },
-    {
-      name: 'task_lifecycle_related',
-      description: 'Find tasks related to a given task by tag overlap. Returns semantically similar tasks based on shared terms extracted from title, goal, and context.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to find related tasks for.'),
-        limit: numberSchema('Maximum results; defaults to 8.'),
-      }, ['task_number']),
-    },
-    {
-      name: 'task_lifecycle_defer',
-      description: 'Defer a task. Valid for open work and compatibility review/dependency wait states.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to defer.'),
-        agent_id: stringSchema('Agent id deferring the task.'),
-        reason: stringSchema('Optional reason for deferral.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_reopen',
-      description: 'Reopen a closed or confirmed task.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to reopen.'),
-        agent_id: stringSchema('Agent id reopening the task.'),
-        reason: stringSchema('Optional reason for reopening.'),
-      }, ['task_number', 'agent_id']),
-    },
-    {
-      name: 'task_lifecycle_review',
-      description: 'Compatibility migration tool only for pre-existing tasks without a review-contract dependency. New ordinary finishes create review dependency work by default. Singleton reviewer sites are admitted and annotated automatically without a flag; multi-reviewer conflicts require conflict_policy_authorization.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Legacy parent task number being reviewed.'),
-        agent_id: stringSchema('Reviewer agent id for compatibility migration.'),
-        verdict: stringSchema('Legacy verdict mapped to a review outcome: accepted, accepted_with_notes, rejected.'),
-        findings: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'Array of finding objects. Blocking findings must include one disposition: remediation_task, covered_by_existing_task, routed_obligation_id, operator_decision_required, operator_deferred_reason, or out_of_scope_or_rejected with authority_basis.' },
-        conflict_policy_authorization: { type: 'object', additionalProperties: true, description: 'Generic conflict-policy authorization basis for admitting an outcome when the dependency worker shares an operator_identity with gated work.' },
-        single_operator_review: { type: 'boolean', description: 'Deprecated input compatibility field. Singleton reviewer sites need no flag; this field never bypasses multi-reviewer conflict policy. Existing single_operator_review annotations remain readable.' },
-      }, ['task_number', 'agent_id', 'verdict']),
-    },
-    {
-      name: 'task_lifecycle_submit_observation',
-      description: 'Submit an observation artifact attached to a task or as a general observation.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Optional task number to attach to.'),
-        artifact_uri: { type: 'string' },
-        content: { type: 'object', additionalProperties: true },
-        source_operator: stringSchema('Source operator name.'),
-        agent_id: stringSchema('Agent id.'),
-      }, ['artifact_uri']),
-    },
-    {
-      name: 'task_lifecycle_bridge_poll',
-      description: 'Poll the inbox-to-task-lifecycle bridge: evaluate unprocessed envelopes and auto-materialize high-severity tasks.',
-      inputSchema: objectSchema({
-        dry_run: { type: 'boolean', description: 'If true, evaluate without creating tasks.' },
-        threshold: numberSchema('Minimum severity to auto-materialize. Defaults to 50.'),
-        limit: numberSchema('Maximum envelopes to evaluate. Defaults to 20.'),
-      }),
-    },
-    {
-      name: 'task_lifecycle_inbox_target',
-      description: 'Target one inbox envelope by envelope_id for bridge preview/materialization or explicit disposition without relying on broad bridge polling order.',
-      inputSchema: objectSchema({
-        envelope_id: stringSchema('Inbox envelope ID to inspect or disposition.'),
-        dry_run: { type: 'boolean', description: 'If true, preview the targeted action without mutation.' },
-        disposition: stringSchema('Disposition: materialize, acknowledge, already_routed, dismiss, defer, or preview. Defaults to materialize.'),
-        principal: stringSchema('Principal recorded on disposition evidence.'),
-        agent_id: stringSchema('Agent id used as fallback disposition principal.'),
-        reason: stringSchema('Disposition reason; required for dismiss.'),
-      }, ['envelope_id']),
-    },
-    {
-      name: 'task_lifecycle_create',
-      description: 'Create a new task from an immutable payload_ref carrying title, goal, context, required work, non-goals, acceptance criteria, and optional preferred/target roles. required_work and non_goals accept markdown strings or string arrays normalized to newline text.',
-      inputSchema: objectSchema({
-        payload_ref: stringSchema('Required immutable transient payload ref such as mcp_payload:<id>@v1. Payload must contain the task definition. Use task_lifecycle_payload_schema with tool=task_lifecycle_create for exact shapes and examples.'),
-      }, ['payload_ref']),
-    },
-    ...listPayloadTools(),
-    ...listOutputTools().map((tool) => ({
-      ...patchLocalToolDefinition(tool),
-      outputSchema: { type: 'object', additionalProperties: true },
-    })),
-    {
-      name: 'task_lifecycle_set_routing',
-      description: 'Route an opened task to a target role, preferred agent, and/or relative priority without claiming it as that agent.',
-      inputSchema: objectSchema({
-        task_number: numberSchema('Task number to route. Must currently be opened.'),
-        actor_agent_id: stringSchema('Architect/operator agent id performing the routing mutation.'),
-        target_role: nullableStringSchema('Optional target role. Pass null to clear.'),
-        preferred_agent_id: nullableStringSchema('Optional preferred agent id. Pass null to clear.'),
-        relative_priority: numberSchema('Optional relative priority for workboard ranking.'),
-        reason: stringSchema('Reason/authority basis for the routing change.'),
-      }, ['task_number', 'actor_agent_id', 'reason']),
-    },
-    {
-      name: 'task_lifecycle_test_mcp_tool',
-      description: 'Spawn a fresh MCP server process and invoke a single tool to verify code changes without restarting the live session server.',
-      inputSchema: objectSchema({
-        server_path: stringSchema('MCP server script path. Relative paths resolve under the site root. Absolute paths are admitted only under the site root, the running @narada2/task-lifecycle-mcp package root, or roots explicitly configured by NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS. Only existing .js, .mjs, or .cjs files are accepted.'),
-        tool_name: stringSchema('Tool name to invoke on the spawned server.'),
-        arguments: { type: 'object', additionalProperties: true, description: 'Tool arguments object.' },
-        timeout_seconds: numberSchema('Fresh server invocation timeout in seconds. Defaults to 10, max 300.'),
-      }, ['server_path', 'tool_name']),
-    },
-    {
-      name: 'task_lifecycle_run_tests',
-      description: 'Run an approved test selector through Test MCP and record structured test evidence on a task.',
-      inputSchema: objectSchema({
-        selector: stringSchema('Test selector: task-lifecycle, typed-mcp, operator-surface, or all. Defaults to task-lifecycle.'),
-        task_number: numberSchema('Task number to attach structured test evidence to.'),
-        agent_id: stringSchema('Agent id running the tests.'),
-        timeout_seconds: numberSchema('Per-test timeout in seconds. Defaults to 120, max 300.'),
-      }, ['agent_id']),
-    },
-  ];
-}
-
 function testResultArtifactGate(store, taskId) {
   const rows = store.db.prepare("SELECT artifact_id, artifact_uri, admitted_view_json, created_at FROM observation_artifacts WHERE task_id = ? AND artifact_type = 'test_result' ORDER BY created_at DESC, artifact_id DESC").all(taskId);
   const latestBySelector = new Map<string, Record<string, unknown>>();
@@ -3807,115 +3499,6 @@ function admitRosterIdentity(args) {
   };
 }
 
-function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
-  if (!agentId) return;
-  try {
-    const existing = taskStore.db.prepare('SELECT agent_id FROM agent_roster WHERE agent_id = ?').get(agentId);
-    if (existing) return;
-  } catch {
-    return;
-  }
-
-  const rosterPath = join(root, '.ai', 'agents', 'roster.json');
-  let staticAgent = null;
-  try {
-    const roster = JSON.parse(readFileSync(rosterPath, 'utf8'));
-    staticAgent = Array.isArray(roster.agents) ? roster.agents.find((agent) => agent?.agent_id === agentId) : null;
-  } catch {
-    return;
-  }
-  if (!staticAgent?.role) return;
-
-  const now = new Date().toISOString();
-  taskStore.upsertRosterEntry({
-    agent_id: staticAgent.agent_id,
-    role: staticAgent.role,
-    capabilities_json: normalizeCapabilitiesJson(JSON.stringify(staticAgent.capabilities ?? [])),
-    first_seen_at: staticAgent.first_seen_at ?? now,
-    last_active_at: staticAgent.last_active_at ?? now,
-    status: staticAgent.status ?? 'idle',
-    task_number: staticAgent.task_number ?? staticAgent.task ?? null,
-    last_done: staticAgent.last_done ?? null,
-    updated_at: now,
-    ...(staticAgent.operator_identity ? { operator_identity: staticAgent.operator_identity } : {}),
-  });
-}
-
-async function withAuthoredRosterJsonPreserved(root, fn, store = null) {
-  const rosterPath = join(root, '.ai', 'agents', 'roster.json');
-  let before = null;
-  try {
-    before = readFileSync(rosterPath, 'utf8');
-    const sanitized = sanitizeRosterCapabilitiesJson(before);
-    if (sanitized && sanitized !== before) writeFileSync(rosterPath, sanitized, 'utf8');
-  } catch {
-    before = null;
-  }
-  if (store) sanitizeSqlRosterCapabilities(store);
-  const result = await fn();
-  if (before !== null) {
-    try {
-      const after = readFileSync(rosterPath, 'utf8');
-      if (after !== before) {
-        writeFileSync(rosterPath, before, 'utf8');
-      }
-    } catch {
-      // Roster JSON is static compatibility config; preservation is best-effort.
-    }
-  }
-  return result;
-}
-
-function sanitizeSqlRosterCapabilities(store) {
-  try {
-    const rows = store.db.prepare('SELECT agent_id, capabilities_json FROM agent_roster').all();
-    const update = store.db.prepare('UPDATE agent_roster SET capabilities_json = ? WHERE agent_id = ?');
-    for (const row of rows) {
-      const normalized = normalizeCapabilitiesJson(row.capabilities_json);
-      if (normalized !== row.capabilities_json) update.run(normalized, row.agent_id);
-    }
-  } catch {
-    // Best-effort compatibility normalization before shared governance services run.
-  }
-}
-
-function sanitizeRosterCapabilitiesJson(text) {
-  try {
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed?.agents)) return text;
-    let changed = false;
-    const agents = parsed.agents.map((agent) => {
-      if (!agent || typeof agent !== 'object' || Array.isArray(agent)) return agent;
-      const capabilities = agent.capabilities;
-      if (Array.isArray(capabilities)) return agent;
-      const nested = capabilities && typeof capabilities === 'object' && Array.isArray(capabilities.capabilities)
-        ? capabilities.capabilities.filter((item) => typeof item === 'string')
-        : [];
-      changed = true;
-      return { ...agent, capabilities: nested };
-    });
-    return changed ? JSON.stringify({ ...parsed, agents }, null, 2) : text;
-  } catch {
-    return text;
-  }
-}
-
-function normalizeCapabilitiesJson(value) {
-  try {
-    const parsed = JSON.parse(String(value ?? '[]'));
-    if (Array.isArray(parsed)) return JSON.stringify(parsed.filter((item) => typeof item === 'string'));
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.capabilities)) return JSON.stringify(parsed.capabilities.filter((item) => typeof item === 'string'));
-    return JSON.stringify([]);
-  } catch {
-    return JSON.stringify([]);
-  }
-}
-
-/**
- * Spawn a fresh MCP server process and invoke a single tool.
- * Returns the parsed tool result. Used to verify code changes without
- * restarting the long-lived session MCP server.
- */
 async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<string, unknown> = {}) {
   const fullServerPath = resolve(cwd, serverPath);
   const init = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test_mcp_tool', version: '1.0' } } });

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
 import { nativeSurfaceDescriptor, SURFACES } from '../src/main.js';
+
+const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
+const MCP_SURFACES_ROOT = resolve(REPOSITORY_ROOT, 'packages').replace(/\\/g, '/');
 
 test('every registered surface is backed by a package-owned native descriptor', () => {
   assert.ok(SURFACES.length > 0);
@@ -25,6 +31,23 @@ test('every registered surface is backed by a package-owned native descriptor', 
   }
 });
 
+test('native descriptors match package versions and advertise loader lifecycle readback', () => {
+  for (const surface of SURFACES) {
+    const descriptor = nativeSurfaceDescriptor(surface.id);
+    const packageJson = JSON.parse(readFileSync(
+      resolve(REPOSITORY_ROOT, 'packages', surface.package, 'package.json'),
+      'utf8',
+    )) as { version?: string };
+    assert.equal(descriptor.surface_version, packageJson.version, surface.id);
+    assert.deepEqual(descriptor.metadata?.lifecycle_readback, {
+      tool_name: 'mcp_loader_surface_status',
+      arguments: { surface_id: surface.id },
+      authority: 'mcp-loader',
+      availability: 'loader-managed',
+    }, surface.id);
+  }
+});
+
 test('native projection transport and registrar projection transport remain equivalent', () => {
   for (const surface of SURFACES) {
     const native = nativeSurfaceDescriptor(surface.id);
@@ -38,7 +61,7 @@ test('native projection transport and registrar projection transport remain equi
         assert.deepEqual(
           [registrarProjection!.entrypoint, ...(registrarProjection!.args ?? [])],
           nativeProjection.transport.args.map((arg, index) => index === 0 && arg.includes('{mcp_surfaces_root}')
-            ? arg.replace('{mcp_surfaces_root}', 'D:/code/mcp-surfaces/packages')
+            ? arg.replace('{mcp_surfaces_root}', MCP_SURFACES_ROOT)
             : arg),
           `${surface.id}:${nativeProjection.id} transport drift`,
         );

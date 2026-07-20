@@ -12,6 +12,10 @@
     ".": {
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
+    },
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
     }
   },
   "scripts": {

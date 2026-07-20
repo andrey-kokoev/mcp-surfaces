@@ -128,6 +128,10 @@ Step transitions and gate conditions use a small expression language (not arbitr
 | `join` | Orchestration-only merge: wait for multiple preceding steps to converge locally. |
 | `note` | Orchestration-only annotation: record a note in the task event log locally. |
 
+## Task Executability Assessment
+
+The canonical task-linked assessment is a bounded read-only delegated workflow. Delegated Task owns orchestration and the strict dispatch gate; Task Lifecycle owns request, lease, assessment, currency, and verdict authority. A missing or failed evaluator is execution state, not a verdict. The deterministic cross-surface proof establishes bounded executable-path and lifecycle/recovery behavior, not task correctness; the optional live-provider boundary is separate. Both are documented in Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook.
+
 ## Verification
 
 ```powershell

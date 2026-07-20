@@ -27,6 +27,15 @@ pnpm --filter @narada2/task-lifecycle-mcp build
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
 ```
 
+Runtime reconfiguration is staged: the candidate site root and SQLite store
+are prepared before `siteRoot`, `store`, and the configured flag are published.
+If opening or publishing the candidate fails, the prior valid configuration
+remains authoritative. Reconfiguration is refused while another request or
+store transition is active. Store-error recovery may refresh from within the
+owning request; its lease transfers to the replacement handle and is released
+when that request finishes. Shutdown waits for request leases before closing
+the store.
+
 ## Tool Groups
 
 Inspection and workboard:
@@ -120,6 +129,10 @@ supervisor; a one-shot fresh call does not update the bound child. A pending
 the replacement child starts with post-request self-observed boot evidence.
 `acknowledge` and `clear` remain idempotent confirmation modes after that
 automatic reconciliation, so manual marker deletion is never part of recovery.
+
+## Task Executability Proof
+
+Task Lifecycle is the authority for assessment requests, leases, attempts, admitted assessments, currency, and verdicts. Its cross-surface deterministic proof is run through Site Loop and covers lifecycle/recovery mechanics, including Windows SQLite ownership, no-NARS recovery, restart recovery, stale replacement, and strict dispatch enforcement. An `executable` verdict only says the task can be attempted in the declared environment; neither the verdict nor this proof establishes task correctness. The optional live provider check belongs to Worker Delegation. See Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook for commands and recovery boundaries.
 
 ## Verification
 

@@ -6,7 +6,7 @@ import { surfaceDefinition as siteInbox } from '@narada2/site-inbox-mcp/surface-
 import { surfaceDefinition as mailbox } from '@narada2/mailbox-mcp/surface-definition';
 import { surfaceDefinition as graphMail } from '@narada2/graph-mail-mcp/surface-definition';
 import { surfaceDefinition as calendar } from '@narada2/calendar-mcp/surface-definition';
-import { taskLifecycleSurfaceDefinition } from '@narada2/task-lifecycle-mcp';
+import { surfaceDefinition as taskLifecycle } from '@narada2/task-lifecycle-mcp/surface-definition';
 import { surfaceDefinition as siteLoop } from '@narada2/site-loop-mcp/surface-definition';
 import { surfaceDefinition as siteLifecycle } from '@narada2/site-lifecycle-mcp/surface-definition';
 import { surfaceDefinition as siteRegistry } from '@narada2/site-registry-mcp/surface-definition';
@@ -17,7 +17,7 @@ import { surfaceDefinition as sop } from '@narada2/sop-mcp/surface-definition';
 import { surfaceDefinition as scheduler } from '@narada2/scheduler-mcp/surface-definition';
 import { surfaceDefinition as mcpLoader } from '@narada2/mcp-loader-mcp/surface-definition';
 import { surfaceDefinition as surfaceFeedback } from '@narada2/surface-feedback-mcp/surface-definition';
-import { launcherSurfaceDefinition } from '@narada2/launcher-mcp';
+import { surfaceDefinition as launcher } from '@narada2/launcher-mcp/surface-definition';
 import { surfaceDefinition as speech } from '@narada2/speech-mcp/surface-definition';
 import { surfaceDefinition as operatorRouting } from '@narada2/operator-routing-mcp/surface-definition';
 import { surfaceDefinition as artifacts } from '@narada2/artifacts-mcp/surface-definition';
@@ -33,7 +33,7 @@ export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>
   mailbox: mailbox(),
   'graph-mail': graphMail(),
   calendar: calendar(),
-  'task-lifecycle': taskLifecycleSurfaceDefinition(),
+  'task-lifecycle': taskLifecycle(),
   'site-loop': siteLoop(),
   'site-lifecycle': siteLifecycle(),
   'site-registry': siteRegistry(),
@@ -44,7 +44,7 @@ export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>
   scheduler: scheduler(),
   'mcp-loader': mcpLoader(),
   'surface-feedback': surfaceFeedback(),
-  launcher: launcherSurfaceDefinition(),
+  launcher: launcher(),
   speech: speech(),
   'operator-routing': operatorRouting(),
   artifacts: artifacts(),

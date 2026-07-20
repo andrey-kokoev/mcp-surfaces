@@ -294,6 +294,18 @@ Edit shortcut:
 
 Model overrides are intentionally absent from the edit shortcut example. `worker_edit` uses the low cognition defaults; add `overrides.model` only when the active Codex account and runtime are known to support a different model.
 
+## Optional Live Provider Proof
+
+The external-provider E2E is opt-in and resolves the low-cognition provider/model from an explicit worker-runtime registry. It never uses the frozen migration fixture under Narada.
+
+```powershell
+$env:NARADA_E2E_WORKER_EXTERNAL_PROVIDER_LIVE = '1'
+$env:NARADA_E2E_WORKER_PROVIDER_REGISTRY = 'D:/path/to/worker-provider-registry.json'
+pnpm --filter @narada2/worker-delegation-mcp test:e2e:external-provider
+```
+
+The registry must use `narada.carrier.provider_registry.v1`, expose `cognition_defaults.low`, and declare an OpenAI-compatible chat-completions adapter. Missing registry, credential, supported adapter, or runtime prerequisites produce a structured bounded skip with exit code `2`; they are not treated as provider verdicts. A passing live check is evidence that the configured provider/model adapter and runtime path are reachable; it is not a Task Executability verdict or proof of task correctness. The timeout is bounded by `NARADA_E2E_WORKER_EXTERNAL_PROVIDER_TIMEOUT_MS` (5-120 seconds).
+
 ## Verification
 
 ```powershell
@@ -304,10 +316,12 @@ pnpm --filter @narada2/worker-delegation-mcp test:e2e:site-fabric
 
 The E2E commands start the built worker, loader, and filesystem MCP children,
 materialize a temporary Site fabric, and write a bounded result artifact under
-`.tmp/e2e-results/`. The provider test uses a controlled no-credential fixture
-authority; it proves local provider/model/thinking binding, not external
-provider or carrier execution. The same checks are available from the repo
-root as:
+`.tmp/e2e-results/`. The normal provider test uses a controlled no-credential
+fixture authority and proves local provider/model/thinking binding. The
+optional external-provider test is the separate live integration proof; it
+resolves its low-cognition selection from the explicit registry and reports a
+bounded skip when the external authority is unavailable. The same checks are
+available from the repo root as:
 
 ```powershell
 pnpm test:worker-delegation:e2e

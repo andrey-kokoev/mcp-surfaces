@@ -42,7 +42,10 @@ async function processRequest({ request, stdout, framed, handleRequest, activeRe
   activeRequests.set(requestId, abortController);
   writeProgress(stdout, request, 0, 'started', framed);
   try {
-    const response = await handleRequest(request, { abortSignal: abortController.signal });
+    const response = await handleRequest(request, {
+      abortSignal: abortController.signal,
+      requestId: request.id === undefined || request.id === null ? undefined : String(request.id),
+    });
     writeProgress(stdout, request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', framed);
     if (response) writeJsonResponse(stdout, response, framed);
   } finally {

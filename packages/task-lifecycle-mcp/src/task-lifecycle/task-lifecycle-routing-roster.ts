@@ -313,18 +313,20 @@ export async function withAuthoredRosterJsonPreserved(root, fn, store = null) {
     before = null;
   }
   if (store) sanitizeSqlRosterCapabilities(store);
-  const result = await fn();
-  if (before !== null) {
-    try {
-      const after = readFileSync(rosterPath, 'utf8');
-      if (after !== before) {
-        writeFileSync(rosterPath, before, 'utf8');
+  try {
+    return await fn();
+  } finally {
+    if (before !== null) {
+      try {
+        const after = readFileSync(rosterPath, 'utf8');
+        if (after !== before) {
+          writeFileSync(rosterPath, before, 'utf8');
+        }
+      } catch {
+        // Roster JSON is static compatibility config; preservation is best-effort.
       }
-    } catch {
-      // Roster JSON is static compatibility config; preservation is best-effort.
     }
   }
-  return result;
 }
 
 export function sanitizeSqlRosterCapabilities(store) {

@@ -13,6 +13,98 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+function latestEvidenceAdmission(store, taskNumber) {
+  try {
+    return store.db.prepare(`
+      SELECT admission_id, verdict, admitted_by, admitted_at
+      FROM evidence_admission_results
+      WHERE task_number = ?
+      ORDER BY admitted_at DESC
+      LIMIT 1
+    `).get(taskNumber) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function buildCanonicalFinishResponse({ store, taskNumber, payload }) {
+  const lifecycle = store.getLifecycleByNumber(taskNumber);
+  const persistedStatus = lifecycle?.status ?? payload.new_status ?? null;
+  const reviewDependency = lifecycle
+    ? (store.listTaskDependenciesForParent?.(lifecycle.task_id) ?? [])
+      .find((dependency) => dependency.kind === 'review') ?? null
+    : null;
+  const reviewLifecycle = reviewDependency ? store.getLifecycle?.(reviewDependency.required_task_id) : null;
+  const evidenceAdmission = latestEvidenceAdmission(store, taskNumber);
+  const evidencePreflight = asRecord(payload.evidence_preflight);
+  const preflightEvidence = asRecord(evidencePreflight?.evidence);
+  const evidenceAdmissionPayload = asRecord(payload.evidence_admission);
+  const evidenceVerdict = evidenceAdmission?.verdict
+    ?? payload.evidence_verdict
+    ?? evidenceAdmissionPayload?.verdict
+    ?? preflightEvidence?.verdict
+    ?? null;
+
+  // `status` remains the transport/result status. These fields are the single
+  // lifecycle authority and are always read back after every post-finish
+  // transition, including review-dependency creation.
+  payload.new_status = persistedStatus;
+  payload.lifecycle_status = persistedStatus;
+  payload.final_lifecycle_status = persistedStatus;
+  payload.evidence_state = {
+    schema: 'narada.task.mcp.finish.evidence_state.v1',
+    admission_state: evidenceAdmission ? 'recorded' : 'not_recorded',
+    verdict: evidenceVerdict,
+    admission_id: evidenceAdmission?.admission_id ?? null,
+    admitted_by: evidenceAdmission?.admitted_by ?? null,
+    admitted_at: evidenceAdmission?.admitted_at ?? null,
+    blockers: Array.isArray(payload.close_blockers) ? payload.close_blockers : [],
+  };
+  payload.review_dependency_state = reviewDependency
+    ? {
+        state: 'present',
+        status: reviewDependency.status ?? 'open',
+        dependency_id: reviewDependency.dependency_id,
+        required_task_id: reviewDependency.required_task_id,
+        required_task_number: reviewLifecycle?.task_number ?? null,
+        required_task_lifecycle_status: reviewLifecycle?.status ?? null,
+        parent_lifecycle_status: persistedStatus,
+      }
+    : {
+        state: 'none',
+        status: null,
+        dependency_id: null,
+        required_task_id: null,
+        required_task_number: null,
+        required_task_lifecycle_status: null,
+        parent_lifecycle_status: persistedStatus,
+      };
+
+  const reviewDependencyPayload = asRecord(payload.review_dependency);
+  if (reviewDependencyPayload && reviewDependency) {
+    reviewDependencyPayload.parent_dependency_wait_status = {
+      ...(asRecord(reviewDependencyPayload.parent_dependency_wait_status) ?? {}),
+      new_status: persistedStatus,
+      authoritative: true,
+    };
+  } else if (reviewDependency && !reviewDependencyPayload) {
+    payload.review_dependency = {
+      status: 'existing',
+      dependency_id: reviewDependency.dependency_id,
+      required_task_id: reviewDependency.required_task_id,
+      required_task_number: reviewLifecycle?.task_number ?? null,
+      parent_dependency_wait_status: {
+        new_status: persistedStatus,
+        authoritative: true,
+      },
+    };
+  } else if (!reviewDependency) {
+    payload.review_dependency = null;
+  }
+  payload.review_action = reviewDependency ? (payload.review_action ?? 'dependency_present') : 'none';
+  return payload;
+}
+
 function normalizeBlockedReportBlockers(value: unknown): unknown[] {
   if (Array.isArray(value)) return value.filter((item) => item !== null && item !== undefined);
   const text = nonEmptyString(value);
@@ -1191,7 +1283,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           }, true);
         }
       }
-      const admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: ['admission'] });
+      const admission = await admitTaskEvidence({ cwd: siteRoot, store, taskNumber, admittedBy: agentId, methods: ['admission'] });
       return jsonToolResult({
         status: admission.blockers.length === 0 ? 'admitted' : 'rejected',
         task_number: taskNumber,
@@ -1257,6 +1349,18 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
             finishResult.new_status = asRecord(reviewDependency.parent_dependency_wait_status)?.new_status ?? 'awaiting_dependencies';
           }
         }
+      }
+      if (result.status !== 'error'
+        && finishResultPayload
+        && finishResultPayload.close_action !== 'blocked'
+        && typeof buildPostCloseoutContinuation === 'function') {
+        finishResultPayload.post_closeout_continuation = buildPostCloseoutContinuation({
+          agentId,
+          result: finishResultPayload,
+        });
+      }
+      if (result.status !== 'error' && finishResultPayload) {
+        buildCanonicalFinishResponse({ store, taskNumber, payload: finishResultPayload });
       }
       return jsonToolResult(result, result.status === 'error');
     }
@@ -1550,6 +1654,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         };
         if (reviewEvidenceBackfill) payload.review_evidence_backfill = reviewEvidenceBackfill;
         if (identityWarning) payload.identity_warning = identityWarning;
+        buildCanonicalFinishResponse({ store, taskNumber, payload });
         return jsonToolResult(payload);
       }
       if (lifecycle?.status === 'in_review') {
@@ -1677,7 +1782,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (changedFiles) finishOptions.changedFiles = JSON.stringify(changedFiles);
       if (!changedFiles && autoDetectedChangedFiles.length > 0) finishOptions.changedFiles = JSON.stringify(siteRelativeChangedFiles(siteRoot, autoDetectedChangedFiles));
       if (noFilesChanged) finishOptions.changedFiles = JSON.stringify([NO_FILES_CHANGED_MARKER]);
-      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => finishTaskService(finishOptions));
+      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => finishTaskService(finishOptions), store);
       const payload = result.result || result;
       const isBlocked = payload.close_action === 'blocked';
       if (!changedFiles && !noFilesChanged) {
@@ -1792,6 +1897,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (identityWarning) {
         payload.identity_warning = identityWarning;
       }
+      buildCanonicalFinishResponse({ store, taskNumber, payload });
       return jsonToolResult(payload);
     }
 
@@ -1841,7 +1947,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           next_action: evidencePreflight.next_action,
         });
       }
-      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => closeTaskService({ cwd: siteRoot, taskNumber, by: agentId, mode, noContinuationNeeded }));
+      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => closeTaskService({ cwd: siteRoot, taskNumber, by: agentId, mode, noContinuationNeeded }), store);
       const payload = result.result || result;
       const isBlocked = result.exitCode !== 0 || payload.close_action === 'blocked';
       if (!isBlocked) {

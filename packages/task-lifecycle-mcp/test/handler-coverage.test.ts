@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assertTaskLifecycleHandlerCoverage,
   createTaskLifecycleHandlerRegistry,
   PAYLOAD_OUTPUT_TOOL_NAMES,
 } from '../src/task-lifecycle/task-lifecycle-handler-registry.js';
-import { createTaskLifecycleToolCaller, isStoreRetrySafe, validateTaskCreatePayload } from '../src/kernel/tool-call-pipeline.js';
+import { createTaskLifecycleToolCaller, isStoreError, isStoreRetrySafe, validateTaskCreatePayload } from '../src/kernel/tool-call-pipeline.js';
+import { withAuthoredRosterJsonPreserved } from '../src/task-lifecycle/task-lifecycle-routing-roster.js';
 
 const domainTools = ['task_lifecycle_status', 'task_lifecycle_claim', 'task_lifecycle_close'];
 const toolNames = [...domainTools, ...PAYLOAD_OUTPUT_TOOL_NAMES];
@@ -29,6 +33,9 @@ assert.throws(() => validateTaskCreatePayload({ title: 'Reject malformed tags', 
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_claim', args: {}, toolDef: { annotations: { readOnlyHint: false, idempotentHint: false } } }), false);
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_claim', args: { idempotency_key: 'claim-1' }, toolDef: { annotations: { readOnlyHint: false, idempotentHint: false } } }), true);
 assert.equal(isStoreRetrySafe({ canonicalName: 'task_lifecycle_status', args: {}, toolDef: { annotations: { readOnlyHint: true, idempotentHint: false } } }), true);
+assert.equal(isStoreError(new Error('database is not open')), true);
+assert.equal(isStoreError(new Error('task database reference invalid')), false);
+assert.equal(isStoreError(Object.assign(new Error('opaque sqlite failure'), { name: 'SqliteError', code: 'SQLITE_BUSY' })), true);
 
 const pipelineCaller = createTaskLifecycleToolCaller({
   toolAliases: {},
@@ -52,10 +59,33 @@ const pipelineCaller = createTaskLifecycleToolCaller({
 await assert.rejects(
   pipelineCaller({ name: 'task_lifecycle_claim', arguments: {} }),
   (error: unknown) => {
-    assert.match(String(error instanceof Error ? error.message : error), /store_unavailable_after_attempt/);
-    assert.match(String(error instanceof Error ? error.message : error), /original_error=database is not open/);
+    const message = String(error instanceof Error ? error.message : error);
+    assert.match(message, /store_unavailable_after_attempt/);
+    assert.match(message, /original_error=database is not open/);
+    assert.doesNotMatch(message, /stack=|\bat\s+dispatchTool/);
     return true;
   },
 );
+
+const rosterRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-roster-preservation-'));
+const rosterDirectory = join(rosterRoot, '.ai', 'agents');
+mkdirSync(rosterDirectory, { recursive: true });
+const rosterPath = join(rosterDirectory, 'roster.json');
+const authoredRoster = JSON.stringify({
+  agents: [{ agent_id: 'test-agent', capabilities: { capabilities: ['review'] } }],
+}, null, 2);
+writeFileSync(rosterPath, authoredRoster, 'utf8');
+try {
+  await assert.rejects(
+    withAuthoredRosterJsonPreserved(rosterRoot, async () => {
+      assert.notEqual(readFileSync(rosterPath, 'utf8'), authoredRoster);
+      throw new Error('roster-preservation-test-failure');
+    }),
+    /roster-preservation-test-failure/,
+  );
+  assert.equal(readFileSync(rosterPath, 'utf8'), authoredRoster);
+} finally {
+  rmSync(rosterRoot, { recursive: true, force: true });
+}
 
 console.log('task-lifecycle-mcp handler coverage ok');

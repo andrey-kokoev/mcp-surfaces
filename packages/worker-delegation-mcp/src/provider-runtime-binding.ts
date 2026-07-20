@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { diagnosticError } from './errors.js';
 
 export const PROVIDER_RUNTIME_BINDING_SCHEMA = 'narada.carrier.provider_runtime_binding.v1' as const;
+export const PROVIDER_REGISTRY_SCHEMA = 'narada.carrier.provider_registry.v1' as const;
+export const SUPPORTED_WORKER_PROVIDER_ADAPTERS = Object.freeze(['openai-compatible-chat-completions']);
 
 export type WorkerProviderRuntimeMetadata = {
   baseUrl: string;
@@ -26,8 +28,20 @@ export type WorkerProviderRuntimeBinding = {
   credential_env_names: string[];
   base_url_env_names: string[];
   model_env_names: string[];
-  credential_source: 'canonical_environment' | 'provider_environment' | 'not_required';
+  credential_source: 'explicit_override' | 'canonical_environment' | 'provider_environment' | 'not_required';
   credential_fingerprint: string | null;
+};
+
+export type WorkerProviderRuntimeBindingResolution = {
+  schema: 'narada.carrier.provider_runtime_binding_resolution.v1';
+  provider: string;
+  provider_source: 'test_override' | 'canonical_environment' | 'registry_default';
+  adapter_kind: string;
+  model_source: 'test_override' | 'provider_registry_cognition_default' | 'provider_registry_default';
+  base_url_source: 'test_override' | 'canonical_environment' | 'provider_environment' | 'provider_registry_default';
+  reasoning_effort_source: 'test_override' | 'canonical_environment' | 'provider_registry_default';
+  binding: WorkerProviderRuntimeBinding;
+  redacted_binding: Omit<WorkerProviderRuntimeBinding, 'api_key'>;
 };
 
 const CANONICAL_PROVIDER_ENV_KEYS = [
@@ -58,19 +72,130 @@ export function providerRuntimeMetadataFromRegistry(registry: Record<string, unk
   }));
 }
 
+export function resolveWorkerProviderRuntimeBindingFromRegistry(options: {
+  registry: Record<string, unknown>;
+  env: NodeJS.ProcessEnv;
+  providerOverride?: string | null;
+  modelOverride?: string | null;
+  baseUrlOverride?: string | null;
+  apiKeyOverride?: string | null;
+  reasoningEffortOverride?: string | null;
+  cognition?: 'low' | 'medium' | 'high';
+}): WorkerProviderRuntimeBindingResolution {
+  const registry = validateWorkerProviderRegistry(options.registry, { validateRuntimeMetadata: false });
+  const providerFromEnvironment = optionalString(options.env.NARADA_INTELLIGENCE_PROVIDER);
+  const provider = optionalString(options.providerOverride) ?? providerFromEnvironment ?? optionalString(registry.default_provider);
+  if (!provider) {
+    throw diagnosticError('worker_provider_registry_default_missing', 'worker_provider_registry_default_missing');
+  }
+  const rawMetadata = asRecord(asRecord(registry.providers)[provider]);
+  if (Object.keys(rawMetadata).length === 0) {
+    throw diagnosticError('worker_provider_not_registered', 'worker_provider_not_registered', { provider });
+  }
+  const adapterKind = optionalString(rawMetadata.adapter_kind);
+  if (!adapterKind || !SUPPORTED_WORKER_PROVIDER_ADAPTERS.includes(adapterKind)) {
+    throw diagnosticError('worker_provider_adapter_unsupported', 'worker_provider_adapter_unsupported', {
+      provider,
+      adapter_kind: adapterKind,
+      supported_adapter_kinds: [...SUPPORTED_WORKER_PROVIDER_ADAPTERS],
+    });
+  }
+
+  const providerCognition = asRecord(asRecord(rawMetadata.cognition_defaults)[options.cognition ?? 'low']);
+  const registryCognitionModel = optionalString(providerCognition.model);
+  const registryDefaultModel = optionalString(rawMetadata.default_model);
+  const availableModels = stringList(rawMetadata.available_models);
+  const modelOverride = optionalString(options.modelOverride);
+  const model = modelOverride ?? registryCognitionModel ?? registryDefaultModel;
+  if (!model) {
+    throw diagnosticError('worker_provider_model_missing', 'worker_provider_model_missing', { provider, cognition: options.cognition ?? 'low' });
+  }
+  if (availableModels.length > 0 && !availableModels.includes(model)) {
+    throw diagnosticError('worker_provider_model_not_available', 'worker_provider_model_not_available', {
+      provider,
+      model,
+      available_models: availableModels,
+    });
+  }
+
+  const metadataByProvider = providerRuntimeMetadataFromRegistry(options.registry);
+  const binding = resolveWorkerProviderRuntimeBinding({
+    provider,
+    metadataByProvider,
+    env: options.env,
+    model,
+    reasoningEffort: optionalString(options.reasoningEffortOverride) ?? optionalString(providerCognition.reasoning_effort),
+    apiKey: options.apiKeyOverride,
+    baseUrl: options.baseUrlOverride,
+  });
+  return {
+    schema: 'narada.carrier.provider_runtime_binding_resolution.v1',
+    provider,
+    provider_source: optionalString(options.providerOverride)
+      ? 'test_override'
+      : providerFromEnvironment === provider ? 'canonical_environment' : 'registry_default',
+    adapter_kind: adapterKind,
+    model_source: modelOverride ? 'test_override' : registryCognitionModel ? 'provider_registry_cognition_default' : 'provider_registry_default',
+    base_url_source: optionalString(options.baseUrlOverride)
+      ? 'test_override'
+      : options.env.NARADA_INTELLIGENCE_PROVIDER === provider && optionalString(options.env.NARADA_AI_BASE_URL)
+        ? 'canonical_environment'
+        : metadataByProvider[provider].baseUrlEnvNames.some((name) => optionalString(options.env[name]))
+          ? 'provider_environment'
+          : 'provider_registry_default',
+    reasoning_effort_source: optionalString(options.reasoningEffortOverride)
+      ? 'test_override'
+      : options.env.NARADA_INTELLIGENCE_PROVIDER === provider && optionalString(options.env.NARADA_AI_THINKING)
+        ? 'canonical_environment'
+        : 'provider_registry_default',
+    binding,
+    redacted_binding: redactWorkerProviderRuntimeBinding(binding),
+  };
+}
+
+export function validateWorkerProviderRegistry(
+  registry: Record<string, unknown>,
+  options: { validateRuntimeMetadata?: boolean } = {},
+): Record<string, unknown> {
+  if (registry.schema !== PROVIDER_REGISTRY_SCHEMA) {
+    throw diagnosticError('worker_provider_registry_malformed', 'worker_provider_registry_malformed', {
+      expected_schema: PROVIDER_REGISTRY_SCHEMA,
+      actual_schema: registry.schema ?? null,
+    });
+  }
+  const providers = asRecord(registry.providers);
+  if (Object.keys(providers).length === 0) {
+    throw diagnosticError('worker_provider_registry_malformed', 'worker_provider_registry_malformed', { field: 'providers' });
+  }
+  for (const [provider, metadata] of Object.entries(providers)) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw diagnosticError('worker_provider_registry_malformed', 'worker_provider_registry_malformed', { provider, field: 'metadata' });
+    }
+  }
+  // This is the only registry-to-runtime metadata interpretation used by the
+  // worker. It intentionally fails closed for missing base/model fields. The
+  // resolver can defer this check until after provider/model selection so a
+  // missing selected model retains its precise diagnostic.
+  if (options.validateRuntimeMetadata !== false) providerRuntimeMetadataFromRegistry(registry);
+  return registry;
+}
+
 export function resolveWorkerProviderRuntimeBinding(options: {
   provider: string;
   metadataByProvider: Record<string, WorkerProviderRuntimeMetadata>;
   env: NodeJS.ProcessEnv;
   model: string | null;
   reasoningEffort: string | null;
+  apiKey?: string | null;
+  baseUrl?: string | null;
 }): WorkerProviderRuntimeBinding {
   const metadata = options.metadataByProvider[options.provider];
   if (!metadata) throw diagnosticError('worker_provider_metadata_missing', 'worker_provider_metadata_missing', { provider: options.provider });
   const parentProvider = optionalString(options.env.NARADA_INTELLIGENCE_PROVIDER);
+  const explicitCredential = optionalString(options.apiKey);
   const canonicalCredential = parentProvider === options.provider ? optionalString(options.env.NARADA_AI_API_KEY) : null;
   const providerCredential = firstEnvironmentValue(metadata.credentialEnvNames, options.env);
-  const apiKey = canonicalCredential ?? providerCredential;
+  const apiKey = explicitCredential ?? canonicalCredential ?? providerCredential;
   if (metadata.credentialRequirementKind === 'api_key_secret' && !apiKey) {
     throw diagnosticError('worker_provider_credential_missing', 'worker_provider_credential_missing', {
       provider: options.provider,
@@ -78,7 +203,8 @@ export function resolveWorkerProviderRuntimeBinding(options: {
       credential_env_names: metadata.credentialEnvNames,
     });
   }
-  const baseUrl = (parentProvider === options.provider ? optionalString(options.env.NARADA_AI_BASE_URL) : null)
+  const baseUrl = optionalString(options.baseUrl)
+    ?? (parentProvider === options.provider ? optionalString(options.env.NARADA_AI_BASE_URL) : null)
     ?? firstEnvironmentValue(metadata.baseUrlEnvNames, options.env)
     ?? metadata.baseUrl;
   const model = optionalString(options.model)
@@ -100,7 +226,7 @@ export function resolveWorkerProviderRuntimeBinding(options: {
     credential_env_names: [...metadata.credentialEnvNames],
     base_url_env_names: [...metadata.baseUrlEnvNames],
     model_env_names: [...metadata.modelEnvNames],
-    credential_source: canonicalCredential ? 'canonical_environment' : providerCredential ? 'provider_environment' : 'not_required',
+    credential_source: explicitCredential ? 'explicit_override' : canonicalCredential ? 'canonical_environment' : providerCredential ? 'provider_environment' : 'not_required',
     credential_fingerprint: apiKey ? `sha256:${createHash('sha256').update(apiKey).digest('hex').slice(0, 12)}` : null,
   };
 }

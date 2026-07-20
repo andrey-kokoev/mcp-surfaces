@@ -11,6 +11,7 @@ import {
   surfaceDescriptorDigest,
   assertLiveToolsConform,
   defineSurface,
+  defineNativeSurface,
   type SurfaceDescriptorV2,
 } from '../src/index.js';
 import { startHttpFixture } from '../src/http-fixture.js';
@@ -99,6 +100,35 @@ test('defineSurface uses one registry for tools/list and descriptor emission', (
   assert.deepEqual(surface.tools, [definition]);
   assertLiveToolsConform(surface.descriptor, surface.tools);
   assert.equal(surface.descriptor.guidance_tool, 'example_guidance');
+});
+
+test('defineNativeSurface validates read-only inventory and exposes lifecycle readback', () => {
+  const definition = {
+    name: 'native_guidance',
+    description: 'Show native guidance.',
+    inputSchema: { type: 'object', additionalProperties: false },
+  };
+  const base = {
+    surface_id: 'native-helper',
+    surface_version: '1.0.0',
+    package: '@example/native-helper',
+    entrypoint: 'dist/main.js',
+    tools: [definition],
+    read_only_tools: ['native_guidance'] as const,
+    default_effect: 'read' as const,
+    projections: [descriptor().projections[0]!],
+  };
+  const surface = defineNativeSurface(base);
+  assert.deepEqual(surface.descriptor.metadata?.lifecycle_readback, {
+    tool_name: 'mcp_loader_surface_status',
+    arguments: { surface_id: 'native-helper' },
+    authority: 'mcp-loader',
+    availability: 'loader-managed',
+  });
+  assert.throws(
+    () => defineNativeSurface({ ...base, read_only_tools: ['stale_tool'] as const }),
+    /mcp_fabric_read_only_tool_undeclared/,
+  );
 });
 
 test('Streamable HTTP fixture is session-pinned and conforms to fresh tools/list', async () => {

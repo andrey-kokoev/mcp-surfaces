@@ -14,7 +14,7 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'read',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: ["--repo-root","D:/code/narada"], env: [] },
+      transport: { kind: 'stdio', command: 'node', args: ["--repo-root","{site_root}"], env: [] },
       injection_scope: 'local_site',
       default_injection: 'disabled',
       runtime_requirements: [],

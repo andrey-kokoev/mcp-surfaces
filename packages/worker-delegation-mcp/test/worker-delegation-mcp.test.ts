@@ -20,6 +20,112 @@ process.env.CODEX_CONFIG_DIR = root;
 process.env.NARADA_PROVIDER_SECRET_STORE = 'disabled';
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
+const defaultProviderRegistryPath = join(root, 'default-provider-registry.json');
+writeFileSync(defaultProviderRegistryPath, JSON.stringify({
+  schema: 'narada.carrier.provider_registry.v1',
+  default_provider: 'kimi-code-api',
+  providers: {
+    'openai-api': {
+      base_url: 'https://api.openai.com',
+      default_model: 'gpt-5.6-sol',
+      available_models: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+      cognition_defaults: {
+        low: { model: 'gpt-5.6-luna', reasoning_effort: 'low' },
+        medium: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+        high: { model: 'gpt-5.6-sol', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['OPENAI_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'kimi-api': {
+      base_url: 'https://api.moonshot.ai',
+      default_model: 'kimi-k2.7',
+      available_models: ['kimi-k2.7'],
+      cognition_defaults: {
+        low: { model: 'kimi-k2.7', reasoning_effort: 'low' },
+        medium: { model: 'kimi-k2.7', reasoning_effort: 'medium' },
+        high: { model: 'kimi-k2.7', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['KIMI_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'kimi-code-api': {
+      base_url: 'https://api.kimi.com/coding/',
+      default_model: 'k3',
+      available_models: ['k3'],
+      cognition_defaults: {
+        low: { model: 'k3', reasoning_effort: 'low' },
+        medium: { model: 'k3', reasoning_effort: 'medium' },
+        high: { model: 'k3', reasoning_effort: 'high' },
+      },
+      adapter_kind: 'openai-compatible-chat-completions',
+      base_url_env_names: ['KIMI_CODE_API_BASE_URL'],
+      model_env_names: ['KIMI_CODE_MODEL'],
+      credential_env_names: ['KIMI_CODE_API_KEY'],
+      credential_requirement: { kind: 'api_key_secret', secret_ref: 'test/kimi-code-api', env_names: ['KIMI_CODE_API_KEY'] },
+    },
+    'anthropic-api': {
+      base_url: 'https://api.anthropic.com',
+      default_model: 'claude-test',
+      available_models: ['claude-test'],
+      cognition_defaults: {
+        low: { model: 'claude-test', reasoning_effort: 'low' },
+        medium: { model: 'claude-test', reasoning_effort: 'medium' },
+        high: { model: 'claude-test', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['ANTHROPIC_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'deepseek-api': {
+      base_url: 'https://api.deepseek.com',
+      default_model: 'deepseek-test',
+      available_models: ['deepseek-test'],
+      cognition_defaults: {
+        low: { model: 'deepseek-test', reasoning_effort: 'low' },
+        medium: { model: 'deepseek-test', reasoning_effort: 'medium' },
+        high: { model: 'deepseek-test', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['DEEPSEEK_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'glm-api': {
+      base_url: 'https://open.bigmodel.cn/api/paas/v4',
+      default_model: 'glm-test',
+      available_models: ['glm-test'],
+      cognition_defaults: {
+        low: { model: 'glm-test', reasoning_effort: 'low' },
+        medium: { model: 'glm-test', reasoning_effort: 'medium' },
+        high: { model: 'glm-test', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['GLM_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'openrouter-api': {
+      base_url: 'https://openrouter.ai/api/v1',
+      default_model: 'z-ai/glm-5.2',
+      available_models: ['z-ai/glm-5-turbo', 'z-ai/glm-5.2'],
+      cognition_defaults: {
+        low: { model: 'z-ai/glm-5-turbo', reasoning_effort: 'low' },
+        medium: { model: 'z-ai/glm-5.2', reasoning_effort: 'medium' },
+        high: { model: 'z-ai/glm-5.2', reasoning_effort: 'high' },
+      },
+      base_url_env_names: ['OPENROUTER_API_BASE_URL'],
+      credential_requirement: { kind: 'none' },
+    },
+    'codex-subscription': {
+      base_url: 'codex://local-subscription',
+      default_model: 'gpt-5.6-sol',
+      available_models: ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol'],
+      cognition_defaults: {
+        low: { model: 'gpt-5.6-luna', reasoning_effort: 'low' },
+        medium: { model: 'gpt-5.6-terra', reasoning_effort: 'medium' },
+        high: { model: 'gpt-5.6-sol', reasoning_effort: 'high' },
+      },
+      model_env_names: ['CODEX_MODEL', 'NARADA_CODEX_MODEL'],
+      credential_requirement: { kind: 'local_codex_subscription' },
+    },
+  },
+}), 'utf8');
 const fakeCodexScript = join(root, 'exec.cjs');
 const fakeCodexErrorScript = join(root, 'exec-error-with-output.cjs');
 const fakeCodexHangScript = join(root, 'exec-hang.cjs');
@@ -260,6 +366,7 @@ const state = createServerState({
   codexCommandArgs: [fakeCodexScript],
   agentRuntimeServerCommand: process.execPath,
   agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+  providerRegistryPath: defaultProviderRegistryPath,
   maxOutputBytes: 2 * 1024 * 1024,
 }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled', KIMI_CODE_API_KEY: 'kimi-secret-must-not-leak', WORKER_SECRET: 'must-not-leak' });
 
@@ -727,7 +834,7 @@ $out = $args[$args.IndexOf('-o') + 1]
 Set-Content -LiteralPath $out -Encoding UTF8 -Value '{"summary":"ps1 worker ok","deliverables":[],"open_questions":[],"next_actions":[],"edits_performed":false,"target_state_changed":false,"changes":[],"verification":[],"verification_budget_respected":null,"broad_unrelated_failures":[],"exit_interview":null}'
 Write-Output '{"thread_id":"ps1-thread"}'
 `, 'utf8');
-  const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), defaultRuntime: 'codex', codexCommand: 'codex.ps1' }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
+  const ps1State = createServerState({ allowedRoot: root, runRoot: join(root, 'ps1-runs'), defaultRuntime: 'codex', codexCommand: 'codex.ps1', providerRegistryPath: defaultProviderRegistryPath }, { Path: `${ps1Bin};${process.env.Path ?? process.env.PATH ?? ''}` } as NodeJS.ProcessEnv);
   const ps1Run = await rpc({ jsonrpc: '2.0', id: 158, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('ps1 command lookup') } }, ps1State);
   const ps1RunDir = ps1Run.result?.structuredContent.run_dir ?? ps1Run.error?.data.details.run_dir;
   assert.equal(typeof ps1RunDir, 'string');
@@ -752,7 +859,8 @@ Write-Output '{"thread_id":"ps1-thread"}'
     allowedRoot: root,
     runRoot: join(root, 'agent-runtime-shim-runs'),
     agentRuntimeServerCommand: agentRuntimeCmd,
-  }, { PATH: process.env.PATH });
+    providerRegistryPath: defaultProviderRegistryPath,
+  }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled', KIMI_CODE_API_KEY: 'shim-kimi-key' });
   const agentRuntimeShimRun = await rpc({ jsonrpc: '2.0', id: 159, method: 'tools/call', params: { name: 'worker_run', arguments: runArgs('agent runtime shim lookup', { runtime: 'narada-agent-runtime-server' }) } }, agentRuntimeShimState);
   assert.equal(agentRuntimeShimRun.result?.structuredContent.status, 'completed');
   const agentRuntimeShimInvocation = JSON.parse(readFileSync(join(agentRuntimeShimRun.result?.structuredContent.run_dir, 'worker_invocation.json'), 'utf8'));
@@ -862,7 +970,7 @@ assert.equal(allowedConfigRun.result?.structuredContent.confidence, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 
-const managedCancellationState = createServerState({ allowedRoot: root, runRoot: join(root, 'managed-cancellation'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexHangScript] });
+const managedCancellationState = createServerState({ allowedRoot: root, runRoot: join(root, 'managed-cancellation'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexHangScript], providerRegistryPath: defaultProviderRegistryPath });
 const managedCancellationStart = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'managed cancellation run' }, constraints: { cwd: root } } } }, managedCancellationState);
 assert.equal(managedCancellationStart.result?.structuredContent.status, 'running');
 const managedCancellationRunId = String(managedCancellationStart.result?.structuredContent.run_id);
@@ -874,7 +982,7 @@ assert.equal(managedCancellation.result?.structuredContent.evidence.cancellation
 assert.equal(managedCancellation.result?.structuredContent.run.status, 'cancelled');
 assert.equal(managedCancellationState.activeRunCount, 0);
 
-const boundedWaitState = createServerState({ allowedRoot: root, runRoot: join(root, 'bounded-wait'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const boundedWaitState = createServerState({ allowedRoot: root, runRoot: join(root, 'bounded-wait'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], providerRegistryPath: defaultProviderRegistryPath });
 const boundedWait = await rpc({
   jsonrpc: '2.0',
   id: 504,
@@ -901,6 +1009,7 @@ const agentRuntimeState = createServerState({
   runRoot: join(root, 'agent-runtime-runs'),
   agentRuntimeServerCommand: process.execPath,
   agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+  providerRegistryPath: defaultProviderRegistryPath,
 }, {
   ...process.env,
   NARADA_SITE_ROOT: '',
@@ -919,6 +1028,7 @@ const splitBindingState = createServerState({
   runRoot: join(root, 'split-binding-runs'),
   agentRuntimeServerCommand: process.execPath,
   agentRuntimeServerCommandArgs: [fakeAgentRuntimeServerScript],
+  providerRegistryPath: defaultProviderRegistryPath,
 }, {
   ...process.env,
   NARADA_PROVIDER_SECRET_STORE: 'disabled',
@@ -1689,7 +1799,7 @@ assert.match(String(summaryOnlyWait.result?.structuredContent.run.progress.lates
 const verboseWait = await rpc({ jsonrpc: '2.0', id: 527, method: 'tools/call', params: { name: 'worker_run_wait', arguments: { run_id: asyncRun.result?.structuredContent.run_id, timeout_ms: 0, verbose: true } } }, state);
 assert.equal(verboseWait.result?.structuredContent.full_run.summary, 'worker ok');
 
-const prefixedState = createServerState({ allowedRoot: root, runRoot: join(root, 'prefixed'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const prefixedState = createServerState({ allowedRoot: root, runRoot: join(root, 'prefixed'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], providerRegistryPath: defaultProviderRegistryPath });
 const prefixedRun = await rpc({
   jsonrpc: '2.0',
   id: 53,
@@ -1845,6 +1955,7 @@ const unresolvedCognitionState = createServerState({
   defaultRuntime: 'codex',
   codexCommand: process.execPath,
   codexCommandArgs: [fakeCodexScript],
+  providerRegistryPath: defaultProviderRegistryPath,
 });
 unresolvedCognitionState.policy.providerCognitionDefaults['codex-subscription'].low = { model: null, reasoningEffort: null };
 const unresolvedCognition = await rpc({
@@ -1943,7 +2054,7 @@ assert.equal(resumeConfig.ephemeral, false);
 assert.equal(resumeConfig.argv.includes('resume'), true);
 assert.equal(resumeConfig.argv.includes('thread-existing'), true);
 
-const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), defaultRuntime: 'codex', codexCommand: join(root, 'missing-codex.exe') });
+const spawnFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'spawn-failure'), defaultRuntime: 'codex', codexCommand: join(root, 'missing-codex.exe'), providerRegistryPath: defaultProviderRegistryPath });
 const spawnFailure = await rpc({
   jsonrpc: '2.0',
   id: 61,
@@ -1955,7 +2066,7 @@ assert.match(spawnFailure.error?.data.details.reason, /command not found/);
 assert.equal(typeof spawnFailure.error?.data.details.remediation, 'string');
 
 const unavailableRoot = mkdtempSync(join(testTempRoot(), 'worker-delegation-unavailable-'));
-const unavailableState = createServerState({ allowedRoot: unavailableRoot, runRoot: join(unavailableRoot, 'runs'), defaultRuntime: 'codex', codexCommand: 'definitely-not-a-real-codex-binary' });
+const unavailableState = createServerState({ allowedRoot: unavailableRoot, runRoot: join(unavailableRoot, 'runs'), defaultRuntime: 'codex', codexCommand: 'definitely-not-a-real-codex-binary', providerRegistryPath: defaultProviderRegistryPath });
 const unavailableRun = await rpc({
   jsonrpc: '2.0',
   id: 611,
@@ -1987,7 +2098,7 @@ process.stdin.on('end', () => {
   fs.writeFileSync(lastMessagePath, JSON.stringify({ summary: 'ok', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [] }));
 });
 `, 'utf8');
-const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [badEventScript] });
+const badEventState = createServerState({ allowedRoot: eventRoot, runRoot: join(eventRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [badEventScript], providerRegistryPath: defaultProviderRegistryPath });
 const badEvent = await rpc({
   jsonrpc: '2.0',
   id: 62,
@@ -1999,7 +2110,7 @@ assert.equal(badEvent.result?.structuredContent.summary, 'ok');
 assert.match(badEvent.result?.structuredContent.error, /invalid json event/);
 assert.equal(badEvent.result?.structuredContent.warning_count, 0);
 
-const completedWithToolErrorState = createServerState({ allowedRoot: root, runRoot: join(root, 'completed-with-tool-error'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexErrorScript] });
+const completedWithToolErrorState = createServerState({ allowedRoot: root, runRoot: join(root, 'completed-with-tool-error'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexErrorScript], providerRegistryPath: defaultProviderRegistryPath });
 const completedWithToolError = await rpc({
   jsonrpc: '2.0',
   id: 621,
@@ -2070,7 +2181,7 @@ process.stdin.on('end', () => {
   process.exit(1);
 });
 `, 'utf8');
-const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [runtimeErrorScript] });
+const runtimeErrorState = createServerState({ allowedRoot: runtimeErrorRoot, runRoot: join(runtimeErrorRoot, 'runs'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [runtimeErrorScript], providerRegistryPath: defaultProviderRegistryPath });
 const runtimeError = await rpc({
   jsonrpc: '2.0',
   id: 63,
@@ -2087,6 +2198,7 @@ const persistentReconnectState = createServerState({
   defaultRuntime: 'codex',
   codexCommand: process.execPath,
   codexCommandArgs: [fakeCodexPersistentReconnectScript],
+  providerRegistryPath: defaultProviderRegistryPath,
 });
 const persistentReconnectStartedAt = Date.now();
 const persistentReconnect = await rpc({
@@ -2117,6 +2229,7 @@ const transientReconnectState = createServerState({
   defaultRuntime: 'codex',
   codexCommand: process.execPath,
   codexCommandArgs: [fakeCodexTransientReconnectScript],
+  providerRegistryPath: defaultProviderRegistryPath,
 });
 const transientReconnect = await rpc({
   jsonrpc: '2.0',
@@ -2127,7 +2240,7 @@ const transientReconnect = await rpc({
 assert.equal(transientReconnect.result?.structuredContent.status, 'completed');
 assert.equal(transientReconnect.result?.structuredContent.summary, 'transient provider recovered');
 
-const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript] });
+const prestartFailureState = createServerState({ allowedRoot: root, runRoot: join(root, 'prestart-failure'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexPrestartFailureScript], providerRegistryPath: defaultProviderRegistryPath });
 const prestartFailure = await rpc({
   jsonrpc: '2.0',
   id: 631,
@@ -2144,7 +2257,7 @@ const prestartList = await rpc({ jsonrpc: '2.0', id: 633, method: 'tools/call', 
 assert.match(prestartList.result?.structuredContent.runs[0].error_preview, /Not inside a trusted directory/);
 assert.equal(prestartList.result?.structuredContent.runs[0].error_classification, 'codex_untrusted_directory');
 
-const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 1000, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript] });
+const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 1000, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], providerRegistryPath: defaultProviderRegistryPath });
 const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
 assert.equal(materialized.result?.structuredContent.schema, 'narada.producer_output_page.v1');
 assert.equal(materialized.result?.structuredContent.result_materialized, true);

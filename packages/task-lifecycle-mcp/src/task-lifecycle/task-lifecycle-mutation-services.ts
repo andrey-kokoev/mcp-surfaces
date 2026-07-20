@@ -186,7 +186,7 @@ export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }
   writeFileSync(taskPath, updatedContent, 'utf8');
   let admission;
   try {
-    admission = await admitTaskEvidence({ cwd: siteRoot, taskNumber, admittedBy: agentId, methods: ['criteria_proof'] });
+    admission = await admitTaskEvidence({ cwd: siteRoot, store, taskNumber, admittedBy: agentId, methods: ['criteria_proof'] });
   } catch (error) {
     writeFileSync(taskPath, body, 'utf8');
     throw error;

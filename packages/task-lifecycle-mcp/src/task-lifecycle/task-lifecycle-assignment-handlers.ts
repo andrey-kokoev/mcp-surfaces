@@ -173,7 +173,7 @@ export function createTaskLifecycleAssignmentHandlers({
         }, true);
       }
 
-      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => continueTaskService({ cwd: siteRoot, taskNumber, agent: agentId, reason }));
+      const result = await withAuthoredRosterJsonPreserved(siteRoot, () => continueTaskService({ cwd: siteRoot, taskNumber, agent: agentId, reason }), store);
       return jsonToolResult(result.result || result, result.exitCode !== 0);
     },
 

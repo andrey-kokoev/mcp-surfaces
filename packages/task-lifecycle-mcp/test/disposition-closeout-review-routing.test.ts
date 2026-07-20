@@ -275,6 +275,8 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
 
   const generatedReviewTaskNumber = payload.finish_result.review_dependency.required_task_number;
   assert.equal(typeof generatedReviewTaskNumber, 'number');
+  assert.ok(Array.isArray(payload.finish_result.post_closeout_continuation.downstream_role_followups));
+  assert.equal(payload.finish_result.post_closeout_continuation.next_recommendation.task.task_number, generatedReviewTaskNumber);
   const reviewClaimResponse = await handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 5,

@@ -119,6 +119,16 @@ See `docs/site-loop-doctrine.md` at the repository root for the doctrine,
 surface-boundary contract, and target `test_authority` shape for full non-dry
 e2e tests.
 
+## Task Executability Proof
+
+The deterministic cross-surface proof is the Site Loop closure gate:
+
+```powershell
+pnpm --filter @narada2/site-loop-mcp test:e2e:task-executability
+```
+
+It uses the real Task Lifecycle MCP child and the production NARS task-executability dispatch hook with a bounded local evaluator. The emitted evidence distinguishes the real NARS hook path, Site Loop reconciliation, and the injected fake evaluator port. It proves request creation, stale assessment replacement, NARS-versus-Site-Loop leasing (exactly one admitted execution), bounded concurrent leasing, restart recovery, no-NARS recovery, and strict task-linked dispatch. Store ownership and temporary-root cleanup are asserted; promise barriers, not sleeps, establish ordering. This does not prove that the task or its outcome is correct. The optional live provider proof and recovery runbook are documented in Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook.
+
 ## Verification
 
 ```powershell

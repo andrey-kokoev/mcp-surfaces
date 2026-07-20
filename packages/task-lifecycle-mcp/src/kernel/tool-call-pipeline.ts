@@ -15,7 +15,7 @@ export function createTaskLifecycleToolCaller({
   setActiveOutputToolName = (_name?: unknown) => {},
   env = process.env,
 }) {
-  return async function callTaskLifecycleTool(params) {
+  return async function callTaskLifecycleTool(params, requestContext = {}) {
     const record = asRecord(params);
     const name = stringField(record, 'name');
     const args = asRecord(record.arguments);
@@ -35,6 +35,7 @@ export function createTaskLifecycleToolCaller({
         toolDef,
         dispatchTool,
         refreshStore,
+        requestContext,
       });
     }
 
@@ -81,6 +82,7 @@ export function createTaskLifecycleToolCaller({
       toolDef,
       dispatchTool,
       refreshStore,
+      requestContext,
     });
   };
 }
@@ -124,19 +126,19 @@ export function resolveFreshServerInvocationPayload({
   };
 }
 
-async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, toolDef, dispatchTool, refreshStore }) {
+async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, toolDef, dispatchTool, refreshStore, requestContext = {} }) {
   try {
-    return await dispatchTool(canonicalName, args, { payloadSource });
+    return await dispatchTool(canonicalName, args, { payloadSource, ...requestContext });
   } catch (error) {
     if (!isStoreError(error)) throw error;
     const diagnostic = describeStoreError(error);
     if (!isStoreRetrySafe({ canonicalName, args, toolDef })) {
       throw new Error(`store_unavailable_after_attempt: mutation_not_retried; tool=${canonicalName}; retry_safe=false; inspect operation state before retrying; original_error=${diagnostic}`);
     }
-    const refreshed = refreshStore();
+    const refreshed = await refreshStore(requestContext);
     if (!refreshed) throw new Error(`store_unavailable: ${diagnostic}`);
     try {
-      return await dispatchTool(canonicalName, args, { payloadSource });
+      return await dispatchTool(canonicalName, args, { payloadSource, ...requestContext });
     } catch (retryError) {
       if (isStoreError(retryError)) throw new Error(`store_unavailable: ${describeStoreError(retryError)}`);
       throw retryError;
@@ -144,14 +146,55 @@ async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, t
   }
 }
 
+const SQLITE_ERROR_CODE_PATTERN = /^(?:SQLITE_|ERR_SQLITE_)/i;
+const SQLITE_ERROR_NAMES = new Set(['SqliteError', 'SQLiteError']);
+const UNTYPED_STORE_ERROR_MESSAGES = new Set([
+  'attempt to write a readonly database',
+  'database disk image is malformed',
+  'database is locked',
+  'database is not open',
+  'database schema is locked',
+  'database table is locked',
+  'disk i/o error',
+  'file is not a database',
+  'not a database',
+  'unable to open database file',
+]);
+
+type ErrorRecord = {
+  cause?: unknown;
+  code?: unknown;
+  message?: unknown;
+  name?: unknown;
+};
+
+function asErrorRecord(value: unknown): ErrorRecord | null {
+  return typeof value === 'object' && value !== null
+    ? value as ErrorRecord
+    : null;
+}
+
+function findSqliteErrorCode(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth <= 4; depth += 1) {
+    const record = asErrorRecord(current);
+    if (!record) return null;
+    if (typeof record.code === 'string' && SQLITE_ERROR_CODE_PATTERN.test(record.code)) {
+      return record.code;
+    }
+    current = record.cause;
+  }
+  return null;
+}
+
 function describeStoreError(error) {
-  if (error instanceof Error) {
-    const errorCode = (error as Error & { code?: unknown }).code;
-    const code = typeof errorCode === 'string' ? `; code=${errorCode}` : '';
-    const stack = typeof error.stack === 'string'
-      ? error.stack.split(/\r?\n/).slice(1, 9).map((line) => line.trim()).join(' <- ')
-      : '';
-    return `${error.message}${code}${stack ? `; stack=${stack}` : ''}`;
+  const record = asErrorRecord(error);
+  const message = error instanceof Error
+    ? error.message
+    : typeof record?.message === 'string' ? record.message : null;
+  const code = findSqliteErrorCode(error);
+  if (typeof message === 'string') {
+    return `${message}${code ? `; code=${code}` : ''}`;
   }
   return String(error);
 }
@@ -165,8 +208,23 @@ export function isStoreRetrySafe({ canonicalName, args, toolDef }) {
 }
 
 export function isStoreError(error) {
-  const msg = error instanceof Error ? error.message : String(error);
-  return /database|sqlite|SQLITE|disk I\/O|malformed|not a database/i.test(msg);
+  let current = error;
+  for (let depth = 0; depth <= 4; depth += 1) {
+    const record = asErrorRecord(current);
+    if (!record) return false;
+    if (typeof record.code === 'string' && SQLITE_ERROR_CODE_PATTERN.test(record.code)) {
+      return true;
+    }
+    if (typeof record.name === 'string' && SQLITE_ERROR_NAMES.has(record.name)) {
+      return true;
+    }
+    if (typeof record.message === 'string'
+      && UNTYPED_STORE_ERROR_MESSAGES.has(record.message.trim().toLowerCase())) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
 }
 function detectReviewSurfaceMismatch(_canonicalName, _args) {
   return null;

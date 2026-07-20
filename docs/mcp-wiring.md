@@ -78,3 +78,11 @@ The surface itself does not need Narada. The wiring workflow may.
 The registrar catalog is materialized from each package's native V2 descriptor. The descriptor owns the live `tools/list` contract, effect metadata, projection transport, injection scope, runtime requirements, and lifecycle requirement. Carrier-specific files are projections of that descriptor; they are not a second source of tool or scope truth.
 
 Runtime observation is separate from config wiring. The runtime proxy records generation, heartbeat, lease, freshness, health, and contract-digest state. `mcp-loader_runtime_observation` reports the loader's stable logical connection and active/draining generations. A child replacement is requested through `mcp_loader_surface_restart`; a loader-process restart belongs to the carrier or runtime supervisor. Registrar config apply, loader generation replacement, and carrier restart remain separate actuators.
+
+## Native descriptor coverage gate
+
+Every registered package must expose a package-owned `./surface-definition` export. The registrar's native catalog is the only catalog authority; loader fallback entries must use the same built package entrypoint and argument placeholders as the native projection. Operator-specific roots must not be embedded in a descriptor: use `{site_root}`, `{site_control_root}`, `{site_runtime_root}`, `{workspace_root}`, or `{mcp_surfaces_root}` and let the selected binding interpolate them.
+
+The native registrar test checks descriptor coverage, tool-contract conformance, projection transport equivalence, package-version agreement, explicit lifecycle metadata, and portable path interpolation. The shared descriptor builder rejects stale or duplicate read-only inventories. `mcp_loader_site_tool_inventory_check` remains the runtime gate for comparing a live child process with its declared descriptor.
+
+For lifecycle discovery, read `metadata.lifecycle_readback` on the descriptor and then call `mcp_loader_surface_status` when the surface is loader-managed. This reports the child generation and lifecycle posture without implying that a direct standalone process can be restarted by the loader.

@@ -91,7 +91,6 @@ export async function taskLifecycleDispositionCloseout({
   withAuthoredRosterJsonPreserved,
   finishTaskService,
   evaluatePostTransitionFollowups,
-  buildPostCloseoutContinuation,
   detectGitChangedFiles,
   scopeChangedFiles,
 }) {
@@ -184,9 +183,6 @@ export async function taskLifecycleDispositionCloseout({
         result: finishResult,
         signals: { evidence_blocked: finishResult.close_action === 'blocked' },
       });
-      if (finishResult.close_action !== 'blocked') {
-        finishResult.post_closeout_continuation = buildPostCloseoutContinuation({ agentId, result: finishResult });
-      }
       if (!finishChangedFiles && !noFilesChanged) {
         finishResult.changed_files_scoping = scopedChangedFiles;
       }

@@ -23,7 +23,7 @@ export function surfaceDefinition(): DefinedSurface {
       transport: {
         kind: 'stdio',
         command: 'node',
-        args: ['--allowed-site-root', 'D:/code', '--allowed-site-root', 'C:/Users/Andrey/Narada'],
+        args: [],
         env: [],
       },
       injection_scope: 'user_site',

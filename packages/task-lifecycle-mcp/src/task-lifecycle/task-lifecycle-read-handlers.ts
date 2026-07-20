@@ -555,9 +555,12 @@ function taskLifecyclePayloadSchemas() {
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },
     task_lifecycle_disposition_closeout: {
-      payload_ref_shape: { summary: '<closeout summary>', changed_files: ['path/to/file'], no_files_changed: false },
-      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['summary'], remediation: 'Put closeout summaries above the governed inline threshold and optional changed_files/no_files_changed in mcp_payload_create, then call task_lifecycle_closeout with payload_ref plus top-level task_number and agent_id.' },
+      canonical_tool: 'task_lifecycle_disposition_closeout',
+      accepted_legacy_alias: 'task_lifecycle_closeout',
+      payload_ref_shape: { summary: '<closeout summary>', changed_files: ['path/to/file'], no_files_changed: false, reviewer: '<optional admitted reviewer agent id or unique reviewer role alias>' },
+      inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, long_fields: ['summary'], remediation: 'Put closeout summaries above the governed inline threshold and optional changed_files/no_files_changed/reviewer in mcp_payload_create, then call task_lifecycle_disposition_closeout with payload_ref plus top-level task_number and agent_id.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
+      review_routing: 'The optional reviewer is routed through a review-contract dependency; when omitted, the first reviewer-capable roster agent is selected.',
     },
     task_lifecycle_report_blocked: {
       payload_ref_shape: { reason: '<concise blocker summary>', blockers: [{ kind: '<blocker kind>', detail: '<details>' }], next_action: '<long concrete unblock action>', defer: true },

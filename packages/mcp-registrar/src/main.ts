@@ -139,7 +139,7 @@ type CarrierDef = {
 
 const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
-const MCP_REGISTRAR_ENTRYPOINT = 'D:/code/mcp-surfaces/packages/mcp-registrar/dist/src/main.js';
+const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
 const USER_OPERATOR_ID = 'andrey';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createServerState } from '../src/main.js';
 import { workerEditRunArgs } from '../src/tool-handlers/edit.js';
@@ -14,10 +14,36 @@ type RpcResponse = {
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-projection-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
+const providerRegistryPath = join(root, 'provider-registry.json');
+writeFileSync(providerRegistryPath, JSON.stringify({
+  schema: 'narada.carrier.provider_registry.v1',
+  default_provider: 'kimi-code-api',
+  providers: {
+    'kimi-code-api': {
+      base_url: 'https://example.invalid/coding/',
+      default_model: 'projection-test-model',
+      available_models: ['projection-test-model'],
+      cognition_defaults: {
+        low: { model: 'projection-test-model', reasoning_effort: 'low' },
+        medium: { model: 'projection-test-model', reasoning_effort: 'medium' },
+        high: { model: 'projection-test-model', reasoning_effort: 'high' },
+      },
+      adapter_kind: 'openai-compatible-chat-completions',
+      base_url_env_names: ['KIMI_CODE_API_BASE_URL'],
+      model_env_names: ['KIMI_CODE_MODEL'],
+      credential_env_names: ['KIMI_CODE_API_KEY'],
+      credential_requirement: { kind: 'api_key_secret', secret_ref: 'projection/test', env_names: ['KIMI_CODE_API_KEY'] },
+    },
+  },
+}), 'utf8');
 const env = {
   ...process.env,
   PATH: process.env.PATH ?? '',
   NARADA_PROVIDER_SECRET_STORE: 'disabled',
+  NARADA_INTELLIGENCE_PROVIDER: 'kimi-code-api',
+  NARADA_AI_API_KEY: 'projection-test-key',
+  NARADA_AI_BASE_URL: 'https://example.invalid/coding/',
+  NARADA_AI_MODEL: 'projection-test-model',
   KIMI_CODE_API_KEY: 'projection-test-key',
 };
 
@@ -50,6 +76,7 @@ const codexState = createServerState({
   runRoot: join(root, 'codex-runs'),
   defaultRuntime: 'codex',
   codexCommand: process.execPath,
+  providerRegistryPath,
   maxOutputBytes: 2 * 1024 * 1024,
 }, env);
 const codexPreview = await rpc({
@@ -60,7 +87,7 @@ const codexPreview = await rpc({
     name: 'worker_config_resolve',
     arguments: {
       intent: { instruction: 'preview unprojectable MCP tools' },
-      constraints: { cwd: root, authority: 'read', cognition: 'low', required_mcp_tools: ['mailbox_messages_list'] },
+      constraints: { cwd: root, authority: 'read', cognition: 'low', required_mcp_tools: ['mailbox_messages_list'], overrides: { model: 'projection-test-model', reasoning_effort: 'low' } },
     },
   },
 }, codexState);
@@ -74,6 +101,7 @@ const narsState = createServerState({
   runRoot: join(root, 'nars-runs'),
   defaultRuntime: 'narada-agent-runtime-server',
   agentRuntimeServerCommand: process.execPath,
+  providerRegistryPath,
   maxOutputBytes: 2 * 1024 * 1024,
 }, env);
 const narsProjection = await rpc({
@@ -84,7 +112,7 @@ const narsProjection = await rpc({
     name: 'worker_config_resolve',
     arguments: {
       intent: { instruction: 'preview projected MCP tools' },
-      constraints: { cwd: root, authority: 'read', cognition: 'low', required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
+      constraints: { cwd: root, authority: 'read', cognition: 'low', provider: 'kimi-code-api', required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
     },
   },
 }, narsState);
@@ -99,6 +127,7 @@ const staleConfigState = createServerState({
   runRoot: join(root, 'stale-config-runs'),
   defaultRuntime: 'narada-agent-runtime-server',
   agentRuntimeServerCommand: process.execPath,
+  providerRegistryPath,
   maxOutputBytes: 2 * 1024 * 1024,
 }, { ...env, NARADA_WORKER_MCP_CONFIG: JSON.stringify({ schema: 'stale.worker.mcp_projection.v1', mcp_tool_allowlist: ['stale-tool'] }) });
 const staleConfig = await rpc({
@@ -109,7 +138,7 @@ const staleConfig = await rpc({
     name: 'worker_config_resolve',
     arguments: {
       intent: { instruction: 'clear stale MCP projection' },
-      constraints: { cwd: root, authority: 'read', cognition: 'low', overrides: { runtime: 'narada-agent-runtime-server' } },
+      constraints: { cwd: root, authority: 'read', cognition: 'low', provider: 'kimi-code-api', overrides: { runtime: 'narada-agent-runtime-server' } },
     },
   },
 }, staleConfigState);

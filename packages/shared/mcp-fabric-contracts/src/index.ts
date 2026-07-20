@@ -331,6 +331,15 @@ export function defineSurface(input: {
       `mcp_fabric_guidance_tool_count_invalid: ${input.surface_id} declared ${guidanceTools.length}`,
     );
   }
+  const metadata = {
+    lifecycle_readback: {
+      tool_name: 'mcp_loader_surface_status',
+      arguments: { surface_id: input.surface_id },
+      authority: 'mcp-loader',
+      availability: 'loader-managed',
+    },
+    ...(input.metadata ?? {}),
+  };
   const descriptor = parseSurfaceDescriptorV2({
     schema_version: MCP_FABRIC_SCHEMA_VERSION,
     source: 'native',
@@ -352,7 +361,7 @@ export function defineSurface(input: {
       ...(registration.timeout_ms === undefined ? {} : { timeout_ms: registration.timeout_ms }),
     })),
     projections: input.projections,
-    ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+    metadata,
   });
   return {
     descriptor,
@@ -381,6 +390,17 @@ export function defineNativeSurface(input: {
   projections: SurfaceProjectionV2[];
   metadata?: Record<string, unknown>;
 }): DefinedSurface {
+  const toolNames = new Set(input.tools.map((definition) => definition.name));
+  const duplicateReadOnlyTools = input.read_only_tools.filter(
+    (name, index, values) => values.indexOf(name) !== index,
+  );
+  if (duplicateReadOnlyTools.length > 0) {
+    throw new Error(`mcp_fabric_read_only_tool_duplicate: ${duplicateReadOnlyTools.join(',')}`);
+  }
+  const undeclaredReadOnlyTools = input.read_only_tools.filter((name) => !toolNames.has(name));
+  if (undeclaredReadOnlyTools.length > 0) {
+    throw new Error(`mcp_fabric_read_only_tool_undeclared: ${undeclaredReadOnlyTools.join(',')}`);
+  }
   const readOnly = new Set(input.read_only_tools);
   const defaultIdempotency = input.default_effect === 'read' ? 'replayable' : 'non_idempotent';
   const defaultConfirmation = input.default_effect === 'runtime_admin' ? 'always' : 'policy';
