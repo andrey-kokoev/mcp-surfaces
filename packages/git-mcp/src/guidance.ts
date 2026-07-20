@@ -3,7 +3,7 @@ export type GuidanceToolDefinition = GuidanceRecord & { name: string; descriptio
 
 const SURFACE_ID = "git";
 const GUIDANCE_TOOL = "git_guidance";
-const PURPOSE = "Governed Git inspection, branch lifecycle, staging, commit, and push workflows.";
+const PURPOSE = "Governed Git inspection, branch lifecycle, remote synchronization, staging, commit, and push workflows.";
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -57,17 +57,25 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'git_branch_set_upstream or git_branch_unset_upstream for local tracking configuration.',
         'git_branch_delete_remote with explicit remote, branch, and base; the remote ref must be merged before deletion.',
         'Use git_push separately to publish a newly created local branch.'
+      ],
+      remote_synchronization: [
+        'git_status, then git_fetch with one configured remote and one explicit branch; fetch never accepts arbitrary refspecs.',
+        'git_rebase with onto=remote/branch or git_merge with an explicit target. Set autostash=true only for tracked dirty files.',
+        'git_sync_status to inspect operation state and conflicts.',
+        'After resolving and staging every conflict path, use the matching continue tool; use the matching abort tool to roll back the operation.',
+        'Untracked files are refused during synchronization even with autostash because Git autostash does not preserve them.'
       ]
     },
     tool_inventory: {
-      read: ['git_policy_inspect', 'git_status', 'git_branch_list', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show', 'git_output_show'],
-      write: ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_branch_create', 'git_branch_switch', 'git_branch_rename', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_set_upstream', 'git_branch_unset_upstream', 'git_workflow_record'],
+      read: ['git_policy_inspect', 'git_status', 'git_sync_status', 'git_branch_list', 'git_changed_summary', 'git_repositories_summary', 'git_diff', 'git_log', 'git_show', 'git_output_show'],
+      write: ['git_add', 'git_unstage', 'git_commit', 'git_push', 'git_fetch', 'git_rebase', 'git_rebase_continue', 'git_rebase_abort', 'git_merge', 'git_merge_continue', 'git_merge_abort', 'git_branch_create', 'git_branch_switch', 'git_branch_rename', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_set_upstream', 'git_branch_unset_upstream', 'git_workflow_record'],
       write_mode_note: 'Mutations require git-mcp mode=write and policy approval.'
     },
     examples: [
       { intent: 'First use', call: 'git_guidance({})' },
       { intent: 'Normal commit workflow', call: 'git_status -> git_changed_summary/git_diff -> git_add -> staged git_diff -> git_commit -> git_push -> git_workflow_record' },
       { intent: 'Branch workflow', call: 'git_branch_list -> git_branch_create -> git_branch_switch -> git_branch_delete' },
+      { intent: 'Remote synchronization', call: 'git_status -> git_fetch({ remote: "origin", branch: "main" }) -> git_rebase({ onto: "origin/main", autostash: false }) -> git_sync_status' },
       { intent: 'Tool-specific help', call: "git_guidance({ tool: \"<tool_name>\" })" },
       { intent: 'Workflow-specific help', call: "git_guidance({ workflow: \"<workflow_name>\" })" }
     ],
@@ -87,6 +95,9 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For git_commit_scope_required_for_mixed_worktree, inspect git_status, pass the exact intended expected_staged_paths, and retry; the refusal is atomic.',
       'For branch deletion refusals, inspect git_branch_list and retry only with the correct merged base; force deletion is not available.',
       'For remote branch errors, verify the configured remote and remote ref before retrying; the remote deletion tool does not fetch implicitly.',
+      'For git_dirty_worktree_requires_autostash, retry only with autostash=true when all dirty paths are tracked.',
+      'For git_untracked_worktree_requires_manual_preservation, preserve untracked files explicitly before retrying synchronization.',
+      'For sync conflicts, use git_sync_status, resolve and stage conflict paths, then use the matching continue tool or abort safely.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {

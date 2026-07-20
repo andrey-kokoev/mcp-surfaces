@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   optionalBranchName,
@@ -34,6 +34,7 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   const runContext = { ...context, env: state.env };
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, runContext);
+  if (name === 'git_sync_status') return gitSyncStatus(args, state, runContext);
   if (name === 'git_branch_list') return gitBranchList(args, state, runContext);
   if (name === 'git_branch_create') return gitBranchCreate(args, state, runContext);
   if (name === 'git_branch_switch') return gitBranchSwitch(args, state, runContext);
@@ -50,9 +51,303 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   if (name === 'git_unstage') return gitUnstage(args, state, runContext);
   if (name === 'git_commit') return gitCommit(args, state, runContext);
   if (name === 'git_push') return gitPush(args, state, runContext);
+  if (name === 'git_fetch') return gitFetch(args, state, runContext);
+  if (name === 'git_rebase') return gitRebase(args, state, runContext);
+  if (name === 'git_rebase_continue') return gitRebaseContinue(args, state, runContext);
+  if (name === 'git_rebase_abort') return gitRebaseAbort(args, state, runContext);
+  if (name === 'git_merge') return gitMerge(args, state, runContext);
+  if (name === 'git_merge_continue') return gitMergeContinue(args, state, runContext);
+  if (name === 'git_merge_abort') return gitMergeAbort(args, state, runContext);
   if (name === 'git_log') return gitLog(args, state, runContext);
   if (name === 'git_show') return gitShow(args, state, runContext);
   throw diagnosticError('git_mcp_unknown_tool', `git_mcp_unknown_tool:${name}`, { tool_name: name });
+}
+
+export async function gitSyncStatus(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
+  const cwd = resolveWorkingDirectory(args, state);
+  const status = await gitStatus({ working_directory: cwd }, state, context);
+  const operation = await detectSyncOperation(cwd, state, context);
+  const conflicts = stringArray(status.conflicts);
+  return {
+    schema: 'narada.git.sync_status.v1',
+    status: 'ok',
+    working_directory: cwd,
+    operation,
+    in_progress: operation !== null,
+    conflict_paths: conflicts,
+    conflict_count: conflicts.length,
+    clean: status.clean,
+    branch: status.branch,
+    upstream: status.upstream,
+    recovery: operation === 'rebase'
+      ? ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']
+      : operation === 'merge'
+        ? ['git_merge_continue', 'git_merge_abort', 'git_sync_status']
+        : [],
+    post_status: status,
+  };
+}
+
+export async function gitFetch(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_fetch');
+  const cwd = resolveWorkingDirectory(args, state);
+  const remote = requiredRemoteName(args.remote);
+  const branch = requiredBranchName(args.branch, 'branch');
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  requireConfiguredRemote(before.remotes, remote);
+  const result = await runGit(cwd, ['fetch', '--no-tags', remote, branch], state.policy, context);
+  ensureGitOk(result, 'git_fetch_failed');
+  const payload = {
+    schema: 'narada.git.fetch.v1',
+    status: 'ok',
+    working_directory: cwd,
+    remote,
+    branch,
+    scope_label: scopeLabel,
+    output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    pre_status: before,
+    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    summary: `fetched ${remote}/${branch}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+export async function gitRebase(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_rebase');
+  const cwd = resolveWorkingDirectory(args, state);
+  const onto = requireCommitish(args.onto);
+  const autostash = args.autostash === true;
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const before = await prepareSyncMutation(cwd, autostash, state, context);
+  const result = await runGit(cwd, ['rebase', ...(autostash ? ['--autostash'] : []), onto], state.policy, context);
+  return finishSyncMutation('rebase', cwd, onto, autostash, scopeLabel, before, result, state, context);
+}
+
+export async function gitMerge(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_merge');
+  const cwd = resolveWorkingDirectory(args, state);
+  const target = requireCommitish(args.target);
+  const autostash = args.autostash === true;
+  const scopeLabel = optionalNonEmptyString(args.scope_label);
+  const before = await prepareSyncMutation(cwd, autostash, state, context);
+  const result = await runGit(cwd, ['merge', ...(autostash ? ['--autostash'] : []), '--no-edit', target], state.policy, context);
+  return finishSyncMutation('merge', cwd, target, autostash, scopeLabel, before, result, state, context);
+}
+
+export async function gitRebaseContinue(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_rebase_continue');
+  return continueSyncOperation('rebase', args, state, context);
+}
+
+export async function gitRebaseAbort(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_rebase_abort');
+  return abortSyncOperation('rebase', args, state, context);
+}
+
+export async function gitMergeContinue(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_merge_continue');
+  return continueSyncOperation('merge', args, state, context);
+}
+
+export async function gitMergeAbort(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  requireWriteMode(state.policy, 'git_merge_abort');
+  return abortSyncOperation('merge', args, state, context);
+}
+
+async function prepareSyncMutation(cwd: string, autostash: boolean, state: GitMcpState, context: GitRequestContext): Promise<Record<string, unknown>> {
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  const operation = await detectSyncOperation(cwd, state, context);
+  if (operation) {
+    throw diagnosticError('git_sync_operation_in_progress', 'git_sync_operation_in_progress', {
+      operation,
+      mutation_started: false,
+      remediation: `Use git_${operation}_continue, git_${operation}_abort, or git_sync_status before starting another operation.`,
+    });
+  }
+  const conflicts = stringArray(before.conflicts);
+  if (conflicts.length > 0) {
+    throw diagnosticError('git_conflicts_present', 'git_conflicts_present', {
+      conflict_paths: conflicts,
+      mutation_started: false,
+      remediation: 'Resolve the existing conflicts and use the matching continuation or abort tool.',
+    });
+  }
+  const untracked = stringArray(before.untracked);
+  if (untracked.length > 0) {
+    throw diagnosticError('git_untracked_worktree_requires_manual_preservation', 'git_untracked_worktree_requires_manual_preservation', {
+      untracked_paths: untracked,
+      autostash,
+      mutation_started: false,
+      remediation: 'Preserve or remove untracked files explicitly before synchronization; Git autostash does not include them.',
+    });
+  }
+  if (before.clean !== true && !autostash) {
+    throw diagnosticError('git_dirty_worktree_requires_autostash', 'git_dirty_worktree_requires_autostash', {
+      autostash,
+      mutation_started: false,
+      remediation: 'Set autostash=true for tracked dirty worktrees or make the worktree clean before synchronization.',
+    });
+  }
+  return before;
+}
+
+async function finishSyncMutation(
+  operation: 'rebase' | 'merge',
+  cwd: string,
+  target: string,
+  autostash: boolean,
+  scopeLabel: string | null,
+  before: Record<string, unknown>,
+  result: Awaited<ReturnType<typeof runGit>>,
+  state: GitMcpState,
+  context: GitRequestContext,
+) {
+  const after = await gitStatus({ working_directory: cwd }, state, context);
+  const operationState = await detectSyncOperation(cwd, state, context);
+  if (result.exit_code !== 0 && operationState === operation) {
+    const conflicts = stringArray(after.conflicts);
+    const payload = {
+      schema: `narada.git.${operation}.v1`,
+      status: 'conflict',
+      operation,
+      working_directory: cwd,
+      target,
+      autostash,
+      scope_label: scopeLabel,
+      mutation_started: true,
+      operation_in_progress: true,
+      conflict_paths: conflicts,
+      conflict_count: conflicts.length,
+      output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+      pre_status: before,
+      post_status: after,
+      recovery: operation === 'rebase'
+        ? ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']
+        : ['git_merge_continue', 'git_merge_abort', 'git_sync_status'],
+      summary: `${operation} requires conflict resolution`,
+    };
+    audit(state, payload);
+    return payload;
+  }
+  ensureGitOk(result, `git_${operation}_failed`);
+  const payload = {
+    schema: `narada.git.${operation}.v1`,
+    status: operation === 'rebase' ? 'rebased' : 'merged',
+    operation,
+    working_directory: cwd,
+    target,
+    autostash,
+    scope_label: scopeLabel,
+    mutation_started: true,
+    operation_in_progress: false,
+    output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    pre_status: before,
+    post_status: after,
+    recovery: [],
+    summary: `${operation} completed onto ${target}`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+async function continueSyncOperation(operation: 'rebase' | 'merge', args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext) {
+  const cwd = resolveWorkingDirectory(args, state);
+  const current = await detectSyncOperation(cwd, state, context);
+  if (current !== operation) {
+    throw diagnosticError(`git_${operation}_not_in_progress`, `git_${operation}_not_in_progress`, { operation: current, mutation_started: false });
+  }
+  const status = await gitStatus({ working_directory: cwd }, state, context);
+  const conflicts = stringArray(status.conflicts);
+  if (conflicts.length > 0) {
+    throw diagnosticError(`git_${operation}_conflicts_remaining`, `git_${operation}_conflicts_remaining`, {
+      conflict_paths: conflicts,
+      mutation_started: false,
+      remediation: 'Resolve and stage every conflict path before continuing.',
+    });
+  }
+  const command = operation === 'rebase'
+    ? ['-c', 'core.editor=true', 'rebase', '--continue']
+    : ['commit', '--no-edit'];
+  const result = await runGit(cwd, command, state.policy, { ...context, env: { ...state.env, GIT_EDITOR: 'true' } });
+  const after = await gitStatus({ working_directory: cwd }, state, context);
+  const stillInProgress = await detectSyncOperation(cwd, state, context);
+  if (result.exit_code !== 0 && stillInProgress === operation) {
+    return syncRecoveryPayload(operation, 'conflict', cwd, result, after, args);
+  }
+  ensureGitOk(result, `git_${operation}_continue_failed`);
+  const payload = {
+    schema: `narada.git.${operation}_continue.v1`,
+    status: 'ok',
+    operation,
+    working_directory: cwd,
+    mutation_started: true,
+    operation_in_progress: false,
+    output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    post_status: after,
+    summary: `${operation} continued successfully`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+async function abortSyncOperation(operation: 'rebase' | 'merge', args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext) {
+  const cwd = resolveWorkingDirectory(args, state);
+  const current = await detectSyncOperation(cwd, state, context);
+  if (current !== operation) {
+    throw diagnosticError(`git_${operation}_not_in_progress`, `git_${operation}_not_in_progress`, { operation: current, mutation_started: false });
+  }
+  const result = await runGit(cwd, [operation, '--abort'], state.policy, context);
+  ensureGitOk(result, `git_${operation}_abort_failed`);
+  const after = await gitStatus({ working_directory: cwd }, state, context);
+  const payload = {
+    schema: `narada.git.${operation}_abort.v1`,
+    status: 'aborted',
+    operation,
+    working_directory: cwd,
+    mutation_started: true,
+    operation_in_progress: false,
+    output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    post_status: after,
+    summary: `${operation} aborted`,
+  };
+  audit(state, payload);
+  return payload;
+}
+
+function syncRecoveryPayload(operation: 'rebase' | 'merge', status: 'conflict', cwd: string, result: Awaited<ReturnType<typeof runGit>>, after: Record<string, unknown>, args: Record<string, unknown>) {
+  return {
+    schema: `narada.git.${operation}_continue.v1`,
+    status,
+    operation,
+    working_directory: cwd,
+    mutation_started: true,
+    operation_in_progress: true,
+    conflict_paths: stringArray(after.conflicts),
+    output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    post_status: after,
+    recovery: operation === 'rebase'
+      ? ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']
+      : ['git_merge_continue', 'git_merge_abort', 'git_sync_status'],
+    scope_label: optionalNonEmptyString(args.scope_label),
+  };
+}
+
+async function detectSyncOperation(cwd: string, state: GitMcpState, context: GitRequestContext): Promise<'rebase' | 'merge' | null> {
+  for (const marker of ['rebase-merge', 'rebase-apply'] as const) {
+    const path = await gitPath(cwd, marker, state, context);
+    if (path && existsSync(path)) return 'rebase';
+  }
+  const mergeHead = await gitPath(cwd, 'MERGE_HEAD', state, context);
+  return mergeHead && existsSync(mergeHead) ? 'merge' : null;
+}
+
+async function gitPath(cwd: string, name: string, state: GitMcpState, context: GitRequestContext): Promise<string | null> {
+  const result = await runGit(cwd, ['rev-parse', '--git-path', name], state.policy, context);
+  if (result.exit_code !== 0 || result.timed_out || result.cancelled) return null;
+  const value = result.output_text.trim();
+  return value ? resolve(cwd, value) : null;
 }
 
 export async function gitUnstage(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {

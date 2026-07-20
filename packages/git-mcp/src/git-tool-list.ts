@@ -15,6 +15,75 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       }),
     },
     {
+      name: 'git_fetch',
+      description: 'Fetch one explicit branch from one configured remote without tags or arbitrary refspecs.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        remote: { type: 'string', description: 'Configured remote name.' },
+        branch: { type: 'string', description: 'Explicit remote branch name.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['remote', 'branch']),
+    },
+    {
+      name: 'git_rebase',
+      description: 'Rebase onto one explicit commit-ish with governed dirty-worktree checks and structured conflict recovery.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        onto: { type: 'string', description: 'Explicit branch, tag, or commit to rebase onto.' },
+        autostash: { type: 'boolean', default: false, description: 'Required for tracked dirty worktrees; untracked files are always refused.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['onto']),
+    },
+    {
+      name: 'git_rebase_continue',
+      description: 'Continue an in-progress rebase after all conflict paths have been resolved and staged.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }),
+    },
+    {
+      name: 'git_rebase_abort',
+      description: 'Abort an in-progress rebase and read back the restored repository state.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }),
+    },
+    {
+      name: 'git_merge',
+      description: 'Merge one explicit commit-ish with governed dirty-worktree checks and structured conflict recovery.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        target: { type: 'string', description: 'Explicit branch, tag, or commit to merge.' },
+        autostash: { type: 'boolean', default: false, description: 'Required for tracked dirty worktrees; untracked files are always refused.' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }, ['target']),
+    },
+    {
+      name: 'git_merge_continue',
+      description: 'Complete an in-progress merge after all conflict paths have been resolved and staged.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }),
+    },
+    {
+      name: 'git_merge_abort',
+      description: 'Abort an in-progress merge and read back the restored repository state.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string' },
+        scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
+      }),
+    },
+    {
+      name: 'git_sync_status',
+      description: 'Inspect whether a rebase or merge is in progress, including conflict paths and governed recovery actions.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
+      }),
+    },
+    {
       name: 'git_branch_list',
       description: 'List local and/or remote branches with object ids, current-branch state, and upstream metadata.',
       inputSchema: objectSchema({
@@ -243,12 +312,12 @@ function decorateTools(tools: Array<Record<string, any>>): Array<Record<string, 
 }
 
 function toolAnnotations(name: string) {
-  const writes = /git_add|git_unstage|git_commit|git_push|git_workflow_record|git_branch_(create|switch|rename|delete|set_upstream|unset_upstream)/.test(name);
+  const writes = /git_add|git_unstage|git_commit|git_push|git_fetch|git_rebase|git_merge|git_workflow_record|git_branch_(create|switch|rename|delete|set_upstream|unset_upstream)/.test(name);
   return {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: false,
-    idempotentHint: /guidance|inspect|status|branch_list|summary|diff|log|show|output_show/.test(name),
+    idempotentHint: /guidance|inspect|status|sync_status|branch_list|summary|diff|log|show|output_show/.test(name),
     openWorldHint: false,
   };
 }

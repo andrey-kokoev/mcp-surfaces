@@ -17,11 +17,19 @@ import {
   gitChangedSummary,
   gitCommit,
   gitDiff,
+  gitFetch,
   gitLog,
+  gitMerge,
+  gitMergeAbort,
+  gitMergeContinue,
   gitPush,
+  gitRebase,
+  gitRebaseAbort,
+  gitRebaseContinue,
   gitRepositoriesSummary,
   gitShow,
   gitStatus,
+  gitSyncStatus,
   gitUnstage,
   gitWorkflowRecord,
   handleRequest,
@@ -90,14 +98,22 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_changed_summary',
   'git_commit',
   'git_diff',
+  'git_fetch',
   'git_guidance',
   'git_log',
+  'git_merge',
+  'git_merge_abort',
+  'git_merge_continue',
   'git_output_show',
   'git_policy_inspect',
   'git_push',
+  'git_rebase',
+  'git_rebase_abort',
+  'git_rebase_continue',
   'git_repositories_summary',
   'git_show',
   'git_status',
+  'git_sync_status',
   'git_unstage',
   'git_workflow_record',
 ]);
@@ -144,6 +160,13 @@ assert.deepEqual(guidanceContent.tool_inventory.write, [
   'git_unstage',
   'git_commit',
   'git_push',
+  'git_fetch',
+  'git_rebase',
+  'git_rebase_continue',
+  'git_rebase_abort',
+  'git_merge',
+  'git_merge_continue',
+  'git_merge_abort',
   'git_branch_create',
   'git_branch_switch',
   'git_branch_rename',
@@ -622,6 +645,95 @@ const foreignRootAttempt = await rpc({
 }, state);
 assert.equal(foreignRootAttempt.error?.data.code, 'git_output_ref_scope_unreadable');
 assert.match(foreignRootAttempt.error?.data.message, /target_site_root_not_supported/);
+
+const syncRoot = mkdtempSync(join(tmpdir(), 'git-mcp-sync-'));
+const syncRemote = join(syncRoot, 'remote.git');
+const syncRepo = join(syncRoot, 'repo');
+const syncPeer = join(syncRoot, 'peer');
+git(syncRoot, ['init', '--bare', '--initial-branch=main', syncRemote]);
+git(syncRoot, ['init', '--initial-branch=main', syncRepo]);
+git(syncRepo, ['config', 'user.email', 'agent@example.test']);
+git(syncRepo, ['config', 'user.name', 'Agent Test']);
+git(syncRepo, ['remote', 'add', 'origin', syncRemote]);
+writeFileSync(join(syncRepo, 'conflict.txt'), 'base\n', 'utf8');
+git(syncRepo, ['add', 'conflict.txt']);
+git(syncRepo, ['commit', '-m', 'sync base']);
+git(syncRepo, ['push', '--set-upstream', 'origin', 'main']);
+git(syncRoot, ['clone', syncRemote, syncPeer]);
+git(syncPeer, ['config', 'user.email', 'peer@example.test']);
+git(syncPeer, ['config', 'user.name', 'Peer Test']);
+const syncState = createServerState({ allowedRoot: syncRoot, outputRoot: syncRoot, mode: 'write' });
+const syncReadState = createServerState({ allowedRoot: syncRoot, outputRoot: syncRoot, mode: 'read' });
+
+writeFileSync(join(syncPeer, 'remote.txt'), 'remote\n', 'utf8');
+git(syncPeer, ['add', 'remote.txt']);
+git(syncPeer, ['commit', '-m', 'peer change']);
+git(syncPeer, ['push', 'origin', 'main']);
+const fetched = await gitFetch({ working_directory: syncRepo, remote: 'origin', branch: 'main', scope_label: 'remote-sync-test' }, syncState);
+assert.equal(fetched.schema, 'narada.git.fetch.v1');
+assert.equal(fetched.status, 'ok');
+assert.equal((fetched.post_status as any).behind, 1);
+
+writeFileSync(join(syncRepo, 'local.txt'), 'local\n', 'utf8');
+git(syncRepo, ['add', 'local.txt']);
+git(syncRepo, ['commit', '-m', 'local change']);
+const rebased = await gitRebase({ working_directory: syncRepo, onto: 'origin/main', autostash: false }, syncState);
+assert.equal(rebased.schema, 'narada.git.rebase.v1');
+assert.equal(rebased.status, 'rebased');
+assert.equal((rebased.post_status as any).behind, 0);
+
+writeFileSync(join(syncPeer, 'remote-two.txt'), 'remote two\n', 'utf8');
+git(syncPeer, ['add', 'remote-two.txt']);
+git(syncPeer, ['commit', '-m', 'peer second change']);
+git(syncPeer, ['push', 'origin', 'main']);
+await gitFetch({ working_directory: syncRepo, remote: 'origin', branch: 'main' }, syncState);
+writeFileSync(join(syncRepo, 'local.txt'), 'local dirty\n', 'utf8');
+const dirtyRebase = await gitRebase({ working_directory: syncRepo, onto: 'origin/main', autostash: true }, syncState);
+assert.equal(dirtyRebase.status, 'rebased');
+assert.equal(readFileSync(join(syncRepo, 'local.txt'), 'utf8').replaceAll('\r\n', '\n'), 'local dirty\n');
+writeFileSync(join(syncRepo, 'untracked.txt'), 'must preserve\n', 'utf8');
+await assert.rejects(
+  () => gitRebase({ working_directory: syncRepo, onto: 'origin/main', autostash: true }, syncState),
+  (error: any) => error.codeName === 'git_untracked_worktree_requires_manual_preservation',
+);
+writeFileSync(join(syncRepo, 'local.txt'), 'local dirty\n', 'utf8');
+git(syncRepo, ['add', 'local.txt']);
+git(syncRepo, ['commit', '-m', 'preserve local dirty test']);
+git(syncRepo, ['clean', '-f']);
+
+writeFileSync(join(syncPeer, 'conflict.txt'), 'remote conflict\n', 'utf8');
+git(syncPeer, ['add', 'conflict.txt']);
+git(syncPeer, ['commit', '-m', 'remote conflict']);
+git(syncPeer, ['push', 'origin', 'main']);
+writeFileSync(join(syncRepo, 'conflict.txt'), 'local conflict\n', 'utf8');
+git(syncRepo, ['add', 'conflict.txt']);
+git(syncRepo, ['commit', '-m', 'local conflict']);
+await gitFetch({ working_directory: syncRepo, remote: 'origin', branch: 'main' }, syncState);
+const conflictRebase = await gitRebase({ working_directory: syncRepo, onto: 'origin/main', autostash: false }, syncState);
+assert.equal(conflictRebase.status, 'conflict');
+assert.equal(conflictRebase.operation_in_progress, true);
+assert.deepEqual(conflictRebase.recovery, ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']);
+const syncStatus = await gitSyncStatus({ working_directory: syncRepo }, syncState);
+assert.equal(syncStatus.operation, 'rebase');
+assert.equal(syncStatus.in_progress, true);
+const abortedRebase = await gitRebaseAbort({ working_directory: syncRepo }, syncState);
+assert.equal(abortedRebase.status, 'aborted');
+assert.equal((await gitSyncStatus({ working_directory: syncRepo }, syncState)).operation, null);
+
+git(syncRepo, ['branch', 'feature']);
+git(syncRepo, ['switch', 'feature']);
+writeFileSync(join(syncRepo, 'feature.txt'), 'feature\n', 'utf8');
+git(syncRepo, ['add', 'feature.txt']);
+git(syncRepo, ['commit', '-m', 'feature change']);
+git(syncRepo, ['switch', 'main']);
+const merged = await gitMerge({ working_directory: syncRepo, target: 'feature', autostash: false }, syncState);
+assert.equal(merged.status, 'merged');
+assert.equal((merged.post_status as any).clean, true);
+assert.equal((await gitMergeContinue({ working_directory: syncRepo }, syncState).catch(() => null)), null);
+await assert.rejects(
+  () => gitFetch({ working_directory: syncRepo, remote: 'origin', branch: 'main' }, syncReadState),
+  (error: any) => error.codeName === 'git_write_mode_required',
+);
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
