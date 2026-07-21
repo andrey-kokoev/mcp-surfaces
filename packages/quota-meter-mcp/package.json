@@ -1,0 +1,36 @@
+{
+  "name": "@narada2/quota-meter-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Host-level MCP surface for quota-meter glide status and overlay lifecycle management.",
+  "bin": {
+    "quota-meter-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/quota-meter-mcp.test.js && node dist/test/protocol-smoke.test.js"
+  },
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  },
+  "files": [
+    "dist/",
+    "README.md"
+  ]
+}

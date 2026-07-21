@@ -246,6 +246,9 @@ importers:
       '@narada2/operator-routing-mcp':
         specifier: workspace:*
         version: link:../operator-routing-mcp
+      '@narada2/quota-meter-mcp':
+        specifier: workspace:*
+        version: link:../quota-meter-mcp
       '@narada2/scheduler-mcp':
         specifier: workspace:*
         version: link:../scheduler-mcp
@@ -303,6 +306,16 @@ importers:
         version: link:../../../narada/packages/site-paths
 
   packages/operator-routing-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
+
+  packages/quota-meter-mcp:
     dependencies:
       '@narada2/mcp-fabric-contracts':
         specifier: workspace:*

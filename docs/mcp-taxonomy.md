@@ -45,6 +45,7 @@ The V2 runtime observation and reconciliation contracts are also transport-neutr
 - `@narada2/operator-routing-mcp`
 - `@narada2/artifacts-mcp`
 - `@narada2/nars-session-mcp`
+- `@narada2/quota-meter-mcp`
 - `@narada2/surface-feedback-mcp`
 - `@narada2/launcher-mcp`
 

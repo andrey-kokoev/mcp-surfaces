@@ -22,6 +22,7 @@ import { surfaceDefinition as speech } from '@narada2/speech-mcp/surface-definit
 import { surfaceDefinition as operatorRouting } from '@narada2/operator-routing-mcp/surface-definition';
 import { surfaceDefinition as artifacts } from '@narada2/artifacts-mcp/surface-definition';
 import { surfaceDefinition as narsSession } from '@narada2/nars-session-mcp/surface-definition';
+import { surfaceDefinition as quotaMeter } from '@narada2/quota-meter-mcp/surface-definition';
 import { surfaceDefinition as cloudflareCarrier } from '@narada2/cloudflare-carrier-mcp/surface-definition';
 import { surfaceDefinition as siteCoherence } from '@narada2/site-coherence-mcp/surface-definition';
 
@@ -49,6 +50,7 @@ export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>
   'operator-routing': operatorRouting(),
   artifacts: artifacts(),
   'nars-session': narsSession(),
+  'quota-meter': quotaMeter(),
   'cloudflare-carrier': cloudflareCarrier(),
   'site-coherence': siteCoherence(),
 });

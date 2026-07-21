@@ -50,6 +50,7 @@
     "@narada2/operator-routing-mcp": "workspace:*",
     "@narada2/artifacts-mcp": "workspace:*",
     "@narada2/nars-session-mcp": "workspace:*",
+    "@narada2/quota-meter-mcp": "workspace:*",
     "@narada2/cloudflare-carrier-mcp": "workspace:*",
     "@narada2/site-coherence-mcp": "workspace:*",
     "@narada2/mcp-fabric-compiler": "workspace:*",

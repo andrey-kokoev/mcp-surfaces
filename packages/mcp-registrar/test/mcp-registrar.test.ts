@@ -241,6 +241,21 @@ try {
   const operatorProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator');
   const operatorProjectionServer = (operatorProjectionConfig.config.mcpServers as Record<string, any>)[operatorProjectionConfig.serverKey];
   assert.equal(operatorProjectionServer.surface_projection.projection_id, 'user-site-operator');
+
+  const quotaMeter = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'quota-meter');
+  assert.ok(quotaMeter);
+  assert.equal(quotaMeter.injection_scope, 'host');
+  assert.deepEqual(quotaMeter.projections?.map((projection: Record<string, any>) => ({
+    id: projection.id,
+    injection_scope: projection.injection_scope,
+  })), [{ id: 'default', injection_scope: 'host' }]);
+  assert.deepEqual(quotaMeter.tools, [
+    'quota_meter_guidance',
+    'quota_meter_glide_status',
+    'quota_meter_overlay_status',
+    'quota_meter_overlay_start',
+    'quota_meter_overlay_stop',
+  ]);
   assert.equal(operatorProjectionServer.surface_projection.injection_scope, 'user_site');
   const narsProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'local-site-nars-runtime');
   const narsProjectionServer = (narsProjectionConfig.config.mcpServers as Record<string, any>)[narsProjectionConfig.serverKey];

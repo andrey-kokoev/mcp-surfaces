@@ -30,6 +30,7 @@
     { "path": "../operator-routing-mcp" },
     { "path": "../artifacts-mcp" },
     { "path": "../nars-session-mcp" },
+    { "path": "../quota-meter-mcp" },
     { "path": "../cloudflare-carrier-mcp" },
     { "path": "../site-coherence-mcp" },
     { "path": "../shared/mcp-fabric-compiler" },

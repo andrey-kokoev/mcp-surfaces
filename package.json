@@ -44,6 +44,7 @@
     "test:site-lifecycle": "pnpm --filter @narada2/site-lifecycle-mcp test",
     "test:site-registry": "pnpm --filter @narada2/site-registry-mcp test",
     "test:operator-routing": "pnpm --filter @narada2/operator-routing-mcp test",
+    "test:quota-meter": "pnpm --filter @narada2/quota-meter-mcp test",
     "test:surface-feedback": "pnpm --filter @narada2/surface-feedback-mcp test",
     "test:launcher": "pnpm --filter @narada2/launcher-mcp test",
     "test:launcher:e2e:host": "pnpm --filter @narada2/launcher-mcp test:e2e:host",

@@ -27,6 +27,7 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada2/surface-feedback-mcp`: cross-site MCP surface feedback intake and routing. See `packages/surface-feedback-mcp/README.md`.
 - `@narada2/speech-mcp`: host-level speech surface for TTS, bounded capture, and transcription. See `packages/speech-mcp/README.md`.
 - `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions. See `docs/nars-session-mcp-target.md`.
+- `@narada2/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle management. See `packages/quota-meter-mcp/README.md`.
 
 ## Verify
 

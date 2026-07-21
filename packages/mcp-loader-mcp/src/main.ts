@@ -1453,6 +1453,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'site-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/site-lifecycle-mcp/dist/src/main.js`, args: ['--narada-root', '{site_root}'] },
   'artifacts': { entrypoint: `${MCP_SURFACES_ROOT}/artifacts-mcp/dist/src/main.js`, args: [] },
   'nars-session': { entrypoint: `${MCP_SURFACES_ROOT}/nars-session-mcp/dist/src/main.js`, args: [] },
+  'quota-meter': { entrypoint: `${MCP_SURFACES_ROOT}/quota-meter-mcp/dist/src/main.js`, args: [] },
 };
 
 function resolveSiteFabricPaths(siteRoot: string): string[] {

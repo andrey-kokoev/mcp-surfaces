@@ -36,6 +36,7 @@
     { "path": "./packages/speech-mcp" },
     { "path": "./packages/cloudflare-carrier-mcp" },
     { "path": "./packages/site-coherence-mcp" },
-    { "path": "./packages/operator-routing-mcp" }
+    { "path": "./packages/operator-routing-mcp" },
+    { "path": "./packages/quota-meter-mcp" }
   ]
 }
