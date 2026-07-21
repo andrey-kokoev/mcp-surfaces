@@ -9,6 +9,17 @@ let state: any;
 
 try {
   mkdirSync(join(root, '.ai'), { recursive: true });
+  const previousCanonicalRoot = process.env.NARADA_SURFACE_FEEDBACK_ROOT;
+  delete process.env.NARADA_SURFACE_FEEDBACK_ROOT;
+  try {
+    assert.throws(
+      () => createServerState({ feedbackRoot: root, taskLifecycleRoot: root }),
+      /canonical_feedback_root_required/,
+    );
+  } finally {
+    if (previousCanonicalRoot === undefined) delete process.env.NARADA_SURFACE_FEEDBACK_ROOT;
+    else process.env.NARADA_SURFACE_FEEDBACK_ROOT = previousCanonicalRoot;
+  }
   state = createServerState({
     feedbackRoot: root,
     canonicalFeedbackRoot: root,
@@ -91,7 +102,7 @@ try {
   assert.equal(view(noncanonicalDoctor).storage_posture, 'noncanonical_feedback_root');
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);
   assert.ok(view(noncanonicalDoctor).diagnostics.some((item: string) => /noncanonical/.test(item)));
-  assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--feedback-root/.test(item)));
+  assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--canonical-feedback-root/.test(item)));
   const noncanonicalRead = await callWith(noncanonicalState, 'surface_feedback_list', { scope: 'all_authorized' });
   assert.equal(errorCode(noncanonicalRead), 'feedback_global_read_requires_canonical_store');
   const noncanonicalSource = await callWith(noncanonicalState, 'surface_feedback_submit', {
@@ -105,7 +116,7 @@ try {
     feedback_id: view(noncanonicalSource).feedback_id,
   });
   assert.equal(errorCode(noncanonicalConversion), 'feedback_handoff_requires_canonical_store');
-  assert.match(noncanonicalConversion.error.data.remediation, /--feedback-root/);
+  assert.match(noncanonicalConversion.error.data.remediation, /--canonical-feedback-root/);
   await closeServerState(noncanonicalState);
 
   const unconfiguredState = createServerState({

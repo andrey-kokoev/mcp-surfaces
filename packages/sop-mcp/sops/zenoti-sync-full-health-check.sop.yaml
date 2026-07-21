@@ -1,0 +1,172 @@
+sop_id: zenoti-sync-full-health-check
+title: Zenoti Full Synchronization Health Check
+description: |
+  Read-only, end-to-end health check for tenant 895 Zenoti synchronization.
+  Correlates scheduler intent, synchronizer runs, PostgreSQL materialization,
+  broadcast delivery, validator/R2 publication, and smart-scheduling D1
+  projections. The SOP records evidence and a verdict; it never repairs,
+  retries a sync job, clears a queue, or mutates production state.
+status: active
+trigger_kind: manual
+steps:
+  - id: establish_context
+    executor: agent
+    blocking: true
+    title: Establish observation context
+    depends_on: []
+    instructions: |
+      Establish the observation context before querying any layer.
+      Use tenant 895, the current calendar week in America/Chicago, and
+      record current UTC and local timestamps plus the freshness boundary.
+      Return structured fields: tenant_id, week_start_local,
+      week_end_exclusive_local, observed_at_utc, observed_at_local, and
+      freshness_boundary. Do not mutate any state.
+
+  - id: check_upstream_runs
+    executor: agent
+    blocking: true
+    title: Check scheduler and synchronizer
+    depends_on: [establish_context]
+    instructions: |
+      Using MCP only, resolve the `sonar.cloud` repository root from the
+      active repository inventory and allowed filesystem roots. Run the
+      authoritative read-only Zenoti PostgreSQL health probe at
+      `sonar.cloud/scripts/ops/sql/zenoti_sync_health_t895.sql`, resolved
+      against that repository root, through the approved structured-command
+      surface and inspect the synchronizer Railway status/logs through that
+      same surface. If the repository root is not discoverable, record that
+      as a blocker instead of substituting a developer-machine absolute path.
+      Capture schedule intents, watermarks, active/stale runs, failed runs,
+      task queue and lease counts, gaps, classes/registrations task counts,
+      sync run IDs, finish timestamps, deployment IDs, and any probe errors.
+      Preserve execution/output references and do not invoke direct shell
+      commands or repair actions.
+
+  - id: check_materialization
+    executor: agent
+    blocking: true
+    title: Check PostgreSQL materialization
+    depends_on: [establish_context]
+    instructions: |
+      Using MCP only, resolve the `sonar.cloud` repository root from the
+      active repository inventory and allowed filesystem roots. Run the
+      read-only materialization health probe at
+      `sonar.cloud/scripts/ops/sql/tenant_895_class_sessions_materialized_health.sql`,
+      resolved against that repository root, through the approved
+      structured-command surface. Capture source and
+      materialized row counts, date bounds, source last-updated timestamp,
+      last successful and failed refreshes, job/step identity, and whether
+      the materialized result is fresh for the established context.
+      Preserve execution/output references and do not apply SQL changes.
+
+  - id: check_delivery
+    executor: agent
+    blocking: true
+    title: Check broadcast and relay delivery
+    depends_on: [establish_context]
+    instructions: |
+      Using MCP only, resolve the `sonar.cloud` repository root from the
+      active repository inventory and allowed filesystem roots. Run the
+      read-only delivery health probe at
+      `sonar.cloud/scripts/ops/sql/broadcast_delivery_health.sql`, resolved
+      against that repository root, through the approved structured-command
+      surface. Inspect the current Cloudflare relay/DLQ observation through
+      the approved MCP surface. If the repository root is not discoverable,
+      record that as a blocker instead of substituting a developer-machine
+      absolute path.
+      Capture terminal receipts, unresolved failures, pending/raised alerts,
+      HTTP status, queue depth, unalerted depth, observation timestamp, and
+      any transient transport failure. Preserve references and do not send,
+      acknowledge, delete, or replay messages.
+
+  - id: check_validator_publication
+    executor: agent
+    blocking: true
+    title: Check validator and R2 publication
+    depends_on: [establish_context]
+    instructions: |
+      Using MCP only, inspect validator Railway status/logs and the
+      validator refresh ledger, materialized refresh, projection run, and
+      R2 publication evidence exposed by the authoritative PostgreSQL health
+      probe. Capture validator deployment ID, refresh/run IDs, status,
+      attempts, source snapshot, expected and produced row counts, R2 object
+      identity, publication timestamp, and any error or retry history.
+      Treat historical terminal records separately from the current chain.
+      Do not restart or refresh the validator.
+
+  - id: check_d1_projection
+    executor: agent
+    blocking: true
+    title: Check smart-scheduling D1 projection
+    depends_on: [establish_context, check_validator_publication]
+    instructions: |
+      Using MCP only, query production D1 through the approved Wrangler MCP
+      command surface with read-only pnpm exec wrangler d1 execute calls.
+      Verify projection-run status, source projection run ID, snapshot time,
+      committed/staging state, studio and region projection counts, and
+      current-week rows from studio_week_formats_latest and
+      region_week_formats_latest. Use studio_week_format_projection_runs
+      plus the base studio_week_formats and region_week_formats tables for
+      provenance because latest views may omit provenance columns. Do not
+      query a presumed physical class_sessions table and do not mutate D1.
+      Capture command/output references and explain any expected exclusion
+      such as rows without a class format.
+
+  - id: reconcile_and_recheck
+    executor: agent
+    blocking: true
+    title: Reconcile layers and recheck transients
+    depends_on:
+      - check_upstream_runs
+      - check_materialization
+      - check_delivery
+      - check_d1_projection
+    instructions: |
+      Correlate all prior structured results by tenant, sync run ID,
+      projection run ID, source snapshot, timestamps, date bounds, and row
+      counts. Confirm scheduler intent through D1 is current, source and
+      materialization agree, delivery has no unresolved loss, validator/R2
+      and D1 share the committed projection, and current-week counts are
+      reconciled with documented exclusions. If and only if a read-only
+      observation has a transient DNS/transport/propagation failure, perform
+      one bounded recheck after approximately 60 seconds through MCP and
+      preserve both observations. Never retry a sync job or perform repair.
+
+  - id: record_verdict
+    executor: agent
+    blocking: true
+    title: Record final verdict and evidence
+    depends_on: [reconcile_and_recheck]
+    instructions: |
+      Produce one structured verdict: pass, degraded, or fail.
+      Use pass only when every current layer is fresh, correlated, delivered,
+      published, and reconciled. Use degraded for a recovered transient
+      observation, historical audit artifact, or performance warning that
+      does not compromise the current chain. Use fail for an active gap,
+      stale/failed run, unresolved delivery failure, incomplete projection,
+      stale D1, or unexplained count divergence. A zero current-week count
+      is not failure by itself when authoritative layers agree and the result
+      is explained. Include the verdict rationale, current blockers, historical
+      findings, recheck result, and every execution/output/evidence reference.
+
+acceptance_criteria:
+  - Observation context includes tenant 895, current calendar week, UTC/local timestamps, and freshness boundary
+  - Scheduler intents, watermarks, synchronizer runs, task leases, and gaps have fresh evidence
+  - PostgreSQL source and materialized class-session outputs have been checked and reconciled
+  - Broadcast delivery and Cloudflare relay/DLQ have fresh evidence with no unexplained terminal loss
+  - Validator refresh, projection commit, and R2 publication are correlated to the current sync chain
+  - D1 studio/region latest projections are committed, current, and reconciled to authoritative upstream counts
+  - Any transient observation is either rechecked once or explicitly recorded as unresolved
+  - The final verdict is pass, degraded, or fail with rationale and complete evidence references
+  - No step performs a production mutation, sync retry, queue replay, acknowledgement, restart, or repair
+
+evidence_requirements:
+  - SOP run ID and per-step event IDs
+  - Structured-command execution and output references for every PostgreSQL and Wrangler probe
+  - Tenant, calendar-week boundaries, UTC/local observation timestamps, and freshness boundary
+  - Schedule intent, watermark, sync run, task, materialization, validator, projection, and deployment IDs
+  - Source/materialized/D1 row counts and date bounds with documented exclusions
+  - Broadcast receipt, relay HTTP, DLQ depth, and alert state observations
+  - R2 object identity and publication timestamp
+  - Recheck evidence for transient failures, including the original observation
+  - Final verdict, rationale, active blockers, historical findings, and performance warnings

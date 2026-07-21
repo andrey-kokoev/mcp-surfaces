@@ -15,6 +15,16 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
+    path_resolution: {
+      working_directory: {
+        omitted: 'Select the first allowed root reported by git_policy_inspect.',
+        absolute: 'Use the supplied absolute repository directory after allowed-root enforcement.',
+        relative: 'Resolve an explicitly supplied relative working_directory against the MCP process current directory; prefer an absolute path when the target matters.',
+      },
+      pathspecs: 'Pathspec arguments are repository-relative to the selected working_directory. Absolute pathspecs and parent traversal are refused.',
+      current_directory_inference: 'The caller current directory does not choose the default repository; only an explicit relative working_directory uses process current directory resolution.',
+      filesystem_boundary: 'Filesystem paths use the first allowed root for relative paths; this Git contract is intentionally different and must not be conflated with fs_guidance.',
+    },
     first_use: [
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
@@ -37,6 +47,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
         'If git_status reports any unstaged, untracked, or conflict paths, pass expected_staged_paths to git_commit; the guard protects the exact index scope and never infers mixed-worktree intent.',
         'git_commit with concise message and verification body.',
         'git_push only after target is resolved.',
+        'Every successful mutation returns mutation_effect, verification_status, and compact post_state; use those fields as the normal readback. verified_post_state remains a compatibility alias.',
         'git_workflow_record for SHA, push status, staged paths, and unrelated dirty paths.'
       ],
       read_only_review: [

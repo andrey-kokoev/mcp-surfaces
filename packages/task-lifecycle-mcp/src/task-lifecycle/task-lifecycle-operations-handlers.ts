@@ -457,20 +457,21 @@ export function createTaskLifecycleOperationsHandlers(context) {
       if (!testServer.found) {
         return jsonToolResult({
           schema: 'narada.task_lifecycle.run_tests.v0',
-          status: 'failed',
-          error: 'test_mcp_server_not_found',
+          status: 'blocked',
+          error: 'test_mcp_site_binding_invalid',
           selector,
           task_number: taskNumber ?? null,
           task_id: lifecycle?.task_id ?? null,
           agent_id: agentId,
+          site_binding: testServer.binding,
           configured_test_server_path: testServer.primary,
           candidate_test_server_paths: testServer.candidates,
-          remediation: 'Configure the site Test MCP server path for this workspace or run package/root tests through structured-command and submit the resulting execution refs as evidence.',
+          remediation: 'Set NARADA_TASK_LIFECYCLE_TEST_ROOT to the Site or workspace that owns the Test MCP server, or run package/root tests through structured-command and submit the resulting execution refs as evidence. Do not interpret missing/stale paths under the current task-lifecycle root as failed implementation evidence.',
         }, true);
       }
       for (const target of targets) {
         try {
-          const result = await testMcpTool(siteRoot, testServer.path, 'run_test', target, { timeoutSeconds, agentId });
+          const result = await testMcpTool(testServer.root, testServer.path, 'run_test', target, { timeoutSeconds, agentId });
           results.push(result);
         } catch (error) {
           const diagnostic = error instanceof Error ? error.message : String(error);
@@ -479,6 +480,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
             error: 'test_mcp_execution_failed',
             target,
             test_server_path: testServer.path,
+            site_binding: testServer.binding,
             diagnostic,
             remediation: 'Verify the configured Test MCP server path and restart the task-lifecycle session with the requested agent identity before retrying.',
           });
@@ -531,9 +533,39 @@ function resolveTestMcpServerPath(siteRoot) {
     'tools/mcp-servers/test/test-mcp-server.js',
     'packages/test-mcp-server/dist/test-mcp-server.js',
   ];
-  for (const candidate of candidates) {
-    const fullPath = resolve(siteRoot, candidate);
-    if (existsSync(fullPath)) return { found: true, path: candidate, primary: resolve(siteRoot, candidates[0]), candidates: candidates.map((item) => resolve(siteRoot, item)) };
+  const configuredRoot = typeof process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT === 'string'
+    && process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT.trim()
+    ? resolve(process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT.trim())
+    : null;
+  const roots = configuredRoot
+    ? [{ root: configuredRoot, source: 'env:NARADA_TASK_LIFECYCLE_TEST_ROOT' }]
+    : [{ root: siteRoot, source: 'task_lifecycle_site_root' }];
+  for (const candidateRoot of roots) {
+    for (const candidate of candidates) {
+      const fullPath = resolve(candidateRoot.root, candidate);
+      if (existsSync(fullPath)) {
+        return {
+          found: true,
+          root: candidateRoot.root,
+          path: candidate,
+          primary: resolve(candidateRoot.root, candidates[0]),
+          candidates: candidates.map((item) => resolve(candidateRoot.root, item)),
+          binding: { task_lifecycle_site_root: siteRoot, test_root: candidateRoot.root, source: candidateRoot.source },
+        };
+      }
+    }
   }
-  return { found: false, path: null, primary: resolve(siteRoot, candidates[0]), candidates: candidates.map((item) => resolve(siteRoot, item)) };
+  return {
+    found: false,
+    path: null,
+    root: configuredRoot ?? siteRoot,
+    primary: resolve(configuredRoot ?? siteRoot, candidates[0]),
+    candidates: candidates.map((item) => resolve(configuredRoot ?? siteRoot, item)),
+    binding: {
+      task_lifecycle_site_root: siteRoot,
+      test_root: configuredRoot ?? siteRoot,
+      source: configuredRoot ? 'env:NARADA_TASK_LIFECYCLE_TEST_ROOT' : 'task_lifecycle_site_root',
+      configuration_required: true,
+    },
+  };
 }

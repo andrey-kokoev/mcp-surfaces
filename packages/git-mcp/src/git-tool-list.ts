@@ -1,4 +1,5 @@
 import { guidanceToolDefinition } from './guidance.js';
+const WORKING_DIRECTORY_DESCRIPTION = 'Repository directory under an allowed root. Omitted selects the first allowed root; an explicit relative value resolves against the MCP process current directory; prefer an absolute path when the target matters.';
 export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const readTools = [
     guidanceToolDefinition(),
@@ -9,16 +10,31 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
     },
     {
       name: 'git_status',
-      description: 'Inspect branch, upstream, remotes, push readiness, and dirty paths before diffing, staging, committing, or pushing.',
+      description: 'Inspect branch, upstream, remotes, and bounded dirty-state summaries. Supports explicit work-scope, path-scoped, staged-only, and summary queries.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
+        work_scope_ref: { type: 'string', description: 'Optional short-lived work-scope reference issued by git_begin_work_scope.' },
+        pathspec: { type: 'string', description: 'Optional single path prefix or Git pathspec to inspect.' },
+        pathspecs: { type: 'array', items: { type: 'string' }, description: 'Optional path prefixes or Git pathspecs to inspect.' },
+        staged_only: { type: 'boolean', default: false, description: 'Return only paths with staged index changes.' },
+        include_untracked: { type: 'boolean', default: true, description: 'Include untracked paths in the result; defaults to true for compatibility.' },
+        format: { type: 'string', enum: ['full', 'paths', 'summary'], default: 'full', description: 'full returns entries, paths returns bounded matching paths, summary returns counts and branch state.' },
       }),
+    },
+    {
+      name: 'git_begin_work_scope',
+      description: 'Issue a short-lived explicit work-scope reference for a declared path set and current base state. It does not infer ownership and does not mutate Git.',
+      inputSchema: objectSchema({
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
+        allowed_paths: { type: 'array', items: { type: 'string' }, description: 'Explicit repository-relative files or directories that may be staged and committed.' },
+        base_state: { type: 'object', additionalProperties: true, description: 'Optional caller-supplied base state; when head or index_digest are supplied they must match the live repository.' },
+      }, ['allowed_paths']),
     },
     {
       name: 'git_fetch',
       description: 'Fetch one explicit branch from one configured remote without tags or arbitrary refspecs.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         remote: { type: 'string', description: 'Configured remote name.' },
         branch: { type: 'string', description: 'Explicit remote branch name.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -28,7 +44,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_rebase',
       description: 'Rebase onto one explicit commit-ish with governed dirty-worktree checks and structured conflict recovery.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         onto: { type: 'string', description: 'Explicit branch, tag, or commit to rebase onto.' },
         autostash: { type: 'boolean', default: false, description: 'Required for tracked dirty worktrees; untracked files are always refused.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -38,7 +54,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_rebase_continue',
       description: 'Continue an in-progress rebase after all conflict paths have been resolved and staged.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
@@ -46,7 +62,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_rebase_abort',
       description: 'Abort an in-progress rebase and read back the restored repository state.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
@@ -54,7 +70,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_merge',
       description: 'Merge one explicit commit-ish with governed dirty-worktree checks and structured conflict recovery.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         target: { type: 'string', description: 'Explicit branch, tag, or commit to merge.' },
         autostash: { type: 'boolean', default: false, description: 'Required for tracked dirty worktrees; untracked files are always refused.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -64,7 +80,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_merge_continue',
       description: 'Complete an in-progress merge after all conflict paths have been resolved and staged.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
@@ -72,7 +88,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_merge_abort',
       description: 'Abort an in-progress merge and read back the restored repository state.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
@@ -80,14 +96,14 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_sync_status',
       description: 'Inspect whether a rebase or merge is in progress, including conflict paths and governed recovery actions.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string', description: 'Repository directory under an allowed root. Defaults to the first allowed root.' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
       }),
     },
     {
       name: 'git_branch_list',
       description: 'List local and/or remote branches with object ids, current-branch state, and upstream metadata.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope: { type: 'string', enum: ['local', 'remote', 'all'], default: 'all' },
         limit: { type: 'integer', default: 100, minimum: 1, maximum: 500 },
       }),
@@ -117,7 +133,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_repositories_summary',
       description: 'Summarize multiple repositories for multi-repo handoff and publication checks, including dirty paths, latest commit, remotes, and push readiness.',
       inputSchema: objectSchema({
-        working_directories: { type: 'array', items: { type: 'string' }, description: 'Repository directories under allowed roots.' },
+        working_directories: { type: 'array', items: { type: 'string' }, description: 'Repository directories under allowed roots. Omit a single working_directory to select the first allowed root; explicit relative directories use the MCP process current directory.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied label for the workflow being summarized.' },
         expected_paths_by_repository: {
           type: 'object',
@@ -138,7 +154,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
           items: {
             type: 'object',
             properties: {
-              working_directory: { type: 'string' },
+              working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
               staged_paths: { type: 'array', items: { type: 'string' } },
               committed_sha: { type: 'string' },
               pushed: { type: 'boolean' },
@@ -156,7 +172,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_diff',
       description: 'Show a paged Git diff for working tree, staged changes, or one commit; optionally include bounded untracked-file patches for working-tree review.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         scope: { type: 'string', enum: ['working', 'staged', 'commit'], default: 'working' },
         pathspec: { type: 'string', description: 'Optional single Git pathspec. Use pathspecs for multiple paths.' },
         pathspecs: { type: 'array', items: { type: 'string' }, description: 'Optional Git pathspec list for multi-path diffs.' },
@@ -170,7 +186,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_log',
       description: 'List recent commits, optionally limited to one path.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         limit: { type: 'integer', default: 20 },
         pathspec: { type: 'string', description: 'Optional Git pathspec.' },
       }),
@@ -179,7 +195,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_show',
       description: 'Show one commit with metadata and optional patch.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         commit: { type: 'string' },
         pathspec: { type: 'string', description: 'Optional Git pathspec.' },
         include_patch: { type: 'boolean', default: true },
@@ -189,10 +205,11 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
   const writeTools = [
     {
       name: 'git_add',
-      description: 'Preflight all explicit paths and stage them atomically; refuses the whole request before mutation when any path is ignored.',
+      description: 'Preflight explicit files or directories, including ignored-path checks, and stage them atomically. A work-scope reference constrains the index and returns a narrower index-scope reference for commit.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to stage.' },
+        work_scope_ref: { type: 'string', description: 'Optional work-scope reference issued by git_begin_work_scope.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['paths']),
     },
@@ -200,29 +217,32 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_unstage',
       description: 'Unstage explicit file paths from the index without modifying the working tree.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         paths: { type: 'array', items: { type: 'string' }, description: 'Explicit file paths to unstage.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['paths']),
     },
     {
       name: 'git_commit',
-      description: 'Create a commit from already staged changes. In a mixed worktree, expected_staged_paths is required and must exactly match the intended index scope; scope_label is audit metadata and does not isolate the index.',
+      description: 'Create a commit from already staged changes. Consume index_scope_ref for an atomic exact-index check; expected_staged_paths remains a compatibility guard.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         message: { type: 'string' },
         body: { type: 'string' },
+        work_scope_ref: { type: 'string', description: 'Optional work-scope reference that constrains the commit.' },
+        index_scope_ref: { type: 'string', description: 'Optional short-lived exact-index reference returned by git_add.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
         expected_staged_paths: { type: 'array', items: { type: 'string' }, description: 'Exact set of staged display paths required before mutation when unstaged, untracked, or conflict paths exist outside the index; also guards the index in clean or staged-only worktrees. The commit is refused atomically when the actual index differs.' },
       }, ['message']),
     },
     {
       name: 'git_push',
-      description: 'Push the current branch or an explicit remote and branch. Force push is not supported.',
+      description: 'Push the current branch or an explicit remote and branch. An expected commit ref verifies HEAD before publication; force push is not supported.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         remote: { type: 'string' },
         branch: { type: 'string' },
+        expected_commit: { type: 'string', description: 'Optional commit SHA or commit_ref returned by git_commit; push refuses if HEAD differs.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
     },
@@ -230,7 +250,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_create',
       description: 'Create a local branch from HEAD or an explicit start point without checking it out.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         name: { type: 'string' },
         start_point: { type: 'string', description: 'Optional commit, branch, or tag; defaults to HEAD.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -240,7 +260,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_switch',
       description: 'Switch to an existing local branch without creating, discarding, or force-applying changes.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         branch: { type: 'string' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }, ['branch']),
@@ -249,7 +269,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_rename',
       description: 'Rename an existing local branch to a new local branch name.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         old_name: { type: 'string' },
         new_name: { type: 'string' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -259,7 +279,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_delete',
       description: 'Delete a local branch only after verifying it is merged into the selected base; force deletion is not supported.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         branch: { type: 'string' },
         base: { type: 'string', description: 'Commit, branch, or tag used for the merged-only safety check; defaults to the current branch.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
@@ -269,7 +289,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_delete_remote',
       description: 'Delete a remote branch only after verifying its remote ref is merged into an explicit local base; force deletion is not supported.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         remote: { type: 'string' },
         branch: { type: 'string' },
         base: { type: 'string', description: 'Local commit, branch, or tag used for the merged-only safety check.' },
@@ -280,7 +300,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_set_upstream',
       description: 'Set a local branch upstream to an existing branch on a configured remote.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         local_branch: { type: 'string', description: 'Local branch; defaults to the current branch.' },
         remote: { type: 'string' },
         remote_branch: { type: 'string', description: 'Remote branch; defaults to local_branch.' },
@@ -291,7 +311,7 @@ export function listTools(mode: string = 'read'): Array<Record<string, any>> {
       name: 'git_branch_unset_upstream',
       description: 'Remove upstream configuration from a local branch; defaults to the current branch.',
       inputSchema: objectSchema({
-        working_directory: { type: 'string' },
+        working_directory: { type: 'string', description: WORKING_DIRECTORY_DESCRIPTION },
         local_branch: { type: 'string', description: 'Local branch; defaults to the current branch.' },
         scope_label: { type: 'string', description: 'Optional caller-supplied audit label for this mutation.' },
       }),
@@ -317,7 +337,7 @@ function toolAnnotations(name: string) {
     title: name,
     readOnlyHint: !writes,
     destructiveHint: false,
-    idempotentHint: /guidance|inspect|status|sync_status|branch_list|summary|diff|log|show|output_show/.test(name),
+    idempotentHint: /guidance|inspect|status|begin_work_scope|sync_status|branch_list|summary|diff|log|show|output_show/.test(name),
     openWorldHint: false,
   };
 }

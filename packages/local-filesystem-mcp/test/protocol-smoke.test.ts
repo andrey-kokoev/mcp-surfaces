@@ -42,6 +42,38 @@ try {
   const readFileTool = tools.result.tools.find((tool) => tool.name === 'fs_read_file');
   assert.equal(readFileTool.annotations.readOnlyHint, true);
   assert.equal(readFileTool.outputSchema.type, 'object');
+  assert.match(readFileTool.inputSchema.properties.path.description, /first allowed root/);
+
+  const doctor = handleRequest({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: { name: 'fs_doctor', arguments: {} },
+  }, state);
+  assert.equal(doctor.result.structuredContent.relative_path_resolution.base, root);
+  assert.equal(doctor.result.structuredContent.relative_path_resolution.rule, 'first_allowed_root');
+  const relativeStat = handleRequest({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: { name: 'fs_stat', arguments: { path: '.' } },
+  }, state);
+  assert.equal(relativeStat.result.structuredContent.path, root);
+  const relativeRefusal = handleRequest({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'tools/call',
+    params: { name: 'fs_stat', arguments: { path: '..' } },
+  }, state);
+  assert.equal((relativeRefusal.error.data.details as any).active_resolution_base, root);
+  assert.equal((relativeRefusal.error.data.details as any).relative_path_resolution.rule, 'first_allowed_root');
+  const guidance = handleRequest({
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: { name: 'fs_guidance', arguments: {} },
+  }, state);
+  assert.equal(guidance.result.structuredContent.path_resolution.relative_paths.includes('first allowed root'), true);
 
   const prompts = handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state);
   assert.equal(prompts.result.prompts[0].name, 'local_filesystem_tool_usage');

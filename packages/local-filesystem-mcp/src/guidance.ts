@@ -70,6 +70,13 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
+    path_resolution: {
+      base: 'The first allowed root returned by fs_doctor.allowed_roots and fs_doctor.relative_path_resolution.base.',
+      relative_paths: 'Resolve relative filesystem paths against that first allowed root; do not infer the base from the caller current directory.',
+      absolute_paths: 'Prefer absolute paths when multiple roots are allowed; the surface still enforces containment.',
+      directory_arguments: 'directory, root, and path arguments used for search accept the same filesystem rule.',
+      git_boundary: 'Git working_directory has a separate contract; use git_guidance and git_policy_inspect for it.',
+    },
     ...patchRecovery,
     ...repositoryInventory,
     ...fileMetrics,

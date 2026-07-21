@@ -43,6 +43,8 @@ export function createTaskLifecycleReadHandlers({
           return {
             task_number: row.task_number,
             task_id: row.task_id,
+            task_ref: buildStableTaskReference({ siteRoot, lifecycle: row, spec }).task_ref,
+            task_reference: buildStableTaskReference({ siteRoot, lifecycle: row, spec }),
             status: row.status,
             title: spec?.title ?? null,
             assigned_to: assignment?.agent_id ?? null,
@@ -141,6 +143,36 @@ export function createTaskLifecycleReadHandlers({
       });
     },
   };
+}
+
+function buildStableTaskReference({ siteRoot, lifecycle, spec, taskFile = null }: {
+  siteRoot: string;
+  lifecycle: Record<string, unknown>;
+  spec?: Record<string, unknown> | null;
+  taskFile?: string | null;
+}) {
+  const taskNumber = Number(lifecycle.task_number);
+  const taskId = String(lifecycle.task_id ?? '');
+  const goalRef = firstReference(spec, ['goal_ref', 'goal_id', 'goal_number', 'source_goal_ref']);
+  return {
+    schema: 'narada.task.reference.v1',
+    task_ref: `task #${taskNumber}`,
+    task_id: taskId,
+    task_number: taskNumber,
+    number_authority: 'task_lifecycle',
+    task_file_name: taskFile ? taskFile.split(/[\\/]/).pop() : `${taskId}.md`,
+    goal_ref: goalRef,
+    cross_reference_key: `${taskId}@${taskNumber}`,
+  };
+}
+
+function firstReference(spec: Record<string, unknown> | null | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = spec?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
 export function classifyTaskListProjectionConsistency({ lifecycle, latestOutcome, activeAssignment }) {

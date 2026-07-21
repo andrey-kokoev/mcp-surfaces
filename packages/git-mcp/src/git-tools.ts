@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   optionalBranchName,
@@ -16,6 +16,15 @@ import {
 import { diagnosticError } from './git-errors.js';
 import { combineOutput, ensureGitOk, gitText, runGit } from './git-runner.js';
 import { parseStatus } from './status-parser.js';
+import {
+  createIndexScope,
+  createWorkScope,
+  resolveScopeToken,
+  storeScopeToken,
+  type GitBaseState,
+  type GitIndexScope,
+  type GitWorkScope,
+} from './scope-tokens.js';
 import type { GitMcpState } from './state.js';
 
 const PREVIEW_CHAR_LIMIT = 1000;
@@ -34,6 +43,7 @@ export async function callGitTool(name: string, args: Record<string, unknown>, s
   const runContext = { ...context, env: state.env };
   if (name === 'git_policy_inspect') return publicGitPolicy(state.policy);
   if (name === 'git_status') return gitStatus(args, state, runContext);
+  if (name === 'git_begin_work_scope') return gitBeginWorkScope(args, state, runContext);
   if (name === 'git_sync_status') return gitSyncStatus(args, state, runContext);
   if (name === 'git_branch_list') return gitBranchList(args, state, runContext);
   if (name === 'git_branch_create') return gitBranchCreate(args, state, runContext);
@@ -98,6 +108,7 @@ export async function gitFetch(args: Record<string, unknown>, state: GitMcpState
   requireConfiguredRemote(before.remotes, remote);
   const result = await runGit(cwd, ['fetch', '--no-tags', remote, branch], state.policy, context);
   ensureGitOk(result, 'git_fetch_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.fetch.v1',
     status: 'ok',
@@ -107,7 +118,8 @@ export async function gitFetch(args: Record<string, unknown>, state: GitMcpState
     scope_label: scopeLabel,
     output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'fetch', remote, branch }),
+    post_status: after,
     summary: `fetched ${remote}/${branch}`,
   };
   audit(state, payload);
@@ -222,6 +234,7 @@ async function finishSyncMutation(
       conflict_count: conflicts.length,
       output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
       pre_status: before,
+      ...verifiedMutationPostState(after, { operation, target, status: 'conflict' }),
       post_status: after,
       recovery: operation === 'rebase'
         ? ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']
@@ -243,6 +256,7 @@ async function finishSyncMutation(
     mutation_started: true,
     operation_in_progress: false,
     output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    ...verifiedMutationPostState(after, { operation, target, status: operation === 'rebase' ? 'rebased' : 'merged' }),
     pre_status: before,
     post_status: after,
     recovery: [],
@@ -285,6 +299,7 @@ async function continueSyncOperation(operation: 'rebase' | 'merge', args: Record
     mutation_started: true,
     operation_in_progress: false,
     output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    ...verifiedMutationPostState(after, { operation: `${operation}_continue`, status: 'ok' }),
     post_status: after,
     summary: `${operation} continued successfully`,
   };
@@ -309,6 +324,7 @@ async function abortSyncOperation(operation: 'rebase' | 'merge', args: Record<st
     mutation_started: true,
     operation_in_progress: false,
     output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    ...verifiedMutationPostState(after, { operation: `${operation}_abort`, status: 'aborted' }),
     post_status: after,
     summary: `${operation} aborted`,
   };
@@ -326,6 +342,7 @@ function syncRecoveryPayload(operation: 'rebase' | 'merge', status: 'conflict', 
     operation_in_progress: true,
     conflict_paths: stringArray(after.conflicts),
     output: combineOutput(result).slice(0, PREVIEW_CHAR_LIMIT),
+    ...verifiedMutationPostState(after, { operation: `${operation}_continue`, status }),
     post_status: after,
     recovery: operation === 'rebase'
       ? ['git_rebase_continue', 'git_rebase_abort', 'git_sync_status']
@@ -370,6 +387,7 @@ export async function gitUnstage(args: Record<string, unknown>, state: GitMcpSta
     paths,
     unstaged_count: paths.length,
     summary: `unstaged ${paths.length} path${paths.length === 1 ? '' : 's'}`,
+    ...verifiedMutationPostState(status, { operation: 'unstage', paths }),
     post_status: status,
   };
   audit(state, payload);
@@ -498,7 +516,12 @@ function resolveLocalBranchArgument(value: unknown, status: Record<string, unkno
 }
 
 export async function gitChangedSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
-  const status = await gitStatus(args, state, context);
+  const status = await gitStatus({
+    working_directory: args.working_directory,
+    work_scope_ref: args.work_scope_ref,
+    include_untracked: true,
+    format: 'full',
+  }, state, context);
   const entries = Array.isArray(status.status_entries) ? status.status_entries.map(asStatusEntry) : [];
   const trackedEntries = entries.filter((entry) => !entry.untracked);
   const untrackedEntries = entries.filter((entry) => entry.untracked);
@@ -617,6 +640,7 @@ export async function gitBranchCreate(args: Record<string, unknown>, state: GitM
   await requireLocalBranchAbsent(cwd, branch, state, context);
   const result = await runGit(cwd, ['branch', branch, startPoint], state.policy, context);
   ensureGitOk(result, 'git_branch_create_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_create.v1',
     status: 'ok',
@@ -628,7 +652,8 @@ export async function gitBranchCreate(args: Record<string, unknown>, state: GitM
     checked_out: false,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_create', branch, start_point: startPoint }),
+    post_status: after,
     summary: `created local branch ${branch} from ${startPoint}`,
   };
   audit(state, payload);
@@ -644,6 +669,7 @@ export async function gitBranchSwitch(args: Record<string, unknown>, state: GitM
   await requireLocalBranch(cwd, branch, state, context);
   const result = await runGit(cwd, ['switch', '--', branch], state.policy, context);
   ensureGitOk(result, 'git_branch_switch_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_switch.v1',
     status: 'ok',
@@ -655,7 +681,8 @@ export async function gitBranchSwitch(args: Record<string, unknown>, state: GitM
     discard_changes: false,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_switch', branch }),
+    post_status: after,
     summary: `switched to local branch ${branch}`,
   };
   audit(state, payload);
@@ -674,6 +701,7 @@ export async function gitBranchRename(args: Record<string, unknown>, state: GitM
   await requireLocalBranchAbsent(cwd, newName, state, context);
   const result = await runGit(cwd, ['branch', '-m', oldName, newName], state.policy, context);
   ensureGitOk(result, 'git_branch_rename_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_rename.v1',
     status: 'ok',
@@ -684,7 +712,8 @@ export async function gitBranchRename(args: Record<string, unknown>, state: GitM
     new_name: newName,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_rename', old_name: oldName, new_name: newName }),
+    post_status: after,
     summary: `renamed local branch ${oldName} to ${newName}`,
   };
   audit(state, payload);
@@ -713,6 +742,7 @@ export async function gitBranchDelete(args: Record<string, unknown>, state: GitM
   await requireMergedInto(cwd, branch, base, state, context, { branch, base });
   const result = await runGit(cwd, ['branch', '-d', branch], state.policy, context);
   ensureGitOk(result, 'git_branch_delete_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_delete.v1',
     status: 'ok',
@@ -725,7 +755,8 @@ export async function gitBranchDelete(args: Record<string, unknown>, state: GitM
     force: false,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_delete', branch, base }),
+    post_status: after,
     summary: `deleted merged local branch ${branch}`,
   };
   audit(state, payload);
@@ -745,6 +776,7 @@ export async function gitBranchDeleteRemote(args: Record<string, unknown>, state
   await requireMergedInto(cwd, remoteObjectId, base, state, context, { remote, branch, base, remote_object_id: remoteObjectId });
   const result = await runGit(cwd, ['push', remote, '--delete', branch], state.policy, context);
   ensureGitOk(result, 'git_branch_delete_remote_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_delete_remote.v1',
     status: 'ok',
@@ -759,7 +791,8 @@ export async function gitBranchDeleteRemote(args: Record<string, unknown>, state
     force: false,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_delete_remote', remote, branch, base }),
+    post_status: after,
     summary: `deleted merged remote branch ${remote}/${branch}`,
   };
   audit(state, payload);
@@ -779,6 +812,7 @@ export async function gitBranchSetUpstream(args: Record<string, unknown>, state:
   await requireRemoteBranch(cwd, remote, remoteBranch, state, context);
   const result = await runGit(cwd, ['branch', '--set-upstream-to', `${remote}/${remoteBranch}`, localBranch], state.policy, context);
   ensureGitOk(result, 'git_branch_set_upstream_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_set_upstream.v1',
     status: 'ok',
@@ -790,7 +824,8 @@ export async function gitBranchSetUpstream(args: Record<string, unknown>, state:
     remote_branch: remoteBranch,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_set_upstream', local_branch: localBranch, remote, remote_branch: remoteBranch }),
+    post_status: after,
     summary: `set ${localBranch} upstream to ${remote}/${remoteBranch}`,
   };
   audit(state, payload);
@@ -806,6 +841,7 @@ export async function gitBranchUnsetUpstream(args: Record<string, unknown>, stat
   await requireLocalBranch(cwd, localBranch, state, context);
   const result = await runGit(cwd, ['branch', '--unset-upstream', localBranch], state.policy, context);
   ensureGitOk(result, 'git_branch_unset_upstream_failed');
+  const after = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.branch_unset_upstream.v1',
     status: 'ok',
@@ -815,11 +851,54 @@ export async function gitBranchUnsetUpstream(args: Record<string, unknown>, stat
     local_branch: localBranch,
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(after, { operation: 'branch_unset_upstream', local_branch: localBranch }),
+    post_status: after,
     summary: `unset upstream for ${localBranch}`,
   };
   audit(state, payload);
   return payload;
+}
+
+export async function gitBeginWorkScope(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
+  const cwd = resolveWorkingDirectory(args, state);
+  const requestedPaths = stringArray(args.allowed_paths);
+  if (requestedPaths.length === 0) throw diagnosticError('git_begin_work_scope_requires_allowed_paths');
+  const allowedPaths = requestedPaths.map((path) => {
+    const validated = validateGitPathspec(path);
+    if (validated === '.' || /[*?\[]/.test(validated)) {
+      throw diagnosticError('git_begin_work_scope_requires_explicit_paths', 'git_begin_work_scope_requires_explicit_paths', { path: validated });
+    }
+    return validated.replaceAll('\\', '/');
+  });
+  const root = (await gitText(cwd, ['rev-parse', '--show-toplevel'], state.policy, 'git_begin_work_scope_failed', context)).trim();
+  const baseState = await readGitBaseState(cwd, state, context);
+  const suppliedBase = asRecord(args.base_state);
+  for (const field of ['head', 'index_digest'] as const) {
+    if (suppliedBase[field] !== undefined && suppliedBase[field] !== baseState[field]) {
+      throw diagnosticError('git_work_scope_base_state_mismatch', 'git_work_scope_base_state_mismatch', {
+        field,
+        supplied: suppliedBase[field],
+        actual: baseState[field],
+        mutation_started: false,
+        atomic: true,
+      });
+    }
+  }
+  const token = createWorkScope({ repositoryRoot: root, allowedPaths, baseState });
+  storeScopeToken(state, token);
+  return {
+    schema: 'narada.git.work_scope.v1',
+    status: 'ok',
+    working_directory: cwd,
+    repository_root: root,
+    work_scope_ref: token.ref,
+    allowed_paths: token.allowed_paths,
+    base_state: token.base_state,
+    created_at: token.created_at,
+    expires_at: token.expires_at,
+    mutation_started: false,
+    summary: `work scope issued for ${token.allowed_paths.length} path${token.allowed_paths.length === 1 ? '' : 's'}`,
+  };
 }
 
 export async function gitStatus(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}): Promise<Record<string, unknown>> {
@@ -827,7 +906,16 @@ export async function gitStatus(args: Record<string, unknown>, state: GitMcpStat
   const root = await gitText(cwd, ['rev-parse', '--show-toplevel'], state.policy, 'git_status_failed', context);
   const status = await gitText(cwd, ['status', '--porcelain=v1', '-z', '-b', '--untracked-files=all'], state.policy, 'git_status_failed', context);
   const parsed = parseStatus(status);
-  const branch = typeof parsed.branch === 'string' ? parsed.branch : null;
+  const workScope = args.work_scope_ref ? requireWorkScope(args.work_scope_ref, root.trim(), state) : null;
+  const pathspecs = optionalPathspecs(args.pathspec, args.pathspecs);
+  const filtered = filterStatus(parsed, {
+    pathspecs,
+    allowedPaths: workScope?.allowed_paths ?? null,
+    stagedOnly: args.staged_only === true,
+    includeUntracked: args.include_untracked !== false,
+    format: stringEnum(args.format, ['full', 'paths', 'summary'], 'full') as 'full' | 'paths' | 'summary',
+  });
+  const branch = typeof filtered.branch === 'string' ? filtered.branch : null;
   const remotes = await listRemotes(cwd, state.policy, context);
   const configuredPushTarget = await resolvePushTarget(cwd, null, null, state.policy, context, remotes);
   return {
@@ -835,12 +923,183 @@ export async function gitStatus(args: Record<string, unknown>, state: GitMcpStat
     status: 'ok',
     working_directory: cwd,
     repository_root: root.trim(),
-    ...parsed,
+    ...filtered,
+    query: {
+      work_scope_ref: workScope?.ref ?? null,
+      pathspecs,
+      staged_only: args.staged_only === true,
+      include_untracked: args.include_untracked !== false,
+      format: filtered.format,
+    },
     remotes,
     remote_names: remotes.map((remote) => remote.name),
     push_target: configuredPushTarget,
     push_remediation: pushRemediation(configuredPushTarget, branch, remotes),
   };
+}
+
+function filterStatus(parsed: Record<string, unknown>, options: {
+  pathspecs: string[];
+  allowedPaths: string[] | null;
+  stagedOnly: boolean;
+  includeUntracked: boolean;
+  format: 'full' | 'paths' | 'summary';
+}): Record<string, unknown> {
+  const entries = Array.isArray(parsed.status_entries) ? parsed.status_entries.map(asStatusEntry) : [];
+  const selected = entries.filter((entry) => {
+    const path = String(entry.path ?? entry.display_path ?? '').replaceAll('\\', '/');
+    const inScope = !options.allowedPaths || options.allowedPaths.some((allowed) => pathMatches(path, allowed));
+    const inPathspec = options.pathspecs.length === 0 || options.pathspecs.some((pathspec) => pathMatches(path, pathspec));
+    const staged = !options.stagedOnly || entry.staged === true;
+    const untracked = options.includeUntracked || entry.untracked !== true;
+    return inScope && inPathspec && staged && untracked;
+  });
+  const staged = selected.filter((entry) => entry.staged).map((entry) => entry.display_path);
+  const unstaged = selected.filter((entry) => entry.unstaged).map((entry) => entry.display_path);
+  const untracked = selected.filter((entry) => entry.untracked).map((entry) => entry.display_path);
+  const conflicts = selected.filter((entry) => entry.conflict).map((entry) => entry.display_path);
+  const summary = {
+    staged_count: staged.length,
+    unstaged_count: unstaged.length,
+    untracked_count: untracked.length,
+    conflict_count: conflicts.length,
+    matching_path_count: selected.length,
+    clean: staged.length + unstaged.length + untracked.length + conflicts.length === 0,
+  };
+  const full = {
+    ...parsed,
+    status_entries: selected,
+    staged,
+    unstaged,
+    untracked,
+    conflicts,
+    clean: summary.clean,
+    summary,
+    format: options.format,
+  };
+  if (options.format === 'full') return full;
+  return {
+    ...full,
+    status_entries: [],
+    staged: [],
+    unstaged: [],
+    untracked: [],
+    conflicts: [],
+    paths: selected.map((entry) => entry.display_path),
+  };
+}
+
+function pathMatches(path: string, pattern: string): boolean {
+  const normalizedPath = path.replaceAll('\\', '/');
+  const normalizedPattern = pattern.replaceAll('\\', '/');
+  if (!/[*?\[]/.test(normalizedPattern)) {
+    return normalizedPath === normalizedPattern || normalizedPath.startsWith(`${normalizedPattern.replace(/\/$/, '')}/`);
+  }
+  const expression = normalizedPattern
+    .replace(/[.+^${}()|\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]');
+  return new RegExp(`^${expression}$`).test(normalizedPath);
+}
+
+async function readGitBaseState(cwd: string, state: GitMcpState, context: GitRequestContext): Promise<GitBaseState> {
+  const headResult = await runGit(cwd, ['rev-parse', 'HEAD'], state.policy, context);
+  const indexResult = await runGit(cwd, ['write-tree'], state.policy, context);
+  return {
+    head: headResult.exit_code === 0 && !headResult.timed_out && !headResult.cancelled
+      ? headResult.output_text.trim()
+      : null,
+    index_digest: indexResult.exit_code === 0 && !indexResult.timed_out && !indexResult.cancelled
+      ? indexResult.output_text.trim()
+      : null,
+  };
+}
+
+function requireWorkScope(ref: unknown, repositoryRoot: string, state: GitMcpState): GitWorkScope {
+  try {
+    const token = resolveScopeToken(state, ref, 'work_scope');
+    if (token.repository_root !== repositoryRoot) throw new Error('git_work_scope_repository_mismatch');
+    return token as GitWorkScope;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError(message, message, {
+      work_scope_ref: ref ?? null,
+      repository_root: repositoryRoot,
+      mutation_started: false,
+      atomic: true,
+    });
+  }
+}
+
+function requireIndexScope(ref: unknown, repositoryRoot: string, state: GitMcpState): GitIndexScope {
+  try {
+    const token = resolveScopeToken(state, ref, 'index_scope');
+    if (token.repository_root !== repositoryRoot) throw new Error('git_index_scope_repository_mismatch');
+    return token as GitIndexScope;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw diagnosticError(message, message, {
+      index_scope_ref: ref ?? null,
+      repository_root: repositoryRoot,
+      mutation_started: false,
+      atomic: true,
+    });
+  }
+}
+
+function assertScopeHead(scope: GitWorkScope | GitIndexScope, current: GitBaseState): void {
+  const expectedHead = scope.kind === 'work_scope' ? scope.base_state.head : scope.base_head;
+  if (expectedHead !== current.head) {
+    throw diagnosticError('git_work_scope_base_state_drift', 'git_work_scope_base_state_drift', {
+      expected_head: expectedHead,
+      actual_head: current.head,
+      scope_ref: scope.ref,
+      mutation_started: false,
+      atomic: true,
+      remediation: 'Create a fresh work scope after the repository HEAD changes; unrelated worktree edits remain untouched.',
+    });
+  }
+}
+
+function compactPostState(status: Record<string, unknown>, verification: 'verified' | 'unknown' = 'verified') {
+  const summary = asRecord(status.summary);
+  return {
+    verification,
+    branch: status.branch ?? null,
+    upstream: status.upstream ?? null,
+    ahead: status.ahead ?? 0,
+    behind: status.behind ?? 0,
+    clean: status.clean === true,
+    staged_count: Number(summary.staged_count ?? stringArray(status.staged).length),
+    unstaged_count: Number(summary.unstaged_count ?? stringArray(status.unstaged).length),
+    untracked_count: Number(summary.untracked_count ?? stringArray(status.untracked).length),
+    conflict_count: Number(summary.conflict_count ?? stringArray(status.conflicts).length),
+    matching_path_count: Number(summary.matching_path_count ?? stringArray(status.status_entries).length),
+  };
+}
+
+function verifiedMutationPostState(status: Record<string, unknown>, mutationEffect: Record<string, unknown>) {
+  const postState = compactPostState(status);
+  return {
+    mutation_effect: mutationEffect,
+    post_state: postState,
+    verification_status: postState.verification,
+    // Compatibility name retained while callers migrate to the concise
+    // mutation contract above.
+    verified_post_state: postState,
+  };
+}
+
+function normalizeExpectedCommit(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  const raw = String(value).trim();
+  const commit = raw.startsWith('git_commit:') ? raw.slice('git_commit:'.length) : raw;
+  if (!/^[0-9a-fA-F]{7,64}$/.test(commit)) {
+    throw diagnosticError('git_expected_commit_invalid', 'git_expected_commit_invalid', { expected_commit: raw });
+  }
+  return commit.toLowerCase();
 }
 
 export async function gitRepositoriesSummary(args: Record<string, unknown>, state: GitMcpState, context: GitRequestContext = {}) {
@@ -912,6 +1171,7 @@ export async function gitWorkflowRecord(args: Record<string, unknown>, state: Gi
       push_status: stringEnum(input.push_status, WORKFLOW_PUSH_STATUSES, 'not_attempted'),
       push_reason: optionalNonEmptyString(input.push_reason),
       unrelated_dirty_paths_left: stringArray(input.unrelated_dirty_paths_left),
+      ...verifiedMutationPostState(status, { operation: 'workflow_record_repository' }),
       post_status: status,
     });
   }
@@ -978,30 +1238,117 @@ export async function gitAdd(args: Record<string, unknown>, state: GitMcpState, 
   requireWriteMode(state.policy, 'git_add');
   const cwd = resolveWorkingDirectory(args, state);
   const scopeLabel = optionalNonEmptyString(args.scope_label);
-  const paths = await Promise.all(stringArray(args.paths).map((path) => validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context))));
-  if (paths.length === 0) throw diagnosticError('git_add_requires_paths');
+  const requestedPaths = stringArray(args.paths);
+  if (requestedPaths.length === 0) throw diagnosticError('git_add_requires_paths');
+  const before = await gitStatus({ working_directory: cwd }, state, context);
+  const repositoryRoot = String(before.repository_root ?? cwd);
+  const workScope = args.work_scope_ref ? requireWorkScope(args.work_scope_ref, repositoryRoot, state) : null;
+  const baseState = await readGitBaseState(cwd, state, context);
+  if (workScope) {
+    assertScopeHead(workScope, baseState);
+    const existingOutOfScope = stringArray(before.staged)
+      .map(normalizeCommitScopePath)
+      .filter((path) => path && !workScope.allowed_paths.some((allowed) => pathMatches(path, allowed)));
+    if (existingOutOfScope.length > 0) {
+      throw diagnosticError('git_work_scope_has_out_of_scope_staged_paths', 'git_work_scope_has_out_of_scope_staged_paths', {
+        work_scope_ref: workScope.ref,
+        out_of_scope_staged_paths: existingOutOfScope,
+        mutation_started: false,
+        atomic: true,
+        remediation: 'Unstage the unrelated paths explicitly or start a scope that includes the complete intended index.',
+      });
+    }
+  }
+  const paths = await expandGitAddPaths(cwd, requestedPaths, state, context);
+  if (workScope) {
+    const outOfScope = paths.filter((path) => !workScope.allowed_paths.some((allowed) => pathMatches(path, allowed)));
+    if (outOfScope.length > 0) {
+      throw diagnosticError('git_add_paths_outside_work_scope', 'git_add_paths_outside_work_scope', {
+        work_scope_ref: workScope.ref,
+        allowed_paths: workScope.allowed_paths,
+        out_of_scope_paths: outOfScope,
+        mutation_started: false,
+        atomic: true,
+      });
+    }
+  }
   await preflightGitAddPaths(cwd, paths, state, context);
-  const result = await runGit(cwd, ['add', '--', ...paths], state.policy, context);
+  const result = await runGit(cwd, ['add', '--', ...requestedPaths], state.policy, context);
   ensureGitOk(result, 'git_add_failed');
   const status = await gitStatus({ working_directory: cwd }, state, context);
+  const stagedPaths = stringArray(status.staged).map(normalizeCommitScopePath).filter(Boolean);
+  if (workScope) {
+    const outOfScope = stagedPaths.filter((path) => !workScope.allowed_paths.some((allowed) => pathMatches(path, allowed)));
+    if (outOfScope.length > 0) {
+      throw diagnosticError('git_add_produced_out_of_scope_index', 'git_add_produced_out_of_scope_index', {
+        work_scope_ref: workScope.ref,
+        out_of_scope_staged_paths: outOfScope,
+        mutation_started: true,
+        atomic: false,
+        remediation: 'The index changed unexpectedly; inspect git_status and unstage only the unrelated paths before retrying.',
+      });
+    }
+  }
+  const afterBaseState = await readGitBaseState(cwd, state, context);
+  const indexScope = workScope
+    ? createIndexScope({
+        repositoryRoot,
+        workScopeRef: workScope.ref,
+        stagedPaths,
+        indexDigest: afterBaseState.index_digest,
+        baseHead: workScope.base_state.head,
+      })
+    : null;
+  if (indexScope) storeScopeToken(state, indexScope);
   const payload = {
     schema: 'narada.git.add.v1',
     status: 'ok',
     working_directory: cwd,
     scope_label: scopeLabel,
     paths,
-    staged_count: paths.length,
+    requested_paths: requestedPaths,
+    staged_count: stagedPaths.length,
+    work_scope_ref: workScope?.ref ?? null,
+    index_scope_ref: indexScope?.ref ?? null,
+    index_scope: indexScope,
     preflight: {
       status: 'passed',
       checked_path_count: paths.length,
       ignored_path_count: 0,
       atomic: true,
     },
-    summary: `staged ${paths.length} path${paths.length === 1 ? '' : 's'}`,
+    summary: `staged ${stagedPaths.length} path${stagedPaths.length === 1 ? '' : 's'}`,
+    ...verifiedMutationPostState(status, { operation: 'add', requested_paths: requestedPaths, staged_paths: stagedPaths }),
     post_status: status,
   };
   audit(state, payload);
   return payload;
+}
+
+async function expandGitAddPaths(cwd: string, requestedPaths: string[], state: GitMcpState, context: GitRequestContext): Promise<string[]> {
+  const expanded: string[] = [];
+  for (const requested of requestedPaths) {
+    const path = validateGitPathspec(requested);
+    if (path === '.') throw diagnosticError('git_broad_path_not_allowed', 'git_broad_path_not_allowed', { path });
+    if (/[*?\[]/.test(path)) throw diagnosticError('git_add_requires_explicit_paths', 'git_add_requires_explicit_paths', { path });
+    const absolute = resolve(cwd, path);
+    if (existsSync(absolute) && statSync(absolute).isDirectory()) {
+      const result = await runGit(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', path], state.policy, context);
+      ensureGitOk(result, 'git_add_directory_enumeration_failed');
+      const children = result.output_text.split('\0').filter(Boolean);
+      if (children.length === 0) {
+        throw diagnosticError('git_add_directory_has_no_stageable_paths', 'git_add_directory_has_no_stageable_paths', {
+          path,
+          mutation_started: false,
+          remediation: 'Select a tracked or non-ignored file under the directory explicitly.',
+        });
+      }
+      expanded.push(...children);
+      continue;
+    }
+    expanded.push(await validateExplicitFilePath(cwd, path, (workdir, gitArgs) => runGit(workdir, gitArgs, state.policy, context)));
+  }
+  return [...new Set(expanded.map((path) => path.replaceAll('\\', '/')))];
 }
 
 async function preflightGitAddPaths(cwd: string, paths: string[], state: GitMcpState, context: GitRequestContext): Promise<void> {
@@ -1046,6 +1393,33 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
   const body = optionalNonEmptyString(args.body);
   const expectedStagedPaths = optionalExpectedStagedPaths(args.expected_staged_paths);
   const statusBefore = await gitStatus({ working_directory: cwd }, state, context);
+  const repositoryRoot = String(statusBefore.repository_root ?? cwd);
+  const workScope = args.work_scope_ref ? requireWorkScope(args.work_scope_ref, repositoryRoot, state) : null;
+  const indexScope = args.index_scope_ref ? requireIndexScope(args.index_scope_ref, repositoryRoot, state) : null;
+  const baseStateBefore = await readGitBaseState(cwd, state, context);
+  if (workScope) assertScopeHead(workScope, baseStateBefore);
+  if (indexScope) {
+    assertScopeHead(indexScope, baseStateBefore);
+    if (indexScope.work_scope_ref && workScope?.ref !== indexScope.work_scope_ref) {
+      throw diagnosticError('git_index_scope_work_scope_mismatch', 'git_index_scope_work_scope_mismatch', {
+        index_scope_ref: indexScope.ref,
+        index_work_scope_ref: indexScope.work_scope_ref,
+        supplied_work_scope_ref: workScope?.ref ?? null,
+        mutation_started: false,
+        atomic: true,
+      });
+    }
+    if (indexScope.index_digest !== baseStateBefore.index_digest) {
+      throw diagnosticError('git_index_scope_state_drift', 'git_index_scope_state_drift', {
+        index_scope_ref: indexScope.ref,
+        expected_index_digest: indexScope.index_digest,
+        actual_index_digest: baseStateBefore.index_digest,
+        mutation_started: false,
+        atomic: true,
+        remediation: 'The index changed after git_add; inspect the index and obtain a fresh index_scope_ref.',
+      });
+    }
+  }
   if (!Array.isArray(statusBefore.staged) || statusBefore.staged.length === 0) {
     throw diagnosticError('git_commit_requires_staged_changes');
   }
@@ -1058,7 +1432,36 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
   const unstagedPaths = (stringArray(statusBefore.unstaged) ?? []).map(normalizeCommitScopePath).filter(Boolean);
   const untrackedPaths = (stringArray(statusBefore.untracked) ?? []).map(normalizeCommitScopePath).filter(Boolean);
   const conflictPaths = (stringArray(statusBefore.conflicts) ?? []).map(normalizeCommitScopePath).filter(Boolean);
-  if (!expectedStagedPaths && (unstagedPaths.length > 0 || untrackedPaths.length > 0 || conflictPaths.length > 0)) {
+  if (workScope) {
+    const outOfScope = actualStagedPaths.filter((path) => !workScope.allowed_paths.some((allowed) => pathMatches(path, allowed)));
+    if (outOfScope.length > 0) {
+      throw diagnosticError('git_commit_paths_outside_work_scope', 'git_commit_paths_outside_work_scope', {
+        work_scope_ref: workScope.ref,
+        out_of_scope_staged_paths: outOfScope,
+        mutation_started: false,
+        atomic: true,
+        remediation: 'Unstage unrelated paths or create a scope covering the complete intended index.',
+      });
+    }
+  }
+  if (indexScope) {
+    const expectedSet = new Set(indexScope.staged_paths);
+    const actualSet = new Set(actualStagedPaths);
+    const missingPaths = indexScope.staged_paths.filter((path) => !actualSet.has(path));
+    const unexpectedPaths = actualStagedPaths.filter((path) => !expectedSet.has(path));
+    if (missingPaths.length > 0 || unexpectedPaths.length > 0) {
+      throw diagnosticError('git_index_scope_staged_set_mismatch', 'git_index_scope_staged_set_mismatch', {
+        index_scope_ref: indexScope.ref,
+        expected_staged_paths: indexScope.staged_paths,
+        actual_staged_paths: actualStagedPaths,
+        missing_paths: missingPaths,
+        unexpected_paths: unexpectedPaths,
+        mutation_started: false,
+        atomic: true,
+      });
+    }
+  }
+  if (!expectedStagedPaths && !indexScope && !workScope && (unstagedPaths.length > 0 || untrackedPaths.length > 0 || conflictPaths.length > 0)) {
     throw diagnosticError('git_commit_scope_required_for_mixed_worktree', 'git_commit_scope_required_for_mixed_worktree', {
       scope_label: scopeLabel,
       staged_paths: actualStagedPaths,
@@ -1097,6 +1500,7 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
     ? statusBefore.status_entries.filter((entry) => asStatusEntry(entry).staged)
     : [];
   const committedFiles = committedEntries.map((entry) => asStatusEntry(entry).display_path).filter(Boolean);
+  const postStatus = await gitStatus({ working_directory: cwd }, state, context);
   const payload = {
     schema: 'narada.git.commit.v1',
     status: 'ok',
@@ -1106,9 +1510,13 @@ export async function gitCommit(args: Record<string, unknown>, state: GitMcpStat
     committed_entries: committedEntries,
     committed_files: committedFiles,
     committed_file_count: committedEntries.length,
+    commit_ref: `git_commit:${commit}`,
+    work_scope_ref: workScope?.ref ?? indexScope?.work_scope_ref ?? null,
+    index_scope_ref: indexScope?.ref ?? null,
     summary: firstNonEmptyLine(result.output_text) ?? `created ${commit}`,
     output: combineOutput(result),
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(postStatus, { operation: 'commit', commit, committed_files: committedFiles }),
+    post_status: postStatus,
   };
   audit(state, payload);
   return payload;
@@ -1120,12 +1528,23 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState,
   const scopeLabel = optionalNonEmptyString(args.scope_label);
   const remote = optionalRefName(args.remote, 'remote');
   const branch = optionalRefName(args.branch, 'branch');
+  const expectedCommit = normalizeExpectedCommit(args.expected_commit);
   const pushArgs = ['push'];
   if (remote || branch) {
     if (!remote || !branch) throw diagnosticError('git_push_remote_and_branch_required_together');
     pushArgs.push(remote, branch);
   }
   const before = await gitStatus({ working_directory: cwd }, state, context);
+  const beforeBaseState = await readGitBaseState(cwd, state, context);
+  if (expectedCommit && beforeBaseState.head !== expectedCommit) {
+    throw diagnosticError('git_push_head_mismatch', 'git_push_head_mismatch', {
+      expected_commit: expectedCommit,
+      actual_head: beforeBaseState.head,
+      mutation_started: false,
+      atomic: true,
+      remediation: 'Re-read the commit result and explicitly retry with the current intended commit.',
+    });
+  }
   const remotes = Array.isArray(before.remotes) ? before.remotes.map(asRemote) : [];
   const effectiveTarget = await resolvePushTarget(cwd, remote, branch, state.policy, context, remotes);
   if (effectiveTarget.status !== 'resolved') {
@@ -1140,6 +1559,18 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState,
   }
   const result = await runGit(cwd, pushArgs, state.policy, context);
   ensureGitOk(result, 'git_push_failed');
+  const postStatus = await gitStatus({ working_directory: cwd }, state, context);
+  const postBaseState = await readGitBaseState(cwd, state, context);
+  const headVerified = !expectedCommit || postBaseState.head === expectedCommit;
+  if (!headVerified) {
+    throw diagnosticError('git_push_post_state_head_mismatch', 'git_push_post_state_head_mismatch', {
+      expected_commit: expectedCommit,
+      actual_head: postBaseState.head,
+      mutation_started: true,
+      atomic: false,
+      remediation: 'The push completed but local HEAD changed during verification; inspect the remote target before retrying.',
+    });
+  }
   const payload = {
     schema: 'narada.git.push.v1',
     status: 'ok',
@@ -1150,10 +1581,14 @@ export async function gitPush(args: Record<string, unknown>, state: GitMcpState,
     effective_remote: effectiveTarget.remote,
     effective_branch: effectiveTarget.branch,
     effective_target_status: effectiveTarget.status,
+    expected_commit: expectedCommit,
+    remote_target_verified: true,
+    head_verified: headVerified,
     ...(effectiveTarget.reason ? { effective_target_reason: effectiveTarget.reason } : {}),
     output: combineOutput(result),
     pre_status: before,
-    post_status: await gitStatus({ working_directory: cwd }, state, context),
+    ...verifiedMutationPostState(postStatus, { operation: 'push', remote: effectiveTarget.remote, branch: effectiveTarget.branch, expected_commit: expectedCommit }),
+    post_status: postStatus,
   };
   audit(state, payload);
   return payload;

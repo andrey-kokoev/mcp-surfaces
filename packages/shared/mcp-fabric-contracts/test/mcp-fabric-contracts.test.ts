@@ -120,10 +120,18 @@ test('defineNativeSurface validates read-only inventory and exposes lifecycle re
   };
   const surface = defineNativeSurface(base);
   assert.deepEqual(surface.descriptor.metadata?.lifecycle_readback, {
-    tool_name: 'mcp_loader_surface_status',
-    arguments: { surface_id: 'native-helper' },
     authority: 'mcp-loader',
     availability: 'loader-managed',
+    discovery: {
+      tool_name: 'mcp_loader_connection_inventory',
+      arguments: {},
+      select: { field: 'surface_id', equals: 'native-helper', result_field: 'connection_id' },
+    },
+    status: {
+      tool_name: 'mcp_loader_surface_status',
+      arguments: { connection_id: '{connection_id}' },
+      connection_id_from: 'discovery.selected.connection_id',
+    },
   });
   assert.throws(
     () => defineNativeSurface({ ...base, read_only_tools: ['stale_tool'] as const }),

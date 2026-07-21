@@ -4,6 +4,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { terminalTaskMutationGuard } from './closure-authority.js';
+import { inspectSupersededTaskGuard } from './task-lineage-guards.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
@@ -1457,6 +1458,16 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         return jsonToolResult(payload, true);
       }
       const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const lineageGuard = lifecycle
+        ? inspectSupersededTaskGuard({ store, lifecycle, authorityBasis })
+        : { status: 'not_applicable' as const };
+      if (lineageGuard.status === 'blocked') {
+        return jsonToolResult({
+          status: 'blocked',
+          ...lineageGuard,
+          operation: 'finish',
+        }, true);
+      }
       const terminalGuard = lifecycle ? terminalTaskMutationGuard(lifecycle, 'finish') : null;
       if (terminalGuard) {
         return jsonToolResult({ status: 'blocked', ...terminalGuard }, true);

@@ -43,6 +43,9 @@ shape for MCP surfaces as Narada's governed crossing layer.
 See `docs/mcp-injection-scopes.md` for the doctrine that separates host,
 user-site, and local-site MCP injection from session aliases.
 
+See `docs/site-root-contract.md` for the canonical workspace/control-root and
+generated Site marker contract.
+
 See `docs/mcp-output-refusal-conventions.md` for common output reference,
 payload reference, and refusal conventions shared across surfaces.
 

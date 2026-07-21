@@ -1,6 +1,6 @@
 {
   "schema": "narada.site_tool_surface.manifest.v1",
-  "site_root": "D:\\code\\mcp-surfaces\\.narada",
+  "site_root": "D:\\code\\mcp-surfaces",
   "tool_root": "D:\\code\\mcp-surfaces\\.narada\\tools",
   "generated_at": "2026-07-18T19:01:09.726Z",
   "entries": [

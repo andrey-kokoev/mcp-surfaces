@@ -23,7 +23,6 @@ export type SiteLoopScheduledSop = {
   anchor_at: string;
   target_role: string;
   preferred_agent_id: string;
-  mutation_posture: 'proposal_only';
 };
 
 export type SiteLoopConfig = {
@@ -154,7 +153,6 @@ function validateScheduledSops(errors: string[], schedules: SiteLoopScheduledSop
     ids.add(schedule?.id);
     if (!Number.isFinite(schedule?.interval_days) || schedule.interval_days <= 0) errors.push(`${path}.interval_days_positive_number_required`);
     if (!Number.isFinite(Date.parse(schedule?.anchor_at))) errors.push(`${path}.anchor_at_iso_timestamp_required`);
-    if (schedule?.mutation_posture !== 'proposal_only') errors.push(`${path}.mutation_posture_proposal_only_required`);
   }
 }
 

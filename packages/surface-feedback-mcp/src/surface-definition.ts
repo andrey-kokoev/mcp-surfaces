@@ -14,7 +14,17 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'local_write',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: ['--site-id', '{site_id}', '--site-root', '{site_root}'], env: [] },
+      transport: {
+        kind: 'stdio',
+        command: 'node',
+        args: [
+          '--feedback-root', '{site_control_root}/feedback',
+          '--canonical-feedback-root', '{site_control_root}/feedback',
+          '--task-lifecycle-root', '{site_root}',
+          '--site-id', '{site_id}',
+        ],
+        env: ['NARADA_SURFACE_FEEDBACK_ROOT'],
+      },
       injection_scope: 'user_site',
       default_injection: 'disabled',
       runtime_requirements: [],

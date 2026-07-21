@@ -27,6 +27,13 @@ pnpm --filter @narada2/task-lifecycle-mcp build
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
 ```
 
+When `--site-root` is omitted, the runtime resolves its Site root in this
+order: `NARADA_TASK_LIFECYCLE_ROOT`, `NARADA_SITE_ROOT`, then the process
+working directory. `task_lifecycle_doctor` reports both the effective root and
+the source that selected it; carrier/site wiring should pass an explicit
+`--site-root` or one of these environment bindings rather than relying on a
+developer-machine default.
+
 Runtime reconfiguration is staged: the candidate site root and SQLite store
 are prepared before `siteRoot`, `store`, and the configured flag are published.
 If opening or publishing the candidate fails, the prior valid configuration
@@ -58,6 +65,10 @@ Descriptive site-local tags:
 - `task_lifecycle_list` accepts `tags` plus `tag_match: "any" | "all"`; `task_lifecycle_show` returns normalized `tags` and recent tag updates.
 - Tags are trimmed, lowercased kebab-case labels, limited to 20 per task and 64 characters per label. They are discovery metadata only: they never authorize, route, prioritize, create dependencies, affect review, or close work.
 - `task_lifecycle_related` prefers explicit tag overlap and falls back to derived title/goal/context terms for untagged or legacy tasks.
+- `task_lifecycle_list` and `task_lifecycle_show` expose a compact
+  `task_reference` containing the authoritative `task_id`, `task_number`, and
+  human-readable `task_ref`; use that tuple when goal/chapter numbering differs
+  from task projection filenames.
 
 Assignment and routing:
 
@@ -111,6 +122,12 @@ The special completion-truthfulness guard is activated only by structured fields
 
 Agents should call `task_lifecycle_next` for work selection, claim before doing task work when required, and use `task_lifecycle_finish` to submit work reports or complete outcome-contract tasks. Every ordinary finish now creates or reuses one review-contract dependency by default; callers may name `reviewer`, otherwise routing uses the first reviewer-capable roster agent and then the `reviewer` role. Reviewers claim that generated task and admit its outcome with `task_lifecycle_finish` using `outcome`, `summary`, and `findings`. `task_lifecycle_review` remains compatibility migration only for pre-existing tasks without a review dependency. Singleton reviewer sites need no boolean flag: same-operator review is annotated automatically, while multi-reviewer conflict policy still requires explicit authorization. Existing `single_operator_review` annotations retain their readback shape. Closeout and closure can be blocked by evidence, unsatisfied dependencies, conflict-policy gates, or undisposed blocking outcomes; do not treat a successful tool call as authority to skip those gates.
 
+Every task-lifecycle tool description begins with a semantic canonical action
+hint (for example, `submit work`, `show`, or `tags update`). Carrier projections
+may still assign hashed transport aliases, but completion/help text remains
+anchored to the canonical action name so read and mutation calls are not
+visually interchangeable.
+
 `task_lifecycle_test_mcp_tool` is the bounded one-shot recovery route when the
 session-bound task-lifecycle server is stale or wedged. Its `server_path`
 contract is explicit: relative paths resolve under the Site root; absolute
@@ -129,6 +146,12 @@ supervisor; a one-shot fresh call does not update the bound child. A pending
 the replacement child starts with post-request self-observed boot evidence.
 `acknowledge` and `clear` remain idempotent confirmation modes after that
 automatic reconciliation, so manual marker deletion is never part of recovery.
+
+Task projections carrying legacy `superseded/*`, `superseded-*`, or
+`replacement-*` lineage labels are blocked at claim, continue, and finish
+boundaries. Proceed only with an explicit
+`authority_basis.kind=operator_direct_instruction` and a substantive summary
+when the operator intentionally authorizes work on the superseded lineage.
 
 ## Task Executability Proof
 

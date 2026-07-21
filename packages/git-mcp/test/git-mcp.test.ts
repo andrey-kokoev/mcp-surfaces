@@ -14,6 +14,7 @@ import {
   gitBranchSetUpstream,
   gitBranchSwitch,
   gitBranchUnsetUpstream,
+  gitBeginWorkScope,
   gitChangedSummary,
   gitCommit,
   gitDiff,
@@ -35,6 +36,8 @@ import {
   handleRequest,
 } from '../src/main.js';
 import { runGit } from '../src/git-runner.js';
+import { resolveWorkingDirectory } from '../src/policy.js';
+import { buildGuidanceResult } from '../src/guidance.js';
 
 type RpcResponse = {
   result?: Record<string, any>;
@@ -87,6 +90,7 @@ const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {
 const toolNames = tools.result?.tools.map((tool) => tool.name).sort();
 assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_add',
+  'git_begin_work_scope',
   'git_branch_create',
   'git_branch_delete',
   'git_branch_delete_remote',
@@ -117,6 +121,21 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_unstage',
   'git_workflow_record',
 ]);
+const gitStatusTool = tools.result?.tools.find((tool) => tool.name === 'git_status');
+assert.match(gitStatusTool.inputSchema.properties.working_directory.description, /explicit relative/);
+const policyReadback = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'git_policy_inspect', arguments: {} } }, state);
+assert.equal(policyReadback.result?.structuredContent.relative_path_resolution.omitted_working_directory, 'Use the first allowed root.');
+const guidanceReadback = buildGuidanceResult({});
+assert.equal((guidanceReadback.path_resolution as any).pathspecs.includes('repository-relative'), true);
+assert.equal(resolveWorkingDirectory(undefined, state.policy), root);
+const currentDirectoryPolicy = { ...state.policy, allowedRoots: [process.cwd()] };
+assert.equal(resolveWorkingDirectory('.', currentDirectoryPolicy), process.cwd());
+assert.throws(
+  () => resolveWorkingDirectory('..', currentDirectoryPolicy),
+  (error: any) => error?.details?.resolution_rule === 'process_current_directory'
+    && error?.details?.resolution_base === process.cwd()
+    && error?.details?.requested_working_directory === '..',
+);
 
 const readTools = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/list', params: {} }, readState);
 const readToolNames = readTools.result?.tools.map((tool) => tool.name).sort();
@@ -254,6 +273,9 @@ assert.match(untrackedDiff.diff, /\+hello/);
 
 const addResult = await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
 assert.deepEqual((addResult.post_status as any).staged, ['README.md']);
+assert.equal((addResult.verified_post_state as any).verification, 'verified');
+assert.equal(addResult.verification_status, 'verified');
+assert.deepEqual((addResult.mutation_effect as any).operation, 'add');
 const postAddSummary = await gitChangedSummary({ working_directory: repo, pathspec: 'README.md' }, state);
 assert.deepEqual(postAddSummary.tracked_changed_paths, ['README.md']);
 assert.deepEqual(postAddSummary.relevant_changed_paths, ['README.md']);
@@ -274,6 +296,7 @@ const unstageResponse = await rpc({
 }, state);
 assert.equal(unstageResponse.error, undefined);
 assert.equal(unstageResponse.result?.structuredContent.schema, 'narada.git.unstage.v1');
+assert.equal(unstageResponse.result?.structuredContent.verified_post_state.verification, 'verified');
 assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).staged, []);
 assert.deepEqual((unstageResponse.result?.structuredContent.post_status as any).unstaged, []);
 await gitAdd({ working_directory: repo, paths: ['README.md'] }, state);
@@ -294,6 +317,45 @@ await assert.rejects(
 
 const commitResult = await gitCommit({ working_directory: repo, message: 'Initial commit', expected_staged_paths: ['README.md'] }, state);
 assert.match(commitResult.commit, /^[0-9a-f]{40}$/);
+assert.equal((commitResult.verified_post_state as any).verification, 'verified');
+assert.equal(commitResult.verification_status, 'verified');
+assert.equal((commitResult.mutation_effect as any).operation, 'commit');
+
+const scopedRepo = join(root, 'scoped-repo');
+git(root, ['init', '--initial-branch=main', scopedRepo]);
+git(scopedRepo, ['config', 'user.email', 'agent@example.test']);
+git(scopedRepo, ['config', 'user.name', 'Agent Test']);
+writeFileSync(join(scopedRepo, 'alpha.txt'), 'alpha\n', 'utf8');
+writeFileSync(join(scopedRepo, 'beta.txt'), 'beta\n', 'utf8');
+git(scopedRepo, ['add', '.']);
+git(scopedRepo, ['commit', '-m', 'Scoped base']);
+writeFileSync(join(scopedRepo, 'alpha.txt'), 'alpha changed\n', 'utf8');
+writeFileSync(join(scopedRepo, 'beta.txt'), 'beta changed\n', 'utf8');
+const workScope = await gitBeginWorkScope({ working_directory: scopedRepo, allowed_paths: ['alpha.txt'] }, state);
+assert.match(workScope.work_scope_ref, /^gws_/);
+assert.deepEqual(workScope.allowed_paths, ['alpha.txt']);
+const scopedStatus = await gitStatus({ working_directory: scopedRepo, work_scope_ref: workScope.work_scope_ref, format: 'summary' }, state);
+assert.equal((scopedStatus.summary as any).matching_path_count, 1);
+assert.deepEqual(scopedStatus.paths, ['alpha.txt']);
+const scopedAdd = await gitAdd({ working_directory: scopedRepo, paths: ['alpha.txt'], work_scope_ref: workScope.work_scope_ref }, state);
+assert.match(scopedAdd.index_scope_ref, /^gis_/);
+assert.deepEqual(scopedAdd.paths, ['alpha.txt']);
+assert.equal((scopedAdd.verified_post_state as any).verification, 'verified');
+git(scopedRepo, ['add', 'beta.txt']);
+await assert.rejects(
+  () => gitCommit({ working_directory: scopedRepo, message: 'Reject out-of-scope index', work_scope_ref: workScope.work_scope_ref, index_scope_ref: scopedAdd.index_scope_ref }, state),
+  (error: any) => error.codeName === 'git_index_scope_state_drift' && error.details.mutation_started === false && error.details.atomic === true,
+);
+await gitUnstage({ working_directory: scopedRepo, paths: ['beta.txt'] }, state);
+const scopedCommit = await gitCommit({ working_directory: scopedRepo, message: 'Scoped commit', work_scope_ref: workScope.work_scope_ref, index_scope_ref: scopedAdd.index_scope_ref }, state);
+assert.equal(scopedCommit.committed_files.includes('alpha.txt'), true);
+assert.match(scopedCommit.commit_ref, /^git_commit:[0-9a-f]{40}$/);
+mkdirSync(join(scopedRepo, 'nested'), { recursive: true });
+writeFileSync(join(scopedRepo, 'nested', 'file.txt'), 'nested\n', 'utf8');
+const directoryAdd = await gitAdd({ working_directory: scopedRepo, paths: ['nested'] }, state);
+assert.deepEqual(directoryAdd.paths, ['nested/file.txt']);
+assert.deepEqual((directoryAdd.post_status as any).staged, ['nested/file.txt']);
+await gitUnstage({ working_directory: scopedRepo, paths: ['nested/file.txt'] }, state);
 
 writeFileSync(join(repo, 'scope-a.txt'), 'a\n', 'utf8');
 writeFileSync(join(repo, 'scope-b.txt'), 'b\n', 'utf8');
@@ -424,6 +486,8 @@ git(repo, ['restore', '--', 'big.txt']);
 
 const pushResult = await gitPush({ working_directory: repo, remote: 'origin', branch: currentBranch(repo) }, state);
 assert.match(pushResult.output, /(new branch|main -> main|master -> master)/);
+assert.equal(pushResult.verification_status, 'verified');
+assert.equal((pushResult.mutation_effect as any).operation, 'push');
 
 const initialBranchList = await gitBranchList({ working_directory: repo, scope: 'local' }, state);
 assert.equal(initialBranchList.schema, 'narada.git.branch_list.v1');
@@ -433,10 +497,13 @@ assert.equal((initialBranchList.branches as any[]).some((branch) => branch.name 
 
 const createdBranch = await gitBranchCreate({ working_directory: repo, name: 'feature/mcp' }, state);
 assert.equal(createdBranch.checked_out, false);
+assert.equal((createdBranch.verified_post_state as any).verification, 'verified');
 assert.equal((createdBranch.post_status as any).branch, baseBranch);
 const switchedBranch = await gitBranchSwitch({ working_directory: repo, branch: 'feature/mcp' }, state);
+assert.equal((switchedBranch.verified_post_state as any).verification, 'verified');
 assert.equal((switchedBranch.post_status as any).branch, 'feature/mcp');
 const renamedBranch = await gitBranchRename({ working_directory: repo, old_name: 'feature/mcp', new_name: 'feature/renamed' }, state);
+assert.equal((renamedBranch.verified_post_state as any).verification, 'verified');
 assert.equal((renamedBranch.post_status as any).branch, 'feature/renamed');
 await gitBranchSwitch({ working_directory: repo, branch: baseBranch }, state);
 const deletedMergedBranch = await gitBranchDelete({ working_directory: repo, branch: 'feature/renamed', base: baseBranch }, state);
@@ -672,6 +739,7 @@ git(syncPeer, ['push', 'origin', 'main']);
 const fetched = await gitFetch({ working_directory: syncRepo, remote: 'origin', branch: 'main', scope_label: 'remote-sync-test' }, syncState);
 assert.equal(fetched.schema, 'narada.git.fetch.v1');
 assert.equal(fetched.status, 'ok');
+assert.equal((fetched.verified_post_state as any).verification, 'verified');
 assert.equal((fetched.post_status as any).behind, 1);
 
 writeFileSync(join(syncRepo, 'local.txt'), 'local\n', 'utf8');
@@ -680,6 +748,7 @@ git(syncRepo, ['commit', '-m', 'local change']);
 const rebased = await gitRebase({ working_directory: syncRepo, onto: 'origin/main', autostash: false }, syncState);
 assert.equal(rebased.schema, 'narada.git.rebase.v1');
 assert.equal(rebased.status, 'rebased');
+assert.equal((rebased.verified_post_state as any).verification, 'verified');
 assert.equal((rebased.post_status as any).behind, 0);
 
 writeFileSync(join(syncPeer, 'remote-two.txt'), 'remote two\n', 'utf8');
@@ -728,6 +797,7 @@ git(syncRepo, ['commit', '-m', 'feature change']);
 git(syncRepo, ['switch', 'main']);
 const merged = await gitMerge({ working_directory: syncRepo, target: 'feature', autostash: false }, syncState);
 assert.equal(merged.status, 'merged');
+assert.equal((merged.verified_post_state as any).verification, 'verified');
 assert.equal((merged.post_status as any).clean, true);
 assert.equal((await gitMergeContinue({ working_directory: syncRepo }, syncState).catch(() => null)), null);
 await assert.rejects(

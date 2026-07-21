@@ -62,6 +62,7 @@ export function createTaskLifecycleInspectionHandlers({
       const reviewAuthority = buildReviewAuthorityReadback({ legacyReviewRows: reviews, dependencyReadback });
       let body = null;
       const expectedTags = spec ? parseStoredTaskTags(spec.tags_json) : [];
+      let taskFilePath: string | null = null;
       let tagProjection: Record<string, unknown> | null = spec ? {
         status: 'not_found',
         expected_tags: expectedTags,
@@ -72,6 +73,7 @@ export function createTaskLifecycleInspectionHandlers({
       try {
         const taskFile = await findTaskFile(siteRoot, String(taskNumber));
         if (taskFile) {
+          taskFilePath = taskFile.path;
           const fileData = await readTaskFile(taskFile.path);
           body = fileData.body;
           if (spec) {
@@ -116,6 +118,8 @@ export function createTaskLifecycleInspectionHandlers({
         status: 'ok',
         task_number: taskNumber,
         task_id: lifecycle.task_id,
+        task_ref: `task #${taskNumber}`,
+        task_reference: buildStableTaskReference({ siteRoot, lifecycle, spec, taskFile: taskFilePath }),
         lifecycle,
         closure_authority: deriveClosureAuthority(lifecycle),
         spec: spec ? { ...spec, tags: parseStoredTaskTags(spec.tags_json), target_role: routing.target_role, preferred_agent_id: routing.preferred_agent_id } : null,
@@ -243,6 +247,8 @@ export function createTaskLifecycleInspectionHandlers({
         tasks.push({
           task_number: taskNumber,
           task_id: lifecycle.task_id,
+          task_ref: `task #${taskNumber}`,
+          task_reference: buildStableTaskReference({ siteRoot, lifecycle, spec }),
           title: spec?.title ?? null,
           lifecycle: {
             status: lifecycle.status,
@@ -427,6 +433,36 @@ export function createTaskLifecycleInspectionHandlers({
       return jsonToolResult(result);
     },
   };
+}
+
+function buildStableTaskReference({ siteRoot, lifecycle, spec, taskFile = null }: {
+  siteRoot: string;
+  lifecycle: Record<string, unknown>;
+  spec?: Record<string, unknown> | null;
+  taskFile?: string | null;
+}) {
+  const taskNumber = Number(lifecycle.task_number);
+  const taskId = String(lifecycle.task_id ?? '');
+  const goalRef = firstReference(spec, ['goal_ref', 'goal_id', 'goal_number', 'source_goal_ref']);
+  return {
+    schema: 'narada.task.reference.v1',
+    task_ref: `task #${taskNumber}`,
+    task_id: taskId,
+    task_number: taskNumber,
+    number_authority: 'task_lifecycle',
+    task_file_name: taskFile ? taskFile.split(/[\\/]/).pop() : `${taskId}.md`,
+    goal_ref: goalRef,
+    cross_reference_key: `${taskId}@${taskNumber}`,
+  };
+}
+
+function firstReference(spec: Record<string, unknown> | null | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = spec?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return null;
 }
 
 function annotateSearchResultAuthority(store, item) {

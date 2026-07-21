@@ -60,6 +60,12 @@ export function publicGitPolicy(policy: GitMcpPolicy) {
     mutation_audit: policy.mutationAudit,
     push_policy: policy.pushPolicy,
     branch_policy: policy.branchPolicy,
+    relative_path_resolution: {
+      omitted_working_directory: 'Use the first allowed root.',
+      absolute_working_directory: 'Use the supplied absolute path when it is under an allowed root.',
+      relative_working_directory: 'Resolve an explicitly supplied relative working_directory against the MCP process current directory, then enforce allowed-root containment.',
+      pathspecs: 'Resolve Git pathspec arguments relative to the selected repository working directory; absolute pathspecs and parent traversal are refused.',
+    },
   };
 }
 
@@ -114,9 +120,22 @@ export function normalizeAllowedRoots(roots: unknown) {
 }
 
 export function resolveWorkingDirectory(input: unknown, policy: GitMcpPolicy): string {
-  const cwd = resolve(String(input ?? policy.allowedRoots[0]));
+  const requested = input === undefined || input === null ? null : String(input);
+  const resolutionBase = requested === null
+    ? policy.allowedRoots[0]
+    : isAbsolute(requested) ? null : process.cwd();
+  const resolutionRule = requested === null
+    ? 'first_allowed_root'
+    : isAbsolute(requested) ? 'absolute_path' : 'process_current_directory';
+  const cwd = resolve(requested ?? policy.allowedRoots[0]);
   if (!policy.allowedRoots.some((root) => cwd === root || isPathInside(cwd, root))) {
-    throw new GitPolicyError('git_working_directory_outside_allowed_roots', { working_directory: cwd, allowed_roots: policy.allowedRoots });
+    throw new GitPolicyError('git_working_directory_outside_allowed_roots', {
+      requested_working_directory: requested,
+      working_directory: cwd,
+      resolution_base: resolutionBase,
+      resolution_rule: resolutionRule,
+      allowed_roots: policy.allowedRoots,
+    });
   }
   return cwd;
 }

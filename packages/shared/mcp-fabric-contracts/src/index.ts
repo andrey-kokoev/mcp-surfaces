@@ -52,6 +52,27 @@ export const LifecycleRequirementSchema = z.object({
   }
 });
 
+export const LifecycleReadbackMetadataSchema = z.object({
+  authority: z.literal('mcp-loader'),
+  availability: z.literal('loader-managed'),
+  discovery: z.object({
+    tool_name: z.literal('mcp_loader_connection_inventory'),
+    arguments: JsonObjectSchema,
+    select: z.object({
+      field: IdentifierSchema,
+      equals: z.string().trim().min(1),
+      result_field: IdentifierSchema,
+    }).strict(),
+  }).strict(),
+  status: z.object({
+    tool_name: z.literal('mcp_loader_surface_status'),
+    arguments: z.object({ connection_id: z.literal('{connection_id}') }).strict(),
+    connection_id_from: z.literal('discovery.selected.connection_id'),
+  }).strict(),
+}).strict();
+
+export type LifecycleReadbackMetadata = z.infer<typeof LifecycleReadbackMetadataSchema>;
+
 export const ToolContractV2Schema = z.object({
   name: IdentifierSchema,
   description: z.string().trim().min(1),
@@ -115,6 +136,17 @@ export const SurfaceDescriptorV2Schema = z.object({
       message: 'guidance_tool must name a declared tool',
       path: ['guidance_tool'],
     });
+  }
+  const lifecycleReadback = descriptor.metadata?.lifecycle_readback;
+  if (lifecycleReadback !== undefined) {
+    const parsed = LifecycleReadbackMetadataSchema.safeParse(lifecycleReadback);
+    if (!parsed.success) {
+      context.addIssue({
+        code: 'custom',
+        message: `invalid lifecycle_readback metadata: ${parsed.error.issues.map((issue) => issue.message).join('; ')}`,
+        path: ['metadata', 'lifecycle_readback'],
+      });
+    }
   }
 });
 
@@ -315,6 +347,27 @@ export type DefinedSurface = {
   tool_contract_digest: string;
 };
 
+export function lifecycleReadbackMetadata(surfaceId: string): LifecycleReadbackMetadata {
+  return {
+    authority: 'mcp-loader',
+    availability: 'loader-managed',
+    discovery: {
+      tool_name: 'mcp_loader_connection_inventory',
+      arguments: {},
+      select: {
+        field: 'surface_id',
+        equals: surfaceId,
+        result_field: 'connection_id',
+      },
+    },
+    status: {
+      tool_name: 'mcp_loader_surface_status',
+      arguments: { connection_id: '{connection_id}' },
+      connection_id_from: 'discovery.selected.connection_id',
+    },
+  };
+}
+
 export function defineSurface(input: {
   surface_id: string;
   surface_version: string;
@@ -332,13 +385,8 @@ export function defineSurface(input: {
     );
   }
   const metadata = {
-    lifecycle_readback: {
-      tool_name: 'mcp_loader_surface_status',
-      arguments: { surface_id: input.surface_id },
-      authority: 'mcp-loader',
-      availability: 'loader-managed',
-    },
     ...(input.metadata ?? {}),
+    lifecycle_readback: lifecycleReadbackMetadata(input.surface_id),
   };
   const descriptor = parseSurfaceDescriptorV2({
     schema_version: MCP_FABRIC_SCHEMA_VERSION,

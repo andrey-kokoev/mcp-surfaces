@@ -1513,6 +1513,7 @@ compatibility_record: true
   assert.equal(finishTool.inputSchema.properties.outcome.type, 'string');
   assert.equal(finishTool.inputSchema.properties.findings.type, 'array');
   assert.equal(Object.hasOwn(finishTool.inputSchema.properties, 'verdict'), false);
+  assert.match(finishTool.description, /Canonical action: finish/);
   assert.match(finishTool.description, /outcome contract/);
   const blockedReportTool = toolsListResponse.result.tools.find((tool: any) => tool.name === 'task_lifecycle_report_blocked');
   assert.equal(blockedReportTool.inputSchema.required.includes('reason'), true);
@@ -2802,8 +2803,9 @@ compatibility_record: true
     },
   }, builderRuntime);
   const runTestsPayload = await responsePayload(runTestsResponse, builderRuntime, 108);
-  assert.equal(runTestsPayload.status, 'failed');
-  assert.equal(runTestsPayload.error, 'test_mcp_server_not_found');
+  assert.equal(runTestsPayload.status, 'blocked');
+  assert.equal(runTestsPayload.error, 'test_mcp_site_binding_invalid');
+  assert.equal(runTestsPayload.site_binding.configuration_required, true);
   assert.match(runTestsPayload.configured_test_server_path, /tools[\\/]mcp-servers[\\/]test[\\/]test-mcp-server\.mjs/);
   assert.match(runTestsPayload.remediation, /structured-command/);
 

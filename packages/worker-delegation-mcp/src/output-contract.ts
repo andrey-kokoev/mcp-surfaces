@@ -119,7 +119,10 @@ export function workerOutputSchema(): Record<string, unknown> {
       review_verdict: { type: ['string', 'null'] },
       acceptance_verdict: { type: ['string', 'null'] },
       verdict: { type: ['string', 'null'] },
-      structured_outputs: { type: 'object', additionalProperties: true },
+      // Keep the provider-facing structured output object closed.  Codex's
+      // structured-output validator rejects an object schema that omits this
+      // constraint, even though the outer worker contract is already closed.
+      structured_outputs: { type: 'object', additionalProperties: false },
     },
   };
 }

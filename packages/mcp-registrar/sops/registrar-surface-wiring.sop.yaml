@@ -86,9 +86,9 @@ steps:
     depends_on: [sync_all]
     instructions: |
       Check each carrier config file for the new surface entry:
-      - opencode: C:/Users/Andrey/.config/opencode/opencode.jsonc
-      - codex: C:/Users/Andrey/.codex/config.toml
-      - kimi: C:/Users/Andrey/.kimi/mcp.json
+      - opencode: the configured carrier path (NARADA_OPENCODE_CONFIG_PATH or the carrier-native default)
+      - codex: the configured carrier path (NARADA_CODEX_CONFIG_PATH or the carrier-native default)
+      - kimi: the configured carrier path (NARADA_KIMI_CONFIG_PATH or the carrier-native default)
       Verify the command, args, and env_vars are correct.
       Verify no local Site carrier config was created and no generated
       carrier config contains stale Site-local entrypoints or obsolete tool

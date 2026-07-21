@@ -15,7 +15,7 @@ import {
   type McpToolDefinition,
   type SurfaceDescriptorV2,
 } from '@narada2/mcp-fabric-contracts';
-import { payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShow, payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
 import { loaderRuntimeLifecycle, loaderSupervisorRestartAction } from './runtime-lifecycle.js';
 import { DEFAULT_TOOL_CALL_TIMEOUT_MS, DEFAULT_TOOL_TIMEOUT_GRACE_MS, resolveToolCallTimeoutMs } from './tool-timeout.js';
@@ -71,11 +71,13 @@ const DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const STDERR_TAIL_LIMIT = 8000;
 const DEFAULT_ATTACH_TIMEOUT_MS = 30000;
 const DEFAULT_RUNTIME_LEASE_MS = 30000;
+const DEFAULT_LOADER_RESULT_INLINE_LIMIT = 12000;
 const FILE_MTIME_CLOCK_SKEW_MS = 1000;
 const SITE_TOOL_OBSERVATION_PAYLOAD_PREFIX = 'site-tools-';
 const SITE_TOOL_OBSERVATION_MAX_ENTRIES = 32;
 const SITE_TOOL_OBSERVATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const REJECTED_SITE_IDS = new Set(['narada-andrey', 'narada-user-site']);
+const SURFACE_HANDLE_PREFIX = 'msh_';
 
 type McpRuntimeKind = string;
 
@@ -499,9 +501,20 @@ type ChildConnection = {
   stderrTail: string;
 };
 
+type SurfaceHandle = {
+  handle: string;
+  handleScope: 'loader_process';
+  logicalConnectionId: string;
+  siteRoot: string;
+  surfaceId: string;
+  runtimeKind: McpRuntimeKind | null;
+  createdAt: string;
+};
+
 type LoaderState = {
   policy: LoaderPolicy;
   connections: Map<string, ChildConnection>;
+  surfaceHandles: Map<string, SurfaceHandle>;
 };
 
 export function createServerState(options: JsonRecord = {}): LoaderState {
@@ -521,7 +534,7 @@ export function createServerState(options: JsonRecord = {}): LoaderState {
     toolCallTimeoutMs: integer(options.toolCallTimeoutMs, DEFAULT_TOOL_CALL_TIMEOUT_MS, 1000, 900000),
     toolCallGraceMs: integer(options.toolCallGraceMs, DEFAULT_TOOL_TIMEOUT_GRACE_MS, 0, 60000),
   };
-  return { policy, connections: new Map() };
+  return { policy, connections: new Map(), surfaceHandles: new Map() };
 }
 
 export async function handleRequest(request: JsonRecord, state: LoaderState) {
@@ -595,6 +608,14 @@ export function listTools() {
       entrypoint: { type: 'string', description: 'Optional explicit entrypoint path; must be allowed by policy if provided.' },
       args: { type: 'array', items: { type: 'string' }, description: 'Optional additional args appended after resolved args.' },
     }, ['site_root', 'surface_id'], { readOnly: false }),
+    tool('mcp_loader_open_surface', 'Open a surface and return a stable logical handle for calls across loader-managed child generations. The handle is scoped to this loader process and does not survive loader restart.', {
+      site_root: { type: 'string', description: 'Site root directory.' },
+      surface_id: { type: 'string', description: 'Surface identifier from the site fabric or shared surface registry.' },
+      runtime_kind: { type: 'string', description: 'Explicit runtime context required when the selected surface projection declares runtime_requirements.' },
+      entrypoint: { type: 'string', description: 'Optional explicit entrypoint path; must be allowed by policy if provided.' },
+      args: { type: 'array', items: { type: 'string' }, description: 'Optional additional args appended after resolved args.' },
+    }, ['site_root', 'surface_id'], { readOnly: false }),
+    tool('mcp_loader_surface_handle_inventory', 'List stable logical surface handles and the current child generation, without spawning or replacing a surface.', {}, [], { readOnly: true }),
     tool('mcp_loader_list_tools', 'List tools exposed by an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
@@ -604,11 +625,25 @@ export function listTools() {
     tool('mcp_loader_tool_discovery_manifest', 'Return canonical semantic tool names for an attached surface and flag generated aliases as non-authoritative.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: true }),
-    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface. If the nested arguments include timeout_ms, the loader honors it up to its bounded maximum and waits an additional bounded grace (--tool-timeout-grace-ms, default 1000 ms) so the tool can return its own bounded timeout result.', {
+    tool('mcp_loader_call_tool', 'Call a tool on an attached MCP surface. Results are bounded by default and include a typed summary; set include_runtime_metadata=true when lifecycle/freshness evidence is needed on this call. If the nested arguments include timeout_ms, the loader honors it up to its bounded maximum and waits an additional bounded grace (--tool-timeout-grace-ms, default 1000 ms) so the tool can return its own bounded timeout result.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       tool_name: { type: 'string', description: 'Tool name on the attached surface.' },
       arguments: { type: 'object', description: 'Arguments object for the tool call.' },
+      include_runtime_metadata: { type: 'boolean', description: 'Include loader runtime_lifecycle and runtime_freshness metadata on this result. Defaults to false; attach/status/observation tools remain authoritative for lifecycle evidence.' },
     }, ['connection_id', 'tool_name'], { readOnly: false }),
+    tool('mcp_loader_call_surface_tool', 'Call a tool through a stable logical surface handle. Results are bounded by default and include a typed summary; set include_runtime_metadata=true for lifecycle/freshness evidence. The handle follows loader-managed child replacement; use mcp_loader_open_surface to create a new handle after loader restart.', {
+      surface_handle: { type: 'string', description: 'Stable handle returned by mcp_loader_open_surface.' },
+      tool_name: { type: 'string', description: 'Tool name on the logical surface.' },
+      arguments: { type: 'object', description: 'Arguments object for the tool call.' },
+      include_runtime_metadata: { type: 'boolean', description: 'Include loader runtime_lifecycle and runtime_freshness metadata on this result. Defaults to false.' },
+    }, ['surface_handle', 'tool_name'], { readOnly: false }),
+    tool('mcp_loader_read_result', 'Read a bounded page from a materialized proxied child result. The ref is bound to the same Site authority as the connection.', {
+      connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_call_tool or mcp_loader_call_surface_tool.' },
+      ref: { type: 'string', description: 'Materialized result ref returned in result.details_ref or result.output_ref.' },
+      output_ref: { type: 'string', description: 'Alias for ref.' },
+      offset: { type: 'integer', minimum: 0, description: 'Character offset into the materialized JSON output.' },
+      limit: { type: 'integer', minimum: 1, description: 'Maximum output characters for this page.' },
+    }, ['connection_id'], { readOnly: true }),
     tool('mcp_loader_detach', 'Detach and terminate an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: false, destructive: true }),
@@ -641,6 +676,10 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
       return siteToolInventoryCheck(args, state);
     case 'mcp_loader_attach_surface':
       return attachSurface(args, state);
+    case 'mcp_loader_open_surface':
+      return openSurfaceHandle(args, state);
+    case 'mcp_loader_surface_handle_inventory':
+      return surfaceHandleInventory(state);
     case 'mcp_loader_list_tools':
       return listAttachedTools(args, state);
     case 'mcp_loader_surface_status':
@@ -649,6 +688,10 @@ async function callTool(params: JsonRecord, state: LoaderState): Promise<JsonRec
       return toolDiscoveryManifest(args, state);
     case 'mcp_loader_call_tool':
       return callAttachedTool(args, state);
+    case 'mcp_loader_call_surface_tool':
+      return callSurfaceHandleTool(args, state);
+    case 'mcp_loader_read_result':
+      return readLoaderResult(args, state);
     case 'mcp_loader_detach':
       return detachConnection(args, state);
     case 'mcp_loader_surface_restart':
@@ -672,11 +715,11 @@ function connectionInventory(state: LoaderState): JsonRecord {
       connection_id: connection.connectionId,
       liveness: status.status,
       age_ms: Number.isFinite(attachedAtMs) ? Math.max(0, now - attachedAtMs) : null,
-      runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+      runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
       recovery_actions: {
         inspect: { tool_name: 'mcp_loader_surface_status', arguments: { connection_id: connection.connectionId } },
         detach: { tool_name: 'mcp_loader_detach', arguments: { connection_id: connection.connectionId } },
-        restart: { tool_name: 'mcp_loader_surface_restart', arguments: { connection_id: connection.connectionId } },
+        restart: loaderRecoveryActions(connection)[0],
       },
     };
   });
@@ -838,6 +881,74 @@ async function attachSurface(args: JsonRecord, state: LoaderState): Promise<Json
   return attachedResponse(connection);
 }
 
+async function openSurfaceHandle(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
+  const attached = await attachSurface(args, state);
+  const connectionId = requiredString(attached.connection_id, 'surface_attach_missing_connection_id');
+  const connection = getConnection({ connection_id: connectionId }, state);
+  const handle = `${SURFACE_HANDLE_PREFIX}${randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  const record: SurfaceHandle = {
+    handle,
+    handleScope: 'loader_process',
+    logicalConnectionId: connection.logicalConnectionId,
+    siteRoot: connection.siteRoot,
+    surfaceId: connection.surfaceId,
+    runtimeKind: connection.runtimeKind,
+    createdAt: new Date().toISOString(),
+  };
+  state.surfaceHandles.set(handle, record);
+  return {
+    schema: 'narada.mcp_loader.surface_handle_opened.v1',
+    status: 'opened',
+    surface_handle: handle,
+    handle_scope: record.handleScope,
+    handle_survives_child_restart: true,
+    handle_survives_loader_restart: false,
+    logical_connection_id: connection.logicalConnectionId,
+    connection_id: connection.connectionId,
+    generation_id: connection.generationId,
+    site_root: connection.siteRoot,
+    surface_id: connection.surfaceId,
+    runtime_kind: connection.runtimeKind,
+    runtime_requirements: connection.runtimeRequirements,
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
+    runtime_freshness: loaderRuntimeFreshness(),
+    tool_count: connection.toolSnapshot?.length ?? null,
+    created_at: record.createdAt,
+    call: {
+      tool_name: 'mcp_loader_call_surface_tool',
+      arguments: { surface_handle: handle, tool_name: '<child_tool>', arguments: {} },
+    },
+  };
+}
+
+function surfaceHandleInventory(state: LoaderState): JsonRecord {
+  const handles = [...state.surfaceHandles.values()].map((handle) => {
+    const connection = findConnectionForHandle(handle, state);
+    return {
+      surface_handle: handle.handle,
+      handle_scope: handle.handleScope,
+      logical_connection_id: handle.logicalConnectionId,
+      site_root: handle.siteRoot,
+      surface_id: handle.surfaceId,
+      runtime_kind: handle.runtimeKind,
+      created_at: handle.createdAt,
+      connection_id: connection?.connectionId ?? null,
+      generation_id: connection?.generationId ?? null,
+      status: connection && isConnectionLive(connection) ? 'live' : 'unavailable',
+      recovery: connection
+        ? { tool_name: 'mcp_loader_surface_restart', arguments: { connection_id: connection.connectionId } }
+        : { tool_name: 'mcp_loader_open_surface', arguments: { site_root: handle.siteRoot, surface_id: handle.surfaceId, runtime_kind: handle.runtimeKind } },
+    };
+  });
+  return {
+    schema: 'narada.mcp_loader.surface_handle_inventory.v1',
+    status: 'ok',
+    handle_scope: 'loader_process',
+    handle_count: handles.length,
+    handles,
+  };
+}
+
 async function openConnection(input: {
   state: LoaderState;
   siteRoot: string;
@@ -932,7 +1043,7 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     surface_id: connection.surfaceId,
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
     runtime_freshness: loaderRuntimeFreshness(),
     entrypoint: connection.entrypoint,
     args: connection.args,
@@ -950,7 +1061,7 @@ async function listAttachedTools(args: JsonRecord, state: LoaderState): Promise<
     schema: 'narada.mcp_loader.tools.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
     runtime_freshness: loaderRuntimeFreshness(),
     tools: connection.toolSnapshot ?? [],
   };
@@ -971,7 +1082,7 @@ async function toolDiscoveryManifest(args: JsonRecord, state: LoaderState): Prom
     schema: 'narada.mcp_loader.tool_discovery_manifest.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
     runtime_freshness: loaderRuntimeFreshness(),
     alias_policy: {
       canonical_name_source: 'tools/list.name',
@@ -1013,26 +1124,135 @@ async function callAttachedTool(args: JsonRecord, state: LoaderState): Promise<J
     ...(timeout.source === 'tool_request' ? { _meta: { narada_request_timeout_ms: timeout.timeoutMs } } : {}),
   };
   const result = await sendChildRequest(connection, 'tools/call', childParams, timeout.outerTimeoutMs);
-  const enrichedResult = enrichAttachedGuidanceResult(result, toolName, connection);
-  enforceResponseSize(enrichedResult, state.policy.maxResponseBytes);
-  return {
+  const includeRuntimeMetadata = args.include_runtime_metadata === true;
+  const enrichedResult = enrichAttachedGuidanceResult(result, toolName, connection, includeRuntimeMetadata);
+  const bounded = buildBoundedToolResult({
+    siteRoot: connection.siteRoot,
+    toolName: `mcp_loader_call_tool:${connection.surfaceId}:${toolName}`,
+    value: enrichedResult,
+    isError: Boolean(enrichedResult.isError),
+    limit: DEFAULT_LOADER_RESULT_INLINE_LIMIT,
+    readerTool: 'mcp_loader_read_result',
+  });
+  const boundedResult = asRecord(bounded.structuredContent);
+  const response: JsonRecord = {
     schema: 'narada.mcp_loader.tool_result.v1',
     connection_id: connection.connectionId,
     surface_id: connection.surfaceId,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
-    runtime_freshness: loaderRuntimeFreshness(),
-    result: enrichedResult,
+    result: boundedResult,
+    result_summary: typedResultSummary(enrichedResult),
+    result_bounded: boundedResult.schema === 'narada.producer_output_page.v1',
+    ...(typeof boundedResult.output_ref === 'string' ? {
+      details_ref: boundedResult.output_ref,
+      details_reader: 'mcp_loader_read_result',
+    } : {}),
+    ...(includeRuntimeMetadata ? {
+      runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
+      runtime_freshness: loaderRuntimeFreshness(),
+    } : {}),
   };
+  enforceResponseSize(response, state.policy.maxResponseBytes);
+  return response;
 }
 
-function enrichAttachedGuidanceResult(result: JsonRecord, toolName: string, connection: ChildConnection): JsonRecord {
-  if (!toolName.endsWith('_guidance') && toolName !== 'guidance') return result;
+async function callSurfaceHandleTool(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
+  const handle = getSurfaceHandle(args, state);
+  const connection = findConnectionForHandle(handle, state);
+  if (!connection || !isConnectionLive(connection)) {
+    throw diagnosticError(
+      'surface_handle_connection_unavailable',
+      `surface_handle_connection_unavailable:${handle.handle}`,
+      {
+        surface_handle: handle.handle,
+        logical_connection_id: handle.logicalConnectionId,
+        site_root: handle.siteRoot,
+        surface_id: handle.surfaceId,
+        recovery: {
+          tool_name: 'mcp_loader_open_surface',
+          arguments: { site_root: handle.siteRoot, surface_id: handle.surfaceId, runtime_kind: handle.runtimeKind },
+        },
+      },
+    );
+  }
+  return callAttachedTool({
+    connection_id: connection.connectionId,
+    tool_name: requiredString(args.tool_name, 'missing_tool_name'),
+    arguments: asRecord(args.arguments),
+    include_runtime_metadata: args.include_runtime_metadata,
+  }, state);
+}
+
+function readLoaderResult(args: JsonRecord, state: LoaderState): JsonRecord {
+  const connection = getConnection(args, state);
+  const ref = requiredString(args.ref ?? args.output_ref, 'missing_output_ref');
+  const page = outputShow({
+    siteRoot: connection.siteRoot,
+    args: {
+      ref,
+      ...(args.offset === undefined ? {} : { offset: args.offset }),
+      ...(args.limit === undefined ? {} : { limit: args.limit }),
+    },
+    maxBytes: state.policy.maxResponseBytes,
+  });
+  const result = {
+    schema: 'narada.mcp_loader.result_page.v1',
+    connection_id: connection.connectionId,
+    surface_id: connection.surfaceId,
+    result: page,
+  };
+  enforceResponseSize(result, state.policy.maxResponseBytes);
+  return result;
+}
+
+function getSurfaceHandle(args: JsonRecord, state: LoaderState): SurfaceHandle {
+  const handle = requiredString(args.surface_handle, 'missing_surface_handle');
+  const record = state.surfaceHandles.get(handle);
+  if (!record) throw diagnosticError('surface_handle_not_found', `surface_handle_not_found:${handle}`);
+  return record;
+}
+
+function findConnectionForHandle(handle: SurfaceHandle, state: LoaderState): ChildConnection | null {
+  const matches = [...state.connections.values()]
+    .filter((connection) => connection.logicalConnectionId === handle.logicalConnectionId)
+    .sort((left, right) => Date.parse(right.attachedAt) - Date.parse(left.attachedAt));
+  return matches.find((connection) => isConnectionLive(connection)) ?? matches[0] ?? null;
+}
+
+function typedResultSummary(result: JsonRecord): JsonRecord {
+  const structured = asRecord(result.structuredContent);
+  const summary: JsonRecord = {
+    schema: typeof structured.schema === 'string' ? structured.schema : 'narada.mcp_loader.child_result.v1',
+    status: typeof structured.status === 'string' ? structured.status : (result.isError ? 'error' : 'ok'),
+    is_error: result.isError === true,
+  };
+  for (const key of ['code', 'message', 'summary', 'surface_id', 'task_id', 'task_number', 'ref', 'output_ref', 'next_offset', 'truncated']) {
+    const value = structured[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' || value === null) summary[key] = value;
+  }
+  for (const key of ['count', 'total', 'checked_surface_count', 'violation_count']) {
+    const value = structured[key];
+    if (typeof value === 'number') summary[key] = value;
+  }
+  if (structured.counts && typeof structured.counts === 'object' && !Array.isArray(structured.counts)) {
+    const counts: JsonRecord = {};
+    for (const [key, value] of Object.entries(asRecord(structured.counts)).slice(0, 32)) {
+      if (typeof value === 'number') counts[key] = value;
+    }
+    if (Object.keys(counts).length > 0) summary.counts = counts;
+  }
+  if (Array.isArray(structured.items)) summary.item_count = structured.items.length;
+  if (Array.isArray(structured.findings)) summary.finding_count = structured.findings.length;
+  return summary;
+}
+
+function enrichAttachedGuidanceResult(result: JsonRecord, toolName: string, connection: ChildConnection, includeRuntimeMetadata: boolean): JsonRecord {
+  if (!includeRuntimeMetadata || (!toolName.endsWith('_guidance') && toolName !== 'guidance')) return result;
   const structuredContent = asRecord(result.structuredContent);
   return {
     ...result,
     structuredContent: {
       ...structuredContent,
-      loader_runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+      loader_runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
       loader_runtime_freshness: loaderRuntimeFreshness(),
     },
   };
@@ -1053,6 +1273,19 @@ async function detachConnection(args: JsonRecord, state: LoaderState): Promise<J
 
 async function restartConnection(args: JsonRecord, state: LoaderState): Promise<JsonRecord> {
   const connection = getConnection(args, state);
+  if (connection.lifecycle.mode !== 'replayable') {
+    throw diagnosticError(
+      'surface_restart_not_loader_replayable',
+      `surface_restart_not_loader_replayable:${connection.surfaceId}:${connection.lifecycle.mode}`,
+      {
+        connection_id: connection.connectionId,
+        surface_id: connection.surfaceId,
+        lifecycle: connection.lifecycle,
+        runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
+        recovery_actions: loaderRecoveryActions(connection),
+      },
+    );
+  }
   const previous = connectionStatusFields(connection);
   const previousConnectionId = connection.connectionId;
   const termination = await terminateConnection(connection);
@@ -1086,7 +1319,7 @@ async function restartConnection(args: JsonRecord, state: LoaderState): Promise<
     connection_id: replacement.connectionId,
     previous_connection_id: previousConnectionId,
     surface_id: replacement.surfaceId,
-    runtime_lifecycle: loaderRuntimeLifecycle(replacement.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(replacement.connectionId, replacement.lifecycle),
     entrypoint: replacement.entrypoint,
     args: replacement.args,
     termination,
@@ -1210,7 +1443,10 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
   'scheduler': { entrypoint: `${MCP_SURFACES_ROOT}/scheduler-mcp/dist/src/main.js`, args: [] },
   'mcp-registrar': { entrypoint: `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`, args: [] },
-  'surface-feedback': { entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`, args: ['--feedback-root', MCP_WORKSPACE_ROOT] },
+  'surface-feedback': {
+    entrypoint: `${MCP_SURFACES_ROOT}/surface-feedback-mcp/dist/src/main.js`,
+    args: ['--feedback-root', '{site_control_root}/feedback', '--canonical-feedback-root', '{site_control_root}/feedback', '--task-lifecycle-root', '{site_root}', '--site-id', '{site_id}'],
+  },
   'speech': { entrypoint: `${MCP_SURFACES_ROOT}/speech-mcp/dist/src/main.js`, args: [] },
   'cloudflare-carrier': { entrypoint: `${MCP_SURFACES_ROOT}/cloudflare-carrier-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
   'site-coherence': { entrypoint: `${MCP_SURFACES_ROOT}/site-coherence-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
@@ -1483,7 +1719,7 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     runtime_kind: connection.runtimeKind,
     runtime_requirements: connection.runtimeRequirements,
     lifecycle: connection.lifecycle,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
     runtime_freshness: loaderRuntimeFreshness(),
     entrypoint: connection.entrypoint,
     args: connection.args,
@@ -1652,7 +1888,7 @@ function childRuntimeDiagnostic(connection: ChildConnection, extra: JsonRecord =
     exit_code: connection.process.exitCode,
     signal_code: connection.process.signalCode,
     stderr_tail: connection.stderrTail,
-    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId),
+    runtime_lifecycle: loaderRuntimeLifecycle(connection.connectionId, connection.lifecycle),
     ...extra,
   };
 }

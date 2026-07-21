@@ -44,8 +44,6 @@ type FeedbackState = {
   db: DatabaseSync;
 };
 
-const DEFAULT_CANONICAL_FEEDBACK_ROOT = 'D:/code/mcp-surfaces';
-
 const CREATE_TABLES = [
   `CREATE TABLE IF NOT EXISTS feedback_entries (
     feedback_id TEXT PRIMARY KEY,
@@ -97,7 +95,19 @@ const CREATE_TABLES = [
 
 export function createServerState(options: JsonRecord = {}): FeedbackState {
   const feedbackRoot = resolve(String(options.feedbackRoot ?? options.outputRoot ?? process.cwd()));
-  const canonicalFeedbackRoot = resolve(String(options.canonicalFeedbackRoot ?? process.env.NARADA_SURFACE_FEEDBACK_ROOT ?? DEFAULT_CANONICAL_FEEDBACK_ROOT));
+  const configuredCanonicalFeedbackRoot = options.canonicalFeedbackRoot
+    ?? process.env.NARADA_SURFACE_FEEDBACK_ROOT;
+  if (typeof configuredCanonicalFeedbackRoot !== 'string' || configuredCanonicalFeedbackRoot.trim().length === 0) {
+    throw diagnosticError(
+      'canonical_feedback_root_required',
+      'canonical_feedback_root_required',
+      {
+        remediation: 'Pass --canonical-feedback-root <path> or configure NARADA_SURFACE_FEEDBACK_ROOT before starting surface-feedback-mcp.',
+        feedback_root: feedbackRoot,
+      },
+    );
+  }
+  const canonicalFeedbackRoot = resolve(configuredCanonicalFeedbackRoot);
   const taskLifecycleRootOption = optionalString(options.taskLifecycleRoot);
   const taskLifecycleRootEnv = optionalString(process.env.NARADA_TASK_LIFECYCLE_ROOT);
   const siteRootEnv = optionalString(process.env.NARADA_SITE_ROOT);
@@ -168,6 +178,17 @@ export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
   let buffer = '';
   let sawFramedInput = false;
   process.stdin.setEncoding('utf8');
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await closeServerState(state);
+  };
+  const handleSignal = () => {
+    void close().finally(() => process.exit(0));
+  };
+  process.once('SIGTERM', handleSignal);
+  process.once('SIGINT', handleSignal);
   try {
     for await (const chunk of process.stdin) {
       buffer += chunk;
@@ -180,7 +201,9 @@ export async function runStdioServer(options: JsonRecord = {}): Promise<void> {
       }
     }
   } finally {
-    await closeServerState(state);
+    process.removeListener('SIGTERM', handleSignal);
+    process.removeListener('SIGINT', handleSignal);
+    await close();
   }
 }
 
@@ -515,7 +538,7 @@ function feedbackDoctor(state: FeedbackState): JsonRecord {
       authorityConfigured ? null : 'Server-bound mutation authority is not configured.',
     ].filter(Boolean),
     remediation: [
-      usesCanonicalStore ? null : `Configure --feedback-root ${state.canonicalFeedbackRoot}.`,
+      usesCanonicalStore ? null : `Configure --canonical-feedback-root ${state.canonicalFeedbackRoot}.`,
       taskRoot.configuration_valid ? null : 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.',
       state.taskLifecycleHealth === 'unhealthy' ? 'Repair task-lifecycle startup/runtime configuration, then retry a lifecycle operation to refresh observed health.' : null,
       authorityConfigured ? null : 'Configure --site-id/NARADA_SITE_ID and optional --owned-surface-id values.',
@@ -544,7 +567,7 @@ function feedbackCapabilities(state: FeedbackState): JsonRecord {
     : 'The configured feedback root is not the canonical feedback store.';
   const allAuthorizedRemediation = usesCanonicalStore
     ? authorityRemediation
-    : `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`;
+    : `Configure --canonical-feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`;
   return {
     schema: 'narada.surface_feedback.capabilities.v1',
     status: allAuthorizedAvailable ? 'ready' : 'degraded',
@@ -1435,7 +1458,7 @@ function assertTaskHandoffAuthority(state: FeedbackState): void {
   throw diagnosticError(code, String(capability.reason ?? code), {
     ...capability,
     remediation: code === 'feedback_handoff_requires_canonical_store'
-      ? `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical User Site handoff store.`
+      ? `Configure --canonical-feedback-root ${state.canonicalFeedbackRoot} for the canonical User Site handoff store.`
       : code === 'feedback_handoff_requires_server_authority'
         ? 'Configure --site-id or NARADA_SITE_ID on the serving User Site projection.'
         : code === 'feedback_task_lifecycle_root_invalid'
@@ -1673,7 +1696,7 @@ function feedbackReadScopeQuery(args: JsonRecord, state: FeedbackState): { sql: 
         feedback_root: state.feedbackRoot,
         canonical_feedback_root: state.canonicalFeedbackRoot,
         storage_posture: 'noncanonical_feedback_root',
-        remediation: `Configure --feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`,
+        remediation: `Configure --canonical-feedback-root ${state.canonicalFeedbackRoot} for the canonical cross-site feedback store.`,
       });
     }
     if (!state.authoritySiteId) {

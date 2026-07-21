@@ -1,4 +1,5 @@
 type TaskLifecyclePayload = Record<string, unknown>;
+import { inspectSupersededTaskGuard } from './task-lineage-guards.js';
 
 type GenericEngineerClaimAuthorityArgs = {
   args: TaskLifecyclePayload;
@@ -40,6 +41,15 @@ export function createTaskLifecycleAssignmentHandlers({
       const identityWarning = verifySessionIdentity(agentId);
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+
+      const lineageGuard = inspectSupersededTaskGuard({ store, lifecycle, authorityBasis: args.authority_basis });
+      if (lineageGuard.status === 'blocked') {
+        return jsonToolResult({
+          status: 'blocked',
+          ...lineageGuard,
+          operation: 'claim',
+        }, true);
+      }
 
       const eligibility = checkTaskRoleEligibilityLocal({ store, siteRoot, taskId: lifecycle.task_id, taskNumber, agentId });
       const genericEngineerAuthority = validateGenericEngineerClaimAuthority({ args, eligibility, lifecycle, taskNumber, agentId });
@@ -155,6 +165,15 @@ export function createTaskLifecycleAssignmentHandlers({
       enforceSessionIdentity(agentId);
       const lifecycle = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
+
+      const lineageGuard = inspectSupersededTaskGuard({ store, lifecycle, authorityBasis: args.authority_basis });
+      if (lineageGuard.status === 'blocked') {
+        return jsonToolResult({
+          status: 'blocked',
+          ...lineageGuard,
+          operation: 'continue',
+        }, true);
+      }
 
       const eligibility = checkTaskRoleEligibilityLocal({ store, siteRoot, taskId: lifecycle.task_id, taskNumber, agentId });
       if (!eligibility.eligible) {

@@ -5,6 +5,7 @@ node_modules/
 .ai/
 .narada/crew/
 .narada/runtime/
+/.narada/site.json
 /.narada/local-filesystem-mcp/patch-outcomes/
 packages/*/dist/
 packages/shared/*/dist/

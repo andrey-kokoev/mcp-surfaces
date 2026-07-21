@@ -51,7 +51,7 @@ import {
   buildLifecycleTargetLocusStatus as buildPipelineLifecycleTargetLocusStatus,
   createTaskLifecycleToolCaller,
 } from '../kernel/tool-call-pipeline.js';
-import { runJsonRpcStdioServer } from '../kernel/stdio-json-rpc.js';
+import { drainJsonRpcFrames as drainFramedJsonRpcFrames, runJsonRpcStdioServer } from '../kernel/stdio-json-rpc.js';
 import { RuntimeStoreOwnership } from '../kernel/runtime-store-ownership.js';
 import { deriveClosureAuthority } from './closure-authority.js';
 import {
@@ -731,8 +731,12 @@ function buildPostCloseoutContinuation({ agentId, result }) {
 function patchLocalToolDefinition(toolDef) {
   const name = String(toolDef?.name ?? '');
   const readOnly = TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name);
+  const actionHint = name.startsWith('task_lifecycle_')
+    ? `Canonical action: ${name.replace(/^task_lifecycle_/, '').replaceAll('_', ' ')} (${name}).`
+    : null;
   const annotatedToolDef = {
     ...toolDef,
+    ...(actionHint ? { description: `${actionHint} ${String(toolDef?.description ?? '')}` } : {}),
     annotations: {
       title: name,
       readOnlyHint: readOnly,
@@ -766,6 +770,7 @@ function patchLocalToolDefinition(toolDef) {
 }
 
 let siteRoot = null;
+let siteRootSource = 'unknown';
 let store = null;
 let runtimeConfigured = false;
 let runtimeStderr = process.stderr;
@@ -887,7 +892,18 @@ export function configureTaskLifecycleMcpRuntime({
   }
 
   runtimeStderr = stderr;
-  const nextRoot = resolve(String(options.siteRoot ?? cwd));
+  const selectedRoot = options.siteRoot
+    ?? env.NARADA_TASK_LIFECYCLE_ROOT
+    ?? env.NARADA_SITE_ROOT
+    ?? cwd;
+  const selectedRootSource = options.siteRoot
+    ? 'cli:--site-root'
+    : env.NARADA_TASK_LIFECYCLE_ROOT
+      ? 'env:NARADA_TASK_LIFECYCLE_ROOT'
+      : env.NARADA_SITE_ROOT
+        ? 'env:NARADA_SITE_ROOT'
+        : 'process_cwd';
+  const nextRoot = resolve(String(selectedRoot));
   const hadPublishedRuntime = runtimeConfigured;
   if (hadPublishedRuntime && (runtimeStoreOwnership.activeRequestCount > 0 || runtimeStoreOwnership.isTransitioning)) {
     throw new Error('task_lifecycle_runtime_reconfigure_active_requests');
@@ -917,10 +933,11 @@ export function configureTaskLifecycleMcpRuntime({
 
   SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
   publishTaskLifecycleRuntime(nextRoot, nextStore);
+  siteRootSource = selectedRootSource;
   runtimeConfigured = true;
   recordTaskLifecycleRuntimeObservation();
   reconcileTaskLifecycleRestartAfterBoot();
-  return { status: 'configured', siteRoot: nextRoot };
+  return { status: 'configured', siteRoot: nextRoot, siteRootSource: selectedRootSource };
 }
 
 function ensureRuntimeConfigured() {
@@ -1211,6 +1228,7 @@ function getTaskLifecycleHandlerRegistry() {
           jsonToolResult,
           getRegisteredTools: () => taskLifecycleTools().map((tool) => tool.name),
           getSiteRoot: () => siteRoot,
+          getSiteRootSource: () => siteRootSource,
           getToolAliases: () => TOOL_ALIASES,
           getSitePolicy: getTaskLifecycleSitePolicySummary,
           buildTaskLifecycleFreshness,
@@ -2640,32 +2658,25 @@ function testTargetsForSelector(selector) {
     case 'task-lifecycle':
       return [
         { test_id: 'task_next_cli' },
-        { path: 'tools/task-lifecycle/tests/Test-TaskRoutingMcp.js' },
-        { path: 'tools/task-lifecycle/tests/Test-PreferredAgentMismatchClaimAuthority.js' },
-        { path: 'tools/task-lifecycle/tests/Test-RecoveryTruthfulnessGuard.js' },
-        { path: 'tools/task-lifecycle/tests/Test-McpFinishChangedFileEvidence.js' },
-        { path: 'tools/task-lifecycle/tests/Test-SelfCertificationGuard.js' },
-        { path: 'tools/task-lifecycle/tests/Test-SelfCertificationMcpFinishGuard.js' },
-        { path: 'tools/task-lifecycle/tests/Test-AgentsPostureAudit.js' },
-        { path: 'tools/task-lifecycle/tests/Test-RosterSqlVolatileState.js' },
-        { path: 'tools/task-lifecycle/tests/Test-CapaDispositionCorrectiveCoverage.js' },
+        { test_id: 'task_lifecycle_continuation' },
       ];
     case 'typed-mcp':
       return [{ test_id: 'mcp_surface_registry_validation' }];
     case 'operator-surface':
       return [
-        { path: 'tools/operator-surface-carriers/Test-AcceptanceCriteriaBodyEnforcement.test.js' },
-        { path: 'tools/operator-surface-carriers/agent-desktop-shortcuts-authority.test.js' },
-        { path: 'tools/operator-surface/osm-send-permission-policy.test.js' },
-        { path: 'tools/operator-surface/operator-surface-shutdown-paths.test.js' },
+        { path: 'tools/operator-surface-carriers/Test-AcceptanceCriteriaBodyEnforcement.test.mjs' },
+        { path: 'tools/operator-surface-carriers/agent-desktop-shortcuts-authority.test.mjs' },
+        { path: 'tools/operator-surface/osm-send-permission-policy.test.mjs' },
+        { path: 'tools/operator-surface/operator-surface-shutdown-paths.test.mjs' },
       ];
     case 'all':
       return [
         { test_id: 'task_next_cli' },
+        { test_id: 'task_lifecycle_continuation' },
         { test_id: 'shell_mcp' },
         { test_id: 'test_mcp' },
         { test_id: 'mcp_surface_registry_validation' },
-        { path: 'tools/operator-surface-carriers/Test-AcceptanceCriteriaBodyEnforcement.test.js' },
+        { path: 'tools/operator-surface-carriers/Test-AcceptanceCriteriaBodyEnforcement.test.mjs' },
       ];
     default:
       throw new Error(`unknown_test_selector: ${selector}`);
@@ -2687,37 +2698,12 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function drainJsonRpcFrames(input) {
-  const requests = [];
-  let cursor = 0;
-  while (cursor < input.length) {
-    const headerEnd = input.indexOf('\r\n\r\n', cursor);
-    if (headerEnd < 0) break;
-    const header = input.slice(cursor, headerEnd);
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) throw new Error('mcp_stdio_frame_missing_content_length');
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (input.length < bodyEnd) break;
-    const body = input.slice(bodyStart, bodyEnd);
-    try {
-      requests.push(JSON.parse(body));
-    } catch {
-      requests.push({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error', data: { frame_body: body.slice(0, 200) } } });
-    }
-    cursor = bodyEnd;
-    while (input[cursor] === '\r' || input[cursor] === '\n') cursor += 1;
-  }
-  return { requests, remaining: input.slice(cursor) };
-}
-
 function parseJsonRpcInput(input) {
   const trimmed = input.trim();
   if (!trimmed) return [];
   if (/^Content-Length:/im.test(trimmed)) {
-    const parsed = drainJsonRpcFrames(input);
-    if (parsed.remaining.trim().length > 0) throw new Error('mcp_stdio_trailing_frame_bytes');
+    const parsed = drainFramedJsonRpcFrames(Buffer.from(input, 'utf8'));
+    if (parsed.remaining.toString('utf8').trim().length > 0) throw new Error('mcp_stdio_trailing_frame_bytes');
     return parsed.requests;
   }
   return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {

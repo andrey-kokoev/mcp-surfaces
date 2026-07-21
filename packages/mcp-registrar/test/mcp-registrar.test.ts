@@ -320,16 +320,13 @@ try {
   assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_import'));
   assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_actionable_queue'));
   assert.deepEqual(surfaceFeedback?.args, [
-    '--feedback-root', 'D:/code/mcp-surfaces',
-    '--canonical-feedback-root', 'D:/code/mcp-surfaces',
-    '--site-id', 'andrey-user',
-    '--owned-surface-id', 'surface-feedback',
-    '--owned-surface-id', 'site-registry',
-    '--owned-surface-id', 'mcp-loader',
-    '--owned-surface-id', 'mcp-registrar',
-    '--owned-surface-id', 'launcher',
-    '--owned-surface-id', 'operator-routing',
+    '--feedback-root', '{site_control_root}/feedback',
+    '--canonical-feedback-root', '{site_control_root}/feedback',
+    '--task-lifecycle-root', '{site_root}',
+    '--site-id', '{site_id}',
   ]);
+  assert.ok(surfaceFeedback?.env_vars?.includes('NARADA_SURFACE_FEEDBACK_ROOT'));
+  assert.equal(surfaceFeedback?.args.some((arg) => /D:\/code|C:\/Users\/Andrey/i.test(arg)), false);
 
   const localFilesystemEntrypoint = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
   const observedLocalFilesystemTools = await observeToolsList(localFilesystemEntrypoint, [
@@ -490,7 +487,7 @@ try {
         transport: 'stdio',
         command: 'node',
         args: ['D:/code/mcp-surfaces/packages/git-mcp/dist/src/main.js'],
-        tools: ['git_add', 'git_branch_create', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_list', 'git_branch_rename', 'git_branch_set_upstream', 'git_branch_switch', 'git_branch_unset_upstream', 'git_changed_summary', 'git_commit', 'git_diff', 'git_fetch', 'git_guidance', 'git_log', 'git_merge', 'git_merge_abort', 'git_merge_continue', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_rebase', 'git_rebase_abort', 'git_rebase_continue', 'git_repositories_summary', 'git_show', 'git_status', 'git_sync_status', 'git_unstage', 'git_workflow_record'],
+        tools: ['git_add', 'git_begin_work_scope', 'git_branch_create', 'git_branch_delete', 'git_branch_delete_remote', 'git_branch_list', 'git_branch_rename', 'git_branch_set_upstream', 'git_branch_switch', 'git_branch_unset_upstream', 'git_changed_summary', 'git_commit', 'git_diff', 'git_fetch', 'git_guidance', 'git_log', 'git_merge', 'git_merge_abort', 'git_merge_continue', 'git_output_show', 'git_policy_inspect', 'git_push', 'git_rebase', 'git_rebase_abort', 'git_rebase_continue', 'git_repositories_summary', 'git_show', 'git_status', 'git_sync_status', 'git_unstage', 'git_workflow_record'],
         surface_id: 'git',
       },
     },
@@ -921,6 +918,7 @@ try {
   );
   const controlRootWorkerServer = (controlRootWorkerBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-worker-delegation'];
   const controlRootRunRoot = String(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--run-root') + 1]);
+  assert.equal(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--site-root') + 1], controlRootWorkspace);
   assert.equal(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--allowed-root') + 1], controlRootWorkspace);
   assert.equal(controlRootRunRoot.replace(/\\/g, '/'), join(controlRootSite, 'runtime', 'worker-delegation').replace(/\\/g, '/'));
   assert.equal(controlRootRunRoot.replace(/\\/g, '/').includes('/.narada/.narada/'), false);
@@ -1090,10 +1088,9 @@ try {
     assert.match(content, /surface-feedback/);
     assert.match(content, /--feedback-root/);
     assert.match(content, /--canonical-feedback-root/);
+    assert.match(content, /--task-lifecycle-root/);
     assert.match(content, /--site-id/);
-    assert.match(content, /--owned-surface-id/);
-    assert.match(content, /D:\/code\/mcp-surfaces/);
-    assert.doesNotMatch(content, /--feedback-root["',\s\]]+[A-Z]:\/code\/narada(?!\/mcp-surfaces)/i);
+    assert.doesNotMatch(content, /--owned-surface-id/);
     if (carrierId === 'codex-andrey') {
       assert.match(content, /--anchored-allowed-root/);
       assert.match(content, /user_home:\.codex/);

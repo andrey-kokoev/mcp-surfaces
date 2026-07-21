@@ -18,6 +18,7 @@ export {
   gitBranchSetUpstream,
   gitBranchSwitch,
   gitBranchUnsetUpstream,
+  gitBeginWorkScope,
   gitChangedSummary,
   gitCommit,
   gitDiff,

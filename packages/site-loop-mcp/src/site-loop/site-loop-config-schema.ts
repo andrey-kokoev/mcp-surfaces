@@ -40,7 +40,7 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'sop_id', 'title', 'instructions', 'interval_days', 'anchor_at', 'target_role', 'preferred_agent_id', 'mutation_posture'],
+        required: ['id', 'sop_id', 'title', 'instructions', 'interval_days', 'anchor_at', 'target_role', 'preferred_agent_id'],
         properties: {
           id: { $ref: '#/$defs/nonEmptyString' },
           sop_id: { $ref: '#/$defs/nonEmptyString' },
@@ -50,7 +50,6 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
           anchor_at: { $ref: '#/$defs/nonEmptyString' },
           target_role: { $ref: '#/$defs/nonEmptyString' },
           preferred_agent_id: { $ref: '#/$defs/nonEmptyString' },
-          mutation_posture: { const: 'proposal_only' },
         },
       },
     },

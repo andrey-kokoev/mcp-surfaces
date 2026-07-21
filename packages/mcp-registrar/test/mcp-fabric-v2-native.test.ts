@@ -40,10 +40,18 @@ test('native descriptors match package versions and advertise loader lifecycle r
     )) as { version?: string };
     assert.equal(descriptor.surface_version, packageJson.version, surface.id);
     assert.deepEqual(descriptor.metadata?.lifecycle_readback, {
-      tool_name: 'mcp_loader_surface_status',
-      arguments: { surface_id: surface.id },
       authority: 'mcp-loader',
       availability: 'loader-managed',
+      discovery: {
+        tool_name: 'mcp_loader_connection_inventory',
+        arguments: {},
+        select: { field: 'surface_id', equals: surface.id, result_field: 'connection_id' },
+      },
+      status: {
+        tool_name: 'mcp_loader_surface_status',
+        arguments: { connection_id: '{connection_id}' },
+        connection_id_from: 'discovery.selected.connection_id',
+      },
     }, surface.id);
   }
 });

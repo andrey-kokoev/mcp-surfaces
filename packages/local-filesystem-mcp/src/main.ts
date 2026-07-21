@@ -56,6 +56,8 @@ const DEFAULT_FILE_METRICS_MAX_TOTAL_SCAN_BYTES = 256 * 1024 * 1024;
 const MAX_FILE_METRICS_MAX_TOTAL_SCAN_BYTES = 512 * 1024 * 1024;
 const MAX_FILE_METRICS_SNAPSHOT_FILES = 10_000;
 const FILE_METRICS_SNAPSHOT_CACHE_MAX_ENTRIES = 4;
+const PATH_ARGUMENT_DESCRIPTION = 'Absolute paths are preferred. A relative path resolves against the first allowed root shown by fs_doctor, never against the caller current directory.';
+const DIRECTORY_ARGUMENT_DESCRIPTION = 'Directory under an allowed root. Absolute paths are preferred; relative directories resolve against the first allowed root shown by fs_doctor.';
 const fileMetricsSnapshotCache = new Map();
 const REPOSITORY_GENERATED_PATH_MARKERS = [
   '/.ai/runtime/',
@@ -443,7 +445,7 @@ export function listTools(mode) {
       name: 'fs_read_file',
       description: 'Read a text file under an allowed root with line offset and limit.',
       inputSchema: objectSchema({
-        path: { type: 'string' },
+        path: { type: 'string', description: PATH_ARGUMENT_DESCRIPTION },
         offset: { type: 'integer', default: 1 },
         limit: { type: 'integer', default: 400 },
         timeout_ms: { type: 'integer', description: 'Optional read timeout in milliseconds. Defaults to 5000.' },
@@ -453,7 +455,7 @@ export function listTools(mode) {
       name: 'fs_read_file_range',
       description: 'Read a text file line range under an allowed root. Lines are 1-based and inclusive.',
       inputSchema: objectSchema({
-        path: { type: 'string' },
+        path: { type: 'string', description: PATH_ARGUMENT_DESCRIPTION },
         start_line: { type: 'integer' },
         end_line: { type: 'integer' },
         timeout_ms: { type: 'integer', description: 'Optional read timeout in milliseconds. Defaults to 5000.' },
@@ -462,14 +464,14 @@ export function listTools(mode) {
     {
       name: 'fs_stat',
       description: 'Return file or directory metadata under an allowed root.',
-      inputSchema: objectSchema({ path: { type: 'string' } }, ['path']),
+      inputSchema: objectSchema({ path: { type: 'string', description: PATH_ARGUMENT_DESCRIPTION } }, ['path']),
     },
     {
       name: 'fs_glob_search',
       description: 'List files under an allowed root using ripgrep file globbing. Empty matches return ok with count 0.',
       inputSchema: objectSchema({
         pattern: { type: 'string' },
-        directory: { type: 'string', default: '.' },
+        directory: { type: 'string', default: '.', description: DIRECTORY_ARGUMENT_DESCRIPTION },
         ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude. Defaults also exclude generated dependency/build directories.' },
         offset: { type: 'integer', default: 0 },
         limit: { type: 'integer', default: 100 },
@@ -483,7 +485,7 @@ export function listTools(mode) {
       description: 'Return a bounded candidate-source inventory under an allowed root, excluding generated runtime artifacts by default. Use git-mcp for authoritative tracked and ignored state.',
       inputSchema: objectSchema({
         pattern: { type: 'string', default: '**/*' },
-        directory: { type: 'string', default: '.' },
+        directory: { type: 'string', default: '.', description: DIRECTORY_ARGUMENT_DESCRIPTION },
         ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude.' },
         include_generated: { type: 'boolean', default: false, description: 'Include known generated runtime/artifact paths in the inventory.' },
         offset: { type: 'integer', default: 0 },
@@ -498,8 +500,8 @@ export function listTools(mode) {
       description: 'Return bounded metadata-only file metrics under an allowed root. It reports paths, exact byte counts, bounded line counts for text files, file type, scope classification, aggregate page totals, and the explicit include/ignore boundary without returning file contents.',
       inputSchema: objectSchema({
         pattern: { type: 'string', default: DEFAULT_FILE_METRICS_PATTERN, description: 'Include glob pattern. Defaults to all files under directory.' },
-        directory: { type: 'string', default: '.', description: 'Explicit directory/root under an allowed root.' },
-        root: { type: 'string', description: 'Alias for directory; do not pass both.' },
+        directory: { type: 'string', default: '.', description: DIRECTORY_ARGUMENT_DESCRIPTION },
+        root: { type: 'string', description: `Alias for directory; ${DIRECTORY_ARGUMENT_DESCRIPTION}` },
         ignore: { type: 'array', items: { type: 'string' }, description: 'Additional ignore glob patterns.' },
         exclude: { type: 'array', items: { type: 'string' }, description: 'Alias for additional ignore glob patterns.' },
         offset: { type: 'integer', default: 0 },
@@ -516,7 +518,7 @@ export function listTools(mode) {
       description: 'Search file contents under an allowed root using ripgrep. Use output_mode content for line-numbered matches; empty matches return ok with count 0.',
       inputSchema: objectSchema({
         pattern: { type: 'string' },
-        path: { type: 'string', default: '.' },
+        path: { type: 'string', default: '.', description: DIRECTORY_ARGUMENT_DESCRIPTION },
         output_mode: { type: 'string', enum: ['files_with_matches', 'count_matches', 'content'], default: 'files_with_matches' },
         ignore: { type: 'array', items: { type: 'string' }, description: 'Additional glob patterns to exclude. Defaults also exclude generated dependency/build/runtime directories.' },
         offset: { type: 'integer', default: 0 },
@@ -1000,6 +1002,13 @@ function doctorTool(state) {
       root: entry.root,
       provenance: entry.provenance,
     })),
+    relative_path_resolution: {
+      base: state.allowedRoots[0] ?? null,
+      rule: 'first_allowed_root',
+      relative_paths: 'Resolve relative filesystem paths against base; the process current directory is not used.',
+      absolute_paths: 'Resolve absolute paths as given, then enforce containment under an allowed root.',
+      recommendation: 'Pass an absolute path when multiple allowed roots are active or when the target root matters.',
+    },
     output_root: state.outputRoot,
     audit_log_dir: state.auditLogDir,
     client_roots: state.clientRoots,
@@ -2781,14 +2790,22 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
     const message = error instanceof Error ? error.message : String(error);
     const codeName = message.split(/[:\s]/)[0] || 'path_resolution_failed';
     if (codeName === 'path_required' || codeName === 'path_outside_allowed_roots' || codeName === 'allowed_root_not_found') {
+      const roots = Array.isArray(allowedRoots) && allowedRoots.length > 0 && typeof allowedRoots[0] === 'object'
+        ? allowedRoots.map((entry) => entry.root)
+        : allowedRoots;
+      const relativeBase = Array.isArray(roots) && roots.length > 0 ? roots[0] : null;
       throw diagnosticError(codeName, message, {
         ...context,
         requested_path: inputPath ?? null,
-        active_resolution_base: process.cwd(),
-        remediation: 'Pass an absolute path under an allowed root, or inspect fs_doctor for allowed_roots and active policy before retrying relative paths.',
-        allowed_roots: Array.isArray(allowedRoots) && allowedRoots.length > 0 && typeof allowedRoots[0] === 'object'
-          ? allowedRoots.map((entry) => entry.root)
-          : allowedRoots,
+        active_resolution_base: relativeBase,
+        resolution_rule: 'first_allowed_root_for_relative_paths',
+        relative_path_resolution: {
+          base: relativeBase,
+          rule: 'first_allowed_root',
+          process_current_directory_used: false,
+        },
+        remediation: 'Pass an absolute path under an allowed root, or inspect fs_doctor for relative_path_resolution and allowed_roots before retrying relative paths.',
+        allowed_roots: roots,
       });
     }
     throw error;

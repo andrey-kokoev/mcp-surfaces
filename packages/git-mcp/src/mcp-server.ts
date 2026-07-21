@@ -79,6 +79,7 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
     auditLogDir: options.auditLogDir ? resolve(String(options.auditLogDir)) : null,
     env: stateEnv,
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
+    scopeTokens: new Map(),
   };
 }
 

@@ -123,7 +123,12 @@ export function resolveAllowedPath(inputPath, allowedRootEntries, { defaultRoot 
   const root = findContainingRoot(candidate, allowedRoots);
   if (!root) throw new Error(`path_outside_allowed_roots: ${inputPath}`);
   if (requireExistingParent && !existsSync(root)) throw new Error(`allowed_root_not_found: ${root}`);
-  return { path: candidate, root };
+  return {
+    path: candidate,
+    root,
+    resolution_base: isAbsolute(inputPath) ? null : base,
+    resolution_rule: isAbsolute(inputPath) ? 'absolute_path' : 'first_allowed_root',
+  };
 }
 
 export function findContainingRoot(path, allowedRoots) {

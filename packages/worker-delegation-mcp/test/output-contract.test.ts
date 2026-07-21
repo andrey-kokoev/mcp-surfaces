@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { outputContractForMode, outputContractForRequest, parseLastMessage, parseWorkerOutputJson, workerOutputFromAgentMessage } from '../src/output-contract.js';
+import { outputContractForMode, outputContractForRequest, parseLastMessage, parseWorkerOutputJson, workerOutputFromAgentMessage, workerOutputSchema } from '../src/output-contract.js';
 
 const root = mkdtempSync(join(tmpdir(), 'worker-output-contract-'));
 
@@ -108,3 +108,8 @@ assert.equal(requestContract.tool_capability_note, 'If a raw MCP surface adverti
 assert.deepEqual(requestContract.verification_budget, { max_commands: 1, focus: 'focused' });
 assert.deepEqual(requestContract.test_budget, { max_commands: 0 });
 assert.equal(Array.isArray(requestContract.target_paths), true);
+
+const schema = workerOutputSchema() as any;
+assert.equal(schema.additionalProperties, false);
+assert.equal(schema.properties.structured_outputs.type, 'object');
+assert.equal(schema.properties.structured_outputs.additionalProperties, false);

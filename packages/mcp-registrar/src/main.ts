@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { payloadShow } from '@narada2/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { basename, dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada2/mcp-fabric-contracts';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
 
@@ -137,23 +137,28 @@ type CarrierDef = {
   surface_overrides?: Record<string, SurfaceOverride>;
 };
 
-const MCP_SURFACES_ROOT = 'D:/code/mcp-surfaces/packages';
+function findPackageRoot(moduleDirectory: string): string {
+  let current = resolve(moduleDirectory);
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (existsSync(join(current, 'package.json'))) return current;
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return resolve(moduleDirectory, '..');
+}
+
+function portablePathLiteral(path: string): string {
+  return resolve(path).replace(/\\/g, '/');
+}
+
+const MCP_REGISTRAR_PACKAGE_ROOT = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join(MCP_REGISTRAR_PACKAGE_ROOT, '..', '..'));
+const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
+const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
-const USER_NARADA_ROOT = 'C:/Users/Andrey/Narada';
-const USER_OPERATOR_ID = 'andrey';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
-const SURFACE_FEEDBACK_USER_SITE_ARGS = [
-  '--feedback-root', 'D:/code/mcp-surfaces',
-  '--canonical-feedback-root', 'D:/code/mcp-surfaces',
-  '--site-id', 'andrey-user',
-  '--owned-surface-id', 'surface-feedback',
-  '--owned-surface-id', 'site-registry',
-  '--owned-surface-id', 'mcp-loader',
-  '--owned-surface-id', 'mcp-registrar',
-  '--owned-surface-id', 'launcher',
-  '--owned-surface-id', 'operator-routing',
-];
 
 function nativeEntrypoint(value: string): string {
   return value.replace('{mcp_surfaces_root}', MCP_SURFACES_ROOT);
@@ -211,9 +216,7 @@ function nativeSurfaceToRegistrarRecord(native: DefinedSurface): RegistrarSurfac
     package: descriptor.package.replace('@narada2/', ''),
     entrypoint: first.entrypoint,
     kind: 'mcp_surface',
-    args: descriptor.surface_id === 'surface-feedback'
-      ? [...SURFACE_FEEDBACK_USER_SITE_ARGS]
-      : (first.args ?? []).map(nativeEntrypoint),
+    args: (first.args ?? []).map(nativeEntrypoint),
     tools: descriptor.tools.map((tool) => tool.name),
     output_reader_closure: SURFACE_OUTPUT_READER_CLOSURES[descriptor.surface_id],
     projections,
@@ -240,15 +243,15 @@ function nativeSurfaceCatalog(): RegistrarSurfaceRecord[] {
 export const SURFACES: RegistrarSurfaceRecord[] = nativeSurfaceCatalog();
 
 const KNOWN_SITES: SiteDef[] = [
-  { site_id: 'andrey-user', root: 'C:/Users/Andrey/Narada', config_path: 'C:/Users/Andrey/Narada/config.json', surfaces: [] },
-  { site_id: 'narada-proper', root: 'D:/code/narada', config_path: 'D:/code/narada/config.json', surfaces: [] },
-  { site_id: 'narada-sonar', root: 'D:/code/narada.sonar', config_path: 'D:/code/narada.sonar/.narada/config.json', surfaces: [] },
-  { site_id: 'narada-revolution', root: 'D:/code/narada.revolution', config_path: 'D:/code/narada.revolution/config.json', surfaces: [] },
-  { site_id: 'narada-staccato', root: 'D:/code/narada.staccato', config_path: 'D:/code/narada.staccato/config.json', surfaces: [] },
-  { site_id: 'narada-cpy', root: 'D:/code/narada.cpy', config_path: 'D:/code/narada.cpy/config.json', surfaces: [] },
-  { site_id: 'narada-utz', root: 'D:/code/narada.utz', config_path: 'D:/code/narada.utz/config.json', surfaces: [] },
-  { site_id: 'narada-timour', root: 'D:/code/narada.timour-marketing-agent', config_path: 'D:/code/narada.timour-marketing-agent/config.json', surfaces: [] },
-  { site_id: 'smart-scheduling', root: 'D:/code/smart-scheduling/.narada', config_path: 'D:/code/smart-scheduling/.narada/config.json', surfaces: [] },
+  { site_id: 'andrey-user', root: defaultUserNaradaRoot(), config_path: siteConfigPathForRoot(defaultUserNaradaRoot()), surfaces: [] },
+  { site_id: 'narada-proper', root: join(MCP_WORKSPACE_PARENT, 'narada'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada')), surfaces: [] },
+  { site_id: 'narada-sonar', root: join(MCP_WORKSPACE_PARENT, 'narada.sonar'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.sonar')), surfaces: [] },
+  { site_id: 'narada-revolution', root: join(MCP_WORKSPACE_PARENT, 'narada.revolution'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.revolution')), surfaces: [] },
+  { site_id: 'narada-staccato', root: join(MCP_WORKSPACE_PARENT, 'narada.staccato'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.staccato')), surfaces: [] },
+  { site_id: 'narada-cpy', root: join(MCP_WORKSPACE_PARENT, 'narada.cpy'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.cpy')), surfaces: [] },
+  { site_id: 'narada-utz', root: join(MCP_WORKSPACE_PARENT, 'narada.utz'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.utz')), surfaces: [] },
+  { site_id: 'narada-timour', root: join(MCP_WORKSPACE_PARENT, 'narada.timour-marketing-agent'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'narada.timour-marketing-agent')), surfaces: [] },
+  { site_id: 'smart-scheduling', root: join(MCP_WORKSPACE_PARENT, 'smart-scheduling'), config_path: siteConfigPathForRoot(join(MCP_WORKSPACE_PARENT, 'smart-scheduling')), surfaces: [] },
 ];
 
 type SiteRegistryCatalog = {
@@ -264,16 +267,16 @@ type SiteRegistryRow = {
 };
 
 function comparableSiteRoot(root: string): string {
-  return root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return canonicalWorkspaceRoot(root).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
 }
 
 function projectionLaunchArgs(projection: McpSurfaceProjection): string[] {
   if (projection.id !== 'user-site-operator') return [];
   return [
     '--projection', projection.id,
-    '--user-site-root', USER_NARADA_ROOT,
+    '--user-site-root', defaultUserNaradaRoot(),
     '--source-kind', 'operator',
-    '--operator-id', USER_OPERATOR_ID,
+    '--operator-id', defaultOperatorId(),
   ];
 }
 
@@ -309,8 +312,24 @@ function siteConfigPathForRoot(root: string): string {
 }
 
 function defaultUserNaradaRoot(): string {
-  return process.env.NARADA_USER_SITE_ROOT
-    ?? (process.env.USERPROFILE ? join(process.env.USERPROFILE, 'Narada') : USER_NARADA_ROOT);
+  const configured = process.env.NARADA_USER_SITE_ROOT?.trim();
+  if (configured) return portablePathLiteral(configured);
+  if (process.env.USERPROFILE) return portablePathLiteral(join(process.env.USERPROFILE, 'Narada'));
+  if (process.env.HOME) return portablePathLiteral(join(process.env.HOME, 'Narada'));
+  return portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.narada', 'user-site'));
+}
+
+function defaultOperatorId(): string {
+  const configured = process.env.NARADA_OPERATOR_ID?.trim();
+  if (configured) return configured;
+  const userRoot = defaultUserNaradaRoot();
+  const parent = basename(dirname(userRoot));
+  return parent && parent !== '.' ? parent.toLowerCase() : 'operator';
+}
+
+function canonicalWorkspaceRoot(root: string): string {
+  const resolved = resolve(root);
+  return basename(resolved).toLowerCase() === '.narada' ? dirname(resolved) : resolved;
 }
 
 /**
@@ -332,8 +351,9 @@ function readSiteRegistryCatalog(): SiteRegistryCatalog {
     const rows = db.prepare('SELECT site_id, site_root FROM site_registry ORDER BY created_at ASC, site_id ASC').all() as unknown as SiteRegistryRow[];
     const items = rows.flatMap((row) => {
       const siteId = typeof row.site_id === 'string' ? row.site_id.trim() : '';
-      const root = typeof row.site_root === 'string' ? row.site_root.trim() : '';
-      if (!siteId || !root) return [];
+      const rawRoot = typeof row.site_root === 'string' ? row.site_root.trim() : '';
+      if (!siteId || !rawRoot) return [];
+      const root = canonicalWorkspaceRoot(rawRoot);
       const known = KNOWN_SITES.find((site) => comparableSiteRoot(site.root) === comparableSiteRoot(root));
       return [{
         site_id: siteId,
@@ -357,9 +377,24 @@ function readSiteRegistryCatalog(): SiteRegistryCatalog {
   }
 }
 
+function defaultCarrierConfigPath(kind: CarrierDef['kind']): string {
+  const home = process.env.USERPROFILE ?? process.env.HOME ?? MCP_WORKSPACE_ROOT;
+  if (kind === 'opencode') return resolve(process.env.NARADA_OPENCODE_CONFIG_PATH?.trim() ?? join(home, '.config', 'opencode', 'opencode.jsonc'));
+  if (kind === 'kimi') return resolve(process.env.NARADA_KIMI_CONFIG_PATH?.trim() ?? join(home, '.kimi-code', 'mcp.json'));
+  return resolve(process.env.NARADA_CODEX_CONFIG_PATH?.trim() ?? join(home, '.codex', 'config.toml'));
+}
+
+function defaultCarrierExtraAllowedRoots(): string[] {
+  const configured = process.env.NARADA_MCP_EXTRA_ALLOWED_ROOTS?.trim();
+  if (configured) {
+    return uniqueStrings(configured.split(/[;\r\n]+/).map((value) => value.trim()).filter(Boolean));
+  }
+  return [portablePathLiteral(MCP_WORKSPACE_PARENT)];
+}
+
 const CARRIERS: CarrierDef[] = [
   {
-    carrier_id: 'opencode-andrey', kind: 'opencode', config_path: 'C:/Users/Andrey/.config/opencode/opencode.jsonc', surfaces: [],
+    carrier_id: 'opencode-andrey', kind: 'opencode', config_path: defaultCarrierConfigPath('opencode'), surfaces: [],
     site_bindings: [{
       site_id: 'andrey-user',
       surfaces: [
@@ -389,13 +424,12 @@ const CARRIERS: CarrierDef[] = [
         'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
-      extra_allowed_roots: ['D:/code'],
+      extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
-    extra_allowed_roots: ['D:/code'],
-    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
+    extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
   },
   {
-    carrier_id: 'kimi-andrey', kind: 'kimi', config_path: 'C:/Users/Andrey/.kimi-code/mcp.json', surfaces: [],
+    carrier_id: 'kimi-andrey', kind: 'kimi', config_path: defaultCarrierConfigPath('kimi'), surfaces: [],
     site_bindings: [{
       site_id: 'andrey-user',
       surfaces: [
@@ -425,13 +459,12 @@ const CARRIERS: CarrierDef[] = [
         'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
-      extra_allowed_roots: ['D:/code'],
+      extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
-    extra_allowed_roots: ['D:/code'],
-    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
+    extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
   },
   {
-    carrier_id: 'codex-andrey', kind: 'codex', config_path: 'C:/Users/Andrey/.codex/config.toml', surfaces: [],
+    carrier_id: 'codex-andrey', kind: 'codex', config_path: defaultCarrierConfigPath('codex'), surfaces: [],
     site_bindings: [{
       site_id: 'andrey-user',
       surfaces: [
@@ -461,10 +494,9 @@ const CARRIERS: CarrierDef[] = [
         'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
-      extra_allowed_roots: ['D:/code'],
+      extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
-    extra_allowed_roots: ['D:/code'],
-    surface_overrides: { 'surface-feedback': { args: SURFACE_FEEDBACK_USER_SITE_ARGS } },
+    extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
   },
 ];
 
@@ -489,7 +521,7 @@ function siteAggregateMcpFileName(siteId: string): string {
 }
 
 function siteMcpFabricMode(site: SiteDef): SiteMcpFabricMode {
-  const configDir = join(site.root, '.ai', 'mcp');
+  const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
   if (!existsSync(configDir)) return 'empty';
   const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
   if (files.length === 0) return 'empty';
@@ -968,13 +1000,15 @@ type SitePathInterpolation = {
 };
 
 function sitePathInterpolation(siteRoot: string, workspaceRoot = siteRoot): SitePathInterpolation {
-  const normalizedRoot = siteRoot.replace(/\\/g, '/');
-  const siteControlRoot = normalizedRoot.endsWith('/.narada') ? siteRoot : join(siteRoot, '.narada');
+  const canonicalRoot = canonicalWorkspaceRoot(siteRoot);
+  const siteControlRoot = basename(resolve(siteRoot)).toLowerCase() === '.narada'
+    ? resolve(siteRoot)
+    : join(canonicalRoot, '.narada');
   return {
-    siteRoot,
+    siteRoot: canonicalRoot,
     siteControlRoot,
     siteRuntimeRoot: join(siteControlRoot, 'runtime'),
-    workspaceRoot,
+    workspaceRoot: canonicalWorkspaceRoot(workspaceRoot),
   };
 }
 
@@ -1202,7 +1236,7 @@ function restartOwnerForSurface(surfaceId: string, injectionScope: McpInjectionS
 
 function locusForScope(scope: McpInjectionScope, siteRoot: string): McpAuthorityLocus {
   if (scope === 'host') return { kind: 'host' };
-  if (scope === 'user_site') return { kind: 'user_site', site_root: USER_NARADA_ROOT };
+  if (scope === 'user_site') return { kind: 'user_site', site_root: defaultUserNaradaRoot() };
   return { kind: 'local_site', site_root: siteRoot };
 }
 
@@ -1286,8 +1320,8 @@ function dedupeRoots(roots: string[]): string[] {
 function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
   for (const binding of carrier.site_bindings) {
     const site = lookupSite(binding.site_id);
-    const siteRoot = site.root.replace(/\\/g, '/');
-    const siteControlRoot = sitePathInterpolation(site.root).siteControlRoot;
+    const siteRoot = canonicalWorkspaceRoot(site.root).replace(/\\/g, '/');
+    const siteControlRoot = sitePathInterpolation(siteRoot).siteControlRoot;
     const extraRoots = dedupeRoots([
       ...(carrier.extra_allowed_roots ?? []),
       ...(binding.extra_allowed_roots ?? []),
@@ -1323,14 +1357,15 @@ function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId
   const surface = lookupSurface(surfaceId);
   const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
   const projection = selected.projection;
+  const siteRoot = canonicalWorkspaceRoot(site.root);
   const resolvedArgs = [
-    ...resolveSurfaceArgs(surface, site.site_id, site.root, extraRoots, projection),
+    ...resolveSurfaceArgs(surface, site.site_id, siteRoot, extraRoots, projection),
     ...projectionLaunchArgs(projection),
   ];
-  const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, site.root, projection);
+  const resolvedEntrypoint = resolveEntrypoint(surface, site.site_id, siteRoot, projection);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const serverKey = `${binding.prefix}-${surfaceId}`;
-  const naradaScope = naradaScopeMetadata(surfaceId, site.root, site.site_id, projection.id);
+  const naradaScope = naradaScopeMetadata(surfaceId, siteRoot, site.site_id, projection.id);
   return {
     key: serverKey,
     server: {
@@ -1356,19 +1391,20 @@ function localSurfaceKey(binding: SiteBinding, local: SiteLocalSurface): string 
 
 function materializeLocalSurface(binding: SiteBinding, site: SiteDef, local: SiteLocalSurface, extraRoots: string[]): { key: string; server: MaterializedServer } {
   const serverKey = localSurfaceKey(binding, local);
-  const entrypoint = resolveLocalEntrypoint(local, site.root);
-  const args = ['--site-root', site.root];
+  const siteRoot = canonicalWorkspaceRoot(site.root);
+  const entrypoint = resolveLocalEntrypoint(local, siteRoot);
+  const args = ['--site-root', siteRoot];
   const siteRootIncluded = extraRoots.length > 0;
   if (local.surface_id === 'local-filesystem-mcp.local' && siteRootIncluded) {
-    const allRoots = dedupeRoots([site.root, ...extraRoots]);
+    const allRoots = dedupeRoots([siteRoot, ...extraRoots]);
     for (const r of allRoots) {
       if (!args.includes(r)) {
         args.push('--allowed-root', r);
       }
     }
-    args.push('--output-root', site.root);
+    args.push('--output-root', siteRoot);
   }
-  const naradaScope = naradaScopeMetadata(local.surface_id, site.root, site.site_id);
+  const naradaScope = naradaScopeMetadata(local.surface_id, siteRoot, site.site_id);
   return {
     key: serverKey,
     server: {
@@ -1416,7 +1452,8 @@ function collectCarrierServers(carrier: CarrierDef): Record<string, Materialized
   const servers: Record<string, MaterializedServer> = {};
   for (const binding of carrier.site_bindings) {
     const site = lookupSite(binding.site_id);
-    const extraRoots = dedupeRoots([site.root, ...(carrier.extra_allowed_roots ?? []), ...(binding.extra_allowed_roots ?? [])]);
+    const siteRoot = canonicalWorkspaceRoot(site.root);
+    const extraRoots = dedupeRoots([siteRoot, ...(carrier.extra_allowed_roots ?? []), ...(binding.extra_allowed_roots ?? [])]);
     const sharedSurfaceIds = sharedSurfaceIdsForBinding(binding);
     for (const surfaceId of sharedSurfaceIds) {
       const { key, server } = materializeSharedSurface(binding, site, surfaceId, extraRoots);
@@ -2615,7 +2652,7 @@ function registrarSiteList(_args: JsonRecord): JsonRecord {
 function registrarSiteSurfaces(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const site = lookupSite(siteId);
-  const configDir = join(site.root, '.ai', 'mcp');
+  const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
   if (!existsSync(configDir)) return { site_id: siteId, surfaces: [], count: 0 };
   const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
   const allFound: string[] = [];
@@ -2654,15 +2691,16 @@ export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceReco
     : { ...selected.projection, args: undefined };
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
   const fileName = `${siteSurfacePrefix(siteId)}-${surfaceId}-mcp.json`;
-  const workspaceRoot = siteWorkspaceRoot(site);
-  const paths = sitePathInterpolation(site.root, workspaceRoot);
+  const siteRoot = canonicalWorkspaceRoot(site.root);
+  const workspaceRoot = canonicalWorkspaceRoot(siteWorkspaceRoot(site));
+  const paths = sitePathInterpolation(siteRoot, workspaceRoot);
   const resolvedArgs = [
     ...(projection.args ?? surface.args).map((arg) => interpolateArg(arg, siteId, paths)),
     ...projectionLaunchArgs(projection),
   ];
-  const resolvedEntrypoint = resolveEntrypoint(surface, siteId, site.root, projection);
-  const scopeMetadata = surfaceScopeMetadata(surfaceId, site.root, projection.id);
-  const naradaScope = naradaScopeMetadata(surfaceId, site.root, siteId, projection.id);
+  const resolvedEntrypoint = resolveEntrypoint(surface, siteId, siteRoot, projection);
+  const scopeMetadata = surfaceScopeMetadata(surfaceId, siteRoot, projection.id);
+  const naradaScope = naradaScopeMetadata(surfaceId, siteRoot, siteId, projection.id);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
   const launch = carrierLaunchCommand({
     kind: 'shared',
@@ -2717,7 +2755,7 @@ function registrarSiteBind(args: JsonRecord): JsonRecord {
   const runtimeKind = optionalRuntimeKind(args.runtime_kind);
   const site = lookupSite(siteId);
   const surface = lookupSurface(surfaceId);
-  const configDir = join(site.root, '.ai', 'mcp');
+  const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
   const sidecarRefusal = siteBindSidecarRefusal(site, surfaceId, args);
   if (sidecarRefusal) return sidecarRefusal;
   mkdirSync(configDir, { recursive: true });
@@ -2731,7 +2769,7 @@ function registrarSiteUnbind(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const site = lookupSite(siteId);
-  const configDir = join(site.root, '.ai', 'mcp');
+  const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
   if (!existsSync(configDir)) return { status: 'not_found', site_id: siteId, surface_id: surfaceId };
   const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
