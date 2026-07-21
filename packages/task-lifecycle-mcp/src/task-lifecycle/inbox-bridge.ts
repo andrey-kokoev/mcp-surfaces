@@ -52,6 +52,20 @@ function firstPayloadString(payload, fields) {
   return null;
 }
 
+function firstEnvelopeOrPayloadString(envelope, field) {
+  const envelopeValue = normalizedNonEmptyString(envelope?.[field]);
+  if (envelopeValue) return { field: `envelope.${field}`, value: envelopeValue };
+  const payloadValue = normalizedNonEmptyString(envelope?.payload?.[field]);
+  return payloadValue ? { field: `payload.${field}`, value: payloadValue } : null;
+}
+
+function isCanonicalScheduledSopReplacement(envelope) {
+  return envelope?.kind === 'command_request'
+    && envelope?.source?.kind === 'site_loop_schedule'
+    && normalizedNonEmptyString(envelope?.supersedes_envelope_id) !== null
+    && normalizedNonEmptyString(envelope?.payload?.sop_id) !== null;
+}
+
 function resolveAgentRoleFromStore(store, agentId) {
   if (!store || !agentId) return null;
   try {
@@ -87,7 +101,8 @@ function ensureTaskRolePreferencesTable(store) {
 export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskLifecyclePayload = {}, store = null) {
   const payload = envelope?.payload ?? {};
   const ownership = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE);
-  const explicitRole = firstPayloadString(payload, ROLE_FIELD_PRECEDENCE);
+  const explicitRole = firstEnvelopeOrPayloadString(envelope, 'target_role')
+    ?? firstPayloadString(payload, ROLE_FIELD_PRECEDENCE);
   const preferredAgentId = ownership?.value ?? null;
   const agentRole = resolveAgentRoleFromStore(store, preferredAgentId);
   let targetRole = explicitRole?.value ?? agentRole ?? severityResult.targetRole ?? null;
@@ -137,7 +152,7 @@ export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskL
  */
 export function checkDuplicateTask(store, envelope) {
   const envelopeId = envelope.envelope_id;
-  const title = String(envelope.payload?.title ?? envelope.title ?? '').trim();
+  const title = String(envelope.title ?? envelope.payload?.title ?? '').trim();
 
   // 1. Fast path: check durable envelope_task_mappings table
   if (envelopeId && store.getTaskByEnvelopeId) {
@@ -174,6 +189,19 @@ export function checkDuplicateTask(store, envelope) {
     }
   }
 
+  // A canonical scheduled-SOP replacement is an explicit hard-cutover
+  // boundary. It may intentionally retain the legacy title, so fuzzy title
+  // matching must not route it back into the superseded task. Exact mapping
+  // and envelope-ID evidence above still remain authoritative for retries.
+  if (isCanonicalScheduledSopReplacement(envelope)) {
+    return {
+      isDuplicate: false,
+      duplicateTaskId: null,
+      duplicateTaskNumber: null,
+      matchType: null,
+    };
+  }
+
   return findDuplicateTaskRows(rows, envelope);
 }
 
@@ -182,8 +210,8 @@ export function checkDuplicateTask(store, envelope) {
  */
 export function buildTaskSpecFromEnvelope(envelope, severityResult, options: TaskLifecyclePayload = {}) {
   const payload = envelope.payload ?? {};
-  const title = `[From Inbox] ${payload.title ?? envelope.title ?? 'Untitled'}`;
-  const goal = payload.summary ?? payload.description ?? '';
+  const title = `[From Inbox] ${envelope.title ?? payload.title ?? 'Untitled'}`;
+  const goal = envelope.summary ?? payload.summary ?? payload.description ?? '';
   const routing = asPayload(options.routing ?? deriveRoutingFromEnvelopePayload(envelope, severityResult, options.store ?? null));
 
   const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
@@ -193,6 +221,9 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     `**Envelope ID:** ${envelope.envelope_id}`,
     `**Received:** ${envelope.received_at}`,
     `**Kind:** ${envelope.kind}`,
+    `**Title:** ${envelope.title ?? payload.title ?? 'Untitled'}`,
+    `**Summary:** ${envelope.summary ?? payload.summary ?? payload.description ?? ''}`,
+    `**Target Role:** ${envelope.target_role ?? payload.target_role ?? 'unknown'}`,
     `**Authority:** ${envelope.authority?.level ?? 'unknown'} (${envelope.authority?.principal ?? 'unknown'})`,
     `**Source:** ${envelope.source?.ref ?? 'unknown'}`,
   ];
@@ -221,10 +252,14 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     for (let i = 0; i < proposals.length; i++) {
       workItems.push(`${i + 1}. ${proposals[i]}`);
     }
+  } else if (typeof payload.sop_id === 'string' && payload.sop_id.trim()) {
+    const triggeredBy = routing.preferredAgentId ?? envelope.target_role ?? 'operator';
+    workItems.push(
+      `Start SOP ${payload.sop_id.trim()} through SOP MCP with trigger_source_kind="inbox_event", trigger_source_ref="${envelope.envelope_id}", and triggered_by="${triggeredBy}".`,
+    );
   } else {
     workItems.push('1. Review envelope content and determine disposition');
   }
-  const requiredWork = workItems.join('\n');
 
   const acceptanceCriteria = [];
   if (evidence.length > 0) {
@@ -235,15 +270,18 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
       acceptanceCriteria.push(`Address proposal: ${p}`);
     }
   }
+  if (typeof payload.sop_id === 'string' && payload.sop_id.trim()) {
+    acceptanceCriteria.push(`Record the SOP run evidence with trigger_source_ref="${envelope.envelope_id}"`);
+  }
   acceptanceCriteria.push('Submit disposition to inbox (acknowledge / dismiss / escalate)');
 
-  const nonGoals = 'Do not leave envelope in unprocessed state';
+  const nonGoals = ['Do not leave envelope in unprocessed state'];
 
   return {
     title,
     goal,
     context,
-    requiredWork,
+    requiredWork: workItems,
     nonGoals,
     acceptanceCriteria,
     preferredRole: routing.targetRole,
