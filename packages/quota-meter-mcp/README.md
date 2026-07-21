@@ -25,6 +25,9 @@ By default the surface targets `D:\code\quota-meter` on Windows. Set
 override the Node executable, and `QUOTA_METER_STATE_ROOT` can override the
 overlay PID/position directory. Native `codex login` and `kimi login` remain
 the authentication mechanisms; the surface never reads or returns tokens.
+On Windows, the surface also restores the standard `windir` environment value
+from `SystemRoot` when it is missing so the WPF overlay font subsystem can
+initialize correctly.
 
 ## Quick start
 

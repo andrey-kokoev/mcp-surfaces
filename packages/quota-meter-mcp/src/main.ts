@@ -54,7 +54,11 @@ if (isMainModule()) {
 export function createServerState(options: JsonRecord = {}, env: NodeJS.ProcessEnv = process.env): QuotaMeterState {
   const quotaMeterRoot = resolve(String(options.quotaMeterRoot ?? options.quota_meter_root ?? env.QUOTA_METER_ROOT ?? 'D:\\code\\quota-meter'));
   const stateRoot = resolve(String(options.stateRoot ?? options.state_root ?? env.QUOTA_METER_STATE_ROOT ?? join(env.LOCALAPPDATA ?? env.TEMP ?? env.TMP ?? process.cwd(), 'quota-meter')));
-  const stateEnv = { ...env, QUOTA_METER_STATE_ROOT: stateRoot };
+  const stateEnv: NodeJS.ProcessEnv = { ...env, QUOTA_METER_STATE_ROOT: stateRoot };
+  if (process.platform === 'win32' && !stateEnv.windir) {
+    const windowsRoot = stateEnv.SystemRoot ?? stateEnv.WINDIR ?? process.env.SystemRoot;
+    if (windowsRoot) stateEnv.windir = windowsRoot;
+  }
   return {
     quotaMeterRoot,
     nodePath: String(options.nodePath ?? options.node_path ?? env.QUOTA_METER_NODE ?? process.execPath),

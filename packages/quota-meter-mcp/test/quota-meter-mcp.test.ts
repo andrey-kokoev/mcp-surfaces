@@ -7,12 +7,17 @@ import { surfaceDefinition } from '../src/surface-definition.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'quota-meter-mcp-'));
 const state = createServerState({ quotaMeterRoot: 'D:\\code\\quota-meter', stateRoot });
+const stateWithWindowsRoot = createServerState(
+  { quotaMeterRoot: 'D:\\code\\quota-meter', stateRoot },
+  { SystemRoot: 'C:\\Windows', LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local' },
+);
 
 try {
   assert.equal(normalizeProviderSelection(undefined), 'all');
   assert.equal(normalizeProviderSelection('codex,kimi'), 'codex,kimi');
   assert.equal(normalizeRefreshSeconds(undefined), 60);
   assert.equal(normalizeRefreshSeconds(30), 30);
+  if (process.platform === 'win32') assert.equal(stateWithWindowsRoot.env.windir, 'C:\\Windows');
   assert.throws(() => normalizeProviderSelection('codex, kimi'), /quota_meter_invalid_provider_selection/);
   assert.throws(() => normalizeRefreshSeconds(4), /quota_meter_invalid_refresh_seconds/);
 
