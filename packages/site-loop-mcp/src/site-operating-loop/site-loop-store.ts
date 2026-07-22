@@ -57,6 +57,13 @@ interface LoopRunFinishOptions {
   error?: JsonValue;
 }
 
+interface StaleLoopRunReconciliationOptions {
+  loopId?: string;
+  activeRunId?: string | null;
+  staleAfterMs?: number;
+  now?: Date;
+}
+
 interface LoopControlOptions {
   loopId?: string;
   paused?: boolean;
@@ -199,6 +206,9 @@ export function ensureSiteLoopTables(db) {
       escalation_json TEXT NOT NULL,
       UNIQUE(loop_id, directive_id, classification)
     );
+
+    CREATE INDEX IF NOT EXISTS idx_site_loop_escalations_loop_status
+      ON site_loop_escalations(loop_id, status, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS directive_outcomes (
       outcome_id TEXT PRIMARY KEY,
@@ -353,18 +363,22 @@ export function listDirectiveOutcomes(store, { loopId = DEFAULT_SITE_OPERATING_L
 
 export function getDirectiveOutcomeSummary(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID }: DirectiveOutcomeLookupOptions = {}) {
   const rows = store.db.prepare(`
-    SELECT directive_id, outcome, recorded_at
+    SELECT outcome, COUNT(*) AS count
     FROM directive_outcome_latest
     WHERE loop_id = ?
-    ORDER BY observed_at DESC, recorded_at DESC
+    GROUP BY outcome
   `).all(loopId);
   const counts = {};
-  for (const row of rows) counts[String(row.outcome)] = (counts[String(row.outcome)] ?? 0) + 1;
+  let latestCount = 0;
+  for (const row of rows) {
+    counts[String(row.outcome)] = Number(row.count ?? 0);
+    latestCount += Number(row.count ?? 0);
+  }
   return {
     schema: 'narada.site_operating_loop.directive_outcome_summary.v1',
     loop_id: loopId,
     counts,
-    latest_count: rows.length,
+    latest_count: latestCount,
   };
 }
 
@@ -524,7 +538,7 @@ export function getLoopHealth(store, loopId) {
     schema: 'narada.site_operating_loop.health.v1',
     loop_id: String(row.loop_id),
     status: effectiveStatus,
-    stored_status: storedStatus,
+    persisted_status: storedStatus,
     consecutive_failures: Number(row.consecutive_failures ?? 0),
     last_successful_run_id: row.last_successful_run_id ? String(row.last_successful_run_id) : null,
     last_success_at: row.last_success_at ? String(row.last_success_at) : null,
@@ -560,6 +574,63 @@ export function finishLoopRun(store, runId, { status, finished_at, summary = nul
     SET status = ?, finished_at = ?, summary_json = ?, error_json = ?
     WHERE run_id = ?
   `).run(status, finished_at, stringifyJson(summary), stringifyJson(error), runId);
+}
+
+export function reconcileStaleLoopRuns(store, {
+  loopId,
+  activeRunId = null,
+  staleAfterMs = 5 * 60 * 1000,
+  now = new Date(),
+}: StaleLoopRunReconciliationOptions = {}) {
+  const finalStaleAfterMs = Math.max(1, Number(staleAfterMs));
+  const nowIso = now.toISOString();
+  const staleBefore = new Date(now.getTime() - finalStaleAfterMs).toISOString();
+  const rows = store.db.prepare(`
+    SELECT run_id, loop_id, started_at
+    FROM site_loop_runs
+    WHERE loop_id = ?
+      AND status = 'running'
+      AND started_at <= ?
+      AND (? IS NULL OR run_id <> ?)
+    ORDER BY started_at ASC
+  `).all(loopId, staleBefore, activeRunId, activeRunId);
+  const recoveredRuns = [];
+  const update = store.db.prepare(`
+    UPDATE site_loop_runs
+    SET status = 'abandoned',
+        finished_at = ?,
+        summary_json = ?,
+        error_json = ?
+    WHERE run_id = ? AND status = 'running'
+  `);
+  for (const row of rows) {
+    const recovery = {
+      schema: 'narada.site_operating_loop.stale_run_recovery.v1',
+      kind: 'stale_loop_run_recovered',
+      loop_id: String(row.loop_id),
+      run_id: String(row.run_id),
+      started_at: String(row.started_at),
+      recovered_at: nowIso,
+      stale_before: staleBefore,
+      active_run_id: activeRunId,
+    };
+    const result = update.run(
+      nowIso,
+      stringifyJson({ stale_run_recovery: recovery }),
+      stringifyJson(recovery),
+      row.run_id,
+    );
+    if (Number(result.changes ?? 0) === 1) recoveredRuns.push(recovery);
+  }
+  return {
+    schema: 'narada.site_operating_loop.stale_run_reconciliation.v1',
+    status: 'ok',
+    loop_id: loopId,
+    active_run_id: activeRunId,
+    stale_before: staleBefore,
+    recovered_count: recoveredRuns.length,
+    recovered_runs: recoveredRuns,
+  };
 }
 
 export function recordLoopStep(store, step) {
@@ -780,9 +851,10 @@ export function listLoopAttention(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_
   const max = Math.max(1, Math.min(500, Number(limit ?? 50)));
   const clauses = ['loop_id = ?'];
   const params: unknown[] = [loopId];
-  if (status) {
+  const canonicalStatus = status === 'open' ? 'opened' : status;
+  if (canonicalStatus) {
     clauses.push('status = ?');
-    params.push(status);
+    params.push(canonicalStatus);
   }
   params.push(max);
   const rows = store.db.prepare(`
@@ -831,15 +903,19 @@ export function getLoopAttentionSummary(store, { loopId = DEFAULT_SITE_OPERATING
   `).all(loopId);
   const counts = Object.fromEntries(rows.map((row) => [String(row.status), Number(row.count ?? 0)]));
   const severityRows = store.db.prepare(`
-    SELECT escalation_json
+    SELECT
+      CASE
+        WHEN json_valid(escalation_json) THEN COALESCE(json_extract(escalation_json, '$.severity'), 'warning')
+        ELSE 'warning'
+      END AS severity,
+      COUNT(*) AS count
     FROM site_loop_escalations
     WHERE loop_id = ? AND status = 'opened'
+    GROUP BY severity
   `).all(loopId);
   const openBySeverity = {};
   for (const row of severityRows) {
-    const escalation = parseJson(row.escalation_json);
-    const severity = String(escalation?.severity ?? 'warning');
-    openBySeverity[severity] = (openBySeverity[severity] ?? 0) + 1;
+    openBySeverity[String(row.severity ?? 'warning')] = Number(row.count ?? 0);
   }
   return {
     schema: 'narada.site_operating_loop.attention_summary.v1',
@@ -851,29 +927,45 @@ export function getLoopAttentionSummary(store, { loopId = DEFAULT_SITE_OPERATING
   };
 }
 
-export function getLoopUnresolvedBacklogSummary(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID } = {}) {
-  const unresolvedStatuses = new Set(['received', 'carrier_accepted', 'delivery_stale', 'action_stale', 'blocked_no_carrier']);
+export function getLoopUnresolvedBacklogSummary(store, {
+  loopId = DEFAULT_SITE_OPERATING_LOOP_ID,
+  limit = 25,
+} = {}) {
+  const max = Math.max(1, Math.min(100, Number(limit ?? 25)));
+  const unresolvedStatuses = ['received', 'carrier_accepted', 'delivery_stale', 'action_stale', 'blocked_no_carrier'];
+  const countRows = store.db.prepare(`
+    SELECT outcome, COUNT(*) AS count
+    FROM directive_outcome_latest
+    WHERE loop_id = ? AND outcome IN (${unresolvedStatuses.map(() => '?').join(', ')})
+    GROUP BY outcome
+  `).all(loopId, ...unresolvedStatuses);
+  const counts = {};
+  let unresolvedCount = 0;
+  for (const row of countRows) {
+    counts[String(row.outcome)] = Number(row.count ?? 0);
+    unresolvedCount += Number(row.count ?? 0);
+  }
   const rows = store.db.prepare(`
     SELECT directive_id, outcome, observed_at, recorded_at
     FROM directive_outcome_latest
-    WHERE loop_id = ?
+    WHERE loop_id = ? AND outcome IN (${unresolvedStatuses.map(() => '?').join(', ')})
     ORDER BY observed_at DESC, recorded_at DESC
-  `).all(loopId);
+    LIMIT ?
+  `).all(loopId, ...unresolvedStatuses, max);
   const unresolved = rows
     .map((row) => ({
       directive_id: String(row.directive_id),
       status: String(row.outcome),
       observed_at: String(row.observed_at ?? row.recorded_at),
-    }))
-    .filter((item) => unresolvedStatuses.has(item.status));
-  const counts = {};
-  for (const item of unresolved) counts[item.status] = (counts[item.status] ?? 0) + 1;
+    }));
   return {
     schema: 'narada.site_operating_loop.unresolved_backlog_summary.v1',
     loop_id: loopId,
-    unresolved_count: unresolved.length,
+    unresolved_count: unresolvedCount,
     counts,
     directives: unresolved,
+    returned_count: unresolved.length,
+    truncated: unresolved.length < unresolvedCount,
   };
 }
 

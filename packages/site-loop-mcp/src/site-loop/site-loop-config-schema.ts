@@ -171,6 +171,7 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
       properties: {
         command: { $ref: '#/$defs/nonEmptyString' },
         args: { $ref: '#/$defs/stringArray' },
+        working_directory: { $ref: '#/$defs/nonEmptyString' },
         dry_run_arg: { $ref: '#/$defs/nonEmptyString' },
         limit_arg: { $ref: '#/$defs/nonEmptyString' },
         preferred_role_arg: { $ref: '#/$defs/nonEmptyString' },
@@ -184,6 +185,7 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
         execution: { const: 'direct_spawn' },
         command: { $ref: '#/$defs/nonEmptyString' },
         args: { $ref: '#/$defs/stringArray' },
+        working_directory: { $ref: '#/$defs/nonEmptyString' },
         dry_run_arg: { $ref: '#/$defs/nonEmptyString' },
         limit_arg: { $ref: '#/$defs/nonEmptyString' },
         preferred_role_arg: { $ref: '#/$defs/nonEmptyString' },

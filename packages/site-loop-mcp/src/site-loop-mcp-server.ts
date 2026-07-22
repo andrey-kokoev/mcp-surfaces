@@ -743,8 +743,8 @@ function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {
   const proofKind = optionalString(args.proof_kind) ?? optionalString(args.proofKind);
   const waitForCompletion = args.wait_for_completion === true || args.waitForCompletion === true;
   const timeoutMs = optionalNumber(args.timeout_ms) ?? optionalNumber(args.timeoutMs);
-  if (waitForCompletion && timeoutMs && timeoutMs > 10_000) {
-    throw new Error('proof_run_wait_exceeds_mcp_transport_budget: use bounded start mode, then poll site_loop_proof_status/readiness');
+  if (waitForCompletion && (timeoutMs == null || timeoutMs > 10_000)) {
+    throw new Error('proof_run_wait_exceeds_mcp_transport_budget: provide timeout_ms <= 10000 or use bounded start mode, then poll site_loop_proof_status/readiness');
   }
   const base = {
     live: true,
@@ -775,6 +775,7 @@ function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {
       mailboxProof: true,
       controlledMailboxProof: true,
       controlledMailboxSource,
+      startOnly: !waitForCompletion,
     };
   }
   throw new Error(`unknown_proof_kind: ${proofKind ?? ''}`);
@@ -851,9 +852,10 @@ async function runTest(selector, context: SiteOpsRequestContext = {}) {
 async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
   const config = requireActiveSiteLoopConfig();
   const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? config.scheduler.default_task_name;
-  const [loopStatus, loopHealth, scheduledTask] = await Promise.all([
+  const [loopStatus, loopHealth, operating, scheduledTask] = await Promise.all([
     loadSiteLoopModule().then((module) => module.siteLoopStatus(siteRoot)).catch((error) => statusError(error)),
     loadSiteLoopModule().then((module) => module.siteLoopHealth(siteRoot)).catch((error) => statusError(error)),
+    loadSiteLoopModule().then((module) => module.siteLoopOperatingLayerStatus(siteRoot, { limit: 25 })).catch((error) => statusError(error)),
     readScheduledTaskStatus(taskName),
   ]);
   const pidFiles = config.scheduler.pid_files.map((name) => readPidFileStatus(name));
@@ -862,6 +864,21 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
   const logicalLoopEnabled = loopStatus?.control?.enabled ?? loopStatus?.enabled;
   const logicalLoopPaused = loopStatus?.control?.paused ?? loopStatus?.paused;
   const healthStatus = loopHealth?.status ?? loopHealth?.overall_status ?? loopHealth?.health;
+  const operational = operating && typeof operating === 'object' ? operating : {};
+  const operationalBacklog = operational.backlog && typeof operational.backlog === 'object' ? operational.backlog : {};
+  const operationalResident = operational.resident && typeof operational.resident === 'object' ? operational.resident : {};
+  const operationalAlerts = Array.isArray(operational.alerts) ? operational.alerts : [];
+  const openAttention = Number(operationalBacklog.open_attention ?? loopHealth?.attention?.open_count ?? 0);
+  const stalePending = Number(operationalBacklog.stale_pending_directives ?? 0);
+  const unresolved = Number(operationalBacklog.unresolved_directives ?? loopHealth?.unresolved_backlog?.unresolved_count ?? 0);
+  const errorAttention = operationalAlerts.some((item) => item && (item.severity === 'critical' || item.severity === 'error'));
+  const computedHealthStatus = healthStatus === 'healthy' && (
+    operating?.status === 'attention_needed'
+      || openAttention > 0
+      || stalePending > 0
+      || unresolved > 0
+      || errorAttention
+  ) ? 'degraded' : healthStatus;
   const blockers = [
     ...(scheduledTask.status === 'missing' ? ['scheduled_task_missing'] : []),
     ...(scheduledTask.status === 'error' ? ['scheduled_task_query_failed'] : []),
@@ -870,6 +887,12 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
     ...(logicalLoopPaused === true ? ['logical_loop_paused'] : []),
     ...(loopStatus?.status === 'error' ? ['loop_status_unavailable'] : []),
     ...(loopHealth?.status === 'error' ? ['loop_health_unavailable'] : []),
+    ...(computedHealthStatus === 'degraded' ? ['health_degraded'] : []),
+    ...(operational.status === 'error' ? ['operating_status_unavailable'] : []),
+    ...(operationalResident.status && !['available', 'busy'].includes(String(operationalResident.status)) ? ['resident_carrier_unavailable'] : []),
+    ...(stalePending > 0 ? ['stale_pending_directives'] : []),
+    ...(openAttention > 0 ? ['open_attention'] : []),
+    ...(errorAttention ? ['error_attention'] : []),
   ];
   const posture = blockers.length === 0 && livePidFiles.length > 0 ? 'running' : blockers.length === 0 ? 'ready_but_no_live_pid' : 'attention_needed';
   return {
@@ -885,13 +908,15 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
       status: loopStatus?.status,
     },
     health: {
-      status: healthStatus,
+      status: computedHealthStatus,
       raw_status: loopHealth?.status,
+      computed_from_operating_layer: computedHealthStatus !== healthStatus,
     },
-    useful_work: summarizeUsefulWork(loopStatus, loopHealth),
+    useful_work: summarizeUsefulWork(loopStatus, { ...loopHealth, status: computedHealthStatus }),
     raw: {
       loop_status: loopStatus,
       loop_health: loopHealth,
+      operating_layer: operating,
     },
   };
 }

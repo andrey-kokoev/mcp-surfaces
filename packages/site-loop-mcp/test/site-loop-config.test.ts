@@ -5,10 +5,11 @@ import { join } from 'node:path';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
-import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, renderResidentAgentCliCommand, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
+import { checkTaskGovernancePackageBoundary, listSiteLoopAttention, processLaunchRequiredEnvironment, processLaunchSpawnEnvironmentDelta, renderResidentAgentCliCommand, renderResidentLaunchTemplate, runProjectionDriftCheck } from '../src/site-loop/site-loop-engine.js';
 import { DEFAULT_SITE_LOOP_PHASE_PLAN, SITE_LOOP_ADAPTER_PHASE_PLAN, listSiteLoopRuns, runSiteLoop, siteLoopStatus } from '../src/site-loop/site-loop.js';
 import { siteLoopDependencyBoundaries } from '../src/site-loop/site-loop-boundary.js';
-import { findLatestResidentControlTarget, getResidentStatus } from '../src/task-lifecycle/dispatch-directives.js';
+import { findLatestResidentControlTarget, getResidentStatus, selectResidentInputTransport } from '../src/task-lifecycle/dispatch-directives.js';
+import { classifyResidentCarrierLiveness, readCarrierHeartbeatRecord, readCarrierSessionReadiness } from '../src/task-lifecycle/carrier-heartbeat.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-'));
 const packageRoot = new URL('..', import.meta.url);
@@ -62,6 +63,22 @@ assert.deepEqual(processLaunchSpawnEnvironmentDelta({
 });
 assert.equal(processLaunchSpawnEnvironmentDelta(null).status, 'refused');
 assert.equal(processLaunchSpawnEnvironmentDelta({ KIMI_CODE_API_KEY: '<set>' }).status, 'refused');
+
+const launchTemplateConfig = {
+  ...DEFAULT_SITE_LOOP_CONFIG,
+  site_id: 'sonar',
+  resident: { ...DEFAULT_SITE_LOOP_CONFIG.resident, agent_id: 'resident' },
+};
+assert.equal(
+  renderResidentLaunchTemplate(
+    '--target-site-id {site_id} --workspace-root {workspace_root} --agent {agent_id}',
+    'D:/code/narada.sonar',
+    launchTemplateConfig,
+    launchTemplateConfig.resident_launch,
+    'agent-web-ui',
+  ),
+  '--target-site-id sonar --workspace-root D:/code/narada.sonar --agent resident',
+);
 
 const legacyProjectionConfig = {
   ...DEFAULT_SITE_LOOP_CONFIG,
@@ -134,6 +151,51 @@ writeFileSync(join(residentTargetResultsRoot, 'evt-resident-target.result.json')
     control_path: join(residentTargetRoot, '.narada', 'crew', 'nars-sessions', residentTargetSessionId, 'control.jsonl'),
   },
 }, null, 2), 'utf8');
+const residentTargetSessionRoot = join(residentTargetRoot, '.narada', 'crew', 'nars-sessions', residentTargetSessionId);
+mkdirSync(residentTargetSessionRoot, { recursive: true });
+const residentTargetHeartbeatPath = join(residentTargetSessionRoot, 'heartbeat.json');
+writeFileSync(residentTargetHeartbeatPath, JSON.stringify({
+  schema: 'narada.nars.heartbeat.v1',
+  session_id: residentTargetSessionId,
+  agent_id: 'resident.target',
+  status: 'alive',
+  heartbeat_at: new Date().toISOString(),
+}, null, 2), 'utf8');
+const residentTargetHeartbeat = readCarrierHeartbeatRecord(residentTargetHeartbeatPath, residentTargetSessionId, 30000);
+assert.equal(residentTargetHeartbeat.fresh, true);
+assert.equal(residentTargetHeartbeat.live, true);
+const residentTargetEventsPath = join(residentTargetSessionRoot, 'events.jsonl');
+writeFileSync(residentTargetEventsPath, [
+  JSON.stringify({ event: 'session_started', session_id: residentTargetSessionId }),
+  JSON.stringify({ event: 'session_lifecycle_transition', lifecycle_state: 'ready', event_sequence: 2, session_id: residentTargetSessionId, timestamp: new Date().toISOString() }),
+].join('\n'), 'utf8');
+const residentTargetReadiness = readCarrierSessionReadiness(residentTargetEventsPath, residentTargetSessionId);
+assert.equal(residentTargetReadiness.status, 'ready');
+assert.equal(residentTargetReadiness.ready, true);
+const residentTargetTerminalEventsPath = join(residentTargetSessionRoot, 'terminal-events.jsonl');
+writeFileSync(residentTargetTerminalEventsPath, [
+  JSON.stringify({ event: 'session_lifecycle_transition', lifecycle_state: 'ready', event_sequence: 2, session_id: residentTargetSessionId, timestamp: new Date().toISOString() }),
+  JSON.stringify({ event: 'session_lifecycle_transition', lifecycle_state: 'stopped', event_sequence: 3, session_id: residentTargetSessionId, timestamp: new Date().toISOString() }),
+].join('\n'), 'utf8');
+const residentTargetTerminalReadiness = readCarrierSessionReadiness(residentTargetTerminalEventsPath, residentTargetSessionId);
+assert.equal(residentTargetTerminalReadiness.status, 'not_ready');
+assert.equal(residentTargetTerminalReadiness.ready, false);
+assert.equal((residentTargetTerminalReadiness as Record<string, unknown>).latest_lifecycle_state, 'stopped');
+const staleHeartbeat = { status: 'stale', fresh: false, live: false };
+const startupReadyClassification = classifyResidentCarrierLiveness({
+  heartbeat: staleHeartbeat,
+  process_count: 1,
+  session_readiness: residentTargetReadiness,
+});
+assert.equal(startupReadyClassification.live, false);
+assert.equal(startupReadyClassification.reason, 'stale_carrier_heartbeat_process_present');
+const processOnlyClassification = classifyResidentCarrierLiveness({
+  heartbeat: staleHeartbeat,
+  process_count: 1,
+  session_readiness: { status: 'not_ready', ready: false },
+});
+assert.equal(processOnlyClassification.live, false);
+assert.equal(processOnlyClassification.reason, 'stale_carrier_heartbeat_process_present');
 const residentTarget = findLatestResidentControlTarget(residentTargetRoot, 'resident.target', { requireLiveCarrier: false });
 const residentTargetRecord = residentTarget as Record<string, unknown>;
 assert.equal(DEFAULT_SITE_LOOP_CONFIG.resident_runtime.process_probe_patterns.includes('narada-agent-runtime-server'), true);
@@ -142,6 +204,27 @@ assert.equal(residentTargetRecord.runtime, 'narada-agent-runtime-server');
 assert.equal(residentTargetRecord.actual_runtime, 'narada-agent-runtime-server');
 assert.equal(residentTargetRecord.carrierSessionId, residentTargetSessionId);
 assert.equal(residentTargetRecord.preference, 'interactive_agent_cli');
+const residentLiveTarget = findLatestResidentControlTarget(residentTargetRoot, 'resident.target', { requireLiveCarrier: true });
+assert.equal((residentLiveTarget as Record<string, unknown>).status, 'available');
+
+assert.deepEqual(selectResidentInputTransport({
+  controlPath: 'D:/site/.narada/crew/nars-sessions/carrier_test/control.jsonl',
+  eventEndpoint: 'ws://127.0.0.1:12345/events',
+}), {
+  kind: 'control_jsonl',
+  target: 'D:/site/.narada/crew/nars-sessions/carrier_test/control.jsonl',
+  transport: 'agent_cli_control_jsonl',
+});
+assert.deepEqual(selectResidentInputTransport({ eventEndpoint: 'ws://127.0.0.1:12345/events' }), {
+  kind: 'event_websocket',
+  target: 'ws://127.0.0.1:12345/events',
+  transport: 'agent_runtime_event_websocket',
+});
+assert.deepEqual(selectResidentInputTransport(), {
+  kind: 'unavailable',
+  target: null,
+  transport: null,
+});
 
 const residentCommandRoot = mkdtempSync(join(tmpdir(), 'site-loop-resident-command-'));
 writeSiteLoopConfig(residentCommandRoot, {
@@ -257,7 +340,15 @@ const minimalSiteLoopConfig = {
     ticket_projection: { kind: 'ticket_projection', ref: 'example' },
   },
   commands: {
-    source_sync: { execution: 'direct_spawn', command: 'example-sync', args: ['--json'] },
+    source_sync: {
+      execution: 'direct_spawn',
+      command: 'example-sync',
+      args: ['--json'],
+      working_directory: 'D:/code/narada',
+      dry_run_arg: '--dry-run',
+      limit_arg: '--limit',
+      preferred_role_arg: '--preferred-role',
+    },
     status: 'example status',
   },
   schemas: {
@@ -322,6 +413,10 @@ assert.equal(overrideLoad.config.resident.required_task_tools.length, DEFAULT_SI
 assert.deepEqual(overrideLoad.config.refs.ticket_projection, { kind: 'ticket_projection', ref: 'example' });
 assert.equal(overrideLoad.config.commands.source_sync.command, 'example-sync');
 assert.deepEqual(overrideLoad.config.commands.source_sync.args, ['--json']);
+assert.equal(overrideLoad.config.commands.source_sync.working_directory, 'D:/code/narada');
+assert.equal(overrideLoad.config.commands.source_sync.dry_run_arg, '--dry-run');
+assert.equal(overrideLoad.config.commands.source_sync.limit_arg, '--limit');
+assert.equal(overrideLoad.config.commands.source_sync.preferred_role_arg, '--preferred-role');
 assert.equal(overrideLoad.config.commands.status, 'example status');
 assert.equal(overrideLoad.config.scheduler.default_task_name, '\\Example-Site-Loop');
 assert.deepEqual(overrideLoad.config.scheduler.pid_files, ['example-loop.pid']);

@@ -146,7 +146,7 @@ try {
   assert.equal(status.loop_id, 'configured.e2e.loop');
   assert.equal(status.schema, 'narada.site_operating_loop.status.v1');
 
-  const unifiedStatus = contentText('site_loop_unified_status', await client.request(10, 'tools/call', { name: 'site_loop_unified_status', arguments: {} }));
+  const unifiedStatus = await toolJson(10, 'site_loop_unified_status', {});
   assert.equal(unifiedStatus.status, 'ok', JSON.stringify(unifiedStatus));
   assert.equal(typeof unifiedStatus.posture, 'string', JSON.stringify(unifiedStatus));
   assert.equal(['missing', 'unsupported_platform'].includes(String((unifiedStatus.scheduled_task as JsonRecord).status)), true, JSON.stringify(unifiedStatus));

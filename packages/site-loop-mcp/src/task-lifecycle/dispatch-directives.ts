@@ -11,6 +11,7 @@ import {
   leaseId,
 } from '@narada2/task-governance-core/directive-runtime-store';
 import { openTaskLifecycleStoreWithDiscipline } from './sqlite-discipline.js';
+import { classifyResidentCarrierLiveness, readCarrierHeartbeatRecord, readCarrierSessionReadiness } from './carrier-heartbeat.js';
 import { loadSiteLoopOperatingPolicy } from '../site-loop/operating-loop-policy.js';
 import { requireSiteLoopConfig, schemaName, type SiteLoopConfig } from '../site-loop/site-loop-config.js';
 
@@ -73,7 +74,8 @@ export async function dispatchPendingDirectives({
   const leaseRecovery = recoverExpiredLeases(store);
   const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
   const eventEndpoint = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
-  const deliveryTarget = eventEndpoint ?? controlPath;
+  const inputTransport = selectResidentInputTransport({ controlPath, eventEndpoint });
+  const deliveryTarget = inputTransport.target;
   const pending = dedupeDirectives([
     ...store.listPending({ target: { kind: 'agent', id: effectiveAgentId }, limit }),
     ...store.listPending({ target: { kind: 'role', id: effectiveRole }, limit }),
@@ -144,7 +146,7 @@ export async function dispatchPendingDirectives({
     const lease = {
       leaseId: leaseId(directive.directive_id, activeCarrierSessionId),
       leasedUntil: leaseExpiryIso(5),
-      transport: eventEndpoint ? 'agent_runtime_event_websocket' : 'agent_cli_control_jsonl',
+      transport: inputTransport.transport,
       carrierSessionId: activeCarrierSessionId,
     };
     if (dryRun) {
@@ -163,18 +165,18 @@ export async function dispatchPendingDirectives({
       },
     };
     try {
-      if (eventEndpoint) {
+      if (inputTransport.kind === 'event_websocket') {
         await sendWebSocketJsonFrame(eventEndpoint, frame);
-      } else if (controlPath) {
+      } else if (inputTransport.kind === 'control_jsonl') {
         appendControlFrame(controlPath, frame);
       } else {
         throw new Error('resident_input_target_missing');
       }
     } catch (error) {
-      failDirectiveDelivery(store, directive.directive_id, eventEndpoint ? 'event_websocket_send_failed' : 'control_jsonl_append_failed');
+      failDirectiveDelivery(store, directive.directive_id, inputTransport.kind === 'event_websocket' ? 'event_websocket_send_failed' : 'control_jsonl_append_failed');
       skipped.push({
         directive_id: directive.directive_id,
-        reason: eventEndpoint ? 'event_websocket_send_failed' : 'control_jsonl_append_failed',
+        reason: inputTransport.kind === 'event_websocket' ? 'event_websocket_send_failed' : 'control_jsonl_append_failed',
         error: error instanceof Error ? error.message : String(error),
       });
       continue;
@@ -208,6 +210,36 @@ export async function dispatchPendingDirectives({
     lease_recovery: leaseRecovery,
     dispatched,
     skipped,
+  };
+}
+
+/**
+ * Select the resident's input lane, not merely the first endpoint available.
+ * The event WebSocket is primarily a projection lane and detached runtimes
+ * may not expose writable child stdin behind it. Prefer the durable control
+ * sideband whenever it exists; use WebSocket input only as a fallback.
+ */
+export function selectResidentInputTransport({ controlPath = null, eventEndpoint = null } = {}) {
+  const normalizedControlPath = typeof controlPath === 'string' && controlPath.trim() ? controlPath : null;
+  if (normalizedControlPath) {
+    return {
+      kind: 'control_jsonl',
+      target: normalizedControlPath,
+      transport: 'agent_cli_control_jsonl',
+    };
+  }
+  const normalizedEventEndpoint = typeof eventEndpoint === 'string' && eventEndpoint.trim() ? eventEndpoint : null;
+  if (normalizedEventEndpoint) {
+    return {
+      kind: 'event_websocket',
+      target: normalizedEventEndpoint,
+      transport: 'agent_runtime_event_websocket',
+    };
+  }
+  return {
+    kind: 'unavailable',
+    target: null,
+    transport: null,
   };
 }
 
@@ -1058,13 +1090,36 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
   const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
   const heartbeat = readCarrierHeartbeat(cwd, carrierSessionId);
   if (heartbeat.live) {
+    const operational = readResidentCarrierOperationalEvidence(cwd, carrierSessionId);
+    if (operational.usable === false) {
+      return {
+        status: 'degraded',
+        live: false,
+        reason: operational.reason,
+        heartbeat,
+        operational,
+      };
+    }
     return {
       status: 'ok',
       live: true,
       reason: 'fresh_carrier_heartbeat',
       heartbeat,
+      operational,
     };
   }
+  if (heartbeat.status === 'stopped') {
+    return {
+      status: 'stale',
+      live: false,
+      reason: 'carrier_heartbeat_stopped',
+      heartbeat,
+    };
+  }
+  const sessionReadiness = readCarrierSessionReadiness(
+    join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl'),
+    carrierSessionId,
+  );
   try {
     const output = execFileSync('powershell.exe', [
       '-NoProfile',
@@ -1076,14 +1131,83 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
       timeout: 5000,
       env: { ...process.env, NARADA_RESIDENT_CARRIER_PROBE_ID: String(carrierSessionId) },
     }).trim();
-    return output
-      ? { status: 'ok', live: true, reason: 'process_command_line_match', pid: Number(output) || output, heartbeat }
-      : { status: 'ok', live: false, reason: 'process_not_found', heartbeat };
+    const classification = classifyResidentCarrierLiveness({
+      heartbeat,
+      process_count: output ? 1 : 0,
+      session_readiness: sessionReadiness,
+    });
+    return classification.live
+      ? { status: 'ok', ...classification, pid: Number(output) || output }
+      : output
+        ? { status: 'stale', ...classification, pid: Number(output) || output }
+        : { status: 'ok', ...classification };
   } catch (error) {
     return {
       status: 'error',
       live: false,
       reason: 'process_check_failed',
+      error: error instanceof Error ? error.message : String(error),
+      heartbeat,
+      session_readiness: sessionReadiness,
+    };
+  }
+}
+
+function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl');
+  if (!existsSync(path)) {
+    return { status: 'missing', usable: true, reason: 'carrier_operational_evidence_missing', path };
+  }
+  try {
+    const requests = new Map();
+    const inputs = new Map();
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const eventName = event.event ?? event.type ?? null;
+      const requestKey = event.runtime_request_id ?? event.request_id ?? null;
+      if (eventName === 'runtime_request_state_transition' && requestKey) {
+        requests.set(String(requestKey), {
+          state: event.request_state ?? event.terminal_state ?? null,
+          terminal_state: event.terminal_state ?? null,
+        });
+      } else if (eventName === 'session_control_rejected' && requestKey) {
+        requests.set(String(requestKey), { state: 'failed', terminal_state: 'failed' });
+      }
+      const inputKey = event.input_event_id ?? event.event_id ?? event.turn_id ?? null;
+      if (!inputKey) continue;
+      if (eventName === 'input_event_queued') inputs.set(String(inputKey), 'queued');
+      else if (['input_event_started', 'input_admitted_to_turn', 'turn_started'].includes(eventName)) inputs.set(String(inputKey), 'running');
+      else if (['input_completed', 'input_event_completed', 'turn_complete', 'turn_cancelled'].includes(eventName)) inputs.set(String(inputKey), 'completed');
+      else if (eventName === 'turn_lifecycle_transition' && event.terminal_state) inputs.set(String(inputKey), 'completed');
+      else if (eventName === 'turn_lifecycle_transition' && event.turn_state === 'failed') inputs.set(String(inputKey), 'failed');
+    }
+    const requestRows = [...requests.values()];
+    const failureCount = requestRows.filter((request) => request.state === 'failed' || request.terminal_state === 'failed').length;
+    const successfulRequestCount = requestRows.filter((request) => ['completed', 'succeeded', 'reported'].includes(String(request.state))).length;
+    const pendingInputCount = [...inputs.values()].filter((state) => !['completed', 'failed'].includes(state)).length;
+    const unusable = failureCount >= 3 && successfulRequestCount === 0;
+    return {
+      status: unusable ? 'runtime_failures' : 'usable',
+      usable: !unusable,
+      reason: unusable ? 'carrier_runtime_failures' : 'carrier_operational_evidence_usable',
+      path,
+      request_count: requestRows.length,
+      failure_count: failureCount,
+      successful_request_count: successfulRequestCount,
+      pending_input_count: pendingInputCount,
+    };
+  } catch (error) {
+    return {
+      status: 'unreadable',
+      usable: true,
+      reason: 'carrier_operational_evidence_unreadable',
+      path,
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -1091,20 +1215,8 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
 
 function readCarrierHeartbeat(cwd, carrierSessionId, maxAgeMs = 30000) {
   const path = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
-  if (!existsSync(path)) return { status: 'missing', live: false, path };
-  try {
-    const record = JSON.parse(readFileSync(path, 'utf8'));
-    if (record.status === 'stopped') {
-      return { status: 'stopped', live: false, age_ms: null, max_age_ms: maxAgeMs, path, record };
-    }
-    const heartbeatMs = Date.parse(record.heartbeat_at ?? '');
-    const age_ms = Number.isFinite(heartbeatMs) ? Date.now() - heartbeatMs : null;
-    const matches = record.carrier_session_id === carrierSessionId;
-    const live = matches && record.status === 'alive' && age_ms !== null && age_ms <= maxAgeMs;
-    return { status: live ? 'fresh' : 'stale', live, age_ms, max_age_ms: maxAgeMs, path, record };
-  } catch (error) {
-    return { status: 'unreadable', live: false, path, error: error instanceof Error ? error.message : String(error) };
-  }
+  const heartbeat = readCarrierHeartbeatRecord(path, carrierSessionId, maxAgeMs);
+  return { ...heartbeat, max_age_ms: maxAgeMs };
 }
 
 function inferAgentCliSessionState(cwd, carrierSessionId) {

@@ -9,6 +9,7 @@ export type SiteLoopCommandConfig = {
   execution: 'direct_spawn';
   command: string;
   args: string[];
+  working_directory?: string;
   dry_run_arg?: string;
   limit_arg?: string;
   preferred_role_arg?: string;
@@ -312,11 +313,20 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     controlled_mailbox_source_status: 'narada.site_loop.controlled_mailbox_source_status.v1',
   },
   commands: {
-    source_sync: { execution: 'direct_spawn', command: 'pnpm', args: ['cli', '--', '--json', 'sync'], dry_run_arg: '--dry-run' },
+    source_sync: {
+      execution: 'direct_spawn',
+      command: 'pnpm',
+      args: ['cli', '--', '--json', 'sync'],
+      working_directory: undefined,
+      dry_run_arg: '--dry-run',
+      limit_arg: undefined,
+      preferred_role_arg: undefined,
+    },
     ticket_task_reconciliation: {
       execution: 'direct_spawn',
       command: 'pnpm',
       args: ['cli', '--', '--json', 'ticket', 'task', 'reconcile'],
+      working_directory: undefined,
       preferred_role_arg: '--preferred-role',
       limit_arg: '--limit',
       dry_run_arg: '--dry-run',
@@ -327,8 +337,8 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     run_once: 'pnpm cli -- loop run site.loop --once --ensure-resident',
     supervise: 'pnpm cli -- loop supervise site.loop --ensure-resident',
     agent_cli_resident: '.\\narada-site.ps1 agent-start -Agent {resident_agent_id} -Carrier agent-cli -Runtime narada-agent-runtime-server -Exec',
-    live_fixture_proof: 'pnpm cli -- resident e2e --ack-fixture --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
-    mailbox_proof: 'pnpm cli -- resident e2e --mailbox-proof --controlled-mailbox-proof --controlled-mailbox-source <ref> --live --ensure-resident --expect-carrier-preference interactive_agent_cli --production-proof --json',
+    live_fixture_proof: 'MCP site_loop_proof_run({ proof_kind: "resident_production", ensure_resident: true, require_live_carrier: true, wait_for_completion: false })',
+    mailbox_proof: 'MCP site_loop_proof_run({ proof_kind: "controlled_mailbox", controlled_mailbox_source: "<ref>", ensure_resident: true, require_live_carrier: true, wait_for_completion: false })',
     background_agent_cli: 'pnpm cli -- resident summon --background --json',
   },
   policy: {
@@ -580,7 +590,7 @@ function validateCommand(errors: string[], command: unknown, path: string) {
   const record = isPlainObject(command) ? command : null;
   requireNonEmptyString(errors, record?.command, `${path}.command`);
   requireStringArray(errors, record?.args, `${path}.args`);
-  for (const key of ['dry_run_arg', 'limit_arg', 'preferred_role_arg']) {
+  for (const key of ['working_directory', 'dry_run_arg', 'limit_arg', 'preferred_role_arg']) {
     if (record?.[key] != null) requireNonEmptyString(errors, record[key], `${path}.${key}`);
   }
 }
@@ -643,6 +653,7 @@ function validateOverrideShape(base: unknown, override: unknown, path = 'config'
       }
       continue;
     }
+    if (baseValue === undefined) continue;
     if (typeof value !== typeof baseValue) errors.push(`${childPath}_${typeof baseValue}_required`);
   }
   return errors;
