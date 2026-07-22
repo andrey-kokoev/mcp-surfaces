@@ -2,6 +2,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import type { TestProcessScope } from './process-scope.js';
+export { TestProcessScope, createTestProcessScope, nativeTestProcessScopePath } from './process-scope.js';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -114,6 +116,7 @@ export type JsonlMcpClientOptions = {
 export type SpawnJsonlMcpServerOptions = JsonlMcpClientOptions & {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  scope?: TestProcessScope;
 };
 
 export type SpawnedJsonlMcpServer = {
@@ -234,13 +237,15 @@ export function spawnJsonlMcpServer(
   args: string[],
   options: SpawnJsonlMcpServerOptions = {},
 ): SpawnedJsonlMcpServer {
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    env: options.env ?? process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: false,
-    windowsHide: true,
-  });
+  const child = options.scope
+    ? options.scope.spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env })
+    : spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      windowsHide: true,
+    });
   const client = createJsonlClient(child, options);
   return { child, client, close: client.close };
 }
@@ -250,6 +255,7 @@ export type ContentLengthMcpClientOptions = JsonlMcpClientOptions;
 export type SpawnContentLengthMcpServerOptions = ContentLengthMcpClientOptions & {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  scope?: TestProcessScope;
 };
 export type SpawnedContentLengthMcpServer = {
   child: ChildProcessWithoutNullStreams;
@@ -385,13 +391,15 @@ export function spawnContentLengthMcpServer(
   args: string[],
   options: SpawnContentLengthMcpServerOptions = {},
 ): SpawnedContentLengthMcpServer {
-  const child = spawn(command, args, {
-    cwd: options.cwd,
-    env: options.env ?? process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: false,
-    windowsHide: true,
-  });
+  const child = options.scope
+    ? options.scope.spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env })
+    : spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+      windowsHide: true,
+    });
   const client = createContentLengthClient(child, options);
   return { child, client, close: client.close };
 }

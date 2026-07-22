@@ -186,6 +186,15 @@ try {
 
   assert.equal(state.workerState.providerRuntimeMetadata.test.baseUrl, 'test://provider');
   assert.equal(state.workerState.providerRuntimeMetadata.test.defaultModel, 'test-medium');
+  const previousProviderRegistryPath = process.env.NARADA_PROVIDER_REGISTRY_PATH;
+  process.env.NARADA_PROVIDER_REGISTRY_PATH = providerRegistryPath;
+  try {
+    const envRegistryState = createServerState({ siteRoot, taskRoot: root, allowedRoots: [root], workerPolicy: { defaultRuntime: 'codex' } });
+    assert.equal(envRegistryState.workerState.providerRuntimeMetadata.test.baseUrl, 'test://provider');
+  } finally {
+    if (previousProviderRegistryPath === undefined) delete process.env.NARADA_PROVIDER_REGISTRY_PATH;
+    else process.env.NARADA_PROVIDER_REGISTRY_PATH = previousProviderRegistryPath;
+  }
 
   const policy = await callTool(state, 'delegated_task_policy_inspect', {});
   const policyView = policy.result.structuredContent as Record<string, any>;
@@ -214,6 +223,35 @@ try {
   assert.ok(runTool.inputSchema.properties.workflow.properties.instruction);
   assert.ok(runTool.inputSchema.properties.workflow.properties.milestones);
   assert.ok(runTool.inputSchema.properties.workflow.properties.authority_gates);
+
+  const mergeProbeBefore = workerCalls.length;
+  const mergeProbe = await callTool(state, 'delegated_task_run', {
+    objective: 'Preserve caller worker overrides while applying step bounds.',
+    constraints: {
+      authority: 'read',
+      cwd: root,
+      provider: 'test',
+      overrides: { model: 'caller-model', reasoning_effort: 'low', config: { caller_key: 'caller' } },
+    },
+    workflow: {
+      steps: [{
+        id: 'merge-probe',
+        kind: 'worker',
+        constraints: { runtime: 'narada-agent-runtime-server', overrides: { skip_git_repo_check: true, config: { step_key: 'step' } } },
+      }],
+    },
+    execution: { wait_for_completion: true, timeout_ms: 1000 },
+  });
+  const mergeProbeView = mergeProbe.result.structuredContent as Record<string, any>;
+  assert.equal(mergeProbeView.task_status, 'completed');
+  const mergeProbeCall = workerCalls.slice(mergeProbeBefore).find((call) => call.name === 'worker_run');
+  assert.ok(mergeProbeCall);
+  const mergeProbeOverrides = (mergeProbeCall?.args.constraints as Record<string, any>).overrides;
+  assert.equal(mergeProbeOverrides.runtime, 'narada-agent-runtime-server');
+  assert.equal(mergeProbeOverrides.model, 'caller-model');
+  assert.equal(mergeProbeOverrides.reasoning_effort, 'low');
+  assert.equal(mergeProbeOverrides.skip_git_repo_check, true);
+  assert.deepEqual(mergeProbeOverrides.config, { caller_key: 'caller', step_key: 'step' });
 
   const invalid = await callTool(state, 'delegated_task_validate', {
     objective: 'Invalid graph',

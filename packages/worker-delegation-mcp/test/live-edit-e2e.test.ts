@@ -17,10 +17,46 @@ const targetPath = join(root, 'worker-edit-target.txt');
 const runRoot = join(root, 'runs');
 const auditLogDir = join(root, 'audit');
 const fixturePath = join(root, 'deterministic-agent-runtime.cjs');
+const providerRegistryPath = join(root, '.narada', 'provider-registry.json');
 const workerServerPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const filesystemServerPath = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
 
 mkdirSync(join(root, '.narada'), { recursive: true });
+mkdirSync(join(root, '.ai'), { recursive: true });
+writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-delegation-live-edit' }), 'utf8');
+writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+  schema: 'narada.intelligence.launch_context.v1',
+  user_site_id: 'site:worker-delegation-live-edit-user',
+  host_site_id: 'site:worker-delegation-live-edit-host',
+  principal_id: 'principal:worker-delegation-live-edit',
+  registry_db_path: '.ai\\\\intelligence-registry.db',
+  principal_binding: {
+    schema: 'narada.intelligence.principal_binding.v1',
+    actor: { principal_id: 'principal:worker-delegation-live-edit', auth_type: 'test' },
+    memberships: [{ registry: 'site-roster', site_id: 'site:worker-delegation-live-edit-user', role: 'resident', evidence_ref: 'test:worker-delegation-live-edit' }],
+  },
+}), 'utf8');
+writeFileSync(providerRegistryPath, JSON.stringify({
+  schema: 'narada.provider.registry.fixture.v1',
+  default_provider: 'codex-subscription',
+  providers: {
+    'codex-subscription': {
+      base_url: 'https://provider-fixture.invalid',
+      default_model: 'fixture-edit-model',
+      default_thinking: 'low',
+      available_models: ['fixture-edit-model'],
+      cognition_defaults: {
+        low: { model: 'fixture-edit-model', reasoning_effort: 'low' },
+        medium: { model: 'fixture-edit-model', reasoning_effort: 'medium' },
+        high: { model: 'fixture-edit-model', reasoning_effort: 'high' },
+      },
+      credential_requirement: { kind: 'none' },
+      base_url_env_names: ['FIXTURE_PROVIDER_BASE_URL'],
+      model_env_names: ['CODEX_MODEL'],
+    },
+  },
+}), 'utf8');
 writeFileSync(targetPath, 'before\n', 'utf8');
 writeFileSync(fixturePath, [
   "const { spawn } = require('node:child_process');",
@@ -140,6 +176,7 @@ try {
     '--default-runtime', 'narada-agent-runtime-server',
     '--agent-runtime-server-command', process.execPath,
     '--agent-runtime-server-command-arg', fixturePath,
+    '--provider-registry-path', providerRegistryPath,
   ], {
     env: { ...process.env, NARADA_PROVIDER_SECRET_STORE: 'disabled' },
     timeoutMs: 15000,

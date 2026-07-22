@@ -1,10 +1,12 @@
-import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
 
 const testRoot = dirname(fileURLToPath(import.meta.url));
 const testFiles = [
   'cognition-defaults.test.js',
+  'canonical-provider-registry.test.js',
+  'provider-registry-diagnostics.test.js',
   'provider-runtime-binding.test.js',
   'implementation-identity.test.js',
   'output-contract.test.js',
@@ -20,13 +22,22 @@ const testFiles = [
   'protocol-smoke.test.js',
 ];
 
-for (const testFile of testFiles) {
-  const result = spawnSync(process.execPath, [join(testRoot, testFile)], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'inherit',
-    windowsHide: true,
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+const processScope = createTestProcessScope({ label: 'worker-delegation-test-runner' });
+let failureCode = 0;
+try {
+  for (const testFile of testFiles) {
+    const status = await processScope.run(process.execPath, [join(testRoot, testFile)], {
+      cwd: process.cwd(),
+      env: process.env,
+      windowsHide: true,
+    });
+    if (status !== 0) {
+      failureCode = status;
+      break;
+    }
+  }
+} finally {
+  await processScope.close();
+  processScope.assertClean();
 }
+if (failureCode !== 0) process.exit(failureCode);

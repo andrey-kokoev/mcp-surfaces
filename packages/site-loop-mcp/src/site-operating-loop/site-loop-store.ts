@@ -74,6 +74,13 @@ interface LoopClassificationOptions {
   at?: string;
 }
 
+interface LoopClassificationRecoveryOptions {
+  loopId?: string;
+  directiveId?: string;
+  classification?: string;
+  since?: string | null;
+}
+
 interface LoopEscalationOptions {
   loopId?: string;
   directiveId?: string;
@@ -701,6 +708,20 @@ export function countRecentConsecutiveLoopClassificationObservations(store, { lo
   return count;
 }
 
+export function hasLoopClassificationRecoverySince(store, { loopId, directiveId, classification, since }: LoopClassificationRecoveryOptions = {}) {
+  if (!since) return false;
+  const row = store.db.prepare(`
+    SELECT 1
+    FROM site_loop_classification_observations
+    WHERE loop_id = ?
+      AND directive_id = ?
+      AND observed_at >= ?
+      AND classification <> ?
+    LIMIT 1
+  `).get(loopId, directiveId, since, classification);
+  return Boolean(row);
+}
+
 export function getLoopEscalation(store, { loopId, directiveId, classification }: LoopEscalationOptions = {}) {
   const row = store.db.prepare(`
     SELECT * FROM site_loop_escalations
@@ -736,6 +757,12 @@ export function recordLoopEscalation(store, { loopId, directiveId, classificatio
         escalation_json = ?
     WHERE escalation_id = ? AND status = 'opened'
   `).run(envelopeId ?? null, escalationJson, escalationId);
+  return getLoopEscalation(store, { loopId, directiveId, classification });
+}
+
+export function reopenLoopEscalation(store, { loopId, directiveId, classification, envelopeId, escalation, at = new Date().toISOString() }: LoopEscalationOptions = {}) {
+  const escalationId = `loopesc_${hashStable({ loopId, directiveId, classification }).slice(0, 32)}`;
+  const escalationJson = stringifyJson(escalation);
   store.db.prepare(`
     UPDATE site_loop_escalations
     SET status = 'opened',

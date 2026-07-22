@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/mcp-loader-mcp.test.js"
   },
   "dependencies": {
     "@narada2/mcp-fabric-contracts": "workspace:*",

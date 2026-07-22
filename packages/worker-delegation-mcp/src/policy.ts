@@ -77,6 +77,13 @@ const ENV_KEYS = [
   'CODEX_HOME',
   'CODEX_CONFIG_DIR',
   'NARADA_WORKER_MCP_CONFIG',
+  'NARADA_INTELLIGENCE_ADAPTER_ID',
+  'NARADA_INTELLIGENCE_REGISTRY_DB',
+  'NARADA_INTELLIGENCE_TARGET_SITE',
+  'NARADA_INTELLIGENCE_USER_SITE',
+  'NARADA_INTELLIGENCE_HOST_SITE',
+  'NARADA_INTELLIGENCE_PRINCIPAL_ID',
+  'NARADA_INTELLIGENCE_PRINCIPAL_BINDING',
 ];
 const WORKER_AUTHORITIES: WorkerAuthority[] = ['read', 'write', 'command'];
 const WORKER_COGNITION: WorkerCognition[] = ['low', 'medium', 'high'];
@@ -309,7 +316,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
       required_markers: [...NARADA_SITE_ROOT_MARKERS],
       site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
       workspace_root: 'worker cwd inside the resolved Site root',
-      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+      environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
       provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
       provider_alias_posture: 'selected_provider_aliases_only',
       provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
@@ -353,7 +360,7 @@ export function publicWorkerPolicy(policy: WorkerPolicy): Record<string, unknown
         site_bound: true,
         site_root_markers: [...NARADA_SITE_ROOT_MARKERS],
         site_root_resolution: 'constraints.site_root when provided; otherwise nearest parent containing a Narada Site marker above cwd',
-        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
+        site_environment_keys: ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR'],
         provider_runtime_binding_schema: 'narada.carrier.provider_runtime_binding.v1',
         provider_alias_posture: 'selected_provider_aliases_only',
         provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',

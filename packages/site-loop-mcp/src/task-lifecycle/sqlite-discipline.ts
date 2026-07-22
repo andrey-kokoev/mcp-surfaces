@@ -11,6 +11,8 @@ interface TaskLifecycleSqliteOptions {
   staleMs?: number;
   timeoutMs?: number;
   pollMs?: number;
+  mode?: 'fast' | 'deep';
+  integrityCheck?: boolean;
 }
 
 const heldLocks = new Map();
@@ -56,28 +58,51 @@ export function openTaskLifecycleStoreWithDiscipline(cwd, options: TaskLifecycle
   }
 }
 
-export function taskLifecycleDbHealth(cwd) {
+function pragmaValue(row) {
+  return Object.values(row ?? {})[0] ?? null;
+}
+
+export function taskLifecycleDbHealth(cwd, options: TaskLifecycleSqliteOptions = {}) {
   const siteLoopConfig = requireSiteLoopConfig(resolve(cwd));
+  const deep = options.mode === 'deep' || options.integrityCheck === true;
   let store = null;
   try {
     store = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
-    const integrity = store.db.prepare('PRAGMA integrity_check').get();
+    // The Site Loop calls this from its bounded hot path. A full integrity_check
+    // scans the entire database and is intentionally opt-in for large task DBs.
+    const schemaVersion = store.db.prepare('PRAGMA schema_version').get();
+    const pageCount = store.db.prepare('PRAGMA page_count').get();
+    const freelistCount = store.db.prepare('PRAGMA freelist_count').get();
     const wal = store.db.prepare('PRAGMA journal_mode').get();
     const busyTimeout = store.db.prepare('PRAGMA busy_timeout').get();
+    const tableProbe = store.db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'task_lifecycle'").get();
+    const integrity = deep ? store.db.prepare('PRAGMA integrity_check').get() : null;
+    const integrityValue = pragmaValue(integrity);
+    const tablePresent = tableProbe?.present === 1;
     return {
       schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
-      status: String(Object.values(integrity ?? {})[0] ?? '') === 'ok' ? 'ok' : 'attention_needed',
-      integrity_check: Object.values(integrity ?? {})[0] ?? null,
-      journal_mode: Object.values(wal ?? {})[0] ?? null,
-      busy_timeout_ms: Number(Object.values(busyTimeout ?? {})[0] ?? 0),
-      repair_command: String(Object.values(integrity ?? {})[0] ?? '') === 'ok'
-        ? null
-        : 'pnpm cli -- task db repair-indexes --ack-repair',
+      status: deep
+        ? (String(integrityValue ?? '') === 'ok' ? 'ok' : 'attention_needed')
+        : (tablePresent ? 'ok' : 'attention_needed'),
+      health_mode: deep ? 'deep' : 'fast',
+      integrity_check: deep ? integrityValue : null,
+      integrity_check_status: deep ? (String(integrityValue ?? '') === 'ok' ? 'ok' : 'failed') : 'deferred',
+      schema_version: Number(pragmaValue(schemaVersion) ?? 0),
+      page_count: Number(pragmaValue(pageCount) ?? 0),
+      freelist_count: Number(pragmaValue(freelistCount) ?? 0),
+      task_lifecycle_table_present: tablePresent,
+      journal_mode: pragmaValue(wal),
+      busy_timeout_ms: Number(pragmaValue(busyTimeout) ?? 0),
+      repair_command: deep && String(integrityValue ?? '') !== 'ok'
+        ? 'pnpm cli -- task db repair-indexes --ack-repair'
+        : null,
     };
   } catch (error) {
     return {
       schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
       status: 'error',
+      health_mode: deep ? 'deep' : 'fast',
+      integrity_check_status: deep ? 'failed' : 'not_available',
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
@@ -150,7 +175,10 @@ function applyDbPragmas(db, options: TaskLifecycleSqliteOptions = {}) {
 }
 
 function finalizeWriteConnection(db) {
-  if (process.env.NARADA_TASK_LIFECYCLE_AUTO_REPAIR_INDEXES !== '0') {
+  // Full quick_check/integrity_check scans the entire task database. It is
+  // reserved for explicit repair/diagnostic runs, never for the bounded Site
+  // Loop write hot path or ordinary connection close.
+  if (process.env.NARADA_TASK_LIFECYCLE_AUTO_REPAIR_INDEXES === '1') {
     const quick = String(Object.values(db.prepare('PRAGMA quick_check').get() ?? {})[0] ?? '');
     if (quick !== 'ok') {
       db.exec('REINDEX');
@@ -229,10 +257,15 @@ function releaseWriteLock(lock) {
 function lockIsStale(lockDir, staleMs) {
   try {
     const owner = readLockOwner(lockDir);
+    const ownerPid = Number(owner?.pid);
+    // A dead owner is definitive evidence of a stale lock. Do not make every
+    // restart wait for the conservative heartbeat TTL before recovering it.
+    if (Number.isFinite(ownerPid) && ownerPid > 0
+      && (ownerPid === process.pid || !processIsLive(ownerPid))) return true;
     const heartbeatMs = Date.parse(owner?.heartbeat_at ?? owner?.acquired_at ?? '');
     const ageMs = Date.now() - (Number.isFinite(heartbeatMs) ? heartbeatMs : statSync(lockDir).mtimeMs);
     if (ageMs <= staleMs) return false;
-    if (owner?.pid && processIsLive(Number(owner.pid))) return false;
+    if (ownerPid > 0 && ownerPid !== process.pid && processIsLive(ownerPid)) return false;
     return true;
   } catch {
     return true;

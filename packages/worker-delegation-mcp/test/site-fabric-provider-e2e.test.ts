@@ -29,6 +29,7 @@ async function main(): Promise<void> {
   const auditLogDir = join(root, 'audit');
   const fixturePath = join(root, 'deterministic-provider-runtime.cjs');
   const providerRegistryPath = join(root, '.narada', 'provider-registry.json');
+  const intelligenceRegistryPath = join(root, '.ai', 'intelligence-registry.db');
   const workerServerPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
   const loaderServerPath = fileURLToPath(new URL('../../../mcp-loader-mcp/dist/src/main.js', import.meta.url));
   const filesystemServerPath = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
@@ -52,6 +53,20 @@ async function main(): Promise<void> {
 
     mkdirSync(join(root, '.narada'), { recursive: true });
     mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
+    writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-delegation-e2e-site' }), 'utf8');
+    writeFileSync(intelligenceRegistryPath, 'fixture', 'utf8');
+    writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+      schema: 'narada.intelligence.launch_context.v1',
+      user_site_id: 'site:worker-delegation-e2e-user',
+      host_site_id: 'site:worker-delegation-e2e-host',
+      principal_id: 'principal:worker-delegation-e2e',
+      registry_db_path: '.ai\\\\intelligence-registry.db',
+      principal_binding: {
+        schema: 'narada.intelligence.principal_binding.v1',
+        actor: { principal_id: 'principal:worker-delegation-e2e', auth_type: 'test' },
+        memberships: [{ registry: 'site-roster', site_id: 'site:worker-delegation-e2e-user', role: 'resident', evidence_ref: 'test:worker-delegation-e2e' }],
+      },
+    }), 'utf8');
     writeFileSync(targetPath, 'before\n', 'utf8');
     writeFileSync(providerRegistryPath, JSON.stringify({
       schema: 'narada.provider.registry.fixture.v1',
@@ -249,9 +264,7 @@ async function main(): Promise<void> {
       wait_for_completion: true,
       overrides: { runtime: 'narada-agent-runtime-server' },
     });
-    const editPage = asRecord(editResult.structuredContent);
-    assert.equal(editPage.schema, 'narada.producer_output_page.v1');
-    const editOutputRecord = await readProducedJson(loaderClient, loaderConnectionId, editPage, 20);
+    const editOutputRecord = await readProducedOrInline(loaderClient, loaderConnectionId, editResult, 20);
     assert.equal(editOutputRecord.status, 'completed');
     assert.equal(editOutputRecord.edits_performed, true);
     assert.equal(editOutputRecord.target_state_changed, true);
@@ -276,9 +289,7 @@ async function main(): Promise<void> {
           overrides: { runtime: 'narada-agent-runtime-server' },
         },
       });
-      const runPage = asRecord(runResult.structuredContent);
-      assert.equal(runPage.schema, 'narada.producer_output_page.v1');
-      const runStructured = await readProducedJson(loaderClient, loaderConnectionId, runPage, requestId + 100);
+      const runStructured = await readProducedOrInline(loaderClient, loaderConnectionId, runResult, requestId + 100);
       diagnosticState = runStructured;
       const resolved = asRecord(runStructured.resolved_worker_config);
       assert.equal(runStructured.status, 'completed', JSON.stringify(runStructured));
@@ -373,10 +384,58 @@ async function readProducedJson(client: JsonlMcpClient, connectionId: string, pr
   const outputRef = String(producerPage.output_ref ?? producerPage.ref ?? '');
   assert.ok(outputRef);
   const output = await readMcpOutputText({ output_text: '', next_offset: 0 }, async ({ offset, limit, pageNumber }) => {
-    const pageResult = await callAttached(client, connectionId, firstPageId + pageNumber, 'worker_output_show', { ref: outputRef, offset, limit });
-    const page = asRecord(pageResult.structuredContent);
-    assert.equal(page.schema, 'narada.mcp_output_page.v1');
-    return page;
+    return readWorkerOutputPage(client, connectionId, outputRef, offset, limit, firstPageId + pageNumber);
   }, { initialReadOffset: 0 });
   return JSON.parse(output.text) as JsonRecord;
+}
+
+async function readWorkerOutputPage(client: JsonlMcpClient, connectionId: string, outputRef: string, offset: number, limit: number, requestId: number): Promise<JsonRecord> {
+  let result = await callAttached(client, connectionId, requestId, 'worker_output_show', { ref: outputRef, offset, limit });
+  for (let depth = 0; depth < 8; depth += 1) {
+    const childResult = Object.prototype.hasOwnProperty.call(result, 'structuredContent');
+    const page = asRecord(childResult ? result.structuredContent : result);
+    if (page.schema === 'narada.mcp_output_page.v1') return page;
+    assert.equal(page.schema, 'narada.producer_output_page.v1', JSON.stringify(page));
+    assert.equal(typeof page.output_ref, 'string');
+    result = childResult
+      ? await callAttached(client, connectionId, requestId + depth + 1, 'worker_output_show', { ref: page.output_ref, offset, limit })
+      : await readLoaderMaterializedResult(client, connectionId, String(page.output_ref), requestId + 100 + depth, limit);
+  }
+  throw new Error(`worker output page nesting exceeded for ${outputRef}`);
+}
+
+async function readLoaderMaterializedResult(client: JsonlMcpClient, connectionId: string, outputRef: string, firstPageId: number, limit: number): Promise<JsonRecord> {
+  let offset = 0;
+  let outputText = '';
+  let pageNumber = 0;
+  while (true) {
+    const response = await client.request(firstPageId + pageNumber, 'tools/call', {
+      name: 'mcp_loader_read_result',
+      arguments: { connection_id: connectionId, ref: outputRef, offset, limit },
+    });
+    const envelope = structured(response);
+    const page = asRecord(envelope.result);
+    assert.equal(page.schema, 'narada.mcp_output_page.v1');
+    assert.equal(typeof page.output_text, 'string');
+    outputText += String(page.output_text);
+    const nextOffset = page.next_offset;
+    if (nextOffset === null || nextOffset === undefined) break;
+    const next = Number(nextOffset);
+    assert.ok(Number.isSafeInteger(next) && next > offset, `loader output readback offset did not advance: ${offset} -> ${String(nextOffset)}`);
+    offset = next;
+    pageNumber += 1;
+  }
+  return JSON.parse(outputText) as JsonRecord;
+}
+
+async function readProducedOrInline(client: JsonlMcpClient, connectionId: string, result: JsonRecord, firstPageId: number): Promise<JsonRecord> {
+  const hasStructuredContent = Object.prototype.hasOwnProperty.call(result, 'structuredContent');
+  let candidate = asRecord(hasStructuredContent ? result.structuredContent : result);
+  if (!hasStructuredContent && candidate.schema === 'narada.producer_output_page.v1' && typeof candidate.output_ref === 'string') {
+    const nestedResult = await readLoaderMaterializedResult(client, connectionId, candidate.output_ref, firstPageId + 500, 20000);
+    candidate = asRecord(nestedResult.structuredContent ?? nestedResult);
+  }
+  return candidate.schema === 'narada.producer_output_page.v1'
+    ? readProducedJson(client, connectionId, candidate, firstPageId)
+    : candidate;
 }

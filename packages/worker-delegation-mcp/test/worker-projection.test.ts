@@ -6,6 +6,7 @@ import { workerEditRunArgs } from '../src/tool-handlers/edit.js';
 import { listTools } from '../src/tool-list.js';
 import { writeWorkerSessionRecord } from '../src/run-record.js';
 import { callWorkerTool } from '../src/worker-tools.js';
+import { loadIntelligenceLaunchContext, projectIntelligenceLaunchContext } from '../src/intelligence-launch-context.js';
 
 type RpcResponse = {
   result?: Record<string, any>;
@@ -14,6 +15,21 @@ type RpcResponse = {
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-projection-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
+mkdirSync(join(root, '.ai'), { recursive: true });
+writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'projection-site' }), 'utf8');
+writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+  schema: 'narada.intelligence.launch_context.v1',
+  user_site_id: 'site:projection-user',
+  host_site_id: 'site:projection-host',
+  principal_id: 'principal:projection',
+  registry_db_path: '.ai\\intelligence-registry.db',
+  principal_binding: {
+    schema: 'narada.intelligence.principal_binding.v1',
+    actor: { principal_id: 'principal:projection', auth_type: 'test' },
+    memberships: [{ registry: 'site-roster', site_id: 'site:projection-user', role: 'resident', evidence_ref: 'test:projection' }],
+  },
+}), 'utf8');
 const providerRegistryPath = join(root, 'provider-registry.json');
 writeFileSync(providerRegistryPath, JSON.stringify({
   schema: 'narada.carrier.provider_registry.v1',
@@ -121,6 +137,9 @@ assert.equal(narsProjection.result?.structuredContent.launchable, true, JSON.str
 assert.deepEqual(narsProjection.result?.structuredContent.resolved_worker_config.required_mcp_tools, ['mailbox_messages_list']);
 assert.deepEqual(narsProjection.result?.structuredContent.resolved_worker_config.worker_mcp_projection.mcp_tool_allowlist, ['mailbox_messages_list']);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), true);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.status, 'ready');
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.principal_binding_present, true);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_REGISTRY_DB'), true);
 
 const staleConfigState = createServerState({
   allowedRoot: root,
@@ -205,3 +224,17 @@ const clearedProjection = await rpc({
 assert.deepEqual(clearedProjection.result?.structuredContent.resolved_worker_config.required_mcp_tools, []);
 assert.equal(clearedProjection.result?.structuredContent.resolved_worker_config.worker_mcp_projection, undefined);
 assert.equal(clearedProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), false);
+
+const incompleteRoot = mkdtempSync(join(testTempRoot(), 'worker-intelligence-context-incomplete-'));
+mkdirSync(join(incompleteRoot, '.narada'), { recursive: true });
+writeFileSync(join(incompleteRoot, '.narada', 'site.json'), JSON.stringify({ site_id: 'incomplete-site' }), 'utf8');
+const incompleteContext = loadIntelligenceLaunchContext({ sessionSiteRoot: incompleteRoot, userSiteRoot: incompleteRoot, processEnv: {} });
+assert.equal(incompleteContext.status, 'blocked');
+assert.equal(incompleteContext.missing.includes('host_site_id'), true);
+assert.equal(incompleteContext.missing.includes('principal_binding'), true);
+assert.throws(() => projectIntelligenceLaunchContext(incompleteContext), (error: any) => error.codeName === 'worker_intelligence_context_required');
+
+const malformedRoot = mkdtempSync(join(testTempRoot(), 'worker-intelligence-context-malformed-'));
+mkdirSync(join(malformedRoot, '.narada'), { recursive: true });
+writeFileSync(join(malformedRoot, '.narada', 'intelligence-launch-context.json'), '{"schema":"wrong"}', 'utf8');
+assert.throws(() => loadIntelligenceLaunchContext({ sessionSiteRoot: malformedRoot, userSiteRoot: malformedRoot, processEnv: {} }), (error: any) => error.codeName === 'worker_intelligence_context_invalid');

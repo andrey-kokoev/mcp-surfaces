@@ -28,6 +28,7 @@ import {
   getLoopStatus,
   getDirectiveOutcomeSummary,
   ensureSiteLoopTables,
+  hasLoopClassificationRecoverySince,
   listDirectiveOutcomes,
   listLoopAttention,
   listLoopRuns,
@@ -36,6 +37,7 @@ import {
   resolveDirectiveOutcome,
   recordLoopClassificationObservation,
   recordLoopEscalation,
+  reopenLoopEscalation,
   recordLoopHealthFailure,
   recordLoopHealthSuccess,
   releaseLoopLock,
@@ -2157,10 +2159,21 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
   const dbHealth = taskLifecycleDbHealth(siteRoot);
   const health = getLoopHealth(store, siteLoopConfig.loop_id);
   const stalePending = stalePendingDirectives(pending.directives ?? [], { now: nowIso });
-  const status = siteLoopOperatingLayerStatus(siteRoot, {
-    nowIso,
-    requireFreshProductionProof,
-  });
+  const outcomes = requireFreshProductionProof ? siteResidentOutcomes(siteRoot, { limit: 500 }) : null;
+  const latestProductionOutcome = latestProductionReportedOutcome(outcomes?.outcomes ?? []);
+  const productionProofFreshnessWindowMs = Number(
+    options.productionProofFreshnessMs
+      ?? options.production_proof_freshness_ms
+      ?? siteLoopConfig.mailbox_proof.freshness_ms,
+  );
+  const productionProofAgeMs = latestProductionOutcome?.event_at
+    ? Date.parse(nowIso) - Date.parse(latestProductionOutcome.event_at)
+    : null;
+  const productionProofFresh = Boolean(
+    latestProductionOutcome
+      && Number.isFinite(productionProofAgeMs)
+      && productionProofAgeMs <= productionProofFreshnessWindowMs,
+  );
   const alerts = operatingLayerAlertSignals({
     resident,
     dbHealth,
@@ -2168,7 +2181,7 @@ function persistOperatingLayerAlerts(siteRoot, store, options: SiteLoopPayload =
     pending,
     stalePending,
     requireFreshProductionProof,
-    productionProofFresh: asRecord(status.latest_activity).production_proof_fresh,
+    productionProofFresh,
   })
     .map((item) => asRecord(item))
     .filter((item) => ['error', 'critical'].includes(stringValue(item.severity)));
@@ -2636,7 +2649,11 @@ export async function runSiteResidentE2E(cwd, options: SiteLoopPayload = {}) {
   const fixtureId = options.id ?? `resident-e2e-${Date.now()}`;
   const expectedCarrierPreference = options.expectCarrierPreference ?? options.expect_carrier_preference ?? null;
   const requireProductionProof = options.requireProductionProof === true || options.require_production_proof === true;
-  const writeLockTimeoutMs = Math.max(0, Number(options.writeLockTimeoutMs ?? options.write_lock_timeout_ms ?? 1000));
+  const proofTimeoutMs = Math.max(1, Number(options.timeoutMs ?? options.timeout_ms ?? 120_000));
+  const configuredWriteLockTimeoutMs = options.writeLockTimeoutMs ?? options.write_lock_timeout_ms;
+  const writeLockTimeoutMs = configuredWriteLockTimeoutMs == null
+    ? proofTimeoutMs
+    : Math.max(0, Number(configuredWriteLockTimeoutMs));
   const writeLockPollMs = Math.max(25, Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? 50));
   const startOnly = options.startOnly === true || options.start_only === true;
   if (requireProductionProof) {
@@ -2716,7 +2733,7 @@ export async function runSiteResidentE2E(cwd, options: SiteLoopPayload = {}) {
       })
     : null;
   const beforeDirectiveIds = mailboxProof ? allResidentDirectiveIds(siteRoot) : [];
-  const deadline = Date.now() + Number(options.timeoutMs ?? options.timeout_ms ?? 120_000);
+  const deadline = Date.now() + proofTimeoutMs;
   const pollMs = Number(options.pollMs ?? options.poll_ms ?? 5_000);
   let firstRun: SiteLoopPayload = await runSiteLoop(siteRoot, {
     limit: options.limit ?? 25,
@@ -4274,7 +4291,7 @@ function recordOutcomeForClassification(store, classification, { nowIso = new Da
   });
 }
 
-function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPayload = {}) {
+export function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPayload = {}) {
   const siteLoopConfig = configForSite(siteRoot);
   const runId = stringValue(options.runId);
   const nowIso = stringValue(options.nowIso, new Date().toISOString());
@@ -4318,9 +4335,16 @@ function reconcileLoopEscalations(siteRoot, store, outcome, options: SiteLoopPay
     if (count < 3) continue;
     const existing = getLoopEscalation(store, { loopId: siteLoopConfig.loop_id, directiveId, classification: classificationStatus });
     if (existing?.status === 'opened') continue;
+    if (existing?.status === 'acknowledged' && !hasLoopClassificationRecoverySince(store, {
+      loopId: siteLoopConfig.loop_id,
+      directiveId,
+      classification: classificationStatus,
+      since: existing.acknowledged_at,
+    })) continue;
     const severity = loopAttentionSeverity(siteRoot, classificationStatus);
     const envelope = writeOperatorAttentionEnvelope(siteRoot, { ...item, severity }, { runId, nowIso });
-    const escalation = recordLoopEscalation(store, {
+    const escalationWriter = existing?.status === 'acknowledged' ? reopenLoopEscalation : recordLoopEscalation;
+    const escalation = escalationWriter(store, {
       loopId: siteLoopConfig.loop_id,
       directiveId,
       classification: classificationStatus,

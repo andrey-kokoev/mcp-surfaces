@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Shared bounded mechanics for real MCP end-to-end tests.",
   "scripts": {
-    "build": "tsc -b",
+    "build": "cargo build --release --manifest-path native/Cargo.toml && tsc -b",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm build && node dist/test/mcp-e2e-harness.test.js"
   },

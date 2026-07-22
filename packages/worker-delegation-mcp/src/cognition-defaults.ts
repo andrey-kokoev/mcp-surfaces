@@ -5,6 +5,15 @@ import { diagnosticError } from './errors.js';
 import type { WorkerCognition, WorkerCognitionDefaults } from './policy.js';
 
 export type ProviderCognitionDefaults = Record<string, Record<WorkerCognition, WorkerCognitionDefaults>>;
+export type ProviderRegistryDiagnostics = {
+  status: 'available' | 'missing' | 'invalid';
+  source: 'legacy_json' | 'canonical_sqlite' | null;
+  path: string | null;
+  searchedPaths: string[];
+  selection: 'explicit' | 'candidate' | null;
+  errorCode: 'not_found' | 'invalid_json' | 'read_failed' | 'invalid_shape' | null;
+  providerCount: number | null;
+};
 export type CognitionDefaultsPersistence = {
   writeState: (path: string, content: string) => void;
   appendAudit: (path: string, line: string) => void;
@@ -163,7 +172,7 @@ export function updateCognitionDefault(options: {
   }
 }
 
-export function publicCognitionDefaults(state: CognitionDefaultsState, defaults: ProviderCognitionDefaults): Record<string, unknown> {
+export function publicCognitionDefaults(state: CognitionDefaultsState, defaults: ProviderCognitionDefaults, providerRegistryDiagnostics?: ProviderRegistryDiagnostics): Record<string, unknown> {
   return {
     schema: 'narada.worker.cognition_defaults.v1',
     status: 'ok',
@@ -183,8 +192,22 @@ export function publicCognitionDefaults(state: CognitionDefaultsState, defaults:
       precedence: 'per_run_override > site_effective_cognition_default > explicit_provider_registry_default > global_provider_registry_default > generic_cognition_default',
     }])),
     provider_models: cloneModels(state.providerModels),
+    provider_registry: publicProviderRegistryDiagnostics(providerRegistryDiagnostics),
     applicability: 'updates affect future new runs only; existing and resumed sessions retain their resolved settings unless explicitly overridden',
     persistence: { path: state.path, audit_path: state.auditPath },
+  };
+}
+
+export function publicProviderRegistryDiagnostics(value?: ProviderRegistryDiagnostics): Record<string, unknown> | null {
+  if (!value) return null;
+  return {
+    status: value.status,
+    source: value.source,
+    path: value.path,
+    searched_paths: [...value.searchedPaths],
+    selection: value.selection,
+    error_code: value.errorCode,
+    provider_count: value.providerCount,
   };
 }
 

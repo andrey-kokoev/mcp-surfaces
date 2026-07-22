@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js"
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
@@ -29,5 +29,8 @@
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@narada2/mcp-e2e-harness": "workspace:*"
+  }
 }

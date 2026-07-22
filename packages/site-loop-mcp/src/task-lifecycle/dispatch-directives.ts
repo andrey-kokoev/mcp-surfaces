@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { Socket } from 'node:net';
@@ -66,9 +66,11 @@ export async function dispatchPendingDirectives({
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
   const store = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   store.initSchema();
-  const receiptReconciliation = reconcileCarrierReceipts(cwd, store);
-  const leaseRecovery = recoverExpiredLeases(store);
   const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, effectiveAgentId, { requireLiveCarrier }) as ResidentControlTarget | null;
+  const receiptReconciliation = reconcileCarrierReceipts(cwd, store, {
+    carrierSessionIds: carrier?.carrierSessionId ? [carrier.carrierSessionId] : [],
+  });
+  const leaseRecovery = recoverExpiredLeases(store);
   const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
   const eventEndpoint = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
   const deliveryTarget = eventEndpoint ?? controlPath;
@@ -526,29 +528,26 @@ function siteControlRoot(siteRoot: string): string {
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-export function reconcileCarrierReceipts(cwd, store) {
+export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchPayload = {}) {
   const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const sessionPaths = receiptSessionPaths(cwd);
+  const carrierSessionIds = new Set([
+    ...activeLeaseCarrierSessionIds(store.db),
+    ...(Array.isArray(options.carrierSessionIds) ? options.carrierSessionIds.map(String) : []),
+  ]);
+  const sessionPaths = receiptSessionPaths(cwd, { sessionIds: [...carrierSessionIds] });
   const recorded = [];
   const carrierAccepted = [];
   const skipped = [];
   if (sessionPaths.length === 0) {
-    return { status: 'ok', scanned: 0, recorded: [], carrier_accepted: [], skipped: [], reason: 'session_paths_missing' };
+    return { status: 'ok', scanned: 0, scanned_bytes: 0, events_scanned: 0, recorded: [], carrier_accepted: [], skipped: [], reason: carrierSessionIds.size === 0 ? 'no_targeted_session_ids' : 'targeted_session_paths_missing' };
   }
   const events = [];
+  const scans = [];
+  ensureReceiptScanCursorTable(store.db);
   for (const sessionPath of sessionPaths) {
-    if (!existsSync(sessionPath)) continue;
-    const lines = readFileSync(sessionPath, 'utf8').split(/\r?\n/).filter(Boolean);
-    for (const line of lines) {
-      let event;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!['directive_receipt_recorded', 'directive_accepted_recorded', 'directive_carrier_accepted_recorded'].includes(event.event) || !event.directive_id) continue;
-      events.push({ event, sessionPath });
-    }
+    const scan = readReceiptEventsIncrementally(store.db, sessionPath);
+    scans.push(scan);
+    for (const event of scan.events) events.push({ event, sessionPath });
   }
   for (const { event, sessionPath } of events.filter((item) => item.event.event === 'directive_receipt_recorded')) {
       const directive = store.getDirective(event.directive_id);
@@ -597,7 +596,17 @@ export function reconcileCarrierReceipts(cwd, store) {
       });
       carrierAccepted.push({ directive_id: event.directive_id, triage_id: triage.triage_id, session_path: sessionPath, status: 'carrier_accepted' });
     }
-  return { status: 'ok', scanned: sessionPaths.length, recorded, carrier_accepted: carrierAccepted, skipped };
+  for (const scan of scans) persistReceiptScanCursor(store.db, scan.path, scan.next_offset);
+  return {
+    status: 'ok',
+    scanned: sessionPaths.length,
+    scanned_bytes: scans.reduce((total, scan) => total + scan.bytes_read, 0),
+    events_scanned: scans.reduce((total, scan) => total + scan.events.length, 0),
+    targeted_session_ids: [...carrierSessionIds],
+    recorded,
+    carrier_accepted: carrierAccepted,
+    skipped,
+  };
 }
 
 function validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig: SiteLoopConfig) {
@@ -900,22 +909,109 @@ function carrierSessionIdFromSessionPath(sessionPath) {
   return pcRuntime?.[1] ?? null;
 }
 
-function receiptSessionPaths(cwd) {
+function activeLeaseCarrierSessionIds(db, now = new Date().toISOString()) {
+  try {
+    return db.prepare(`
+      SELECT DISTINCT carrier_session_id
+      FROM directive_delivery_attempts
+      WHERE status = 'leased'
+        AND carrier_session_id IS NOT NULL
+        AND (leased_until IS NULL OR leased_until > ?)
+    `).all(now).map((row) => String(row.carrier_session_id)).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function receiptSessionPaths(cwd, { sessionIds = [] } = {}) {
   const paths = [];
+  const ids = [...new Set(sessionIds.map(String).filter(Boolean))];
+  if (ids.length === 0) return paths;
   const siteSessionRoot = configuredSessionRoot(cwd);
   if (existsSync(siteSessionRoot)) {
-    for (const entry of readdirSync(siteSessionRoot, { withFileTypes: true }).filter((item) => item.isDirectory())) {
-      paths.push(join(siteSessionRoot, entry.name, 'session.jsonl'));
-      paths.push(join(siteSessionRoot, entry.name, 'events.jsonl'));
+    for (const sessionId of ids) {
+      paths.push(join(siteSessionRoot, sessionId, 'session.jsonl'));
+      paths.push(join(siteSessionRoot, sessionId, 'events.jsonl'));
     }
   }
   for (const externalSessionRoot of configuredExternalSessionRoots(cwd)) {
     if (!existsSync(externalSessionRoot)) continue;
-    for (const sessionId of agentCliCarrierSessionIds(cwd)) {
+    for (const sessionId of ids) {
       paths.push(join(externalSessionRoot, `${sessionId}.jsonl`));
     }
   }
-  return paths;
+  return [...new Set(paths)].filter((path) => existsSync(path));
+}
+
+function ensureReceiptScanCursorTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS site_loop_receipt_scan_cursors (
+      session_path TEXT PRIMARY KEY,
+      byte_offset INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    )
+  `);
+}
+
+function readReceiptEventsIncrementally(db, path) {
+  const size = statSync(path).size;
+  const cursor = db.prepare(`
+    SELECT byte_offset
+    FROM site_loop_receipt_scan_cursors
+    WHERE session_path = ?
+  `).get(path);
+  const startOffset = Math.min(Math.max(0, Number(cursor?.byte_offset ?? 0)), size);
+  const fd = openSync(path, 'r');
+  const events = [];
+  const chunkSize = 64 * 1024;
+  let readPosition = startOffset;
+  let pending = Buffer.alloc(0);
+  let pendingStartOffset = startOffset;
+  try {
+    while (readPosition < size) {
+      const buffer = Buffer.alloc(Math.min(chunkSize, size - readPosition));
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, readPosition);
+      if (bytesRead <= 0) break;
+      readPosition += bytesRead;
+      pending = pending.length === 0
+        ? buffer.subarray(0, bytesRead)
+        : Buffer.concat([pending, buffer.subarray(0, bytesRead)]);
+      let newlineIndex = pending.indexOf(0x0a);
+      while (newlineIndex >= 0) {
+        const line = pending.subarray(0, newlineIndex);
+        pending = pending.subarray(newlineIndex + 1);
+        pendingStartOffset += newlineIndex + 1;
+        if (line.length > 0) {
+          try {
+            const event = JSON.parse(line.toString('utf8'));
+            if (['directive_receipt_recorded', 'directive_accepted_recorded', 'directive_carrier_accepted_recorded'].includes(event.event) && event.directive_id) {
+              events.push(event);
+            }
+          } catch {
+            // Ignore malformed historical lines while advancing the durable byte cursor.
+          }
+        }
+        newlineIndex = pending.indexOf(0x0a);
+      }
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return {
+    path,
+    start_offset: startOffset,
+    next_offset: pendingStartOffset,
+    bytes_read: readPosition - startOffset,
+    events,
+  };
+}
+
+function persistReceiptScanCursor(db, path, byteOffset) {
+  db.prepare(`
+    INSERT INTO site_loop_receipt_scan_cursors (session_path, byte_offset, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(session_path) DO UPDATE SET byte_offset = excluded.byte_offset, updated_at = excluded.updated_at
+  `).run(path, byteOffset, new Date().toISOString());
 }
 
 function agentCliCarrierSessionIds(cwd) {

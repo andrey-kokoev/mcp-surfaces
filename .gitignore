@@ -22,3 +22,4 @@ executions/
 /packages/shared/*/src/*.d.ts
 /packages/shared/*/src/*.js
 /packages/shared/*/src/*.js.map
+packages/shared/*/native/target/

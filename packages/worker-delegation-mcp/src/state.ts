@@ -1,6 +1,7 @@
 import type { WorkerPolicy } from './policy.js';
-import type { CognitionDefaultsState } from './cognition-defaults.js';
+import type { CognitionDefaultsState, ProviderRegistryDiagnostics } from './cognition-defaults.js';
 import type { WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
+import type { IntelligenceLaunchContext } from './intelligence-launch-context.js';
 
 export type WorkerMcpState = {
   siteRoot?: string;
@@ -8,7 +9,9 @@ export type WorkerMcpState = {
   env: NodeJS.ProcessEnv;
   activeRunCount: number;
   cognitionDefaults?: CognitionDefaultsState;
+  providerRegistryDiagnostics?: ProviderRegistryDiagnostics;
   providerRuntimeMetadata: Record<string, WorkerProviderRuntimeMetadata>;
+  intelligenceLaunchContext?: IntelligenceLaunchContext;
   activeRunControllers?: Map<string, AbortController>;
   activeRunCompletions?: Map<string, Promise<Record<string, unknown>>>;
   activeRunCancellationRequests?: Set<string>;

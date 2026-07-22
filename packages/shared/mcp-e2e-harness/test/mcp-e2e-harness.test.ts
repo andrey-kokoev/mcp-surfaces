@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import {
   asRecord,
   assertFileStateUnchanged,
   assertSiteFabricEnvIsolated,
   createJsonlClient,
   createSiteFabricIsolation,
+  createTestProcessScope,
   createTemporaryE2eRoot,
   readMcpOutputText,
   removeTemporaryE2eRoot,
@@ -21,13 +21,15 @@ import {
   tomlPath,
 } from '../src/main.js';
 
+const processScope = createTestProcessScope({ label: 'mcp-e2e-harness-test' });
+
 const fixture = spawnJsonlMcpServer(process.execPath, [
   '-e',
   [
     "process.stdin.setEncoding('utf8');",
     "process.stdin.on('data', (chunk) => { for (const line of chunk.split(/\\r?\\n/).filter(Boolean)) { const request = JSON.parse(line); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { structuredContent: { schema: 'fixture.response.v1', method: request.method } } }) + '\\n'); } });",
   ].join('\n'),
-], { label: 'mcp-e2e-harness-fixture', timeoutMs: 2_000 });
+], { label: 'mcp-e2e-harness-fixture', timeoutMs: 2_000, scope: processScope });
 
 const response = await fixture.client.request(1, 'initialize', { protocolVersion: '2024-11-05' });
 assert.equal(structured(response).schema, 'fixture.response.v1');
@@ -57,7 +59,7 @@ const framedFixture = spawnContentLengthMcpServer(process.execPath, [
     "  }",
     "});",
   ].join(String.fromCharCode(10)),
-], { label: 'mcp-e2e-harness-framed-fixture', timeoutMs: 2_000 });
+], { label: 'mcp-e2e-harness-framed-fixture', timeoutMs: 2_000, scope: processScope });
 
 const framedResponse = await framedFixture.client.request(2, 'initialize', { protocolVersion: '2024-11-05' });
 assert.equal(structured(framedResponse).schema, 'framed.fixture.v1');
@@ -70,7 +72,7 @@ const protocolFixture = spawnJsonlMcpServer(process.execPath, [
     "process.stdin.setEncoding('utf8');",
     "process.stdin.on('data', (chunk) => { for (const line of chunk.split(/\\r?\\n/).filter(Boolean)) { const request = JSON.parse(line); if (request.method === 'initialize') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { serverInfo: { name: 'protocol-fixture' }, capabilities: { tools: {} } } }) + '\\n'); if (request.method === 'tools/list') process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'fixture_tool' }] } }) + '\\n'); } });",
   ].join('\n'),
-], { label: 'mcp-e2e-harness-protocol-fixture', timeoutMs: 2_000 });
+], { label: 'mcp-e2e-harness-protocol-fixture', timeoutMs: 2_000, scope: processScope });
 const protocol = await runMcpProtocolSmoke(protocolFixture.client, {
   expectedServerName: 'protocol-fixture',
   requiredTools: ['fixture_tool'],
@@ -129,12 +131,36 @@ writeFileSync(snapshotPath, 'fixture-with-more-content', 'utf8');
 assert.throws(() => assertFileStateUnchanged(presentSnapshot), /file modified during e2e/);
 assert.equal(removeTemporaryE2eRoot(isolationRoot), true);
 
-const rawChild = spawn(process.execPath, [
+const rawChild = processScope.spawn(process.execPath, [
   '-e',
   "process.stdin.on('data', () => process.stdout.write('\\n')); process.stdin.resume();",
-], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+], { windowsHide: true });
 const client = createJsonlClient(rawChild, { label: 'raw-client-fixture', timeoutMs: 2_000 });
 await client.close();
+const descendantRoot = createTemporaryE2eRoot('shared harness descendant');
+const descendantPidPath = join(descendantRoot, 'pid.txt');
+const descendantParent = processScope.spawn(process.execPath, [
+  '-e',
+  "const fs = require('node:fs'); const { spawn } = require('node:child_process'); const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit', windowsHide: true }); fs.writeFileSync(process.argv[1], String(child.pid)); setTimeout(() => process.exit(0), 50);",
+  descendantPidPath,
+], { windowsHide: true });
+await new Promise<void>((resolve, reject) => {
+  const timer = setTimeout(() => reject(new Error('process scope helper did not close after terminating an inherited-output descendant')), 1_500);
+  descendantParent.once('close', () => {
+    clearTimeout(timer);
+    resolve();
+  });
+  descendantParent.once('error', (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+});
+const descendantPid = Number(readFileSync(descendantPidPath, 'utf8'));
+assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+rmSync(descendantRoot, { recursive: true, force: true });
+await processScope.close();
+processScope.assertClean();
+assert.throws(() => process.kill(descendantPid, 0));
 
 console.log(JSON.stringify({
   schema: 'narada.mcp.e2e.result.v1',

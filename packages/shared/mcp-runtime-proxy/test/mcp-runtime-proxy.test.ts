@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { effectiveRequestTimeoutMs } from '../src/main.js';
+import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
 import {
   captureRuntimeFreshness,
   classifyRuntimeInstance,
@@ -16,6 +17,7 @@ import {
 } from '../src/runtime-lifecycle.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
+const processScope = createTestProcessScope({ label: 'mcp-runtime-proxy-test' });
 
 assert.equal(effectiveRequestTimeoutMs(100, null, 60000), 100);
 assert.equal(effectiveRequestTimeoutMs(100, 300, 1000), 1300);
@@ -97,7 +99,7 @@ try {
   const childEntrypoint = join(root, 'failing-child.mjs');
   writeFileSync(childEntrypoint, "process.stderr.write('import failed: missing shared dist\\n'); process.exit(42);\n", 'utf8');
   const proxyEntrypoint = fileURLToPath(new URL('../src/main.js', import.meta.url));
-  const child = spawn(process.execPath, [
+  const child = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'test-surface',
@@ -133,7 +135,7 @@ try {
   const silentEntrypoint = join(root, 'silent-child.mjs');
   writeFileSync(silentEntrypoint, "process.stdin.resume(); setInterval(() => {}, 1000);\n", 'utf8');
   const diagnosticsDir = join(root, 'diagnostics');
-  const silentProxy = spawn(process.execPath, [
+  const silentProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'silent-surface',
@@ -213,7 +215,7 @@ try {
     "});",
   ].join('\n'), 'utf8');
   const statusDiagnosticsDir = join(root, 'status-diagnostics');
-  const statusProxy = spawn(process.execPath, [
+  const statusProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id', 'status-surface',
     '--entrypoint', statusChildEntrypoint,
@@ -263,7 +265,7 @@ try {
     '  }',
     '});',
   ].join('\n'), 'utf8');
-  const honoredProxy = spawn(process.execPath, [
+  const honoredProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'honored-surface',
@@ -292,7 +294,7 @@ try {
 
   // A child that never responds is still terminated after the honored tool
   // timeout plus grace: the watchdog remains the hung-child guard.
-  const honoredSilentProxy = spawn(process.execPath, [
+  const honoredSilentProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'honored-silent-surface',
@@ -320,7 +322,7 @@ try {
 
   const contentLengthChildEntrypoint = join(root, 'json-line-content-length-child.mjs');
   writeFileSync(contentLengthChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { const request = JSON.parse(chunk.trim()); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'Content-Length: is data, not framing' }] } }) + String.fromCharCode(10)); });", 'utf8');
-  const contentLengthProxy = spawn(process.execPath, [
+  const contentLengthProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'json-line-content-length-surface',
@@ -346,7 +348,7 @@ try {
 
   const framedChildEntrypoint = join(root, 'framed-child.mjs');
   writeFileSync(framedChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.once('data', (chunk) => { const request = JSON.parse(chunk.trim()); const body = JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'framed-child', version: '1' } } }); process.stdout.write('Content-Length: ' + Buffer.byteLength(body, 'utf8') + '\\r\\n\\r\\n' + body); setTimeout(() => process.exit(0), 20); });\n", 'utf8');
-  const framedProxy = spawn(process.execPath, [
+  const framedProxy = processScope.spawn(process.execPath, [
     proxyEntrypoint,
     '--surface-id',
     'framed-surface',
@@ -365,7 +367,7 @@ try {
 
   const normalizedChildEntrypoint = join(root, 'normalized-child.mjs');
   writeFileSync(normalizedChildEntrypoint, "process.stdin.setEncoding('utf8'); process.stdin.once('data', (chunk) => { if (/Content-Length:/i.test(chunk)) process.exit(41); const request = JSON.parse(chunk.trim()); process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {} }) + '\\n'); setTimeout(() => process.exit(0), 20); });\n", 'utf8');
-  const normalizedProxy = spawn(process.execPath, [proxyEntrypoint, '--surface-id', 'normalized-surface', '--entrypoint', normalizedChildEntrypoint, '--'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const normalizedProxy = processScope.spawn(process.execPath, [proxyEntrypoint, '--surface-id', 'normalized-surface', '--entrypoint', normalizedChildEntrypoint, '--'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   let normalizedStdout = '';
   normalizedProxy.stdout.setEncoding('utf8');
   normalizedProxy.stdout.on('data', (chunk) => { normalizedStdout += chunk; });
@@ -377,7 +379,78 @@ try {
   assert.match(normalizedStdout, /^Content-Length:/i);
   assert.match(normalizedStdout, /"id":"framed-init"/);
 
+  // A large refused proof result may be followed by a carrier presentation
+  // continuation marker on the same physical line. The proxy must forward
+  // the complete JSON-RPC response, discard only the marker, and remain live
+  // for the next call.
+  const oversizedChildEntrypoint = join(root, 'oversized-refusal-child.mjs');
+  writeFileSync(oversizedChildEntrypoint, [
+    "let buffer = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => {",
+    '  buffer += chunk;',
+    '  let index;',
+    "  while ((index = buffer.indexOf('\\n')) >= 0) {",
+    '    const line = buffer.slice(0, index);',
+    '    buffer = buffer.slice(index + 1);',
+    '    if (!line.trim()) continue;',
+    '    const request = JSON.parse(line);',
+    '    const body = JSON.stringify({',
+    "      jsonrpc: '2.0',",
+    '      id: request.id,',
+    '      result: {',
+    '        isError: true,',
+    "        content: [{ type: 'text', text: 'production_carrier_not_available' }],",
+    '        structuredContent: {',
+    "          schema: 'narada.producer_output_page.v1',",
+    "          status: 'error',",
+    '          truncated: true,',
+    "          output_ref: 'mcp_output:o_task39_proxy_boundary',",
+    "          reason: 'production_carrier_not_available',",
+    "          output_text: 'x'.repeat(14000),",
+    '        },',
+    '      },',
+    '    });',
+    "    process.stdout.write(body + 'Cont\\r\\n');",
+    '  }',
+    '});',
+  ].join('\n'), 'utf8');
+  const oversizedProxy = processScope.spawn(process.execPath, [
+    proxyEntrypoint,
+    '--surface-id',
+    'site-loop',
+    '--entrypoint',
+    oversizedChildEntrypoint,
+    '--',
+  ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let oversizedStdout = '';
+  oversizedProxy.stdout.setEncoding('utf8');
+  oversizedProxy.stdout.on('data', (chunk) => { oversizedStdout += chunk; });
+  oversizedProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'oversized-1', method: 'tools/call', params: { name: 'site_loop_proof_run', arguments: {} } })}\n`);
+  await waitForOutput(() => oversizedStdout.includes('"oversized-1"'), 2_000);
+  const oversizedFirst = JSON.parse(oversizedStdout.trim()) as {
+    id: string;
+    result: { structuredContent: { schema: string; reason: string; output_text: string } };
+  };
+  assert.equal(oversizedFirst.id, 'oversized-1');
+  assert.equal(oversizedFirst.result.structuredContent.schema, 'narada.producer_output_page.v1');
+  assert.equal(oversizedFirst.result.structuredContent.reason, 'production_carrier_not_available');
+  assert.equal(oversizedFirst.result.structuredContent.output_text.length, 14000);
+  assert.equal(oversizedProxy.exitCode, null);
+  oversizedStdout = '';
+  oversizedProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'oversized-2', method: 'tools/call', params: { name: 'site_loop_proof_run', arguments: {} } })}\n`);
+  await waitForOutput(() => oversizedStdout.includes('"oversized-2"'), 2_000);
+  const oversizedLines = oversizedStdout.trim().split(/\r?\n/).filter(Boolean);
+  assert.equal(oversizedLines.length, 1);
+  assert.equal((JSON.parse(oversizedLines[0]) as { id: string }).id, 'oversized-2');
+  assert.equal(oversizedLines.some((line) => line.trim() === 'Cont'), false);
+  assert.equal(oversizedProxy.exitCode, null);
+  oversizedProxy.kill();
+  await new Promise<number | null>((resolve) => oversizedProxy.on('close', resolve));
+
   console.log('mcp-runtime-proxy behavior ok');
 } finally {
   rmSync(root, { recursive: true, force: true });
+  await processScope.close();
+  processScope.assertClean();
 }

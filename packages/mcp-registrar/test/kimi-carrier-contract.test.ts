@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { asRecord, createTemporaryE2eRoot, removeTemporaryE2eRoot, spawnJsonlMcpServer } from '@narada2/mcp-e2e-harness';
+import { asRecord, createTemporaryE2eRoot, createTestProcessScope, removeTemporaryE2eRoot, spawnJsonlMcpServer, type TestProcessScope } from '@narada2/mcp-e2e-harness';
 import { MOONSHOT_SCHEMA_DIALECT, validateMoonshotToolInputSchema, type MoonshotSchemaFinding } from '../src/moonshot-schema.js';
 import { materializeKimiCarrierConfig, type KimiMcpServerConfig } from './kimi-carrier-test-support.js';
 
@@ -10,11 +10,12 @@ type ServerResult = { server: string; toolCount: number; schemaCount: number; fa
 
 const temporaryRoot = createTemporaryE2eRoot('kimi-carrier-contract');
 const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+const processScope = createTestProcessScope({ label: 'kimi-carrier-contract' });
 
 try {
   const config = await materializeKimiCarrierConfig(join(temporaryRoot, 'mcp.json'));
   const entries = Object.entries(config.mcpServers).sort(([left], [right]) => left.localeCompare(right));
-  const results = await mapWithConcurrency(entries, 4, ([server, definition]) => inspectServer(server, definition));
+  const results = await mapWithConcurrency(entries, 1, ([server, definition]) => inspectServer(server, definition, processScope));
   const failures = results.flatMap((result) => result.failures);
   assert.equal(failures.length, 0, formatFailures(failures));
 
@@ -24,10 +25,15 @@ try {
   assert.equal(schemaCount, toolCount, 'every exposed tool must have an input schema');
   console.log(`Kimi carrier contract ok: ${results.length} servers, ${toolCount} tools, ${schemaCount} schemas (${MOONSHOT_SCHEMA_DIALECT})`);
 } finally {
-  assert.equal(removeTemporaryE2eRoot(temporaryRoot), true, `failed to remove ${temporaryRoot}`);
+  try {
+    await processScope.close();
+    processScope.assertClean();
+  } finally {
+    assert.equal(removeTemporaryE2eRoot(temporaryRoot), true, `failed to remove ${temporaryRoot}`);
+  }
 }
 
-async function inspectServer(server: string, definition: KimiMcpServerConfig): Promise<ServerResult> {
+async function inspectServer(server: string, definition: KimiMcpServerConfig, processScope: TestProcessScope): Promise<ServerResult> {
   const failures: ContractFailure[] = [];
   let toolCount = 0;
   let schemaCount = 0;
@@ -45,6 +51,7 @@ async function inspectServer(server: string, definition: KimiMcpServerConfig): P
       env: { ...process.env, ...definition.env },
       timeoutMs: 20_000,
       closeTimeoutMs: 1_000,
+      scope: processScope,
       label: `Kimi carrier server ${server}`,
     });
     try {

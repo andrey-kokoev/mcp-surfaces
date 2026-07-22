@@ -91,6 +91,8 @@ For a concrete example, `@narada2/local-filesystem-mcp` can run standalone, whil
 
 `pnpm test:registrar:kimi-contract` materializes the real `kimi-andrey` configuration, launches every emitted stdio server with its generated command and arguments, performs MCP initialization and `tools/list`, and validates every tool `inputSchema` against the strict contract from [MoonshotAI/walle v0.1.13](https://github.com/MoonshotAI/walle). This deterministic test requires no Kimi account or provider call and is included in the registrar package test.
 
+The contract probe is intentionally serial and places each launched server in the Rust-backed E2E process scope. This keeps the live carrier projection coverage intact while ensuring runtime-proxy descendants are reclaimed when each probe closes.
+
 `pnpm test:registrar:kimi-live` adds one real non-interactive Kimi provider turn with the complete materialized MCP config. It is skipped unless `NARADA_KIMI_CARRIER_LIVE_E2E=1`; running it requires operator approval and an authenticated Kimi installation. Set `NARADA_KIMI_COMMAND` to override the executable and `NARADA_KIMI_LIVE_TIMEOUT_MS` to override the 120-second timeout.
 
 The successful live turn is provider-level evidence that Moonshot accepted the complete advertised tool set. The deterministic layer remains responsible for proving that every configured server starts and every returned schema was inspected.

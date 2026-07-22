@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { payloadShow } from '@narada2/mcp-transport';
+import { createTestProcessScope } from '@narada2/mcp-e2e-harness';
 import { resolveToolCallTimeoutMs } from '../src/tool-timeout.js';
 import { loaderRuntimeLifecycle } from '../src/runtime-lifecycle.js';
 
@@ -175,7 +175,8 @@ for (const [legacyRoot, site_id] of [[legacyAndreyRoot, 'narada-andrey'], [legac
 }
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const child = spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', retiredStubRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', resolve(dirname(serverPath), '..', '..', '..'), '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
+const processScope = createTestProcessScope({ label: 'mcp-loader-test' });
+const child = processScope.spawn(process.execPath, [serverPath, '--allowed-site-root', root, '--allowed-site-root', aggregateRoot, '--allowed-site-root', fragmentedRoot, '--allowed-site-root', duplicateRoot, '--allowed-site-root', retiredStubRoot, '--allowed-site-root', legacyAndreyRoot, '--allowed-site-root', legacyUserSiteRoot, '--allowed-entrypoint-prefix', root, '--allowed-entrypoint-prefix', aggregateRoot, '--allowed-entrypoint-prefix', join(dirname(serverPath), 'echo-server.mjs'), '--allowed-entrypoint-prefix', resolve(dirname(serverPath), '..', '..', '..'), '--tool-call-timeout-ms', '1000'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, NARADA_AGENT_ID: 'test.agent', NARADA_CARRIER_SESSION_ID: 'carrier-test', NARADA_SITE_ID: 'test-site' } });
 
 let stdout = '';
 let stderr = '';
@@ -189,7 +190,17 @@ function rpc(method: string, params: Record<string, unknown>, id: number) {
 }
 
 function responseForId(id: number): Record<string, any> | undefined {
-  return stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.id === id);
+  const lines = stdout.split(/\r?\n/);
+  // A large JSONL response can arrive over several pipe reads.  Do not parse
+  // the final unterminated fragment while the child is still writing it.
+  const completeLineCount = stdout.endsWith('\n') ? lines.length : Math.max(0, lines.length - 1);
+  for (let index = 0; index < completeLineCount; index += 1) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    const message = JSON.parse(line);
+    if (message.id === id) return message;
+  }
+  return undefined;
 }
 
 async function call(method: string, params: Record<string, unknown>, id: number): Promise<Record<string, any> | undefined> {
@@ -564,4 +575,6 @@ try {
   rmSync(legacyAndreyRoot, { recursive: true, force: true });
   rmSync(legacyUserSiteRoot, { recursive: true, force: true });
   rmSync(externalRoot, { recursive: true, force: true });
+  await processScope.close();
+  processScope.assertClean();
 }

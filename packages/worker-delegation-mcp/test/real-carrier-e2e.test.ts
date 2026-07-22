@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   asRecord,
   createTemporaryE2eRoot,
@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   const runRoot = join(root, '.ai', 'runtime', 'worker-delegation');
   const auditLogDir = join(root, '.ai', 'runtime', 'worker-audit');
   const policyPath = join(root, '.narada', 'worker-policy.toml');
+  const providerRegistryPath = join(root, '.narada', 'provider-registry.json');
   const mcpFixturePath = join(root, '.ai', 'mcp', 'narada-carrier-fixture.cjs');
   const workerServerPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
   const runtimeServerPath = process.env.NARADA_E2E_RUNTIME_SERVER_ENTRYPOINT
@@ -54,6 +55,19 @@ async function main(): Promise<void> {
 
     mkdirSync(join(root, '.narada'), { recursive: true });
     mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
+    writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'site:narada' }), 'utf8');
+    writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+      schema: 'narada.intelligence.launch_context.v1',
+      user_site_id: 'site:user',
+      host_site_id: 'site:pc',
+      principal_id: 'principal:andrey',
+      registry_db_path: '.ai\\intelligence-registry.db',
+      principal_binding: {
+        schema: 'narada.intelligence.principal_binding.v1',
+        actor: { principal_id: 'principal:andrey', auth_type: 'user-site-session' },
+        memberships: [{ registry: 'site-roster', site_id: 'site:narada', role: 'resident', evidence_ref: 'test:worker-delegation-real-carrier' }],
+      },
+    }), 'utf8');
     writeFileSync(mcpFixturePath, [
       "let buffer = '';",
       "process.stdin.setEncoding('utf8');",
@@ -100,6 +114,31 @@ async function main(): Promise<void> {
     ].join('\n'), 'utf8');
 
     provider = await startProviderFixture();
+    await initializeCanonicalIntelligenceRegistry(
+      join(root, '.ai', 'intelligence-registry.db'),
+      `${provider.baseUrl}/v1/chat/completions`,
+    );
+    writeFileSync(providerRegistryPath, JSON.stringify({
+      schema: 'narada.carrier.provider_registry.v1',
+      default_provider: 'kimi-code-api',
+      providers: {
+        'kimi-code-api': {
+          base_url: provider.baseUrl,
+          default_model: 'real-carrier-e2e-fixture-model',
+          available_models: ['real-carrier-e2e-fixture-model'],
+          cognition_defaults: {
+            low: { model: 'real-carrier-e2e-fixture-model', reasoning_effort: 'low' },
+            medium: { model: 'real-carrier-e2e-fixture-model', reasoning_effort: 'medium' },
+            high: { model: 'real-carrier-e2e-fixture-model', reasoning_effort: 'high' },
+          },
+          adapter_kind: 'openai-compatible-chat-completions',
+          base_url_env_names: ['KIMI_CODE_API_BASE_URL'],
+          model_env_names: ['KIMI_CODE_MODEL'],
+          credential_env_names: ['KIMI_CODE_API_KEY'],
+          credential_requirement: { kind: 'api_key_secret', secret_ref: 'test/real-carrier-e2e', env_names: ['KIMI_CODE_API_KEY'] },
+        },
+      },
+    }, null, 2), 'utf8');
     const workerHandle = spawnJsonlMcpServer(process.execPath, [
       workerServerPath,
       '--site-root', root,
@@ -109,6 +148,7 @@ async function main(): Promise<void> {
       '--default-runtime', 'narada-agent-runtime-server',
       '--agent-runtime-server-command', process.execPath,
       '--agent-runtime-server-command-arg', runtimeServerPath,
+      '--provider-registry-path', providerRegistryPath,
     ], {
       cwd: root,
       env: {
@@ -117,10 +157,14 @@ async function main(): Promise<void> {
         NARADA_SITE_ROOT: root,
         NARADA_WORKSPACE_ROOT: root,
         NARADA_INTELLIGENCE_PROVIDER: 'kimi-code-api',
+        NARADA_INTELLIGENCE_ADAPTER_ID: 'adapter:openai-compatible-http',
         NARADA_AI_API_KEY: 'real-carrier-e2e-fixture-key',
         NARADA_AI_BASE_URL: provider.baseUrl,
         NARADA_AI_MODEL: 'real-carrier-e2e-fixture-model',
         NARADA_AI_THINKING: 'low',
+        KIMI_CODE_API_BASE_URL: provider.baseUrl,
+        KIMI_CODE_MODEL: 'real-carrier-e2e-fixture-model',
+        KIMI_CODE_API_KEY: 'real-carrier-e2e-fixture-key',
       },
       timeoutMs: 60000,
       label: 'worker-delegation',
@@ -248,6 +292,25 @@ type ProviderFixture = {
   requests: JsonRecord[];
   close: () => Promise<void>;
 };
+
+async function initializeCanonicalIntelligenceRegistry(registryPath: string, endpointUrl: string): Promise<void> {
+  const contract = await import(pathToFileURL(join(naradaRoot, 'packages', 'invokable-intelligence-contract', 'dist', 'index.js')).href);
+  const registry = await import(pathToFileURL(join(naradaRoot, 'packages', 'invokable-intelligence-registry', 'dist', 'index.js')).href);
+  const store = await registry.SqliteRegistryStore.open(registryPath);
+  try {
+    await store.loadCatalogSeed(contract.buildCanonicalLocalTestSeed({
+      adapterProtocol: { family: 'openai', operation: 'chat-completions', version: '1' },
+      credentialStore: 'env',
+      credentialReference: 'KIMI_CODE_API_KEY',
+      endpointUrl,
+      invocationModelKey: 'real-carrier-e2e-fixture-model',
+      now: new Date().toISOString(),
+      validUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    }));
+  } finally {
+    await store.close();
+  }
+}
 
 async function startProviderFixture(): Promise<ProviderFixture> {
   const requests: JsonRecord[] = [];

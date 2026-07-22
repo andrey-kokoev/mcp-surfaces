@@ -1934,7 +1934,7 @@ function validateStepOutputSchema(step: WorkflowStep, output: JsonRecord): JsonR
 }
 function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonRecord {
   const workOrderConstraints = workOrderWorkerConstraints(task.workflow);
-  const constraints = { ...task.constraints, ...workOrderConstraints, ...step.constraints };
+  const constraints = mergeWorkerConstraintSources(task.constraints, workOrderConstraints, step.constraints);
   const requiredMcpTools = uniqueStrings([...stringList(constraints.required_mcp_tools), ...stringList(task.acceptance.required_mcp_tools)]);
   if (requiredMcpTools.length > 0) constraints.required_mcp_tools = requiredMcpTools;
   const cwd = task.execution_binding.workspace_root;
@@ -1951,6 +1951,29 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
   else delete workerConstraints.overrides;
   const outputContract = isTaskExecutabilityStep(step) ? { schema: TASK_EXECUTABILITY_ASSESSMENT_SCHEMA, structured_output_key: TASK_EXECUTABILITY_ASSESSMENT_TEMPLATE_ID, strict: true, output_schema: step.output_schema } : undefined;
   return { intent: { instruction: workerInstruction(task, step), mode: step.kind === 'review' || step.kind === 'verify' ? 'audit_only' : step.kind === 'research' || isTaskExecutabilityStep(step) ? 'audit_only' : undefined, ...(outputContract ? { output_contract: outputContract } : {}) }, constraints: workerConstraints };
+}
+function mergeWorkerConstraintSources(...sources: JsonRecord[]): JsonRecord {
+  const merged: JsonRecord = {};
+  const overrides: JsonRecord = {};
+  let hasOverrides = false;
+  for (const source of sources) {
+    Object.assign(merged, source);
+    const sourceOverrides = rec(source.overrides);
+    if (Object.keys(sourceOverrides).length === 0) continue;
+    hasOverrides = true;
+    for (const [key, value] of Object.entries(sourceOverrides)) {
+      const currentConfig = rec(overrides.config);
+      const sourceConfig = rec(value);
+      if (key === 'config' && (Object.keys(currentConfig).length > 0 || Object.keys(sourceConfig).length > 0)) {
+        overrides.config = { ...currentConfig, ...sourceConfig };
+      } else {
+        overrides[key] = value;
+      }
+    }
+  }
+  if (hasOverrides) merged.overrides = overrides;
+  else delete merged.overrides;
+  return merged;
 }
 function workOrderWorkerConstraints(workflow: JsonRecord): JsonRecord {
   const workOrder = rec(workflow.work_order);
@@ -2983,9 +3006,11 @@ function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessE
   };
 }
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
-  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);
+  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH, env.NARADA_PROVIDER_REGISTRY_PATH);
   if (explicit) return resolve(explicit);
+  const properRoot = firstString(env.NARADA_PROPER_ROOT);
   const candidates = [
+    ...(properRoot ? [join(properRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json')] : []),
     join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',

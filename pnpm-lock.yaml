@@ -381,6 +381,10 @@ importers:
       '@narada2/mcp-fabric-contracts':
         specifier: workspace:*
         version: link:../mcp-fabric-contracts
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../mcp-e2e-harness
 
   packages/shared/mcp-telemetry: {}
 

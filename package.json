@@ -54,7 +54,8 @@
     "test:speech": "pnpm --filter @narada2/speech-mcp test",
     "test:cloudflare-carrier": "pnpm --filter @narada2/cloudflare-carrier-mcp test",
     "test:site-coherence": "pnpm --filter @narada2/site-coherence-mcp test",
-    "test:artifacts": "pnpm --filter @narada2/artifacts-mcp test"
+    "test:artifacts": "pnpm --filter @narada2/artifacts-mcp test",
+    "test:isolated": "pnpm --filter @narada2/mcp-e2e-harness build && pwsh -NoLogo -NoProfile -File ./test-process-audit.ps1 -IsolatedWorktree"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

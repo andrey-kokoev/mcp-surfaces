@@ -852,7 +852,66 @@ function parsePositiveInteger(value: string, name: string, maximum = Number.MAX_
 function drainJsonLines(buffer: string): { framed: boolean; remaining: string; requests: JsonRecord[] } {
   const lines = buffer.split(/\r?\n/);
   const remaining = lines.pop() ?? '';
-  return { framed: false, remaining, requests: lines.filter((line) => line.trim()).map((line) => JSON.parse(line) as JsonRecord) };
+  return {
+    framed: false,
+    remaining,
+    // A carrier may append a presentation continuation marker after an
+    // otherwise complete JSON-RPC line. Never let that marker crash the
+    // proxy; recover the complete JSON object and discard only the trailing
+    // non-protocol text. Standalone malformed lines are ignored as well so
+    // child stdout cannot become an uncaught parser exception.
+    requests: lines
+      .map(parseJsonLine)
+      .filter((line): line is JsonRecord => line !== null),
+  };
+}
+
+function parseJsonLine(line: string): JsonRecord | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return isJsonRecord(parsed) ? parsed : null;
+  } catch {
+    const prefixEnd = firstJsonValueEnd(trimmed);
+    if (prefixEnd === null || prefixEnd >= trimmed.length) return null;
+    try {
+      const parsed: unknown = JSON.parse(trimmed.slice(0, prefixEnd));
+      return isJsonRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function firstJsonValueEnd(text: string): number | null {
+  const first = text[0];
+  if (first !== '{' && first !== '[') return null;
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === '{' || character === '[') {
+      stack.push(character);
+      continue;
+    }
+    if (character !== '}' && character !== ']') continue;
+    const expected = character === '}' ? '{' : '[';
+    if (stack.pop() !== expected) return null;
+    if (stack.length === 0) return index + 1;
+  }
+  return null;
 }
 
 function drainJsonRpcFrames(buffer: string): { framed: boolean; remaining: string; requests: JsonRecord[] } {

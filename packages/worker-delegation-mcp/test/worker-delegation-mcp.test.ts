@@ -14,6 +14,21 @@ type RpcResponse = {
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
+mkdirSync(join(root, '.ai'), { recursive: true });
+writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-test-site' }), 'utf8');
+writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
+  schema: 'narada.intelligence.launch_context.v1',
+  user_site_id: 'site:worker-test-user',
+  host_site_id: 'site:worker-test-host',
+  principal_id: 'principal:worker-test',
+  registry_db_path: '.ai\\intelligence-registry.db',
+  principal_binding: {
+    schema: 'narada.intelligence.principal_binding.v1',
+    actor: { principal_id: 'principal:worker-test', auth_type: 'test' },
+    memberships: [{ registry: 'site-roster', site_id: 'site:worker-test-user', role: 'resident', evidence_ref: 'test:worker' }],
+  },
+}), 'utf8');
 process.env.NARADA_SITE_ROOT = root;
 process.env.CODEX_HOME = root;
 process.env.CODEX_CONFIG_DIR = root;
@@ -353,8 +368,7 @@ process.stdin.on('data', (chunk) => {
 const rawRpc = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>) => Promise<RpcResponse>;
 const rpc = async (request: Record<string, unknown>, state: ReturnType<typeof createServerState>): Promise<RpcResponse> => {
   const response = await rawRpc(request, state);
-  const params = request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params as Record<string, unknown> : {};
-  return params.name !== 'worker_policy_inspect' ? await materializeOutputRefResponse(response, state) : response;
+  return await materializeOutputRefResponse(response, state);
 };
 const rpcWithContext = handleRequest as unknown as (request: Record<string, unknown>, state: ReturnType<typeof createServerState>, context: { abortSignal?: AbortSignal }) => Promise<RpcResponse>;
 const state = createServerState({
@@ -369,6 +383,26 @@ const state = createServerState({
   providerRegistryPath: defaultProviderRegistryPath,
   maxOutputBytes: 2 * 1024 * 1024,
 }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled', KIMI_CODE_API_KEY: 'kimi-secret-must-not-leak', WORKER_SECRET: 'must-not-leak' });
+const registryAliasState = createServerState({ allowedRoot: root }, {
+  PATH: process.env.PATH,
+  NARADA_SITE_ROOT: root,
+  NARADA_PROVIDER_REGISTRY_PATH: defaultProviderRegistryPath,
+  NARADA_PROVIDER_SECRET_STORE: 'disabled',
+});
+assert.equal(registryAliasState.policy.defaultNaradaAgentRuntimeProvider, 'kimi-code-api');
+assert.equal(registryAliasState.policy.providerCognitionDefaults['codex-subscription'].low.model, 'gpt-5.6-luna');
+const properRoot = mkdtempSync(join(root, 'proper-root-'));
+const properRegistryDirectory = join(properRoot, 'packages', 'carrier-provider-contract', 'contracts');
+mkdirSync(properRegistryDirectory, { recursive: true });
+writeFileSync(join(properRegistryDirectory, 'provider-registry.json'), readFileSync(defaultProviderRegistryPath));
+const properRootState = createServerState({ allowedRoot: root }, {
+  PATH: process.env.PATH,
+  NARADA_SITE_ROOT: root,
+  NARADA_PROPER_ROOT: properRoot,
+  NARADA_PROVIDER_SECRET_STORE: 'disabled',
+});
+assert.equal(properRootState.policy.defaultNaradaAgentRuntimeProvider, 'kimi-code-api');
+assert.equal(properRootState.policy.providerCognitionDefaults['codex-subscription'].low.model, 'gpt-5.6-luna');
 
 const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state);
 assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
@@ -494,13 +528,13 @@ assert.equal(policy.result?.structuredContent.runtimes.deepseek, undefined);
 assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'], undefined);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'deepseek-api', 'glm-api', 'openrouter-api', 'codex-subscription']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.provider_env_key, 'NARADA_INTELLIGENCE_PROVIDER');
 assert.match(policy.result?.structuredContent.nars_site_semantics.remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
@@ -2258,7 +2292,7 @@ assert.match(prestartList.result?.structuredContent.runs[0].error_preview, /Not 
 assert.equal(prestartList.result?.structuredContent.runs[0].error_classification, 'codex_untrusted_directory');
 
 const materializedState = createServerState({ allowedRoot: root, runRoot: join(root, 'small-output'), maxOutputBytes: 1000, defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexScript], providerRegistryPath: defaultProviderRegistryPath });
-const materialized = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
+const materialized = await rawRpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, materializedState);
 assert.equal(materialized.result?.structuredContent.schema, 'narada.producer_output_page.v1');
 assert.equal(materialized.result?.structuredContent.result_materialized, true);
 assert.equal(materialized.result?.structuredContent.reader_tool, 'worker_output_show');

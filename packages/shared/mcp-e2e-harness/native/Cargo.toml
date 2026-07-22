@@ -1,0 +1,9 @@
+[package]
+name = "narada-test-process-scope"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "narada-test-process-scope"
+path = "src/main.rs"

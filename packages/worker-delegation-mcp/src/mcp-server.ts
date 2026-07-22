@@ -1,9 +1,10 @@
 import { buildGuidanceResult } from './guidance.js';
 import { createWorkerPolicy } from './policy.js';
-import { loadCognitionDefaultsState, type ProviderCognitionDefaults } from './cognition-defaults.js';
+import { loadCognitionDefaultsState, type ProviderCognitionDefaults, type ProviderRegistryDiagnostics } from './cognition-defaults.js';
 import { WorkerMcpError, diagnosticError } from './errors.js';
 import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
+import { readCanonicalProviderRegistry, type ProviderRegistrySource } from './canonical-provider-registry.js';
 import { providerRuntimeMetadataFromRegistry, type WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
 import type { WorkerMcpState } from './state.js';
 import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
@@ -67,6 +68,10 @@ export async function runStdioServer(options: Record<string, unknown>) {
 export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): WorkerMcpState {
   const siteRoot = resolve(String(options.siteRoot ?? firstRoot(options.allowedRoot) ?? firstRoot(options.allowedRoots) ?? process.cwd()));
   const stateEnv = { ...env };
+  const hasExplicitSiteRoot = typeof options.siteRoot === 'string' && options.siteRoot.trim().length > 0;
+  const hasInheritedSiteBinding = typeof stateEnv.NARADA_SITE_ROOT === 'string' && stateEnv.NARADA_SITE_ROOT.trim().length > 0;
+  if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_SITE_ROOT = siteRoot;
+  if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_WORKSPACE_ROOT ??= siteRoot;
   loadSiteSecrets(siteRoot, stateEnv);
   loadProviderCredentialSecrets(siteRoot, stateEnv, options);
   const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
@@ -81,7 +86,7 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
-  return { siteRoot, policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  return { siteRoot, policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRegistryDiagnostics: providerPolicyDefaults.providerRegistryDiagnostics, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -363,8 +368,12 @@ function firstRoot(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return isObjectRecord(value) ? value : {};
 }
 
 function loadSiteExtraAllowedRoots(siteRoot: string): string[] {
@@ -403,11 +412,11 @@ function siteControlRoot(siteRoot: string): string {
 }
 
 function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): void {
-  const registryPath = providerRegistryPath(siteRoot, env, options);
-  if (!registryPath || !existsSync(registryPath)) return;
+  const resolution = providerRegistryResolution(siteRoot, env, options);
+  if (!resolution.path) return;
   let registry: Record<string, unknown>;
   try {
-    registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
+    registry = readProviderRegistryDocument(resolution);
   } catch {
     return;
   }
@@ -428,14 +437,18 @@ function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv,
   }
 }
 
-function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): { policyOptions: Record<string, unknown>; providerModels: Record<string, string[]>; providerRuntimeMetadata: Record<string, WorkerProviderRuntimeMetadata> } {
-  const registryPath = providerRegistryPath(siteRoot, env, options);
-  if (!registryPath || !existsSync(registryPath)) return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {} };
+function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): { policyOptions: Record<string, unknown>; providerModels: Record<string, string[]>; providerRuntimeMetadata: Record<string, WorkerProviderRuntimeMetadata>; providerRegistryDiagnostics: ProviderRegistryDiagnostics } {
+  const resolution = providerRegistryResolution(siteRoot, env, options);
+  if (!resolution.path) return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {}, providerRegistryDiagnostics: providerRegistryFailure(resolution, 'not_found') };
   let registry: Record<string, unknown>;
   try {
-    registry = JSON.parse(readFileSync(registryPath, 'utf8')) as Record<string, unknown>;
-  } catch {
-    return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {} };
+    registry = readProviderRegistryDocument(resolution);
+  } catch (error) {
+    const errorCode = resolution.source === 'legacy_json' && error instanceof SyntaxError ? 'invalid_json' : 'read_failed';
+    return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {}, providerRegistryDiagnostics: providerRegistryFailure(resolution, errorCode) };
+  }
+  if (!isObjectRecord(registry.providers) || Object.keys(registry.providers).length === 0) {
+    return { policyOptions: {}, providerModels: {}, providerRuntimeMetadata: {}, providerRegistryDiagnostics: providerRegistryFailure(resolution, 'invalid_shape') };
   }
   const providers = asRecord(registry.providers);
   const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
@@ -452,18 +465,72 @@ function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, op
     ...(typeof registry.default_provider === 'string' && registry.default_provider.trim() ? { defaultNaradaAgentRuntimeProvider: registry.default_provider.trim() } : {}),
     ...(allowedNaradaAgentRuntimeProviders.length > 0 ? { allowedNaradaAgentRuntimeProviders } : {}),
     ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
-  }, providerModels, providerRuntimeMetadata: providerRuntimeMetadataFromRegistry(registry) };
+  }, providerModels, providerRuntimeMetadata: providerRuntimeMetadataFromRegistry(registry), providerRegistryDiagnostics: {
+    status: 'available',
+    path: resolution.path,
+    searchedPaths: resolution.candidates,
+    selection: resolution.selection,
+    source: resolution.source,
+    errorCode: null,
+    providerCount: Object.keys(providers).length,
+  } };
 }
 
+type ProviderRegistryResolution = {
+  candidates: string[];
+  path: string | null;
+  selection: 'explicit' | 'candidate' | null;
+  source: ProviderRegistrySource;
+};
+
 function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {
-  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH);
-  if (explicit) return resolve(explicit);
+  return providerRegistryResolution(siteRoot, env, options).path;
+}
+
+function providerRegistryResolution(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): ProviderRegistryResolution {
+  const explicit = firstString(
+    options.providerRegistryPath,
+    env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH,
+    env.NARADA_PROVIDER_REGISTRY_PATH,
+  );
+  if (explicit) {
+    const candidate = resolve(explicit);
+    const path = existsSync(candidate) ? candidate : null;
+    return { candidates: [candidate], path, selection: path ? 'explicit' : null, source: providerRegistrySource(candidate) };
+  }
+  const properRoot = firstString(env.NARADA_PROPER_ROOT);
   const candidates = [
+    ...(properRoot ? [join(properRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json')] : []),
+    join(siteRoot, '.ai', 'intelligence-registry.db'),
     join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
-  ];
-  return candidates.map((candidate) => resolve(candidate)).find((candidate) => existsSync(candidate)) ?? null;
+    join(siteRoot, '..', 'narada', '.ai', 'intelligence-registry.db'),
+  ].map((candidate) => resolve(candidate)).filter((candidate, index, all) => all.indexOf(candidate) === index);
+  const path = candidates.find((candidate) => existsSync(candidate)) ?? null;
+  return { candidates, path, selection: path ? 'candidate' : null, source: path ? providerRegistrySource(path) : providerRegistrySource(candidates[0] ?? '') };
+}
+
+function providerRegistryFailure(resolution: ProviderRegistryResolution, errorCode: ProviderRegistryDiagnostics['errorCode']): ProviderRegistryDiagnostics {
+  return {
+    status: errorCode === 'not_found' ? 'missing' : 'invalid',
+    path: resolution.path,
+    searchedPaths: resolution.candidates,
+    selection: resolution.selection,
+    source: resolution.source,
+    errorCode,
+    providerCount: null,
+  };
+}
+
+function providerRegistrySource(path: string): ProviderRegistrySource {
+  return /\.(?:db|sqlite|sqlite3)$/i.test(path) ? 'canonical_sqlite' : 'legacy_json';
+}
+
+function readProviderRegistryDocument(resolution: ProviderRegistryResolution): Record<string, unknown> {
+  if (!resolution.path) throw new Error('provider registry path is missing');
+  if (resolution.source === 'canonical_sqlite') return readCanonicalProviderRegistry(resolution.path);
+  return JSON.parse(readFileSync(resolution.path, 'utf8')) as Record<string, unknown>;
 }
 
 function lookupPowerShellSecret(secretRef: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {

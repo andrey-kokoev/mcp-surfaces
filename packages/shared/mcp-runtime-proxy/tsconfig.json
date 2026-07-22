@@ -7,7 +7,8 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
-    { "path": "../mcp-fabric-contracts" }
+    { "path": "../mcp-fabric-contracts" },
+    { "path": "../mcp-e2e-harness" }
   ],
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
