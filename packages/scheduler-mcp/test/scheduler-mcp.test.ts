@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { buildCreateScheduleArgs, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, scheduledActionPolicyReasons, schedulerFailureDetails } from '../src/main.js';
 
 const state = createServerState({});
+
+const canonicalWrapperRoot = mkdtempSync(join(tmpdir(), 'scheduler-mcp-wrapper-'));
+try {
+  const canonicalWrapper = join(canonicalWrapperRoot, 'canonical-entrypoint.cmd');
+  writeFileSync(canonicalWrapper, '@echo off\r\n', 'utf8');
+  const canonicalWrapperState = createServerState({ allowedRoots: [canonicalWrapperRoot] });
+  const canonicalWrapperReasons = scheduledActionPolicyReasons('pwsh.exe', `-File "${canonicalWrapper}"`, canonicalWrapperRoot, canonicalWrapperState);
+  assert.equal(canonicalWrapperReasons.some((reason) => reason.startsWith('scheduler_transient_wrapper_refused:')), false);
+} finally {
+  rmSync(canonicalWrapperRoot, { recursive: true, force: true });
+}
 
 const grouped = compactScheduledTaskRows([
   { TaskName: '\\Narada-Sonar-Daemon', Status: 'Ready', 'Schedule Type': 'At logon time', 'Next Run Time': 'N/A', 'Last Run Time': 'today', 'Last Result': '0', 'Task To Run': 'pwsh.exe' },
@@ -19,6 +33,12 @@ assert.match(String(accessDenied.remediation), /elevated PowerShell/);
 
 const invalidArgs = schedulerFailureDetails({ operation: 'create', exitCode: 2147500037, stderr: '', taskName: '\\BadTask' });
 assert.equal(invalidArgs.classification, 'invalid_arguments_or_unsupported_scheduler_option');
+const timedOut = schedulerFailureDetails({ operation: 'update_action', exitCode: -2, taskName: '\\SlowTask', command: 'pwsh.exe', timedOut: true, timeoutMs: 25 });
+assert.equal(timedOut.classification, 'scheduler_command_timed_out');
+assert.equal(timedOut.timed_out, true);
+assert.equal(timedOut.timeout_ms, 25);
+assert.equal(timedOut.operator_command, null);
+assert.match(String(timedOut.operator_command_note), /preview-only/);
 assert.equal(buildTaskRunCommand('pwsh.exe', '-File tool.ps1'), 'pwsh.exe -File tool.ps1');
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 15 }), ['/sc', 'minute', '/mo', '15']);
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 120 }), ['/sc', 'hourly', '/mo', '2']);
@@ -76,8 +96,11 @@ assert.equal(dryRunUpdateData.preserves_triggers, true);
 assert.equal(dryRunUpdateData.mutation_method, 'powershell_set_scheduled_task_action');
 assert.equal(dryRunUpdateData.execute, 'pwsh.exe');
 assert.equal(dryRunUpdateData.arguments, '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start');
-assert.deepEqual(dryRunUpdateData.schtasks_fallback, dryRunUpdateData.schtasks_args);
-assert.deepEqual(dryRunUpdateData.schtasks_args.slice(0, 4), ['/change', '/tn', '\\Narada-Sonar-Daemon', '/tr']);
-assert.match(dryRunUpdateData.working_dir_warning, /cannot set Start In/);
+assert.equal(dryRunUpdateData.schtasks_fallback, undefined);
+assert.equal(dryRunUpdateData.schtasks_preview_not_used_for_mutation, true);
+assert.deepEqual(dryRunUpdateData.schtasks_preview_args.slice(0, 4), ['/change', '/tn', '\\Narada-Sonar-Daemon', '/tr']);
+assert.equal(dryRunUpdateData.working_dir, 'D:\\code\\narada.sonar');
+assert.equal(dryRunUpdateData.working_dir_applied, false);
+assert.equal(dryRunUpdateData.working_dir_would_apply, true);
 
 console.log('scheduler-mcp behavior ok');

@@ -25,6 +25,8 @@ const READ_RESULT_INLINE_CHAR_LIMIT = 20_000;
 const READ_BUFFER_BYTES = 64 * 1024;
 const DEFAULT_READ_OPERATION_TIMEOUT_MS = 5_000;
 const DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS = 10_000;
+const TRANSIENT_EXECUTABLE_EXTENSIONS = new Set(['.cmd', '.bat', '.ps1', '.psm1', '.js', '.mjs', '.cjs', '.ts']);
+const TRANSIENT_EXECUTABLE_PATH = /(^|[\\/])\.ai[\\/](?:tmp|temp)(?:[\\/]|$)/i;
 const ROOTS_LIST_REQUEST_PREFIX = 'local_filesystem_roots_';
 const DEFAULT_GLOB_IGNORE_PATTERNS = [
   '**/.git/**',
@@ -542,7 +544,7 @@ export function listTools(mode) {
   const writeTools = [
     {
       name: 'fs_write_file',
-      description: 'Write a text file under an allowed root and append an audit record.',
+      description: 'Write a text file under an allowed root and append an audit record. Refuses executable scripts under .ai/tmp or .ai/temp.',
       inputSchema: objectSchema({
         payload_ref: { type: 'string', description: 'Optional MCP payload ref carrying the complete fs_write_file argument object, including large content.' },
         payload_path: { type: 'string', description: 'Optional JSON payload path under the site MCP payload staging directory.' },
@@ -557,7 +559,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_str_replace_file',
-      description: 'Replace exactly one string occurrence in a text file under an allowed root and append an audit record.',
+      description: 'Replace exactly one string occurrence in a text file under an allowed root and append an audit record. Refuses executable scripts under .ai/tmp or .ai/temp.',
       inputSchema: objectSchema({
         path: { type: 'string' },
         old: { type: 'string' },
@@ -567,7 +569,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_replace_range',
-      description: 'Replace an inclusive 1-based line range in a text file under an allowed root and append an audit record.',
+      description: 'Replace an inclusive 1-based line range in a text file under an allowed root and append an audit record. Refuses executable scripts under .ai/tmp or .ai/temp.',
       inputSchema: objectSchema({
         path: { type: 'string' },
         start_line: { type: 'integer' },
@@ -578,7 +580,7 @@ export function listTools(mode) {
     },
     {
       name: 'fs_apply_patch',
-      description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots. Supply operation_id to recover a durable outcome after transport loss via fs_patch_outcome_show.',
+      description: 'Apply a unified diff or Codex-style apply_patch patch to files under allowed roots. Refuses executable scripts under .ai/tmp or .ai/temp. Supply operation_id to recover a durable outcome after transport loss via fs_patch_outcome_show.',
       inputSchema: objectSchema({
         patch: { type: 'string' },
         operation_id: { type: 'string', description: 'Caller-chosen idempotency/recovery identifier; use fs_patch_outcome_show with this value after a transport problem.' },
@@ -1902,6 +1904,7 @@ function cappedToolValue({ state, value, summary = {} }) {
 
 function writeFileTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
+  assertFilesystemMutationTargetAllowed(path, root, 'fs_write_file');
   const content = stringField(args, 'content') ?? '';
   const overwrite = booleanField(args, 'overwrite') ?? true;
   const createOnly = booleanField(args, 'create_only') ?? false;
@@ -1920,6 +1923,7 @@ function writeFileTool(args, state) {
 
 async function writeFileToolAsync(args, state, context) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
+  assertFilesystemMutationTargetAllowed(path, root, 'fs_write_file');
   const content = stringField(args, 'content') ?? '';
   const overwrite = booleanField(args, 'overwrite') ?? true;
   const createOnly = booleanField(args, 'create_only') ?? false;
@@ -1972,6 +1976,7 @@ async function writeFileToolAsync(args, state, context) {
 
 function strReplaceTool(args, state) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_str_replace_file' });
+  assertFilesystemMutationTargetAllowed(path, root, 'fs_str_replace_file');
   const oldText = stringField(args, 'old') ?? '';
   const newText = stringField(args, 'new') ?? '';
   if (!oldText) throw diagnosticError('str_replace_requires_old', 'str_replace_requires_old', pathMetadata(path, root));
@@ -2056,6 +2061,7 @@ function replaceRangeTool(args, state) {
   if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
   if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_replace_range' });
+  assertFilesystemMutationTargetAllowed(path, root, 'fs_replace_range');
   const replacement = stringField(args, 'replacement') ?? '';
   const before = readFileSync(path, 'utf8');
   assertExpectedSha256(args, before, { operation: 'fs_replace_range', path, root });
@@ -2138,6 +2144,7 @@ function applyPatchTool(args, state) {
       checkTimeout('plan_file_start');
       const source = resolvePatchSource(filePatch, state);
       const target = resolvePatchTarget(filePatch, state);
+      if (!filePatch.deleteFile) assertFilesystemMutationTargetAllowed(target.path, target.root, 'fs_apply_patch');
       if (filePatch.oldPath !== '/dev/null' && !existsSync(source.path)) {
         throw diagnosticError('patch_source_not_found', `patch_source_not_found: ${source.path}`, {
           ...pathMetadata(source.path, source.root),
@@ -2414,6 +2421,7 @@ function patchOutcomePath(state, operationId) {
 function movePathTool(args, state) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_move_path', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_move_path', field: 'to' });
+  assertFilesystemMutationTargetAllowed(to.path, to.root, 'fs_move_path');
   const overwrite = booleanField(args, 'overwrite') ?? false;
   return movePath({ state, operation: 'fs_move_path', args, from, to, overwrite, directoryOnly: false });
 }
@@ -2810,6 +2818,18 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
     }
     throw error;
   }
+}
+
+function assertFilesystemMutationTargetAllowed(path, root, operation) {
+  const normalized = String(path).replaceAll('\\', '/');
+  const extension = extname(normalized).toLowerCase();
+  if (!TRANSIENT_EXECUTABLE_PATH.test(normalized) || !TRANSIENT_EXECUTABLE_EXTENSIONS.has(extension)) return;
+  throw diagnosticError('transient_executable_write_disallowed', 'transient_executable_write_disallowed', {
+    operation,
+    ...pathMetadata(path, root),
+    refusal_reason: `transient_executable_write_disallowed:${path}`,
+    remediation: 'Do not create or edit executable wrappers/scripts under .ai/tmp or .ai/temp. Use structured_command_start or the owning MCP surface directly and preserve its execution_ref as evidence.',
+  });
 }
 
 function siteControlRoot(siteRoot) {

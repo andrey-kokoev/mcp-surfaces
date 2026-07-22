@@ -37,7 +37,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
-      'Do not schedule cmd, .cmd/.bat wrappers, or scripts staged under .ai/tmp or .ai/temp; working_dir is advisory and must not be emulated with Set-Location wrappers.',
+      'Do not schedule cmd.exe or transient/unapproved .cmd/.bat wrappers. Existing repository-owned .cmd/.bat entrypoints are allowed only under an allowed root; working_dir is applied by the Task Scheduler action and must not be emulated with Set-Location wrappers.',
       'Do not treat copied .log/.exit files, wrapper scripts, or assistant-authored narratives as governed execution evidence.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],

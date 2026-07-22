@@ -14,7 +14,7 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'runtime_admin',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: [], env: [] },
+      transport: { kind: 'stdio', command: 'node', args: ['--allowed-root', '{site_root}'], env: [] },
       injection_scope: 'local_site',
       default_injection: 'enabled',
       runtime_requirements: [],

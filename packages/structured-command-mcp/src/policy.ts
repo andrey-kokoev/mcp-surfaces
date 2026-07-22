@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 
 // The normal default policy is bounded at fifteen minutes. Sites may select a
@@ -52,7 +52,7 @@ export function createExecutionPolicy(options: unknown = {}) {
 
 }
 
-function wrapperExecutionReasons(argv) {
+function wrapperExecutionReasons(argv, cwd, policy) {
   const reasons = [];
   for (const rawValue of argv) {
     const value = String(rawValue ?? '').trim().replace(/^['"]|['"]$/g, '');
@@ -60,7 +60,12 @@ function wrapperExecutionReasons(argv) {
     const normalized = value.replaceAll('\\', '/');
     const extension = extname(normalized).toLowerCase();
     if (DISALLOWED_WRAPPER_EXTENSIONS.has(extension)) {
-      reasons.push(`wrapper_execution_disallowed:${value}`);
+      const candidate = resolve(cwd, value);
+      const canonicalRepositoryWrapper = !TRANSIENT_WRAPPER_PATH.test(normalized)
+        && isInsideAnyRoot(candidate, policy.allowedRoots)
+        && existsSync(candidate)
+        && statSync(candidate).isFile();
+      if (!canonicalRepositoryWrapper) reasons.push(`wrapper_execution_disallowed:${value}`);
       continue;
     }
     if (TRANSIENT_WRAPPER_PATH.test(normalized) && ['.ps1', '.psm1', '.js', '.mjs', '.cjs', '.ts'].includes(extension)) {
@@ -128,7 +133,7 @@ export function decideStructuredCommandExecution({ command, args = [], workingDi
   if (!normalizedCommand) reasons.push('command_required');
   if (policy.blockedCommands.has(normalizedCommand.toLowerCase())) reasons.push(`blocked_command:${normalizedCommand}`);
   if (!isInsideAnyRoot(cwd, policy.allowedRoots)) reasons.push(`working_directory_outside_allowed_roots:${cwd}`);
-  reasons.push(...wrapperExecutionReasons(argv));
+  reasons.push(...wrapperExecutionReasons(argv, cwd, policy));
   if (!isCommandAllowed(argv, policy)) reasons.push(`command_not_allowed:${argv.join(' ')}`);
 
   return {
@@ -180,7 +185,7 @@ function buildRemediationHints(argv, reasons) {
   }
 
   if (reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:') || String(reason).startsWith('transient_wrapper_path_disallowed:'))) {
-    hints.push('Do not execute an ad-hoc .cmd/.bat wrapper or a script from .ai/tmp. Run the owning MCP tool directly, or use structured_command_start with a canonical allowlisted command and retain its execution_ref as evidence.');
+    hints.push('Do not execute cmd.exe or an unapproved/transient wrapper. A repository-owned .cmd/.bat entrypoint must already exist under an allowed root; otherwise run the owning MCP tool directly or use structured_command_start with a canonical allowlisted command and retain its execution_ref as evidence.');
   }
 
   return [...new Set(hints)];

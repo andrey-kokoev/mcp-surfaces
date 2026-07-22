@@ -4,7 +4,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { terminalTaskMutationGuard } from './closure-authority.js';
-import { validateGovernedTestEvidenceRefs } from './governed-test-evidence.js';
+import { validateGovernedTestEvidenceRefs, type GovernedTestEvidenceResolution } from './governed-test-evidence.js';
 import { inspectSupersededTaskGuard } from './task-lineage-guards.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
@@ -115,6 +115,71 @@ function normalizeBlockedReportBlockers(value: unknown): unknown[] {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }): GovernedTestEvidenceResolution {
+  const structuredMatch = /^structured_command_execution:([A-Za-z0-9._:-]+)$/.exec(ref);
+  if (structuredMatch) {
+    const executionPath = join(siteRoot, 'executions', `${structuredMatch[1]}.json`);
+    if (!existsSync(executionPath)) {
+      return { status: 'unverified', reason: 'structured_command_execution_not_found', details: { path: executionPath } };
+    }
+    try {
+      const record = asRecord(JSON.parse(readFileSync(executionPath, 'utf8')));
+      const result = asRecord(record?.result);
+      const successful = record?.schema === 'narada.structured_command.execution.v0'
+        && record?.ref === ref
+        && result?.schema === 'narada.structured_command.execution_result.v0'
+        && result?.status === 'ok'
+        && result?.executed === true
+        && result?.exit_code === 0
+        && result?.pending !== true
+        && result?.timed_out !== true
+        && result?.cancelled !== true;
+      if (!successful) {
+        return {
+          status: 'unverified',
+          reason: 'structured_command_execution_not_successful',
+          details: {
+            path: executionPath,
+            execution_status: result?.status ?? null,
+            executed: result?.executed ?? null,
+            exit_code: result?.exit_code ?? null,
+            pending: result?.pending ?? null,
+            timed_out: result?.timed_out ?? null,
+            cancelled: result?.cancelled ?? null,
+          },
+        };
+      }
+      return {
+        status: 'verified',
+        reason: 'structured_command_execution_successful',
+        details: { path: executionPath, exit_code: result.exit_code, finished_at: result.finished_at ?? null },
+      };
+    } catch (error) {
+      return { status: 'unverified', reason: 'structured_command_execution_unreadable', details: { path: executionPath, error: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  const artifactMatch = /^test_mcp_artifact:([A-Za-z0-9._:-]+)$/.exec(ref);
+  if (artifactMatch) {
+    try {
+      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const row = store.db.prepare('SELECT artifact_id, task_id, artifact_type, admitted_view_json FROM observation_artifacts WHERE artifact_id = ?').get(artifactMatch[1]);
+      if (!row) return { status: 'unverified', reason: 'test_mcp_artifact_not_found', details: { artifact_id: artifactMatch[1] } };
+      if (row.artifact_type !== 'test_result' || row.task_id !== lifecycle?.task_id) {
+        return { status: 'unverified', reason: 'test_mcp_artifact_task_or_type_mismatch', details: { artifact_id: artifactMatch[1], artifact_type: row.artifact_type ?? null, artifact_task_id: row.task_id ?? null, task_id: lifecycle?.task_id ?? null } };
+      }
+      const payload = asRecord(JSON.parse(String(row.admitted_view_json ?? '{}')));
+      const passed = payload?.status === 'passed' && Number(payload?.failed ?? 0) === 0;
+      if (!passed) return { status: 'unverified', reason: 'test_mcp_artifact_not_passed', details: { artifact_id: artifactMatch[1], status: payload?.status ?? null, failed: payload?.failed ?? null } };
+      return { status: 'verified', reason: 'test_mcp_artifact_passed', details: { artifact_id: artifactMatch[1], task_id: lifecycle?.task_id ?? null } };
+    } catch (error) {
+      return { status: 'unverified', reason: 'test_mcp_artifact_unreadable', details: { artifact_id: artifactMatch[1], error: error instanceof Error ? error.message : String(error) } };
+    }
+  }
+
+  return { status: 'unverified', reason: 'typed_evidence_ref_not_supported_by_resolver' };
 }
 
 function outcomeIsSingleOperatorReview(outcome: Record<string, unknown> | null | undefined): boolean {
@@ -1375,7 +1440,6 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const outcome = stringField(args, 'outcome');
       const findings = Array.isArray(args.findings) ? args.findings : undefined;
       const evidenceRefs = stringArrayField(args, 'evidence_refs') ?? [];
-      const evidenceRefsValidation = validateGovernedTestEvidenceRefs(evidenceRefs);
       let reviewer = stringField(args, 'reviewer');
       const changedFiles = stringArrayField(args, 'changed_files');
       const noFilesChanged = booleanField(args, 'no_files_changed') === true;
@@ -1384,6 +1448,9 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const authorityBasis = objectField(args, 'authority_basis');
       if (!taskNumber) throw new Error('task_number_required');
       if (!agentId) throw new Error('agent_id_required');
+      const evidenceRefsValidation = validateGovernedTestEvidenceRefs(evidenceRefs, {
+        resolve: (ref) => resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }),
+      });
       if (args.findings !== undefined && !Array.isArray(args.findings)) throw new Error('findings_must_be_array');
       const validReviewVerdicts = ['accepted', 'accepted_with_notes', 'rejected'];
       if (verdict && !validReviewVerdicts.includes(verdict)) {
@@ -1398,10 +1465,10 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           remediation: 'For claimed-state finish/report submission, call this tool without verdict and provide summary plus changed_files or no_files_changed. Use accepted, accepted_with_notes, or rejected only for review-state tasks.',
         }, true);
       }
-      if (evidenceRefsValidation.status === 'rejected') {
+      if (evidenceRefs.length > 0 && !evidenceRefsValidation.verification_eligible) {
         return jsonToolResult({
           status: 'blocked',
-          error: 'governed_test_evidence_required',
+          error: evidenceRefsValidation.status === 'unverified' ? 'governed_test_evidence_unverified' : 'governed_test_evidence_required',
           close_blocked: true,
           task_number: taskNumber,
           schema: evidenceRefsValidation.schema,

@@ -49,7 +49,7 @@ type CleanupEvidence = {
   fixture_process_started: boolean;
   fixture_process_exited: boolean;
   scheduler_mcp_exited: boolean;
-  fixture_command_removed: boolean;
+  fixture_launcher_removed: boolean;
   temporary_root_removed: boolean;
   failures: string[];
 };
@@ -62,7 +62,7 @@ const recorder = installE2eArtifactRecorder(ARTIFACT_PATH, {
 
 let scheduler: SpawnedJsonlMcpServer | null = null;
 let temporaryRoot: string | null = null;
-let fixtureCommandPath: string | null = null;
+let fixtureLauncherPath: string | null = null;
 let taskName = ['', `NaradaMcpSurfacesE2e-${process.pid}-${Date.now()}`].join('\\');
 let taskCreated = false;
 let taskMayExist = false;
@@ -70,7 +70,7 @@ let taskDeleted = false;
 let taskAbsentAfterDelete = false;
 let fixtureProcessExited = false;
 let schedulerMcpExited = false;
-let fixtureCommandRemoved = true;
+let fixtureLauncherRemoved = true;
 let fixture: FixtureEvidence | null = null;
 let history: JsonRecord | null = null;
 let action: JsonRecord | null = null;
@@ -103,8 +103,12 @@ async function main(): Promise<void> {
     const fixtureScriptPath = join(temporaryRoot, 'scheduler-fixture.cjs');
     const token = `${TEST_ID}:${Date.now()}`;
     writeFileSync(fixtureScriptPath, fixtureScript(), 'utf8');
-    fixtureCommandPath = join(tmpdir(), `${TEST_ID}-${process.pid}-${Date.now()}.cmd`);
-    writeFileSync(fixtureCommandPath, fixtureCommand(fixtureScriptPath, markerPath, token), 'utf8');
+    fixtureLauncherPath = join(temporaryRoot, 'scheduler-fixture-launcher.ps1');
+    writeFileSync(fixtureLauncherPath, fixtureLauncher(fixtureScriptPath, markerPath, token), 'utf8');
+    const launcherCommand = process.env.SystemRoot
+      ? join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      : 'powershell.exe';
+    const launcherArguments = `-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File ${quoteWindows(fixtureLauncherPath)}`;
 
     scheduler = spawnJsonlMcpServer(process.execPath, [serverPath], {
       cwd: temporaryRoot,
@@ -119,6 +123,7 @@ async function main(): Promise<void> {
       requiredTools: [
         'scheduler_task_create',
         'scheduler_task_show',
+        'scheduler_task_update_action',
         'scheduler_task_run',
         'scheduler_task_history',
         'scheduler_task_delete',
@@ -127,8 +132,9 @@ async function main(): Promise<void> {
 
     const create = await call('scheduler_task_create', {
       task_name: taskName,
-      command: quoteWindows(process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe'),
-      arguments: `/d /c ${quoteWindows(fixtureCommandPath)}`,
+      command: quoteWindows(launcherCommand),
+      arguments: launcherArguments,
+      working_dir: temporaryRoot,
       schedule: 'once',
       start_time: futureStartTime(),
       description: 'Disposable bounded Scheduler MCP PC-host lifecycle proof.',
@@ -146,16 +152,35 @@ async function main(): Promise<void> {
     }
     const created = structured(create);
     assert.equal(created.status, 'created', JSON.stringify(created));
+    assert.equal(created.working_dir_applied, true, JSON.stringify(created));
     taskCreated = true;
     action = {
-      command: process.env.ComSpec ?? 'C:\\Windows\\System32\\cmd.exe',
-      arguments: `/d /c ${quoteWindows(fixtureCommandPath)}`,
+      command: launcherCommand,
+      arguments: launcherArguments,
+      working_dir: temporaryRoot,
     };
 
     const shown = await callRequired('scheduler_task_show', { task_name: taskName });
     const shownTask = asRecord(shown.task);
     assert.equal(shownTask.TaskName, taskName, JSON.stringify(shown));
-    assert.match(String(shownTask['Task To Run'] ?? ''), /scheduler-mcp-pc-host-lifecycle-e2e-.*\.cmd/i, JSON.stringify(shown));
+    const taskToRun = String(shownTask['Task To Run'] ?? '');
+    assert.match(taskToRun, /scheduler-fixture-launcher\.ps1/i, JSON.stringify(shown));
+    assert.match(taskToRun, /powershell(?:\.exe)?/i, JSON.stringify(shown));
+    assert.match(taskToRun, /-WindowStyle\s+Hidden/i, JSON.stringify(shown));
+    assert.doesNotMatch(taskToRun, /cmd(?:\.exe)?|\.cmd(?:\s|$)/i, JSON.stringify(shown));
+    assert.equal(resolve(String(shownTask['Start In'] ?? shownTask['Start In Directory'] ?? '')), resolve(temporaryRoot), JSON.stringify(shown));
+
+    const updated = await callRequired('scheduler_task_update_action', {
+      task_name: taskName,
+      command: quoteWindows(launcherCommand),
+      arguments: launcherArguments,
+      working_dir: temporaryRoot,
+    });
+    assert.equal(updated.status, 'updated', JSON.stringify(updated));
+    assert.equal(updated.working_dir_applied, true, JSON.stringify(updated));
+    const updatedShown = await callRequired('scheduler_task_show', { task_name: taskName });
+    const updatedTask = asRecord(updatedShown.task);
+    assert.equal(resolve(String(updatedTask['Start In'] ?? updatedTask['Start In Directory'] ?? '')), resolve(temporaryRoot), JSON.stringify(updatedShown));
 
     const run = await callRequired('scheduler_task_run', { task_name: taskName });
     assert.equal(run.status, 'started', JSON.stringify(run));
@@ -209,14 +234,14 @@ async function main(): Promise<void> {
         cleanupFailures.push(`temporary_root_remove:${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    if (fixtureCommandPath) {
+    if (fixtureLauncherPath) {
       try {
-        await rm(fixtureCommandPath, { force: true, maxRetries: 3, retryDelay: 100 });
-        fixtureCommandRemoved = !existsSync(fixtureCommandPath);
-        if (!fixtureCommandRemoved) cleanupFailures.push('fixture_command_still_exists');
+        await rm(fixtureLauncherPath, { force: true, maxRetries: 3, retryDelay: 100 });
+        fixtureLauncherRemoved = !existsSync(fixtureLauncherPath);
+        if (!fixtureLauncherRemoved) cleanupFailures.push('fixture_launcher_still_exists');
       } catch (error) {
-        fixtureCommandRemoved = false;
-        cleanupFailures.push(`fixture_command_remove:${error instanceof Error ? error.message : String(error)}`);
+        fixtureLauncherRemoved = false;
+        cleanupFailures.push(`fixture_launcher_remove:${error instanceof Error ? error.message : String(error)}`);
       }
     }
     const noResourcesRequired = status === 'not_run'
@@ -231,7 +256,7 @@ async function main(): Promise<void> {
           && (!taskCreated || taskAbsentAfterDelete)
           && (!fixture || fixtureProcessExited)
           && schedulerMcpExited
-          && fixtureCommandRemoved
+          && fixtureLauncherRemoved
           && temporaryRootRemoved
           ? 'passed'
           : preserveRoot && cleanupFailures.length === 0
@@ -242,7 +267,7 @@ async function main(): Promise<void> {
       fixture_process_started: fixture !== null,
       fixture_process_exited: fixtureProcessExited,
       scheduler_mcp_exited: schedulerMcpExited,
-      fixture_command_removed: fixtureCommandRemoved,
+      fixture_launcher_removed: fixtureLauncherRemoved,
       temporary_root_removed: temporaryRootRemoved,
       failures: cleanupFailures,
     };
@@ -274,18 +299,18 @@ async function main(): Promise<void> {
         fixture_process_started: fixture !== null,
         fixture_process_exited: fixtureProcessExited,
         scheduler_mcp_exited: schedulerMcpExited,
-        fixture_command_removed: fixtureCommandRemoved,
+        fixture_launcher_removed: fixtureLauncherRemoved,
       },
     }));
     process.exitCode = exitCode;
   }
 }
 
-function fixtureCommand(scriptPath: string, markerPath: string, token: string): string {
+function fixtureLauncher(scriptPath: string, markerPath: string, token: string): string {
+  const powershellLiteral = (value: string) => `'${value.replaceAll("'", "''")}'`;
   return [
-    '@echo off',
-    `${quoteWindows(process.execPath)} ${quoteWindows(scriptPath)} ${quoteWindows(markerPath)} ${quoteWindows(token)}`,
-    'exit /b %ERRORLEVEL%',
+    `$process = Start-Process -FilePath ${powershellLiteral(process.execPath)} -ArgumentList @(${powershellLiteral(quoteWindows(scriptPath))}, ${powershellLiteral(quoteWindows(markerPath))}, ${powershellLiteral(quoteWindows(token))}) -WindowStyle Hidden -Wait -PassThru`,
+    'exit $process.ExitCode',
   ].join('\r\n') + '\r\n';
 }
 

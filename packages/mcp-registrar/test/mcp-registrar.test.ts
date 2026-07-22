@@ -849,7 +849,7 @@ try {
   assert.ok(!userTaskServer.args.includes('{site_root}'));
   const bindConfig = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
-    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: [], tools: ['scheduler_task_list'] },
+    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
   assert.equal(bindConfig.fileName, 'narada-sonar-scheduler-mcp.json');
   assert.equal(bindConfig.serverKey, 'narada-sonar-scheduler');
@@ -865,7 +865,7 @@ try {
 
   const smartSchedulingBindConfig = buildSiteBindConfig(
     { site_id: 'smart-scheduling', root, config_path: join(root, 'site.json'), surfaces: [] },
-    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: [], tools: ['scheduler_task_list'] },
+    { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
   assert.equal(smartSchedulingBindConfig.fileName, 'narada-smart-scheduling-scheduler-mcp.json');
   assert.equal(smartSchedulingBindConfig.serverKey, 'narada-smart-scheduling-scheduler');

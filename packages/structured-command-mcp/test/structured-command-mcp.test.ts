@@ -127,6 +127,16 @@ const cmdWrapper = decideStructuredCommandExecution({
 assert.equal(cmdWrapper.status, 'refused');
 assert.ok(cmdWrapper.reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:')));
 
+const canonicalBatchEntrypoint = join(root, 'canonical-entrypoint.cmd');
+writeFileSync(canonicalBatchEntrypoint, '@echo off\r\n', 'utf8');
+const canonicalBatch = decideStructuredCommandExecution({
+  command: 'pwsh',
+  args: ['-File', canonicalBatchEntrypoint],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(canonicalBatch.status, 'allowed');
+assert.equal(canonicalBatch.reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:')), false);
+
 const transientPowerShellWrapper = decideStructuredCommandExecution({
   command: 'pwsh',
   args: ['-NoProfile', '-File', join(root, '.ai', 'tmp', 'site-loop-focused-tests.ps1')],

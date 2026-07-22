@@ -37,7 +37,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
-      'Do not execute .cmd/.bat files or scripts created under .ai/tmp. File creation is not execution, and a log/exit-code file is not governed test evidence.',
+      'Do not execute cmd.exe or unapproved/transient wrappers. Repository-owned .cmd/.bat entrypoints are permitted only when they already exist under an allowed root; scripts created under .ai/tmp remain refused. File creation is not execution, and a log/exit-code file is not governed test evidence.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [

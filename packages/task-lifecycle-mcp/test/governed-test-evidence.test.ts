@@ -6,10 +6,33 @@ const admitted = validateGovernedTestEvidenceRefs([
   'test_mcp_artifact:artifact_abc',
   'mcp_output:output_456',
 ]);
-assert.equal(admitted.status, 'admissible');
-assert.equal(admitted.verification_eligible, true);
+assert.equal(admitted.status, 'unverified');
+assert.equal(admitted.verification_eligible, false);
 assert.deepEqual(admitted.execution_refs, ['structured_command_execution:e_123', 'test_mcp_artifact:artifact_abc']);
 assert.deepEqual(admitted.diagnostic_refs, ['mcp_output:output_456']);
+assert.deepEqual(admitted.verified_refs, []);
+assert.equal(admitted.unverified_refs.length, 2);
+
+const verified = validateGovernedTestEvidenceRefs([
+  'structured_command_execution:e_123',
+  'test_mcp_artifact:artifact_abc',
+], {
+  resolve: (ref) => ({ status: 'verified', reason: `verified:${ref}` }),
+});
+assert.equal(verified.status, 'admissible');
+assert.equal(verified.verification_eligible, true);
+assert.deepEqual(verified.verified_refs, ['structured_command_execution:e_123', 'test_mcp_artifact:artifact_abc']);
+assert.deepEqual(verified.unverified_refs, []);
+
+const mixedRejected = validateGovernedTestEvidenceRefs([
+  'structured_command_execution:e_123',
+  'test:copied-log',
+], {
+  resolve: (ref) => ({ status: 'verified', reason: `verified:${ref}` }),
+});
+assert.equal(mixedRejected.status, 'rejected');
+assert.equal(mixedRejected.verification_eligible, false);
+assert.equal(mixedRejected.rejected_refs.length, 1);
 
 const diagnosticOnly = validateGovernedTestEvidenceRefs(['mcp_output:output_456']);
 assert.equal(diagnosticOnly.status, 'diagnostic_only');

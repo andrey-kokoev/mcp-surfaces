@@ -104,7 +104,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not fan out full-content fs_read_file calls when only line counts or byte sizes are needed; use fs_file_metrics with a bounded limit and page deliberately.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
-      'Do not create ad-hoc executable wrappers (.cmd/.bat or scripts under .ai/tmp/.ai/temp) to run commands; call structured_command_start or the owning MCP surface directly. File creation is not execution evidence.',
+      'Do not create or edit ad-hoc executable wrappers (.cmd/.bat or scripts under .ai/tmp/.ai/temp) to run commands; transient executable writes are refused. Call structured_command_start or the owning MCP surface directly. File creation is not execution evidence.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [

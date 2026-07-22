@@ -3,6 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, statSync } from 'node:fs';
 import { extname, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -19,6 +20,8 @@ type SchedulerState = {
 const SCHTASKS_TIMEOUT_MS = 10_000;
 const TRANSIENT_SCRIPT_EXTENSIONS = new Set(['.ps1', '.psm1', '.js', '.mjs', '.cjs', '.ts']);
 const TRANSIENT_SCRIPT_SUFFIX = /\.(?:ps1|psm1|js|mjs|cjs|ts)(?:["'\s]|$)/i;
+const WRAPPER_EXTENSIONS = new Set(['.cmd', '.bat']);
+const TRANSIENT_WRAPPER_PATH = /(^|\/)\.ai\/(?:tmp|temp)(?:\/|$)/i;
 
 function terminateProcessTree(child: ChildProcess) {
   if (!child.pid) return;
@@ -33,21 +36,39 @@ function terminateProcessTree(child: ChildProcess) {
   child.kill('SIGTERM');
 }
 
+function actionTokens(value: string | null | undefined): string[] {
+  if (!value) return [];
+  return value.match(/"[^"]*"|'[^']*'|\S+/g)?.map((token) => token.replace(/^['"]|['"]$/g, '')) ?? [];
+}
+
+function isPathWithinRoot(root: string, candidate: string): boolean {
+  const remainder = relative(root, candidate);
+  return remainder === '' || (!remainder.startsWith('..') && !remainder.includes(':'));
+}
+
 export function createServerState(options: JsonRecord = {}): SchedulerState {
   const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots).map((root) => resolve(root));
   return { allowedRoots };
 }
 
 export function scheduledActionPolicyReasons(command: string, cmdArgs: string | null | undefined, workingDir: string | null | undefined, state: SchedulerState): string[] {
-  const actionText = [command, cmdArgs ?? ''].filter(Boolean).join(' ');
-  const normalizedAction = actionText.replaceAll('\\', '/');
   const reasons: string[] = [];
   const executable = command.trim().replace(/^['"]|['"]$/g, '').replaceAll('\\', '/').split('/').at(-1)?.toLowerCase() ?? '';
   if (executable === 'cmd' || executable === 'cmd.exe') {
     reasons.push(`scheduler_shell_action_disallowed:${command}`);
   }
-  if (/\.(?:cmd|bat)(?:["'\s]|$)/i.test(normalizedAction)) {
-    reasons.push(`scheduler_transient_wrapper_refused:${actionText}`);
+  for (const value of [command, ...actionTokens(cmdArgs)]) {
+    const normalized = value.replaceAll('\\', '/');
+    const cleanValue = normalized.replace(/^['"]|['"]$/g, '');
+    const extension = extname(cleanValue).toLowerCase();
+    if (!WRAPPER_EXTENSIONS.has(extension)) continue;
+    const candidate = resolve(workingDir ?? state.allowedRoots[0] ?? process.cwd(), cleanValue);
+    const canonicalRepositoryWrapper = !TRANSIENT_WRAPPER_PATH.test(normalized)
+      && state.allowedRoots.length > 0
+      && state.allowedRoots.some((root) => isPathWithinRoot(root, candidate))
+      && existsSync(candidate)
+      && statSync(candidate).isFile();
+    if (!canonicalRepositoryWrapper) reasons.push(`scheduler_transient_wrapper_refused:${value}`);
   }
   for (const value of [command, cmdArgs ?? '']) {
     const normalized = value.replaceAll('\\', '/');
@@ -167,7 +188,7 @@ export function listTools() {
           task_name: { type: 'string', description: 'Task path, e.g. \\Narada\\MyTask.' },
           command: { type: 'string', description: 'Executable path or command.' },
           arguments: { type: 'string', description: 'Command-line arguments.' },
-          working_dir: { type: 'string', description: 'Start-in directory.' },
+          working_dir: { type: 'string', description: 'Start-in directory. When supplied, the MCP applies it through the Task Scheduler action WorkingDirectory property after creation.' },
           schedule: { type: 'string', enum: ['daily', 'hourly', 'at_startup', 'at_logon', 'once'], description: 'Trigger schedule type.' },
           start_time: { type: 'string', description: 'HH:mm start time (for daily/hourly/once).' },
           interval_minutes: { type: 'number', description: 'Repeat interval in minutes (for hourly).' },
@@ -202,8 +223,8 @@ export function listTools() {
           task_name: { type: 'string', description: 'Full task path to update.' },
           command: { type: 'string', description: 'Executable path or command.' },
           arguments: { type: 'string', description: 'Command-line arguments.' },
-          working_dir: { type: 'string', description: 'Advisory start-in directory. schtasks /change cannot set this; it is never implemented by adding a shell wrapper.' },
-          dry_run: { type: 'boolean', description: 'Return the planned schtasks command without mutating.' },
+          working_dir: { type: 'string', description: 'Start-in directory applied through the Task Scheduler action WorkingDirectory property; never emulated with a shell wrapper.' },
+          dry_run: { type: 'boolean', description: 'Return the planned PowerShell action mutation and a non-authoritative schtasks preview without mutating.' },
         },
         required: ['task_name', 'command'],
         additionalProperties: false,
@@ -321,13 +342,14 @@ async function schtasks(args: string[], timeoutMs = SCHTASKS_TIMEOUT_MS): Promis
   });
 }
 
-async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
+async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string, workingDir?: string, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
   const script = [
     '$ErrorActionPreference = "Stop"',
     '$execute = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_EXECUTE")',
     '$arguments = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_ARGUMENTS")',
+    '$workingDirectory = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_WORKING_DIR")',
     '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK")',
-    'if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments }',
+    'if ([string]::IsNullOrWhiteSpace($workingDirectory)) { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments } } else { if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute -WorkingDirectory $workingDirectory } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments -WorkingDirectory $workingDirectory } }',
     'Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null',
   ].join(';');
   const encodedCommand = Buffer.from(script, 'utf16le').toString('base64');
@@ -346,6 +368,7 @@ async function setScheduledTaskAction(taskName: string, command: string, cmdArgs
         NARADA_SCHEDULER_TASK: taskName,
         NARADA_SCHEDULER_EXECUTE: command,
         NARADA_SCHEDULER_ARGUMENTS: cmdArgs ?? '',
+        NARADA_SCHEDULER_WORKING_DIR: workingDir ?? '',
       },
     });
     let stdout = '';
@@ -448,31 +471,52 @@ function compactTrigger(row: JsonRecord): JsonRecord {
   };
 }
 
-export function schedulerFailureDetails({ operation, exitCode, stdout = '', stderr = '', taskName = '', command = '' }: { operation: string; exitCode: number; stdout?: string; stderr?: string; taskName?: string; command?: string }): JsonRecord {
+export function schedulerFailureDetails({ operation, exitCode, stdout = '', stderr = '', taskName = '', command = '', timedOut = false, timeoutMs = SCHTASKS_TIMEOUT_MS }: { operation: string; exitCode: number; stdout?: string; stderr?: string; taskName?: string; command?: string; timedOut?: boolean; timeoutMs?: number }): JsonRecord {
   const combined = `${stdout}\n${stderr}`.toLowerCase();
-  const classification = combined.includes('access is denied')
+  const classification = timedOut
+    ? 'scheduler_command_timed_out'
+    : combined.includes('access is denied')
     ? 'requires_elevation'
     : combined.includes('folder') || combined.includes('cannot find')
       ? 'invalid_task_path_or_missing_task'
       : combined.includes('invalid') || exitCode === 2147500037
         ? 'invalid_arguments_or_unsupported_scheduler_option'
         : 'scheduler_command_failed';
-  const operatorCommand = command
-    ? `schtasks.exe /Create /TN ${quoteCmd(taskName)} /TR ${quoteCmd(command)} /F`
+  const operatorVerb = operation === 'update_action' ? 'Change' : operation === 'delete' ? 'Delete' : operation === 'enable' || operation === 'disable' ? 'Change' : 'Create';
+  const operatorArgs = operation === 'update_action'
+    ? ` /TR ${quoteCmd(command)}`
+    : operation === 'enable'
+      ? ' /Enable'
+      : operation === 'disable'
+        ? ' /Disable'
+        : operation === 'delete'
+          ? ' /F'
+          : command
+            ? ` /TR ${quoteCmd(command)} /F`
+            : '';
+  const operatorCommand = operation !== 'update_action' && (command || ['delete', 'enable', 'disable'].includes(operation))
+    ? `schtasks.exe /${operatorVerb} /TN ${quoteCmd(taskName)}${operatorArgs}`
     : null;
   return {
     operation,
     exit_code: exitCode,
     classification,
     requires_elevation: classification === 'requires_elevation',
+    timed_out: timedOut,
+    timeout_ms: timeoutMs,
     task_name: taskName,
     stdout,
     stderr,
     operator_command: operatorCommand,
-    remediation: classification === 'requires_elevation'
+    operator_command_note: operation === 'update_action'
+      ? 'The MCP mutates the action with PowerShell Set-ScheduledTask; any schtasks representation is preview-only and does not apply working_dir.'
+      : null,
+    remediation: classification === 'scheduler_command_timed_out'
+      ? `The scheduler command exceeded its ${timeoutMs}ms bound and its process tree was terminated. Retry after confirming scheduler health; do not emulate the operation with an ungoverned wrapper.`
+      : classification === 'requires_elevation'
       ? 'Run the equivalent scheduler command from an elevated PowerShell window, or use structured_command_elevated_window_execute for an explicit UAC prompt.'
       : classification === 'invalid_arguments_or_unsupported_scheduler_option'
-        ? 'Inspect task_name, schedule, start_time, and command quoting. schtasks.exe /create does not support a separate Start In directory; wrap the command with Set-Location if needed.'
+        ? 'Inspect task_name, schedule, start_time, and command quoting. The MCP applies working_dir through the Task Scheduler action; do not emulate Start In with a Set-Location or shell wrapper.'
         : 'Inspect stdout/stderr and retry with a concrete task path such as \\TaskName.',
   };
 }
@@ -505,8 +549,8 @@ export function compactScheduledTaskRows(rows: JsonRecord[]): JsonRecord[] {
 async function schedulerTaskList(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const folder = optionalString(args.folder) ?? '\\';
   const limit = clamp(integer(args.limit, 50, 1, 500), 1, 500);
-  const { stdout, exitCode } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', folder]);
-  if (exitCode !== 0 && exitCode !== 1) throw diagnosticError('scheduler_query_failed', `scheduler_query_failed:${exitCode}`);
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', folder]);
+  if (exitCode !== 0 && exitCode !== 1) throw diagnosticError('scheduler_query_failed', `scheduler_query_failed:${exitCode}`, schedulerFailureDetails({ operation: 'list', exitCode, stdout, stderr, timedOut }));
   const all = compactScheduledTaskRows(parseCSV(stdout));
   const items = all.slice(0, limit);
   return { items, count: items.length, folder };
@@ -514,8 +558,11 @@ async function schedulerTaskList(args: JsonRecord, _state: SchedulerState): Prom
 
 async function schedulerTaskShow(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
-  const { stdout, exitCode } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', taskName]);
-  if (exitCode !== 0) throw diagnosticError('scheduler_task_not_found', `scheduler_task_not_found:${taskName}`, { exitCode });
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', taskName]);
+  if (exitCode !== 0) {
+    if (timedOut) throw diagnosticError('scheduler_query_timed_out', `scheduler_query_timed_out:${taskName}`, schedulerFailureDetails({ operation: 'show', exitCode, stdout, stderr, taskName, timedOut }));
+    throw diagnosticError('scheduler_task_not_found', `scheduler_task_not_found:${taskName}`, { exitCode });
+  }
   const rows = parseCSV(stdout);
   if (rows.length === 0) throw diagnosticError('scheduler_task_not_found', `scheduler_task_not_found:${taskName}`);
   return { task: rows[0], task_compact: compactScheduledTaskRows(rows)[0] ?? null };
@@ -525,23 +572,40 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
   const command = requiredString(args.command, 'scheduler_requires_command');
   const cmdArgs = optionalString(args.arguments);
-  const workingDir = optionalString(args.working_dir);
+  const workingDirInput = optionalString(args.working_dir);
+  const workingDir = workingDirInput ? resolve(workingDirInput) : null;
   const schedule = requiredString(args.schedule, 'scheduler_requires_schedule');
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = cmdArgs ? `${command} ${cmdArgs}` : command;
   const schArgs = ['/create', '/tn', taskName, '/tr', taskRun, '/f'];
   schArgs.push(...buildCreateScheduleArgs(schedule, args));
-  const realTr = workingDir ? `${command} ${cmdArgs ?? ''}`.trim() : taskRun;
-  schArgs[schArgs.indexOf('/tr') + 1] = realTr;
-  const { stdout, stderr, exitCode } = await schtasks(schArgs);
-  if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: realTr }));
-  return { status: 'created', task_name: taskName, schedule, command: realTr, working_dir_warning: workingDir ? 'schtasks.exe /create cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined };
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(schArgs);
+  if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: taskRun, timedOut }));
+  if (workingDir) {
+    const actionResult = await setScheduledTaskAction(taskName, command, cmdArgs, workingDir);
+    if (actionResult.exitCode !== 0) {
+      throw diagnosticError('scheduler_create_working_dir_failed', `scheduler_create_working_dir_failed:${actionResult.exitCode}`, {
+        ...schedulerFailureDetails({ operation: 'create_working_dir', exitCode: actionResult.exitCode, stdout: actionResult.stdout, stderr: actionResult.stderr, taskName, command: taskRun, timedOut: actionResult.timedOut }),
+        task_created: true,
+        mutation_method: 'powershell_set_scheduled_task_action',
+      });
+    }
+  }
+  return {
+    status: 'created',
+    task_name: taskName,
+    schedule,
+    command: taskRun,
+    working_dir: workingDir,
+    working_dir_applied: Boolean(workingDir),
+    mutation_method: workingDir ? 'schtasks_create_then_powershell_set_scheduled_task_action' : 'schtasks_create',
+  };
 }
 
 async function schedulerTaskDelete(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
-  const { stdout, stderr, exitCode } = await schtasks(['/delete', '/tn', taskName, '/f']);
-  if (exitCode !== 0) throw diagnosticError('scheduler_delete_failed', `scheduler_delete_failed:${exitCode}`, schedulerFailureDetails({ operation: 'delete', exitCode, stdout, stderr, taskName }));
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/delete', '/tn', taskName, '/f']);
+  if (exitCode !== 0) throw diagnosticError('scheduler_delete_failed', `scheduler_delete_failed:${exitCode}`, schedulerFailureDetails({ operation: 'delete', exitCode, stdout, stderr, taskName, timedOut }));
   return { status: 'deleted', task_name: taskName };
 }
 
@@ -574,7 +638,8 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
   const command = requiredString(args.command, 'scheduler_requires_command');
   const cmdArgs = optionalString(args.arguments);
-  const workingDir = optionalString(args.working_dir);
+  const workingDirInput = optionalString(args.working_dir);
+  const workingDir = workingDirInput ? resolve(workingDirInput) : null;
   assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = buildTaskRunCommand(command, cmdArgs);
   const schArgs = ['/change', '/tn', taskName, '/tr', taskRun];
@@ -586,13 +651,15 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
       execute: command,
       arguments: cmdArgs ?? '',
       mutation_method: 'powershell_set_scheduled_task_action',
-      schtasks_args: schArgs,
-      schtasks_fallback: schArgs,
+      schtasks_preview_args: schArgs,
+      schtasks_preview_not_used_for_mutation: true,
       preserves_triggers: true,
-      working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined,
+      working_dir: workingDir,
+      working_dir_applied: false,
+      working_dir_would_apply: Boolean(workingDir),
     };
   }
-  const powershellResult = await setScheduledTaskAction(taskName, command, cmdArgs);
+  const powershellResult = await setScheduledTaskAction(taskName, command, cmdArgs, workingDir);
   if (powershellResult.exitCode !== 0) {
     throw diagnosticError(
       'scheduler_update_action_failed',
@@ -605,9 +672,11 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
           stderr: powershellResult.stderr,
           taskName,
           command: taskRun,
+          timedOut: powershellResult.timedOut,
         }),
         mutation_method: 'powershell_set_scheduled_task_action',
-        schtasks_fallback: schArgs,
+        schtasks_preview_args: schArgs,
+        schtasks_preview_not_used_for_mutation: true,
       },
     );
   }
@@ -617,36 +686,37 @@ async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState
     command: taskRun,
     preserves_triggers: true,
     mutation_method: 'powershell_set_scheduled_task_action',
-    working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined,
+    working_dir: workingDir,
+    working_dir_applied: Boolean(workingDir),
   };
 }
 
 async function schedulerTaskEnable(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
-  const { stdout, stderr, exitCode } = await schtasks(['/change', '/tn', taskName, '/enable']);
-  if (exitCode !== 0) throw diagnosticError('scheduler_enable_failed', `scheduler_enable_failed:${exitCode}`, schedulerFailureDetails({ operation: 'enable', exitCode, stdout, stderr, taskName }));
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/change', '/tn', taskName, '/enable']);
+  if (exitCode !== 0) throw diagnosticError('scheduler_enable_failed', `scheduler_enable_failed:${exitCode}`, schedulerFailureDetails({ operation: 'enable', exitCode, stdout, stderr, taskName, timedOut }));
   return { status: 'enabled', task_name: taskName };
 }
 
 async function schedulerTaskDisable(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
-  const { stdout, stderr, exitCode } = await schtasks(['/change', '/tn', taskName, '/disable']);
-  if (exitCode !== 0) throw diagnosticError('scheduler_disable_failed', `scheduler_disable_failed:${exitCode}`, schedulerFailureDetails({ operation: 'disable', exitCode, stdout, stderr, taskName }));
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/change', '/tn', taskName, '/disable']);
+  if (exitCode !== 0) throw diagnosticError('scheduler_disable_failed', `scheduler_disable_failed:${exitCode}`, schedulerFailureDetails({ operation: 'disable', exitCode, stdout, stderr, taskName, timedOut }));
   return { status: 'disabled', task_name: taskName };
 }
 
 async function schedulerTaskRun(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
-  const { stdout, stderr, exitCode } = await schtasks(['/run', '/tn', taskName]);
-  if (exitCode !== 0) throw diagnosticError('scheduler_run_failed', `scheduler_run_failed:${exitCode}`, schedulerFailureDetails({ operation: 'run', exitCode, stdout, stderr, taskName }));
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/run', '/tn', taskName]);
+  if (exitCode !== 0) throw diagnosticError('scheduler_run_failed', `scheduler_run_failed:${exitCode}`, schedulerFailureDetails({ operation: 'run', exitCode, stdout, stderr, taskName, timedOut }));
   return { status: 'started', task_name: taskName };
 }
 
 async function schedulerTaskHistory(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
   const limit = clamp(integer(args.limit, 20, 1, 200), 1, 200);
-  const { stdout, exitCode } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', taskName]);
-  if (exitCode !== 0 && exitCode !== 1) throw diagnosticError('scheduler_query_failed', `scheduler_query_failed:${exitCode}`);
+  const { stdout, stderr, exitCode, timedOut } = await schtasks(['/query', '/fo', 'CSV', '/v', '/tn', taskName]);
+  if (exitCode !== 0 && exitCode !== 1) throw diagnosticError('scheduler_query_failed', `scheduler_query_failed:${exitCode}`, schedulerFailureDetails({ operation: 'history', exitCode, stdout, stderr, taskName, timedOut }));
   const rows = parseCSV(stdout);
   if (rows.length === 0) throw diagnosticError('scheduler_task_not_found', `scheduler_task_not_found:${taskName}`);
   const history = compactScheduledTaskRows(rows).slice(0, limit).map((task) => ({

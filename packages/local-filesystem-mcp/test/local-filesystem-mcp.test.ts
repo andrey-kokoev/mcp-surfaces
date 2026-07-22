@@ -720,6 +720,16 @@ trust_level = "untrusted"
   assert.match(writeResponse.result.content[0].text, /fs_write_file: written\npath: /);
   assert.match(writeResponse.result.content[0].text, /relative_path: b\.txt/);
   assert.match(readFileSync(join(auditDir, 'filesystem-mcp-audit.jsonl'), 'utf8'), /fs_write_file/);
+  const transientScriptDirectory = join(trusted, '.ai', 'tmp');
+  mkdirSync(transientScriptDirectory, { recursive: true });
+  const transientWrapperWrite = call(writeState, 308, 'fs_write_file', { path: join(transientScriptDirectory, 'generated.cmd'), content: '@echo off\r\n' });
+  assert.equal(transientWrapperWrite.error.data.code, 'transient_executable_write_disallowed');
+  assert.equal(existsSync(join(transientScriptDirectory, 'generated.cmd')), false);
+  writeFileSync(join(transientScriptDirectory, 'existing.ps1'), 'Write-Output before\n', 'utf8');
+  const transientScriptReplace = call(writeState, 309, 'fs_str_replace_file', { path: join(transientScriptDirectory, 'existing.ps1'), old: 'before', new: 'after' });
+  assert.equal(transientScriptReplace.error.data.code, 'transient_executable_write_disallowed');
+  const transientPatch = call(writeState, 310, 'fs_apply_patch', { patch: `*** Begin Patch\n*** Add File: .ai/tmp/patched.js\n+console.log('blocked');\n*** End Patch` });
+  assert.equal(transientPatch.error.data.code, 'transient_executable_write_disallowed');
   const verifyWriteRead = call(writeState, 30, 'fs_read_file', { path: join(trusted, 'b.txt') });
   assert.equal(verifyWriteRead.result.structuredContent.content, 'created');
   const guardedReadThenReplace = call(writeState, 3001, 'fs_str_replace_file', { path: join(trusted, 'b.txt'), old: 'created', new: 'created-via-guard', expected_sha256: verifyWriteRead.result.structuredContent.content_sha256 });

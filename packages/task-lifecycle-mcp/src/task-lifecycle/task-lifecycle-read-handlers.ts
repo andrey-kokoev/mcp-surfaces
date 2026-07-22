@@ -538,7 +538,7 @@ function taskLifecycleToolGuidance(tool) {
     },
     task_lifecycle_finish: {
       preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
-      caveat: 'Use inline recovery_truthfulness for ordinary recovery packets under the governed threshold; use payload_ref for larger summary/findings/guard packets and include changed_files or no_files_changed for implementation work. When evidence_refs are supplied, use structured_command_execution:<execution_ref> or test_mcp_artifact:<artifact_id>; mcp_output refs are diagnostic only, and copied logs, exit files, wrappers, transient paths, and untyped narrative refs are refused.',
+      caveat: 'Use inline recovery_truthfulness for ordinary recovery packets under the governed threshold; use payload_ref for larger summary/findings/guard packets and include changed_files or no_files_changed for implementation work. When evidence_refs are supplied, use a successful structured_command_execution:<execution_ref> or test_mcp_artifact:<artifact_id>; the finish gate dereferences and verifies those refs. mcp_output refs are diagnostic only, and copied logs, exit files, wrappers, transient paths, and untyped narrative refs are refused.',
     },
     task_lifecycle_report_blocked: {
       preferred_for: 'Recording unresolved blockers with exact next action.',
