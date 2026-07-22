@@ -23,6 +23,7 @@ const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot, '--si
     NARADA_AGENT_CONTEXT_DB: join(siteRoot, '.ai', 'state', 'agent-context.sqlite'),
   },
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 
 let stdout = '';

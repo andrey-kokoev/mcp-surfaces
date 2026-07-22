@@ -3072,14 +3072,14 @@ try {
     scopedStore.db.close();
   }
 
-  spawnSync('git', ['init'], { cwd: scopedSiteRoot, stdio: 'ignore' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: scopedSiteRoot, stdio: 'ignore' });
-  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: scopedSiteRoot, stdio: 'ignore' });
+  spawnSync('git', ['init'], { cwd: scopedSiteRoot, stdio: 'ignore', windowsHide: true });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: scopedSiteRoot, stdio: 'ignore', windowsHide: true });
+  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: scopedSiteRoot, stdio: 'ignore', windowsHide: true });
   writeFileSync(join(scopedSiteRoot, 'README.md'), '# base\n');
   writeFileSync(join(scopedSiteRoot, 'packages', 'example', 'src', 'index.ts'), 'export const a = 1;\n');
   writeFileSync(join(scopedSiteRoot, '.ai', 'tmp', 'scratch.json'), '{}\n');
-  spawnSync('git', ['add', '.'], { cwd: scopedSiteRoot, stdio: 'ignore' });
-  spawnSync('git', ['commit', '-m', 'base'], { cwd: scopedSiteRoot, stdio: 'ignore' });
+  spawnSync('git', ['add', '.'], { cwd: scopedSiteRoot, stdio: 'ignore', windowsHide: true });
+  spawnSync('git', ['commit', '-m', 'base'], { cwd: scopedSiteRoot, stdio: 'ignore', windowsHide: true });
 
   writeFileSync(join(scopedSiteRoot, 'packages', 'example', 'src', 'index.ts'), 'export const a = 2;\n');
   writeFileSync(join(scopedSiteRoot, '.ai', 'tmp', 'scratch.json'), '{"changed":true}\n');
@@ -3284,6 +3284,7 @@ try {
     encoding: 'utf8',
     env: { ...process.env, NARADA_AGENT_ID: 'scoped.builder' },
     timeout: 10_000,
+    windowsHide: true,
   });
   assert.equal(freshServerFinish.status, 0, freshServerFinish.stderr);
   const freshFrames = freshServerFinish.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('{')).map((line) => JSON.parse(line));

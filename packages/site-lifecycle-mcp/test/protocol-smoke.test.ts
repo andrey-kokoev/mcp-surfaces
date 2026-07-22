@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const proc = spawn(process.execPath, [serverPath, '--narada-root', 'D:/definitely/missing/narada'], { stdio: ['pipe', 'pipe', 'pipe'] });
+const proc = spawn(process.execPath, [serverPath, '--narada-root', 'D:/definitely/missing/narada'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
 let stderr = '';

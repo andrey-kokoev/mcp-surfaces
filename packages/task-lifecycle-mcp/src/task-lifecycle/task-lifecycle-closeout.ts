@@ -378,7 +378,7 @@ function extractTaskSection(body, heading) {
 }
 
 export function detectGitChangedFiles(cwd, basePath = cwd) {
-  const result = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' });
+  const result = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) return [];
   return result.stdout
     .split(/\r?\n/)
@@ -406,9 +406,9 @@ function relativeSitePath(siteRoot, filePath) {
 
 function gitVisiblePathSubset(cwd, files) {
   return files.filter((file) => {
-    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     if (tracked.status === 0) return true;
-    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     return untracked.status === 0 && untracked.stdout.trim().length > 0;
   });
 }

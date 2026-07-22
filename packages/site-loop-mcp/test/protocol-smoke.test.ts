@@ -11,6 +11,7 @@ const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', impor
 const proc = spawn(process.execPath, ['--no-warnings', serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 
 let stdout = '';

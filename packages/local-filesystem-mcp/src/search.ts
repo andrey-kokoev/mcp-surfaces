@@ -35,6 +35,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 1024 * 1024,
     timeout: effectiveTimeoutMs,
+    windowsHide: true,
     env,
   });
   if (result.error) {

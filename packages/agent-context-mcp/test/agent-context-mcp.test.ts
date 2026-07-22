@@ -51,6 +51,7 @@ const proc = spawn(process.execPath, [serverPath, '--site-root', siteRoot, '--si
     NARADA_AGENT_CONTEXT_DB: dbPath,
   },
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 
 let stdout = '';
@@ -349,6 +350,7 @@ const mismatchProc = spawn(process.execPath, [serverPath, '--site-root', boundSi
     NARADA_AGENT_CONTEXT_DB: join(boundSiteRoot, '.ai', 'state', 'agent-context.sqlite'),
   },
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 let mismatchStderr = '';
 mismatchProc.stderr.setEncoding('utf8');
@@ -366,6 +368,7 @@ const foreignDbProc = spawn(process.execPath, [serverPath, '--site-root', boundS
     NARADA_AGENT_CONTEXT_DB: join(foreignSiteRoot, '.ai', 'state', 'agent-context.sqlite'),
   },
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 let foreignDbStderr = '';
 foreignDbProc.stderr.setEncoding('utf8');

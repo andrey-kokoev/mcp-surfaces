@@ -657,9 +657,9 @@ function ensureTaskReportsIdentityRefColumn(db) {
 
 function gitVisiblePathSubset(cwd, files) {
   return files.filter((file) => {
-    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     if (tracked.status === 0) return true;
-    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     return untracked.status === 0 && untracked.stdout.trim().length > 0;
   });
 }
@@ -3505,6 +3505,7 @@ async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<
     const proc = spawn(process.execPath, [fullServerPath, '--site-root', cwd], {
       cwd,
       env: childEnv,
+      windowsHide: true,
     });
     let out = '';
     let err = '';

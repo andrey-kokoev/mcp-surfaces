@@ -16,11 +16,11 @@ const siteRoot = createTemporaryE2eRoot('git-site-fabric-e2e');
 const repo = join(siteRoot, 'repo');
 const remote = join(siteRoot, 'remote.git');
 mkdirSync(repo, { recursive: true });
-execFileSync('git', ['init', '--initial-branch=main', repo], { stdio: 'ignore' });
-execFileSync('git', ['init', '--bare', '--initial-branch=main', remote], { stdio: 'ignore' });
-execFileSync('git', ['config', 'user.email', 'e2e@example.test'], { cwd: repo, stdio: 'ignore' });
-execFileSync('git', ['config', 'user.name', 'MCP E2E'], { cwd: repo, stdio: 'ignore' });
-execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repo, stdio: 'ignore' });
+execFileSync('git', ['init', '--initial-branch=main', repo], { stdio: 'ignore', windowsHide: true });
+execFileSync('git', ['init', '--bare', '--initial-branch=main', remote], { stdio: 'ignore', windowsHide: true });
+execFileSync('git', ['config', 'user.email', 'e2e@example.test'], { cwd: repo, stdio: 'ignore', windowsHide: true });
+execFileSync('git', ['config', 'user.name', 'MCP E2E'], { cwd: repo, stdio: 'ignore', windowsHide: true });
+execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repo, stdio: 'ignore', windowsHide: true });
 writeFileSync(join(repo, 'README.md'), 'site fabric git e2e\n', 'utf8');
 
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
@@ -72,7 +72,7 @@ try {
     name: 'git_push', arguments: { working_directory: repo, remote: 'origin', branch: 'main' },
   }));
   assert.equal(pushed.status, 'ok', JSON.stringify(pushed));
-  assert.match(String(execFileSync('git', ['rev-parse', 'refs/heads/main'], { cwd: remote, encoding: 'utf8' })).trim(), /^[0-9a-f]{40}$/);
+  assert.match(String(execFileSync('git', ['rev-parse', 'refs/heads/main'], { cwd: remote, encoding: 'utf8', windowsHide: true })).trim(), /^[0-9a-f]{40}$/);
   const initialRemoteBranches = structured(await server.client.request(16, 'tools/call', {
     name: 'git_branch_list', arguments: { working_directory: repo, scope: 'remote' },
   }));

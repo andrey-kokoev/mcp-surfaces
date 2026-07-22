@@ -27,7 +27,7 @@ lines.on('line', (line) => {
   }
   if (count === 1 && mode === 'timeout') return;
   if (count === 1 && mode === 'stale') {
-    spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('stale-not-json\\\\n'), 1_100)"], { stdio: ['ignore', process.stdout, process.stderr] });
+    spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('stale-not-json\\\\n'), 1_100)"], { stdio: ['ignore', process.stdout, process.stderr], windowsHide: true });
     return;
   }
   if (count === 2 && mode === 'stale') {

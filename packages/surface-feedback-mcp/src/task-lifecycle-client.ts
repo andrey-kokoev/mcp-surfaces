@@ -89,6 +89,7 @@ export function createTaskLifecycleProcessClient({
       cwd: siteRoot,
       env: { ...env, NARADA_SITE_ROOT: siteRoot },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     child = spawned;
     liveChildren.add(spawned);

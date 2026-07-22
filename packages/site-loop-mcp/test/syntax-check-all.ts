@@ -14,7 +14,7 @@ function walk(dir) {
 }
 walk(root);
 for (const file of files) {
-  const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) {
     process.stderr.write(`${file}\n${result.stderr}`);
     process.exit(result.status ?? 1);

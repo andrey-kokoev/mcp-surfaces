@@ -49,6 +49,7 @@ const proc = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning
   input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n' + JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n',
   encoding: 'utf8',
   timeout: 10000,
+  windowsHide: true,
 });
 
 const lines = proc.stdout.trim().split('\n');

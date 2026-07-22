@@ -72,6 +72,7 @@ const beta = writeFixtureSite('gamma', {
 const proc = spawn(process.execPath, ['--no-warnings', serverPath, '--site-root', beta.root], {
   cwd: beta.root,
   stdio: ['pipe', 'pipe', 'pipe'],
+  windowsHide: true,
 });
 
 let stdout = '';

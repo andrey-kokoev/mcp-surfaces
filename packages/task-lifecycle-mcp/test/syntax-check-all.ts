@@ -9,7 +9,7 @@ const files = [...walk(join(packageRoot, 'src')), ...walk(join(packageRoot, 'tes
   .filter((file) => !file.endsWith('syntax-check-all.js'));
 
 for (const file of files) {
-  const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) {
     process.stderr.write(`syntax check failed: ${relative(packageRoot, file)}\n`);
     process.stderr.write(result.stderr || result.stdout || '');

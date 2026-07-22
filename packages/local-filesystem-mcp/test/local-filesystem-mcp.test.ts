@@ -784,6 +784,7 @@ trust_level = "untrusted"
     input: `Content-Length: ${Buffer.byteLength(framedRequestBody, 'utf8')}\n\n${framedRequestBody}`,
     encoding: 'utf8',
     timeout: 5000,
+    windowsHide: true,
   });
   assert.equal(framedWrite.status, 0, framedWrite.stderr);
   const framedResponse = parseFirstJsonRpcFrame(framedWrite.stdout);
@@ -817,6 +818,7 @@ trust_level = "untrusted"
     encoding: 'utf8',
     timeout: 5000,
     env: { ...process.env, NARADA_LOCAL_FILESYSTEM_WRITE_DELAY_MS: '50' },
+    windowsHide: true,
   });
   assert.equal(delayedWrite.status, 0, delayedWrite.stderr);
   const delayedFrames = parseJsonRpcFrames(delayedWrite.stdout);
@@ -851,6 +853,7 @@ trust_level = "untrusted"
     encoding: 'utf8',
     timeout: 5000,
     env: { ...process.env, NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS: '60000' },
+    windowsHide: true,
   });
   const framedBlockedReadElapsedMs = Date.now() - framedBlockedReadStartedAt;
   assert.equal(blockedRead.status, 0, blockedRead.stderr);
