@@ -37,6 +37,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not execute .cmd/.bat files or scripts created under .ai/tmp. File creation is not execution, and a log/exit-code file is not governed test evidence.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [
@@ -47,6 +48,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'After mcp_loader_surface_restart or detach plus reattach, storage-backed input_ref and execution_ref values remain readable when the replacement uses the same storage root. Input refs are re-evaluated against the replacement process policy before execution; inspect an execution ref with structured_command_execution_show before deciding to rerun.',
       'Use mcp_loader_list_tools({ connection_id: replacement_connection_id }) followed by mcp_loader_call_tool({ connection_id: replacement_connection_id, tool_name: "structured_command_execution_policy_inspect", arguments: {} }) as a small health check on the replacement connection. When calling through mcp-loader, pass timeout_ms in the nested structured-command arguments and stay within the loader and child policy caps.',
       'For a governed command that may outlast the reliable synchronous bound, call structured_command_start. It returns a durable running execution_ref immediately; poll structured_command_execution_show until status is ok, failed, timed_out, or cancelled. The detached runner remains bounded by policy and persists completion independently of the MCP server process.',
+      'For tests, invoke the package/root test command directly through structured_command_start or the owning Test MCP. Preserve the returned execution_ref; copied stdout, .log files, .exit files, and ad-hoc wrapper scripts are not admissible verification evidence.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     recovery_commands: [

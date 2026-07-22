@@ -2,8 +2,8 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { extname, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const SERVER_NAME = 'scheduler-mcp';
@@ -16,11 +16,68 @@ type SchedulerState = {
   allowedRoots: string[];
 };
 
-const SCHTASKS_TIMEOUT_MS = 30_000;
+const SCHTASKS_TIMEOUT_MS = 10_000;
+const TRANSIENT_SCRIPT_EXTENSIONS = new Set(['.ps1', '.psm1', '.js', '.mjs', '.cjs', '.ts']);
+const TRANSIENT_SCRIPT_SUFFIX = /\.(?:ps1|psm1|js|mjs|cjs|ts)(?:["'\s]|$)/i;
+
+function terminateProcessTree(child: ChildProcess) {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    killer.on('error', () => {});
+    return;
+  }
+  child.kill('SIGTERM');
+}
 
 export function createServerState(options: JsonRecord = {}): SchedulerState {
-  const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots);
+  const allowedRoots = optionList(options.allowedRoot ?? options.allowedRoots).map((root) => resolve(root));
   return { allowedRoots };
+}
+
+export function scheduledActionPolicyReasons(command: string, cmdArgs: string | null | undefined, workingDir: string | null | undefined, state: SchedulerState): string[] {
+  const actionText = [command, cmdArgs ?? ''].filter(Boolean).join(' ');
+  const normalizedAction = actionText.replaceAll('\\', '/');
+  const reasons: string[] = [];
+  const executable = command.trim().replace(/^['"]|['"]$/g, '').replaceAll('\\', '/').split('/').at(-1)?.toLowerCase() ?? '';
+  if (executable === 'cmd' || executable === 'cmd.exe') {
+    reasons.push(`scheduler_shell_action_disallowed:${command}`);
+  }
+  if (/\.(?:cmd|bat)(?:["'\s]|$)/i.test(normalizedAction)) {
+    reasons.push(`scheduler_transient_wrapper_refused:${actionText}`);
+  }
+  for (const value of [command, cmdArgs ?? '']) {
+    const normalized = value.replaceAll('\\', '/');
+    const extension = extname(normalized.replace(/^['"]|['"]$/g, '')).toLowerCase();
+    if ((TRANSIENT_SCRIPT_EXTENSIONS.has(extension) || TRANSIENT_SCRIPT_SUFFIX.test(normalized))
+      && /(^|\/)\.ai\/(?:tmp|temp)(?:\/|$)/i.test(normalized)) {
+      reasons.push(`scheduler_transient_script_path_refused:${value}`);
+    }
+  }
+  if (workingDir && state.allowedRoots.length > 0) {
+    const resolvedWorkingDir = resolve(workingDir);
+    const withinAllowedRoot = state.allowedRoots.some((root) => {
+      const remainder = relative(root, resolvedWorkingDir);
+      return remainder === '' || (!remainder.startsWith('..') && !remainder.includes(':'));
+    });
+    if (!withinAllowedRoot) {
+      reasons.push(`scheduler_working_dir_outside_allowed_root:${workingDir}`);
+    }
+  }
+  return [...new Set(reasons)];
+}
+
+export function assertScheduledActionAllowed(command: string, cmdArgs: string | null | undefined, workingDir: string | null | undefined, state: SchedulerState): void {
+  const reasons = scheduledActionPolicyReasons(command, cmdArgs, workingDir, state);
+  if (reasons.length > 0) {
+    throw diagnosticError('scheduler_action_refused', 'scheduler_action_refused', {
+      refusal_reasons: reasons,
+      remediation: 'Schedule the owning executable directly from an allowed root. Do not use cmd, .cmd/.bat wrappers, or scripts staged under .ai/tmp or .ai/temp. Use structured_command_start or the owning MCP surface for governed execution and preserve its execution_ref as evidence.',
+    });
+  }
 }
 
 export async function handleRequest(request: JsonRecord, state: SchedulerState) {
@@ -145,7 +202,7 @@ export function listTools() {
           task_name: { type: 'string', description: 'Full task path to update.' },
           command: { type: 'string', description: 'Executable path or command.' },
           arguments: { type: 'string', description: 'Command-line arguments.' },
-          working_dir: { type: 'string', description: 'Advisory start-in directory. schtasks /change cannot set this; wrap Set-Location in the command if required.' },
+          working_dir: { type: 'string', description: 'Advisory start-in directory. schtasks /change cannot set this; it is never implemented by adding a shell wrapper.' },
           dry_run: { type: 'boolean', description: 'Return the planned schtasks command without mutating.' },
         },
         required: ['task_name', 'command'],
@@ -248,7 +305,7 @@ async function schtasks(args: string[], timeoutMs = SCHTASKS_TIMEOUT_MS): Promis
     };
     const timer = setTimeout(() => {
       stderr = `${stderr}\nschtasks.exe timed out after ${timeoutMs}ms`.trim();
-      child.kill();
+      terminateProcessTree(child);
       finish({ stdout, stderr, exitCode: -2, timedOut: true });
     }, timeoutMs);
     child.stdout.setEncoding('utf8');
@@ -261,6 +318,56 @@ async function schtasks(args: string[], timeoutMs = SCHTASKS_TIMEOUT_MS): Promis
     child.on('error', (err) => {
       finish({ stdout, stderr: `${stderr}\n${err.message}`, exitCode: -1 });
     });
+  });
+}
+
+async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
+  const script = [
+    '$ErrorActionPreference = "Stop"',
+    '$execute = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_EXECUTE")',
+    '$arguments = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_ARGUMENTS")',
+    '$taskName = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_TASK")',
+    'if ([string]::IsNullOrWhiteSpace($arguments)) { $action = New-ScheduledTaskAction -Execute $execute } else { $action = New-ScheduledTaskAction -Execute $execute -Argument $arguments }',
+    'Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null',
+  ].join(';');
+  const encodedCommand = Buffer.from(script, 'utf16le').toString('base64');
+  return new Promise((resolveExecution) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-EncodedCommand',
+      encodedCommand,
+    ], {
+      windowsHide: true,
+      env: {
+        ...process.env,
+        NARADA_SCHEDULER_TASK: taskName,
+        NARADA_SCHEDULER_EXECUTE: command,
+        NARADA_SCHEDULER_ARGUMENTS: cmdArgs ?? '',
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result: { stdout: string; stderr: string; exitCode: number; timedOut?: boolean }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveExecution(result);
+    };
+    const timer = setTimeout(() => {
+      stderr = (stderr + '\npowershell.exe timed out after ' + timeoutMs + 'ms').trim();
+      terminateProcessTree(child);
+      finish({ stdout, stderr, exitCode: -2, timedOut: true });
+    }, timeoutMs);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (code) => finish({ stdout, stderr, exitCode: code ?? -1 }));
+    child.on('error', (err) => finish({ stdout, stderr: stderr + '\n' + err.message, exitCode: -1 }));
   });
 }
 
@@ -420,7 +527,7 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
   const cmdArgs = optionalString(args.arguments);
   const workingDir = optionalString(args.working_dir);
   const schedule = requiredString(args.schedule, 'scheduler_requires_schedule');
-  const description = optionalString(args.description);
+  assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = cmdArgs ? `${command} ${cmdArgs}` : command;
   const schArgs = ['/create', '/tn', taskName, '/tr', taskRun, '/f'];
   schArgs.push(...buildCreateScheduleArgs(schedule, args));
@@ -428,7 +535,7 @@ async function schedulerTaskCreate(args: JsonRecord, state: SchedulerState): Pro
   schArgs[schArgs.indexOf('/tr') + 1] = realTr;
   const { stdout, stderr, exitCode } = await schtasks(schArgs);
   if (exitCode !== 0) throw diagnosticError('scheduler_create_failed', `scheduler_create_failed:${exitCode}`, schedulerFailureDetails({ operation: 'create', exitCode, stdout, stderr, taskName, command: realTr }));
-  return { status: 'created', task_name: taskName, schedule, command: realTr, working_dir_warning: workingDir ? 'schtasks.exe does not support Start In via /create; include an explicit Set-Location wrapper in command/arguments when required.' : undefined };
+  return { status: 'created', task_name: taskName, schedule, command: realTr, working_dir_warning: workingDir ? 'schtasks.exe /create cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined };
 }
 
 async function schedulerTaskDelete(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
@@ -463,11 +570,12 @@ export function buildCreateScheduleArgs(schedule: string, args: JsonRecord): str
   }
 }
 
-async function schedulerTaskUpdateAction(args: JsonRecord, _state: SchedulerState): Promise<JsonRecord> {
+async function schedulerTaskUpdateAction(args: JsonRecord, state: SchedulerState): Promise<JsonRecord> {
   const taskName = requiredString(args.task_name, 'scheduler_requires_task_name');
   const command = requiredString(args.command, 'scheduler_requires_command');
   const cmdArgs = optionalString(args.arguments);
   const workingDir = optionalString(args.working_dir);
+  assertScheduledActionAllowed(command, cmdArgs, workingDir, state);
   const taskRun = buildTaskRunCommand(command, cmdArgs);
   const schArgs = ['/change', '/tn', taskName, '/tr', taskRun];
   if (args.dry_run === true) {
@@ -475,19 +583,41 @@ async function schedulerTaskUpdateAction(args: JsonRecord, _state: SchedulerStat
       status: 'planned',
       task_name: taskName,
       command: taskRun,
+      execute: command,
+      arguments: cmdArgs ?? '',
+      mutation_method: 'powershell_set_scheduled_task_action',
       schtasks_args: schArgs,
+      schtasks_fallback: schArgs,
       preserves_triggers: true,
-      working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; include an explicit Set-Location wrapper in command/arguments when required.' : undefined,
+      working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined,
     };
   }
-  const { stdout, stderr, exitCode } = await schtasks(schArgs);
-  if (exitCode !== 0) throw diagnosticError('scheduler_update_action_failed', `scheduler_update_action_failed:${exitCode}`, schedulerFailureDetails({ operation: 'update_action', exitCode, stdout, stderr, taskName, command: taskRun }));
+  const powershellResult = await setScheduledTaskAction(taskName, command, cmdArgs);
+  if (powershellResult.exitCode !== 0) {
+    throw diagnosticError(
+      'scheduler_update_action_failed',
+      'scheduler_update_action_failed:' + powershellResult.exitCode,
+      {
+        ...schedulerFailureDetails({
+          operation: 'update_action',
+          exitCode: powershellResult.exitCode,
+          stdout: powershellResult.stdout,
+          stderr: powershellResult.stderr,
+          taskName,
+          command: taskRun,
+        }),
+        mutation_method: 'powershell_set_scheduled_task_action',
+        schtasks_fallback: schArgs,
+      },
+    );
+  }
   return {
     status: 'updated',
     task_name: taskName,
     command: taskRun,
     preserves_triggers: true,
-    working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; include an explicit Set-Location wrapper in command/arguments when required.' : undefined,
+    mutation_method: 'powershell_set_scheduled_task_action',
+    working_dir_warning: workingDir ? 'schtasks.exe /change cannot set Start In; working_dir is advisory and was not applied. Do not compensate with a shell wrapper.' : undefined,
   };
 }
 

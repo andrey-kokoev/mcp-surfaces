@@ -119,6 +119,22 @@ const defaultPwshExecutionPolicyFile = decideStructuredCommandExecution({
 }, stateWithDefaultCommands.policy);
 assert.equal(defaultPwshExecutionPolicyFile.status, 'allowed');
 assert.deepEqual(defaultPwshExecutionPolicyFile.reasons, []);
+
+const cmdWrapper = decideStructuredCommandExecution({
+  command: join(root, '.ai', 'tmp', 'site-loop-focused-tests.cmd'),
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(cmdWrapper.status, 'refused');
+assert.ok(cmdWrapper.reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:')));
+
+const transientPowerShellWrapper = decideStructuredCommandExecution({
+  command: 'pwsh',
+  args: ['-NoProfile', '-File', join(root, '.ai', 'tmp', 'site-loop-focused-tests.ps1')],
+  workingDirectory: root,
+}, stateWithDefaultCommands.policy);
+assert.equal(transientPowerShellWrapper.status, 'refused');
+assert.ok(transientPowerShellWrapper.reasons.some((reason) => String(reason).startsWith('transient_wrapper_path_disallowed:')));
+
 const defaultPwshCommand = decideStructuredCommandExecution({
   command: 'pwsh',
   args: ['-Command', 'Write-Output nope'],
@@ -323,7 +339,7 @@ assert.ok(raced.status === 'timed_out' || raced.status === 'cancelled');
 const grandchildPidFile = join(root, 'grandchild.pid');
 const timedOutTree = await exec({
   command: 'node',
-  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
+  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); writeFileSync(${JSON.stringify(grandchildPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
   working_directory: root,
   timeout_ms: 50,
 }, state);
@@ -339,7 +355,7 @@ assert.throws(() => process.kill(grandchildPid, 0), `grandchild process ${grandc
 const stubbornPidFile = join(root, 'stubborn-grandchild.pid');
 const timedOutStubbornTree = await exec({
   command: 'node',
-  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' }); writeFileSync(${JSON.stringify(stubbornPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
+  args: ['-e', `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); const grandchild = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true }); writeFileSync(${JSON.stringify(stubbornPidFile)}, String(grandchild.pid)); setInterval(() => {}, 1000);`],
   working_directory: root,
   timeout_ms: 50,
 }, state);

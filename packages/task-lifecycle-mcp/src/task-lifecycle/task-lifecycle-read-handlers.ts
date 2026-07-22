@@ -538,7 +538,7 @@ function taskLifecycleToolGuidance(tool) {
     },
     task_lifecycle_finish: {
       preferred_for: 'Finishing a claimed task or admitting an outcome for an outcome-contract dependency task.',
-      caveat: 'Use inline recovery_truthfulness for ordinary recovery packets under the governed threshold; use payload_ref for larger summary/findings/guard packets and include changed_files or no_files_changed for implementation work.',
+      caveat: 'Use inline recovery_truthfulness for ordinary recovery packets under the governed threshold; use payload_ref for larger summary/findings/guard packets and include changed_files or no_files_changed for implementation work. When evidence_refs are supplied, use structured_command_execution:<execution_ref> or test_mcp_artifact:<artifact_id>; mcp_output refs are diagnostic only, and copied logs, exit files, wrappers, transient paths, and untyped narrative refs are refused.',
     },
     task_lifecycle_report_blocked: {
       preferred_for: 'Recording unresolved blockers with exact next action.',
@@ -582,7 +582,7 @@ function taskLifecyclePayloadSchemas() {
       preferred_tool_for_new_review_work: 'task_lifecycle_finish',
     },
     task_lifecycle_finish: {
-      payload_ref_shape: { summary: '<finish summary>', outcome: '<contract outcome when applicable>', findings: [], changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
+      payload_ref_shape: { summary: '<finish summary>', outcome: '<contract outcome when applicable>', findings: [], evidence_refs: ['structured_command_execution:<execution_ref>'], changed_files: ['path/to/file'], no_files_changed: false, self_certification: {}, recovery_truthfulness: {} },
       inline_payload_limit: { threshold_chars: DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT, remediation: 'Inline recovery_truthfulness and other companion fields are accepted up to the governed threshold. Put larger summary, findings, outcome evidence, or guard packets in mcp_payload_create, then call task_lifecycle_finish with payload_ref plus top-level task_number and agent_id.' },
       top_level_fields_remain_required: ['task_number', 'agent_id'],
     },

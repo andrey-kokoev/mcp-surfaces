@@ -4,6 +4,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { renderTaskBodyFromSpec } from '@narada2/task-governance-core/task-spec';
 import { isSqliteBusyError, withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { terminalTaskMutationGuard } from './closure-authority.js';
+import { validateGovernedTestEvidenceRefs } from './governed-test-evidence.js';
 import { inspectSupersededTaskGuard } from './task-lineage-guards.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
@@ -1374,6 +1375,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       const outcome = stringField(args, 'outcome');
       const findings = Array.isArray(args.findings) ? args.findings : undefined;
       const evidenceRefs = stringArrayField(args, 'evidence_refs') ?? [];
+      const evidenceRefsValidation = validateGovernedTestEvidenceRefs(evidenceRefs);
       let reviewer = stringField(args, 'reviewer');
       const changedFiles = stringArrayField(args, 'changed_files');
       const noFilesChanged = booleanField(args, 'no_files_changed') === true;
@@ -1394,6 +1396,17 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           invalid_verdict: verdict,
           valid_review_verdicts: validReviewVerdicts,
           remediation: 'For claimed-state finish/report submission, call this tool without verdict and provide summary plus changed_files or no_files_changed. Use accepted, accepted_with_notes, or rejected only for review-state tasks.',
+        }, true);
+      }
+      if (evidenceRefsValidation.status === 'rejected') {
+        return jsonToolResult({
+          status: 'blocked',
+          error: 'governed_test_evidence_required',
+          close_blocked: true,
+          task_number: taskNumber,
+          schema: evidenceRefsValidation.schema,
+          evidence_refs_validation: evidenceRefsValidation,
+          remediation: evidenceRefsValidation.remediation,
         }, true);
       }
       if (verdict) {
@@ -1658,6 +1671,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           close_action: 'closed',
           assignment_released: Boolean(activeAssignment),
           task_outcome: taskOutcome,
+          evidence_refs_validation: evidenceRefsValidation,
           outcome_contract: outcomeContract,
           allowed_outcomes: allowedOutcomes,
           outcome_capability_policy: outcomeCapabilityPolicy,
@@ -1795,6 +1809,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (noFilesChanged) finishOptions.changedFiles = JSON.stringify([NO_FILES_CHANGED_MARKER]);
       const result = await withAuthoredRosterJsonPreserved(siteRoot, () => finishTaskService(finishOptions), store);
       const payload = result.result || result;
+      payload.evidence_refs_validation = evidenceRefsValidation;
       const isBlocked = payload.close_action === 'blocked';
       if (!changedFiles && !noFilesChanged) {
         payload.changed_files_scoping = scopedChangedFiles;

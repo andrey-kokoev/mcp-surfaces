@@ -104,12 +104,14 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'Do not treat assistant text as the durable record when structuredContent is present.',
       'Do not fan out full-content fs_read_file calls when only line counts or byte sizes are needed; use fs_file_metrics with a bounded limit and page deliberately.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not create ad-hoc executable wrappers (.cmd/.bat or scripts under .ai/tmp/.ai/temp) to run commands; call structured_command_start or the owning MCP surface directly. File creation is not execution evidence.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [
       'For unknown_tool, call tools/list and this guidance command again after restart.',
       'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
       'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
+      'For command execution, use structured_command_start or the owning MCP surface and preserve its execution_ref; do not use fs_write_file to manufacture a transient wrapper.',
       'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
     ],
     feedback: {

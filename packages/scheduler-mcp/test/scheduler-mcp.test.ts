@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildCreateScheduleArgs, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerFailureDetails } from '../src/main.js';
+import { buildCreateScheduleArgs, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, scheduledActionPolicyReasons, schedulerFailureDetails } from '../src/main.js';
 
 const state = createServerState({});
 
@@ -23,6 +23,12 @@ assert.equal(buildTaskRunCommand('pwsh.exe', '-File tool.ps1'), 'pwsh.exe -File 
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 15 }), ['/sc', 'minute', '/mo', '15']);
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 120 }), ['/sc', 'hourly', '/mo', '2']);
 assert.deepEqual(buildCreateScheduleArgs('hourly', { interval_minutes: 90 }), ['/sc', 'minute', '/mo', '90']);
+assert.ok(scheduledActionPolicyReasons('cmd.exe', '/c tool.cmd', null, state).some((reason) => reason.startsWith('scheduler_shell_action_disallowed:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\tool.cmd', null, state).some((reason) => reason.startsWith('scheduler_transient_wrapper_refused:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\.ai\\tmp\\tool.ps1', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File "D:\\code\\site\\.ai\\tmp\\tool.ps1"', null, state).some((reason) => reason.startsWith('scheduler_transient_script_path_refused:')));
+const rootedState = createServerState({ allowedRoots: ['D:\\code\\site'] });
+assert.ok(scheduledActionPolicyReasons('pwsh.exe', '-File D:\\code\\site\\tool.ps1', 'D:\\other-site', rootedState).some((reason) => reason.startsWith('scheduler_working_dir_outside_allowed_root:')));
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
   return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -31,26 +37,30 @@ function view(res: Record<string, any>): Record<string, any> {
   return res.result.structuredContent as Record<string, any>;
 }
 
-const list = await callTool('scheduler_task_list', { limit: 5 });
-const listData = view(list);
-assert.ok(Array.isArray(listData.items), 'list should return items array');
-assert.ok(typeof listData.count === 'number', 'list should have count');
-if (listData.items.length > 0) {
-  const first = listData.items[0] as Record<string, any>;
-  assert.ok(first.task_name, 'task should have task_name');
-  assert.ok(first.status, 'task should have status');
-}
+if (process.env.NARADA_RUN_LIVE_SCHEDULER_TESTS === '1') {
+  const list = await callTool('scheduler_task_list', { limit: 5 });
+  const listData = view(list);
+  assert.ok(Array.isArray(listData.items), 'list should return items array');
+  assert.ok(typeof listData.count === 'number', 'list should have count');
+  if (listData.items.length > 0) {
+    const first = listData.items[0] as Record<string, any>;
+    assert.ok(first.task_name, 'task should have task_name');
+    assert.ok(first.status, 'task should have status');
+  }
 
-const knownTask = listData.items[0] as Record<string, any> | undefined;
-if (knownTask) {
-  const show = await callTool('scheduler_task_show', { task_name: knownTask.task_name as string });
-  const showData = view(show);
-  assert.ok(showData.task, 'show should return task');
-  assert.equal(showData.task.TaskName, knownTask.task_name);
+  const knownTask = listData.items[0] as Record<string, any> | undefined;
+  if (knownTask) {
+    const show = await callTool('scheduler_task_show', { task_name: knownTask.task_name as string });
+    const showData = view(show);
+    assert.ok(showData.task, 'show should return task');
+    assert.equal(showData.task.TaskName, knownTask.task_name);
 
-  const history = await callTool('scheduler_task_history', { task_name: knownTask.task_name as string, limit: 3 });
-  const historyData = view(history);
-  assert.ok(Array.isArray(historyData.items), 'history should return items');
+    const history = await callTool('scheduler_task_history', { task_name: knownTask.task_name as string, limit: 3 });
+    const historyData = view(history);
+    assert.ok(Array.isArray(historyData.items), 'history should return items');
+  }
+} else {
+  console.log('scheduler-mcp live scheduler assertions skipped; set NARADA_RUN_LIVE_SCHEDULER_TESTS=1 to run them');
 }
 
 const dryRunUpdate = await callTool('scheduler_task_update_action', {
@@ -63,6 +73,10 @@ const dryRunUpdate = await callTool('scheduler_task_update_action', {
 const dryRunUpdateData = view(dryRunUpdate);
 assert.equal(dryRunUpdateData.status, 'planned');
 assert.equal(dryRunUpdateData.preserves_triggers, true);
+assert.equal(dryRunUpdateData.mutation_method, 'powershell_set_scheduled_task_action');
+assert.equal(dryRunUpdateData.execute, 'pwsh.exe');
+assert.equal(dryRunUpdateData.arguments, '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start');
+assert.deepEqual(dryRunUpdateData.schtasks_fallback, dryRunUpdateData.schtasks_args);
 assert.deepEqual(dryRunUpdateData.schtasks_args.slice(0, 4), ['/change', '/tn', '\\Narada-Sonar-Daemon', '/tr']);
 assert.match(dryRunUpdateData.working_dir_warning, /cannot set Start In/);
 

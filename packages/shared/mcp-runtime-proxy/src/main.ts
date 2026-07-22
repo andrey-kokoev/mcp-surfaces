@@ -489,6 +489,10 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       if (childClosed) resolveDone();
     });
   });
+  // A terminal child failure can be observed in the same tick as the proxy's
+  // exit. Close stdout only after the diagnostic write has drained so callers
+  // never lose the structured child_exited_before_response error.
+  await flushProxyStdout();
 }
 
 function flushPendingErrors(
@@ -944,6 +948,13 @@ function writeJsonRpcMessageToStream(stream: NodeJS.WritableStream, message: Jso
   const json = JSON.stringify(message);
   if (framed) stream.write(`Content-Length: ${Buffer.byteLength(json, 'utf8')}\r\n\r\n${json}`);
   else stream.write(`${json}\n`);
+}
+
+async function flushProxyStdout(): Promise<void> {
+  if (process.stdout.writableEnded || process.stdout.destroyed) return;
+  await new Promise<void>((resolve) => {
+    process.stdout.end(() => resolve());
+  });
 }
 
 function tail(text: string, limit: number): string {

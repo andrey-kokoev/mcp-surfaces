@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { extname, relative, resolve } from 'node:path';
 
 // The normal default policy is bounded at fifteen minutes. Sites may select a
 // lower maxTimeoutMs for more restrictive deployments.
@@ -30,6 +30,9 @@ const DEFAULT_ALLOWED_PREFIXES = [
   ['pwsh', '-noprofile', '-executionpolicy', 'bypass', '-file'],
 ];
 
+const DISALLOWED_WRAPPER_EXTENSIONS = new Set(['.cmd', '.bat']);
+const TRANSIENT_WRAPPER_PATH = /(^|\/)\.ai\/(?:tmp|temp)(?:\/|$)/i;
+
 export function createExecutionPolicy(options: unknown = {}) {
   const optionsRecord = asRecord(options);
   const allowedRoots = normalizeAllowedRoots(optionsRecord.allowedRoots);
@@ -47,6 +50,24 @@ export function createExecutionPolicy(options: unknown = {}) {
     maxOutputBytes: clampInteger(optionsRecord.maxOutputBytes, 1, 20 * 1024 * 1024, 1024 * 1024),
   };
 
+}
+
+function wrapperExecutionReasons(argv) {
+  const reasons = [];
+  for (const rawValue of argv) {
+    const value = String(rawValue ?? '').trim().replace(/^['"]|['"]$/g, '');
+    if (!value) continue;
+    const normalized = value.replaceAll('\\', '/');
+    const extension = extname(normalized).toLowerCase();
+    if (DISALLOWED_WRAPPER_EXTENSIONS.has(extension)) {
+      reasons.push(`wrapper_execution_disallowed:${value}`);
+      continue;
+    }
+    if (TRANSIENT_WRAPPER_PATH.test(normalized) && ['.ps1', '.psm1', '.js', '.mjs', '.cjs', '.ts'].includes(extension)) {
+      reasons.push(`transient_wrapper_path_disallowed:${value}`);
+    }
+  }
+  return [...new Set(reasons)];
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -107,6 +128,7 @@ export function decideStructuredCommandExecution({ command, args = [], workingDi
   if (!normalizedCommand) reasons.push('command_required');
   if (policy.blockedCommands.has(normalizedCommand.toLowerCase())) reasons.push(`blocked_command:${normalizedCommand}`);
   if (!isInsideAnyRoot(cwd, policy.allowedRoots)) reasons.push(`working_directory_outside_allowed_roots:${cwd}`);
+  reasons.push(...wrapperExecutionReasons(argv));
   if (!isCommandAllowed(argv, policy)) reasons.push(`command_not_allowed:${argv.join(' ')}`);
 
   return {
@@ -155,6 +177,10 @@ function buildRemediationHints(argv, reasons) {
 
   if (reasons.some((reason) => String(reason).startsWith('blocked_command:'))) {
     hints.push('Use an explicit argv-based allowed command or a narrower MCP surface; blocked shell interpreters remain disallowed.');
+  }
+
+  if (reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:') || String(reason).startsWith('transient_wrapper_path_disallowed:'))) {
+    hints.push('Do not execute an ad-hoc .cmd/.bat wrapper or a script from .ai/tmp. Run the owning MCP tool directly, or use structured_command_start with a canonical allowlisted command and retain its execution_ref as evidence.');
   }
 
   return [...new Set(hints)];

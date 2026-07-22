@@ -144,7 +144,7 @@ try {
     '--request-timeout-ms',
     '100',
     '--tool-timeout-grace-ms',
-    '50',
+    '1000',
     '--diagnostics-dir',
     diagnosticsDir,
     '--',
@@ -191,7 +191,7 @@ try {
   assert.equal(artifact.request.args_summary.timeout_ms, 5);
   assert.equal(artifact.pending_requests.length, 0);
   assert.equal(artifact.proxy.request_timeout_ms, 100);
-  assert.equal(artifact.proxy.tool_timeout_grace_ms, 50);
+  assert.equal(artifact.proxy.tool_timeout_grace_ms, 1000);
   assert.equal(artifact.child_process.entrypoint, silentEntrypoint);
   assert.equal(typeof artifact.child_process.entrypoint_sha256, 'string');
   assert.equal(artifact.diagnostic.code, 'child_request_timeout');
@@ -245,8 +245,8 @@ try {
 
   // Regression for sfb_36762540-087: a tool that declares timeout_ms beyond
   // the proxy watchdog must not get the shared child SIGTERMed. The watchdog
-  // honors the declared timeout plus the grace margin, the slow response
-  // arrives, and the transport stays usable for the next call.
+  // honors the declared timeout plus a process-startup/transport grace margin,
+  // the slow response arrives, and the transport stays usable for the next call.
   const honoredChildEntrypoint = join(root, 'honored-child.mjs');
   writeFileSync(honoredChildEntrypoint, [
     "let buffer = '';",
@@ -284,7 +284,7 @@ try {
   await waitForOutput(() => honoredStdout.includes('"honored-1"'), 2000);
   const honoredResponse = JSON.parse(honoredStdout.trim());
   assert.equal(honoredResponse.id, 'honored-1');
-  assert.equal(honoredResponse.result.content[0].text, 'slow-ok-honored-1');
+  assert.equal(honoredResponse.result?.content?.[0]?.text, 'slow-ok-honored-1', JSON.stringify(honoredResponse));
   honoredStdout = '';
   honoredProxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'honored-2', method: 'tools/call', params: { name: 'slow_tool', arguments: {}, _meta: { narada_request_timeout_ms: 300 } } })}\n`);
   await waitForOutput(() => honoredStdout.includes('"honored-2"'), 2000);

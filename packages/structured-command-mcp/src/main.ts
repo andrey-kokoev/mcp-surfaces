@@ -854,6 +854,7 @@ export function spawnStructured(command: string, args: string[], { cwd, timeoutM
 // descendants that ignore SIGTERM (POSIX only; Windows uses taskkill /T /F).
 const POSIX_KILL_GRACE_MS = 1_000;
 const POSIX_KILL_FORCE_WAIT_MS = 5_000;
+const WINDOWS_KILL_WAIT_MS = 1_500;
 
 async function killChildProcessTree(child: ReturnType<typeof spawn>): Promise<void> {
   const pid = child.pid;
@@ -869,9 +870,15 @@ async function killChildProcessTree(child: ReturnType<typeof spawn>): Promise<vo
       try {
         const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
         let finished = false;
+        const timer = setTimeout(() => {
+          try { killer.kill(); } catch { /* taskkill already exited */ }
+          try { child.kill(); } catch { /* process already exited */ }
+          finish();
+        }, WINDOWS_KILL_WAIT_MS);
         const finish = () => {
           if (finished) return;
           finished = true;
+          clearTimeout(timer);
           resolve();
         };
         killer.once('error', () => {
