@@ -705,8 +705,11 @@ const providerState = createServerState({
   secretLookupCommand: process.execPath,
   secretLookupCommandArgs: [providerSecretLookupScript],
 }, { PATH: process.env.PATH });
-assert.equal(providerState.env.DEEPSEEK_API_KEY, 'deepseek-from-secret-store');
-assert.equal(providerState.env.DEEPSEEK_API_BASE_URL, 'https://api.deepseek.com');
+// Provider secrets are intentionally lazy: MCP startup must not synchronously
+// query every provider's secret store. The selected provider is loaded when a
+// config is resolved for that provider.
+assert.equal(providerState.env.DEEPSEEK_API_KEY, undefined);
+assert.equal(providerState.env.DEEPSEEK_API_BASE_URL, undefined);
 const providerPolicy = await rpc({ jsonrpc: '2.0', id: 197, method: 'tools/call', params: { name: 'worker_policy_inspect', arguments: {} } }, providerState);
 assert.equal(JSON.stringify(providerPolicy.result?.structuredContent).includes('deepseek-from-secret-store'), false);
 assert.equal(providerPolicy.result?.structuredContent.allowed_narada_agent_runtime_providers.includes('deepseek-api'), true);
@@ -731,6 +734,8 @@ const directDeepseekResolve = await rpc({ jsonrpc: '2.0', id: 198, method: 'tool
 assert.equal(directDeepseekResolve.error?.data.code, 'worker_runtime_migrated_to_nars_provider');
 assert.match(String(directDeepseekResolve.error?.data.details.remediation), /provider="deepseek-api"/);
 const deepseekResolve = await rpc({ jsonrpc: '2.0', id: 199, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: { intent: { instruction: 'deepseek secret check' }, constraints: { cwd: providerRoot, provider: 'deepseek-api', overrides: { runtime: 'narada-agent-runtime-server' } } } } }, providerState);
+assert.equal(providerState.env.DEEPSEEK_API_KEY, 'deepseek-from-secret-store');
+assert.equal(providerState.env.DEEPSEEK_API_BASE_URL, 'https://api.deepseek.com');
 assert.equal(deepseekResolve.result?.structuredContent.runtime_availability.available, true);
 assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.runtime, 'narada-agent-runtime-server');
 assert.equal(deepseekResolve.result?.structuredContent.resolved_worker_config.provider, 'deepseek-api');

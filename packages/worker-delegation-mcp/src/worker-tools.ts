@@ -145,6 +145,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
     environment.NARADA_MAX_TOOL_ROUNDS = String(state.policy.maxToolRounds);
     if (!providerResolution.provider) throw diagnosticError('worker_provider_required', 'worker_provider_required');
+    state.ensureProviderCredential?.(providerResolution.provider);
     const providerRuntimeBinding = resolveWorkerProviderRuntimeBinding({
       provider: providerResolution.provider,
       metadataByProvider: state.providerRuntimeMetadata,

@@ -73,7 +73,6 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_SITE_ROOT = siteRoot;
   if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_WORKSPACE_ROOT ??= siteRoot;
   loadSiteSecrets(siteRoot, stateEnv);
-  loadProviderCredentialSecrets(siteRoot, stateEnv, options);
   const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
   const loadedCognitionDefaults = loadCognitionDefaultsState({
     siteRoot,
@@ -86,7 +85,22 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
-  return { siteRoot, policy: createWorkerPolicy(mergedOptions), cognitionDefaults: loadedCognitionDefaults.state, providerRegistryDiagnostics: providerPolicyDefaults.providerRegistryDiagnostics, providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata, env: stateEnv, activeRunCount: 0, clientRoots: { supported: false, roots: [], lastUpdatedAt: null } };
+  const attemptedProviderCredentialLoads = new Set<string>();
+  return {
+    siteRoot,
+    policy: createWorkerPolicy(mergedOptions),
+    cognitionDefaults: loadedCognitionDefaults.state,
+    providerRegistryDiagnostics: providerPolicyDefaults.providerRegistryDiagnostics,
+    providerRuntimeMetadata: providerPolicyDefaults.providerRuntimeMetadata,
+    env: stateEnv,
+    activeRunCount: 0,
+    ensureProviderCredential: (provider) => {
+      if (attemptedProviderCredentialLoads.has(provider)) return;
+      attemptedProviderCredentialLoads.add(provider);
+      loadProviderCredentialSecrets(siteRoot, stateEnv, options, provider);
+    },
+    clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
+  };
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -411,7 +425,7 @@ function siteControlRoot(siteRoot: string): string {
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): void {
+function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>, providerFilter?: string): void {
   const resolution = providerRegistryResolution(siteRoot, env, options);
   if (!resolution.path) return;
   let registry: Record<string, unknown>;
@@ -421,7 +435,9 @@ function loadProviderCredentialSecrets(siteRoot: string, env: NodeJS.ProcessEnv,
     return;
   }
   const providers = asRecord(registry.providers);
-  for (const metadata of Object.values(providers).map(asRecord)) {
+  for (const [provider, metadataValue] of Object.entries(providers)) {
+    if (providerFilter && provider !== providerFilter) continue;
+    const metadata = asRecord(metadataValue);
     const requirement = asRecord(metadata.credential_requirement);
     if (requirement.kind !== 'api_key_secret') continue;
     const envNames = Array.isArray(requirement.env_names) ? requirement.env_names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];

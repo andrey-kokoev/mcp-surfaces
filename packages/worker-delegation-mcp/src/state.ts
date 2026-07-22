@@ -11,6 +11,8 @@ export type WorkerMcpState = {
   cognitionDefaults?: CognitionDefaultsState;
   providerRegistryDiagnostics?: ProviderRegistryDiagnostics;
   providerRuntimeMetadata: Record<string, WorkerProviderRuntimeMetadata>;
+  /** Load one provider's secret on first use; startup must remain side-effect free. */
+  ensureProviderCredential?: (provider: string) => void;
   intelligenceLaunchContext?: IntelligenceLaunchContext;
   activeRunControllers?: Map<string, AbortController>;
   activeRunCompletions?: Map<string, Promise<Record<string, unknown>>>;
