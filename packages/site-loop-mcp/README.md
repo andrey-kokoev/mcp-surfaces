@@ -113,7 +113,13 @@ evidence, refuses a concurrent active supervisor, and exposes the resulting
 `runtime_host` in loop status. The existing Site Loop engine remains the domain
 body adapter during migration; domain phases, source sync, and effect admission
 remain owned here. Long-running supervision will move to the same canonical host
-boundary in a later slice rather than introducing a second lifecycle model.
+boundary. The `site-loop-supervisor` entry point now routes the long-running
+`superviseSiteLoop` domain engine through that same host lease and lifecycle
+evidence. The engine remains the domain body adapter during migration; domain
+phases, source sync, the compatibility file heartbeat, and effect admission
+remain owned here. The file heartbeat is a probe/compatibility signal, not a
+second authority. The old `site-loop-runner --supervise` path remains available
+for compatibility, but new supervision must use `site-loop-supervisor`.
 
 ## Run
 

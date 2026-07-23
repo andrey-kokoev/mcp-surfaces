@@ -144,6 +144,49 @@ export async function runSiteLoopWithCanonicalRuntimeHost(
   operation: (context: { runtimeHost: ReturnType<typeof openSiteOperatingRuntimeHost> }) => Promise<unknown> | unknown,
   options: RuntimeHostOptions = {},
 ) {
+  return runWithCanonicalRuntimeHost(cwd, operation, options, {
+    bindingStarted: 'mcp_surface_runtime_host_binding_started',
+    bindingReady: 'mcp_surface_runtime_host_binding_ready',
+    servingStarted: 'bounded_site_loop_operation_started',
+    completed: 'bounded_site_loop_operation_completed',
+    stopped: 'bounded_site_loop_operation_stopped',
+    failed: 'bounded_site_loop_operation_failed',
+    stoppedAfterFailure: 'bounded_site_loop_operation_stopped_after_failure',
+  });
+}
+
+export async function runSiteLoopSupervisorWithCanonicalRuntimeHost(
+  cwd: string,
+  operation: (context: { runtimeHost: ReturnType<typeof openSiteOperatingRuntimeHost> }) => Promise<unknown> | unknown,
+  options: RuntimeHostOptions = {},
+) {
+  return runWithCanonicalRuntimeHost(cwd, operation, options, {
+    bindingStarted: 'site_loop_supervisor_runtime_host_binding_started',
+    bindingReady: 'site_loop_supervisor_runtime_host_binding_ready',
+    servingStarted: 'long_running_site_loop_supervisor_started',
+    completed: 'site_loop_supervisor_completed',
+    stopped: 'site_loop_supervisor_stopped',
+    failed: 'long_running_site_loop_supervisor_failed',
+    stoppedAfterFailure: 'site_loop_supervisor_stopped_after_failure',
+  });
+}
+
+type RuntimeHostLifecycleReasons = {
+  bindingStarted: string;
+  bindingReady: string;
+  servingStarted: string;
+  completed: string;
+  stopped: string;
+  failed: string;
+  stoppedAfterFailure: string;
+};
+
+async function runWithCanonicalRuntimeHost(
+  cwd: string,
+  operation: (context: { runtimeHost: ReturnType<typeof openSiteOperatingRuntimeHost> }) => Promise<unknown> | unknown,
+  options: RuntimeHostOptions,
+  reasons: RuntimeHostLifecycleReasons,
+) {
   const runtimeHost = openSiteOperatingRuntimeHost(cwd, options);
   const events: unknown[] = [];
   const leaseTtlMs = numberOption(options, 5 * 60_000, 'runtimeLeaseTtlMs', 'runtime_lease_ttl_ms');
@@ -158,12 +201,12 @@ export async function runSiteLoopWithCanonicalRuntimeHost(
   try {
     const claim = runtimeHost.claim();
     if (claim?.event) events.push(claim.event);
-    transition('binding', { reason: 'mcp_surface_runtime_host_binding_started' });
+    transition('binding', { reason: reasons.bindingStarted });
     transition('ready', {
-      reason: 'mcp_surface_runtime_host_binding_ready',
+      reason: reasons.bindingReady,
       projection_attachment: 'external',
     });
-    transition('serving', { reason: 'bounded_site_loop_operation_started' });
+    transition('serving', { reason: reasons.servingStarted });
     runtimeHost.assertAuthority();
     heartbeatTimer = setInterval(() => {
       try {
@@ -177,8 +220,8 @@ export async function runSiteLoopWithCanonicalRuntimeHost(
     const result = await operation({ runtimeHost });
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = null;
-    transition('closing', { reason: 'bounded_site_loop_operation_completed' });
-    transition('stopped', { reason: 'bounded_site_loop_operation_stopped' });
+    transition('closing', { reason: reasons.completed });
+    transition('stopped', { reason: reasons.stopped });
     const snapshot = runtimeHost.snapshot();
     return {
       ...(result && typeof result === 'object' && !Array.isArray(result) ? result : { result }),
@@ -191,9 +234,9 @@ export async function runSiteLoopWithCanonicalRuntimeHost(
     try {
       const state = runtimeHost.snapshot()?.runtime_host_state;
       if (['created', 'binding', 'ready', 'serving', 'closing'].includes(String(state))) {
-        transition('failed', { reason: 'bounded_site_loop_operation_failed' });
+        transition('failed', { reason: reasons.failed });
       }
-      if (runtimeHost.snapshot()?.runtime_host_state === 'failed') transition('stopped', { reason: 'bounded_site_loop_operation_stopped_after_failure' });
+      if (runtimeHost.snapshot()?.runtime_host_state === 'failed') transition('stopped', { reason: reasons.stoppedAfterFailure });
     } catch {}
     throw error;
   } finally {

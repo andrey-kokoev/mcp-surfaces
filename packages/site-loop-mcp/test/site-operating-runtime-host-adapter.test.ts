@@ -6,6 +6,7 @@ import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 import {
   openSiteOperatingRuntimeHost,
   runSiteLoopWithCanonicalRuntimeHost,
+  runSiteLoopSupervisorWithCanonicalRuntimeHost,
 } from '../src/site-loop/site-operating-runtime-host.js';
 
 function makeSiteRoot(prefix: string) {
@@ -70,6 +71,25 @@ try {
   } finally {
     statusStore.close();
   }
+
+  const supervisorResult = await runSiteLoopSupervisorWithCanonicalRuntimeHost(siteRoot, async () => ({
+    status: 'stopped',
+    health_status: 'healthy',
+    cycles_completed: 1,
+  }), { owner_id: 'long-running-supervisor' }) as Record<string, any>;
+  assert.equal(supervisorResult.status, 'stopped');
+  assert.equal(supervisorResult.runtime_host.runtime_host_state, 'stopped');
+  assert.deepEqual(supervisorResult.runtime_host.lifecycle_history, ['created', 'binding', 'ready', 'serving', 'closing', 'stopped']);
+  assert.deepEqual(
+    supervisorResult.runtime_host_events.slice(1).map((event: any) => event.details?.reason),
+    [
+      'site_loop_supervisor_runtime_host_binding_started',
+      'site_loop_supervisor_runtime_host_binding_ready',
+      'long_running_site_loop_supervisor_started',
+      'site_loop_supervisor_completed',
+      'site_loop_supervisor_stopped',
+    ],
+  );
   console.log('site-loop canonical runtime host adapter ok');
 } finally {
   rmSync(siteRoot, { recursive: true, force: true });

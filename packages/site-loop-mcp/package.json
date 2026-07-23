@@ -6,7 +6,8 @@
   "description": "Config-governed site-loop MCP runtime and site operations tools.",
   "bin": {
     "site-loop-mcp": "./dist/src/site-loop-mcp-server.js",
-    "site-loop-runner": "./dist/src/site-loop/site-loop-engine.js"
+    "site-loop-runner": "./dist/src/site-loop/site-loop-engine.js",
+    "site-loop-supervisor": "./dist/src/site-loop/site-loop-supervisor-runner.js"
   },
   "exports": {
     "./surface-definition": {
@@ -19,6 +20,7 @@
     "./site-loop/site-loop": { "default": "./dist/src/site-loop/site-loop.js" },
     "./site-loop/site-loop-config": { "default": "./dist/src/site-loop/site-loop-config.js" },
     "./site-loop/site-loop-engine": { "default": "./dist/src/site-loop/site-loop-engine.js" },
+    "./site-loop/site-loop-supervisor-runner": { "default": "./dist/src/site-loop/site-loop-supervisor-runner.js" },
     "./site-loop/site-loop-store": { "default": "./dist/src/site-loop/site-loop-store.js" },
     "./schemas/site-loop-config.schema.json": { "default": "./schemas/site-loop-config.schema.json" },
     "./site-operating-loop/site-loop-store": { "default": "./dist/src/site-operating-loop/site-loop-store.js" },
