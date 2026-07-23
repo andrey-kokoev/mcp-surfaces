@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost } from '@narada2/site-operating-loop/site-loop-store';
 
 export const DEFAULT_SITE_OPERATING_LOOP_ID = 'site.operating-loop';
 export const DEFAULT_SITE_OPERATING_LOOP_OWNER_ID = 'site-operating-loop';
@@ -704,7 +705,19 @@ export function getLoopStatus(store, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID }
     control: getLoopControl(store, loopId),
     attention: getLoopAttentionSummary(store, { loopId }),
     directive_outcomes: getDirectiveOutcomeSummary(store, { loopId }),
+    runtime_host: hasTable(store.db, 'site_loop_runtime_hosts')
+      ? getCanonicalSiteOperatingLoopRuntimeHost({ db: store.db }, loopId)
+      : null,
   };
+}
+
+function hasTable(db, name) {
+  return Boolean(db.prepare(`
+    SELECT 1 AS present
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+    LIMIT 1
+  `).get(name));
 }
 
 export function getLoopControl(store, loopId) {

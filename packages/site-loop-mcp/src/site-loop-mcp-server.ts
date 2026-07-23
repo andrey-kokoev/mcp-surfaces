@@ -20,6 +20,7 @@ import {
 } from '@narada2/mcp-transport';
 import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
 import { siteLoopDependencyBoundaries } from './site-loop/site-loop-boundary.js';
+import { runSiteLoopWithCanonicalRuntimeHost } from './site-loop/site-operating-runtime-host.js';
 let siteLoopModulePromise = null;
 type SiteOpsServerArgs = Record<string, unknown>;
 type SiteLoopToolArgs = SiteOpsServerArgs;
@@ -463,7 +464,11 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       return (await loadSiteLoopModule()).setSiteLoopControl(siteRoot, normalizeLoopControl(args));
     case 'site_loop_run_once':
       assertRunOnceTransportBudget(args);
-      return (await loadSiteLoopModule()).runSiteLoop(siteRoot, normalizeLoopOptions(args));
+      return runSiteLoopWithCanonicalRuntimeHost(
+        siteRoot,
+        () => loadSiteLoopModule().then((module) => module.runSiteLoop(siteRoot, normalizeLoopOptions(args))),
+        normalizeLoopOptions(args),
+      );
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
@@ -722,6 +727,9 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
     sourceSync: args.source_sync === true || args.sourceSync === true,
     testAuthority: args.test_authority === true || args.testAuthority === true,
     ensureResident: args.ensure_resident === true || args.ensureResident === true,
+    ownerId: optionalString(args.owner_id) ?? optionalString(args.ownerId),
+    runtimeId: optionalString(args.runtime_id) ?? optionalString(args.runtimeId),
+    runtimeLeaseTtlMs: optionalNumber(args.runtime_lease_ttl_ms) ?? optionalNumber(args.runtimeLeaseTtlMs),
     requireLiveCarrier: typeof args.require_live_carrier === 'boolean'
       ? args.require_live_carrier
       : typeof args.requireLiveCarrier === 'boolean'

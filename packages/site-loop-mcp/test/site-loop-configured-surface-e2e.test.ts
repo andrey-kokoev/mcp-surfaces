@@ -145,6 +145,12 @@ try {
   const status = contentText('site_loop_status', await client.request(9, 'tools/call', { name: 'site_loop_status', arguments: {} }));
   assert.equal(status.loop_id, 'configured.e2e.loop');
   assert.equal(status.schema, 'narada.site_operating_loop.status.v1');
+  assert.equal((status.runtime_host as JsonRecord | null)?.runtime_host_state ?? null, null);
+
+  const dryRun = await toolJson(18, 'site_loop_run_once', { dry_run: true, limit: 1 });
+  const runtimeHost = dryRun.runtime_host as JsonRecord;
+  assert.equal(runtimeHost.runtime_host_state, 'stopped', JSON.stringify(dryRun));
+  assert.deepEqual(runtimeHost.lifecycle_history, ['created', 'binding', 'ready', 'serving', 'closing', 'stopped'], JSON.stringify(dryRun));
 
   const unifiedStatus = await toolJson(10, 'site_loop_unified_status', {});
   assert.equal(unifiedStatus.status, 'ok', JSON.stringify(unifiedStatus));
@@ -171,7 +177,20 @@ try {
   assert.equal(proofStatus.status, 'missing_or_stale', JSON.stringify(proofStatus));
   assert.equal((proofStatus.production_proof as JsonRecord).status, 'missing', JSON.stringify(proofStatus));
 
-  const runs = contentText('site_loop_runs_list', await client.request(15, 'tools/call', { name: 'site_loop_runs_list', arguments: { limit: 5 } }));
+  const proofStart = contentText('site_loop_proof_run', await client.request(15, 'tools/call', {
+    name: 'site_loop_proof_run',
+    arguments: { proof_kind: 'resident_production', wait_for_completion: false },
+  }));
+  assert.equal(proofStart.status, 'started', JSON.stringify(proofStart));
+  assert.equal(proofStart.mode, 'live_unattended_start_only', JSON.stringify(proofStart));
+  assert.equal(typeof proofStart.request_id, 'string', JSON.stringify(proofStart));
+
+  const queuedProofStatus = contentText('site_loop_proof_status', await client.request(16, 'tools/call', { name: 'site_loop_proof_status', arguments: {} }));
+  const queuedProductionProof = queuedProofStatus.production_proof as JsonRecord;
+  assert.equal((queuedProductionProof.request as JsonRecord).request_id, proofStart.request_id, JSON.stringify(queuedProofStatus));
+  assert.equal(['queued', 'running'].includes(String((queuedProductionProof.request as JsonRecord).status)), true, JSON.stringify(queuedProofStatus));
+
+  const runs = contentText('site_loop_runs_list', await client.request(17, 'tools/call', { name: 'site_loop_runs_list', arguments: { limit: 5 } }));
   assert.equal(runs.loop_id, 'configured.e2e.loop', JSON.stringify(runs));
   assert.equal(Array.isArray(runs.runs), true, JSON.stringify(runs));
 } finally {

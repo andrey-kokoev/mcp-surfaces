@@ -27,7 +27,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-loop-db-health.test.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-escalation-reconciliation.test.js && node dist/test/site-loop-stale-run-recovery.test.js && node dist/test/site-loop-receipt-reconciliation.test.js && node dist/test/task-executability-reconciliation.test.js && node dist/test/task-executability-cross-surface-e2e.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-operating-runtime-host-adapter.test.js && node dist/test/site-loop-db-health.test.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-escalation-reconciliation.test.js && node dist/test/site-loop-stale-run-recovery.test.js && node dist/test/site-loop-receipt-reconciliation.test.js && node dist/test/task-executability-reconciliation.test.js && node dist/test/task-executability-cross-surface-e2e.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:configured": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:task-executability": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/task-executability-cross-surface-e2e.test.js",
     "test:e2e:production": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-production-e2e.test.js"
@@ -40,7 +40,8 @@
     "@narada2/delegated-task-mcp": "workspace:*",
     "@narada2/task-governance-core": "workspace:*",
     "@narada2/task-executability-orchestrator": "workspace:*",
-    "@narada2/task-lifecycle-mcp": "workspace:*"
+    "@narada2/task-lifecycle-mcp": "workspace:*",
+    "@narada2/site-operating-loop": "workspace:*"
   },
   "files": ["dist/", "schemas/", "README.md"],
   "devDependencies": {

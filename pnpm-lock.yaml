@@ -40,6 +40,14 @@ importers:
         specifier: ^1.0.0
         version: 1.6.1(@types/node@22.19.19)
 
+  ../narada/packages/process-launch-posture: {}
+
+  ../narada/packages/site-operating-loop:
+    dependencies:
+      '@narada2/process-launch-posture':
+        specifier: workspace:*
+        version: link:../process-launch-posture
+
   ../narada/packages/site-paths: {}
 
   packages/agent-context-mcp:
@@ -448,6 +456,9 @@ importers:
       '@narada2/mcp-transport':
         specifier: workspace:*
         version: link:../shared/mcp-transport
+      '@narada2/site-operating-loop':
+        specifier: workspace:*
+        version: link:../../../narada/packages/site-operating-loop
       '@narada2/task-executability-orchestrator':
         specifier: workspace:*
         version: link:../../../narada-core/packages/task-executability-orchestrator

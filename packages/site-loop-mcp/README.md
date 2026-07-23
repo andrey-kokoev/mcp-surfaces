@@ -104,6 +104,17 @@ Configured executable commands use an explicit `execution: "direct_spawn"` mode.
 
 Readiness/coherence tools report whether operating prerequisites are satisfied, including optional mailbox-chain proof checks when requested.
 
+## Canonical Site Operating Runtime Host migration
+
+The MCP surface now uses Narada's canonical Site Operating Runtime Host boundary
+for bounded `site_loop_run_once` execution. The adapter claims one durable host
+lease, records `created -> binding -> ready -> serving -> closing -> stopped`
+evidence, refuses a concurrent active supervisor, and exposes the resulting
+`runtime_host` in loop status. The existing Site Loop engine remains the domain
+body adapter during migration; domain phases, source sync, and effect admission
+remain owned here. Long-running supervision will move to the same canonical host
+boundary in a later slice rather than introducing a second lifecycle model.
+
 ## Run
 
 ```powershell
