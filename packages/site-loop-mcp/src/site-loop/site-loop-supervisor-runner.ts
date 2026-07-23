@@ -70,8 +70,8 @@ if (isEntrypoint) {
   runSiteLoopSupervisor(args.cwd, args)
     .then((result) => {
       console.log(JSON.stringify({
-        schema: SITE_LOOP_SUPERVISOR_RUNNER_SCHEMA,
         ...result,
+        runner_schema: SITE_LOOP_SUPERVISOR_RUNNER_SCHEMA,
       }, null, 2));
       process.exit(result.status === 'ok' && result.health_status !== 'degraded' ? 0 : 1);
     })
