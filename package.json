@@ -5,10 +5,11 @@
   "type": "module",
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",
   "scripts": {
-    "build": "tsc -b && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile",
+    "build": "pnpm --filter @narada2/process-launch-posture build && pnpm --filter @narada2/site-operating-loop build && tsc -b && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-workspace-artifact-manifest.ts",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm run test:ui-boundary && pnpm -r --workspace-concurrency=1 test",
-    "test:ui-boundary": "node test/ui-neutral-boundary.test.mjs",
+    "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm -r --workspace-concurrency=1 test",
+    "test:typescript-boundary": "node --import tsx test/typescript-source-boundary.test.ts",
+    "test:ui-boundary": "node --import tsx test/ui-neutral-boundary.test.ts",
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:mcp-telemetry": "pnpm --filter @narada2/mcp-telemetry test",
@@ -60,7 +61,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "tsx": "^4.21.0"
   },
   "packageManager": "pnpm@10.9.0"
 }

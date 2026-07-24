@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { processSupervisorEntrypoint } from '@narada2/process-launch-posture';
 import {
   RUNTIME_STATUS_TOOL_NAME,
   captureRuntimeFreshness,
@@ -16,6 +17,7 @@ import {
   writeRuntimeInstance,
   type RuntimeInstanceRecord,
 } from './runtime-lifecycle.js';
+import { preflightWorkspaceArtifacts, type WorkspaceArtifactPreflight } from './workspace-artifact-manifest.js';
 
 type JsonRecord = Record<string, unknown>;
 type RequestLifecycleEvent = {
@@ -47,12 +49,18 @@ type PendingRequest = {
 type ProxyOptions = {
   entrypoint: string;
   childArgs: string[];
+  artifactManifestPath: string | null;
   surfaceId: string | null;
   requestTimeoutMs: number;
   toolTimeoutGraceMs: number;
   diagnosticsDir: string | null;
   livenessCheckMs: number;
   orphanGraceMs: number;
+};
+type ChildLaunch = {
+  child: ChildProcessWithoutNullStreams;
+  supervisorPath: string | null;
+  supervisorIdentityPath: string | null;
 };
 
 const STDERR_TAIL_LIMIT = 8000;
@@ -72,6 +80,7 @@ const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 
 function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
+  let artifactManifestPath: string | null = null;
   let surfaceId: string | null = null;
   let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
   let toolTimeoutGraceMs = DEFAULT_TOOL_TIMEOUT_GRACE_MS;
@@ -84,6 +93,7 @@ function parseArgs(argv: string[]): ProxyOptions {
   for (let index = 0; index < prelude.length; index += 1) {
     const arg = prelude[index];
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
+    else if (arg === '--artifact-manifest' && prelude[index + 1]) artifactManifestPath = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
     else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms', MAX_TOOL_TIMEOUT_GRACE_MS);
@@ -95,6 +105,7 @@ function parseArgs(argv: string[]): ProxyOptions {
   return {
     entrypoint: resolve(entrypoint),
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
+    artifactManifestPath: artifactManifestPath ? resolve(artifactManifestPath) : null,
     surfaceId,
     requestTimeoutMs,
     toolTimeoutGraceMs,
@@ -181,6 +192,33 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   const options = parseArgs(argv);
+  const artifactPreflight = preflightWorkspaceArtifacts({
+    surfaceId: options.surfaceId,
+    entrypoint: options.entrypoint,
+    artifactManifestPath: options.artifactManifestPath,
+  });
+  if (!artifactPreflight.ok) {
+    await writePreflightRefusal(artifactPreflight);
+    process.exitCode = 1;
+    return;
+  }
+  const supervisorPath = processSupervisorEntrypoint();
+  if (process.platform === 'win32' && (!supervisorPath || !existsSync(supervisorPath))) {
+    await writePreflightRefusal({
+      schema: 'narada.workspace_artifact_preflight.v1',
+      status: 'refused',
+      ok: false,
+      surface_id: options.surfaceId,
+      entrypoint: options.entrypoint,
+      artifact_manifest_path: options.artifactManifestPath,
+      manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+      code: 'workspace_artifact_missing',
+      reason: 'The Windows process supervisor executable is missing.',
+      details: { supervisor_path: supervisorPath },
+    });
+    process.exitCode = 1;
+    return;
+  }
   if (!existsSync(options.entrypoint)) {
     process.stderr.write(`mcp_runtime_proxy_entrypoint_not_found:${options.entrypoint}\n`);
   }
@@ -194,19 +232,15 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let stdoutTail = '';
   let childClosed = false;
   let parentFramed = false;
-  const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs);
-
-  const child = spawn(process.execPath, [options.entrypoint, ...options.childArgs], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: process.env,
-    shell: false,
-    windowsHide: true,
-  });
+  const childLaunch = spawnProxyChild(options, supervisorPath);
+  const child = childLaunch.child;
+  const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs, childLaunch);
   const startupTrace = createStartupTrace(options, child, childIdentity);
   const parentPid = process.ppid;
   const freshnessTracker = captureRuntimeFreshness({
     proxyRuntimePath: fileURLToPath(import.meta.url),
     childEntrypoint: options.entrypoint,
+    artifactManifestPath: options.artifactManifestPath,
   });
   const instancePath = runtimeInstancePath(options.diagnosticsDir ?? defaultDiagnosticsDir());
   let reclamationReason: string | null = null;
@@ -224,12 +258,21 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       proxyPid: process.pid,
       childPid: child.pid ?? null,
     });
+    const supervisorIdentity = childLaunch.supervisorIdentityPath
+      ? readSupervisorIdentity(childLaunch.supervisorIdentityPath)
+      : null;
+    const managedChildPid = typeof supervisorIdentity?.managed_child_pid === 'number'
+      ? supervisorIdentity.managed_child_pid
+      : null;
     const record: RuntimeInstanceRecord = {
-      schema: 'narada.mcp_runtime_proxy.instance.v1',
+      schema: 'narada.mcp_runtime_proxy.instance.v2',
       surface_id: options.surfaceId,
       proxy_pid: process.pid,
       parent_pid: parentPid,
       child_pid: child.pid ?? null,
+      supervisor_pid: childLaunch.supervisorPath ? child.pid ?? null : null,
+      managed_child_pid: managedChildPid,
+      server_pid: managedChildPid,
       entrypoint: options.entrypoint,
       started_at: freshnessTracker.started_at,
       heartbeat_at: now.toISOString(),
@@ -237,6 +280,9 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       state,
       liveness_evidence: evidence,
       runtime_freshness: runtimeFreshness,
+      artifact_manifest_path: options.artifactManifestPath,
+      artifact_manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+      generation_id: `${options.surfaceId ?? 'surface'}:${freshnessTracker.started_at}`,
       closed_at: closedAt,
     };
     writeRuntimeInstance(instancePath, record);
@@ -260,12 +306,12 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       if (childClosed) return;
       runtimeInstance = writeInstance('reclaiming', {
         reason,
-        signal: 'SIGTERM',
+        termination_mode: childLaunch.supervisorPath ? 'owned_supervisor_tree' : 'SIGTERM',
         grace_ms: options.orphanGraceMs,
       });
-      child.kill('SIGTERM');
+      terminateProxyChild(child, false);
       orphanForceKillTimer = setTimeout(() => {
-        if (!childClosed) child.kill('SIGKILL');
+        if (!childClosed) terminateProxyChild(child, true);
       }, Math.min(options.orphanGraceMs, 5_000));
       orphanForceKillTimer.unref();
     }, options.orphanGraceMs);
@@ -300,6 +346,13 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       if (request.method === 'tools/call' && params.name === RUNTIME_STATUS_TOOL_NAME) {
         const id = request.id;
         if (typeof id === 'string' || typeof id === 'number') {
+          const supervisorIdentity = childLaunch.supervisorIdentityPath
+            ? readSupervisorIdentity(childLaunch.supervisorIdentityPath)
+            : null;
+          const serverPid = typeof supervisorIdentity?.managed_child_pid === 'number'
+            ? supervisorIdentity.managed_child_pid
+            : (childLaunch.supervisorPath ? null : child.pid ?? null);
+          const childPidRole = childLaunch.supervisorPath ? 'supervisor' : 'server';
           const runtimeFreshness = evaluateRuntimeFreshness({
             tracker: freshnessTracker,
             surfaceId: options.surfaceId,
@@ -318,7 +371,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{ type: 'text', text: `mcp_runtime_proxy_status: ${runtimeFreshness.status}\nproxy_pid: ${process.pid}\nchild_pid: ${child.pid ?? 'unknown'}\nrestart_owner: carrier_or_runtime_supervisor` }],
+              content: [{ type: 'text', text: `mcp_runtime_proxy_status: ${runtimeFreshness.status}\nproxy_pid: ${process.pid}\nchild_pid: ${child.pid ?? 'unknown'}\nchild_pid_role: ${childPidRole}\nserver_pid: ${serverPid ?? 'unknown'}\nrestart_owner: carrier_or_runtime_supervisor` }],
               structuredContent: payload,
             },
           }, drained.framed);
@@ -346,7 +399,9 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
             effective_request_timeout_ms: pendingRequest.effectiveTimeoutMs,
             requested_transport_timeout_ms: pendingRequest.requestedTransportTimeoutMs,
           });
-          recordLifecycle(pendingRequest, 'child_termination_requested', { signal: 'SIGTERM' });
+          recordLifecycle(pendingRequest, 'child_termination_requested', {
+            termination_mode: childLaunch.supervisorPath ? 'owned_supervisor_tree' : 'SIGTERM',
+          });
           const artifactPath = writeForensicArtifact({
             event: 'proxy_child_request_timeout',
             request: pendingRequest,
@@ -493,6 +548,55 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   // exit. Close stdout only after the diagnostic write has drained so callers
   // never lose the structured child_exited_before_response error.
   await flushProxyStdout();
+}
+
+async function writePreflightRefusal(preflight: WorkspaceArtifactPreflight): Promise<void> {
+  process.stderr.write(`mcp_runtime_proxy_preflight_refused:${preflight.code ?? 'workspace_manifest_stale'}:${preflight.reason ?? 'workspace artifact preflight failed'}\n`);
+  await new Promise<void>((resolveDone) => {
+    let buffer = '';
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      process.stdin.off('data', onData);
+      process.stdin.off('end', finish);
+      process.stdin.pause();
+      resolveDone();
+    };
+    const respond = (request: JsonRecord, framed: boolean) => {
+      if (typeof request.id !== 'string' && typeof request.id !== 'number') return;
+      writeJsonRpcMessage({
+        jsonrpc: '2.0',
+        id: request.id,
+        error: {
+          code: -32000,
+          message: `mcp_runtime_proxy_preflight_refused:${preflight.code}`,
+          data: {
+            schema: 'narada.mcp_runtime_proxy.error.v1',
+            code: preflight.code,
+            method: request.method ?? null,
+            surface_id: preflight.surface_id,
+            entrypoint: preflight.entrypoint,
+            artifact_manifest_path: preflight.artifact_manifest_path,
+            details: preflight.details ?? {},
+          },
+        },
+      }, framed);
+      finish();
+    };
+    const onData = (chunk: string) => {
+      buffer += chunk;
+      const drained = startsWithJsonRpcFrame(buffer) ? drainJsonRpcFrames(buffer) : drainJsonLines(buffer);
+      buffer = drained.remaining;
+      for (const request of drained.requests) respond(request, drained.framed);
+    };
+    const timeout = setTimeout(finish, 5_000);
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', onData);
+    process.stdin.on('end', finish);
+    process.stdin.resume();
+  });
 }
 
 function flushPendingErrors(
@@ -690,7 +794,50 @@ function serializeRequest(request: PendingRequest): JsonRecord {
   };
 }
 
-function buildChildIdentity(entrypoint: string, childArgs: string[]): JsonRecord {
+function spawnProxyChild(options: ProxyOptions, supervisorPath: string | null): ChildLaunch {
+  const spawnOptions: import('node:child_process').SpawnOptions = {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.env,
+    shell: false,
+    windowsHide: true,
+  };
+  if (process.platform === 'win32' && supervisorPath) {
+    const supervisorIdentityPath = join(
+      options.diagnosticsDir ?? defaultDiagnosticsDir(),
+      `supervisor-${process.pid}.json`,
+    );
+    return {
+      child: spawn(supervisorPath, [
+        '--identity-path',
+        supervisorIdentityPath,
+        '--parent-pid',
+        String(process.pid),
+        '--',
+        process.execPath,
+        options.entrypoint,
+        ...options.childArgs,
+      ], spawnOptions) as ChildProcessWithoutNullStreams,
+      supervisorPath,
+      supervisorIdentityPath,
+    };
+  }
+  return {
+    child: spawn(process.execPath, [options.entrypoint, ...options.childArgs], spawnOptions) as ChildProcessWithoutNullStreams,
+    supervisorPath: null,
+    supervisorIdentityPath: null,
+  };
+}
+
+function readSupervisorIdentity(path: string): JsonRecord | null {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return isJsonRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildChildIdentity(entrypoint: string, childArgs: string[], launch: ChildLaunch): JsonRecord {
   const entrypointStat = safeStat(entrypoint);
   const sourcePath = sourcePathForEntrypoint(entrypoint);
   const sourceStat = sourcePath ? safeStat(sourcePath) : null;
@@ -711,6 +858,9 @@ function buildChildIdentity(entrypoint: string, childArgs: string[]): JsonRecord
       ? sourceStat.mtimeMs > entrypointStat.mtimeMs ? 'source_newer_than_entrypoint' : 'entrypoint_not_older_than_source'
       : 'unknown',
     package: packageMetadataFor(entrypoint),
+    supervisor_path: launch.supervisorPath,
+    supervisor_identity_path: launch.supervisorIdentityPath,
+    child_pid_role: launch.supervisorPath ? 'supervisor' : 'server',
   };
 }
 
@@ -747,7 +897,7 @@ function packageMetadataFor(entrypoint: string): JsonRecord | null {
   return null;
 }
 
-function defaultDiagnosticsDir(): string | null {
+function defaultDiagnosticsDir(): string {
   const siteRoot = process.env.NARADA_SITE_ROOT || process.env.NARADA_WORKSPACE_ROOT || '';
   if (siteRoot) return join(resolve(siteRoot), '.ai', 'runtime', 'mcp-runtime-proxy');
   return join(process.cwd(), '.ai', 'runtime', 'mcp-runtime-proxy');
@@ -803,8 +953,9 @@ function isJsonRecord(value: unknown): value is JsonRecord {
 }
 
 function sendCancellationToChild(child: ReturnType<typeof spawn>, request: PendingRequest, reason: string): void {
-  if (child.stdin.destroyed || !child.stdin.writable) return;
-  writeJsonRpcMessageToStream(child.stdin, {
+  const stdin = child.stdin;
+  if (!stdin || stdin.destroyed || !stdin.writable) return;
+  writeJsonRpcMessageToStream(stdin, {
     jsonrpc: '2.0',
     method: 'notifications/cancelled',
     params: {
@@ -813,7 +964,6 @@ function sendCancellationToChild(child: ReturnType<typeof spawn>, request: Pendi
     },
   }, request.framed);
 }
-
 function rememberTimedOutRequest(timedOutRequests: Map<string | number, NodeJS.Timeout>, id: string | number): void {
   const existingTimer = timedOutRequests.get(id);
   if (existingTimer) clearTimeout(existingTimer);
@@ -833,13 +983,26 @@ function terminateChildAfterRequestTimeout(
   timers: Set<NodeJS.Timeout>,
   isChildClosed: () => boolean,
 ): void {
-  if (!child.stdin.destroyed) child.stdin.end();
-  child.kill('SIGTERM');
+  const stdin = child.stdin;
+  if (stdin && !stdin.destroyed) stdin.end();
+  terminateProxyChild(child, false);
   const sigkillTimer = setTimeout(() => {
     timers.delete(sigkillTimer);
-    if (!isChildClosed()) child.kill('SIGKILL');
+    if (!isChildClosed()) terminateProxyChild(child, true);
   }, DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS);
   timers.add(sigkillTimer);
+}
+
+function terminateProxyChild(child: ReturnType<typeof spawn>, force: boolean): void {
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    killer.unref();
+    return;
+  }
+  child.kill(force ? 'SIGKILL' : 'SIGTERM');
 }
 
 function clearTimers(timers: Set<NodeJS.Timeout>): void {

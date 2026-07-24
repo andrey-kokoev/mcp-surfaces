@@ -1,23 +1,29 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve, sep } from 'node:path';
 
 type JsonRecord = Record<string, unknown>;
 
 export const RUNTIME_STATUS_TOOL_NAME = 'mcp_runtime_proxy_status';
-export const RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v1';
-export const RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v1';
+export const RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v2';
+export const LEGACY_RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v1';
+export const RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v2';
+export const LEGACY_RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v1';
 
 type FileSnapshot = {
   path: string;
   exists: boolean;
   mtime_ms: number | null;
   size: number | null;
+  sha256: string | null;
 };
 
 export type RuntimeFreshnessTracker = {
   started_at: string;
   proxy_runtime: FileSnapshot;
   child_runtime: FileSnapshot;
+  artifact_manifest: FileSnapshot | null;
+  artifact_manifest_fingerprint: string | null;
   source_files: FileSnapshot[];
 };
 
@@ -27,6 +33,9 @@ export type RuntimeInstanceRecord = {
   proxy_pid: number;
   parent_pid: number;
   child_pid: number | null;
+  supervisor_pid?: number | null;
+  managed_child_pid?: number | null;
+  server_pid?: number | null;
   entrypoint: string;
   started_at: string;
   heartbeat_at: string;
@@ -34,12 +43,16 @@ export type RuntimeInstanceRecord = {
   state: 'live' | 'stale' | 'reclaiming' | 'reclaimed' | 'closed';
   liveness_evidence: JsonRecord;
   runtime_freshness?: JsonRecord;
+  artifact_manifest_path?: string | null;
+  artifact_manifest_fingerprint?: string | null;
+  generation_id?: string | null;
   closed_at?: string | null;
 };
 
 export function captureRuntimeFreshness(input: {
   proxyRuntimePath: string;
   childEntrypoint: string;
+  artifactManifestPath?: string | null;
   startedAt?: string;
 }): RuntimeFreshnessTracker {
   const proxyRuntime = fileSnapshot(input.proxyRuntimePath);
@@ -51,8 +64,19 @@ export function captureRuntimeFreshness(input: {
     started_at: input.startedAt ?? new Date().toISOString(),
     proxy_runtime: proxyRuntime,
     child_runtime: childRuntime,
+    artifact_manifest: input.artifactManifestPath ? fileSnapshot(input.artifactManifestPath) : null,
+    artifact_manifest_fingerprint: input.artifactManifestPath ? readManifestFingerprint(input.artifactManifestPath) : null,
     source_files: sourceFiles,
   };
+}
+
+function readManifestFingerprint(path: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as JsonRecord;
+    return typeof parsed.manifest_fingerprint === 'string' ? parsed.manifest_fingerprint : null;
+  } catch {
+    return null;
+  }
 }
 
 export function evaluateRuntimeFreshness(input: {
@@ -80,6 +104,24 @@ export function evaluateRuntimeFreshness(input: {
         path: pair.current.path,
         started_mtime_ms: pair.started.mtime_ms,
         current_mtime_ms: pair.current.mtime_ms,
+      });
+    }
+  }
+  let artifactManifestCurrent: FileSnapshot | null = null;
+  if (input.tracker.artifact_manifest) {
+    artifactManifestCurrent = fileSnapshot(input.tracker.artifact_manifest.path);
+    if (!artifactManifestCurrent.exists) {
+      evidenceUnknown = true;
+      reasons.push({ code: 'artifact_manifest_missing', evidence: 'unknown', path: artifactManifestCurrent.path });
+    } else if (
+      input.tracker.artifact_manifest_fingerprint !== readManifestFingerprint(artifactManifestCurrent.path)
+      || input.tracker.artifact_manifest.size !== artifactManifestCurrent.size
+    ) {
+      reasons.push({
+        code: 'artifact_manifest_changed_since_process_start',
+        path: artifactManifestCurrent.path,
+        started_fingerprint: input.tracker.artifact_manifest_fingerprint,
+        current_fingerprint: readManifestFingerprint(artifactManifestCurrent.path),
       });
     }
   }
@@ -225,9 +267,9 @@ function fileSnapshot(path: string): FileSnapshot {
   const absolute = resolve(path);
   try {
     const stat = statSync(absolute);
-    return { path: absolute, exists: true, mtime_ms: stat.mtimeMs, size: stat.size };
+    return { path: absolute, exists: true, mtime_ms: stat.mtimeMs, size: stat.size, sha256: createHash('sha256').update(readFileSync(absolute)).digest('hex') };
   } catch {
-    return { path: absolute, exists: false, mtime_ms: null, size: null };
+    return { path: absolute, exists: false, mtime_ms: null, size: null, sha256: null };
   }
 }
 

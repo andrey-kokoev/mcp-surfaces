@@ -26,6 +26,27 @@ and turns child startup exits into JSON-RPC errors for pending requests. This is
 for carrier diagnostics only; it does not authorize tools, mutate policy, or
 interpret MCP domain behavior.
 
+## Build artifact preflight
+
+Every launch must provide `--artifact-manifest <path>`. The workspace build
+creates `.ai/runtime/workspace-artifact-manifest.json`; it records the package
+metadata, TypeScript source fingerprints, local dependency metadata, declared
+runtime export targets, and their emitted artifact fingerprints. Before the
+entrypoint is spawned, the proxy verifies the manifest fingerprint and refuses
+with a structured preflight error if the manifest is missing, stale, or no
+longer matches an export target. Re-run the workspace build before retrying;
+the proxy never starts a server against an unverified workspace.
+
+On Windows, the proxy starts the native Rust process supervisor after preflight.
+The supervisor owns the MCP server in a Job Object configured to terminate the
+managed server when the supervisor exits, and monitors the proxy PID. The
+diagnostic instance record identifies `proxy_pid`, `supervisor_pid`, and
+`managed_child_pid`/`server_pid` separately; `child_pid` is the supervisor PID
+on Windows and the server PID on platforms without the Windows supervisor.
+The supervisor preserves the server's inherited stdio and terminates the
+managed server when its proxy parent disappears. The supervisor executable is
+also required before a Windows launch is admitted.
+
 Every proxied surface advertises one proxy-owned read-only tool,
 `mcp_runtime_proxy_status`, in its normal `tools/list` response. Call it when
 a carrier-bound surface may be running an old build. Its
@@ -52,13 +73,15 @@ forward this metadata so the surface can return its own bounded result without
 losing the shared transport.
 
 The proxy also writes a heartbeat lease at
-`<diagnostics-dir>/instance-<proxy-pid>.json`. The lease includes parent
-carrier PID, proxy/child PIDs, freshness evidence, and live/stale/reclaimed
-state. If carrier stdin closes or the captured parent PID dies, the proxy first
-closes child stdin, waits the bounded orphan grace period, then sends
-`SIGTERM` (and finally `SIGKILL` only if needed). A live parent and open
-carrier stream are never reclaimed. Defaults are a 5-second liveness check and
-a 15-second grace; tests/supervisors may set `--liveness-check-ms` and
+`<diagnostics-dir>/instance-<proxy-pid>.json`. The lease includes parent,
+proxy, supervisor/server PIDs, artifact freshness evidence, and
+live/stale/reclaiming/closed state. If carrier stdin closes or the captured
+parent PID dies, the proxy first closes the managed server's stdin, waits the
+bounded orphan grace period, then terminates the owned process tree. On
+Windows this is a supervisor-tree termination; on other platforms it is the
+existing signal-based child termination. A live parent and open carrier stream
+are never reclaimed. Defaults are a 5-second liveness check and a 15-second
+grace; tests/supervisors may set `--liveness-check-ms` and
 `--orphan-grace-ms`.
 
 Operators can list all recorded instances without starting a child:

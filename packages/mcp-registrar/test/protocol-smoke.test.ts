@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-protocol-'));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
+const artifactManifestPath = fileURLToPath(new URL('../../../../.ai/runtime/workspace-artifact-manifest.json', import.meta.url));
 const child = spawn(process.execPath, [serverPath], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
 let stdout = '';
@@ -21,6 +22,7 @@ async function exchangeThroughProxy(): Promise<Record<string, any>[]> {
   const proxy = spawn(process.execPath, [
     proxyPath,
     '--surface-id', 'mcp-registrar',
+    '--artifact-manifest', artifactManifestPath,
     '--entrypoint', serverPath,
     '--',
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });

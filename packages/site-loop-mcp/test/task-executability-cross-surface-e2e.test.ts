@@ -49,13 +49,13 @@ type AnyRecord = Record<string, any>;
 
 const narsDispatchModulePath = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../../../narada/packages/agent-runtime-server/src/task-executability-dispatch.mjs',
+  '../../../../../narada/packages/agent-runtime-server/src/task-executability-dispatch.ts',
 );
 assert.ok(existsSync(narsDispatchModulePath), `missing real NARS dispatch hook: ${narsDispatchModulePath}`);
 const {
   createNarsLifecycleHookDispatcher,
   dispatchNarsLifecycleHooksForEvent,
-} = await import(pathToFileURL(resolve(narsDispatchModulePath, '..', 'lifecycle-hooks.mjs')).href);
+} = await import(pathToFileURL(resolve(narsDispatchModulePath, '..', 'lifecycle-hooks.ts')).href);
 const { createNarsTaskExecutabilityDispatchHook } = await import(pathToFileURL(narsDispatchModulePath).href);
 
 const siteRoot = createTemporaryE2eRoot('site-loop-task-executability-cross-surface-e2e');
@@ -374,7 +374,7 @@ function narsToolResultPayload(followUp: AnyRecord): AnyRecord {
 async function delegatedDispatchCheck(store: SqliteTaskLifecycleStore, task: { taskId: string; taskNumber: number }): Promise<JsonRecord> {
   const state = createServerState({ taskRoot: siteRoot, siteRoot, outputRoot: siteRoot, allowedRoots: [siteRoot] });
   state.taskLifecycleStore = store;
-  const response = await handleRequest({
+  const response = await ((handleRequest({
     jsonrpc: '2.0',
     id: 'task-executability-cross-surface-dispatch',
     method: 'tools/call',
@@ -389,7 +389,7 @@ async function delegatedDispatchCheck(store: SqliteTaskLifecycleStore, task: { t
         execution: { start: false },
       },
     },
-  }, state);
+  }, state)) as any) as any;
   assert.equal(response?.error, undefined, JSON.stringify(response));
   return ((response?.result as AnyRecord)?.structuredContent ?? response?.result ?? {}) as JsonRecord;
 }
@@ -502,10 +502,10 @@ try {
     taskNumber: executableTask.taskNumber,
     spec: {
       title: changedSpec.title,
-      goal: changedSpec.goal_markdown,
-      context: changedSpec.context_markdown,
-      required_work: changedSpec.required_work_markdown,
-      non_goals: changedSpec.non_goals_markdown,
+      goal: changedSpec.goal_markdown ?? null,
+      context: changedSpec.context_markdown ?? null,
+      required_work: changedSpec.required_work_markdown ?? null,
+      non_goals: changedSpec.non_goals_markdown ?? null,
       acceptance_criteria: jsonArray(changedSpec.acceptance_criteria_json) as string[],
       dependencies: jsonArray(changedSpec.dependencies_json).map(Number),
     },

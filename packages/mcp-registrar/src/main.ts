@@ -157,6 +157,7 @@ const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join
 const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
+const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json'));
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
 
@@ -1144,7 +1145,7 @@ function projectionSupportsRuntime(projection: McpSurfaceProjection, runtimeKind
 
 function selectSurfaceProjection(
   surfaceId: string,
-  projectionId?: string,
+  projectionId?: string | null,
   runtimeKind?: McpRuntimeKind,
   options: { requireExplicit?: boolean } = {},
 ): { surface: RegistrarSurfaceRecord; projection: McpSurfaceProjection } {
@@ -1521,6 +1522,7 @@ type CarrierLaunchCommand = {
   args: string[];
   uses_runtime_proxy: boolean;
   runtime_proxy_entrypoint?: string;
+  artifact_manifest_path?: string;
   child_entrypoint: string;
   child_args: string[];
 };
@@ -1543,6 +1545,8 @@ function carrierLaunchCommand(server: MaterializedServer, surfaceId: string): Ca
       MCP_RUNTIME_PROXY_ENTRYPOINT,
       '--surface-id',
       surfaceId,
+      '--artifact-manifest',
+      MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--entrypoint',
       childEntrypoint,
       '--',
@@ -1620,6 +1624,18 @@ function addRuntimePreflightFindings(
   usesRuntimeProxy: boolean,
 ): void {
   if (usesRuntimeProxy) {
+    if (!existsSync(MCP_WORKSPACE_ARTIFACT_MANIFEST)) {
+      add('error', 'registrar_workspace_artifact_manifest_missing', `Workspace artifact manifest does not exist: ${MCP_WORKSPACE_ARTIFACT_MANIFEST}`, {
+        ...detail,
+        artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+        remediation: 'Run pnpm build from mcp-surfaces before launching carrier MCPs.',
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_workspace_artifact_manifest_exists', `Workspace artifact manifest exists: ${MCP_WORKSPACE_ARTIFACT_MANIFEST}`, {
+        ...detail,
+        artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      });
+    }
     if (!existsSync(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
       add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, {
         ...detail,
@@ -2031,11 +2047,13 @@ function parseCodexToml(content: string): JsonRecord {
       const kvMatch = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
       if (kvMatch) {
         const [, k, rawV] = kvMatch;
+        const serverRecord = asRecord((result.mcpServers as JsonRecord)[currentKey]);
         try {
-          (result.mcpServers as JsonRecord)[currentKey][k] = JSON.parse(rawV);
+          serverRecord[k] = JSON.parse(rawV);
         } catch {
-          (result.mcpServers as JsonRecord)[currentKey][k] = rawV.replace(/^"|"$/g, '');
+          serverRecord[k] = rawV.replace(/^"|"$/g, '');
         }
+        (result.mcpServers as JsonRecord)[currentKey] = serverRecord;
       }
     }
   }
@@ -2680,7 +2698,7 @@ function siteSurfacePrefix(siteId: string): string {
   return siteId.startsWith('narada-') ? siteId : 'narada-' + siteId;
 }
 
-export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceRecord, projectionId?: string, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
+export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceRecord, projectionId?: string | null, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
   const siteId = site.site_id;
   const surfaceId = surface.id;
   const selected = selectSurfaceProjection(surfaceId, projectionId, runtimeKind, {
@@ -3056,6 +3074,8 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
       server.launch_entrypoint,
       '--surface-id',
       surfaceId,
+      '--artifact-manifest',
+      MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--entrypoint',
       server.entrypoint,
       '--',

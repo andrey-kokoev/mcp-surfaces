@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js"
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
@@ -21,10 +21,15 @@
     "./runtime-observation": {
       "types": "./dist/src/runtime-observation.d.ts",
       "default": "./dist/src/runtime-observation.js"
+    },
+    "./workspace-artifact-manifest": {
+      "types": "./dist/src/workspace-artifact-manifest.d.ts",
+      "default": "./dist/src/workspace-artifact-manifest.js"
     }
   },
   "dependencies": {
-    "@narada2/mcp-fabric-contracts": "workspace:*"
+    "@narada2/mcp-fabric-contracts": "workspace:*",
+    "@narada2/process-launch-posture": "workspace:*"
   },
   "files": [
     "dist/",

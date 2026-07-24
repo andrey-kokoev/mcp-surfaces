@@ -24,9 +24,11 @@ import {
 const siteRoot = createTemporaryE2eRoot('structured-command-proxy-timeout-e2e');
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
 const proxyPath = fileURLToPath(new URL('../../../shared/mcp-runtime-proxy/dist/src/main.js', import.meta.url));
+const artifactManifestPath = fileURLToPath(new URL('../../../../.ai/runtime/workspace-artifact-manifest.json', import.meta.url));
 const proxy = spawnJsonlMcpServer(process.execPath, [
   proxyPath,
   '--surface-id', 'structured-command',
+  '--artifact-manifest', artifactManifestPath,
   '--entrypoint', serverPath,
   '--request-timeout-ms', '1000',
   '--tool-timeout-grace-ms', '3000',
