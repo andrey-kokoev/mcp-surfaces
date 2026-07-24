@@ -49,6 +49,8 @@ The V2 runtime observation and reconciliation contracts are also transport-neutr
 - `@narada2/surface-feedback-mcp`
 - `@narada2/launcher-mcp`
 
+- @narada2/operator-console-overlay-mcp
+
 ## Ambiguous Infrastructure
 
 These are Narada-owned infrastructure surfaces that can feel generic because they support other surfaces, but they still belong to the Narada control plane:

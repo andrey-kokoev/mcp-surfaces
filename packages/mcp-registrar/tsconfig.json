@@ -31,6 +31,7 @@
     { "path": "../artifacts-mcp" },
     { "path": "../nars-session-mcp" },
     { "path": "../quota-meter-mcp" },
+    { "path": "../operator-console-overlay-mcp" },
     { "path": "../cloudflare-carrier-mcp" },
     { "path": "../site-coherence-mcp" },
     { "path": "../shared/mcp-fabric-compiler" },

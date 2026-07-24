@@ -29,6 +29,8 @@ Standalone MCP surface packages shared by Narada sites and carriers.
 - `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions. See `docs/nars-session-mcp-target.md`.
 - `@narada2/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle management. See `packages/quota-meter-mcp/README.md`.
 
+- @narada2/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console Windows overlay. See packages/operator-console-overlay-mcp/README.md.
+
 ## Verify
 
 ```powershell

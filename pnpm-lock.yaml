@@ -251,6 +251,9 @@ importers:
       '@narada2/nars-session-mcp':
         specifier: workspace:*
         version: link:../nars-session-mcp
+      '@narada2/operator-console-overlay-mcp':
+        specifier: workspace:*
+        version: link:../operator-console-overlay-mcp
       '@narada2/operator-routing-mcp':
         specifier: workspace:*
         version: link:../operator-routing-mcp
@@ -312,6 +315,16 @@ importers:
       '@narada2/site-paths':
         specifier: workspace:*
         version: link:../../../narada/packages/site-paths
+
+  packages/operator-console-overlay-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+    devDependencies:
+      '@narada2/mcp-e2e-harness':
+        specifier: workspace:*
+        version: link:../shared/mcp-e2e-harness
 
   packages/operator-routing-mcp:
     dependencies:

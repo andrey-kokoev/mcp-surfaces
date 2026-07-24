@@ -52,6 +52,8 @@ Site-root convention is documented in `docs/site-root-contract.md`: the
 workspace is the canonical Site root, `.narada` is the control root, and
 `.narada/site.json` is a generated local marker ignored by Git.
 
+- @narada2/operator-console-overlay-mcp: host-level dedicated MCP surface for the Narada Operator Console overlay; canonical overlay mechanics remain owned by Narada proper.
+
 ## Getting Started
 
 - Use `pnpm@10.9.0` (pinned via `packageManager` in the root `package.json`; `corepack enable` provides it).
