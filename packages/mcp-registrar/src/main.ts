@@ -166,6 +166,9 @@ const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
 const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
+const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)
+  ? createHash('sha256').update(readFileSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)).digest('hex')
+  : null;
 const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json'));
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
@@ -513,6 +516,22 @@ const CARRIERS: CarrierDef[] = [
 type RegistrarState = JsonRecord;
 
 const FRESH_REGISTRAR_ENV = 'NARADA_MCP_REGISTRAR_FRESH_CHILD';
+
+function assertRegistrarProcessCurrent(operation: string): void {
+  if (!PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT || !existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)) return;
+  const currentFingerprint = createHash('sha256').update(readFileSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)).digest('hex');
+  if (currentFingerprint === PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT) return;
+  throw diagnosticError(
+    'registrar_process_stale',
+    'This resident registrar process was started from an older compiled registrar entrypoint.',
+    {
+      operation,
+      process_registrar_entrypoint_fingerprint: PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT,
+      current_registrar_entrypoint_fingerprint: currentFingerprint,
+      remediation: 'Restart the resident mcp-registrar process and retry; no carrier configuration write was performed.',
+    },
+  );
+}
 
 export function createServerState(_options: JsonRecord = {}): RegistrarState {
   return {};
@@ -961,7 +980,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_site_unbind': result = registrarSiteUnbind(args); break;
     case 'registrar_carrier_list': result = registrarCarrierList(args); break;
     case 'registrar_carrier_bind': result = await registrarCarrierBind(args); break;
-    case 'registrar_carrier_unbind': result = registrarCarrierUnbind(args); break;
+    case 'registrar_carrier_unbind': result = await registrarCarrierUnbind(args); break;
     case 'registrar_sync': result = await registrarSync(args); break;
     case 'registrar_carrier_materialize': result = await registrarCarrierMaterialize(args); break;
     case 'registrar_carrier_apply': result = await registrarCarrierApply(args); break;
@@ -1937,6 +1956,7 @@ async function registrarCarrierMaterialize(args: JsonRecord): Promise<JsonRecord
   if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
     return runFreshRegistrarRequest('registrar_carrier_materialize', args);
   }
+  assertRegistrarProcessCurrent('registrar_carrier_materialize');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
@@ -1971,6 +1991,7 @@ async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
   if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
     return runFreshRegistrarRequest('registrar_carrier_apply', args);
   }
+  assertRegistrarProcessCurrent('registrar_carrier_apply');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
@@ -3599,6 +3620,7 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
   if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
     return runFreshRegistrarRequest('registrar_carrier_bind', args);
   }
+  assertRegistrarProcessCurrent('registrar_carrier_bind');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const projectionId = optionalString(args.projection_id);
@@ -3655,7 +3677,11 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
   };
 }
 
-function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
+async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    return runFreshRegistrarRequest('registrar_carrier_unbind', args);
+  }
+  assertRegistrarProcessCurrent('registrar_carrier_unbind');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const carrier = lookupCarrier(carrierId);
@@ -3686,6 +3712,22 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
   writeSiteAllowedRootsConfig(carrier);
+  if (result.status === 'unbound') {
+    const content = readFileSync(carrier.config_path, 'utf8');
+    const structured = parseCarrierConfig(carrier.kind, content);
+    if (!structured) {
+      throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed after unbinding.', { config_path: carrier.config_path });
+    }
+    const finalized = validateCarrierMaterialization(carrier, { content, structured }, carrier.config_path);
+    writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
+    return {
+      ...result,
+      runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+      materialization_validation: finalized.validation,
+      materialization_generation: finalized.generation,
+      generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+    };
+  }
   return result;
 }
 
