@@ -17,6 +17,11 @@ import {
   writeRuntimeInstance,
   type RuntimeInstanceRecord,
 } from './runtime-lifecycle.js';
+import {
+  MCP_RUNTIME_CONTRACT_VERSION,
+  preflightMaterializationGeneration,
+  type MaterializationPreflight,
+} from './materialization-contract.js';
 import { preflightWorkspaceArtifacts, type WorkspaceArtifactPreflight } from './workspace-artifact-manifest.js';
 
 type JsonRecord = Record<string, unknown>;
@@ -29,6 +34,9 @@ type StartupTrace = {
   path: string | null;
   startedAt: string;
   completed: boolean;
+  runtimeContractVersion: number | null;
+  artifactManifestFingerprint: string | null;
+  materializationGenerationFingerprint: string | null;
   events: RequestLifecycleEvent[];
 };
 type PendingRequest = {
@@ -50,6 +58,10 @@ type ProxyOptions = {
   entrypoint: string;
   childArgs: string[];
   artifactManifestPath: string | null;
+  artifactManifestFingerprint: string | null;
+  runtimeContractVersion: number | null;
+  materializationSidecarPath: string | null;
+  materializationGenerationFingerprint: string | null;
   surfaceId: string | null;
   requestTimeoutMs: number;
   toolTimeoutGraceMs: number;
@@ -81,6 +93,8 @@ const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
   let artifactManifestPath: string | null = null;
+  let runtimeContractVersion: number | null = null;
+  let materializationSidecarPath: string | null = null;
   let surfaceId: string | null = null;
   let requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS;
   let toolTimeoutGraceMs = DEFAULT_TOOL_TIMEOUT_GRACE_MS;
@@ -94,6 +108,8 @@ function parseArgs(argv: string[]): ProxyOptions {
     const arg = prelude[index];
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
     else if (arg === '--artifact-manifest' && prelude[index + 1]) artifactManifestPath = prelude[++index];
+    else if (arg === '--runtime-contract-version' && prelude[index + 1]) runtimeContractVersion = parsePositiveInteger(prelude[++index], 'runtime_contract_version');
+    else if (arg === '--materialization-sidecar' && prelude[index + 1]) materializationSidecarPath = prelude[++index];
     else if (arg === '--surface-id' && prelude[index + 1]) surfaceId = prelude[++index];
     else if (arg === '--request-timeout-ms' && prelude[index + 1]) requestTimeoutMs = parsePositiveInteger(prelude[++index], 'request_timeout_ms');
     else if (arg === '--tool-timeout-grace-ms' && prelude[index + 1]) toolTimeoutGraceMs = parsePositiveInteger(prelude[++index], 'tool_timeout_grace_ms', MAX_TOOL_TIMEOUT_GRACE_MS);
@@ -106,6 +122,10 @@ function parseArgs(argv: string[]): ProxyOptions {
     entrypoint: resolve(entrypoint),
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
     artifactManifestPath: artifactManifestPath ? resolve(artifactManifestPath) : null,
+    artifactManifestFingerprint: null,
+    runtimeContractVersion,
+    materializationSidecarPath: materializationSidecarPath ? resolve(materializationSidecarPath) : null,
+    materializationGenerationFingerprint: null,
     surfaceId,
     requestTimeoutMs,
     toolTimeoutGraceMs,
@@ -137,6 +157,9 @@ function createStartupTrace(
       : null,
     startedAt: new Date().toISOString(),
     completed: false,
+    runtimeContractVersion: null,
+    artifactManifestFingerprint: null,
+    materializationGenerationFingerprint: null,
     events: [],
   };
   recordStartupTrace(trace, options, child, childIdentity, 'proxy_started', {
@@ -168,6 +191,9 @@ function recordStartupTrace(
       started_at: trace.startedAt,
       updated_at: new Date().toISOString(),
       completed: trace.completed,
+      runtime_contract_version: trace.runtimeContractVersion,
+      artifact_manifest_fingerprint: trace.artifactManifestFingerprint,
+      materialization_generation_fingerprint: trace.materializationGenerationFingerprint,
       proxy_pid: process.pid,
       child_pid: child.pid ?? null,
       child_identity: childIdentity,
@@ -202,6 +228,75 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  options.artifactManifestFingerprint = artifactPreflight.manifest_fingerprint;
+  if (options.runtimeContractVersion === null) {
+    await writePreflightRefusal({
+      schema: 'narada.workspace_artifact_preflight.v1',
+      status: 'refused',
+      ok: false,
+      surface_id: options.surfaceId,
+      entrypoint: options.entrypoint,
+      artifact_manifest_path: options.artifactManifestPath,
+      manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+      code: 'runtime_contract_version_missing',
+      reason: 'The launch did not declare the MCP runtime contract version.',
+      details: {
+        expected_runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+        remediation: 'Regenerate the carrier configuration with the current registrar before launching this surface.',
+      },
+    });
+    process.exitCode = 1;
+    return;
+  }
+  if (options.runtimeContractVersion !== MCP_RUNTIME_CONTRACT_VERSION) {
+    await writePreflightRefusal({
+      schema: 'narada.workspace_artifact_preflight.v1',
+      status: 'refused',
+      ok: false,
+      surface_id: options.surfaceId,
+      entrypoint: options.entrypoint,
+      artifact_manifest_path: options.artifactManifestPath,
+      manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+      code: 'runtime_contract_version_mismatch',
+      reason: 'The launch declares an obsolete MCP runtime contract version.',
+      details: {
+        actual_runtime_contract_version: options.runtimeContractVersion,
+        expected_runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+        remediation: 'Regenerate the carrier configuration with the current registrar before launching this surface.',
+      },
+    });
+    process.exitCode = 1;
+    return;
+  }
+  const materializationPreflight: MaterializationPreflight = options.materializationSidecarPath
+    ? preflightMaterializationGeneration({
+      sidecarPath: options.materializationSidecarPath,
+      manifestPath: options.artifactManifestPath!,
+      manifestFingerprint: artifactPreflight.manifest_fingerprint,
+    })
+    : { ok: true, generation_fingerprint: null };
+  if (!materializationPreflight.ok) {
+    await writePreflightRefusal({
+      schema: 'narada.workspace_artifact_preflight.v1',
+      status: 'refused',
+      ok: false,
+      surface_id: options.surfaceId,
+      entrypoint: options.entrypoint,
+      artifact_manifest_path: options.artifactManifestPath,
+      manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+      code: materializationPreflight.code,
+      reason: materializationPreflight.reason,
+      details: {
+        ...(materializationPreflight.details ?? {}),
+        materialization_sidecar_path: options.materializationSidecarPath,
+        materialization_generation_fingerprint: materializationPreflight.generation_fingerprint,
+        remediation: 'Regenerate the carrier configuration with the current registrar; the proxy will not rebuild or retry it.',
+      },
+    });
+    process.exitCode = 1;
+    return;
+  }
+  options.materializationGenerationFingerprint = materializationPreflight.generation_fingerprint;
   const supervisorPath = processSupervisorEntrypoint();
   if (process.platform === 'win32' && (!supervisorPath || !existsSync(supervisorPath))) {
     await writePreflightRefusal({
@@ -236,6 +331,14 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   const child = childLaunch.child;
   const childIdentity = buildChildIdentity(options.entrypoint, options.childArgs, childLaunch);
   const startupTrace = createStartupTrace(options, child, childIdentity);
+  startupTrace.runtimeContractVersion = options.runtimeContractVersion;
+  startupTrace.artifactManifestFingerprint = artifactPreflight.manifest_fingerprint;
+  startupTrace.materializationGenerationFingerprint = materializationPreflight.generation_fingerprint;
+  recordStartupTrace(startupTrace, options, child, childIdentity, 'preflight_ok', {
+    runtime_contract_version: options.runtimeContractVersion,
+    artifact_manifest_fingerprint: artifactPreflight.manifest_fingerprint,
+    materialization_generation_fingerprint: materializationPreflight.generation_fingerprint,
+  });
   const parentPid = process.ppid;
   const freshnessTracker = captureRuntimeFreshness({
     proxyRuntimePath: fileURLToPath(import.meta.url),
@@ -597,6 +700,7 @@ async function writePreflightRefusal(preflight: WorkspaceArtifactPreflight): Pro
     process.stdin.on('end', finish);
     process.stdin.resume();
   });
+  await flushProxyStdout();
 }
 
 function flushPendingErrors(
@@ -746,6 +850,11 @@ function writeForensicArtifact(input: {
         request_timeout_ms: input.options.requestTimeoutMs,
         tool_timeout_grace_ms: input.options.toolTimeoutGraceMs,
         kill_grace_ms: DEFAULT_REQUEST_TIMEOUT_KILL_GRACE_MS,
+        runtime_contract_version: input.options.runtimeContractVersion,
+        artifact_manifest_path: input.options.artifactManifestPath,
+        artifact_manifest_fingerprint: input.options.artifactManifestFingerprint,
+        materialization_sidecar_path: input.options.materializationSidecarPath,
+        materialization_generation_fingerprint: input.options.materializationGenerationFingerprint,
       },
       surface: {
         surface_id: input.options.surfaceId,

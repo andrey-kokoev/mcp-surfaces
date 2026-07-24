@@ -126,6 +126,7 @@ function spawnProxy(args: string[], options: Parameters<typeof processScope.spaw
     proxyEntrypoint,
     '--artifact-manifest',
     artifactManifestPath,
+    '--runtime-contract-version', '2',
     ...args,
   ], options);
 }

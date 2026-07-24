@@ -23,6 +23,7 @@ async function exchangeThroughProxy(): Promise<Record<string, any>[]> {
     proxyPath,
     '--surface-id', 'mcp-registrar',
     '--artifact-manifest', artifactManifestPath,
+    '--runtime-contract-version', '2',
     '--entrypoint', serverPath,
     '--',
   ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });

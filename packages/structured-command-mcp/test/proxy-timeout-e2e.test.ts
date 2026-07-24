@@ -29,6 +29,7 @@ const proxy = spawnJsonlMcpServer(process.execPath, [
   proxyPath,
   '--surface-id', 'structured-command',
   '--artifact-manifest', artifactManifestPath,
+  '--runtime-contract-version', '2',
   '--entrypoint', serverPath,
   '--request-timeout-ms', '1000',
   '--tool-timeout-grace-ms', '3000',

@@ -55,7 +55,7 @@ export type WorkspaceArtifactPreflight = {
   entrypoint: string;
   artifact_manifest_path: string | null;
   manifest_fingerprint: string | null;
-  code?: 'workspace_manifest_missing' | 'workspace_manifest_stale' | 'workspace_export_target_missing' | 'workspace_artifact_missing' | 'workspace_dependency_unverified';
+  code?: 'workspace_manifest_missing' | 'workspace_manifest_stale' | 'workspace_export_target_missing' | 'workspace_artifact_missing' | 'workspace_dependency_unverified' | 'runtime_contract_version_missing' | 'runtime_contract_version_mismatch' | 'materialization_generation_missing' | 'materialization_generation_stale';
   reason?: string;
   details?: JsonRecord;
 };

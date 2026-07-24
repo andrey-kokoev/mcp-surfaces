@@ -106,6 +106,7 @@ const proxyChild = spawn(process.execPath, [
   proxyPath,
   '--surface-id', 'worker-delegation',
   '--artifact-manifest', artifactManifestPath,
+  '--runtime-contract-version', '2',
   '--entrypoint', serverPath,
   '--',
   '--site-root', legacyRoot,

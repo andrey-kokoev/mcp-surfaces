@@ -3,11 +3,19 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
 import { payloadShow } from '@narada2/mcp-transport';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada2/mcp-fabric-contracts';
+import {
+  MCP_RUNTIME_CONTRACT_VERSION,
+  buildMaterializationGeneration,
+  materializationSidecarPath,
+  validateMaterializedConfiguration,
+  writeMaterializationGeneration,
+} from '@narada2/mcp-runtime-proxy/materialization-contract';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
 
 const SERVER_NAME = 'mcp-registrar';
@@ -157,6 +165,7 @@ const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join
 const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
 const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
+const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
 const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json'));
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
@@ -502,6 +511,8 @@ const CARRIERS: CarrierDef[] = [
 ];
 
 type RegistrarState = JsonRecord;
+
+const FRESH_REGISTRAR_ENV = 'NARADA_MCP_REGISTRAR_FRESH_CHILD';
 
 export function createServerState(_options: JsonRecord = {}): RegistrarState {
   return {};
@@ -949,11 +960,11 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_site_bind': result = registrarSiteBind(args); break;
     case 'registrar_site_unbind': result = registrarSiteUnbind(args); break;
     case 'registrar_carrier_list': result = registrarCarrierList(args); break;
-    case 'registrar_carrier_bind': result = registrarCarrierBind(args); break;
+    case 'registrar_carrier_bind': result = await registrarCarrierBind(args); break;
     case 'registrar_carrier_unbind': result = registrarCarrierUnbind(args); break;
-    case 'registrar_sync': result = registrarSync(args); break;
-    case 'registrar_carrier_materialize': result = registrarCarrierMaterialize(args); break;
-    case 'registrar_carrier_apply': result = registrarCarrierApply(args); break;
+    case 'registrar_sync': result = await registrarSync(args); break;
+    case 'registrar_carrier_materialize': result = await registrarCarrierMaterialize(args); break;
+    case 'registrar_carrier_apply': result = await registrarCarrierApply(args); break;
     case 'registrar_carrier_validate': result = registrarCarrierValidate(args); break;
     case 'registrar_carrier_diff': result = registrarCarrierDiff(args); break;
     case 'registrar_surface_usage': result = registrarSurfaceUsage(args); break;
@@ -1523,13 +1534,16 @@ type CarrierLaunchCommand = {
   uses_runtime_proxy: boolean;
   runtime_proxy_entrypoint?: string;
   artifact_manifest_path?: string;
+  runtime_contract_version?: number;
+  materialization_sidecar_path?: string;
   child_entrypoint: string;
   child_args: string[];
 };
 
-function carrierLaunchCommand(server: MaterializedServer, surfaceId: string): CarrierLaunchCommand {
+function carrierLaunchCommand(server: MaterializedServer, surfaceId: string, configPath?: string): CarrierLaunchCommand {
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
+  const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
   if (server.kind === 'local') {
     return {
       command: server.command ?? 'node',
@@ -1547,6 +1561,9 @@ function carrierLaunchCommand(server: MaterializedServer, surfaceId: string): Ca
       surfaceId,
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      '--runtime-contract-version',
+      String(MCP_RUNTIME_CONTRACT_VERSION),
+      ...(sidecarPath ? ['--materialization-sidecar', sidecarPath] : []),
       '--entrypoint',
       childEntrypoint,
       '--',
@@ -1554,6 +1571,9 @@ function carrierLaunchCommand(server: MaterializedServer, surfaceId: string): Ca
     ],
     uses_runtime_proxy: true,
     runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    ...(sidecarPath ? { materialization_sidecar_path: sidecarPath } : {}),
     child_entrypoint: childEntrypoint,
     child_args: childArgs,
   };
@@ -1667,13 +1687,13 @@ function addRuntimePreflightFindings(
   }
 }
 
-function emitOpencodeConfig(carrier: CarrierDef): { content: string; structured: JsonRecord } {
+function emitOpencodeConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const mcp: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
     mcp[key] = {
       type: 'local',
       command: [launch.command, ...launch.args],
@@ -1685,14 +1705,14 @@ function emitOpencodeConfig(carrier: CarrierDef): { content: string; structured:
   return { content: header + JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function emitKimiConfig(carrier: CarrierDef): { content: string; structured: JsonRecord } {
+function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
-    const launch = carrierLaunchCommand(overridden, surfaceId);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
     const base: JsonRecord = {
       transport: 'stdio',
       command: launch.command,
@@ -1706,7 +1726,7 @@ function emitKimiConfig(carrier: CarrierDef): { content: string; structured: Jso
   return { content: JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function emitCodexConfig(carrier: CarrierDef): { content: string; structured: JsonRecord } {
+function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
   const rawServers = collectCarrierServers(carrier);
   const lines: string[] = [];
   lines.push('# Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.');
@@ -1722,7 +1742,7 @@ function emitCodexConfig(carrier: CarrierDef): { content: string; structured: Js
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
     const carrierAvailableTools = codexCarrierAvailableTools(server);
     lines.push(`[mcp_servers.${key}]`);
     lines.push(`command = "${launch.command}"`);
@@ -1772,25 +1792,185 @@ function writeFileAtomic(path: string, content: string): void {
   }
 }
 
-function registrarCarrierMaterialize(args: JsonRecord): JsonRecord {
+function readWorkspaceManifestFingerprint(): string | null {
+  if (!existsSync(MCP_WORKSPACE_ARTIFACT_MANIFEST)) return null;
+  try {
+    const manifest = asRecord(JSON.parse(readFileSync(MCP_WORKSPACE_ARTIFACT_MANIFEST, 'utf8')));
+    return typeof manifest.manifest_fingerprint === 'string' ? manifest.manifest_fingerprint : null;
+  } catch {
+    return null;
+  }
+}
+
+function validateCarrierMaterialization(
+  carrier: CarrierDef,
+  result: { content: string; structured: JsonRecord },
+  configPath?: string,
+): {
+  validation: ReturnType<typeof validateMaterializedConfiguration>;
+  generation: ReturnType<typeof buildMaterializationGeneration> | null;
+} {
+  const validation = validateMaterializedConfiguration({
+    structured: result.structured,
+    artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+    runtimeProxyEntrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    expectedSidecarPath: configPath ? materializationSidecarPath(configPath) : undefined,
+    requireSidecar: Boolean(configPath),
+  });
+  if (!validation.ok) {
+    throw diagnosticError(
+      'registrar_materialized_config_contract_invalid',
+      'Generated carrier configuration violates the MCP runtime contract.',
+      {
+        carrier_id: carrier.carrier_id,
+        carrier_kind: carrier.kind,
+        validation,
+        remediation: 'Refuse the write, rebuild the workspace, and retry only after the generated contract validates.',
+      },
+    );
+  }
+  const generation = configPath
+    ? buildMaterializationGeneration({
+      carrierId: carrier.carrier_id,
+      carrierKind: carrier.kind,
+      configPath,
+      content: result.content,
+      artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      artifactManifestFingerprint: readWorkspaceManifestFingerprint(),
+      registrarEntrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+      serverCount: validation.server_count,
+      proxyCount: validation.proxy_count,
+    })
+    : null;
+  return { validation, generation };
+}
+
+function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<JsonRecord> {
+  return new Promise((resolveRequest, rejectRequest) => {
+    const child = spawn(process.execPath, [MCP_REGISTRAR_RUNTIME_ENTRYPOINT], {
+      cwd: MCP_WORKSPACE_ROOT,
+      env: { ...process.env, [FRESH_REGISTRAR_ENV]: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      child.kill();
+      settled = true;
+      rejectRequest(diagnosticError(
+        'registrar_fresh_materialization_failed',
+        'Fresh registrar subprocess timed out while materializing the carrier configuration.',
+        { entrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT, timeout_ms: 30000, stderr_tail: stderr.slice(-4000) },
+      ));
+    }, 30000);
+    const fail = (message: string, details: JsonRecord = {}) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      rejectRequest(diagnosticError('registrar_fresh_materialization_failed', message, {
+        entrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+        stderr_tail: stderr.slice(-4000),
+        ...details,
+      }));
+    };
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.once('error', (error) => fail('Fresh registrar subprocess could not be started.', { error: error.message }));
+    child.once('close', (exitCode, signal) => {
+      if (settled) return;
+      clearTimeout(timeout);
+      const responseLine = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+      if (!responseLine) {
+        fail('Fresh registrar subprocess exited without a JSON-RPC response.', { exit_code: exitCode, signal });
+        return;
+      }
+      let response: JsonRecord;
+      try {
+        response = asRecord(JSON.parse(responseLine));
+      } catch (error) {
+        fail('Fresh registrar subprocess returned invalid JSON-RPC output.', {
+          exit_code: exitCode,
+          signal,
+          parse_error: error instanceof Error ? error.message : String(error),
+          stdout_tail: stdout.slice(-4000),
+        });
+        return;
+      }
+      const responseError = asRecord(response.error);
+      if (Object.keys(responseError).length > 0) {
+        fail(String(responseError.message ?? 'Fresh registrar materialization failed.'), {
+          exit_code: exitCode,
+          signal,
+          child_error: responseError,
+        });
+        return;
+      }
+      const resultEnvelope = asRecord(response.result);
+      const result = resultEnvelope.structuredContent ?? resultEnvelope;
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        fail('Fresh registrar subprocess returned no structured result.', { exit_code: exitCode, signal });
+        return;
+      }
+      if (exitCode !== 0) {
+        fail('Fresh registrar subprocess exited non-zero after returning a result.', { exit_code: exitCode, signal });
+        return;
+      }
+      settled = true;
+      resolveRequest(result as JsonRecord);
+    });
+    child.stdin.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: method, arguments: args },
+    }) + '\n');
+    child.stdin.end();
+  });
+}
+
+async function registrarCarrierMaterialize(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    return runFreshRegistrarRequest('registrar_carrier_materialize', args);
+  }
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
+  const outputPath = optionalString(args.output_path);
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
-    case 'opencode': result = emitOpencodeConfig(carrier); break;
-    case 'kimi': result = emitKimiConfig(carrier); break;
-    case 'codex': result = emitCodexConfig(carrier); break;
+    case 'opencode': result = emitOpencodeConfig(carrier, outputPath ?? undefined); break;
+    case 'kimi': result = emitKimiConfig(carrier, outputPath ?? undefined); break;
+    case 'codex': result = emitCodexConfig(carrier, outputPath ?? undefined); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const outputPath = optionalString(args.output_path);
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath ?? undefined);
   if (outputPath) {
     writeFileAtomic(outputPath, result.content);
+    writeMaterializationGeneration(materializationSidecarPath(outputPath), generation!);
   }
-  return { status: 'materialized', carrier_id: carrierId, kind: carrier.kind, output_path: outputPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scopes: injectionSummary };
+  return {
+    status: 'materialized',
+    carrier_id: carrierId,
+    kind: carrier.kind,
+    output_path: outputPath,
+    byte_size: Buffer.byteLength(result.content, 'utf8'),
+    injection_scopes: injectionSummary,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: validation,
+    materialization_generation: generation,
+    generation_sidecar_path: outputPath ? materializationSidecarPath(outputPath) : null,
+  };
 }
 
-function registrarCarrierApply(args: JsonRecord): JsonRecord {
+async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    return runFreshRegistrarRequest('registrar_carrier_apply', args);
+  }
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
@@ -1798,19 +1978,33 @@ function registrarCarrierApply(args: JsonRecord): JsonRecord {
   const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
-    case 'opencode': result = emitOpencodeConfig(carrier); break;
-    case 'kimi': result = emitKimiConfig(carrier); break;
-    case 'codex': result = emitCodexConfig(carrier); break;
+    case 'opencode': result = emitOpencodeConfig(carrier, configPath); break;
+    case 'kimi': result = emitKimiConfig(carrier, configPath); break;
+    case 'codex': result = emitCodexConfig(carrier, configPath); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, configPath);
   if (existingContent !== null) {
     const backupPath = `${configPath}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
     writeFileSync(backupPath, existingContent, 'utf8');
   }
   writeFileAtomic(configPath, result.content);
+  writeMaterializationGeneration(materializationSidecarPath(configPath), generation!);
   writeSiteAllowedRootsConfig(carrier);
   const site_surface_registries = writeSiteSurfaceRegistriesForCarrier(carrier);
-  return { status: 'applied', carrier_id: carrierId, kind: carrier.kind, config_path: configPath, byte_size: Buffer.byteLength(result.content, 'utf8'), injection_scope_counts: injectionSummary.counts, site_surface_registries };
+  return {
+    status: 'applied',
+    carrier_id: carrierId,
+    kind: carrier.kind,
+    config_path: configPath,
+    byte_size: Buffer.byteLength(result.content, 'utf8'),
+    injection_scope_counts: injectionSummary.counts,
+    site_surface_registries,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: validation,
+    materialization_generation: generation,
+    generation_sidecar_path: materializationSidecarPath(configPath),
+  };
 }
 
 function registrarCarrierValidate(args: JsonRecord): JsonRecord {
@@ -1904,19 +2098,24 @@ function registrarCarrierDiff(args: JsonRecord): JsonRecord {
     case 'codex': generated = emitCodexConfig(carrier); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
+  const materializationValidation = validateCarrierMaterialization(carrier, generated).validation;
 
   const currentPath = carrier.config_path;
   const currentContent = existsSync(currentPath) ? readFileSync(currentPath, 'utf8') : null;
   const currentStructured = currentContent ? parseCarrierConfig(carrier.kind, currentContent) : null;
 
-  return compareCarrierProjection({
+  return {
+    ...compareCarrierProjection({
     carrierId,
     configPath: currentPath,
     generatedContent: generated.content,
     generatedStructured: generated.structured,
     currentContent,
     currentStructured,
-  });
+    }),
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: materializationValidation,
+  };
 }
 
 export function compareCarrierProjection({
@@ -3076,6 +3275,8 @@ function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServe
       surfaceId,
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      '--runtime-contract-version',
+      String(MCP_RUNTIME_CONTRACT_VERSION),
       '--entrypoint',
       server.entrypoint,
       '--',
@@ -3394,7 +3595,10 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
   };
 }
 
-function registrarCarrierBind(args: JsonRecord): JsonRecord {
+async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    return runFreshRegistrarRequest('registrar_carrier_bind', args);
+  }
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const projectionId = optionalString(args.projection_id);
@@ -3412,7 +3616,7 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
 
   const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);
   if (aggregateServerKeys.length > 0) {
-    const applied = registrarCarrierApply({ carrier_id: carrierId });
+    const applied = await registrarCarrierApply({ carrier_id: carrierId });
     writeSiteAllowedRootsConfig(carrier);
     return {
       ...applied,
@@ -3424,21 +3628,31 @@ function registrarCarrierBind(args: JsonRecord): JsonRecord {
     };
   }
 
-  let result: JsonRecord;
+  type CarrierBindPreparation = { result: JsonRecord; content: string; structured: JsonRecord };
+  let prepared: CarrierBindPreparation;
   switch (carrier.kind) {
     case 'opencode':
       throw diagnosticError('registrar_single_surface_bind_unsupported_for_opencode_aggregate', 'registrar_single_surface_bind_unsupported_for_opencode_aggregate');
     case 'kimi':
-      result = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
+      prepared = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
       break;
     case 'codex':
-      result = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
+      prepared = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
       break;
     default:
       throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
+  const finalized = validateCarrierMaterialization(carrier, { content: prepared.content, structured: prepared.structured }, carrier.config_path);
+  writeFileAtomic(carrier.config_path, prepared.content);
+  writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
   writeSiteAllowedRootsConfig(carrier);
-  return result;
+  return {
+    ...prepared.result,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: finalized.validation,
+    materialization_generation: finalized.generation,
+    generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+  };
 }
 
 function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
@@ -3475,22 +3689,22 @@ function registrarCarrierUnbind(args: JsonRecord): JsonRecord {
   return result;
 }
 
-function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): JsonRecord {
+function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): { result: JsonRecord; content: string; structured: JsonRecord } {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   const content = readFileSync(configPath, 'utf8');
   const cfg = JSON.parse(content);
   const mcp = asRecord(cfg.mcpServers);
   const serverKey = siteSurfaceServerKey(siteId, surfaceId);
-  if (mcp[serverKey]) return { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
+  if (mcp[serverKey]) return { result: { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey }, content, structured: cfg };
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId, configPath);
   mcp[serverKey] = {
     transport: 'stdio',
     command: launch.command,
     args: launch.args,
   };
-  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  return { status: 'bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
+  const nextContent = JSON.stringify(cfg, null, 2) + '\n';
+  return { result: { status: 'bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey }, content: nextContent, structured: cfg };
 }
 
 function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
@@ -3505,16 +3719,21 @@ function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
   return { status: 'unbound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
 }
 
-function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): JsonRecord {
+function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): { result: JsonRecord; content: string; structured: JsonRecord } {
   if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
   let content = readFileSync(configPath, 'utf8');
   const sectionKey = `[mcp_servers.${surfaceId}]`;
-  if (content.includes(sectionKey)) return { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
+  if (content.includes(sectionKey)) {
+    const structured = parseCarrierConfig('codex', content);
+    if (!structured) throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed before binding.', { config_path: configPath });
+    return { result: { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId }, content, structured };
+  }
   const surface = lookupSurface(surfaceId);
-  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId, configPath);
   content += `\n${sectionKey}\ncommand = "${launch.command}"\nargs = ${JSON.stringify(launch.args)}\n`;
-  writeFileSync(configPath, content, 'utf8');
-  return { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
+  const structured = parseCarrierConfig('codex', content);
+  if (!structured) throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed after binding.', { config_path: configPath });
+  return { result: { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId }, content, structured };
 }
 
 function codexUnbind(configPath: string, surfaceId: string): JsonRecord {
@@ -3533,7 +3752,7 @@ function codexUnbind(configPath: string, surfaceId: string): JsonRecord {
   return { status: 'unbound', carrier_id: 'codex-andrey', surface_id: surfaceId, server_key: surfaceId };
 }
 
-function registrarSync(args: JsonRecord): JsonRecord {
+async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
   const target = requiredString(args.target, 'registrar_requires_target');
   const results: JsonRecord[] = [];
 
@@ -3541,7 +3760,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
     const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id_for_target');
     lookupCarrier(carrierId);
     for (const surface of SURFACES) {
-      try { results.push(registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id, projection_id: args.projection_id })); }
+      try { results.push(await registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrierId, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
     }
     return { target, carrier_id: carrierId, results, count: results.length };
@@ -3550,7 +3769,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
   if (target === 'all_surfaces_to_all_carriers') {
     for (const carrier of CARRIERS) {
       for (const surface of SURFACES) {
-        try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id, projection_id: args.projection_id })); }
+        try { results.push(await registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id, projection_id: args.projection_id })); }
         catch (e) { results.push({ carrier_id: carrier.carrier_id, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
       }
     }
@@ -3567,7 +3786,7 @@ function registrarSync(args: JsonRecord): JsonRecord {
   }
   if (target === 'all_carriers' || target === 'all') {
     for (const carrier of CARRIERS) {
-      try { results.push(registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surfaceId, projection_id: args.projection_id })); }
+      try { results.push(await registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surfaceId, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrier.carrier_id, surface_id: surfaceId, error: e instanceof Error ? e.message : String(e) }); }
     }
   }

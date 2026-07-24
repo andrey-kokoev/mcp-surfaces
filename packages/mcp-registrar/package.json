@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm -w build && pnpm run test:kimi-contract:run && node dist/test/mcp-fabric-v2-native.test.js && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-fabric-loader-e2e.test.js && node dist/test/site-fabric-catalog-e2e.test.js",
+    "test": "pnpm -w build && pnpm run test:kimi-contract:run && node dist/test/mcp-fabric-v2-native.test.js && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js && node dist/test/materialization-contract-e2e.test.js && node dist/test/site-fabric-loader-e2e.test.js && node dist/test/site-fabric-catalog-e2e.test.js",
     "test:kimi-contract:run": "node dist/test/moonshot-schema.test.js && node dist/test/kimi-carrier-contract.test.js",
     "test:kimi-contract": "pnpm -w build && pnpm run test:kimi-contract:run",
     "test:kimi-live": "pnpm -w build && node dist/test/kimi-carrier-live-e2e.test.js"

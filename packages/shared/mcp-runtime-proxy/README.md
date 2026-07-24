@@ -37,6 +37,20 @@ with a structured preflight error if the manifest is missing, stale, or no
 longer matches an export target. Re-run the workspace build before retrying;
 the proxy never starts a server against an unverified workspace.
 
+Carrier materialization adds a second contract gate. Every generated proxy
+launch declares `--runtime-contract-version 2`, the current
+`--artifact-manifest`, and, for a materialized carrier file, a
+`--materialization-sidecar` path. The registrar validates every generated
+proxy, child entrypoint, and manifest reference before writing the carrier
+file. It records `<carrier-config>.narada-generation.json` with the config,
+manifest, registrar-build, and contract fingerprints. The proxy refuses to
+spawn the child when that sidecar is missing or stale, including after the
+carrier config or registrar build changes.
+
+Materialization requests run in a fresh built registrar subprocess rather than
+using a resident registrar's loaded module graph. A failed validation is a
+structured refusal; the registrar does not rebuild or retry automatically.
+
 On Windows, the proxy starts the native Rust process supervisor after preflight.
 The supervisor owns the MCP server in a Job Object configured to terminate the
 managed server when the supervisor exits, and monitors the proxy PID. The
