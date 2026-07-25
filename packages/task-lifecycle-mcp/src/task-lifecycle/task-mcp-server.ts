@@ -387,6 +387,7 @@ export function taskLifecycleSurfaceDefinition(): DefinedSurface {
         reason: 'Tool and runtime changes require mcp_loader_surface_restart for the bound task-lifecycle surface.',
       },
     }],
+    metadata: { codex_startup_timeout_sec: 60 },
   });
   return taskLifecycleSurfaceCache;
 }

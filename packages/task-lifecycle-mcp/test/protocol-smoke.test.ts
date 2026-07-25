@@ -35,6 +35,7 @@ assert.equal(tools.error, undefined);
 const surface = taskLifecycleSurfaceDefinition();
 assertLiveToolsConform(surface.descriptor, tools.result.tools);
 assert.equal(surface.descriptor.guidance_tool, 'task_lifecycle_guidance');
+assert.equal(surface.descriptor.metadata?.codex_startup_timeout_sec, 60);
 assert.deepEqual(surface.descriptor.projections[0]?.lifecycle, {
   mode: 'restart_required',
   restart_owner: 'mcp-loader',
