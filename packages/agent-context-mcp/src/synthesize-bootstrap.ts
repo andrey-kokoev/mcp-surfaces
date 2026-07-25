@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 /**
  * synthesize-bootstrap.mjs
  *
@@ -9,7 +9,7 @@
  *   const bootstrap = synthesizeBootstrap(db, agentId, { limit: 10 });
  */
 
-export function synthesizeBootstrap(db, agentId, options = {}) {
+export function synthesizeBootstrap(db: any, agentId: any, options: any = {}) {
   const limit = options.limit ?? 10;
 
   if (!db) {
@@ -44,7 +44,7 @@ export function synthesizeBootstrap(db, agentId, options = {}) {
      LIMIT ?`
   ).all(agentId, limit);
 
-  const checkpoints = rows.map((row) => {
+  const checkpoints = rows.map((row: any) => {
     let payload = null;
     try {
       if (row.payload_json) payload = JSON.parse(row.payload_json);
@@ -74,7 +74,7 @@ export function synthesizeBootstrap(db, agentId, options = {}) {
   };
 }
 
-function buildSummary(checkpoints) {
+function buildSummary(checkpoints: any) {
   if (checkpoints.length === 0) {
     return 'No prior checkpoints found. Starting fresh session.';
   }
@@ -83,28 +83,28 @@ function buildSummary(checkpoints) {
   parts.push(`Found ${checkpoints.length} recent checkpoint(s).`);
 
   const recentTasks = checkpoints
-    .filter((c) => c.task_number)
-    .map((c) => `Task ${c.task_number} (${c.boundary_type})`);
+    .filter((c: any) => c.task_number)
+    .map((c: any) => `Task ${c.task_number} (${c.boundary_type})`);
   if (recentTasks.length > 0) {
     parts.push(`Recent work: ${recentTasks.join(', ')}.`);
   }
 
-  const allFiles = checkpoints.flatMap((c) => c.files_changed ?? []);
+  const allFiles = checkpoints.flatMap((c: any) => c.files_changed ?? []);
   const uniqueFiles = [...new Set(allFiles)].slice(0, 10);
   if (uniqueFiles.length > 0) {
     parts.push(`Files touched: ${uniqueFiles.join(', ')}.`);
   }
 
-  const allDecisions = checkpoints.flatMap((c) => c.decisions ?? []);
+  const allDecisions = checkpoints.flatMap((c: any) => c.decisions ?? []);
   if (allDecisions.length > 0) {
     const recentDecisions = allDecisions.slice(0, 3);
-    parts.push(`Key decisions: ${recentDecisions.map((d) => d.what).join('; ')}.`);
+    parts.push(`Key decisions: ${recentDecisions.map((d: any) => d.what).join('; ')}.`);
   }
 
-  const allFriction = checkpoints.flatMap((c) => c.friction ?? []);
-  const highFriction = allFriction.filter((f) => (f.severity ?? 0) >= 7);
+  const allFriction = checkpoints.flatMap((c: any) => c.friction ?? []);
+  const highFriction = allFriction.filter((f: any) => (f.severity ?? 0) >= 7);
   if (highFriction.length > 0) {
-    parts.push(`Outstanding friction: ${highFriction.map((f) => f.what).join('; ')}.`);
+    parts.push(`Outstanding friction: ${highFriction.map((f: any) => f.what).join('; ')}.`);
   }
 
   return parts.join(' ');

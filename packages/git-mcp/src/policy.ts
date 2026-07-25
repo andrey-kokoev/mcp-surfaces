@@ -29,8 +29,9 @@ const DEFAULT_MAX_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
 export function createGitPolicy(options: Record<string, unknown> = {}): GitMcpPolicy {
-  const mode = String(options.mode ?? 'read');
-  if (mode !== 'read' && mode !== 'write') throw new GitPolicyError('git_mode_must_be_read_or_write', { mode });
+  const modeValue = String(options.mode ?? 'read');
+  if (modeValue !== 'read' && modeValue !== 'write') throw new GitPolicyError('git_mode_must_be_read_or_write', { mode: modeValue });
+  const mode: GitMcpMode = modeValue;
   const siteRoot = resolve(String(options.siteRoot ?? options.outputRoot ?? firstOption(options.allowedRoot) ?? firstOption(options.allowedRoots) ?? process.cwd()));
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
   const explicitRoots = [...siteExtraRoots, ...optionList(options.allowedRoot), ...optionList(options.allowedRoots)];
@@ -71,8 +72,8 @@ export function publicGitPolicy(policy: GitMcpPolicy) {
 
 export function parseTrustedProjectRootsFromTrustConfig(configPath: string) {
   const source = readFileSync(configPath, 'utf8');
-  const roots = [];
-  let currentProject = null;
+  const roots: string[] = [];
+  let currentProject: string | null = null;
   for (const rawLine of source.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) continue;
@@ -92,8 +93,12 @@ export function parseTrustedProjectRootsFromTrustConfig(configPath: string) {
   return normalizeAllowedRoots(roots);
 }
 
-export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], rootsConfigPath = null } = {}) {
-  let roots = [];
+export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], rootsConfigPath = null }: {
+  codexConfigPath?: string | null;
+  explicitRoots?: string[];
+  rootsConfigPath?: string | null;
+} = {}): string[] {
+  let roots: string[] = [];
   if (codexConfigPath) roots.push(...parseTrustedProjectRootsFromTrustConfig(codexConfigPath));
   if (rootsConfigPath) {
     const parsed = JSON.parse(readFileSync(rootsConfigPath, 'utf8'));
@@ -107,8 +112,8 @@ export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], 
 }
 
 export function normalizeAllowedRoots(roots: unknown) {
-  const seen = new Set();
-  const normalized = [];
+  const seen = new Set<string>();
+  const normalized: string[] = [];
   for (const root of optionList(roots)) {
     const resolved = resolve(root.trim());
     const key = resolved.toLowerCase();

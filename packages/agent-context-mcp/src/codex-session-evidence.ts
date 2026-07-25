@@ -1,11 +1,11 @@
-// @ts-nocheck
+
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 const CODEX_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function isCodexSessionId(value) {
+export function isCodexSessionId(value: any) {
   return typeof value === 'string' && CODEX_SESSION_ID_RE.test(value);
 }
 
@@ -19,7 +19,7 @@ export function discoverCodexSessionEvidence({
   identity,
   codexHome = defaultCodexHome(),
   limit = 200,
-} = {}) {
+}: any = {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!admissionId) throw new Error('admission_id is required');
 
@@ -35,7 +35,7 @@ export function discoverCodexSessionEvidence({
     if (candidate) candidates.push(candidate);
   }
 
-  const admissible = candidates.filter((candidate) => candidate.admissible);
+  const admissible = candidates.filter((candidate: any) => candidate.admissible);
   const status = admissible.length === 1
     ? 'admissible'
     : admissible.length > 1
@@ -66,7 +66,7 @@ export function verifyCodexExactResume({
   codexSessionId,
   codexSessionFile = null,
   admissionId = null,
-} = {}) {
+}: any = {}) {
   if (!codexSessionId) throw new Error('codex_session_id is required');
   if (!isCodexSessionId(codexSessionId)) throw new Error(`codex_session_id_invalid: ${codexSessionId}`);
 
@@ -101,7 +101,7 @@ export function extractCodexSessionEvidencePacket({
   searchText,
   outputPath = 'kb/operations/codex-session-evidence-packet.json',
   limit = 200,
-} = {}) {
+}: any = {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!admissionId) throw new Error('admission_id is required');
   if (!searchText || typeof searchText !== 'string' || searchText.trim().length < 4) {
@@ -147,11 +147,11 @@ export function extractCodexSessionEvidencePacket({
       admission_guard: discovery.selected.guards,
     },
     match_count: matches.length,
-    numbered_item_count: countNumberedIssueLines(matches.map((match) => match.text).join('\n')),
+    numbered_item_count: countNumberedIssueLines(matches.map((match: any) => match.text).join('\n')),
     matches,
     verification: {
-      contains_list_body: countNumberedIssueLines(matches.map((match) => match.text).join('\n')) > 0,
-      pointer_only: matches.length > 0 && countNumberedIssueLines(matches.map((match) => match.text).join('\n')) === 0,
+      contains_list_body: countNumberedIssueLines(matches.map((match: any) => match.text).join('\n')) > 0,
+      pointer_only: matches.length > 0 && countNumberedIssueLines(matches.map((match: any) => match.text).join('\n')) === 0,
     },
   };
 
@@ -160,7 +160,7 @@ export function extractCodexSessionEvidencePacket({
   return packet;
 }
 
-function listSessionFiles(root) {
+function listSessionFiles(root: any) {
   const found = [];
   const stack = [root];
   while (stack.length > 0) {
@@ -176,11 +176,11 @@ function listSessionFiles(root) {
     }
   }
   return found
-    .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .map((entry) => entry.path);
+    .sort((a: any, b: any) => b.mtimeMs - a.mtimeMs)
+    .map((entry: any) => entry.path);
 }
 
-function readCandidate({ filePath, admissionId, identity, siteRootResolved }) {
+function readCandidate({ filePath, admissionId, identity, siteRootResolved }: any) {
   let content;
   try {
     content = readFileSync(filePath, 'utf8');
@@ -231,7 +231,7 @@ function readCandidate({ filePath, admissionId, identity, siteRootResolved }) {
   };
 }
 
-function extractMatchingTranscriptEntries({ sourceFile, searchText }) {
+function extractMatchingTranscriptEntries({ sourceFile, searchText }: any) {
   const lines = readFileSync(sourceFile, 'utf8').split(/\r?\n/);
   const needle = searchText.toLowerCase();
   const matches = [];
@@ -259,14 +259,14 @@ function extractMatchingTranscriptEntries({ sourceFile, searchText }) {
   return matches;
 }
 
-function extractTranscriptText(entry) {
+function extractTranscriptText(entry: any) {
   const payload = entry?.payload;
   if (!payload || typeof payload !== 'object') return '';
   if (typeof payload.message === 'string') return payload.message;
   if (typeof payload.text === 'string') return payload.text;
   if (Array.isArray(payload.content)) {
     return payload.content
-      .map((block) => {
+      .map((block: any) => {
         if (!block || typeof block !== 'object') return '';
         if (typeof block.text === 'string') return block.text;
         return '';
@@ -277,14 +277,14 @@ function extractTranscriptText(entry) {
   return '';
 }
 
-function countNumberedIssueLines(text) {
+function countNumberedIssueLines(text: any) {
   return text
     .split(/\r?\n/)
-    .filter((line) => /^\s*\d+\.\s+/.test(line))
+    .filter((line: any) => /^\s*\d+\.\s+/.test(line))
     .length;
 }
 
-function parseSessionMeta(content) {
+function parseSessionMeta(content: any) {
   const firstLine = content.split(/\r?\n/, 1)[0];
   try {
     const parsed = JSON.parse(firstLine);
@@ -294,20 +294,20 @@ function parseSessionMeta(content) {
   }
 }
 
-function parseSessionIdFromFilename(filePath) {
+function parseSessionIdFromFilename(filePath: any) {
   const match = basename(filePath).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
   return match?.[1] ?? null;
 }
 
-function normalizePath(value) {
+function normalizePath(value: any) {
   return resolve(value).toLowerCase();
 }
 
-function normalizeRelativePath(path) {
+function normalizeRelativePath(path: any) {
   return path.replace(/\\/g, '/');
 }
 
-function resolveUnderSiteRoot(siteRoot, outputPath) {
+function resolveUnderSiteRoot(siteRoot: any, outputPath: any) {
   const absolute = resolve(siteRoot, outputPath);
   const rel = relative(siteRoot, absolute);
   if (rel === '..' || rel.startsWith('..\\') || rel.startsWith('../')) {

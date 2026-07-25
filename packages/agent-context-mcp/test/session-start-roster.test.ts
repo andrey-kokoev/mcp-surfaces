@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,18 +13,18 @@ const INFERRED_SOURCE = 'identity_inference_non_authoritative';
 const INFERRED_SEMANTICS = 'Role was inferred from identity shape because the Site has not opted into session roster enforcement; this is a read-model hint, not activation authority or a capability grant.';
 const ROSTER_SEMANTICS = 'Roster role binding is used for identity read models, routing, and eligibility; it is not activation authority or a capability grant.';
 
-function makeSite(label) {
+function makeSite(label: any) {
   const siteRoot = mkdtempSync(join(tmpdir(), `agent-context-roster-${label}-`));
   writeFileSync(join(siteRoot, 'AGENTS.md'), '# Fixture Site\n', 'utf8');
   return siteRoot;
 }
 
-function writeRoster(siteRoot, roster) {
+function writeRoster(siteRoot: any, roster: any) {
   mkdirSync(join(siteRoot, '.ai', 'agents'), { recursive: true });
   writeFileSync(join(siteRoot, '.ai', 'agents', 'roster.json'), JSON.stringify(roster, null, 2), 'utf8');
 }
 
-function seedAgentContextDb(siteRoot) {
+function seedAgentContextDb(siteRoot: any) {
   const dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite');
   mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -72,7 +72,7 @@ function seedAgentContextDb(siteRoot) {
   assert.equal(check.role_binding.binding_authority, INFERRED_SOURCE);
   assert.equal(check.role_binding.semantics, INFERRED_SEMANTICS);
 
-  const started = materializeAgentSessionStart({ siteRoot, identity: 'fixture.resident', runtime: 'kimi' });
+  const started: any = materializeAgentSessionStart({ siteRoot, identity: 'fixture.resident', runtime: 'kimi' });
   assert.equal(started.status, 'materialized');
   assert.equal(started.role, 'resident');
   assert.equal(started.role_binding.binding_authority, INFERRED_SOURCE);
@@ -82,6 +82,7 @@ function seedAgentContextDb(siteRoot) {
   const eventRow = db.prepare('SELECT event_id, identity_id, status FROM agent_start_events WHERE event_id = ?')
     .get(started.agent_start_event);
   db.close();
+  assert.ok(eventRow);
   assert.equal(eventRow.identity_id, 'fixture.resident');
   assert.equal(eventRow.status, 'materialized');
 }

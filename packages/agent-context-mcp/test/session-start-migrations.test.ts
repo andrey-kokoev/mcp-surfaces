@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,24 +10,24 @@ import {
   openAgentContextDb,
 } from '../src/session-start.js';
 
-function makeSite(label) {
+function makeSite(label: any) {
   const siteRoot = mkdtempSync(join(tmpdir(), `agent-context-migrations-${label}-`));
   writeFileSync(join(siteRoot, 'AGENTS.md'), '# Fixture Site\n', 'utf8');
   return siteRoot;
 }
 
-function tableNames(dbPath) {
+function tableNames(dbPath: any) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   const names = new Set(
-    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name),
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row: any) => row.name),
   );
   db.close();
   return names;
 }
 
-function columnNames(dbPath, table) {
+function columnNames(dbPath: any, table: any) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
-  const names = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+  const names = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row: any) => row.name));
   db.close();
   return names;
 }
@@ -35,7 +35,7 @@ function columnNames(dbPath, table) {
 // Fresh site without .ai/db/migrations: the package-bundled migrations provision the schema.
 {
   const siteRoot = makeSite('bundled');
-  const started = materializeAgentSessionStart({ siteRoot, identity: 'fixture.resident', runtime: 'kimi' });
+  const started: any = materializeAgentSessionStart({ siteRoot, identity: 'fixture.resident', runtime: 'kimi' });
   assert.equal(started.status, 'materialized');
 
   const dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite');
@@ -65,6 +65,8 @@ function columnNames(dbPath, table) {
   const proposalRow = db.prepare('SELECT proposal_id FROM proposal_records WHERE event_id = ?')
     .get(started.agent_start_event);
   db.close();
+  assert.ok(eventRow);
+  assert.ok(proposalRow);
   assert.equal(eventRow.identity_id, 'fixture.resident');
   assert.equal(eventRow.status, 'materialized');
   assert.equal(proposalRow.proposal_id, started.proposal_id);

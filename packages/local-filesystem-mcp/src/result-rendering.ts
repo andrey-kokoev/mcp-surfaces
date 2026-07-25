@@ -1,4 +1,4 @@
-export function renderToolResultText(value, renderContext: Record<string, unknown> = {}) {
+export function renderToolResultText(value: any, renderContext: Record<string, unknown>= {}) {
   const record = asRecord(value);
   if (record.schema === 'narada.mcp_output_page.v1') return String(record.output_text ?? '');
   if (record.schema === 'narada.mcp_surface.guidance.v0') return renderGuidanceResult(record);
@@ -31,7 +31,7 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
     return compactLines([
       `fs_apply_patch: ${record.status ?? 'ok'}`,
       `changed_files: ${changedFiles.length}`,
-      ...changedFiles.map((file) => {
+      ...changedFiles.map((file: any) => {
         const fileRecord = asRecord(file);
         return `- ${fileRecord.relative_path ?? fileRecord.path ?? ''} deleted=${fileRecord.deleted ?? false} before_sha256=${fileRecord.before_sha256 ?? ''} after_sha256=${fileRecord.after_sha256 ?? 'null'}`;
       }),
@@ -41,7 +41,7 @@ export function renderToolResultText(value, renderContext: Record<string, unknow
   return JSON.stringify(value, null, 2);
 }
 
-function renderGuidanceResult(record) {
+function renderGuidanceResult(record: any) {
   const firstUse = Array.isArray(record.first_use) ? record.first_use.map(String) : [];
   const recovery = Array.isArray(record.recovery) ? record.recovery.map(String) : [];
   return compactLines([
@@ -49,13 +49,13 @@ function renderGuidanceResult(record) {
     `purpose: ${record.purpose ?? ''}`,
     `surface_id: ${record.surface_id ?? 'local-filesystem'}`,
     'first_use:',
-    ...firstUse.map((item) => `- ${item}`),
+    ...firstUse.map((item: any) => `- ${item}`),
     'recovery:',
-    ...recovery.map((item) => `- ${item}`),
+    ...recovery.map((item: any) => `- ${item}`),
   ]);
 }
 
-function renderDoctorResult(record) {
+function renderDoctorResult(record: any) {
   const roots = Array.isArray(record.allowed_roots) ? record.allowed_roots.map(String) : [];
   const permissions = asRecord(record.effective_permissions);
   return compactLines([
@@ -65,11 +65,11 @@ function renderDoctorResult(record) {
     `can_read: ${permissions.can_read ?? false}`,
     `can_write: ${permissions.can_write ?? false}`,
     'allowed_roots:',
-    ...roots.map((root) => `- ${root}`),
+    ...roots.map((root: any) => `- ${root}`),
   ]);
 }
 
-function renderFileMetricsResult(record) {
+function renderFileMetricsResult(record: any) {
   const files = Array.isArray(record.files) ? record.files.map(asRecord) : [];
   const totals = asRecord(record.totals);
   return compactLines([
@@ -90,18 +90,18 @@ function renderFileMetricsResult(record) {
     `scan_budget_exceeded_files: ${totals.scan_budget_exceeded_file_count ?? 0}`,
     `unavailable_files: ${totals.unavailable_file_count ?? 0}`,
     'files:',
-    ...files.map((file) => `${file.relative_path ?? file.path ?? ''} lines=${file.line_count ?? 'unknown'} bytes=${file.byte_count ?? 'unknown'} type=${file.file_type ?? 'unknown'} scope=${file.scope_classification ?? 'unknown'}`),
+    ...files.map((file: any) => `${file.relative_path ?? file.path ?? ''} lines=${file.line_count ?? 'unknown'} bytes=${file.byte_count ?? 'unknown'} type=${file.file_type ?? 'unknown'} scope=${file.scope_classification ?? 'unknown'}`),
   ]);
 }
 
-function isReadFileResult(record) {
+function isReadFileResult(record: any) {
   return typeof record.path === 'string'
     && typeof record.content === 'string'
     && typeof record.offset === 'number'
     && typeof record.returned_lines === 'number';
 }
 
-function renderReadFileResult(record) {
+function renderReadFileResult(record: any) {
   const startLine = Number(record.offset);
   const returnedLines = Number(record.returned_lines);
   const endLine = returnedLines > 0 ? startLine + returnedLines - 1 : startLine - 1;
@@ -116,10 +116,10 @@ function renderReadFileResult(record) {
     record.content_sha256 !== undefined ? `content_sha256: ${record.content_sha256}` : null,
     'content:',
     String(record.content ?? ''),
-  ].filter((line) => line !== null).join('\n');
+  ].filter((line: any) => line !== null).join('\n');
 }
 
-function renderSearchResult(toolName, record, renderContext: Record<string, unknown> = {}) {
+function renderSearchResult(toolName: any, record: any, renderContext: Record<string, unknown>= {}) {
   const matches = Array.isArray(record.matches) ? record.matches.map(String) : [];
   const mode = toolName === 'fs_grep_search' ? [`mode: ${record.output_mode ?? renderContext.grepOutputMode ?? 'files_with_matches'}`] : [];
   return compactLines([
@@ -148,7 +148,7 @@ function renderSearchResult(toolName, record, renderContext: Record<string, unkn
   ]);
 }
 
-function renderFreshnessLine(value) {
+function renderFreshnessLine(value: any) {
   const freshness = asRecord(value);
   if (!freshness.type && !freshness.sha256 && !freshness.tree_sha256) return null;
   const parts = [
@@ -157,11 +157,11 @@ function renderFreshnessLine(value) {
     freshness.tree_sha256 ? `tree_sha256=${freshness.tree_sha256}` : null,
     freshness.tree_entry_count !== undefined ? `tree_entry_count=${freshness.tree_entry_count}` : null,
     freshness.tree_truncated !== undefined ? `tree_truncated=${freshness.tree_truncated}` : null,
-  ].filter((part) => typeof part === 'string');
+  ].filter((part: any) => typeof part === 'string');
   return parts.length > 0 ? `freshness: ${parts.join(' ')}` : null;
 }
 
-function renderCompactRecord(record) {
+function renderCompactRecord(record: any) {
   if (record.schema === 'local.filesystem.stat.v1' || record.type) {
     return compactLines([
       'fs_stat: ok',
@@ -201,14 +201,14 @@ function renderCompactRecord(record) {
   return compactLines(lines);
 }
 
-function filesystemToolLabel(record) {
+function filesystemToolLabel(record: any) {
   const schema = typeof record.schema === 'string' ? record.schema : '';
   const match = schema.match(/^local\.filesystem\.(.+)\.v1$/);
   return match ? `fs_${match[1]}` : 'fs_result';
 }
 
-function compactLines(lines) {
-  return lines.filter((line) => typeof line === 'string' && line.length > 0).join('\n');
+function compactLines(lines: any) {
+  return lines.filter((line: any) => typeof line === 'string' && line.length > 0).join('\n');
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

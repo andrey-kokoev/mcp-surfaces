@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -82,7 +82,7 @@ try {
     name: 'agent_context_checkpoint',
     arguments: {
       agent_id: 'fixture.resident',
-      key_decisions: Array.from({ length: 300 }, (_, index) => `bounded-decision-${index}`),
+      key_decisions: Array.from({ length: 300 }, (_: any, index: any) => `bounded-decision-${index}`),
       authority_basis: { kind: 'site-fabric-e2e', summary: 'Controlled checkpoint persistence.' },
       next_intended_action: { kind: 'verify', summary: 'Read the persisted checkpoint.' },
     },

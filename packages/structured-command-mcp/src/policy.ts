@@ -36,9 +36,9 @@ const TRANSIENT_WRAPPER_PATH = /(^|\/)\.ai\/(?:tmp|temp)(?:\/|$)/i;
 export function createExecutionPolicy(options: unknown = {}) {
   const optionsRecord = asRecord(options);
   const allowedRoots = normalizeAllowedRoots(optionsRecord.allowedRoots);
-  const allowedCommands = new Set([...DEFAULT_ALLOWED_COMMANDS, ...normalizeList(optionsRecord.allowedCommands).map((item) => item.toLowerCase())]);
-  const allowedPrefixes = [...DEFAULT_ALLOWED_PREFIXES, ...normalizeList(optionsRecord.allowedPrefixes).map((prefix) => normalizePrefix(prefix))];
-  const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(optionsRecord.blockedCommands).map((item) => item.toLowerCase())]);
+  const allowedCommands = new Set([...DEFAULT_ALLOWED_COMMANDS, ...normalizeList(optionsRecord.allowedCommands).map((item: any) => item.toLowerCase())]);
+  const allowedPrefixes = [...DEFAULT_ALLOWED_PREFIXES, ...normalizeList(optionsRecord.allowedPrefixes).map((prefix: any) => normalizePrefix(prefix))];
+  const blockedCommands = new Set([...DEFAULT_BLOCKED_COMMANDS, ...normalizeList(optionsRecord.blockedCommands).map((item: any) => item.toLowerCase())]);
   return {
     allowedRoots,
     allowedCommands,
@@ -52,7 +52,7 @@ export function createExecutionPolicy(options: unknown = {}) {
 
 }
 
-function wrapperExecutionReasons(argv, cwd, policy) {
+function wrapperExecutionReasons(argv: any, cwd: any, policy: any) {
   const reasons = [];
   for (const rawValue of argv) {
     const value = String(rawValue ?? '').trim().replace(/^['"]|['"]$/g, '');
@@ -79,7 +79,7 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-export function parseTrustedProjectRootsFromTrustConfig(configPath) {
+export function parseTrustedProjectRootsFromTrustConfig(configPath: any) {
   const source = readFileSync(configPath, 'utf8');
   const roots = [];
   let currentProject = null;
@@ -102,7 +102,7 @@ export function parseTrustedProjectRootsFromTrustConfig(configPath) {
   return normalizeAllowedRoots(roots);
 }
 
-export function buildAllowedRoots({ trustConfigPaths = [], explicitRoots = [] } = {}) {
+export function buildAllowedRoots({ trustConfigPaths = [], explicitRoots = [] } : any= {}) {
   const roots = [];
   for (const configPath of normalizeList(trustConfigPaths)) {
     roots.push(...parseTrustedProjectRootsFromTrustConfig(configPath));
@@ -111,7 +111,7 @@ export function buildAllowedRoots({ trustConfigPaths = [], explicitRoots = [] } 
   return normalizeAllowedRoots(roots);
 }
 
-export function normalizeAllowedRoots(roots) {
+export function normalizeAllowedRoots(roots: any) {
   const seen = new Set();
   const normalized = [];
   for (const root of normalizeList(roots)) {
@@ -124,7 +124,7 @@ export function normalizeAllowedRoots(roots) {
   return normalized;
 }
 
-export function decideStructuredCommandExecution({ command, args = [], workingDirectory }, policy) {
+export function decideStructuredCommandExecution({ command, args = [], workingDirectory }: any, policy: any) {
   const normalizedCommand = normalizeCommand(command);
   const argv = [normalizedCommand, ...normalizeArgs(args)];
   const cwd = resolve(workingDirectory ?? '.');
@@ -149,13 +149,13 @@ export function decideStructuredCommandExecution({ command, args = [], workingDi
   };
 }
 
-function buildRemediationHints(argv, reasons) {
+function buildRemediationHints(argv: any, reasons: any) {
   const command = argv[0]?.toLowerCase();
   const subcommand = argv[1]?.toLowerCase();
   const hints = [];
 
   if (command === 'git') {
-    const toolBySubcommand = {
+    const toolBySubcommand: Record<string, string> = {
       add: 'git_add',
       commit: 'git_commit',
       diff: 'git_diff',
@@ -176,31 +176,31 @@ function buildRemediationHints(argv, reasons) {
     hints.push('Use local-filesystem fs_glob_search or fs_read_file for governed filesystem inspection.');
   }
 
-  if (reasons.some((reason) => String(reason).startsWith('working_directory_outside_allowed_roots:'))) {
+  if (reasons.some((reason: any) => String(reason).startsWith('working_directory_outside_allowed_roots:'))) {
     hints.push('Run from an allowed root or request a policy update through the surface configuration instead of bypassing the root guard.');
   }
 
-  if (reasons.some((reason) => String(reason).startsWith('blocked_command:'))) {
+  if (reasons.some((reason: any) => String(reason).startsWith('blocked_command:'))) {
     hints.push('Use an explicit argv-based allowed command or a narrower MCP surface; blocked shell interpreters remain disallowed.');
   }
 
-  if (reasons.some((reason) => String(reason).startsWith('wrapper_execution_disallowed:') || String(reason).startsWith('transient_wrapper_path_disallowed:'))) {
+  if (reasons.some((reason: any) => String(reason).startsWith('wrapper_execution_disallowed:') || String(reason).startsWith('transient_wrapper_path_disallowed:'))) {
     hints.push('Do not execute cmd.exe or an unapproved/transient wrapper. A repository-owned .cmd/.bat entrypoint must already exist under an allowed root; otherwise run the owning MCP tool directly or use structured_command_start with a canonical allowlisted command and retain its execution_ref as evidence.');
   }
 
   return [...new Set(hints)];
 }
 
-function buildMcpFallbacks(argv, reasons, cwd) {
+function buildMcpFallbacks(argv: any, reasons: any, cwd: any) {
   const command = argv[0]?.toLowerCase();
   const args = argv.slice(1);
-  const fallbacks = [];
-  const refusedByCommandPolicy = reasons.some((reason) => String(reason).startsWith('command_not_allowed:'));
+  const fallbacks: any[] = [];
+  const refusedByCommandPolicy = reasons.some((reason: any) => String(reason).startsWith('command_not_allowed:'));
   if (!refusedByCommandPolicy) return fallbacks;
 
   if (command === 'rg' || command === 'grep' || command === 'findstr') {
     const searchPattern = firstSearchPatternArg(args);
-    const filesMode = command === 'rg' && args.some((arg) => String(arg).toLowerCase() === '--files');
+    const filesMode = command === 'rg' && args.some((arg: any) => String(arg).toLowerCase() === '--files');
     const scopedPaths = searchPathArgs(args, cwd);
     const ignore = globArgs(args);
     if (!filesMode) {
@@ -244,7 +244,7 @@ function buildMcpFallbacks(argv, reasons, cwd) {
   }
 
   if (command === 'git') {
-    const toolBySubcommand = {
+    const toolBySubcommand: Record<string, string> = {
       add: 'git_add',
       commit: 'git_commit',
       diff: 'git_diff',
@@ -276,7 +276,7 @@ function buildMcpFallbacks(argv, reasons, cwd) {
   return fallbacks;
 }
 
-function gitPathArgs(args) {
+function gitPathArgs(args: any) {
   const paths = [];
   let afterSeparator = false;
   for (const rawArg of args) {
@@ -291,14 +291,14 @@ function gitPathArgs(args) {
   return [...new Set(paths)];
 }
 
-function gitOptionValue(args, options) {
+function gitOptionValue(args: any, options: any) {
   for (let index = 0; index < args.length; index += 1) {
     if (options.has(String(args[index] ?? '')) && args[index + 1]) return String(args[index + 1]);
   }
   return null;
 }
 
-function firstSearchPatternArg(args) {
+function firstSearchPatternArg(args: any) {
   const optionsWithValues = new Set(['-g', '--glob', '-t', '--type', '-T', '--type-not', '-e', '--regexp']);
   for (let index = 0; index < args.length; index += 1) {
     const arg = String(args[index] ?? '');
@@ -314,7 +314,7 @@ function firstSearchPatternArg(args) {
   return null;
 }
 
-function firstGlobArg(args) {
+function firstGlobArg(args: any) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = String(args[index] ?? '');
     if (arg === '-g' || arg === '--glob') return args[index + 1] ? String(args[index + 1]) : null;
@@ -322,7 +322,7 @@ function firstGlobArg(args) {
   return null;
 }
 
-function globArgs(args) {
+function globArgs(args: any) {
   const values = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = String(args[index] ?? '');
@@ -335,7 +335,7 @@ function globArgs(args) {
   return values;
 }
 
-function searchPathArgs(args, cwd) {
+function searchPathArgs(args: any, cwd: any) {
   const paths = [];
   const optionsWithValues = new Set(['-g', '--glob', '-t', '--type', '-T', '--type-not', '-e', '--regexp', '-m', '--max-count', '-A', '-B', '-C', '--after-context', '--before-context', '--context']);
   let patternConsumed = false;
@@ -357,14 +357,14 @@ function searchPathArgs(args, cwd) {
   return paths.length > 0 ? [...new Set(paths)] : [cwd];
 }
 
-export function publicExecutionPolicy(policy) {
+export function publicExecutionPolicy(policy: any) {
   return {
     schema: 'narada.structured_command.execution_policy.v0',
     allowed_roots: policy.allowedRoots,
     allowed_commands: [...policy.allowedCommands].sort(),
     default_allowed_commands: [...(policy.defaultAllowedCommands ?? [])].sort(),
-    allowed_prefixes: policy.allowedPrefixes.map((prefix) => prefix.join(' ')),
-    default_allowed_prefixes: (policy.defaultAllowedPrefixes ?? []).map((prefix) => prefix.join(' ')),
+    allowed_prefixes: policy.allowedPrefixes.map((prefix: any) => prefix.join(' ')),
+    default_allowed_prefixes: (policy.defaultAllowedPrefixes ?? []).map((prefix: any) => prefix.join(' ')),
     blocked_commands: [...policy.blockedCommands].sort(),
     max_timeout_ms: policy.maxTimeoutMs,
     max_output_bytes: policy.maxOutputBytes,
@@ -372,14 +372,14 @@ export function publicExecutionPolicy(policy) {
   };
 }
 
-function isCommandAllowed(argv, policy) {
+function isCommandAllowed(argv: any, policy: any) {
   const command = argv[0]?.toLowerCase();
   if (!command) return false;
   if (policy.allowedCommands.has(command)) return true;
-  return policy.allowedPrefixes.some((prefix) => prefix.every((part, index) => commandPartMatches(argv[index], part, index)) && prefixAllowedByAdditionalGuards(prefix, argv));
+  return policy.allowedPrefixes.some((prefix: any) => prefix.every((part: any, index: any) => commandPartMatches(argv[index], part, index)) && prefixAllowedByAdditionalGuards(prefix, argv));
 }
 
-function prefixAllowedByAdditionalGuards(prefix, argv) {
+function prefixAllowedByAdditionalGuards(prefix: any, argv: any) {
   if (prefix[0] === 'pnpm' && prefix[1] === '--filter') {
     const script = argv[3]?.toLowerCase();
     return script === 'test' || script === 'build' || script === 'typecheck' || String(script ?? '').startsWith('test:');
@@ -387,7 +387,7 @@ function prefixAllowedByAdditionalGuards(prefix, argv) {
   return true;
 }
 
-function commandPartMatches(actual, expected, index) {
+function commandPartMatches(actual: any, expected: any, index: any) {
   const normalizedActual = String(actual ?? '').toLowerCase();
   const normalizedExpected = String(expected ?? '').toLowerCase();
   if (normalizedActual === normalizedExpected) return true;
@@ -395,40 +395,40 @@ function commandPartMatches(actual, expected, index) {
   return normalizeExecutableAlias(normalizedActual) === normalizeExecutableAlias(normalizedExpected);
 }
 
-function normalizeExecutableAlias(value) {
+function normalizeExecutableAlias(value: any) {
   if (value === 'pwsh.exe') return 'pwsh';
   return value;
 }
 
-function isInsideAnyRoot(path, roots) {
-  return roots.some((root) => {
+function isInsideAnyRoot(path: any, roots: any) {
+  return roots.some((root: any) => {
     const rel = relative(root, path);
     return rel === '' || (!rel.startsWith('..') && !/^[a-zA-Z]:/.test(rel));
   });
 }
 
-function normalizeCommand(command) {
+function normalizeCommand(command: any) {
   const value = typeof command === 'string' ? command.trim() : '';
   if (!value || /[\r\n;&|<>]/.test(value)) return '';
   return value;
 }
 
-function normalizeArgs(args) {
+function normalizeArgs(args: any) {
   if (!Array.isArray(args)) return [];
-  return args.map((arg) => String(arg));
+  return args.map((arg: any) => String(arg));
 }
 
-function normalizeList(value) {
+function normalizeList(value: any) {
   if (!value) return [];
-  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (Array.isArray(value)) return value.map((item: any) => String(item)).filter(Boolean);
   return [String(value)].filter(Boolean);
 }
 
-function normalizePrefix(prefix) {
-  return String(prefix).trim().split(/\s+/).filter(Boolean).map((item) => item.toLowerCase());
+function normalizePrefix(prefix: any) {
+  return String(prefix).trim().split(/\s+/).filter(Boolean).map((item: any) => item.toLowerCase());
 }
 
-function clampInteger(value, min, max, fallback) {
+function clampInteger(value: any, min: any, max: any, fallback: any) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));

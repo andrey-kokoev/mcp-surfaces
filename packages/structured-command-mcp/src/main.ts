@@ -98,7 +98,7 @@ class StructuredCommandError extends Error {
 }
 
 if (isMainModule()) {
-  runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
+  runStdioServer(parseArgs(process.argv.slice(2))).catch((error: any) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });
@@ -123,7 +123,7 @@ export async function runStdioServer(options: Record<string, unknown>) {
     } else {
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? '';
-      requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
+      requests = lines.filter((line: any) => line.trim()).map((line: any) => JSON.parse(line));
     }
     for (const request of requests) {
       const record = asRecord(request);
@@ -201,7 +201,7 @@ async function processStdioRequest(request: Record<string, unknown>, state: Stru
     }, options);
   };
   progress(0, 'started');
-  return handleRequest(request, state, { abortSignal: abortController.signal, progress }).then((response) => {
+  return handleRequest(request, state, { abortSignal: abortController.signal, progress }).then((response: any) => {
     progress(abortController.signal.aborted ? 1 : 1, abortController.signal.aborted ? 'cancelled' : 'completed');
     if (response) writeJsonRpcMessage(response, options);
   }).finally(() => {
@@ -263,7 +263,7 @@ function promptGet(params: Record<string, unknown>) {
 function completeArgument(params: Record<string, unknown>, state: StructuredCommandState) {
   const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
   const values = argumentName === 'name'
-    ? listTools().map((tool) => tool.name).filter(Boolean).slice(0, 100)
+    ? listTools().map((tool: any) => tool.name).filter(Boolean).slice(0, 100)
     : ['working_directory', 'cwd', 'directory'].includes(argumentName) ? clientRootCompletionValues(state) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
@@ -403,7 +403,7 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
   }
 }
 
-function structuredCommandOutputShow(args, state) {
+function structuredCommandOutputShow(args: any, state: any) {
   try {
     const page = outputShow({ siteRoot: state.siteRoot, args });
     return {
@@ -465,7 +465,7 @@ function structuredCommandTelemetryDeclaration(toolName: string): TelemetryDecla
   });
 }
 
-export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}, explicitStart = false): Promise<unknown> {
+export async function executeStructuredCommand(args: unknown, state: StructuredCommandState, context: RequestContext = {}, explicitStart : any= false): Promise<unknown> {
   const argsRecord = asRecord(args);
   enforceInputCharLimit(argsRecord);
   if (argsRecord.execution_ref) {
@@ -621,7 +621,7 @@ function startDetachedBackgroundRunner(request: BackgroundExecutionRequest, stat
     stdio: 'ignore',
     env: state.env,
   });
-  child.once('error', (error) => {
+  child.once('error', (error: any) => {
     const payload = buildStructuredCommandExecutionPayload({
       decision: {
         command: request.command,
@@ -651,7 +651,7 @@ function startDetachedBackgroundRunner(request: BackgroundExecutionRequest, stat
   child.unref();
 }
 
-export function buildStructuredCommandExecutionPayload({ decision, result, startedAt, timeoutMs, executionPosture, inputRef, executionMode, waitForCompletion }) {
+export function buildStructuredCommandExecutionPayload({ decision, result, startedAt, timeoutMs, executionPosture, inputRef, executionMode, waitForCompletion }: any) {
   const finishedAt = new Date().toISOString();
   return {
     schema: 'narada.structured_command.execution_result.v0',
@@ -680,7 +680,7 @@ export function buildStructuredCommandExecutionPayload({ decision, result, start
   };
 }
 
-export function createStructuredCommandInput(args, state) {
+export function createStructuredCommandInput(args: any, state: any) {
   const inputId = normalizeRefId(args.input_id ?? `i_${randomUUID().replace(/-/g, '').slice(0, 24)}`);
   const input = {
     command: String(args.command ?? ''),
@@ -758,7 +758,7 @@ async function powershellParseCheck(args: Record<string, unknown>, state: Struct
 }
 
 export function spawnStructured(command: string, args: string[], { cwd, timeoutMs, maxOutputBytes, env, abortSignal }: SpawnStructuredOptions): Promise<SpawnStructuredResult> {
-  return new Promise((resolvePromise) => {
+  return new Promise((resolvePromise: any) => {
     if (abortSignal?.aborted) {
       resolvePromise({
         exit_code: null,
@@ -805,17 +805,17 @@ export function spawnStructured(command: string, args: string[], { cwd, timeoutM
       void terminate();
     };
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: any) => {
       const next = stdout + chunk.toString();
       stdoutTruncated ||= Buffer.byteLength(next, 'utf8') > maxOutputBytes;
       stdout = truncateUtf8(next, maxOutputBytes);
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: any) => {
       const next = stderr + chunk.toString();
       stderrTruncated ||= Buffer.byteLength(next, 'utf8') > maxOutputBytes;
       stderr = truncateUtf8(next, maxOutputBytes);
     });
-    child.on('error', (error) => {
+    child.on('error', (error: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -831,7 +831,7 @@ export function spawnStructured(command: string, args: string[], { cwd, timeoutM
       };
       void (terminationPromise ?? Promise.resolve()).then(() => resolvePromise(result));
     });
-    child.on('close', (code) => {
+    child.on('close', (code: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -866,7 +866,7 @@ async function killChildProcessTree(child: ReturnType<typeof spawn>): Promise<vo
     // child.kill() terminates only the direct process on Windows; taskkill /T
     // terminates the full descendant tree so a timed-out command cannot leave
     // grandchildren running.
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve: any) => {
       try {
         const killer = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
         let finished = false;
@@ -885,7 +885,7 @@ async function killChildProcessTree(child: ReturnType<typeof spawn>): Promise<vo
           try { child.kill(); } catch { /* process already exited */ }
           finish();
         });
-        killer.once('close', (code) => {
+        killer.once('close', (code: any) => {
           if (code !== 0) {
             try { child.kill(); } catch { /* process already exited */ }
           }
@@ -920,7 +920,7 @@ async function waitForProcessGroupExit(pid: number, timeoutMs: number): Promise<
   const deadline = Date.now() + timeoutMs;
   while (processGroupExists(pid)) {
     if (Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve: any) => setTimeout(resolve, 25));
   }
   return true;
 }
@@ -934,7 +934,7 @@ function processGroupExists(pid: number): boolean {
   }
 }
 
-export async function executeStructuredCommandElevatedWindow(args, state) {
+export async function executeStructuredCommandElevatedWindow(args: any, state: any) {
   if (process.platform !== 'win32') {
     return {
       schema: 'narada.structured_command.elevated_window_result.v0',
@@ -1020,7 +1020,7 @@ export async function executeStructuredCommandElevatedWindow(args, state) {
   return buildPagedExecutionResult(payload, argsRecord, executionRef);
 }
 
-function buildPagedExecutionResult(payload, args, executionRef) {
+function buildPagedExecutionResult(payload: any, args: any, executionRef: any) {
   if (payload.executed === false) return { ...payload, execution_ref: executionRef ?? null };
   const stdoutPage = pageText(String(payload.stdout ?? ''), args.stdout_offset, args.stdout_limit, STREAM_PREVIEW_CHAR_LIMIT);
   const stderrPage = pageText(String(payload.stderr ?? ''), args.stderr_offset, args.stderr_limit, STREAM_PREVIEW_CHAR_LIMIT);
@@ -1043,7 +1043,7 @@ function buildPagedExecutionResult(payload, args, executionRef) {
   };
 }
 
-function pageText(text, offsetValue, limitValue, defaultLimit) {
+function pageText(text: any, offsetValue: any, limitValue: any, defaultLimit: any) {
   const offset = Math.max(0, Number(offsetValue ?? 0));
   const limit = clampInteger(limitValue, 1, TOOL_OUTPUT_SHOW_MAX_LIMIT, defaultLimit);
   const chunk = text.slice(offset, offset + limit);
@@ -1058,7 +1058,7 @@ function pageText(text, offsetValue, limitValue, defaultLimit) {
   };
 }
 
-export function buildElevatedWindowBrokerCommand({ command, args, workingDirectory, wait }) {
+export function buildElevatedWindowBrokerCommand({ command, args, workingDirectory, wait }: any) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `$p = Start-Process -FilePath ${psSingleQuote(command)} -ArgumentList ${psArrayLiteral(args)} -WorkingDirectory ${psSingleQuote(workingDirectory)} -Verb RunAs -WindowStyle Normal -PassThru`,
@@ -1071,7 +1071,7 @@ export function buildElevatedWindowBrokerCommand({ command, args, workingDirecto
   };
 }
 
-function toolResult(payload, state, toolName = 'structured_command') {
+function toolResult(payload: any, state: any, toolName : any= 'structured_command') {
   const text = renderToolResultText(payload);
   if (text.length > TOOL_RESULT_CHAR_LIMIT) {
     return buildBoundedToolResult({
@@ -1095,11 +1095,11 @@ function toolResult(payload, state, toolName = 'structured_command') {
   };
 }
 
-function assistantTextContent(text) {
+function assistantTextContent(text: any) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function buildStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state }) {
+function buildStructuredContent(payload: any, { truncated, renderedTextLength, fullTextLength, state }: any) {
   if (payload?.schema === 'narada.structured_command.execution_result.v0') {
     return buildExecutionStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state });
   }
@@ -1146,7 +1146,7 @@ function buildStructuredContent(payload, { truncated, renderedTextLength, fullTe
   };
 }
 
-function buildExecutionStructuredContent(payload, { truncated, renderedTextLength, fullTextLength, state: _state }) {
+function buildExecutionStructuredContent(payload: any, { truncated, renderedTextLength, fullTextLength, state: _state }: any) {
   if (payload.executed === false) {
     return {
       schema: payload.schema,
@@ -1212,7 +1212,7 @@ function buildExecutionStructuredContent(payload, { truncated, renderedTextLengt
   };
 }
 
-function renderToolResultText(payload) {
+function renderToolResultText(payload: any) {
   if (payload?.schema === 'narada.structured_command.execution_result.v0' && payload.executed === false) {
     const reasons = payload.refusal_reasons ?? payload.decision?.reasons ?? [];
     const hints = payload.remediation_hints ?? payload.decision?.remediation_hints ?? [];
@@ -1260,7 +1260,7 @@ function renderToolResultText(payload) {
   return JSON.stringify(payload, null, 2);
 }
 
-function renderStreamPreviewLines(label, value, streamTruncated, pageTruncated) {
+function renderStreamPreviewLines(label: any, value: any, streamTruncated: any, pageTruncated: any) {
   if (!value && !streamTruncated) return [];
   const text = String(value ?? '');
   const preview = text.slice(0, STREAM_PREVIEW_CHAR_LIMIT);
@@ -1270,15 +1270,15 @@ function renderStreamPreviewLines(label, value, streamTruncated, pageTruncated) 
   return lines;
 }
 
-function psSingleQuote(value) {
+function psSingleQuote(value: any) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function psArrayLiteral(values) {
-  return `@(${values.map((value) => psSingleQuote(value)).join(', ')})`;
+function psArrayLiteral(values: any) {
+  return `@(${values.map((value: any) => psSingleQuote(value)).join(', ')})`;
 }
 
-function enforceInputCharLimit(value, path = 'arguments') {
+function enforceInputCharLimit(value: any, path : any= 'arguments') {
   if (typeof value === 'string' && value.length > TOOL_INPUT_CHAR_LIMIT) {
     throw diagnosticError('structured_command_input_too_long', `structured_command_input_too_long:${path}:${value.length}>${TOOL_INPUT_CHAR_LIMIT}`, {
       path,
@@ -1287,7 +1287,7 @@ function enforceInputCharLimit(value, path = 'arguments') {
     });
   }
   if (Array.isArray(value)) {
-    value.forEach((item, index) => enforceInputCharLimit(item, `${path}[${index}]`));
+    value.forEach((item: any, index: any) => enforceInputCharLimit(item, `${path}[${index}]`));
     return;
   }
   if (value && typeof value === 'object') {
@@ -1318,7 +1318,7 @@ function structuredCommandInputPosture(args: Record<string, unknown>): Record<st
 
 function inferTestScope(args: Record<string, unknown>): string {
   const command = String(args.command ?? '').toLowerCase();
-  const argv = Array.isArray(args.args) ? args.args.map((item) => String(item).toLowerCase()) : [];
+  const argv = Array.isArray(args.args) ? args.args.map((item: any) => String(item).toLowerCase()) : [];
   if (command === 'pnpm' && argv.includes('test')) return argv.includes('--filter') ? 'focused' : 'broad';
   if (command === 'npm' && argv.includes('test')) return 'broad';
   return 'unknown';
@@ -1336,13 +1336,13 @@ function stringEnumValue(value: unknown, allowed: string[], fallback: string): s
   return text;
 }
 
-export function audit(state, payload) {
+export function audit(state: any, payload: any) {
   if (!state.auditLogDir) return;
   mkdirSync(state.auditLogDir, { recursive: true });
   appendFileSync(join(state.auditLogDir, 'structured-command.jsonl'), `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
-function createStructuredCommandExecution(result, state) {
+function createStructuredCommandExecution(result: any, state: any) {
   if (!state) return null;
   const executionId = `e_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const record = {
@@ -1356,7 +1356,7 @@ function createStructuredCommandExecution(result, state) {
   return record.ref;
 }
 
-export function updateStructuredCommandExecution(ref, result, state) {
+export function updateStructuredCommandExecution(ref: any, result: any, state: any) {
   const { id } = parseRef(ref, 'execution');
   const path = executionPath(state, id);
   const existing = readJsonRecord(path);
@@ -1370,35 +1370,35 @@ export function updateStructuredCommandExecution(ref, result, state) {
   });
 }
 
-export function readStructuredCommandExecution(ref, state) {
+export function readStructuredCommandExecution(ref: any, state: any) {
   const { id } = parseRef(ref, 'execution');
   return readJsonRecord(executionPath(state, id));
 }
 
-function readStructuredCommandInput(ref, state) {
+function readStructuredCommandInput(ref: any, state: any) {
   const { id } = parseRef(ref, 'input');
   return readJsonRecord(inputPath(state, id));
 }
 
-function parseRef(ref, kind) {
+function parseRef(ref: any, kind: any) {
   const match = String(ref ?? '').match(REF_PATTERN);
   if (!match || match[1] !== kind) throw diagnosticError(`structured_command_invalid_${kind}_ref`, `structured_command_invalid_${kind}_ref`, { ref: String(ref ?? ''), expected_kind: kind });
   return { kind: match[1], id: match[2] };
 }
 
-function inputPath(state, id) {
+function inputPath(state: any, id: any) {
   return join(state.storageRoot, 'inputs', `${id}.json`);
 }
 
-function executionPath(state, id) {
+function executionPath(state: any, id: any) {
   return join(state.storageRoot, 'executions', `${id}.json`);
 }
 
-function listStructuredCommandResources(state) {
+function listStructuredCommandResources(state: any) {
   const dir = join(state.storageRoot, 'executions');
   if (!existsSync(dir)) return { resources: [] };
   return {
-    resources: readdirSync(dir).filter((name) => name.endsWith('.json')).sort().map((name) => {
+    resources: readdirSync(dir).filter((name: any) => name.endsWith('.json')).sort().map((name: any) => {
       const id = name.replace(/\.json$/, '');
       const ref = `structured_command_execution:${id}`;
       return { uri: structuredCommandExecutionUri(ref), name: ref, title: ref, description: 'Structured command execution artifact.', mimeType: 'application/json' };
@@ -1406,55 +1406,55 @@ function listStructuredCommandResources(state) {
   };
 }
 
-function readStructuredCommandResource(params, state) {
+function readStructuredCommandResource(params: any, state: any) {
   const ref = structuredCommandExecutionRefFromUri(String(params.uri ?? ''));
   const { id } = parseRef(ref, 'execution');
   const record = readJsonRecord(executionPath(state, id));
   return { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify(record, null, 2) }] };
 }
 
-function structuredCommandExecutionUri(ref) {
+function structuredCommandExecutionUri(ref: any) {
   return `structured-command-execution:${encodeURIComponent(ref)}`;
 }
 
-function structuredCommandExecutionRefFromUri(uri) {
+function structuredCommandExecutionRefFromUri(uri: any) {
   if (!uri.startsWith('structured-command-execution:')) throw diagnosticError('structured_command_resource_uri_invalid', 'structured_command_resource_uri_invalid', { uri });
   return decodeURIComponent(uri.slice('structured-command-execution:'.length));
 }
 
-function writeJsonRecord(path, record) {
+function writeJsonRecord(path: any, record: any) {
   mkdirSync(dirname(path), { recursive: true });
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   renameSync(temporaryPath, path);
 }
 
-function readJsonRecord(path) {
+function readJsonRecord(path: any) {
   if (!existsSync(path)) throw diagnosticError('structured_command_ref_not_found', 'structured_command_ref_not_found', { path });
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-function normalizeRefId(value) {
+function normalizeRefId(value: any) {
   const id = String(value).trim();
   if (!/^[A-Za-z0-9_-]{8,80}$/.test(id)) throw diagnosticError('structured_command_invalid_ref_id', 'structured_command_invalid_ref_id', { input_id: id, pattern: '^[A-Za-z0-9_-]{8,80}$' });
   return id;
 }
 
-function clampInteger(value, min, max, fallback) {
+function clampInteger(value: any, min: any, max: any, fallback: any) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
 }
 
-function sha256Json(value) {
+function sha256Json(value: any) {
   return sha256Text(JSON.stringify(value));
 }
 
-function sha256Text(value) {
+function sha256Text(value: any) {
   return createHash('sha256').update(String(value)).digest('hex');
 }
 
-function truncateUtf8(value, maxBytes) {
+function truncateUtf8(value: any, maxBytes: any) {
   let out = value;
   if (Buffer.byteLength(out, 'utf8') <= maxBytes) return out;
   const marker = '[structured-command omitted earlier output; preserved tail]\n';
@@ -1467,12 +1467,12 @@ function truncateUtf8(value, maxBytes) {
   return out;
 }
 
-function objectSchema(properties, required = []) {
+function objectSchema(properties: any, required : any= []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
-function decorateTools(tools) {
-  return tools.map((tool) => ({
+function decorateTools(tools: any) {
+  return tools.map((tool: any) => ({
     ...tool,
     canonical_name: tool.name,
     annotations: { ...toolAnnotations(tool.name), canonicalName: tool.name },
@@ -1480,7 +1480,7 @@ function decorateTools(tools) {
   }));
 }
 
-function toolAnnotations(name) {
+function toolAnnotations(name: any) {
   return {
     title: String(name),
     readOnlyHint: !/execute|create|start/.test(String(name)),
@@ -1494,12 +1494,12 @@ function genericToolOutputSchema() {
   return { type: 'object', additionalProperties: true };
 }
 
-function parseArgs(argv) {
-  const parsed = {};
+function parseArgs(argv: string[]) {
+  const parsed: Record<string, unknown> = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
-    const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const key = arg.slice(2).replace(/-([a-z])/g, (_: any, c: any) => c.toUpperCase());
     const next = argv[i + 1];
     if (next && !next.startsWith('--')) {
       const current = parsed[key];
@@ -1521,11 +1521,11 @@ function optionList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [String(value)];
 }
 
-function diagnosticError(codeName, message, details: unknown = {}) {
+function diagnosticError(codeName: any, message: any, details: unknown = {}) {
   return new StructuredCommandError(codeName, message, details);
 }
 
-function errorDiagnostic(error) {
+function errorDiagnostic(error: any) {
   if (error instanceof StructuredCommandError) {
     return {
       schema: 'narada.structured_command.error.v0',
@@ -1544,7 +1544,7 @@ function errorDiagnostic(error) {
   };
 }
 
-function drainJsonRpcFrames(buffer) {
+function drainJsonRpcFrames(buffer: any) {
   const requests = [];
   let remaining = buffer;
   while (true) {
@@ -1572,17 +1572,17 @@ function clientSupportsRoots(initializeParams: Record<string, unknown>): boolean
 
 function requestClientRoots(state: StructuredCommandState, pendingServerRequests: Map<string, (message: Record<string, unknown>) => void>, nextId: () => string, options: { framed: boolean }): void {
   const id = nextId();
-  pendingServerRequests.set(id, (message) => {
+  pendingServerRequests.set(id, (message: any) => {
     updateClientRoots(state, asRecord(message.result));
   });
   writeJsonRpcMessage({ jsonrpc: '2.0', id, method: 'roots/list', params: {} }, options);
 }
 
 function updateClientRoots(state: StructuredCommandState, result: Record<string, unknown>): void {
-  const roots = Array.isArray(result.roots) ? result.roots.map((root) => asRecord(root)).filter((root) => typeof root.uri === 'string') : [];
+  const roots = Array.isArray(result.roots) ? result.roots.map((root: any) => asRecord(root)).filter((root: any) => typeof root.uri === 'string') : [];
   state.clientRoots = {
     supported: true,
-    roots: roots.map((root) => ({
+    roots: roots.map((root: any) => ({
       uri: String(root.uri),
       ...(typeof root.name === 'string' ? { name: root.name } : {}),
     })),
@@ -1591,7 +1591,7 @@ function updateClientRoots(state: StructuredCommandState, result: Record<string,
 }
 
 function clientRootCompletionValues(state: StructuredCommandState): string[] {
-  return state.clientRoots.roots.map((root) => {
+  return state.clientRoots.roots.map((root: any) => {
     const uri = root.uri;
     if (uri.startsWith('file:')) {
       try {
@@ -1605,7 +1605,7 @@ function clientRootCompletionValues(state: StructuredCommandState): string[] {
 }
 
 function isInsideAnyRoot(path: string, roots: string[]): boolean {
-  return roots.some((root) => {
+  return roots.some((root: any) => {
     const rel = relative(root, path);
     return rel === '' || (!rel.startsWith('..') && !/^[a-zA-Z]:/.test(rel));
   });

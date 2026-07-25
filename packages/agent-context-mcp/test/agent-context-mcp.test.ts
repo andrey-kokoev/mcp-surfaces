@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -58,15 +58,15 @@ let stdout = '';
 let stderr = '';
 proc.stdout.setEncoding('utf8');
 proc.stderr.setEncoding('utf8');
-proc.stdout.on('data', (chunk) => { stdout += chunk; });
-proc.stderr.on('data', (chunk) => { stderr += chunk; });
+proc.stdout.on('data', (chunk: any) => { stdout += chunk; });
+proc.stderr.on('data', (chunk: any) => { stderr += chunk; });
 
-function writeMessage(message, separator = '\r\n\r\n') {
+function writeMessage(message: any, separator: any = '\r\n\r\n') {
   const body = JSON.stringify(message);
   proc.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}${separator}${body}`);
 }
 
-function writeJsonLine(message) {
+function writeJsonLine(message: any) {
   proc.stdin.write(`${JSON.stringify(message)}\n`);
 }
 
@@ -91,12 +91,12 @@ function readOne() {
   return JSON.parse(body);
 }
 
-async function waitFor(id) {
+async function waitFor(id: any) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const message = readOne();
     if (message?.id === id) return message;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve: any) => setTimeout(resolve, 20));
   }
   throw new Error(`timeout:${id}; stderr=${stderr}`);
 }
@@ -109,13 +109,13 @@ try {
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool) => tool.name);
+  const names = tools.result.tools.map((tool: any) => tool.name);
   assert.equal(names.includes('agent_context_hydrate_current'), true);
   assert.equal(names.includes('agent_context_startup_sequence'), true);
   assert.equal(names.includes('agent_context_continuation_export'), true);
   assert.equal(names.includes('agent_context_continuation_read'), true);
   assert.equal(names.includes('startup_sequence'), false);
-  const checkpointTool = tools.result.tools.find((tool) => tool.name === 'agent_context_checkpoint');
+  const checkpointTool = tools.result.tools.find((tool: any) => tool.name === 'agent_context_checkpoint');
   assert.equal(checkpointTool.inputSchema.properties.continuation_ref.properties.path.type, 'string');
   assert.equal(checkpointTool.inputSchema.properties.continuation.properties.schema.const, 'narada.continuation.v1');
   for (const toolName of [
@@ -124,7 +124,7 @@ try {
     'agent_context_hydrate_current',
     'agent_context_startup_sequence',
   ]) {
-    const tool = tools.result.tools.find((candidate) => candidate.name === toolName);
+    const tool = tools.result.tools.find((candidate: any) => candidate.name === toolName);
     assert.equal(tool.inputSchema.properties.checkpoint_id.type, 'string');
   }
   writeMessage({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }, '\n\n');
@@ -354,8 +354,8 @@ const mismatchProc = spawn(process.execPath, [serverPath, '--site-root', boundSi
 });
 let mismatchStderr = '';
 mismatchProc.stderr.setEncoding('utf8');
-mismatchProc.stderr.on('data', (chunk) => { mismatchStderr += chunk; });
-const mismatchExit = await waitForExit(mismatchProc);
+mismatchProc.stderr.on('data', (chunk: any) => { mismatchStderr += chunk; });
+const mismatchExit = await waitForExit(mismatchProc) as { code: number | null; signal: string | null };
 assert.notEqual(mismatchExit.code, 0);
 assert.match(mismatchStderr, /agent_context_site_root_mismatch/);
 
@@ -372,14 +372,14 @@ const foreignDbProc = spawn(process.execPath, [serverPath, '--site-root', boundS
 });
 let foreignDbStderr = '';
 foreignDbProc.stderr.setEncoding('utf8');
-foreignDbProc.stderr.on('data', (chunk) => { foreignDbStderr += chunk; });
-const foreignDbExit = await waitForExit(foreignDbProc);
+foreignDbProc.stderr.on('data', (chunk: any) => { foreignDbStderr += chunk; });
+const foreignDbExit = await waitForExit(foreignDbProc) as { code: number | null; signal: string | null };
 assert.notEqual(foreignDbExit.code, 0);
 assert.match(foreignDbStderr, /agent_context_db_path_outside_site_root/);
 
-function waitForExit(child) {
-  return new Promise((resolve) => {
-    child.once('exit', (code, signal) => resolve({ code, signal }));
+function waitForExit(child: any) {
+  return new Promise((resolve: any) => {
+    child.once('exit', (code: any, signal: any) => resolve({ code, signal }));
   });
 }
 

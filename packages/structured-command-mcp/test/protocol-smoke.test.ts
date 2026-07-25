@@ -24,28 +24,28 @@ try {
     allowedCommands: ['node'],
   });
 
-  const init = await handleRequest({
+  const init = await ((handleRequest({
     jsonrpc: '2.0',
     id: 1,
     method: 'initialize',
     params: { protocolVersion: '2024-11-05' },
-  }, state) as JsonRpcTestResponse;
+  }, state)) as any) as any as JsonRpcTestResponse;
   assert.equal(init.error, undefined);
   assert.equal(init.result.serverInfo.name, 'structured-command-mcp');
   assert.deepEqual(Object.keys(init.result.capabilities).sort(), ['completions', 'logging', 'prompts', 'resources', 'tools']);
-  const tools = await handleRequest({
+  const tools = await ((handleRequest({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/list',
     params: {},
-  }, state) as JsonRpcTestResponse;
+  }, state)) as any) as any as JsonRpcTestResponse;
   assert.equal(tools.error, undefined);
   const names = tools.result.tools.map((tool) => tool.name);
   assert.equal(names.includes('structured_command_execute'), true);
   assert.equal(names.includes('structured_command_elevated_window_execute'), true);
   assert.equal(names.includes('structured_command_input_create'), true);
   assert.equal(names.includes('structured_command_output_show'), true);
-  const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
+  const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute')!;
   assert.equal(executeTool.annotations.readOnlyHint, false);
   assert.equal(executeTool.outputSchema.type, 'object');
 
@@ -65,7 +65,7 @@ try {
   });
   const materializedRef = materialized.structuredContent.output_ref;
   assert.match(String(materializedRef), /^mcp_output:/);
-  const shownMaterialized = await handleRequest({
+  const shownMaterialized = await ((handleRequest({
     jsonrpc: '2.0',
     id: 'output-show',
     method: 'tools/call',
@@ -73,21 +73,21 @@ try {
       name: 'structured_command_output_show',
       arguments: { ref: materializedRef, offset: 0, limit: 4000 },
     },
-  }, state) as any;
+  }, state)) as any) as any as any;
   assert.equal(shownMaterialized.error, undefined);
   assert.equal(shownMaterialized.result.structuredContent.schema, 'narada.mcp_output_page.v1');
   assert.equal(shownMaterialized.result.structuredContent.ref, materializedRef);
 
-  const guidance = await handleRequest({
+  const guidance = await ((handleRequest({
     jsonrpc: '2.0',
     id: 'guidance',
     method: 'tools/call',
     params: { name: 'structured_command_guidance', arguments: {} },
-  }, state) as any;
+  }, state)) as any) as any as any;
   assert.equal(guidance.error, undefined);
   const guidanceRef = guidance.result.structuredContent.output_ref;
   assert.match(String(guidanceRef), /^mcp_output:/, JSON.stringify(guidance));
-  const shownGuidance = await handleRequest({
+  const shownGuidance = await ((handleRequest({
     jsonrpc: '2.0',
     id: 'guidance-show',
     method: 'tools/call',
@@ -95,16 +95,16 @@ try {
       name: 'structured_command_output_show',
       arguments: { ref: guidanceRef, offset: 0, limit: 4000 },
     },
-  }, state) as any;
+  }, state)) as any) as any as any;
   assert.equal(shownGuidance.error, undefined);
   assert.equal(shownGuidance.result.structuredContent.schema, 'narada.mcp_output_page.v1');
   assert.equal(shownGuidance.result.structuredContent.ref, guidanceRef);
 
-  const prompts = await handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state) as any;
+  const prompts = await ((handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state)) as any) as any as any;
   assert.equal(prompts.result.prompts[0].name, 'structured_command_safe_execution');
-  const completion = await handleRequest({ jsonrpc: '2.0', id: 4, method: 'completion/complete', params: { argument: { name: 'name' } } }, state) as any;
+  const completion = await ((handleRequest({ jsonrpc: '2.0', id: 4, method: 'completion/complete', params: { argument: { name: 'name' } } }, state)) as any) as any as any;
   assert.equal(completion.result.completion.values.includes('structured_command_execute'), true);
-  const logging = await handleRequest({ jsonrpc: '2.0', id: 5, method: 'logging/setLevel', params: { level: 'debug' } }, state) as any;
+  const logging = await ((handleRequest({ jsonrpc: '2.0', id: 5, method: 'logging/setLevel', params: { level: 'debug' } }, state)) as any) as any as any;
   assert.deepEqual(logging.result, {});
 
   const abortController = new AbortController();

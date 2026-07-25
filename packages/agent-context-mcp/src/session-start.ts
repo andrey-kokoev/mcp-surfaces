@@ -1,9 +1,8 @@
-// @ts-nocheck
 // Swallow only the node:sqlite ExperimentalWarning (same posture as narada's
 // legacy sqlite facade): the module is load-time noisy on every MCP surface
 // launch, and the warning carries no actionable information for operators.
-const originalEmitWarning = process.emitWarning;
-process.emitWarning = (warning, ...args) => {
+const originalEmitWarning: any = process.emitWarning;
+process.emitWarning = (warning: any, ...args: any[]) => {
   if (args[0] === 'ExperimentalWarning' && String(warning).includes('SQLite')) return;
   return originalEmitWarning.call(process, warning, ...args);
 };
@@ -20,12 +19,12 @@ import { synthesizeBootstrap } from './synthesize-bootstrap.js';
 import { isCodexSessionId } from './codex-session-evidence.js';
 
 // Package-bundled fallback migrations: dist/src/session-start.js -> package root -> migrations/.
-const PACKAGE_MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations/', import.meta.url));
+const PACKAGE_MIGRATIONS_DIR: any = fileURLToPath(new URL('../../migrations/', import.meta.url));
 
 // Matches narada's legacy sqlite facade: concurrent role launches wait instead of failing with SQLITE_BUSY.
-export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+export const DEFAULT_BUSY_TIMEOUT_MS: any = 5000;
 
-const MIGRATIONS = [
+const MIGRATIONS: any = [
   { table: 'agent_start_events', path: ['.ai', 'db', 'migrations', '001-agent-context-materializations.sql'] },
   { table: 'agent_events', path: ['.ai', 'db', 'migrations', '002-agent-events.sql'] },
   {
@@ -52,13 +51,13 @@ const MIGRATIONS = [
   },
 ];
 
-export function validateIdentityAgainstRoster(siteRoot, identity) {
-  const sqlRosterCheck = validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity);
+export function validateIdentityAgainstRoster(siteRoot: any, identity: any) {
+  const sqlRosterCheck: any = validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity);
   if (sqlRosterCheck.valid) {
     return sqlRosterCheck;
   }
 
-  const rosterPath = join(siteRoot, '.ai', 'agents', 'roster.json');
+  const rosterPath: any = join(siteRoot, '.ai', 'agents', 'roster.json');
   if (!existsSync(rosterPath)) {
     return buildInferredRosterCheck(identity, {
       reason: 'roster_unavailable_but_site_session_roster_enforcement_not_enabled',
@@ -66,14 +65,14 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
     });
   }
 
-  let roster;
+  let roster: any;
   try {
     roster = JSON.parse(readFileSync(rosterPath, 'utf8'));
-  } catch (err) {
+  } catch (err: any) {
     return { valid: false, error: `roster_parse_error: ${err.message}` };
   }
 
-  const agent = roster.agents?.find((candidate) => candidate.agent_id === identity);
+  const agent: any = roster.agents?.find((candidate: any) => candidate.agent_id === identity);
   if (!agent) {
     if (!siteEnforcesSessionRoster(roster)) {
       return buildInferredRosterCheck(identity, {
@@ -84,7 +83,7 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
     return { valid: false, error: `identity_not_in_roster: ${identity}` };
   }
 
-  const capabilities = Array.isArray(agent.capabilities) ? agent.capabilities : [];
+  const capabilities: any = Array.isArray(agent.capabilities) ? agent.capabilities : [];
   return {
     valid: true,
     agent,
@@ -99,8 +98,8 @@ export function validateIdentityAgainstRoster(siteRoot, identity) {
   };
 }
 
-function buildInferredRosterCheck(identity, { reason, prior_error = null } = {}) {
-  const role = inferRoleFromIdentity(identity);
+function buildInferredRosterCheck(identity: any, { reason, prior_error = null } : any= {}) {
+  const role: any = inferRoleFromIdentity(identity);
   return {
     valid: true,
     agent: {
@@ -125,31 +124,31 @@ function buildInferredRosterCheck(identity, { reason, prior_error = null } = {})
   };
 }
 
-function siteEnforcesSessionRoster(roster) {
+function siteEnforcesSessionRoster(roster: any) {
   return roster?.enforce_session_roster === true;
 }
 
-function inferRoleFromIdentity(identity) {
-  const suffix = String(identity ?? '').split('.').pop();
+function inferRoleFromIdentity(identity: any) {
+  const suffix: any = String(identity ?? '').split('.').pop();
   if (['architect', 'builder', 'builder2', 'resident'].includes(suffix)) return suffix;
   return null;
 }
 
-function validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity) {
-  const dbPath = join(siteRoot, '.ai', 'task-lifecycle.db');
+function validateIdentityAgainstTaskLifecycleRoster(siteRoot: any, identity: any) {
+  const dbPath: any = join(siteRoot, '.ai', 'task-lifecycle.db');
   if (!existsSync(dbPath)) {
     return { valid: false, error: `task_lifecycle_roster_db_not_found: ${dbPath}` };
   }
 
-  let db = null;
+  let db: any = null;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const hasRoster = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_roster'").get();
+    const hasRoster: any = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_roster'").get();
     if (!hasRoster) return { valid: false, error: 'task_lifecycle_roster_table_not_found' };
-    const row = db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(identity);
+    const row: any = db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(identity);
     if (!row) return { valid: false, error: `identity_not_in_task_lifecycle_roster: ${identity}` };
-    const capabilities = parseCapabilitiesJson(row.capabilities_json);
-    const agent = {
+    const capabilities: any = parseCapabilitiesJson(row.capabilities_json);
+    const agent: any = {
       agent_id: row.agent_id,
       role: row.role,
       capabilities,
@@ -174,23 +173,23 @@ function validateIdentityAgainstTaskLifecycleRoster(siteRoot, identity) {
       capability_policy: defaultCapabilityPolicy(row.role),
       roster_source: 'task_lifecycle_sqlite_agent_roster',
     };
-  } catch (err) {
+  } catch (err: any) {
     return { valid: false, error: `task_lifecycle_roster_read_error: ${err.message}` };
   } finally {
     if (db) db.close();
   }
 }
 
-function parseCapabilitiesJson(value) {
+function parseCapabilitiesJson(value: any) {
   try {
-    const parsed = JSON.parse(value ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];
+    const parsed: any = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed) ? parsed.filter((entry: any) => typeof entry === 'string') : [];
   } catch {
     return [];
   }
 }
 
-export function buildRoleBindingProjection({ agentId, role, source, bindingAuthority = 'agent_roster' }) {
+export function buildRoleBindingProjection({ agentId, role, source, bindingAuthority = 'agent_roster' }: any) {
   return {
     schema: 'narada.agent.role_binding.v0',
     agent_id: agentId,
@@ -204,7 +203,7 @@ export function buildRoleBindingProjection({ agentId, role, source, bindingAutho
   };
 }
 
-export function defaultCapabilityPolicy(role) {
+export function defaultCapabilityPolicy(role: any) {
   return {
     schema: 'narada.agent.capability_policy.v0',
     direct_substrate_script_execution: 'forbidden',
@@ -225,13 +224,13 @@ export function defaultCapabilityPolicy(role) {
   };
 }
 
-export function openAgentContextDb(siteRoot, dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite')) {
-  const dbDir = dirname(dbPath);
+export function openAgentContextDb(siteRoot: any, dbPath : any= join(siteRoot, '.ai', 'state', 'agent-context.sqlite')) {
+  const dbDir: any = dirname(dbPath);
   if (!existsSync(dbDir)) {
     mkdirSync(dbDir, { recursive: true });
   }
 
-  const db = new DatabaseSync(dbPath);
+  const db: any = new DatabaseSync(dbPath);
   db.exec(`PRAGMA busy_timeout = ${Math.trunc(DEFAULT_BUSY_TIMEOUT_MS)}`);
   applyAgentContextMigrations(db, siteRoot);
   ensureAgentStartEventCompatibility(db);
@@ -247,12 +246,12 @@ export function listAgentStartSessions({
   substrate = null,
   now = new Date(),
   limit = 100,
-} = {}) {
+} : any= {}) {
   if (!db) throw new Error('agent_context_db_not_available');
 
-  const filters = [];
-  const params = {};
-  const normalizedLimit = Math.min(Math.max(parseInt(limit ?? '100', 10) || 100, 1), 500);
+  const filters: any[] = [];
+  const params: any = {};
+  const normalizedLimit: any = Math.min(Math.max(parseInt(limit ?? '100', 10) || 100, 1), 500);
 
   if (identity) {
     filters.push('identity_id = @identity');
@@ -271,8 +270,8 @@ export function listAgentStartSessions({
     filters.push('created_at <= @dateTo');
   }
 
-  const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
-  const rows = db.prepare(`
+  const where: any = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+  const rows: any = db.prepare(`
     SELECT event_id, identity_id, runtime, created_at, status, resume_command, bootstrap_artifact_uri
     FROM agent_start_events
     ${where}
@@ -280,10 +279,10 @@ export function listAgentStartSessions({
     LIMIT @limit
   `).all({ ...params, limit: normalizedLimit });
 
-  const asOf = now instanceof Date ? now : new Date(now);
-  const asOfIso = Number.isNaN(asOf.getTime()) ? new Date().toISOString() : asOf.toISOString();
-  const sessions = rows.map((row) => sessionRowToProjection(row, asOf));
-  const latestByIdentity = new Map();
+  const asOf: any = now instanceof Date ? now : new Date(now);
+  const asOfIso: any = Number.isNaN(asOf.getTime()) ? new Date().toISOString() : asOf.toISOString();
+  const sessions: any = rows.map((row: any) => sessionRowToProjection(row, asOf));
+  const latestByIdentity: any = new Map();
   for (const session of sessions) {
     if (!latestByIdentity.has(session.identity)) latestByIdentity.set(session.identity, session);
   }
@@ -307,15 +306,15 @@ export function listAgentStartSessions({
   };
 }
 
-function normalizeIsoDateFilter(value, fieldName) {
-  const date = new Date(String(value));
+function normalizeIsoDateFilter(value: any, fieldName: any) {
+  const date: any = new Date(String(value));
   if (Number.isNaN(date.getTime())) throw new Error(`invalid_${fieldName}: ${value}`);
   return date.toISOString();
 }
 
-function sessionRowToProjection(row, asOf) {
-  const startedAt = new Date(row.created_at);
-  const seconds = Number.isNaN(startedAt.getTime())
+function sessionRowToProjection(row: any, asOf: any) {
+  const startedAt: any = new Date(row.created_at);
+  const seconds: any = Number.isNaN(startedAt.getTime())
     ? null
     : Math.max(0, Math.floor((asOf.getTime() - startedAt.getTime()) / 1000));
   return {
@@ -343,17 +342,17 @@ export function beginCodexSessionAdmission({
   cwd = siteRoot,
   dryRun = false,
   evidence = {},
-} = {}) {
+} : any= {}) {
   if (runtime !== 'codex') throw new Error(`codex_session_admission_requires_codex_runtime: ${runtime}`);
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!identity) throw new Error('identity is required');
 
-  const rosterCheck = validateIdentityAgainstRoster(siteRoot, identity);
+  const rosterCheck: any = validateIdentityAgainstRoster(siteRoot, identity);
   if (!rosterCheck.valid) throw new Error(rosterCheck.error);
 
-  const admissionId = `codexadm_${randomUUID().replace(/-/g, '')}`;
-  const now = new Date().toISOString();
-  const payload = {
+  const admissionId: any = `codexadm_${randomUUID().replace(/-/g, '')}`;
+  const now: any = new Date().toISOString();
+  const payload: any = {
     schema: 'narada.codex.session_admission.v0',
     admission_id: admissionId,
     identity,
@@ -375,7 +374,7 @@ export function beginCodexSessionAdmission({
   };
 
   if (!dryRun) {
-    const db = openAgentContextDb(siteRoot, dbPath);
+    const db: any = openAgentContextDb(siteRoot, dbPath);
     try {
       db.prepare(`
         INSERT INTO codex_session_admissions (
@@ -428,13 +427,13 @@ export function getCodexSessionAdmission({
   siteRoot,
   admissionId,
   dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite'),
-} = {}) {
+} : any= {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!admissionId) throw new Error('admissionId is required');
 
-  const db = openAgentContextDb(siteRoot, dbPath);
+  const db: any = openAgentContextDb(siteRoot, dbPath);
   try {
-    const row = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
+    const row: any = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
     if (!row) return { status: 'not_found', admission_id: admissionId };
     return {
       status: 'ok',
@@ -458,7 +457,7 @@ export function completeCodexSessionAdmission({
   dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite'),
   cwd = siteRoot,
   evidence = {},
-} = {}) {
+} : any= {}) {
   if (!siteRoot) throw new Error('siteRoot is required');
   if (!admissionId) throw new Error('admissionId is required');
   if (!identity) throw new Error('identity is required');
@@ -466,22 +465,22 @@ export function completeCodexSessionAdmission({
   if (!isCodexSessionId(codexSessionId)) throw new Error(`codex_session_id_invalid: ${codexSessionId}`);
   if (runtime !== 'codex') throw new Error(`codex_session_completion_requires_codex_runtime: ${runtime}`);
 
-  const rosterCheck = validateIdentityAgainstRoster(siteRoot, identity);
+  const rosterCheck: any = validateIdentityAgainstRoster(siteRoot, identity);
   if (!rosterCheck.valid) throw new Error(rosterCheck.error);
 
-  const db = openAgentContextDb(siteRoot, dbPath);
+  const db: any = openAgentContextDb(siteRoot, dbPath);
   try {
-    const row = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
+    const row: any = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
     if (!row) throw new Error(`codex_session_admission_not_found: ${admissionId}`);
     if (row.runtime !== 'codex') throw new Error(`codex_session_admission_wrong_runtime: ${row.runtime}`);
     if (row.agent_id !== identity) throw new Error(`codex_session_admission_identity_mismatch: expected ${row.agent_id}, got ${identity}`);
     if (row.status !== 'creating') throw new Error(`codex_session_admission_not_creating: ${row.status}`);
 
-    const completedAt = new Date().toISOString();
-    let startResult;
+    const completedAt: any = new Date().toISOString();
+    let startResult: any;
     runTransaction(db, () => {
       startResult = writeSessionMaterialization(db, { siteRoot, identity, runtime, dbPath, cwd, rosterCheck });
-      const mergedEvidence = {
+      const mergedEvidence: any = {
         ...parseJsonObject(row.evidence_json),
         ...evidence,
         start_event_status: 'materialized',
@@ -510,7 +509,7 @@ export function completeCodexSessionAdmission({
       );
     });
 
-    const updated = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
+    const updated: any = db.prepare('SELECT * FROM codex_session_admissions WHERE admission_id = ?').get(admissionId);
     return {
       schema: 'narada.codex.session_admission.completion.v0',
       status: 'admitted',
@@ -535,18 +534,18 @@ export function completeCodexSessionAdmission({
   }
 }
 
-function parseJsonObject(value) {
+function parseJsonObject(value: any) {
   try {
-    const parsed = JSON.parse(value ?? '{}');
+    const parsed: any = JSON.parse(value ?? '{}');
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 
-export function applyAgentContextMigrations(db, siteRoot) {
+export function applyAgentContextMigrations(db: any, siteRoot: any) {
   for (const migration of MIGRATIONS) {
-    const hasTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(migration.table);
+    const hasTable: any = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(migration.table);
     if (hasTable) continue;
 
     if (migration.ddl) {
@@ -554,7 +553,7 @@ export function applyAgentContextMigrations(db, siteRoot) {
       continue;
     }
 
-    const migrationPath = resolveMigrationPath(siteRoot, migration);
+    const migrationPath: any = resolveMigrationPath(siteRoot, migration);
     if (!migrationPath) {
       throw new Error(`agent_context_migration_not_found: ${join(siteRoot, ...migration.path)}`);
     }
@@ -562,20 +561,20 @@ export function applyAgentContextMigrations(db, siteRoot) {
   }
 }
 
-function resolveMigrationPath(siteRoot, migration) {
-  const sitePath = join(siteRoot, ...migration.path);
+function resolveMigrationPath(siteRoot: any, migration: any) {
+  const sitePath: any = join(siteRoot, ...migration.path);
   if (existsSync(sitePath)) return sitePath;
-  const bundledPath = join(PACKAGE_MIGRATIONS_DIR, migration.path[migration.path.length - 1]);
+  const bundledPath: any = join(PACKAGE_MIGRATIONS_DIR, migration.path[migration.path.length - 1]);
   if (existsSync(bundledPath)) return bundledPath;
   return null;
 }
 
-export function ensureAgentStartEventCompatibility(db) {
-  const hasEvents = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_start_events'").get();
+export function ensureAgentStartEventCompatibility(db: any) {
+  const hasEvents: any = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_start_events'").get();
   if (!hasEvents) return;
 
-  const columns = new Set(db.prepare('PRAGMA table_info(agent_start_events)').all().map((column) => column.name));
-  const addColumn = (name, type) => {
+  const columns: any = new Set(db.prepare('PRAGMA table_info(agent_start_events)').all().map((column: any) => column.name));
+  const addColumn: any = (name: any, type: any) => {
     if (!columns.has(name)) {
       db.exec(`ALTER TABLE agent_start_events ADD COLUMN ${name} ${type}`);
       columns.add(name);
@@ -658,11 +657,11 @@ export function ensureAgentStartEventCompatibility(db) {
   `);
 }
 
-function ensureCodexAdmissionColumns(db) {
-  const hasTable = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codex_session_admissions'").get();
+function ensureCodexAdmissionColumns(db: any) {
+  const hasTable: any = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'codex_session_admissions'").get();
   if (!hasTable) return;
 
-  const columns = new Set(db.prepare('PRAGMA table_info(codex_session_admissions)').all().map((column) => column.name));
+  const columns: any = new Set(db.prepare('PRAGMA table_info(codex_session_admissions)').all().map((column: any) => column.name));
   if (!columns.has('agent_start_event_id')) {
     db.exec('ALTER TABLE codex_session_admissions ADD COLUMN agent_start_event_id TEXT');
   }
@@ -675,7 +674,7 @@ export function materializeAgentSessionStart({
   dbPath = join(siteRoot, '.ai', 'state', 'agent-context.sqlite'),
   cwd = siteRoot,
   dryRun = false,
-} = {}) {
+} : any= {}) {
   if (!siteRoot) {
     throw new Error('siteRoot is required');
   }
@@ -683,7 +682,7 @@ export function materializeAgentSessionStart({
     throw new Error('identity is required');
   }
 
-  const rosterCheck = validateIdentityAgainstRoster(siteRoot, identity);
+  const rosterCheck: any = validateIdentityAgainstRoster(siteRoot, identity);
   if (!rosterCheck.valid) {
     throw new Error(rosterCheck.error);
   }
@@ -692,7 +691,7 @@ export function materializeAgentSessionStart({
     return buildDryRunResult({ siteRoot, identity, runtime, dbPath, cwd, rosterCheck });
   }
 
-  const db = openAgentContextDb(siteRoot, dbPath);
+  const db: any = openAgentContextDb(siteRoot, dbPath);
   try {
     return writeSessionMaterialization(db, { siteRoot, identity, runtime, dbPath, cwd, rosterCheck });
   } finally {
@@ -700,16 +699,16 @@ export function materializeAgentSessionStart({
   }
 }
 
-export function writeSessionMaterialization(db, { siteRoot, identity, runtime, dbPath, cwd, rosterCheck }) {
-  const now = new Date().toISOString();
-  const eventId = `evt-${now.replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}_${randomUUID().slice(0, 8)}`;
-  const materializationId = `mat-${randomUUID().slice(0, 8)}`;
-  const ecMaterializationId = `ec-${randomUUID().slice(0, 8)}`;
-  const proposalId = `prop-${randomUUID().slice(0, 8)}`;
-  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  const resumeCommand = buildCarrierCommand(runtime, identity);
+export function writeSessionMaterialization(db: any, { siteRoot, identity, runtime, dbPath, cwd, rosterCheck }: any) {
+  const now: any = new Date().toISOString();
+  const eventId: any = `evt-${now.replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}_${randomUUID().slice(0, 8)}`;
+  const materializationId: any = `mat-${randomUUID().slice(0, 8)}`;
+  const ecMaterializationId: any = `ec-${randomUUID().slice(0, 8)}`;
+  const proposalId: any = `prop-${randomUUID().slice(0, 8)}`;
+  const expiresAt: any = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const resumeCommand: any = buildCarrierCommand(runtime, identity);
 
-  const executionContextPayload = buildExecutionContextPayload({
+  const executionContextPayload: any = buildExecutionContextPayload({
     siteRoot,
     runtime,
     cwd,
@@ -718,28 +717,28 @@ export function writeSessionMaterialization(db, { siteRoot, identity, runtime, d
     roleBinding: rosterCheck.role_binding,
     capabilityPolicy: rosterCheck.capability_policy,
   });
-  const intelligenceContextPayload = buildIntelligenceContextPayload();
-  const proposalPayload = {
+  const intelligenceContextPayload: any = buildIntelligenceContextPayload();
+  const proposalPayload: any = {
     proposal_type: 'evaluation',
     description: 'Agent session start materialized by agent-context MCP authority.',
   };
 
-  const insertEvent = db.prepare(`
+  const insertEvent: any = db.prepare(`
     INSERT INTO agent_start_events (event_id, identity_id, runtime, created_at, status, resume_command, bootstrap_artifact_uri)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertEC = db.prepare(`
+  const insertEC: any = db.prepare(`
     INSERT INTO execution_context_materializations (materialization_id, event_id, runtime, cwd, payload_json, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const insertIC = db.prepare(`
+  const insertIC: any = db.prepare(`
     INSERT INTO intelligence_context_materializations (materialization_id, event_id, schema_id, payload_json, created_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
 
-  const insertProposal = db.prepare(`
+  const insertProposal: any = db.prepare(`
     INSERT INTO proposal_records (proposal_id, event_id, materialization_id, proposal_type, payload_json, verdict, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
@@ -751,7 +750,7 @@ export function writeSessionMaterialization(db, { siteRoot, identity, runtime, d
     insertProposal.run(proposalId, eventId, materializationId, proposalPayload.proposal_type, JSON.stringify(proposalPayload), 'pending', now);
   });
 
-  const l1Bootstrap = synthesizeBootstrap(db, identity, { limit: 10 });
+  const l1Bootstrap: any = synthesizeBootstrap(db, identity, { limit: 10 });
 
   return {
     schema: 'narada.agent_context.session_start.v0',
@@ -779,13 +778,13 @@ export function writeSessionMaterialization(db, { siteRoot, identity, runtime, d
   };
 }
 
-function runTransaction(db, fn) {
+function runTransaction(db: any, fn: any) {
   db.exec('BEGIN');
   try {
-    const result = fn();
+    const result: any = fn();
     db.exec('COMMIT');
     return result;
-  } catch (error) {
+  } catch (error: any) {
     try {
       db.exec('ROLLBACK');
     } catch {
@@ -795,14 +794,14 @@ function runTransaction(db, fn) {
   }
 }
 
-export function buildCarrierCommand(runtime, identity) {
+export function buildCarrierCommand(runtime: any, identity: any) {
   if (runtime === 'kimi') {
     return `kimi -S ${identity}`;
   }
   return runtime;
 }
 
-function buildDryRunResult({ siteRoot, identity, runtime, dbPath, cwd, rosterCheck }) {
+function buildDryRunResult({ siteRoot, identity, runtime, dbPath, cwd, rosterCheck }: any) {
   return {
     schema: 'narada.agent_context.session_start.v0',
     status: 'dry_run',
@@ -824,13 +823,13 @@ function buildDryRunResult({ siteRoot, identity, runtime, dbPath, cwd, rosterChe
   };
 }
 
-function buildStartupSequence(identity, eventId) {
+function buildStartupSequence(identity: any, eventId: any) {
   return [
     { tool: 'agent_context_startup_sequence', arguments: {} },
   ];
 }
 
-function buildExecutionContextPayload({ siteRoot, runtime, cwd, identity, eventId, roleBinding, capabilityPolicy }) {
+function buildExecutionContextPayload({ siteRoot, runtime, cwd, identity, eventId, roleBinding, capabilityPolicy }: any) {
   return {
     runtime,
     cwd,
@@ -844,18 +843,18 @@ function buildExecutionContextPayload({ siteRoot, runtime, cwd, identity, eventI
   };
 }
 
-function deriveMcpServersFromFabric(siteRoot) {
-  const mcpFabricDir = join(siteRoot, '.ai', 'mcp');
+function deriveMcpServersFromFabric(siteRoot: any) {
+  const mcpFabricDir: any = join(siteRoot, '.ai', 'mcp');
   if (!existsSync(mcpFabricDir)) {
     return [];
   }
 
-  const servers = [];
+  const servers: any[] = [];
   for (const entry of readdirSync(mcpFabricDir).sort()) {
     if (!entry.endsWith('.json')) continue;
 
-    const configPath = join(mcpFabricDir, entry);
-    let config;
+    const configPath: any = join(mcpFabricDir, entry);
+    let config: any;
     try {
       config = JSON.parse(readFileSync(configPath, 'utf8'));
     } catch {
@@ -865,7 +864,9 @@ function deriveMcpServersFromFabric(siteRoot) {
     for (const [name, server] of Object.entries(config.mcpServers ?? {})) {
       servers.push({
         name,
-        transport: typeof server?.transport === 'string' ? server.transport : 'stdio',
+        transport: typeof server === 'object' && server !== null && typeof (server as Record<string, unknown>).transport === 'string'
+          ? (server as Record<string, unknown>).transport
+          : 'stdio',
       });
     }
   }

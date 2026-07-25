@@ -4,7 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createServerState, handleRequest } from '../src/main.js';
+import { createServerState, handleRequest as handleRequestRaw } from '../src/main.js';
+function handleRequest(request: any, state: any): any {
+  return handleRequestRaw(request, state) as any;
+}
+
 
 const root = mkdtempSync(join(tmpdir(), 'local-filesystem-mcp-protocol-'));
 
@@ -15,73 +19,73 @@ try {
     outputRoot: root,
   });
 
-  const init = handleRequest({
+  const init = (handleRequest({
     jsonrpc: '2.0',
     id: 1,
     method: 'initialize',
     params: { protocolVersion: '2024-11-05' },
-  }, state);
+  }, state)) as any;
   assert.equal(init.error, undefined);
   assert.equal(init.result.serverInfo.name, 'local-filesystem-write');
   assert.deepEqual(Object.keys(init.result.capabilities).sort(), ['completions', 'logging', 'prompts', 'resources', 'tools']);
 
-  const tools = handleRequest({
+  const tools = (handleRequest({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/list',
     params: {},
-  }, state);
+  }, state)) as any;
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool) => tool.name);
+  const names = tools.result.tools.map((tool: any) => tool.name);
   assert.equal(names.includes('fs_read_file'), true);
   assert.equal(names.includes('fs_write_file'), true);
   assert.equal(names.includes('fs_create_directory'), true);
   assert.equal(names.includes('fs_rename_directory'), true);
   assert.equal(names.includes('fs_delete_directory'), true);
   assert.equal(names.includes('mcp_output_show'), false);
-  const readFileTool = tools.result.tools.find((tool) => tool.name === 'fs_read_file');
+  const readFileTool = tools.result.tools.find((tool: any) => tool.name === 'fs_read_file');
   assert.equal(readFileTool.annotations.readOnlyHint, true);
   assert.equal(readFileTool.outputSchema.type, 'object');
   assert.match(readFileTool.inputSchema.properties.path.description, /first allowed root/);
 
-  const doctor = handleRequest({
+  const doctor = (handleRequest({
     jsonrpc: '2.0',
     id: 7,
     method: 'tools/call',
     params: { name: 'fs_doctor', arguments: {} },
-  }, state);
+  }, state)) as any;
   assert.equal(doctor.result.structuredContent.relative_path_resolution.base, root);
   assert.equal(doctor.result.structuredContent.relative_path_resolution.rule, 'first_allowed_root');
-  const relativeStat = handleRequest({
+  const relativeStat = (handleRequest({
     jsonrpc: '2.0',
     id: 8,
     method: 'tools/call',
     params: { name: 'fs_stat', arguments: { path: '.' } },
-  }, state);
+  }, state)) as any;
   assert.equal(relativeStat.result.structuredContent.path, root);
-  const relativeRefusal = handleRequest({
+  const relativeRefusal = (handleRequest({
     jsonrpc: '2.0',
     id: 9,
     method: 'tools/call',
     params: { name: 'fs_stat', arguments: { path: '..' } },
-  }, state);
+  }, state)) as any;
   assert.equal((relativeRefusal.error.data.details as any).active_resolution_base, root);
   assert.equal((relativeRefusal.error.data.details as any).relative_path_resolution.rule, 'first_allowed_root');
-  const guidance = handleRequest({
+  const guidance = (handleRequest({
     jsonrpc: '2.0',
     id: 10,
     method: 'tools/call',
     params: { name: 'fs_guidance', arguments: {} },
-  }, state);
+  }, state)) as any;
   assert.equal(guidance.result.structuredContent.path_resolution.relative_paths.includes('first allowed root'), true);
 
-  const prompts = handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state);
+  const prompts = (handleRequest({ jsonrpc: '2.0', id: 3, method: 'prompts/list', params: {} }, state)) as any;
   assert.equal(prompts.result.prompts[0].name, 'local_filesystem_tool_usage');
-  const prompt = handleRequest({ jsonrpc: '2.0', id: 4, method: 'prompts/get', params: { name: 'local_filesystem_tool_usage' } }, state);
+  const prompt = (handleRequest({ jsonrpc: '2.0', id: 4, method: 'prompts/get', params: { name: 'local_filesystem_tool_usage' } }, state)) as any;
   assert.match(prompt.result.messages[0].content.text, /allowed roots/);
-  const completion = handleRequest({ jsonrpc: '2.0', id: 5, method: 'completion/complete', params: { argument: { name: 'name' } } }, state);
+  const completion = (handleRequest({ jsonrpc: '2.0', id: 5, method: 'completion/complete', params: { argument: { name: 'name' } } }, state)) as any;
   assert.equal(completion.result.completion.values.includes('fs_read_file'), true);
-  const logging = handleRequest({ jsonrpc: '2.0', id: 6, method: 'logging/setLevel', params: { level: 'debug' } }, state);
+  const logging = (handleRequest({ jsonrpc: '2.0', id: 6, method: 'logging/setLevel', params: { level: 'debug' } }, state)) as any;
   assert.deepEqual(logging.result, {});
 
   const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));

@@ -1,4 +1,4 @@
-// @ts-nocheck
+
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,10 +30,10 @@ let stdout = '';
 let stderr = '';
 proc.stdout.setEncoding('utf8');
 proc.stderr.setEncoding('utf8');
-proc.stdout.on('data', (chunk) => { stdout += chunk; });
-proc.stderr.on('data', (chunk) => { stderr += chunk; });
+proc.stdout.on('data', (chunk: any) => { stdout += chunk; });
+proc.stderr.on('data', (chunk: any) => { stderr += chunk; });
 
-function writeMessage(message) {
+function writeMessage(message: any) {
   const body = JSON.stringify(message);
   proc.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
 }
@@ -52,12 +52,12 @@ function readOne() {
   return JSON.parse(body);
 }
 
-async function waitFor(id) {
+async function waitFor(id: any) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const message = readOne();
     if (message?.id === id) return message;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve: any) => setTimeout(resolve, 20));
   }
   throw new Error(`timeout:${id}; stderr=${stderr}`);
 }
@@ -71,7 +71,7 @@ try {
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool) => tool.name);
+  const names = tools.result.tools.map((tool: any) => tool.name);
   assert.equal(names.includes('agent_context_start_session'), true);
   assert.equal(names.includes('agent_context_hydrate_current'), true);
   assert.equal(names.includes('agent_context_startup_sequence'), true);
@@ -86,9 +86,9 @@ try {
   rmSync(siteRoot, { recursive: true, force: true });
 }
 
-function stopChildProcess(child) {
+function stopChildProcess(child: any) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolveStop) => {
+  return new Promise((resolveStop: any) => {
     const timeout = setTimeout(resolveStop, 1000);
     child.once('exit', () => {
       clearTimeout(timeout);

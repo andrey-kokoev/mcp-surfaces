@@ -87,8 +87,8 @@ assert.equal(unbornStatus.branch, 'main');
 assert.equal(unbornStatus.unborn, true);
 
 const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
-const toolNames = tools.result?.tools.map((tool) => tool.name).sort();
-assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
+const toolNames = tools.result?.tools.map((tool: any) => tool.name).sort();
+assert.deepEqual(toolNames.filter((tool: any) => tool.startsWith('git_')), [
   'git_add',
   'git_begin_work_scope',
   'git_branch_create',
@@ -121,7 +121,7 @@ assert.deepEqual(toolNames.filter((tool) => tool.startsWith('git_')), [
   'git_unstage',
   'git_workflow_record',
 ]);
-const gitStatusTool = tools.result?.tools.find((tool) => tool.name === 'git_status');
+const gitStatusTool = tools.result?.tools.find((tool: any) => tool.name === 'git_status');
 assert.match(gitStatusTool.inputSchema.properties.working_directory.description, /explicit relative/);
 const policyReadback = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'git_policy_inspect', arguments: {} } }, state);
 assert.equal(policyReadback.result?.structuredContent.relative_path_resolution.omitted_working_directory, 'Use the first allowed root.');
@@ -138,10 +138,10 @@ assert.throws(
 );
 
 const readTools = await rpc({ jsonrpc: '2.0', id: 21, method: 'tools/list', params: {} }, readState);
-const readToolNames = readTools.result?.tools.map((tool) => tool.name).sort();
+const readToolNames = readTools.result?.tools.map((tool: any) => tool.name).sort();
 assert.equal(readToolNames.includes('git_status'), true);
 assert.equal(readToolNames.includes('git_add'), true);
-const readAddTool = readTools.result?.tools.find((tool) => tool.name === 'git_add');
+const readAddTool = readTools.result?.tools.find((tool: any) => tool.name === 'git_add');
 assert.match(readAddTool.description, /mode=write/);
 assert.match(readAddTool.description, /ignored/);
 
@@ -172,8 +172,8 @@ if (guidanceContent.schema === 'narada.producer_output_page.v1') {
   guidanceContent = JSON.parse(guidanceText);
 }
 assert.equal(guidanceContent.surface_id, 'git');
-assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('git_workflow_record')));
-assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step) => step.includes('any unstaged, untracked, or conflict paths')));
+assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step: any) => step.includes('git_workflow_record')));
+assert.ok((guidanceContent.workflows.normal_publication as string[]).some((step: any) => step.includes('any unstaged, untracked, or conflict paths')));
 assert.deepEqual(guidanceContent.tool_inventory.write, [
   'git_add',
   'git_unstage',
@@ -216,7 +216,7 @@ let status = await gitStatus({ working_directory: repo }, state);
 assert.equal(status.clean, true);
 assert.equal(String(status.repository_root).replaceAll('\\', '/').endsWith('/repo'), true);
 assert.deepEqual(status.remote_names, ['origin']);
-assert.deepEqual((status.remotes as any[]).map((candidate) => ({ name: candidate.name, fetch_url: candidate.fetch_url, push_url: candidate.push_url })), [
+assert.deepEqual((status.remotes as any[]).map((candidate: any) => ({ name: candidate.name, fetch_url: candidate.fetch_url, push_url: candidate.push_url })), [
   { name: 'origin', fetch_url: remote, push_url: remote },
 ]);
 assert.equal((status.push_target as any).status, 'unresolved');
@@ -256,13 +256,13 @@ assert.equal(changedSummary.tracked_changed_count, 0);
 assert.equal(changedSummary.untracked_count, 3);
 assert.equal((changedSummary.advisory_classification as any).advisory_only, true);
 assert.equal((changedSummary.advisory_classification as any).by_classification.runtime_artifact, 1);
-assert.equal((changedSummary.untracked_classifications as any[]).find((item) => item.path === 'runtime/tmp/artifact.log')?.classification, 'runtime_artifact');
-assert.deepEqual((changedSummary.untracked_groups as any[]).map((group) => ({ top_level: group.top_level, count: group.count })), [
+assert.equal((changedSummary.untracked_classifications as any[]).find((item: any) => item.path === 'runtime/tmp/artifact.log')?.classification, 'runtime_artifact');
+assert.deepEqual((changedSummary.untracked_groups as any[]).map((group: any) => ({ top_level: group.top_level, count: group.count })), [
   { top_level: '(root)', count: 1 },
   { top_level: 'notes', count: 1 },
   { top_level: 'runtime', count: 1 },
 ]);
-assert.equal((changedSummary.untracked_groups as any[]).find((group) => group.top_level === 'runtime')?.advisory_classification.by_classification.runtime_artifact, 1);
+assert.equal((changedSummary.untracked_groups as any[]).find((group: any) => group.top_level === 'runtime')?.advisory_classification.by_classification.runtime_artifact, 1);
 assert.deepEqual(changedSummary.relevant_changed_paths, ['README.md', 'notes/task.md']);
 assert.deepEqual(changedSummary.task_relevant_dirty_paths, ['README.md', 'notes/task.md']);
 assert.deepEqual(changedSummary.task_unrelated_dirty_paths, ['runtime/tmp/artifact.log']);
@@ -338,7 +338,8 @@ const scopedStatus = await gitStatus({ working_directory: scopedRepo, work_scope
 assert.equal((scopedStatus.summary as any).matching_path_count, 1);
 assert.deepEqual(scopedStatus.paths, ['alpha.txt']);
 const scopedAdd = await gitAdd({ working_directory: scopedRepo, paths: ['alpha.txt'], work_scope_ref: workScope.work_scope_ref }, state);
-assert.match(scopedAdd.index_scope_ref, /^gis_/);
+assert.ok(scopedAdd.index_scope_ref);
+  assert.match(scopedAdd.index_scope_ref, /^gis_/);
 assert.deepEqual(scopedAdd.paths, ['alpha.txt']);
 assert.equal((scopedAdd.verified_post_state as any).verification, 'verified');
 git(scopedRepo, ['add', 'beta.txt']);
@@ -454,7 +455,7 @@ await gitCommit({ working_directory: repo, message: 'Update readme', expected_st
 git(repo, ['mv', 'README.md', 'RENAMED.md']);
 const renameStatus = await gitStatus({ working_directory: repo }, state);
 assert.deepEqual(renameStatus.staged, ['README.md <- RENAMED.md']);
-assert.deepEqual((renameStatus.status_entries as any[]).filter((entry) => !entry.untracked).map((entry) => ({
+assert.deepEqual((renameStatus.status_entries as any[]).filter((entry: any) => !entry.untracked).map((entry: any) => ({
   x: entry.x,
   y: entry.y,
   path: entry.path,
@@ -462,7 +463,7 @@ assert.deepEqual((renameStatus.status_entries as any[]).filter((entry) => !entry
 })), [{ x: 'R', y: ' ', path: 'RENAMED.md', original_path: 'README.md' }]);
 const renameCommit = await gitCommit({ working_directory: repo, message: 'Rename readme', expected_staged_paths: ['README.md <- RENAMED.md'] }, state);
 assert.deepEqual(renameCommit.committed_files, ['README.md <- RENAMED.md']);
-assert.deepEqual((renameCommit.committed_entries as any[]).map((entry) => ({
+assert.deepEqual((renameCommit.committed_entries as any[]).map((entry: any) => ({
   x: entry.x,
   y: entry.y,
   path: entry.path,
@@ -493,7 +494,7 @@ const initialBranchList = await gitBranchList({ working_directory: repo, scope: 
 assert.equal(initialBranchList.schema, 'narada.git.branch_list.v1');
 const baseBranch = currentBranch(repo);
 assert.equal(initialBranchList.current_branch, baseBranch);
-assert.equal((initialBranchList.branches as any[]).some((branch) => branch.name === baseBranch && branch.type === 'local' && branch.current === true), true);
+assert.equal((initialBranchList.branches as any[]).some((branch: any) => branch.name === baseBranch && branch.type === 'local' && branch.current === true), true);
 
 const createdBranch = await gitBranchCreate({ working_directory: repo, name: 'feature/mcp' }, state);
 assert.equal(createdBranch.checked_out, false);
@@ -531,7 +532,7 @@ const deletedRemoteBranch = await gitBranchDeleteRemote({ working_directory: rep
 assert.equal(deletedRemoteBranch.merge_check, 'passed');
 await gitBranchDelete({ working_directory: repo, branch: 'remote/merged', base: baseBranch }, state);
 const remoteBranchList = await gitBranchList({ working_directory: repo, scope: 'remote' }, state);
-assert.equal((remoteBranchList.branches as any[]).some((branch) => branch.name === 'origin/remote/merged'), false);
+assert.equal((remoteBranchList.branches as any[]).some((branch: any) => branch.name === 'origin/remote/merged'), false);
 
 const repositoriesSummary = await gitRepositoriesSummary({
   working_directories: [repo, noRemoteRepo],

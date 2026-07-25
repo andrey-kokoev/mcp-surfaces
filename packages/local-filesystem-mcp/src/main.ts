@@ -93,7 +93,7 @@ class McpToolError extends Error {
   }
 }
 
-async function countFileLinesAsync(path, checkTimeout, abortSignal) {
+async function countFileLinesAsync(path: any, checkTimeout: any, abortSignal: any) {
   const handle = await openFileAsync(path, 'r');
   const decoder = new StringDecoder('utf8');
   const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
@@ -120,8 +120,8 @@ async function countFileLinesAsync(path, checkTimeout, abortSignal) {
   }
 }
 
-function delayWithDeadline(ms, signal, timeoutMs, timeoutError) {
-  return new Promise((resolvePromise, rejectPromise) => {
+function delayWithDeadline(ms: any, signal: any, timeoutMs: any, timeoutError: any) {
+  return new Promise((resolvePromise: any, rejectPromise: any) => {
     if (signal?.aborted) {
       rejectPromise(Object.assign(new Error('aborted'), { name: 'AbortError' }));
       return;
@@ -132,7 +132,7 @@ function delayWithDeadline(ms, signal, timeoutMs, timeoutError) {
       clearTimeout(deadlineTimer);
       signal?.removeEventListener('abort', abortHandler);
     };
-    const finish = (fn, value) => {
+    const finish = (fn: any, value: any) => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -145,7 +145,7 @@ function delayWithDeadline(ms, signal, timeoutMs, timeoutError) {
   });
 }
 
-async function callReadToolWithRequestDeadline(name, args, state, context) {
+async function callReadToolWithRequestDeadline(name: any, args: any, state: any, context: any) {
   const timeoutMs = readOperationTimeoutMs(args);
   const deadline = createReadRequestTimeoutChecker(name, timeoutMs, args, state);
   deadline.check();
@@ -162,7 +162,7 @@ async function callReadToolWithRequestDeadline(name, args, state, context) {
 }
 
 if (import.meta.url === `file:///${process.argv[1]?.replace(/\\/g, '/')}`) {
-  runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
+  runStdioServer(parseArgs(process.argv.slice(2))).catch((error: any) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });
@@ -187,7 +187,7 @@ export async function runStdioServer(options: Record<string, unknown>) {
     } else {
       const lines = buffer.split(/\r?\n/);
       buffer = lines.pop() ?? '';
-      requests = lines.filter((line) => line.trim()).map((line) => JSON.parse(line));
+      requests = lines.filter((line: any) => line.trim()).map((line: any) => JSON.parse(line));
     }
     for (const request of requests) {
       const record = asRecord(request);
@@ -260,10 +260,10 @@ export function createServerState(options: Record<string, unknown>): Record<stri
   };
 }
 
-function createReadRequestTimeoutChecker(operation, timeoutMs, args, state) {
+function createReadRequestTimeoutChecker(operation: any, timeoutMs: any, args: any, state: any) {
   const startedAt = Date.now();
   const metadata = readRequestPathMetadata(operation, args, state);
-  const details = (elapsedMs) => ({
+  const details = (elapsedMs: any) => ({
     timeout_kind: 'read_request_timeout',
     operation,
     timeout_ms: timeoutMs,
@@ -291,7 +291,7 @@ function createReadRequestTimeoutChecker(operation, timeoutMs, args, state) {
   };
 }
 
-function readRequestPathMetadata(operation, args, state) {
+function readRequestPathMetadata(operation: any, args: any, state: any) {
   try {
     const resolved = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation });
     return pathMetadata(resolved.path, resolved.root);
@@ -300,7 +300,7 @@ function readRequestPathMetadata(operation, args, state) {
   }
 }
 
-function readRequestRecommendedArgs(operation, args, timeoutMs) {
+function readRequestRecommendedArgs(operation: any, args: any, timeoutMs: any) {
   const path = stringField(args, 'path') ?? '<path>';
   const startLine = operation === 'fs_read_file_range'
     ? integerField(args, 'start_line') ?? 1
@@ -335,7 +335,7 @@ export function handleRequest(request: Record<string, unknown>, state: Record<st
   }
 }
 
-function dispatchMethod(method, params, state) {
+function dispatchMethod(method: any, params: any, state: any) {
   switch (method) {
     case 'initialize':
       return {
@@ -364,7 +364,7 @@ function dispatchMethod(method, params, state) {
   }
 }
 
-async function dispatchMethodAsync(method, params, state, context) {
+async function dispatchMethodAsync(method: any, params: any, state: any, context: any) {
   switch (method) {
     case 'tools/call':
       return await callToolAsync(params, state, context);
@@ -384,7 +384,7 @@ async function processStdioRequest(request: Record<string, unknown>, state: Reco
   const abortController = new AbortController();
   activeRequests.set(requestId, abortController);
   sendProgress(request, 0, 'started', options);
-  handleRequestAsync(request, state, { abortSignal: abortController.signal }).then((response) => {
+  handleRequestAsync(request, state, { abortSignal: abortController.signal }).then((response: any) => {
     sendProgress(request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', options);
     if (response) writeJsonRpcResponse(response, options);
   }).finally(() => {
@@ -411,7 +411,7 @@ export async function handleRequestAsync(request: Record<string, unknown>, state
   }
 }
 
-function listPrompts(mode) {
+function listPrompts(mode: any) {
   return [{
     name: 'local_filesystem_tool_usage',
     title: 'Local Filesystem Tool Usage',
@@ -420,7 +420,7 @@ function listPrompts(mode) {
   }];
 }
 
-function promptGet(params, state) {
+function promptGet(params: any, state: any) {
   const name = stringField(params, 'name');
   if (name !== 'local_filesystem_tool_usage') throw diagnosticError('unknown_prompt', `unknown_prompt: ${name}`, { name });
   return {
@@ -432,15 +432,15 @@ function promptGet(params, state) {
   };
 }
 
-function completeArgument(params, state) {
+function completeArgument(params: any, state: any) {
   const argumentName = String(asRecord(asRecord(params).argument).name ?? '');
   const values = argumentName === 'name'
-    ? listTools(state.mode).map((tool) => tool.name).filter(Boolean).slice(0, 100)
+    ? listTools(state.mode).map((tool: any) => tool.name).filter(Boolean).slice(0, 100)
     : ['path', 'directory'].includes(argumentName) ? clientRootCompletionValues(state) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
 
-export function listTools(mode) {
+export function listTools(mode: any) {
   const readTools = [
     guidanceToolDefinition(),
     {
@@ -652,13 +652,13 @@ export function listTools(mode) {
   return decorateTools(mode === 'read' ? readTools : [...readTools, ...writeTools]);
 }
 
-function callTool(params, state) {
+function callTool(params: any, state: any) {
   const record = asRecord(params);
   const name = stringField(record, 'name');
   let args = asRecord(record.arguments);
   activeToolName = name;
   if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
-  if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
+  if (!listTools(state.mode).some((tool: any) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
   switch (name) {
     case 'fs_guidance': return toolResult(buildGuidanceResult(args));
     case 'fs_read_file': return toolResult(readFileTool(args, state));
@@ -685,7 +685,7 @@ function callTool(params, state) {
   }
 }
 
-function readFileTool(args, state) {
+function readFileTool(args: any, state: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
@@ -694,18 +694,18 @@ function readFileTool(args, state) {
   return capReadFileResult(value);
 }
 
-function readFileRangeTool(args, state) {
+function readFileRangeTool(args: any, state: any) {
   const startLine = integerField(args, 'start_line');
   const endLine = integerField(args, 'end_line');
-  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
-  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
+  if (startLine === null || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (endLine === null || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
   const timeoutMs = readOperationTimeoutMs(args);
   const value = readFileRange({ path, root, offset: startLine, limit: endLine - startLine + 1, timeoutMs, operation: 'fs_read_file_range' });
   return capReadFileResult(value);
 }
 
-async function readFileToolAsync(args, state) {
+async function readFileToolAsync(args: any, state: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file' });
   const offset = Math.max(1, integerField(args, 'offset') ?? 1);
   const limit = Math.min(1000, Math.max(1, integerField(args, 'limit') ?? 400));
@@ -714,18 +714,18 @@ async function readFileToolAsync(args, state) {
   return capReadFileResult(value);
 }
 
-async function readFileRangeToolAsync(args, state) {
+async function readFileRangeToolAsync(args: any, state: any) {
   const startLine = integerField(args, 'start_line');
   const endLine = integerField(args, 'end_line');
-  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
-  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
+  if (startLine === null || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (endLine === null || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_read_file_range' });
   const timeoutMs = readOperationTimeoutMs(args);
   const value = await readFileRangeAsync({ path, root, offset: startLine, limit: endLine - startLine + 1, timeoutMs, operation: 'fs_read_file_range' }, state);
   return capReadFileResult(value);
 }
 
-function capReadFileResult(value) {
+function capReadFileResult(value: any) {
   const rendered = renderFilesystemToolResultText(value);
   if (rendered.length <= READ_RESULT_INLINE_CHAR_LIMIT) return value;
   const endLine = value.returned_lines > 0 ? value.offset + value.returned_lines - 1 : value.offset - 1;
@@ -763,7 +763,7 @@ function capReadFileResult(value) {
   };
 }
 
-function readFileRange({ path, root, offset, limit, timeoutMs, operation }) {
+function readFileRange({ path, root, offset, limit, timeoutMs, operation }: any) {
   const window = readTextLineWindow({ path, root, offset, limit, timeoutMs, operation });
   const content = window.selected.join('\n');
   return {
@@ -786,7 +786,7 @@ function readFileRange({ path, root, offset, limit, timeoutMs, operation }) {
   };
 }
 
-async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operation }, state) {
+async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operation }: any, state: any) {
   const startedAt = Date.now();
   const worker = new Worker(READ_LINE_WINDOW_WORKER_SOURCE, {
     eval: true,
@@ -802,7 +802,7 @@ async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operat
     },
   });
   let settled = false;
-  return await new Promise((resolvePromise, rejectPromise) => {
+  return await new Promise((resolvePromise: any, rejectPromise: any) => {
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -819,7 +819,7 @@ async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operat
       clearTimeout(timeout);
       worker.removeAllListeners();
     };
-    worker.on('message', (message) => {
+    worker.on('message', (message: any) => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -854,13 +854,13 @@ async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operat
         error.details ?? {},
       ));
     });
-    worker.on('error', (error) => {
+    worker.on('error', (error: any) => {
       if (settled) return;
       settled = true;
       cleanup();
       rejectPromise(error);
     });
-    worker.on('exit', (code) => {
+    worker.on('exit', (code: any) => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -869,7 +869,7 @@ async function readFileRangeAsync({ path, root, offset, limit, timeoutMs, operat
   });
 }
 
-function readWorkerBlockMs(state) {
+function readWorkerBlockMs(state: any) {
   const value = Number(asRecord(state.env).NARADA_LOCAL_FILESYSTEM_READ_WORKER_BLOCK_MS ?? 0);
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
@@ -973,7 +973,7 @@ function readTextLineWindow({ path, root, offset, limit }) {
 })();
 `;
 
-function statTool(args, state) {
+function statTool(args: any, state: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_stat' });
   const stat = statSync(path);
   const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other';
@@ -991,16 +991,16 @@ function statTool(args, state) {
   };
 }
 
-function doctorTool(state) {
-  const writeTools = listTools('write').map((tool) => tool.name);
-  const readTools = listTools('read').map((tool) => tool.name);
+function doctorTool(state: any) {
+  const writeTools = listTools('write').map((tool: any) => tool.name);
+  const readTools = listTools('read').map((tool: any) => tool.name);
   const effectiveTools = state.mode === 'write' ? [...readTools, ...writeTools] : readTools;
   return {
     schema: 'local.filesystem.doctor.v1',
     status: 'ok',
     mode: state.mode,
     allowed_roots: state.allowedRoots,
-    allowed_root_entries: (state.allowedRootEntries ?? []).map((entry) => ({
+    allowed_root_entries: (state.allowedRootEntries ?? []).map((entry: any) => ({
       root: entry.root,
       provenance: entry.provenance,
     })),
@@ -1028,11 +1028,11 @@ function doctorTool(state) {
   };
 }
 
-function globSearchTool(args, state) {
+function globSearchTool(args: any, state: any) {
   return globSearchToolWithOptions(args, state);
 }
 
-function globSearchToolWithOptions(args, state, { ignorePatterns: ignorePatternsOverride = null } = {}) {
+function globSearchToolWithOptions(args: any, state: any, { ignorePatterns: ignorePatternsOverride = null }: any = {}) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
@@ -1042,16 +1042,16 @@ function globSearchToolWithOptions(args, state, { ignorePatterns: ignorePatterns
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
   const ignorePatterns = ignorePatternsOverride ?? [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
-  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore: any) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
   return cappedSearchResult({ state, kind: 'glob', args, page: runRipgrepPage(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
-async function globSearchToolAsync(args, state, context) {
+async function globSearchToolAsync(args: any, state: any, context: any) {
   return await globSearchToolAsyncWithOptions(args, state, context);
 }
 
-async function globSearchToolAsyncWithOptions(args, state, context, { ignorePatterns: ignorePatternsOverride = null } = {}) {
+async function globSearchToolAsyncWithOptions(args: any, state: any, context: any, { ignorePatterns: ignorePatternsOverride = null }: any = {}) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('glob_requires_pattern', 'glob_requires_pattern');
   const { path: directory } = resolveAllowedToolPath(stringField(args, 'directory') ?? '.', state.allowedRoots, { operation: 'fs_glob_search' });
@@ -1061,25 +1061,25 @@ async function globSearchToolAsyncWithOptions(args, state, context, { ignorePatt
   const cachePolicy = searchCachePolicy(args);
   const snapshotId = stringField(args, 'snapshot_id');
   const ignorePatterns = ignorePatternsOverride ?? [...DEFAULT_GLOB_IGNORE_PATTERNS, ...stringList(args.ignore)];
-  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), directory];
+  const rgArgs = ['--files', '--hidden', '--no-ignore', '-g', pattern, ...ignorePatterns.flatMap((ignore: any) => ['-g', negateGlob(ignore)]), directory];
   const freshness = searchFreshness(directory);
   const page = await runRipgrepPageAsync(rgArgs, { operation: 'fs_glob_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'glob', args, page, offset, limit, freshness, cachePolicy });
 }
 
-function repositoryInventoryTool(args, state) {
+function repositoryInventoryTool(args: any, state: any) {
   const includeGenerated = booleanField(args, 'include_generated') ?? false;
   const value = globSearchTool(repositoryInventorySearchArgs(args, includeGenerated), state);
   return formatRepositoryInventory(value, args, includeGenerated);
 }
 
-async function repositoryInventoryToolAsync(args, state, context) {
+async function repositoryInventoryToolAsync(args: any, state: any, context: any) {
   const includeGenerated = booleanField(args, 'include_generated') ?? false;
   const value = await globSearchToolAsync(repositoryInventorySearchArgs(args, includeGenerated), state, context);
   return formatRepositoryInventory(value, args, includeGenerated);
 }
 
-function fileMetricsTool(args, state) {
+function fileMetricsTool(args: any, state: any) {
   const normalizedArgs = fileMetricsSearchArgs(args);
   const timeoutMs = filesystemOperationTimeoutMs(args);
   const deadlineAt = Date.now() + timeoutMs;
@@ -1099,7 +1099,7 @@ function fileMetricsTool(args, state) {
   ), state);
   if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
     const collected = collectMetricMatchesSync(value, normalizedArgs, state, deadlineAt, timeoutMs);
-    const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, collected.matches);
+    const excluded: any = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, collected.matches);
     const rows = buildFileMetricRowsSync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, createFileMetricsScanBudget(normalizedArgs));
     excluded.out_of_scope_paths = rows.out_of_scope_paths;
     const snapshot = rememberFileMetricsSnapshot({
@@ -1114,7 +1114,7 @@ function fileMetricsTool(args, state) {
     });
     return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
   }
-  const excluded = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs);
+  const excluded: any = collectExcludedPathsSync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs);
   const rows = buildFileMetricRowsSync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, createFileMetricsScanBudget(normalizedArgs));
   excluded.out_of_scope_paths = rows.out_of_scope_paths;
   return formatFileMetricsPage({
@@ -1136,7 +1136,7 @@ function fileMetricsTool(args, state) {
   });
 }
 
-async function fileMetricsToolAsync(args, state, context) {
+async function fileMetricsToolAsync(args: any, state: any, context: any) {
   const normalizedArgs = fileMetricsSearchArgs(args);
   const timeoutMs = filesystemOperationTimeoutMs(args);
   const deadlineAt = Date.now() + timeoutMs;
@@ -1156,7 +1156,7 @@ async function fileMetricsToolAsync(args, state, context) {
   ), state, context);
   if (cachePolicy === 'snapshot' || cachePolicy === 'refresh') {
     const collected = await collectMetricMatchesAsync(value, normalizedArgs, state, deadlineAt, timeoutMs, context.abortSignal);
-    const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, collected.matches);
+    const excluded: any = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, collected.matches);
     const rows = await buildFileMetricRowsAsync(collected.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, createFileMetricsScanBudget(normalizedArgs));
     excluded.out_of_scope_paths = rows.out_of_scope_paths;
     const snapshot = rememberFileMetricsSnapshot({
@@ -1171,7 +1171,7 @@ async function fileMetricsToolAsync(args, state, context) {
     });
     return formatStoredFileMetricsSnapshot(snapshot, normalizedArgs, state, directoryInfo, { timeoutMs, cacheHit: false });
   }
-  const excluded = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
+  const excluded: any = await collectExcludedPathsAsync(normalizedArgs, value, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal);
   const rows = await buildFileMetricRowsAsync(value.matches, normalizedArgs, state, directoryInfo, deadlineAt, timeoutMs, context.abortSignal, createFileMetricsScanBudget(normalizedArgs));
   excluded.out_of_scope_paths = rows.out_of_scope_paths;
   return formatFileMetricsPage({
@@ -1193,7 +1193,7 @@ async function fileMetricsToolAsync(args, state, context) {
   });
 }
 
-function fileMetricsSearchArgs(args) {
+function fileMetricsSearchArgs(args: any) {
   const directory = stringField(args, 'directory');
   const root = stringField(args, 'root');
   if (directory && root) throw diagnosticError('file_metrics_directory_ambiguous', 'file_metrics_directory_ambiguous', { directory, root, remediation: 'Pass either directory or root, not both.' });
@@ -1209,7 +1209,7 @@ function fileMetricsSearchArgs(args) {
   };
 }
 
-function formatStoredFileMetricsSnapshot(snapshot, args, state, directoryInfo, { timeoutMs, cacheHit }) {
+function formatStoredFileMetricsSnapshot(snapshot: any, args: any, state: any, directoryInfo: any, { timeoutMs, cacheHit }: any) {
   const offset = Math.max(0, integerField(args, 'offset') ?? 0);
   const limit = Math.min(MAX_FILE_METRICS_LIMIT, Math.max(1, integerField(args, 'limit') ?? MAX_FILE_METRICS_LIMIT));
   const pageFiles = snapshot.files.slice(offset, offset + limit);
@@ -1235,7 +1235,7 @@ function formatStoredFileMetricsSnapshot(snapshot, args, state, directoryInfo, {
   });
 }
 
-function formatFileMetricsPage({ value, args, state, directoryInfo, files, excluded, timeoutMs, matchedCount = null, hasMore = null, nextOffset = undefined, snapshotId = null, requestedSnapshotId = null, snapshotComplete = false, cacheHit = false, cachePolicy = 'auto', freshness = null, scanBytesReserved = null, scanBudgetBytes = null }) {
+function formatFileMetricsPage({ value, args, state, directoryInfo, files, excluded, timeoutMs, matchedCount = null, hasMore = null, nextOffset = undefined, snapshotId = null, requestedSnapshotId = null, snapshotComplete = false, cacheHit = false, cachePolicy = 'auto', freshness = null, scanBytesReserved = null, scanBudgetBytes = null }: any) {
   const pageTotals = aggregateFileMetrics(files);
   const count = matchedCount ?? value?.count ?? files.length;
   const effectiveHasMore = hasMore ?? value?.has_more === true;
@@ -1302,36 +1302,36 @@ function formatFileMetricsPage({ value, args, state, directoryInfo, files, exclu
   };
 }
 
-function fileMetricsMaxBytesPerFile(args) {
+function fileMetricsMaxBytesPerFile(args: any) {
   const value = integerField(args, 'max_bytes_per_file');
   if (value === null) return DEFAULT_FILE_METRICS_MAX_BYTES_PER_FILE;
   return Math.min(MAX_FILE_METRICS_MAX_BYTES_PER_FILE, Math.max(1, value));
 }
 
-function fileMetricsMaxTotalScanBytes(args) {
+function fileMetricsMaxTotalScanBytes(args: any) {
   const value = integerField(args, 'max_total_scan_bytes');
   if (value === null) return DEFAULT_FILE_METRICS_MAX_TOTAL_SCAN_BYTES;
   return Math.min(MAX_FILE_METRICS_MAX_TOTAL_SCAN_BYTES, Math.max(1, value));
 }
 
-function createFileMetricsScanBudget(args) {
+function createFileMetricsScanBudget(args: any) {
   return { max_bytes: fileMetricsMaxTotalScanBytes(args), reserved_bytes: 0 };
 }
 
-function reserveFileMetricsScanBytes(scanBudget, byteCount) {
+function reserveFileMetricsScanBytes(scanBudget: any, byteCount: any) {
   const bytes = typeof byteCount === 'number' && Number.isFinite(byteCount) ? Math.max(0, byteCount) : 0;
   if (scanBudget.reserved_bytes + bytes > scanBudget.max_bytes) return false;
   scanBudget.reserved_bytes += bytes;
   return true;
 }
 
-function withRemainingFileMetricsTimeout(args, deadlineAt, timeoutMs) {
+function withRemainingFileMetricsTimeout(args: any, deadlineAt: any, timeoutMs: any) {
   const remaining = Math.max(1, deadlineAt - Date.now());
   checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_search');
   return { ...args, timeout_ms: Math.min(timeoutMs, remaining) };
 }
 
-function fileMetricsTimeoutError(timeoutMs, phase, elapsedMs) {
+function fileMetricsTimeoutError(timeoutMs: any, phase: any, elapsedMs: any) {
   return diagnosticError('fs_file_metrics_timed_out', 'fs_file_metrics_timed_out', {
     timeout_kind: 'filesystem_operation_timeout',
     operation: 'fs_file_metrics',
@@ -1347,7 +1347,7 @@ function fileMetricsTimeoutError(timeoutMs, phase, elapsedMs) {
   });
 }
 
-function checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, abortSignal = null) {
+function checkFileMetricsDeadline(deadlineAt: any, timeoutMs: any, phase: any, abortSignal: any = null) {
   if (abortSignal?.aborted) {
     throw diagnosticError('fs_file_metrics_cancelled', 'fs_file_metrics_cancelled', {
       operation: 'fs_file_metrics',
@@ -1361,7 +1361,7 @@ function checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, abortSignal = nu
   throw fileMetricsTimeoutError(timeoutMs, phase, elapsedMs);
 }
 
-function resolveFileMetricsDirectorySync(args, state) {
+function resolveFileMetricsDirectorySync(args: any, state: any) {
   const input = stringField(args, 'directory') ?? stringField(args, 'root') ?? '.';
   const lexical = resolveAllowedToolPath(input, state.allowedRoots, { operation: 'fs_file_metrics', field: 'directory' });
   try {
@@ -1387,7 +1387,7 @@ function resolveFileMetricsDirectorySync(args, state) {
   }
 }
 
-async function resolveFileMetricsDirectoryAsync(args, state, deadlineAt, timeoutMs, abortSignal) {
+async function resolveFileMetricsDirectoryAsync(args: any, state: any, deadlineAt: any, timeoutMs: any, abortSignal: any) {
   const input = stringField(args, 'directory') ?? stringField(args, 'root') ?? '.';
   const lexical = resolveAllowedToolPath(input, state.allowedRoots, { operation: 'fs_file_metrics', field: 'directory' });
   checkFileMetricsDeadline(deadlineAt, timeoutMs, 'before_directory', abortSignal);
@@ -1415,11 +1415,11 @@ async function resolveFileMetricsDirectoryAsync(args, state, deadlineAt, timeout
   }
 }
 
-function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, scanBudget = createFileMetricsScanBudget(args)) {
+function buildFileMetricRowsSync(matches: any, args: any, state: any, directoryInfo: any, deadlineAt: any, timeoutMs: any, scanBudget: any = createFileMetricsScanBudget(args)) {
   const files = [];
   const outOfScopePaths = [];
   const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
-  const checkTimeout = (phase) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase);
+  const checkTimeout = (phase: any) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase);
   for (const match of Array.isArray(matches) ? matches : []) {
     checkTimeout('before_file');
     const filePath = String(match);
@@ -1469,11 +1469,11 @@ function buildFileMetricRowsSync(matches, args, state, directoryInfo, deadlineAt
   return { files, out_of_scope_paths: outOfScopePaths, scan_bytes_reserved: scanBudget.reserved_bytes, scan_budget_bytes: scanBudget.max_bytes };
 }
 
-async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, deadlineAt, timeoutMs, abortSignal, scanBudget = createFileMetricsScanBudget(args)) {
+async function buildFileMetricRowsAsync(matches: any, args: any, state: any, directoryInfo: any, deadlineAt: any, timeoutMs: any, abortSignal: any, scanBudget: any = createFileMetricsScanBudget(args)) {
   const files = [];
   const outOfScopePaths = [];
   const maxBytesPerFile = fileMetricsMaxBytesPerFile(args);
-  const checkTimeout = (phase, signal = abortSignal) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, signal);
+  const checkTimeout = (phase: any, signal: any = abortSignal) => checkFileMetricsDeadline(deadlineAt, timeoutMs, phase, signal);
   for (const match of Array.isArray(matches) ? matches : []) {
     checkTimeout('before_file');
     const filePath = String(match);
@@ -1525,7 +1525,7 @@ async function buildFileMetricRowsAsync(matches, args, state, directoryInfo, dea
   return { files, out_of_scope_paths: outOfScopePaths, scan_bytes_reserved: scanBudget.reserved_bytes, scan_budget_bytes: scanBudget.max_bytes };
 }
 
-function collectMetricMatchesSync(firstValue, args, state, deadlineAt, timeoutMs) {
+function collectMetricMatchesSync(firstValue: any, args: any, state: any, deadlineAt: any, timeoutMs: any) {
   const matches = [];
   let page = firstValue;
   let snapshotId = page.snapshot_id ?? null;
@@ -1549,7 +1549,7 @@ function collectMetricMatchesSync(firstValue, args, state, deadlineAt, timeoutMs
   return { matches, count: page.count ?? matches.length, freshness: page.freshness ?? firstValue.freshness ?? null };
 }
 
-async function collectMetricMatchesAsync(firstValue, args, state, deadlineAt, timeoutMs, abortSignal) {
+async function collectMetricMatchesAsync(firstValue: any, args: any, state: any, deadlineAt: any, timeoutMs: any, abortSignal: any) {
   const matches = [];
   let page = firstValue;
   let snapshotId = page.snapshot_id ?? null;
@@ -1573,7 +1573,7 @@ async function collectMetricMatchesAsync(firstValue, args, state, deadlineAt, ti
   return { matches, count: page.count ?? matches.length, freshness: page.freshness ?? firstValue.freshness ?? null };
 }
 
-function collectExcludedPathsSync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, selectedMatches = null) {
+function collectExcludedPathsSync(args: any, selectedValue: any, state: any, directoryInfo: any, deadlineAt: any, timeoutMs: any, selectedMatches: any = null) {
   const requestedOffset = Math.max(0, integerField(args, 'offset') ?? 0);
   const selectedComplete = Array.isArray(selectedMatches) || (requestedOffset === 0 && selectedValue.has_more !== true);
   const selected = selectedComplete
@@ -1582,10 +1582,10 @@ function collectExcludedPathsSync(args, selectedValue, state, directoryInfo, dea
   const allValue = globSearchToolWithOptions({
     ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
   }, state, { ignorePatterns: [] });
-  const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
+  const selectedSet = new Set(selected.map((path: any) => normalizePathKey(path).toLowerCase()));
   const ignoredCandidates = (selectedComplete && Array.isArray(allValue.matches) ? allValue.matches : [])
-    .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
-    .map((path) => metricDisplayPath(path, directoryInfo.path));
+    .filter((path: any) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
+    .map((path: any) => metricDisplayPath(path, directoryInfo.path));
   const ignoredPaths = ignoredCandidates.slice(0, MAX_FILE_METRICS_LIMIT);
   const ignoredPathsTruncated = ignoredCandidates.length > MAX_FILE_METRICS_LIMIT;
   const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
@@ -1600,7 +1600,7 @@ function collectExcludedPathsSync(args, selectedValue, state, directoryInfo, dea
   };
 }
 
-async function collectExcludedPathsAsync(args, selectedValue, state, directoryInfo, deadlineAt, timeoutMs, abortSignal, selectedMatches = null) {
+async function collectExcludedPathsAsync(args: any, selectedValue: any, state: any, directoryInfo: any, deadlineAt: any, timeoutMs: any, abortSignal: any, selectedMatches: any = null) {
   const requestedOffset = Math.max(0, integerField(args, 'offset') ?? 0);
   const selectedComplete = Array.isArray(selectedMatches) || (requestedOffset === 0 && selectedValue.has_more !== true);
   const selected = selectedComplete
@@ -1609,10 +1609,10 @@ async function collectExcludedPathsAsync(args, selectedValue, state, directoryIn
   const allValue = await globSearchToolAsyncWithOptions({
     ...withRemainingFileMetricsTimeout({ ...args, ignore: [], exclude: [], offset: 0, limit: 500, cache_policy: 'bypass', snapshot_id: null }, deadlineAt, timeoutMs),
   }, state, { abortSignal }, { ignorePatterns: [] });
-  const selectedSet = new Set(selected.map((path) => normalizePathKey(path).toLowerCase()));
+  const selectedSet = new Set(selected.map((path: any) => normalizePathKey(path).toLowerCase()));
   const ignoredCandidates = (selectedComplete && Array.isArray(allValue.matches) ? allValue.matches : [])
-    .filter((path) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
-    .map((path) => metricDisplayPath(path, directoryInfo.path));
+    .filter((path: any) => !selectedSet.has(normalizePathKey(path).toLowerCase()))
+    .map((path: any) => metricDisplayPath(path, directoryInfo.path));
   const ignoredPaths = ignoredCandidates.slice(0, MAX_FILE_METRICS_LIMIT);
   const ignoredPathsTruncated = ignoredCandidates.length > MAX_FILE_METRICS_LIMIT;
   const ignoredCount = typeof allValue.count === 'number' && typeof selectedValue.count === 'number'
@@ -1627,7 +1627,7 @@ async function collectExcludedPathsAsync(args, selectedValue, state, directoryIn
   };
 }
 
-function fileMetricsSnapshotKey(args, directoryInfo) {
+function fileMetricsSnapshotKey(args: any, directoryInfo: any) {
   return sha256(JSON.stringify({
     directory: directoryInfo.path,
     pattern: stringField(args, 'pattern') ?? DEFAULT_FILE_METRICS_PATTERN,
@@ -1637,7 +1637,7 @@ function fileMetricsSnapshotKey(args, directoryInfo) {
   }));
 }
 
-function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount, excluded, freshness, scanBytesReserved, scanBudgetBytes }) {
+function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount, excluded, freshness, scanBytesReserved, scanBudgetBytes }: any) {
   const cacheKey = fileMetricsSnapshotKey(args, directoryInfo);
   for (const [id, existing] of fileMetricsSnapshotCache.entries()) {
     if (existing.cache_key === cacheKey) fileMetricsSnapshotCache.delete(id);
@@ -1662,7 +1662,7 @@ function rememberFileMetricsSnapshot({ args, directoryInfo, files, matchedCount,
   return snapshot;
 }
 
-function loadFileMetricsSnapshot(snapshotId, args, directoryInfo) {
+function loadFileMetricsSnapshot(snapshotId: any, args: any, directoryInfo: any) {
   const snapshot = fileMetricsSnapshotCache.get(snapshotId);
   if (!snapshot || snapshot.cache_key !== fileMetricsSnapshotKey(args, directoryInfo)) {
     throw diagnosticError('fs_file_metrics_snapshot_not_found', 'fs_file_metrics_snapshot_not_found: ' + snapshotId, {
@@ -1675,7 +1675,7 @@ function loadFileMetricsSnapshot(snapshotId, args, directoryInfo) {
   return snapshot;
 }
 
-function metricDisplayPath(path, directory) {
+function metricDisplayPath(path: any, directory: any) {
   try {
     return relative(directory, path).replace(/\\/g, '/');
   } catch {
@@ -1683,7 +1683,7 @@ function metricDisplayPath(path, directory) {
   }
 }
 
-function countFileLines(path, checkTimeout) {
+function countFileLines(path: any, checkTimeout: any) {
   const fd = openSync(path, 'r');
   const decoder = new StringDecoder('utf8');
   const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
@@ -1710,13 +1710,13 @@ function countFileLines(path, checkTimeout) {
   }
 }
 
-function fileType(path, lineCountStatus) {
+function fileType(path: any, lineCountStatus: any) {
   if (lineCountStatus === 'binary') return 'binary';
   const extension = extname(path).replace(/^\./, '').toLowerCase();
   return extension || 'no_extension';
 }
 
-function aggregateFileMetrics(files) {
+function aggregateFileMetrics(files: any) {
   let lineCount = 0;
   let lineCountKnown = true;
   let byteCount = 0;
@@ -1747,7 +1747,7 @@ function aggregateFileMetrics(files) {
   };
 }
 
-function repositoryInventorySearchArgs(args, includeGenerated) {
+function repositoryInventorySearchArgs(args: any, includeGenerated: any) {
   return {
     ...args,
     pattern: stringField(args, 'pattern') ?? '**/*',
@@ -1758,11 +1758,11 @@ function repositoryInventorySearchArgs(args, includeGenerated) {
   };
 }
 
-function formatRepositoryInventory(value, args, includeGenerated) {
-  const matches = Array.isArray(value.matches) ? value.matches.map((item) => String(item)) : [];
-  const classifications = matches.map((path) => ({ path, classification: classifyRepositoryInventoryPath(path) }));
-  const candidateSourcePaths = classifications.filter((item) => item.classification === 'candidate_source').map((item) => item.path);
-  const generatedArtifactPaths = classifications.filter((item) => item.classification === 'generated_artifact').map((item) => item.path);
+function formatRepositoryInventory(value: any, args: any, includeGenerated: any) {
+  const matches = Array.isArray(value.matches) ? value.matches.map((item: any) => String(item)) : [];
+  const classifications = matches.map((path: any) => ({ path, classification: classifyRepositoryInventoryPath(path) }));
+  const candidateSourcePaths = classifications.filter((item: any) => item.classification === 'candidate_source').map((item: any) => item.path);
+  const generatedArtifactPaths = classifications.filter((item: any) => item.classification === 'generated_artifact').map((item: any) => item.path);
   const appliedIgnorePatterns = [
     ...DEFAULT_GLOB_IGNORE_PATTERNS,
     ...(includeGenerated ? [] : DEFAULT_REPOSITORY_INVENTORY_IGNORE_PATTERNS),
@@ -1792,14 +1792,14 @@ function formatRepositoryInventory(value, args, includeGenerated) {
   };
 }
 
-function classifyRepositoryInventoryPath(value) {
+function classifyRepositoryInventoryPath(value: any) {
   const normalized = '/' + String(value).replaceAll('\\', '/').replace(/^\/+|\/+$/g, '').toLowerCase() + '/';
-  return REPOSITORY_GENERATED_PATH_MARKERS.some((marker) => normalized.includes(marker))
+  return REPOSITORY_GENERATED_PATH_MARKERS.some((marker: any) => normalized.includes(marker))
     ? 'generated_artifact'
     : 'candidate_source';
 }
 
-function readSummary(value) {
+function readSummary(value: any) {
   return {
     path: value.path,
     relative_path: value.relative_path,
@@ -1815,7 +1815,7 @@ function readSummary(value) {
   };
 }
 
-function grepSearchTool(args, state) {
+function grepSearchTool(args: any, state: any) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('grep_requires_pattern', 'grep_requires_pattern');
   const { path } = resolveAllowedToolPath(stringField(args, 'path') ?? '.', state.allowedRoots, { operation: 'fs_grep_search' });
@@ -1829,10 +1829,10 @@ function grepSearchTool(args, state) {
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
   const ignorePatterns = [...DEFAULT_GREP_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const freshness = searchFreshness(path);
-  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
+  return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page: runRipgrepPage(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore: any) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, env: state.env }), offset, limit, freshness, cachePolicy });
 }
 
-async function grepSearchToolAsync(args, state, context) {
+async function grepSearchToolAsync(args: any, state: any, context: any) {
   const pattern = stringField(args, 'pattern');
   if (!pattern) throw diagnosticError('grep_requires_pattern', 'grep_requires_pattern');
   const { path } = resolveAllowedToolPath(stringField(args, 'path') ?? '.', state.allowedRoots, { operation: 'fs_grep_search' });
@@ -1846,11 +1846,11 @@ async function grepSearchToolAsync(args, state, context) {
   const modeArgs = mode === 'content' ? ['-n'] : mode === 'count_matches' ? ['-c'] : ['-l'];
   const ignorePatterns = [...DEFAULT_GREP_IGNORE_PATTERNS, ...stringList(args.ignore)];
   const freshness = searchFreshness(path);
-  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
+  const page = await runRipgrepPageAsync(['--field-match-separator', RIPGREP_FIELD_SEPARATOR, '--with-filename', ...modeArgs, ...ignorePatterns.flatMap((ignore: any) => ['-g', negateGlob(ignore)]), '--', pattern, path], { operation: 'fs_grep_search', noMatchStatus: 1, offset, limit, timeoutMs, freshness, cachePolicy, snapshotId, diagnosticError, abortSignal: context.abortSignal, env: state.env });
   return cappedSearchResult({ state, kind: 'grep', args: { ...args, output_mode: mode }, page, offset, limit, freshness, cachePolicy });
 }
 
-function cappedSearchResult({ state, kind, args, page, offset, limit, freshness, cachePolicy }) {
+function cappedSearchResult({ state, kind, args, page, offset, limit, freshness, cachePolicy }: any) {
   const matches = page.matches;
   const nextOffset = page.has_more ? offset + matches.length : null;
   const grepMode = stringField(args, 'output_mode') ?? 'files_with_matches';
@@ -1889,20 +1889,20 @@ function cappedSearchResult({ state, kind, args, page, offset, limit, freshness,
     has_more: page.has_more,
     next_offset: nextOffset,
     matches_format: kind === 'grep' ? 'human' : 'path',
-    matches: kind === 'grep' ? matches.map((match) => renderGrepMatch(match, grepMode)) : matches,
+    matches: kind === 'grep' ? matches.map((match: any) => renderGrepMatch(match, grepMode)) : matches,
     ...(noMatchDiagnostics ? { no_match_diagnostics: noMatchDiagnostics } : {}),
-    ...(kind === 'grep' ? { match_objects_authoritative: true, match_objects: matches.map((match) => buildGrepMatchObject(match, grepMode)) } : {}),
+    ...(kind === 'grep' ? { match_objects_authoritative: true, match_objects: matches.map((match: any) => buildGrepMatchObject(match, grepMode)) } : {}),
   };
   return cappedToolValue({ state, value, summary: { count: value.count, count_exact: value.count_exact, scanned: value.scanned, scanned_unit: value.scanned_unit, returned: value.returned, order: value.order, cache_hit: value.cache_hit, cache_policy: value.cache_policy, snapshot_id: value.snapshot_id, snapshot_complete: value.snapshot_complete, cache_memory_bytes: value.cache_memory_bytes, page_match_bytes: value.page_match_bytes, page_match_bytes_limit: value.page_match_bytes_limit, page_matches_truncated: value.page_matches_truncated, timeout_ms: value.timeout_ms, freshness: value.freshness, matches_format: value.matches_format, has_more: value.has_more, next_offset: value.next_offset } });
 }
 
-function cappedToolValue({ state, value, summary = {} }) {
+function cappedToolValue({ state, value, summary = {} }: any) {
   void state;
   void summary;
   return value;
 }
 
-function writeFileTool(args, state) {
+function writeFileTool(args: any, state: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
   assertFilesystemMutationTargetAllowed(path, root, 'fs_write_file');
   const content = stringField(args, 'content') ?? '';
@@ -1921,7 +1921,7 @@ function writeFileTool(args, state) {
   return { schema: 'local.filesystem.write_file.v1', status: 'written', ...pathMetadata(path, root), size: content.length, create_parent_directories: createParentDirectories, before_sha256: before === null ? null : sha256(before), after_sha256: sha256(content) };
 }
 
-async function writeFileToolAsync(args, state, context) {
+async function writeFileToolAsync(args: any, state: any, context: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_write_file' });
   assertFilesystemMutationTargetAllowed(path, root, 'fs_write_file');
   const content = stringField(args, 'content') ?? '';
@@ -1974,7 +1974,7 @@ async function writeFileToolAsync(args, state, context) {
   }
 }
 
-function strReplaceTool(args, state) {
+function strReplaceTool(args: any, state: any) {
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_str_replace_file' });
   assertFilesystemMutationTargetAllowed(path, root, 'fs_str_replace_file');
   const oldText = stringField(args, 'old') ?? '';
@@ -2004,7 +2004,7 @@ function strReplaceTool(args, state) {
   };
 }
 
-function buildStrReplaceNotFoundDetails({ path, root, before, oldText }) {
+function buildStrReplaceNotFoundDetails({ path, root, before, oldText }: any) {
   const normalizedBefore = normalizeNewlines(before);
   const normalizedOld = normalizeNewlines(oldText);
   const lineCandidates = findLineRangeCandidates(before, oldText).slice(0, 10);
@@ -2036,11 +2036,11 @@ function buildStrReplaceNotFoundDetails({ path, root, before, oldText }) {
   };
 }
 
-function normalizeNewlines(text) {
+function normalizeNewlines(text: any) {
   return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
-function findLineRangeCandidates(content, oldText) {
+function findLineRangeCandidates(content: any, oldText: any) {
   const normalizedNeedle = normalizeNewlines(oldText).trim();
   if (!normalizedNeedle) return [];
   const needleLines = normalizedNeedle.split('\n');
@@ -2055,11 +2055,11 @@ function findLineRangeCandidates(content, oldText) {
   return candidates;
 }
 
-function replaceRangeTool(args, state) {
+function replaceRangeTool(args: any, state: any) {
   const startLine = integerField(args, 'start_line');
   const endLine = integerField(args, 'end_line');
-  if (!Number.isInteger(startLine) || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
-  if (!Number.isInteger(endLine) || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
+  if (startLine === null || startLine < 1) throw diagnosticError('start_line_must_be_positive_integer', 'start_line_must_be_positive_integer', { start_line: startLine ?? null });
+  if (endLine === null || endLine < startLine) throw diagnosticError('end_line_must_be_greater_than_or_equal_start_line', 'end_line_must_be_greater_than_or_equal_start_line', { start_line: startLine ?? null, end_line: endLine ?? null });
   const { path, root } = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_replace_range' });
   assertFilesystemMutationTargetAllowed(path, root, 'fs_replace_range');
   const replacement = stringField(args, 'replacement') ?? '';
@@ -2087,7 +2087,7 @@ function replaceRangeTool(args, state) {
   };
 }
 
-function applyPatchTool(args, state) {
+function applyPatchTool(args: any, state: any) {
   const patch = stringField(args, 'patch');
   if (!patch) throw diagnosticError('patch_required', 'Patch text is required.');
   const dryRun = booleanField(args, 'dry_run') ?? false;
@@ -2140,7 +2140,7 @@ function applyPatchTool(args, state) {
   }
   let planned;
   try {
-    planned = files.map((filePatch) => {
+    planned = files.map((filePatch: any) => {
       checkTimeout('plan_file_start');
       const source = resolvePatchSource(filePatch, state);
       const target = resolvePatchTarget(filePatch, state);
@@ -2179,7 +2179,7 @@ function applyPatchTool(args, state) {
       dry_run: true,
       timeout_ms: timeoutMs,
       recovery_count: recoveryCount,
-      changed_files: planned.map((item) => ({
+      changed_files: planned.map((item: any) => ({
         ...pathMetadata(item.target.path, item.target.root),
         operation: patchOperation(item.filePatch, item.source, item.target),
         hunks: item.filePatch.hunks.length,
@@ -2192,8 +2192,8 @@ function applyPatchTool(args, state) {
     return outcome;
   }
   const changed = [];
-  const backupPaths = uniquePaths(planned.flatMap((item) => [item.source.path, item.target.path]));
-  const backups = backupPaths.map((path) => ({
+  const backupPaths = uniquePaths(planned.flatMap((item: any) => [item.source.path, item.target.path]));
+  const backups = backupPaths.map((path: any) => ({
     path,
     existed: existsSync(path),
     content: existsSync(path) ? readFileSync(path, 'utf8') : null,
@@ -2220,7 +2220,7 @@ function applyPatchTool(args, state) {
         rmSync(item.source.path, { force: false });
       } else {
         mkdirSync(dirname(item.target.path), { recursive: true });
-        writeFileSync(item.target.path, item.after, 'utf8');
+        writeFileSync(item.target.path, item.after ?? '', 'utf8');
         if (!samePath(item.source.path, item.target.path) && existsSync(item.source.path)) rmSync(item.source.path, { force: false });
       }
       const afterSha256 = item.filePatch.deleteFile ? null : sha256(item.after);
@@ -2239,7 +2239,7 @@ function applyPatchTool(args, state) {
   return { schema: 'local.filesystem.apply_patch.v1', status: 'patched', operation_id: operationId, changed_files: changed, recovery_count: recoveryCount, timeout_ms: timeoutMs, outcome_reader: { tool: 'fs_patch_outcome_show', operation_id: operationId } };
 }
 
-function patchOutcomeShowTool(args, state) {
+function patchOutcomeShowTool(args: any, state: any) {
   const operationId = stringField(args, 'operation_id');
   if (!operationId || !/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_required', 'patch_operation_id_required');
   const outcome = readPatchOutcome(state, operationId);
@@ -2247,13 +2247,13 @@ function patchOutcomeShowTool(args, state) {
   return outcome;
 }
 
-function readPatchOutcome(state, operationId) {
+function readPatchOutcome(state: any, operationId: any) {
   const path = patchOutcomePath(state, operationId);
   if (!existsSync(path)) return null;
   return reconcilePatchOutcome(state, JSON.parse(readFileSync(path, 'utf8')));
 }
 
-function reconcilePatchOutcome(state, outcome) {
+function reconcilePatchOutcome(state: any, outcome: any) {
   if (!outcome || !['accepted', 'applying'].includes(outcome.status)) return outcome;
   const ownerAlive = patchOwnerIsAlive(outcome.owner_pid);
   const deadlineExceeded = typeof outcome.deadline_at === 'string' && Date.now() >= Date.parse(outcome.deadline_at);
@@ -2317,7 +2317,7 @@ function reconcilePatchOutcome(state, outcome) {
   });
 }
 
-function writeRecoveredPatchOutcome(state, outcome, recovery) {
+function writeRecoveredPatchOutcome(state: any, outcome: any, recovery: any) {
   const terminal = {
     ...outcome,
     status: recovery.status,
@@ -2342,7 +2342,7 @@ function writeRecoveredPatchOutcome(state, outcome, recovery) {
   return terminal;
 }
 
-function patchOwnerIsAlive(ownerPid) {
+function patchOwnerIsAlive(ownerPid: any) {
   if (!Number.isInteger(ownerPid) || ownerPid <= 0) return false;
   try {
     process.kill(ownerPid, 0);
@@ -2352,8 +2352,8 @@ function patchOwnerIsAlive(ownerPid) {
   }
 }
 
-function patchFilesystemStateMatches(state, entries) {
-  return entries.every((entry) => {
+function patchFilesystemStateMatches(state: any, entries: any) {
+  return entries.every((entry: any) => {
     if (!entry || typeof entry.path !== 'string' || typeof entry.exists !== 'boolean') return false;
     try {
       const resolved = resolveAllowedToolPath(entry.path, state.allowedRoots, { operation: 'fs_patch_outcome_show', field: 'recovery_plan.path' });
@@ -2368,15 +2368,15 @@ function patchFilesystemStateMatches(state, entries) {
   });
 }
 
-function buildPatchRecoveryPlan(planned, backups) {
-  const beforeState = backups.map((backup) => ({
+function buildPatchRecoveryPlan(planned: any, backups: any) {
+  const beforeState = backups.map((backup: any) => ({
     path: backup.path,
     exists: backup.existed,
     sha256: backup.existed ? sha256(backup.content) : null,
   }));
-  const afterState = beforeState.map((entry) => ({ ...entry }));
-  const setAfterState = (entry) => {
-    const existingIndex = afterState.findIndex((candidate) => samePath(candidate.path, entry.path));
+  const afterState = beforeState.map((entry: any) => ({ ...entry }));
+  const setAfterState = (entry: any) => {
+    const existingIndex = afterState.findIndex((candidate: any) => samePath(candidate.path, entry.path));
     if (existingIndex >= 0) afterState[existingIndex] = entry;
     else afterState.push(entry);
   };
@@ -2402,23 +2402,23 @@ function buildPatchRecoveryPlan(planned, backups) {
   return { before_state: beforeState, after_state: afterState, changed_files: changedFiles };
 }
 
-function writePatchFailureBeforeMutation(state, operationId, patchSha256, error) {
+function writePatchFailureBeforeMutation(state: any, operationId: any, patchSha256: any, error: any) {
   writePatchOutcome(state, operationId, { schema: 'local.filesystem.apply_patch.outcome.v1', status: 'failed_before_mutation', operation_id: operationId, patch_sha256: patchSha256, mutation_started: false, rollback_performed: false, finished_at: new Date().toISOString(), error: errorDiagnostic(error) });
 }
 
-function writePatchOutcome(state, operationId, outcome) {
+function writePatchOutcome(state: any, operationId: any, outcome: any) {
   const path = patchOutcomePath(state, operationId);
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(outcome, null, 2)}\n`, 'utf8');
   renameSync(temporary, path);
 }
-function patchOutcomePath(state, operationId) {
+function patchOutcomePath(state: any, operationId: any) {
   if (!/^[A-Za-z0-9._-]{1,160}$/.test(operationId)) throw diagnosticError('patch_operation_id_invalid', 'patch_operation_id_invalid');
   return join(state.outputRoot, '.narada', 'local-filesystem-mcp', 'patch-outcomes', `${operationId}.json`);
 }
 
-function movePathTool(args, state) {
+function movePathTool(args: any, state: any) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_move_path', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_move_path', field: 'to' });
   assertFilesystemMutationTargetAllowed(to.path, to.root, 'fs_move_path');
@@ -2426,7 +2426,7 @@ function movePathTool(args, state) {
   return movePath({ state, operation: 'fs_move_path', args, from, to, overwrite, directoryOnly: false });
 }
 
-function createDirectoryTool(args, state) {
+function createDirectoryTool(args: any, state: any) {
   const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_create_directory' });
   const recursive = booleanField(args, 'recursive') ?? false;
   if (existsSync(target.path)) {
@@ -2459,13 +2459,13 @@ function createDirectoryTool(args, state) {
   };
 }
 
-function renameDirectoryTool(args, state) {
+function renameDirectoryTool(args: any, state: any) {
   const from = resolveAllowedToolPath(stringField(args, 'from'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'from' });
   const to = resolveAllowedToolPath(stringField(args, 'to'), state.allowedRoots, { operation: 'fs_rename_directory', field: 'to' });
   return movePath({ state, operation: 'fs_rename_directory', args, from, to, overwrite: false, directoryOnly: true });
 }
 
-function deleteDirectoryTool(args, state) {
+function deleteDirectoryTool(args: any, state: any) {
   const target = resolveAllowedToolPath(stringField(args, 'path'), state.allowedRoots, { operation: 'fs_delete_directory' });
   const recursive = booleanField(args, 'recursive') ?? false;
   if (!existsSync(target.path)) throw diagnosticError('delete_directory_not_found', `delete_directory_not_found: ${target.path}`, pathMetadata(target.path, target.root));
@@ -2484,7 +2484,7 @@ function deleteDirectoryTool(args, state) {
   };
 }
 
-function movePath({ state, operation, args, from, to, overwrite, directoryOnly }) {
+function movePath({ state, operation, args, from, to, overwrite, directoryOnly }: any) {
   if (samePath(from.path, to.path)) throw diagnosticError('move_source_and_destination_same', `move_source_and_destination_same: ${from.path}`, { operation, from: pathMetadata(from.path, from.root), to: pathMetadata(to.path, to.root) });
   if (!existsSync(from.path)) throw diagnosticError('move_source_not_found', `move_source_not_found: ${from.path}`, { operation, ...pathMetadata(from.path, from.root) });
   const fromStat = statSync(from.path);
@@ -2526,7 +2526,7 @@ function movePath({ state, operation, args, from, to, overwrite, directoryOnly }
   };
 }
 
-function pathMetadata(path, root) {
+function pathMetadata(path: any, root: any) {
   return {
     path,
     root,
@@ -2534,7 +2534,7 @@ function pathMetadata(path, root) {
   };
 }
 
-function readTextLineWindow({ path, root, offset, limit, timeoutMs, operation }) {
+function readTextLineWindow({ path, root, offset, limit, timeoutMs, operation }: any) {
   const fd = openSync(path, 'r');
   const decoder = new StringDecoder('utf8');
   const buffer = Buffer.allocUnsafe(READ_BUFFER_BYTES);
@@ -2593,13 +2593,13 @@ function readTextLineWindow({ path, root, offset, limit, timeoutMs, operation })
   }
 }
 
-async function callToolAsync(params, state, context) {
+async function callToolAsync(params: any, state: any, context: any) {
   const record = asRecord(params);
   const name = stringField(record, 'name');
   const args = asRecord(record.arguments);
   activeToolName = name;
   if (!name) throw diagnosticError('tools_call_requires_name', 'tools_call_requires_name');
-  if (!listTools(state.mode).some((tool) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
+  if (!listTools(state.mode).some((tool: any) => tool.name === name)) throw diagnosticError(`tool_not_available_in_${state.mode}_mode`, `tool_not_available_in_${state.mode}_mode: ${name}`, { tool_name: name, mode: state.mode });
   switch (name) {
     case 'fs_read_file': return await callReadToolWithRequestDeadline(name, args, state, context);
     case 'fs_read_file_range': return await callReadToolWithRequestDeadline(name, args, state, context);
@@ -2615,30 +2615,30 @@ async function callToolAsync(params, state, context) {
   }
 }
 
-function searchTimeoutMs(args) {
+function searchTimeoutMs(args: any) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return undefined;
   return Math.min(300_000, Math.max(1, value));
 }
 
-function readOperationTimeoutMs(args) {
+function readOperationTimeoutMs(args: any) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return DEFAULT_READ_OPERATION_TIMEOUT_MS;
   return Math.min(60_000, Math.max(1, value));
 }
 
-function readHandlerDelayMs(state) {
+function readHandlerDelayMs(state: any) {
   const value = Number(asRecord(state.env).NARADA_LOCAL_FILESYSTEM_READ_HANDLER_DELAY_MS ?? 0);
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
 }
 
-function filesystemOperationTimeoutMs(args) {
+function filesystemOperationTimeoutMs(args: any) {
   const value = integerField(args, 'timeout_ms');
   if (value === null) return DEFAULT_FILESYSTEM_OPERATION_TIMEOUT_MS;
   return Math.min(300_000, Math.max(1, value));
 }
 
-function createReadTimeoutChecker(operation, timeoutMs, { path, root, offset, limit }) {
+function createReadTimeoutChecker(operation: any, timeoutMs: any, { path, root, offset, limit }: any) {
   const startedAt = Date.now();
   return () => {
     const elapsedMs = Date.now() - startedAt;
@@ -2647,7 +2647,7 @@ function createReadTimeoutChecker(operation, timeoutMs, { path, root, offset, li
   };
 }
 
-function readTimeoutError(operation, timeoutMs, { path, root, offset, limit, elapsedMs }) {
+function readTimeoutError(operation: any, timeoutMs: any, { path, root, offset, limit, elapsedMs }: any) {
   return diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
     timeout_kind: 'read_timeout',
     timeout_ms: timeoutMs,
@@ -2670,9 +2670,9 @@ function readTimeoutError(operation, timeoutMs, { path, root, offset, limit, ela
   });
 }
 
-function createOperationTimeoutChecker(operation, timeoutMs) {
+function createOperationTimeoutChecker(operation: any, timeoutMs: any) {
   const startedAt = Date.now();
-  return (phase = null) => {
+  return (phase: any = null) => {
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs <= timeoutMs) return;
     throw diagnosticError(`${operation}_timed_out`, `${operation}_timed_out`, {
@@ -2690,8 +2690,8 @@ function createOperationTimeoutChecker(operation, timeoutMs) {
   };
 }
 
-function delayWithSignal(ms, signal) {
-  return new Promise((resolvePromise, rejectPromise) => {
+function delayWithSignal(ms: any, signal: any) {
+  return new Promise((resolvePromise: any, rejectPromise: any) => {
     if (signal.aborted) {
       rejectPromise(Object.assign(new Error('aborted'), { name: 'AbortError' }));
       return;
@@ -2708,13 +2708,13 @@ function delayWithSignal(ms, signal) {
   });
 }
 
-function searchCachePolicy(args) {
+function searchCachePolicy(args: any) {
   const value = stringField(args, 'cache_policy') ?? 'auto';
   if (!['auto', 'snapshot', 'refresh', 'bypass'].includes(value)) throw diagnosticError('search_cache_policy_unsupported', `search_cache_policy_unsupported: ${value}`, { cache_policy: value });
   return value;
 }
 
-function searchFreshness(path) {
+function searchFreshness(path: any) {
   const stat = statSync(path);
   const type = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other';
   const directoryFingerprint = type === 'directory' ? directoryTreeFingerprint(path, path) : null;
@@ -2729,8 +2729,8 @@ function searchFreshness(path) {
   };
 }
 
-function directoryTreeFingerprint(path, root, { maxEntries = 5000 } = {}) {
-  const entries = [];
+function directoryTreeFingerprint(path: any, root: any, { maxEntries = 5000 }: any = {}) {
+  const entries: string[] = [];
   let treeTruncated = false;
   walkDirectoryFingerprint(path);
   return {
@@ -2740,12 +2740,12 @@ function directoryTreeFingerprint(path, root, { maxEntries = 5000 } = {}) {
     tree_sha256: createHash('sha256').update(entries.join('\n')).digest('hex'),
   };
 
-  function walkDirectoryFingerprint(currentPath) {
+  function walkDirectoryFingerprint(currentPath: any) {
     if (entries.length >= maxEntries) {
       treeTruncated = true;
       return;
     }
-    const children = safeReaddir(currentPath).sort((left, right) => left.name.localeCompare(right.name));
+    const children = safeReaddir(currentPath).sort((left: any, right: any) => left.name.localeCompare(right.name));
     for (const child of children) {
       if (entries.length >= maxEntries) {
         treeTruncated = true;
@@ -2766,7 +2766,7 @@ function directoryTreeFingerprint(path, root, { maxEntries = 5000 } = {}) {
   }
 }
 
-function safeReaddir(path) {
+function safeReaddir(path: any) {
   try {
     return readdirSync(path, { withFileTypes: true });
   } catch {
@@ -2774,24 +2774,24 @@ function safeReaddir(path) {
   }
 }
 
-function renderGrepMatch(match, mode) {
+function renderGrepMatch(match: any, mode: any) {
   const parsed = buildGrepMatchObject(match, mode);
   if (mode === 'count_matches') return `${parsed.path}: ${parsed.count ?? 'unknown'}`;
   if (mode === 'content') return `${parsed.path}:${parsed.line ?? '?'}:${parsed.text ?? ''}`;
   return String(parsed.path ?? match);
 }
 
-function resolvePatchSource(filePatch, state) {
+function resolvePatchSource(filePatch: any, state: any) {
   const patchPath = stripPatchPrefix(filePatch.oldPath === '/dev/null' ? filePatch.newPath : filePatch.oldPath);
   return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_source_path' });
 }
 
-function resolvePatchTarget(filePatch, state) {
+function resolvePatchTarget(filePatch: any, state: any) {
   const patchPath = stripPatchPrefix(filePatch.newPath === '/dev/null' ? filePatch.oldPath : filePatch.newPath);
   return resolveAllowedToolPath(patchPath, state.allowedRoots, { operation: 'fs_apply_patch', field: 'patch_path' });
 }
 
-function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string, unknown> = {}) {
+function resolveAllowedToolPath(inputPath: any, allowedRoots: any, context: Record<string, unknown> = {}) {
   try {
     return resolvePolicyAllowedPath(inputPath, allowedRoots);
   } catch (error) {
@@ -2799,7 +2799,7 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
     const codeName = message.split(/[:\s]/)[0] || 'path_resolution_failed';
     if (codeName === 'path_required' || codeName === 'path_outside_allowed_roots' || codeName === 'allowed_root_not_found') {
       const roots = Array.isArray(allowedRoots) && allowedRoots.length > 0 && typeof allowedRoots[0] === 'object'
-        ? allowedRoots.map((entry) => entry.root)
+        ? allowedRoots.map((entry: any) => entry.root)
         : allowedRoots;
       const relativeBase = Array.isArray(roots) && roots.length > 0 ? roots[0] : null;
       throw diagnosticError(codeName, message, {
@@ -2820,7 +2820,7 @@ function resolveAllowedToolPath(inputPath, allowedRoots, context: Record<string,
   }
 }
 
-function assertFilesystemMutationTargetAllowed(path, root, operation) {
+function assertFilesystemMutationTargetAllowed(path: any, root: any, operation: any) {
   const normalized = String(path).replaceAll('\\', '/');
   const extension = extname(normalized).toLowerCase();
   if (!TRANSIENT_EXECUTABLE_PATH.test(normalized) || !TRANSIENT_EXECUTABLE_EXTENSIONS.has(extension)) return;
@@ -2832,12 +2832,12 @@ function assertFilesystemMutationTargetAllowed(path, root, operation) {
   });
 }
 
-function siteControlRoot(siteRoot) {
+function siteControlRoot(siteRoot: any) {
   const root = resolve(siteRoot);
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-function loadSiteExtraAllowedRoots(siteRoot) {
+function loadSiteExtraAllowedRoots(siteRoot: any) {
   try {
     const configPath = join(siteControlRoot(siteRoot), 'allowed-roots.json');
     if (!existsSync(configPath)) return [];
@@ -2852,7 +2852,7 @@ function loadSiteExtraAllowedRoots(siteRoot) {
   return [];
 }
 
-function loadSiteSecrets(siteRoot, targetEnv) {
+function loadSiteSecrets(siteRoot: any, targetEnv: any) {
   try {
     const configPath = join(siteControlRoot(siteRoot), 'secrets.json');
     if (!existsSync(configPath)) return;
@@ -2870,19 +2870,19 @@ function loadSiteSecrets(siteRoot, targetEnv) {
   }
 }
 
-function stripPatchPrefix(path) {
+function stripPatchPrefix(path: any) {
   const cleaned = normalizePatchPath(String(path ?? '').trim());
   if (cleaned.startsWith('a/') || cleaned.startsWith('b/')) return cleaned.slice(2);
   return cleaned;
 }
 
-function normalizePatchPath(path) {
+function normalizePatchPath(path: any) {
   if (/^[A-Za-z]:\//.test(path)) return path;
   if (/^[A-Za-z]:\\/.test(path)) return path.replace(/\\/g, '/');
   return path.replace(/\\/g, '/');
 }
 
-function rollbackPatch(backups) {
+function rollbackPatch(backups: any) {
   for (const backup of backups) {
     if (backup.existed) {
       mkdirSync(dirname(backup.path), { recursive: true });
@@ -2893,7 +2893,7 @@ function rollbackPatch(backups) {
   }
 }
 
-function uniquePaths(paths) {
+function uniquePaths(paths: any) {
   const seen = new Set();
   const out = [];
   for (const path of paths) {
@@ -2905,7 +2905,7 @@ function uniquePaths(paths) {
   return out;
 }
 
-function appendAudit(state, operation, path, root, detail) {
+function appendAudit(state: any, operation: any, path: any, root: any, detail: any) {
   if (!state.auditLogDir) return;
   mkdirSync(state.auditLogDir, { recursive: true });
   appendFileSync(resolve(state.auditLogDir, 'filesystem-mcp-audit.jsonl'), `${JSON.stringify({
@@ -2919,7 +2919,7 @@ function appendAudit(state, operation, path, root, detail) {
   })}\n`, 'utf8');
 }
 
-function toolResult(value, renderContext: Record<string, unknown> = {}) {
+function toolResult(value: any, renderContext: Record<string, unknown> = {}) {
   if (isToolResult(value)) {
     const structuredContent = value.structuredContent ?? parseToolResultStructuredContent(value);
     return {
@@ -2938,12 +2938,12 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function isToolResult(value) {
+function isToolResult(value: any) {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.content));
 }
 
-function parseToolResultStructuredContent(value) {
-  const text = value.content.find((item) => item?.type === 'text' && typeof item.text === 'string')?.text;
+function parseToolResultStructuredContent(value: any) {
+  const text = value.content.find((item: any) => item?.type === 'text' && typeof item.text === 'string')?.text;
   if (!text) return undefined;
   try {
     return JSON.parse(text);
@@ -2952,11 +2952,11 @@ function parseToolResultStructuredContent(value) {
   }
 }
 
-function samePath(left, right) {
+function samePath(left: any, right: any) {
   return resolve(left).toLowerCase() === resolve(right).toLowerCase();
 }
 
-function uniqueSiblingPath(path, label) {
+function uniqueSiblingPath(path: any, label: any) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const candidate = `${path}.mcp-${label}-${process.pid}-${Date.now()}-${attempt}`;
     if (!existsSync(candidate)) return candidate;
@@ -2964,22 +2964,22 @@ function uniqueSiblingPath(path, label) {
   throw diagnosticError('temporary_path_unavailable', `temporary_path_unavailable: ${path}`, { path, label });
 }
 
-function isPathInside(path, root) {
+function isPathInside(path: any, root: any) {
   const rel = relative(root, path);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
 }
 
-function isPathWithinOrEqual(path, root) {
+function isPathWithinOrEqual(path: any, root: any) {
   const rel = relative(root, path);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-function objectSchema(properties, required = []) {
+function objectSchema(properties: any, required: any = []) {
   return { type: 'object', properties, required, additionalProperties: false };
 }
 
-function decorateTools(tools) {
-  return tools.map((tool) => ({
+function decorateTools(tools: any) {
+  return tools.map((tool: any) => ({
     ...tool,
     canonical_name: tool.name,
     annotations: { ...toolAnnotations(tool.name), canonicalName: tool.name },
@@ -2987,7 +2987,7 @@ function decorateTools(tools) {
   }));
 }
 
-function toolAnnotations(name) {
+function toolAnnotations(name: any) {
   const toolName = String(name);
   const reconcilesPatchOutcome = toolName === 'fs_patch_outcome_show';
   const write = /^fs_(write|str_replace|replace|apply|move|create|rename|delete)/.test(toolName) || reconcilesPatchOutcome;
@@ -3034,7 +3034,7 @@ function parseArgs(argv: string[]): Record<string, unknown> {
   return options;
 }
 
-function drainJsonRpcFrames(buffer) {
+function drainJsonRpcFrames(buffer: any) {
   const requests = [];
   let remaining = buffer;
   while (true) {
@@ -3055,7 +3055,7 @@ function drainJsonRpcFrames(buffer) {
   return { requests, remaining };
 }
 
-function writeJsonRpcResponse(response, { framed = false } = {}) {
+function writeJsonRpcResponse(response: any, { framed = false }: any = {}) {
   const body = JSON.stringify(response);
   if (!framed) {
     process.stdout.write(`${body}\n`);
@@ -3064,7 +3064,7 @@ function writeJsonRpcResponse(response, { framed = false } = {}) {
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
 }
 
-function sendProgress(request, progress, message, options) {
+function sendProgress(request: any, progress: any, message: any, options: any) {
   const progressToken = asRecord(asRecord(request.params)._meta).progressToken;
   if (progressToken === undefined) return;
   writeJsonRpcResponse({
@@ -3074,23 +3074,23 @@ function sendProgress(request, progress, message, options) {
   }, options);
 }
 
-function clientSupportsRoots(initializeParams) {
+function clientSupportsRoots(initializeParams: any) {
   return Boolean(asRecord(asRecord(initializeParams).capabilities).roots);
 }
 
-function requestClientRoots(state, pendingServerRequests, nextId, options) {
+function requestClientRoots(state: any, pendingServerRequests: any, nextId: any, options: any) {
   const id = nextId();
-  pendingServerRequests.set(id, (message) => {
+  pendingServerRequests.set(id, (message: any) => {
     updateClientRoots(state, asRecord(message.result));
   });
   writeJsonRpcResponse({ jsonrpc: '2.0', id, method: 'roots/list', params: {} }, options);
 }
 
-function updateClientRoots(state, result) {
-  const roots = Array.isArray(result.roots) ? result.roots.map((root) => asRecord(root)).filter((root) => typeof root.uri === 'string') : [];
+function updateClientRoots(state: any, result: any) {
+  const roots = Array.isArray(result.roots) ? result.roots.map((root: any) => asRecord(root)).filter((root: any) => typeof root.uri === 'string') : [];
   state.clientRoots = {
     supported: true,
-    roots: roots.map((root) => ({
+    roots: roots.map((root: any) => ({
       uri: String(root.uri),
       ...(typeof root.name === 'string' ? { name: root.name } : {}),
     })),
@@ -3098,10 +3098,10 @@ function updateClientRoots(state, result) {
   };
 }
 
-function clientRootCompletionValues(state) {
+function clientRootCompletionValues(state: any) {
   const rootsValue = asRecord(state.clientRoots).roots;
   const roots = Array.isArray(rootsValue) ? rootsValue : [];
-  return roots.map((root) => {
+  return roots.map((root: any) => {
     const uri = String(asRecord(root).uri ?? '');
     if (!uri) return '';
     if (uri.startsWith('file:')) {
@@ -3115,17 +3115,17 @@ function clientRootCompletionValues(state) {
   }).filter(Boolean).slice(0, 100);
 }
 
-function splitLines(value) {
-  return String(value ?? '').split(/\r?\n/).filter((line) => line.trim().length > 0);
+function splitLines(value: any) {
+  return String(value ?? '').split(/\r?\n/).filter((line: any) => line.trim().length > 0);
 }
 
-function splitFileLines(value) {
+function splitFileLines(value: any) {
   const text = String(value ?? '');
   if (text.length === 0) return [];
   return text.replace(/\r?\n$/, '').split(/\r?\n/);
 }
 
-function assertExpectedSha256(args, before, { operation, path, root }) {
+function assertExpectedSha256(args: any, before: any, { operation, path, root }: any) {
   const expected = stringField(args, 'expected_sha256');
   if (!expected) return;
   const actual = before === null ? null : sha256(before);
@@ -3138,7 +3138,7 @@ function assertExpectedSha256(args, before, { operation, path, root }) {
   }
 }
 
-function expectedSha256Map(args) {
+function expectedSha256Map(args: any) {
   const value = asRecord(args).expected_sha256;
   if (value === undefined || value === null) return new Map();
   const record = asRecord(value);
@@ -3152,7 +3152,7 @@ function expectedSha256Map(args) {
   return new Map(entries);
 }
 
-function assertExpectedPatchSha256(expectedSha256, filePatch, source, target, before) {
+function assertExpectedPatchSha256(expectedSha256: any, filePatch: any, source: any, target: any, before: any) {
   if (expectedSha256.size === 0) return;
   const keys = [
     relative(source.root, source.path).replace(/\\/g, '/'),
@@ -3161,8 +3161,8 @@ function assertExpectedPatchSha256(expectedSha256, filePatch, source, target, be
     stripPatchPrefix(filePatch.newPath),
     normalizePathKey(source.path),
     normalizePathKey(target.path),
-  ].filter((key) => key && key !== '/dev/null');
-  const matchedKey = keys.find((key) => expectedSha256.has(key));
+  ].filter((key: any) => key && key !== '/dev/null');
+  const matchedKey = keys.find((key: any) => expectedSha256.has(key));
   if (!matchedKey) return;
   const expected = expectedSha256.get(matchedKey);
   const actual = source.path && existsSync(source.path) ? sha256(before) : null;
@@ -3177,8 +3177,8 @@ function assertExpectedPatchSha256(expectedSha256, filePatch, source, target, be
   return matchedKey;
 }
 
-function assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedKeys) {
-  const unmatched = [...expectedSha256.keys()].filter((key) => !matchedKeys.has(key));
+function assertAllExpectedPatchSha256KeysMatched(expectedSha256: any, matchedKeys: any) {
+  const unmatched = [...expectedSha256.keys()].filter((key: any) => !matchedKeys.has(key));
   if (unmatched.length === 0) return;
   throw diagnosticError('fs_apply_patch_expected_sha256_unmatched', 'fs_apply_patch_expected_sha256_unmatched', {
     unmatched_expected_sha256_keys: unmatched,
@@ -3186,7 +3186,7 @@ function assertAllExpectedPatchSha256KeysMatched(expectedSha256, matchedKeys) {
   });
 }
 
-function assertExpectedMetadata(args, target, { operation, objectKey = null, mtimeKey, sizeKey, shaKey = null, treeShaKey = null, entryCountKey = null }) {
+function assertExpectedMetadata(args: any, target: any, { operation, objectKey = null, mtimeKey, sizeKey, shaKey = null, treeShaKey = null, entryCountKey = null }: any) {
   const expectedObject = objectKey ? asRecord(asRecord(args)[objectKey]) : {};
   const useObjectGuard = !isEmptyStructuredMetadataGuard(expectedObject);
   const expectedMtime = (useObjectGuard ? stringField(expectedObject, 'mtime') : null) ?? stringField(args, mtimeKey);
@@ -3248,9 +3248,9 @@ function isEmptyStructuredMetadataGuard(value: Record<string, unknown>): boolean
   const keys = Object.keys(value);
   if (keys.length === 0) return true;
   const allowedKeys = new Set(['mtime', 'size', 'sha256', 'tree_sha256', 'entry_count']);
-  if (keys.some((key) => !allowedKeys.has(key))) return false;
+  if (keys.some((key: any) => !allowedKeys.has(key))) return false;
   if (keys.length !== allowedKeys.size) return false;
-  return keys.every((key) => {
+  return keys.every((key: any) => {
     const field = value[key];
     if (typeof field === 'string') return field.trim().length === 0;
     if (typeof field === 'number') return field === 0;
@@ -3258,18 +3258,18 @@ function isEmptyStructuredMetadataGuard(value: Record<string, unknown>): boolean
   });
 }
 
-function normalizePathKey(path) {
+function normalizePathKey(path: any) {
   return String(path ?? '').replace(/\\/g, '/');
 }
 
-function patchOperation(filePatch, source, target) {
+function patchOperation(filePatch: any, source: any, target: any) {
   if (filePatch.deleteFile) return 'delete';
   if (filePatch.oldPath === '/dev/null' || filePatch.kind === 'codex_add') return 'add';
   if (!samePath(source.path, target.path)) return 'move';
   return 'update';
 }
 
-function findTextOccurrences(text, needle) {
+function findTextOccurrences(text: any, needle: any) {
   const matches = [];
   let index = 0;
   while (matches.length < 100) {
@@ -3286,15 +3286,15 @@ function findTextOccurrences(text, needle) {
   return matches;
 }
 
-function sha256(value) {
+function sha256(value: any) {
   return createHash('sha256').update(String(value)).digest('hex');
 }
 
-function diagnosticError(codeName, message, details: unknown = {}) {
+function diagnosticError(codeName: any, message: any, details: unknown = {}) {
   return new McpToolError(codeName, message, normalizeDiagnosticDetails(details));
 }
 
-function normalizeDiagnosticDetails(details) {
+function normalizeDiagnosticDetails(details: any) {
   const record = asRecord(details);
   const normalized = { ...record };
   if (activeToolName && String(activeToolName).startsWith('fs_') && !normalized.operation) normalized.operation = activeToolName;
@@ -3304,7 +3304,7 @@ function normalizeDiagnosticDetails(details) {
   return normalized;
 }
 
-function patchDiagnosticError(codeName, patch, details: unknown = {}) {
+function patchDiagnosticError(codeName: any, patch: any, details: unknown = {}) {
   const firstNonEmptyLine = splitLines(patch)[0] ?? '';
   const detectedFormat = firstNonEmptyLine === '*** Begin Patch'
     ? 'codex_apply_patch'
@@ -3319,7 +3319,7 @@ function patchDiagnosticError(codeName, patch, details: unknown = {}) {
     first_non_empty_line: firstNonEmptyLine,
   });
 }
-function errorDiagnostic(error) {
+function errorDiagnostic(error: any) {
   if (error instanceof McpToolError) {
     return {
       schema: 'local.filesystem.error.v1',
@@ -3342,7 +3342,7 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function resolveFilesystemPayloadArgs(toolName, args, state) {
+function resolveFilesystemPayloadArgs(toolName: any, args: any, state: any) {
   try {
     return resolveToolPayloadArgs({
       siteRoot: state.outputRoot,

@@ -21,6 +21,10 @@
     "./session-start": {
       "types": "./dist/src/session-start.d.ts",
       "default": "./dist/src/session-start.js"
+    },
+    "./path-policy": {
+      "types": "./dist/src/path-policy.d.ts",
+      "default": "./dist/src/path-policy.js"
     }
   },
   "scripts": {

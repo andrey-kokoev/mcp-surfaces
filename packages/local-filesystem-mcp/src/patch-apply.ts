@@ -1,4 +1,4 @@
-export function parsePatch(patch, context = {}) {
+export function parsePatch(patch: any, context : any= {}) {
   const contextRecord = context as { diagnosticError?: unknown; checkTimeout?: unknown };
   const diagnosticError = typeof contextRecord.diagnosticError === 'function' ? contextRecord.diagnosticError : defaultDiagnosticError;
   const checkTimeout = typeof contextRecord.checkTimeout === 'function' ? contextRecord.checkTimeout : noopTimeoutCheck;
@@ -8,13 +8,13 @@ export function parsePatch(patch, context = {}) {
   return parseUnifiedPatch(patch, { diagnosticError, checkTimeout });
 }
 
-export function applyFilePatch(before, filePatch, { diagnosticError, checkTimeout = noopTimeoutCheck }) {
+export function applyFilePatch(before: any, filePatch: any, { diagnosticError, checkTimeout = noopTimeoutCheck }: any) {
   if (filePatch.kind === 'codex_add') return applyCodexAddPatch(filePatch, { diagnosticError, checkTimeout });
   if (filePatch.kind === 'codex_update') return applyCodexUpdatePatch(before, filePatch, { diagnosticError, checkTimeout });
   const hadTrailingNewline = /\r?\n$/.test(before);
   const newline = before.includes('\r\n') ? '\r\n' : '\n';
-  const source = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
-  const output = [];
+  const source: string[] = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
+  const output: string[] = [];
   let sourceIndex = 0;
   for (const hunk of filePatch.hunks) {
     checkTimeout('apply_unified_hunk');
@@ -41,9 +41,9 @@ export function applyFilePatch(before, filePatch, { diagnosticError, checkTimeou
   return `${output.join(newline)}${hadTrailingNewline ? newline : ''}`;
 }
 
-export function applyDeletePatch(before, filePatch, { diagnosticError, checkTimeout = noopTimeoutCheck }) {
+export function applyDeletePatch(before: any, filePatch: any, { diagnosticError, checkTimeout = noopTimeoutCheck }: any) {
   if (filePatch.kind === 'codex_delete') return null;
-  const source = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
+  const source: string[] = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
   for (const hunk of filePatch.hunks) {
     checkTimeout('apply_delete_hunk');
     const hunkStart = hunk.oldStart - 1;
@@ -65,7 +65,7 @@ export function applyDeletePatch(before, filePatch, { diagnosticError, checkTime
       }
     }
   }
-  const removedLineCount = filePatch.hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith('-') || line.startsWith(' ')).length, 0);
+  const removedLineCount = filePatch.hunks.reduce((sum: any, hunk: any) => sum + hunk.lines.filter((line: any) => line.startsWith('-') || line.startsWith(' ')).length, 0);
   if (removedLineCount !== source.length) {
     throw diagnosticError('patch_delete_content_mismatch', 'patch_delete_content_mismatch: delete patch does not cover full file', {
       removed_lines: removedLineCount,
@@ -75,11 +75,11 @@ export function applyDeletePatch(before, filePatch, { diagnosticError, checkTime
   return null;
 }
 
-function parseUnifiedPatch(patch, { diagnosticError, checkTimeout }) {
+function parseUnifiedPatch(patch: any, { diagnosticError, checkTimeout }: any) {
   const lines = patch.split(/\r?\n/);
-  const files = [];
-  let current = null;
-  let currentHunk = null;
+  const files: any[] = [];
+  let current: any = null;
+  let currentHunk: any = null;
   for (const line of lines) {
     checkTimeout('parse_unified_line');
     if (line.startsWith('--- ')) {
@@ -117,16 +117,16 @@ function parseUnifiedPatch(patch, { diagnosticError, checkTimeout }) {
     }
   }
   return files
-    .filter((file) => file.newPath && (file.hunks.length > 0 || file.newPath === '/dev/null'))
-    .map((file) => ({ ...file, deleteFile: file.newPath === '/dev/null' }));
+    .filter((file: any) => file.newPath && (file.hunks.length > 0 || file.newPath === '/dev/null'))
+    .map((file: any) => ({ ...file, deleteFile: file.newPath === '/dev/null' }));
 }
 
-function parseCodexApplyPatch(patch, { diagnosticError, checkTimeout }) {
+function parseCodexApplyPatch(patch: any, { diagnosticError, checkTimeout }: any) {
   const lines = patch.split(/\r?\n/);
-  const firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
-  const files = [];
-  let current = null;
-  let currentHunk = null;
+  const firstContentIndex = lines.findIndex((line: any) => line.trim().length > 0);
+  const files: any[] = [];
+  let current: any = null;
+  let currentHunk: any = null;
   for (let lineNumber = 1; lineNumber <= lines.length; lineNumber += 1) {
     checkTimeout('parse_codex_line');
     const line = lines[lineNumber - 1];
@@ -193,11 +193,11 @@ function parseCodexApplyPatch(patch, { diagnosticError, checkTimeout }) {
     }
     throw codexLineDiagnostic(diagnosticError, 'patch_line_kind_unsupported', patch, line, lineNumber);
   }
-  return files.filter((file) => file.deleteFile || file.hunks.length > 0);
+  return files.filter((file: any) => file.deleteFile || file.hunks.length > 0);
 }
 
-function applyCodexAddPatch(filePatch, { diagnosticError, checkTimeout = noopTimeoutCheck }) {
-  const lines = filePatch.hunks.flatMap((hunk) => hunk.lines.map((line) => {
+function applyCodexAddPatch(filePatch: any, { diagnosticError, checkTimeout = noopTimeoutCheck }: any) {
+  const lines = filePatch.hunks.flatMap((hunk: any) => hunk.lines.map((line: any) => {
     checkTimeout('apply_codex_add_line');
     if (!line.startsWith('+')) throw diagnosticError('patch_add_line_kind_unsupported', `patch_add_line_kind_unsupported: ${line[0] ?? ''}`, { kind: line[0] ?? null });
     return line.slice(1);
@@ -205,14 +205,14 @@ function applyCodexAddPatch(filePatch, { diagnosticError, checkTimeout = noopTim
   return `${lines.join('\n')}${lines.length > 0 ? '\n' : ''}`;
 }
 
-function applyCodexUpdatePatch(before, filePatch, { diagnosticError, checkTimeout = noopTimeoutCheck }) {
+function applyCodexUpdatePatch(before: any, filePatch: any, { diagnosticError, checkTimeout = noopTimeoutCheck }: any) {
   const hadTrailingNewline = /\r?\n$/.test(before);
   const newline = before.includes('\r\n') ? '\r\n' : '\n';
-  let source = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
+  let source: string[] = before.length === 0 ? [] : before.replace(/\r?\n$/, '').split(/\r?\n/);
   for (const hunk of filePatch.hunks) {
     checkTimeout('apply_codex_update_hunk');
-    const oldLines = [];
-    const newLines = [];
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
     for (const line of hunk.lines) {
       checkTimeout('apply_codex_update_line');
       const kind = line[0];
@@ -235,18 +235,18 @@ function applyCodexUpdatePatch(before, filePatch, { diagnosticError, checkTimeou
   return `${source.join(newline)}${hadTrailingNewline ? newline : ''}`;
 }
 
-function findLineBlock(source, block, checkTimeout = noopTimeoutCheck) {
+function findLineBlock(source: any, block: any, checkTimeout : any= noopTimeoutCheck) {
   if (block.length === 0) return 0;
   for (let index = 0; index <= source.length - block.length; index += 1) {
     checkTimeout('find_line_block');
-    if (block.every((line, offset) => source[index + offset] === line)) return index;
+    if (block.every((line: any, offset: any) => source[index + offset] === line)) return index;
   }
   return -1;
 }
 
-function noopTimeoutCheck(_phase = null) {}
+function noopTimeoutCheck(_phase : any= null) {}
 
-function parsePatchHeaderPath(value) {
+function parsePatchHeaderPath(value: any) {
   const trimmed = String(value ?? '').trim();
   if (trimmed === '/dev/null') return trimmed;
   const quoted = trimmed.match(/^"((?:\\.|[^"])*)"/);
@@ -256,13 +256,13 @@ function parsePatchHeaderPath(value) {
   return trimmed.split(/\s+/)[0] ?? '';
 }
 
-function normalizePatchPath(path) {
+function normalizePatchPath(path: any) {
   if (/^[A-Za-z]:\//.test(path)) return path;
   if (/^[A-Za-z]:\\/.test(path)) return path.replace(/\\/g, '/');
   return path.replace(/\\/g, '/');
 }
 
-function codexLineDiagnostic(diagnosticError, codeName, patch, line, lineNumber) {
+function codexLineDiagnostic(diagnosticError: any, codeName: any, patch: any, line: any, lineNumber: any) {
   throw diagnosticError(codeName, patch, {
     expected_format: 'codex_apply_patch',
     line,
@@ -270,7 +270,7 @@ function codexLineDiagnostic(diagnosticError, codeName, patch, line, lineNumber)
   });
 }
 
-function defaultDiagnosticError(codeName, patch, details = {}) {
+function defaultDiagnosticError(codeName: any, patch: any, details : any= {}) {
   const error = new Error(`${codeName}: invalid patch syntax`) as Error & { codeName?: string; details?: unknown };
   error.name = 'PatchApplyError';
   error.codeName = codeName;
@@ -281,6 +281,6 @@ function defaultDiagnosticError(codeName, patch, details = {}) {
   return error;
 }
 
-function splitLines(value) {
-  return String(value ?? '').split(/\r?\n/).filter((line) => line.trim().length > 0);
+function splitLines(value: any) {
+  return String(value ?? '').split(/\r?\n/).filter((line: any) => line.trim().length > 0);
 }

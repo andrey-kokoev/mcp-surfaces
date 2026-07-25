@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @ts-nocheck
+
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 /**
@@ -44,7 +44,7 @@ const MAX_CONTINUATION_ARRAY_ITEMS = 200;
 const startupTracePath = join(siteRoot, '.ai', 'tmp', 'agent-context-mcp-startup.log');
 const startupTraceEnabled = process.env.NARADA_AGENT_CONTEXT_MCP_TRACE === '1';
 
-function traceStartup(event, extra = {}) {
+function traceStartup(event: any, extra: any = {}) {
   if (!startupTraceEnabled) return;
   try {
     mkdirSync(join(siteRoot, '.ai', 'tmp'), { recursive: true });
@@ -67,12 +67,12 @@ function traceStartup(event, extra = {}) {
   }
 }
 
-process.on('uncaughtException', (error) => {
+process.on('uncaughtException', (error: any) => {
   traceStartup('uncaughtException', { error: error?.stack ?? String(error) });
   throw error;
 });
 
-process.on('unhandledRejection', (error) => {
+process.on('unhandledRejection', (error: any) => {
   traceStartup('unhandledRejection', { error: error?.stack ?? String(error) });
 });
 
@@ -250,7 +250,7 @@ export const TOOLS = [
       },
     },
   },
-].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+].map((tool: any) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
 
 function toolAnnotations(name: string) {
   const writes = /start_session|checkpoint/.test(name);
@@ -263,7 +263,7 @@ function toolAnnotations(name: string) {
   };
 }
 
-function checkpointRowForAgent(db, agentId, checkpointId) {
+function checkpointRowForAgent(db: any, agentId: any, checkpointId: any) {
   if (checkpointId !== null) {
     const current = db.prepare(`
       SELECT * FROM agent_checkpoints
@@ -282,7 +282,7 @@ function checkpointRowForAgent(db, agentId, checkpointId) {
   return db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
 }
 
-function normalizeContinuation(value, checkpointId, checkpointAt) {
+function normalizeContinuation(value: any, checkpointId: any, checkpointAt: any) {
   if (value == null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('continuation_invalid: expected an object');
@@ -340,7 +340,7 @@ function normalizeContinuation(value, checkpointId, checkpointAt) {
     source_checkpoint_ref: `agent_context_checkpoint:${checkpointId}`,
     created_at: createdAt,
   };
-  const content = { ...canonical };
+  const content: Record<string, any> = { ...canonical };
   delete content.source_checkpoint_ref;
   const serialized = JSON.stringify(content);
   if (Buffer.byteLength(JSON.stringify(canonical), 'utf8') > MAX_CONTINUATION_STATE_BYTES) {
@@ -353,7 +353,7 @@ function normalizeContinuation(value, checkpointId, checkpointAt) {
   };
 }
 
-function continuationText(value, key, required = false) {
+function continuationText(value: any, key: any, required: any = false) {
   if (value == null && !required) return null;
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`continuation_${key}_invalid`);
@@ -364,13 +364,13 @@ function continuationText(value, key, required = false) {
   return value;
 }
 
-function continuationStringArray(value, key) {
+function continuationStringArray(value: any, key: any) {
   if (value == null) return [];
   if (!Array.isArray(value)) throw new Error(`continuation_${key}_invalid`);
   if (value.length > MAX_CONTINUATION_ARRAY_ITEMS) {
     throw new Error(`continuation_${key}_too_many_items`);
   }
-  return value.map((item, index) => {
+  return value.map((item: any, index: any) => {
     if (typeof item !== 'string' || item.trim() === '') {
       throw new Error(`continuation_${key}_${index}_invalid`);
     }
@@ -381,14 +381,14 @@ function continuationStringArray(value, key) {
   });
 }
 
-function normalizeContinuationTimestamp(value) {
+function normalizeContinuationTimestamp(value: any) {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
     throw new Error('continuation_created_at_invalid');
   }
   return new Date(value).toISOString();
 }
 
-function normalizeContinuationExportPath(value, agentId, checkpointId) {
+function normalizeContinuationExportPath(value: any, agentId: any, checkpointId: any) {
   const defaultPath = `.ai/continuations/${safePathSegment(agentId)}-${checkpointId}.md`;
   const path = value == null ? defaultPath : value;
   if (typeof path !== 'string' || path.trim() === '' || path.includes('\0') || isAbsolute(path) || path.includes(':')) {
@@ -406,7 +406,7 @@ function normalizeContinuationExportPath(value, agentId, checkpointId) {
   return relative(siteRoot, artifactPath).replace(/\\/g, '/');
 }
 
-function safePathSegment(value) {
+function safePathSegment(value: any) {
   const segment = String(value ?? '')
     .replace(/[^a-z0-9_.-]+/gi, '-')
     .replace(/^-+|-+$/g, '')
@@ -414,7 +414,7 @@ function safePathSegment(value) {
   return segment || 'agent';
 }
 
-function renderContinuationMarkdown({ agentId, checkpoint, continuation }) {
+function renderContinuationMarkdown({ agentId, checkpoint, continuation }: any) {
   const lines = [
     '<!-- narada.continuation.handoff.v1 -->',
     `<!-- narada.continuation.content-hash: ${continuation.content_hash} -->`,
@@ -449,7 +449,7 @@ function renderContinuationMarkdown({ agentId, checkpoint, continuation }) {
   return lines.join('\n');
 }
 
-function appendMarkdownList(lines, title, values) {
+function appendMarkdownList(lines: any, title: any, values: any) {
   lines.push(`## ${title}`, '');
   if (!Array.isArray(values) || values.length === 0) {
     lines.push('_None._', '');
@@ -459,15 +459,15 @@ function appendMarkdownList(lines, title, values) {
   lines.push('');
 }
 
-function markdownInline(value) {
+function markdownInline(value: any) {
   return String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
 }
 
-function markdownBlock(value) {
+function markdownBlock(value: any) {
   return String(value ?? '').replace(/\r\n/g, '\n').trim();
 }
 
-function writeContinuationArtifact(artifactPath, markdown, overwrite) {
+function writeContinuationArtifact(artifactPath: any, markdown: any, overwrite: any) {
   mkdirSync(dirname(artifactPath), { recursive: true });
   const bytes = Buffer.from(markdown, 'utf8');
   if (existsSync(artifactPath)) {
@@ -481,7 +481,7 @@ function writeContinuationArtifact(artifactPath, markdown, overwrite) {
   return { bytes: bytes.length, wrote: true };
 }
 
-function continuationInput(value) {
+function continuationInput(value: any) {
   if (!value) return null;
   return {
     schema: value.schema,
@@ -511,7 +511,7 @@ if (isMainModule) {
   assertSiteRoot();
   traceStartup('site_root_ok');
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => {
+  process.stdin.on('data', (chunk: any) => {
     if (inputBuffer.length === 0) {
       traceStartup('first_stdin_chunk', {
         bytes: Buffer.byteLength(chunk, 'utf8'),
@@ -523,8 +523,8 @@ if (isMainModule) {
   });
 }
 
-function parseArgs(argv) {
-  const parsed = {};
+function parseArgs(argv: any): Record<string, any> {
+  const parsed: Record<string, any> = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -582,7 +582,7 @@ function pathWithin(root: string, candidate: string): boolean {
   );
 }
 
-function normalizeContinuationRef(value) {
+function normalizeContinuationRef(value: any) {
   if (value == null) return null;
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('continuation_ref_invalid: expected an object');
@@ -666,7 +666,7 @@ function processInputBuffer() {
   }
 }
 
-function send(payload) {
+function send(payload: any) {
   const body = JSON.stringify(payload);
   if (transportMode === 'ndjson') {
     process.stdout.write(`${body}\n`);
@@ -675,11 +675,11 @@ function send(payload) {
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
 }
 
-function respond(id, result) {
+function respond(id: any, result: any) {
   send({ jsonrpc: '2.0', id, result });
 }
 
-function respondError(id, error) {
+function respondError(id: any, error: any) {
   send({
     jsonrpc: '2.0',
     id,
@@ -690,7 +690,7 @@ function respondError(id, error) {
   });
 }
 
-function sendProgress(message, progress, progressMessage) {
+function sendProgress(message: any, progress: any, progressMessage: any) {
   const progressToken = message?.params?._meta?.progressToken;
   if (progressToken === undefined) return;
   send({
@@ -704,7 +704,7 @@ export function listTools() {
   return TOOLS;
 }
 
-function handleMessage(message) {
+function handleMessage(message: any) {
   if (!message || typeof message !== 'object') return;
   if (message.error) return;
   if (!message.id && message.method === 'notifications/cancelled') {
@@ -784,7 +784,7 @@ function listPrompts() {
   return [{ name: 'agent_context_startup', title: 'Agent Context Startup', description: 'Guidance for hydrating and checkpointing agent context.', arguments: [] }];
 }
 
-function promptGet(params) {
+function promptGet(params: any) {
   const name = String(params.name ?? '');
   if (name !== 'agent_context_startup') throw new Error(`unknown_prompt: ${name}`);
   return {
@@ -793,9 +793,9 @@ function promptGet(params) {
   };
 }
 
-function completeArgument(params) {
+function completeArgument(params: any) {
   const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
-  const values = argumentName === 'name' ? TOOLS.map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+  const values = argumentName === 'name' ? TOOLS.map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
 
@@ -803,7 +803,7 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function callTool(name, toolArgs) {
+function callTool(name: any, toolArgs: any) {
   switch (name) {
     case 'agent_context_guidance':
       return buildGuidanceResult(toolArgs);
@@ -833,7 +833,7 @@ function callTool(name, toolArgs) {
   }
 }
 
-function withDb(fn) {
+function withDb(fn: any) {
   const db = openAgentContextDb(siteRoot, dbPath);
   try {
     ensureCheckpointTables(db);
@@ -843,7 +843,7 @@ function withDb(fn) {
   }
 }
 
-function ensureCheckpointTables(db) {
+function ensureCheckpointTables(db: any) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS agent_checkpoints (
       checkpoint_id TEXT PRIMARY KEY,
@@ -882,18 +882,18 @@ function ensureCheckpointTables(db) {
 }
 
 function doctor() {
-  return withDb((db) => {
+  return withDb((db: any) => {
     const tables = [
       'agent_start_events',
       'agent_events',
       'agent_checkpoints',
       'agent_checkpoint_history',
-    ].map((table) => ({
+    ].map((table: any) => ({
       table,
       exists: !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table),
     }));
     return {
-      status: tables.every((table) => table.exists) ? 'ok' : 'degraded',
+      status: tables.every((table: any) => table.exists) ? 'ok' : 'degraded',
       site_id: siteId,
       server_name: SERVER_NAME,
       site_root: siteRoot,
@@ -903,7 +903,7 @@ function doctor() {
   });
 }
 
-function startSession(toolArgs) {
+function startSession(toolArgs: any) {
   const identity = requiredString(toolArgs, 'identity');
   assertAgentContextIdentity(identity);
   return materializeAgentSessionStart({
@@ -916,12 +916,12 @@ function startSession(toolArgs) {
   });
 }
 
-function checkpoint(toolArgs) {
+function checkpoint(toolArgs: any) {
   const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
   if (!agentId) throw new Error('agent_id_required');
   assertAgentContextIdentity(agentId);
 
-  return withDb((db) => {
+  return withDb((db: any) => {
     const now = new Date().toISOString();
     const checkpointId = `chk_${randomUUID().replace(/-/g, '')}`;
     const existing = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ?').get(agentId);
@@ -993,13 +993,13 @@ function checkpoint(toolArgs) {
   });
 }
 
-function rehydrate(toolArgs) {
+function rehydrate(toolArgs: any) {
   const agentId = requiredString(toolArgs, 'agent_id');
   assertAgentContextIdentity(agentId);
   const checkpointId = optionalCheckpointId(toolArgs);
   const limit = Math.min(Math.max(Number(toolArgs.limit ?? 1), 1), 50);
 
-  return withDb((db) => {
+  return withDb((db: any) => {
     if (checkpointId !== null) {
       const row = checkpointRowForAgent(db, agentId, checkpointId);
       if (!row) {
@@ -1036,12 +1036,12 @@ function rehydrate(toolArgs) {
   });
 }
 
-function continuationExport(toolArgs) {
+function continuationExport(toolArgs: any) {
   const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
   if (!agentId) throw new Error('agent_id_required');
   assertAgentContextIdentity(agentId);
 
-  return withDb((db) => {
+  return withDb((db: any) => {
     const row = db.prepare('SELECT * FROM agent_checkpoints WHERE agent_id = ? ORDER BY checkpoint_at DESC LIMIT 1').get(agentId);
     if (!row) return { status: 'no_checkpoint', agent_id: agentId, message: 'No site-local checkpoint found.' };
 
@@ -1097,13 +1097,13 @@ function continuationExport(toolArgs) {
   });
 }
 
-function continuationRead(toolArgs) {
+function continuationRead(toolArgs: any) {
   const agentId = toolArgs.agent_id ?? process.env.NARADA_AGENT_ID;
   if (!agentId) throw new Error('agent_id_required');
   assertAgentContextIdentity(agentId);
   const checkpointId = optionalCheckpointId(toolArgs);
 
-  return withDb((db) => {
+  return withDb((db: any) => {
     const row = checkpointRowForAgent(db, agentId, checkpointId);
     if (!row) {
       return checkpointId === null
@@ -1141,6 +1141,7 @@ function continuationRead(toolArgs) {
 
     try {
       const reference = normalizeContinuationRef(checkpoint.continuation_ref);
+      if (!reference) throw new Error('continuation_ref_missing');
       const markdown = readFileSync(resolve(siteRoot, reference.path), 'utf8');
       if (checkpoint.continuation) {
         const handoffMarker = '<!-- narada.continuation.handoff.v1 -->';
@@ -1179,8 +1180,8 @@ function continuationRead(toolArgs) {
   });
 }
 
-function whoami(toolArgs = {}) {
-  return withDb((db) => {
+function whoami(toolArgs: any = {}) {
+  return withDb((db: any) => {
     const envAgent = process.env.NARADA_AGENT_ID;
     if (envAgent) {
       const roster = assertAgentContextIdentity(envAgent);
@@ -1226,7 +1227,7 @@ function whoami(toolArgs = {}) {
   });
 }
 
-function hydrateCurrent(toolArgs = {}) {
+function hydrateCurrent(toolArgs: any = {}) {
   const identity = process.env.NARADA_AGENT_ID ?? whoami({}).identity;
   if (!identity) return { status: 'blocked', reason: 'agent_identity_unresolved' };
   const checkpointId = optionalCheckpointId(toolArgs);
@@ -1241,7 +1242,7 @@ function hydrateCurrent(toolArgs = {}) {
       ? checkpointResult.checkpoint_id
       : checkpointId;
     const selectedCheckpointLabel = selectedCheckpointId ? `checkpoint ${selectedCheckpointId}` : 'the latest checkpoint';
-    const startupArgs = {
+    const startupArgs: Record<string, any> = {
       agent_id: identity,
       authority_basis: {
         kind: 'startup_hydration',
@@ -1273,15 +1274,15 @@ function hydrateCurrent(toolArgs = {}) {
   };
 }
 
-function listSessions(toolArgs = {}) {
-  return withDb((db) => listAgentStartSessions({
+function listSessions(toolArgs: any = {}) {
+  return withDb((db: any) => listAgentStartSessions({
     db,
     identity: toolArgs.identity ?? null,
     limit: toolArgs.limit ?? 100,
   }));
 }
 
-function checkpointPayload(toolArgs, agentId, checkpointAt, checkpointId) {
+function checkpointPayload(toolArgs: any, agentId: any, checkpointAt: any, checkpointId: any): Record<string, any> {
   return {
     schema: 'narada.agent_context.checkpoint.v1',
     site_id: siteId,
@@ -1305,7 +1306,7 @@ function checkpointPayload(toolArgs, agentId, checkpointAt, checkpointId) {
   };
 }
 
-function rowToCheckpoint(row) {
+function rowToCheckpoint(row: any) {
   const payload = parseJson(row.payload_json, {});
   return {
     checkpoint_id: row.checkpoint_id,
@@ -1331,7 +1332,7 @@ function rowToCheckpoint(row) {
   };
 }
 
-function assertAgentContextIdentity(agentId) {
+function assertAgentContextIdentity(agentId: any) {
   if (typeof agentId !== 'string' || agentId.trim() === '') {
     throw new Error(`agent_context_identity_invalid: ${agentId}`);
   }
@@ -1340,7 +1341,7 @@ function assertAgentContextIdentity(agentId) {
   return roster;
 }
 
-function requiredString(value, key) {
+function requiredString(value: any, key: any) {
   const result = value?.[key];
   if (typeof result !== 'string' || result.trim() === '') {
     throw new Error(`${key}_required`);
@@ -1348,7 +1349,7 @@ function requiredString(value, key) {
   return result;
 }
 
-function optionalCheckpointId(value) {
+function optionalCheckpointId(value: any) {
   const checkpointId = value?.checkpoint_id;
   if (checkpointId == null) return null;
   if (typeof checkpointId !== 'string' || checkpointId.trim() === '') {
@@ -1357,15 +1358,15 @@ function optionalCheckpointId(value) {
   return checkpointId.trim();
 }
 
-function arrayValue(value) {
+function arrayValue(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
-function jsonOrNull(value) {
+function jsonOrNull(value: any) {
   return value == null ? null : JSON.stringify(value);
 }
 
-function parseJson(value, fallback) {
+function parseJson(value: any, fallback: any) {
   if (value == null || value === '') return fallback;
   try {
     return JSON.parse(value);

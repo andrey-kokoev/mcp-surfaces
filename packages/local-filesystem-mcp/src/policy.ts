@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve } from 'node:path';
 
-export function parseTrustedProjectRootsFromTrustConfig(configPath) {
+export function parseTrustedProjectRootsFromTrustConfig(configPath: any) {
   const source = readFileSync(configPath, 'utf8');
   const roots = [];
   let currentProject = null;
@@ -27,7 +27,7 @@ export function parseTrustedProjectRootsFromTrustConfig(configPath) {
   return normalizeAllowedRoots(roots, 'codex_trust_config');
 }
 
-export function normalizeAllowedRoots(roots, source = 'unspecified') {
+export function normalizeAllowedRoots(roots: any, source : any= 'unspecified') {
   const seen = new Set();
   const normalized = [];
   for (const entry of roots) {
@@ -44,7 +44,7 @@ export function normalizeAllowedRoots(roots, source = 'unspecified') {
   return normalized;
 }
 
-export function resolveAnchoredAllowedRoot(spec, anchors = defaultAnchors()) {
+export function resolveAnchoredAllowedRoot(spec: any, anchors : any= defaultAnchors()) {
   if (typeof spec !== 'string' || spec.trim().length === 0) throw new Error('anchored_allowed_root_required');
   const trimmed = spec.trim();
   const separator = trimmed.indexOf(':');
@@ -74,7 +74,7 @@ function defaultAnchors(): Record<string, unknown> {
   return { user_home: homedir() };
 }
 
-export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], anchoredRoots = [], rootsConfigPath = null, anchors = defaultAnchors() } = {}) {
+export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], anchoredRoots = [], rootsConfigPath = null, anchors = defaultAnchors() } : any= {}) {
   const entries = [];
   if (codexConfigPath) {
     for (const entry of parseTrustedProjectRootsFromTrustConfig(codexConfigPath)) {
@@ -107,15 +107,15 @@ export function buildAllowedRoots({ codexConfigPath = null, explicitRoots = [], 
   return normalized;
 }
 
-export function rootEntriesToRoots(rootEntries) {
+export function rootEntriesToRoots(rootEntries: any) {
   if (!Array.isArray(rootEntries)) return [];
-  return rootEntries.map((entry) => {
+  return rootEntries.map((entry: any) => {
     if (typeof entry === 'string') return entry;
     return entry?.root;
   }).filter((root): root is string => typeof root === 'string');
 }
 
-export function resolveAllowedPath(inputPath, allowedRootEntries, { defaultRoot = null, requireExistingParent = false } = {}) {
+export function resolveAllowedPath(inputPath: any, allowedRootEntries: any, { defaultRoot = null, requireExistingParent = false } : any= {}) {
   const allowedRoots = rootEntriesToRoots(allowedRootEntries);
   if (typeof inputPath !== 'string' || inputPath.trim().length === 0) throw new Error('path_required');
   const base = defaultRoot ?? allowedRoots[0];
@@ -131,7 +131,7 @@ export function resolveAllowedPath(inputPath, allowedRootEntries, { defaultRoot 
   };
 }
 
-export function findContainingRoot(path, allowedRoots) {
+export function findContainingRoot(path: any, allowedRoots: any) {
   const candidate = resolve(path);
   for (const root of allowedRoots) {
     const rel = relative(root, candidate);

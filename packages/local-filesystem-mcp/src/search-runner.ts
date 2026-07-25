@@ -32,8 +32,8 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const matches = [];
-    const pageMatches = [];
+    const matches: any[] = [];
+    const pageMatches: any[] = [];
     let seen = 0;
     let pending = '';
     let stderr = '';
@@ -42,7 +42,7 @@ function collectRipgrepPage(args: string[], { offset, limit, complete, maxMatchB
     let matchBytes = 0;
     let pageMatchBytes = 0;
     let pageMatchesTruncated = 0;
-    let childError = null;
+    let childError: any = null;
     let timedOut = false;
 
     const timer = setTimeout(() => {

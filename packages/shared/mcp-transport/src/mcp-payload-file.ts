@@ -227,6 +227,7 @@ export function resolveToolPayloadArgs({
     };
   }
 
+  if (!payloadPath) throw new Error('payload_path_required');
   const root = resolveSiteRoot(siteRoot);
   const allowedRoot = resolveManagedDirectory(root, payloadDir, 'payload_directory');
   const absolutePath = resolve(root, payloadPath);
@@ -297,12 +298,13 @@ export function prunePayloadWorkspaces({
     };
   }
   const entries = readdirSync(workspaceRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(payloadIdPrefix))
-    .map((entry) => {
+    .filter((entry: any) => entry.isDirectory() && entry.name.startsWith(payloadIdPrefix))
+    .filter((entry: any) => entry.isDirectory() && entry.name.startsWith(payloadIdPrefix))
+    .map((entry: any) => {
       const path = resolve(workspaceRoot, entry.name);
       return { payloadId: entry.name, path, mtimeMs: statSync(path).mtimeMs };
     })
-    .sort((left, right) => right.mtimeMs - left.mtimeMs || right.payloadId.localeCompare(left.payloadId));
+    .sort((left: any, right: any) => right.mtimeMs - left.mtimeMs || right.payloadId.localeCompare(left.payloadId));
   const retainedPayloadIds: string[] = [];
   const removedPayloadIds: string[] = [];
   for (const [index, entry] of entries.entries()) {
@@ -327,14 +329,14 @@ export function prunePayloadWorkspaces({
   };
 }
 
-function resolvePayloadRefArgs({ input, payload, payloadRefMode }) {
+function resolvePayloadRefArgs({ input, payload, payloadRefMode }: any) {
   if (payloadRefMode === 'merge_args') return { ...asRecord(payload), ...withoutPayloadTransport(input) };
   if (payloadRefMode === 'merge_args_prefer_payload_placeholders') return mergeArgsPreferPayloadPlaceholders({ input, payload });
   if (payloadRefMode === 'payload_field' && hasPayloadRefCompanionArgs(input)) return { ...withoutPayloadTransport(input), payload };
   return payload;
 }
 
-function mergeArgsPreferPayloadPlaceholders({ input, payload }) {
+function mergeArgsPreferPayloadPlaceholders({ input, payload }: any) {
   const resolved = { ...asRecord(payload) };
   for (const [key, value] of Object.entries(withoutPayloadTransport(input))) {
     if (Object.prototype.hasOwnProperty.call(resolved, key) && isPlaceholderString(value)) continue;
@@ -343,7 +345,7 @@ function mergeArgsPreferPayloadPlaceholders({ input, payload }) {
   return resolved;
 }
 
-function isPlaceholderString(value) {
+function isPlaceholderString(value: any) {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   return /^<!--[\s\S]*-->$/.test(trimmed)
@@ -351,16 +353,16 @@ function isPlaceholderString(value) {
     || /^<move original\b/i.test(trimmed);
 }
 
-function hasPayloadRefCompanionArgs(input) {
+function hasPayloadRefCompanionArgs(input: any) {
   return Object.keys(withoutPayloadTransport(input)).length > 0;
 }
 
-function withoutPayloadTransport(input) {
+function withoutPayloadTransport(input: any) {
   const { payload_ref, payload_path, payload, payload_file, ...rest } = input;
   return rest;
 }
 
-export function attachPayloadSource(result, payloadSource) {
+export function attachPayloadSource(result: any, payloadSource: any) {
   if (!payloadSource || !result || typeof result !== 'object' || Array.isArray(result)) return result;
   return { ...result, payload_source: payloadSource };
 }
@@ -372,14 +374,14 @@ export function enforceInlinePayloadLimit({
   exemptFields = DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS,
   objectPayloadFields = DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS,
   allowPayloadCreation = false,
-}: Record<string, unknown> = {}) {
+}: Record<string, unknown>= {}) {
   const input = parseArgumentRecord(args);
   const currentToolName = typeof toolName === 'string' ? toolName : '';
   const inlineLimit = typeof limit === 'number' ? limit : DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT;
   const exemptFieldSet = exemptFields instanceof Set ? exemptFields : DEFAULT_INLINE_PAYLOAD_EXEMPT_FIELDS;
   const objectPayloadFieldSet = objectPayloadFields instanceof Set ? objectPayloadFields : DEFAULT_INLINE_OBJECT_PAYLOAD_FIELDS;
   if (allowPayloadCreation === true && isPayloadWorkspaceTool(currentToolName)) return;
-  const violations = [];
+  const violations: any[] = [];
   visitInlinePayload(input, [], { limit: inlineLimit, exemptFields: exemptFieldSet, objectPayloadFields: objectPayloadFieldSet, violations });
   const first = violations[0];
   if (!first) return;
@@ -390,7 +392,7 @@ export function enforceInlinePayloadLimit({
   );
 }
 
-function buildPayloadCreateTemplate(violations) {
+function buildPayloadCreateTemplate(violations: any) {
   const payload = {};
   for (const violation of violations.slice(0, 10)) {
     assignPath(payload, String(violation.field).split('.'), `<move original ${violation.field} here>`);
@@ -398,11 +400,11 @@ function buildPayloadCreateTemplate(violations) {
   return { payload, created_by: '<agent_id_or_principal>' };
 }
 
-function buildPayloadRetryTemplate(toolName) {
+function buildPayloadRetryTemplate(toolName: any) {
   return { tool: toolName || '<original_tool>', args: { payload_ref: 'mcp_payload:<id>@v1' } };
 }
 
-function assignPath(target, path, value) {
+function assignPath(target: any, path: any, value: any) {
   let current = target;
   for (let index = 0; index < path.length; index++) {
     const key = path[index];
@@ -417,11 +419,11 @@ function assignPath(target, path, value) {
   }
 }
 
-function containerKey(key) {
+function containerKey(key: any) {
   return /^\d+$/.test(String(key)) ? Number(key) : key;
 }
 
-function visitInlinePayload(value, path, context) {
+function visitInlinePayload(value: any, path: any, context: any) {
   if (typeof value === 'string') {
     const field = path[path.length - 1] ?? '<root>';
     if (!context.exemptFields.has(field) && value.length > context.limit) {
@@ -430,7 +432,7 @@ function visitInlinePayload(value, path, context) {
     return;
   }
   if (Array.isArray(value)) {
-    value.forEach((item, index) => visitInlinePayload(item, [...path, String(index)], context));
+    value.forEach((item: any, index: any) => visitInlinePayload(item, [...path, String(index)], context));
     return;
   }
   if (!isPlainObject(value)) return;
@@ -447,11 +449,11 @@ function visitInlinePayload(value, path, context) {
   }
 }
 
-function pathToField(path) {
+function pathToField(path: any) {
   return path.length > 0 ? path.join('.') : '<root>';
 }
 
-function isPayloadWorkspaceTool(toolName) {
+function isPayloadWorkspaceTool(toolName: any) {
   return ['mcp_payload_create', 'mcp_payload_derive'].includes(toolName);
 }
 
@@ -628,7 +630,7 @@ function assistantTextContent(text: string): any {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function buildOutputPageEnvelope({ fullText, value, outputRef, payloadRef, outputToolName, outputReaderTool, outputSiteRoot, inlineLimit, isError }) {
+function buildOutputPageEnvelope({ fullText, value, outputRef, payloadRef, outputToolName, outputReaderTool, outputSiteRoot, inlineLimit, isError }: any) {
   let preview = takeUtf8Page(fullText, 0, Math.min(inlineLimit, MAX_OUTPUT_SHOW_CHAR_LIMIT), MAX_OUTPUT_PAGE_BYTES).chunk;
   while (true) {
     const nextOffset = preview.length < fullText.length ? preview.length : null;
@@ -665,11 +667,11 @@ function buildOutputPageEnvelope({ fullText, value, outputRef, payloadRef, outpu
   }
 }
 
-function fitsToolResponse(contentText, structuredContent) {
+function fitsToolResponse(contentText: any, structuredContent: any) {
   return Buffer.byteLength(contentText, 'utf8') + Buffer.byteLength(JSON.stringify(structuredContent), 'utf8') <= MAX_INLINE_RESPONSE_BYTES;
 }
 
-function normalizeInlineOutputLimit(value) {
+function normalizeInlineOutputLimit(value: any) {
   const candidate = value === undefined || value === null
     ? DEFAULT_INLINE_OUTPUT_CHAR_LIMIT
     : value;
@@ -683,13 +685,13 @@ function normalizeInlineOutputLimit(value) {
   return parsed.data;
 }
 
-function normalizeBoundedOutputLimit(value) {
+function normalizeBoundedOutputLimit(value: any) {
   const candidate = value === undefined || value === null ? DEFAULT_INLINE_OUTPUT_CHAR_LIMIT : value;
   const parsed = z.number().finite().safeParse(candidate);
   return normalizeInlineOutputLimit(parsed.success ? Math.min(parsed.data, MAX_OUTPUT_SHOW_CHAR_LIMIT) : candidate);
 }
 
-function fitInlineJson(value, limit) {
+function fitInlineJson(value: any, limit: any) {
   const text = JSON.stringify(value);
   if (text.length > normalizeInlineOutputLimit(limit) || Buffer.byteLength(text, 'utf8') > MAX_INLINE_RESPONSE_BYTES) {
     throw new Error('inline_output_envelope_exceeds_transport_budget');
@@ -721,9 +723,9 @@ export function listOutputResources({ scope, siteRoot, outputDir, cursor, offset
   const dir = resolve(outputDir, DEFAULT_WORKSPACE_DIR);
   if (!existsSync(dir)) return { resources: [], ...page, next_offset: null, nextCursor: null, has_more: false };
   const allResources = readdirSync(dir)
-    .filter((name) => name.endsWith('.json'))
+    .filter((name: any) => name.endsWith('.json'))
     .sort()
-    .map((name) => {
+    .map((name: any) => {
       const outputId = name.replace(/\.json$/, '');
       const ref = buildOutputRef(outputId);
       return {
@@ -767,11 +769,11 @@ export function readOutputResource({ scope, siteRoot, uri, maxBytes, outputDir }
   };
 }
 
-function outputResourceUri(ref) {
+function outputResourceUri(ref: any) {
   return `mcp-output:${encodeURIComponent(ref)}`;
 }
 
-function outputRefFromResourceUri(uri) {
+function outputRefFromResourceUri(uri: any) {
   if (!uri.startsWith('mcp-output:')) throw new Error(`output_resource_uri_invalid: ${uri}`);
   return decodeURIComponent(uri.slice('mcp-output:'.length));
 }
@@ -865,7 +867,7 @@ function readOutputRecord({ scope, siteRoot, ref, maxBytes, outputDir }: OutputR
   return { ...record, byte_size: stat.size, output_path: normalizePath(relative(resolveSiteRoot(siteRoot), path)) };
 }
 
-function publicOutputRecord(record) {
+function publicOutputRecord(record: any) {
   return {
     schema: 'narada.mcp_output_locator.v1',
     status: 'ok',
@@ -878,7 +880,7 @@ function publicOutputRecord(record) {
   };
 }
 
-function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, offset = 0 } = {}) {
+function publicOutputShowRecord(record: any, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, offset = 0 } : any= {}) {
   const outputText = presentationJson(record.full_output);
   const page = takeUtf8Page(outputText, offset, outputLimit, MAX_OUTPUT_PAGE_BYTES);
   const chunk = page.chunk;
@@ -901,7 +903,7 @@ function publicOutputShowRecord(record, { outputLimit = DEFAULT_OUTPUT_SHOW_CHAR
   };
 }
 
-function isOutputLocator(value) {
+function isOutputLocator(value: any) {
   return Boolean(
     value
       && typeof value === 'object'
@@ -911,7 +913,7 @@ function isOutputLocator(value) {
   );
 }
 
-function isOutputShowResult(value) {
+function isOutputShowResult(value: any) {
   return Boolean(
     value
       && typeof value === 'object'
@@ -922,7 +924,7 @@ function isOutputShowResult(value) {
   );
 }
 
-function normalizeOutputShowLimit(value) {
+function normalizeOutputShowLimit(value: any) {
   if (value === undefined || value === null) return DEFAULT_OUTPUT_SHOW_CHAR_LIMIT;
   const parsed = z.number().finite().int().safeParse(value);
   if (!parsed.success || parsed.data < 1) {
@@ -934,7 +936,7 @@ function normalizeOutputShowLimit(value) {
   return parsed.data;
 }
 
-function normalizeOutputShowOffset(value) {
+function normalizeOutputShowOffset(value: any) {
   if (value === undefined || value === null) return 0;
   const parsed = z.number().finite().int().safeParse(value);
   if (!parsed.success || parsed.data < 0) {
@@ -955,7 +957,7 @@ function normalizeResourcePage({ cursor, offset, limit }: { cursor?: unknown; of
   }).parse({ offset, limit });
 }
 
-function parseOutputRef(ref) {
+function parseOutputRef(ref: any) {
   const value = typeof ref === 'string' ? ref.trim() : '';
   if (REF_PATTERN.test(value)) {
     throw new Error('wrong_ref_family: got=mcp_payload expected=mcp_output reader_tool=mcp_payload_show remediation=use mcp_payload_show');
@@ -965,7 +967,7 @@ function parseOutputRef(ref) {
   return { ref: value, outputId: match[1], output_id: match[1] };
 }
 
-function requireOutputRef(args, message, field = 'ref') {
+function requireOutputRef(args: any, message: any, field : any= 'ref') {
   const record = asRecord(args);
   if (field === 'ref' && typeof record.ref === 'string' && typeof record.output_ref === 'string' && record.ref.trim() !== record.output_ref.trim()) {
     throw new Error('output_show_ref_alias_conflict: provide either ref or output_ref, or provide matching values');
@@ -975,22 +977,22 @@ function requireOutputRef(args, message, field = 'ref') {
   return value.trim();
 }
 
-function outputPath({ siteRoot, outputDir, outputId }) {
+function outputPath({ siteRoot, outputDir, outputId }: any) {
   return resolve(resolveManagedDirectory(siteRoot, outputDir, 'output_directory'), DEFAULT_WORKSPACE_DIR, `${outputId}.json`);
 }
 
-function resolveSiteRoot(siteRoot) {
+function resolveSiteRoot(siteRoot: any) {
   return resolve(typeof siteRoot === 'string' && siteRoot.trim().length > 0 ? siteRoot : process.cwd());
 }
 
-function resolveManagedDirectory(siteRoot, directory, label) {
+function resolveManagedDirectory(siteRoot: any, directory: any, label: any) {
   const root = resolveSiteRoot(siteRoot);
   const candidate = resolve(root, String(directory ?? ''));
   if (!isPathInside(candidate, root)) throw new Error(`${label}_outside_site_root: ${normalizePath(String(directory ?? ''))}`);
   return candidate;
 }
 
-function takeUtf8Page(text, offset, maxChars, maxBytes) {
+function takeUtf8Page(text: any, offset: any, maxChars: any, maxBytes: any) {
   if (offset > text.length) return { chunk: '', end: text.length };
   if (offset < text.length && isLowSurrogate(text.charCodeAt(offset))) {
     throw new Error('output_offset_splits_unicode_scalar');
@@ -1002,24 +1004,24 @@ function takeUtf8Page(text, offset, maxChars, maxBytes) {
   return { chunk: text.slice(offset, end), end };
 }
 
-function safeCodePointEnd(text, end) {
+function safeCodePointEnd(text: any, end: any) {
   if (end > 0 && isHighSurrogate(text.charCodeAt(end - 1))) return end - 1;
   return end;
 }
 
-function isHighSurrogate(value) {
+function isHighSurrogate(value: any) {
   return value >= 0xd800 && value <= 0xdbff;
 }
 
-function isLowSurrogate(value) {
+function isLowSurrogate(value: any) {
   return value >= 0xdc00 && value <= 0xdfff;
 }
 
-function isNodeErrorCode(error, code) {
+function isNodeErrorCode(error: any, code: any) {
   return Boolean(error && typeof error === 'object' && error.code === code);
 }
 
-function buildOutputRef(outputId) {
+function buildOutputRef(outputId: any) {
   return `mcp_output:${outputId}`;
 }
 
@@ -1027,7 +1029,7 @@ function randomOutputId() {
   return `o_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
 }
 
-function outputStatus(value, isError) {
+function outputStatus(value: any, isError: any) {
   if (value && typeof value === 'object' && !Array.isArray(value) && typeof value.status === 'string' && value.status.length <= 32) {
     return value.status;
   }
@@ -1094,7 +1096,7 @@ export function listPayloadTools() {
   ];
 }
 
-function toolDefinition(definition) {
+function toolDefinition(definition: any) {
   const { behavior, ...tool } = definition;
   return {
     ...tool,
@@ -1113,22 +1115,22 @@ function genericToolOutputSchema() {
   return { type: 'object', additionalProperties: true };
 }
 
-function asRecord(value) {
+function asRecord(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function parseArgumentRecord(value): Record<string, unknown> {
+function parseArgumentRecord(value: any): Record<string, unknown> {
   const parsed = z.record(z.string(), z.unknown()).safeParse(value ?? {});
   if (!parsed.success) throw new Error('tool_arguments_must_be_object');
   return parsed.data;
 }
 
-function asPayloadObject(value, message) {
+function asPayloadObject(value: any, message: any) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message);
   return value;
 }
 
-export function payloadObjectFromArgs(input, { objectField, jsonField, objectMessage, jsonMessage, ambiguityMessage }) {
+export function payloadObjectFromArgs(input: any, { objectField, jsonField, objectMessage, jsonMessage, ambiguityMessage }: any) {
   const rawObject = input[objectField];
   const rawJson = stringOrNull(input[jsonField]);
   if (rawJson) {
@@ -1141,7 +1143,7 @@ export function payloadObjectFromArgs(input, { objectField, jsonField, objectMes
   return asPayloadObject(rawObject, objectMessage);
 }
 
-function parsePayloadJsonObject(value, message) {
+function parsePayloadJsonObject(value: any, message: any) {
   let parsed;
   try {
     parsed = JSON.parse(value);
@@ -1195,6 +1197,7 @@ function writeRevision({ scope, siteRoot, payloadDir, record }: RevisionWriteOpt
     return { status: 'created', record };
   } catch (error) {
     if (!isNodeErrorCode(error, 'EEXIST')) throw error;
+    if (!isNodeErrorCode(error, 'EEXIST')) throw error;
     let existing;
     try {
       existing = JSON.parse(readFileSync(path, 'utf8'));
@@ -1208,7 +1211,7 @@ function writeRevision({ scope, siteRoot, payloadDir, record }: RevisionWriteOpt
   }
 }
 
-function buildRevisionRecord({ payloadId, revision, payload, createdAt, createdBy, source, maxBytes }) {
+function buildRevisionRecord({ payloadId, revision, payload, createdAt, createdBy, source, maxBytes }: any) {
   const payloadJson = stableJson(payload);
   const byteSize = Buffer.byteLength(payloadJson, 'utf8');
   if (byteSize > maxBytes) throw new Error(`payload_too_large: ${byteSize} > ${maxBytes}`);
@@ -1229,7 +1232,7 @@ function buildRevisionRecord({ payloadId, revision, payload, createdAt, createdB
   };
 }
 
-function validateRevisionRecord(record, parsed, statSize, maxBytes) {
+function validateRevisionRecord(record: any, parsed: any, statSize: any, maxBytes: any) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`payload_ref_record_must_be_object: ${parsed.ref}`);
   if (record.schema !== 'narada.mcp_payload.revision.v1') throw new Error(`payload_ref_schema_unsupported: ${record.schema}`);
   if (record.ref !== parsed.ref || record.payload_id !== parsed.payloadId || record.revision !== parsed.revision) {
@@ -1243,7 +1246,7 @@ function validateRevisionRecord(record, parsed, statSize, maxBytes) {
   if (sha256(payloadJson) !== record.sha256) throw new Error(`payload_ref_sha256_mismatch: ${parsed.ref}`);
 }
 
-function parsePayloadRef(ref) {
+function parsePayloadRef(ref: any) {
   const value = typeof ref === 'string' ? ref.trim() : '';
   if (OUTPUT_REF_PATTERN.test(value)) {
     throw new Error('wrong_ref_family: got=mcp_output expected=mcp_payload remediation=re-call_original_producing_tool_with_paging_args');
@@ -1253,21 +1256,21 @@ function parsePayloadRef(ref) {
   return { ref: value, payloadId: match[1], payload_id: match[1], revision: Number(match[2]) };
 }
 
-function requireRef(args, message, field = 'ref') {
+function requireRef(args: any, message: any, field : any= 'ref') {
   const value = asRecord(args)[field];
   if (typeof value !== 'string' || value.trim().length === 0) throw new Error(message);
   return value.trim();
 }
 
-function revisionPath({ siteRoot, payloadDir, payloadId, revision }) {
+function revisionPath({ siteRoot, payloadDir, payloadId, revision }: any) {
   return resolve(resolveManagedDirectory(siteRoot, payloadDir, 'payload_directory'), DEFAULT_WORKSPACE_DIR, payloadId, `v${revision}.json`);
 }
 
-function buildPayloadRef(payloadId, revision) {
+function buildPayloadRef(payloadId: any, revision: any) {
   return `mcp_payload:${payloadId}@v${revision}`;
 }
 
-function validatePayloadId(value) {
+function validatePayloadId(value: any) {
   const match = value.trim().match(/^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$/);
   if (!match) throw new Error(`payload_id_invalid: ${value}`);
   return value.trim();
@@ -1277,7 +1280,7 @@ function randomPayloadId() {
   return `p_${randomUUID().replace(/-/g, '').slice(0, 24)}`;
 }
 
-function overlayObject(base, overlay) {
+function overlayObject(base: any, overlay: any) {
   const output = { ...base };
   for (const [key, value] of Object.entries(overlay)) {
     if (isPlainObject(value) && isPlainObject(output[key])) {
@@ -1289,31 +1292,31 @@ function overlayObject(base, overlay) {
   return output;
 }
 
-function payloadDeletePaths(value) {
+function payloadDeletePaths(value: any) {
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value) || value.length === 0 || value.some((path) => typeof path !== 'string')) {
+  if (!Array.isArray(value) || value.length === 0 || value.some((path: any) => typeof path !== 'string')) {
     throw new Error('payload_derive_delete_paths_must_be_non_empty_string_array');
   }
   const unique = [...new Set(value)];
   if (unique.length !== value.length) throw new Error('payload_derive_delete_paths_must_be_unique');
-  return unique.map((path) => {
+  return unique.map((path: any) => {
     if (!path.startsWith('/')) throw new Error(`payload_derive_delete_path_invalid: ${path}`);
     return path;
   });
 }
 
-function deleteObjectPaths(payload, paths) {
-  return paths.reduce((current, path) => deleteObjectPath(current, decodeJsonPointer(path), path), payload);
+function deleteObjectPaths(payload: any, paths: any) {
+  return paths.reduce((current: any, path: any) => deleteObjectPath(current, decodeJsonPointer(path), path), payload);
 }
 
-function decodeJsonPointer(path) {
-  return path.slice(1).split('/').map((segment) => {
+function decodeJsonPointer(path: any) {
+  return path.slice(1).split('/').map((segment: any) => {
     if (/~(?:[^01]|$)/.test(segment)) throw new Error(`payload_derive_delete_path_invalid_escape: ${path}`);
     return segment.replace(/~1/g, '/').replace(/~0/g, '~');
   });
 }
 
-function deleteObjectPath(value, segments, originalPath) {
+function deleteObjectPath(value: any, segments: any, originalPath: any) {
   if (!isPlainObject(value)) throw new Error(`payload_derive_delete_path_parent_not_object: ${originalPath}`);
   const [head, ...tail] = segments;
   if (!Object.prototype.hasOwnProperty.call(value, head)) throw new Error(`payload_derive_delete_path_not_found: ${originalPath}`);
@@ -1327,11 +1330,11 @@ function deleteObjectPath(value, segments, originalPath) {
 }
 
 
-function isPlainObject(value) {
+function isPlainObject(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function publicRevisionResult({ status, record, includePayload = false, ref = record.ref, sourceRef = null }) {
+function publicRevisionResult({ status, record, includePayload = false, ref = record.ref, sourceRef = null }: any) {
   return {
     status,
     ref,
@@ -1348,15 +1351,15 @@ function publicRevisionResult({ status, record, includePayload = false, ref = re
   };
 }
 
-function stableJson(value) {
+function stableJson(value: any) {
   return JSON.stringify(sortJson(value)) ?? 'null';
 }
 
-function presentationJson(value) {
+function presentationJson(value: any) {
   return JSON.stringify(value, null, 2) ?? 'null';
 }
 
-function writeImmutableFile(path, serialized) {
+function writeImmutableFile(path: any, serialized: any) {
   const tempPath = `${path}.${randomUUID()}.tmp`;
   let descriptor = null;
   try {
@@ -1378,26 +1381,26 @@ function writeImmutableFile(path, serialized) {
   }
 }
 
-function sortJson(value) {
+function sortJson(value: any): any {
   if (Array.isArray(value)) return value.map(sortJson);
   if (!isPlainObject(value)) return value;
-  const keys = Object.keys(value).sort((left, right) => left.localeCompare(right));
-  return Object.fromEntries(keys.map((key) => [key, sortJson(value[key])]));
+  const keys = Object.keys(value).sort((left: any, right: any) => left.localeCompare(right));
+  return Object.fromEntries(keys.map((key: any) => [key, sortJson(value[key])]));
 }
 
-function sha256(value) {
+function sha256(value: any) {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-function stringOrNull(value) {
+function stringOrNull(value: any) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function isPathInside(candidate, root) {
+function isPathInside(candidate: any, root: any) {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith('..') && !/^[A-Za-z]:/.test(rel));
 }
 
-function normalizePath(value) {
+function normalizePath(value: any): string {
   return value.replace(/\\/g, '/');
 }

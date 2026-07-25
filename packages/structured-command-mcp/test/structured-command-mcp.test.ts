@@ -227,7 +227,7 @@ assert.deepEqual(toolNames, [
   'structured_command_powershell_parse_check',
   'structured_command_start',
 ]);
-const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute');
+const executeTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execute')!;
 assert.equal(executeTool.canonical_name, 'structured_command_execute');
 assert.equal(executeTool.annotations.canonicalName, 'structured_command_execute');
 assert.ok(executeTool.inputSchema.properties.execution_ref);
@@ -236,9 +236,9 @@ assert.ok(executeTool.inputSchema.properties.stdout_limit);
 assert.ok(executeTool.inputSchema.properties.wait_for_completion);
 assert.ok(executeTool.inputSchema.properties.test_scope);
 assert.ok(executeTool.inputSchema.properties.expected_cost);
-const startTool = tools.result.tools.find((tool) => tool.name === 'structured_command_start');
+const startTool = tools.result.tools.find((tool) => tool.name === 'structured_command_start')!;
 assert.equal(startTool.annotations.canonicalName, 'structured_command_start');
-const showTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execution_show');
+const showTool = tools.result.tools.find((tool) => tool.name === 'structured_command_execution_show')!;
 assert.deepEqual(showTool.inputSchema.required, ['execution_ref']);
 
 const tooLongForSync = await (executeStructuredCommand as any)({
@@ -530,7 +530,7 @@ const refusedRgFiles = await exec({
   command: 'rg',
   args: ['--files', '-g', '*.ts'],
   working_directory: root,
-}, state);
+}, state) as any;
 assert.equal(refusedRgFiles.status, 'refused');
 assert.equal(refusedRgFiles.mcp_fallbacks[0].tool_name, 'fs_glob_search');
 assert.deepEqual(refusedRgFiles.mcp_fallbacks[0].arguments, { pattern: '*.ts', directory: root });

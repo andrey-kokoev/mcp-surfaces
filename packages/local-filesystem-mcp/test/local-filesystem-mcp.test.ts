@@ -21,7 +21,7 @@ type JsonRpcTestResponse = DynamicTestValue & {
   error: DynamicTestValue;
 };
 
-function call(state, id, name, args = {}) {
+function call(state: any, id: string | number, name: string, args: Record<string, unknown> = {}) {
   return handleRequest({
     jsonrpc: '2.0',
     id,
@@ -30,7 +30,7 @@ function call(state, id, name, args = {}) {
   }, state) as unknown as JsonRpcTestResponse;
 }
 
-function parseFirstJsonRpcFrame(output) {
+function parseFirstJsonRpcFrame(output: string) {
   const headerEnd = output.indexOf('\r\n\r\n');
   assert.notEqual(headerEnd, -1, 'expected framed JSON-RPC response');
   const header = output.slice(0, headerEnd);
@@ -41,8 +41,8 @@ function parseFirstJsonRpcFrame(output) {
   return JSON.parse(body);
 }
 
-function parseJsonRpcFrames(output) {
-  const frames = [];
+function parseJsonRpcFrames(output: string) {
+  const frames: any[] = [];
   let remaining = output;
   while (remaining.length > 0) {
     const headerEnd = remaining.indexOf('\r\n\r\n');
@@ -58,7 +58,7 @@ function parseJsonRpcFrames(output) {
   return frames;
 }
 
-function sha256(value) {
+function sha256(value: unknown) {
   return createHash('sha256').update(String(value)).digest('hex');
 }
 
@@ -137,7 +137,7 @@ trust_level = "untrusted"
 `, 'utf8');
 
   const rootEntries = parseTrustedProjectRootsFromTrustConfig(configPath);
-  const roots = rootEntries.map((entry) => entry.root);
+  const roots = rootEntries.map((entry: any) => entry.root);
   assert.deepEqual(roots, [resolve(trusted)]);
   assert.equal(resolveAllowedPath(join(trusted, 'a.txt'), rootEntries).path, resolve(join(trusted, 'a.txt')));
   assert.throws(() => resolveAllowedPath(join(other, 'x.txt'), rootEntries), /path_outside_allowed_roots/);
@@ -156,34 +156,34 @@ trust_level = "untrusted"
       limit: 10,
       timeoutMs: 60_000,
       freshness: null,
-      diagnosticError: (_code, message) => new Error(message),
+      diagnosticError: (_code: any, message: any) => new Error(message),
       abortSignal: cancelledSearch.signal,
     }),
     /fs_glob_search_cancelled/
   );
 
 
-  const readToolNames = listTools('read').map((tool) => tool.name);
+  const readToolNames = listTools('read').map((tool: any) => tool.name);
   assert.ok(readToolNames.includes('fs_guidance'));
   assert.ok(readToolNames.includes('fs_read_file'));
   assert.ok(readToolNames.includes('fs_read_file_range'));
   assert.ok(readToolNames.includes('fs_grep_search'));
   assert.ok(readToolNames.includes('fs_repository_inventory'));
   assert.ok(readToolNames.includes('fs_file_metrics'));
-  const globToolDescription = listTools('read').find((tool) => tool.name === 'fs_glob_search')?.description;
+  const globToolDescription = listTools('read').find((tool: any) => tool.name === 'fs_glob_search')?.description;
   assert.match(String(globToolDescription), /Empty matches return ok with count 0/);
-  const inventoryToolDescription = listTools('read').find((tool) => tool.name === 'fs_repository_inventory')?.description;
+  const inventoryToolDescription = listTools('read').find((tool: any) => tool.name === 'fs_repository_inventory')?.description;
   assert.match(String(inventoryToolDescription), /generated runtime artifacts/);
-  const fileMetricsToolDescription = listTools('read').find((tool) => tool.name === 'fs_file_metrics')?.description;
+  const fileMetricsToolDescription = listTools('read').find((tool: any) => tool.name === 'fs_file_metrics')?.description;
   assert.match(String(fileMetricsToolDescription), /metadata-only file metrics/);
-  const grepToolDescription = listTools('read').find((tool) => tool.name === 'fs_grep_search')?.description;
+  const grepToolDescription = listTools('read').find((tool: any) => tool.name === 'fs_grep_search')?.description;
   assert.match(String(grepToolDescription), /line-numbered matches/);
   assert.match(String(grepToolDescription), /empty matches return ok with count 0/);
   assert.equal(readToolNames.includes('mcp_output_show'), false);
   assert.equal(readToolNames.includes('fs_write_file'), false);
   assert.equal(readToolNames.includes('fs_apply_patch'), false);
   assert.equal(readToolNames.includes('fs_patch_outcome_show'), true);
-  const patchOutcomeTool = listTools('read').find((tool) => tool.name === 'fs_patch_outcome_show') as DynamicTestValue;
+  const patchOutcomeTool = listTools('read').find((tool: any) => tool.name === 'fs_patch_outcome_show') as DynamicTestValue;
   assert.equal(patchOutcomeTool.annotations.readOnlyHint, false);
   assert.equal(patchOutcomeTool.annotations.idempotentHint, true);
   const recoveryGuidance = buildGuidanceResult({ workflow: 'bounded_reads_and_patch_recovery' }) as DynamicTestValue;
@@ -195,7 +195,7 @@ trust_level = "untrusted"
   assert.match(String(inventoryGuidance.repository_inventory.sequence[3]), /git_changed_summary/);
   assert.match(String(inventoryGuidance.repository_inventory.default_behavior), /excluded/);
 
-  const writeToolNames = listTools('write').map((tool) => tool.name);
+  const writeToolNames = listTools('write').map((tool: any) => tool.name);
   assert.ok(writeToolNames.includes('fs_guidance'));
   assert.ok(writeToolNames.includes('fs_read_file'));
   assert.equal(writeToolNames.includes('mcp_output_show'), false);
@@ -207,9 +207,9 @@ trust_level = "untrusted"
   assert.ok(writeToolNames.includes('fs_create_directory'));
   assert.ok(writeToolNames.includes('fs_rename_directory'));
   assert.ok(writeToolNames.includes('fs_delete_directory'));
-  const applyPatchToolDescription = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.description;
+  const applyPatchToolDescription = listTools('write').find((tool: any) => tool.name === 'fs_apply_patch')?.description;
   assert.match(String(applyPatchToolDescription), /unified diff or Codex-style apply_patch/);
-  const applyPatchToolSchema = listTools('write').find((tool) => tool.name === 'fs_apply_patch')?.inputSchema as Record<string, DynamicTestValue>;
+  const applyPatchToolSchema = listTools('write').find((tool: any) => tool.name === 'fs_apply_patch')?.inputSchema as Record<string, DynamicTestValue>;
   assert.equal(applyPatchToolSchema.properties.timeout_ms.type, 'integer');
 
   const fakeUserHome = join(tempRoot, 'fake-user-home');
@@ -263,15 +263,15 @@ trust_level = "untrusted"
     id: 1000,
     method: 'initialize',
     params: { protocolVersion: '2024-11-05' },
-  }, readState);
+  }, readState) as unknown as JsonRpcTestResponse;
   assert.equal(initResponse.result.serverInfo.name, 'local-filesystem-read');
   const toolsListResponse = handleRequest({
     jsonrpc: '2.0',
     id: 1001,
     method: 'tools/list',
     params: {},
-  }, readState);
-  assert.equal(toolsListResponse.result.tools.some((tool) => tool.name === 'fs_read_file'), true);
+  }, readState) as unknown as JsonRpcTestResponse;
+  assert.equal(toolsListResponse.result.tools.some((tool: any) => tool.name === 'fs_read_file'), true);
 
   const readResponse = call(readState, 1, 'fs_read_file', { path: join(trusted, 'a.txt'), limit: 1 });
   assert.equal(readResponse.result.structuredContent.content, 'alpha');
@@ -431,7 +431,7 @@ trust_level = "untrusted"
     id: 14,
     method: 'tools/call',
     params: { name: 'fs_file_metrics', arguments: { directory: largeRoot, pattern: '**/*.txt', limit: 1, cache_policy: 'bypass' } },
-  }, readState, { abortSignal: cancelledMetrics.signal });
+  }, readState, { abortSignal: cancelledMetrics.signal }) as unknown as JsonRpcTestResponse;
   assert.equal(cancelledMetricsResponse.error.data.code, 'fs_file_metrics_cancelled');
   const binaryMetrics = call(readState, 156, 'fs_file_metrics', { root: trusted, pattern: '**/binary.bin', limit: 20, cache_policy: 'bypass' });
   const binaryMetricsFile = binaryMetrics.result.structuredContent.files[0];

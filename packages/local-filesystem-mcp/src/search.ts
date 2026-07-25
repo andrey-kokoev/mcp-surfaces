@@ -9,7 +9,7 @@ const SEARCH_CACHE_MAX_MATCH_BYTES = 2 * 1024 * 1024;
 const completeSearchCache = new Map();
 const completeSearchCacheBySnapshotId = new Map();
 
-export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, env = undefined }) {
+export function runRipgrepPage(args: any, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, env = undefined }: any) {
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
   const cacheKey = searchCacheKey({ args, freshness });
   if (snapshotId) {
@@ -108,7 +108,7 @@ export function runRipgrepPage(args, { operation, noMatchStatus, offset, limit, 
   return page;
 }
 
-export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, abortSignal = null, env = undefined }) {
+export async function runRipgrepPageAsync(args: any, { operation, noMatchStatus, offset, limit, timeoutMs, freshness, cachePolicy = 'auto', snapshotId = null, diagnosticError, abortSignal = null, env = undefined }: any) {
   const effectiveTimeoutMs = clampTimeout(timeoutMs);
   const cacheKey = searchCacheKey({ args, freshness });
   if (snapshotId) {
@@ -204,7 +204,7 @@ export async function runRipgrepPageAsync(args, { operation, noMatchStatus, offs
   return page;
 }
 
-export function grepMatchObject(match, mode) {
+export function grepMatchObject(match: any, mode: any) {
   if (mode === 'count_matches') {
     const countMatch = splitRipgrepFields(match, 2) ?? splitTrailingCount(match);
     return {
@@ -225,7 +225,7 @@ export function grepMatchObject(match, mode) {
   return { path: match, raw: match };
 }
 
-function assertRipgrepOk(result, { operation, noMatchStatus, diagnosticError }) {
+function assertRipgrepOk(result: any, { operation, noMatchStatus, diagnosticError }: any) {
   if (result.error) {
     throw diagnosticError(`${operation}_failed`, `${operation}_failed: ${result.error}`, {
       operation,
@@ -244,12 +244,12 @@ function assertRipgrepOk(result, { operation, noMatchStatus, diagnosticError }) 
   });
 }
 
-function splitRipgrepFields(match, fieldCount) {
+function splitRipgrepFields(match: any, fieldCount: any) {
   const fields = String(match).split(RIPGREP_FIELD_SEPARATOR);
   return fields.length >= fieldCount ? [...fields.slice(0, fieldCount - 1), fields.slice(fieldCount - 1).join(RIPGREP_FIELD_SEPARATOR)] : null;
 }
 
-function splitTrailingCount(match) {
+function splitTrailingCount(match: any) {
   const value = String(match);
   const separatorIndex = value.lastIndexOf(':');
   if (separatorIndex < 0) return null;
@@ -257,7 +257,7 @@ function splitTrailingCount(match) {
   return /^\d+$/.test(countText) ? [value.slice(0, separatorIndex), countText] : null;
 }
 
-function pageFromComplete(matches, { offset, limit, cachePolicy = 'auto', requestedSnapshotId = null, cacheHit = true }) {
+function pageFromComplete(matches: any, { offset, limit, cachePolicy = 'auto', requestedSnapshotId = null, cacheHit = true }: any) {
   const record = Array.isArray(matches) ? { matches, memoryBytes: estimateMatchesBytes(matches), snapshotId: null, freshness: null, timeoutMs: SEARCH_HELPER_TIMEOUT_MS } : matches;
   const pageMatches = record.matches.slice(offset, offset + limit);
   return {
@@ -283,7 +283,7 @@ function pageFromComplete(matches, { offset, limit, cachePolicy = 'auto', reques
   };
 }
 
-function rememberCompleteSearch(cacheKey, matches, { freshness, timeoutMs }) {
+function rememberCompleteSearch(cacheKey: any, matches: any, { freshness, timeoutMs }: any) {
   const memoryBytes = estimateMatchesBytes(matches);
   if (memoryBytes > SEARCH_CACHE_MAX_MATCH_BYTES) return;
   const previous = completeSearchCache.get(cacheKey);
@@ -307,8 +307,8 @@ function rememberCompleteSearch(cacheKey, matches, { freshness, timeoutMs }) {
   }
 }
 
-function runSearchHelper(command, args, { input, timeoutMs, abortSignal, env }): Promise<any> {
-  return new Promise((resolvePromise) => {
+function runSearchHelper(command: any, args: any, { input, timeoutMs, abortSignal, env }: any): Promise<any> {
+  return new Promise((resolvePromise: any) => {
     if (abortSignal?.aborted) {
       resolvePromise({ status: null, signal: null, stdout: '', stderr: '', error: 'cancelled', timedOut: false, cancelled: true });
       return;
@@ -319,7 +319,7 @@ function runSearchHelper(command, args, { input, timeoutMs, abortSignal, env }):
     let settled = false;
     let timedOut = false;
     let cancelled = false;
-    const settle = (value) => {
+    const settle = (value: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -339,39 +339,39 @@ function runSearchHelper(command, args, { input, timeoutMs, abortSignal, env }):
     abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: any) => {
       stdout += String(chunk);
       if (Buffer.byteLength(stdout, 'utf8') > 1024 * 1024) {
         child.kill();
         settle({ status: null, signal: null, stdout: stdout.slice(0, 1024 * 1024), stderr, error: 'maxBuffer exceeded', timedOut, cancelled });
       }
     });
-    child.stderr.on('data', (chunk) => {
+    child.stderr.on('data', (chunk: any) => {
       stderr += String(chunk);
       if (Buffer.byteLength(stderr, 'utf8') > 1024 * 1024) {
         child.kill();
         settle({ status: null, signal: null, stdout, stderr: stderr.slice(0, 1024 * 1024), error: 'maxBuffer exceeded', timedOut, cancelled });
       }
     });
-    child.on('error', (error) => {
+    child.on('error', (error: any) => {
       settle({ status: null, signal: null, stdout, stderr, error: error.message, timedOut, cancelled });
     });
-    child.on('close', (code, signal) => {
+    child.on('close', (code: any, signal: any) => {
       settle({ status: code, signal, stdout, stderr, error: null, timedOut, cancelled });
     });
     child.stdin.end(input, 'utf8');
   });
 }
 
-function searchCacheKey(value) {
+function searchCacheKey(value: any) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function estimateMatchesBytes(matches) {
-  return matches.reduce((sum, match) => sum + Buffer.byteLength(String(match), 'utf8'), 0);
+function estimateMatchesBytes(matches: any) {
+  return matches.reduce((sum: any, match: any) => sum + Buffer.byteLength(String(match), 'utf8'), 0);
 }
 
-function timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }) {
+function timeoutDiagnostics({ operation, args, offset, limit, complete, cachePolicy, snapshotId }: any) {
   return {
     timeout_kind: 'search_helper_timeout',
     partial_results_returned: false,
@@ -392,7 +392,7 @@ function timeoutDiagnostics({ operation, args, offset, limit, complete, cachePol
   };
 }
 
-function searchScopeFromArgs(operation, args) {
+function searchScopeFromArgs(operation: any, args: any) {
   if (!Array.isArray(args) || args.length === 0) return null;
   if (operation === 'fs_glob_search') return args.at(-1) ?? null;
   if (operation === 'fs_grep_search') {
@@ -405,7 +405,7 @@ function searchScopeFromArgs(operation, args) {
   return null;
 }
 
-function clampTimeout(value) {
+function clampTimeout(value: any) {
   if (!Number.isInteger(value)) return SEARCH_HELPER_TIMEOUT_MS;
   return Math.min(300_000, Math.max(1, value));
 }
