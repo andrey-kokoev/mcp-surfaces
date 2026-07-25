@@ -175,7 +175,18 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
     });
     writeMaterializationGeneration(sidecarPath, generation);
 
-    writeFileSync(configPath, `${content}[projects.'C:\\Users\\Andrey']\ntrust_level = "trusted"\n\n`, 'utf8');
+    const codexUserSettings = [
+      'approvals_reviewer = "auto_review"',
+      '',
+      content,
+      '[tui]',
+      'resume_cwd = "session"',
+      '',
+      '[windows]',
+      'sandbox = "elevated"',
+      '',
+    ].join('\n');
+    writeFileSync(configPath, codexUserSettings, 'utf8');
     assert.deepEqual(
       preflightMaterializationGeneration({
         sidecarPath,
@@ -185,7 +196,17 @@ test('Codex project trust updates do not invalidate the managed MCP projection',
       { ok: true, generation_fingerprint: generation.generation_fingerprint },
     );
 
-    writeFileSync(configPath, content.replace('command = "node"', 'command = "pnpm"'), 'utf8');
+    writeFileSync(configPath, `${codexUserSettings}[projects.'C:\\Users\\Andrey']\ntrust_level = "trusted"\n\n`, 'utf8');
+    assert.deepEqual(
+      preflightMaterializationGeneration({
+        sidecarPath,
+        manifestPath: f.manifestPath,
+        manifestFingerprint: 'fixture-manifest-fingerprint',
+      }),
+      { ok: true, generation_fingerprint: generation.generation_fingerprint },
+    );
+
+    writeFileSync(configPath, codexUserSettings.replace('command = "node"', 'command = "pnpm"'), 'utf8');
     assert.equal(preflightMaterializationGeneration({
       sidecarPath,
       manifestPath: f.manifestPath,

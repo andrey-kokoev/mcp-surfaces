@@ -8,9 +8,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { payloadCreate } from '@narada2/mcp-transport';
 import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
-const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
+const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
 
-const nestedCarrierMetadataDiff = compareCarrierProjection({
+const nestedCarrierMetadataDiff: any = compareCarrierProjection({
   carrierId: 'fixture-codex',
   configPath: 'fixture.toml',
   generatedContent: '[mcp_servers.fixture]\ncommand = "node"\n[mcp_servers.fixture.tools.new_tool]\napproval_mode = "approve"\n',
@@ -28,7 +28,7 @@ assert.equal(nestedCarrierMetadataDiff.explanation_code, 'carrier_metadata_or_fo
 assert.equal(nestedCarrierMetadataDiff.count_semantics, 'added_removed_changed_counts_cover_server_definitions_only');
 assert.notEqual(nestedCarrierMetadataDiff.generated_sha256, nestedCarrierMetadataDiff.current_sha256);
 
-const identicalCarrierProjection = compareCarrierProjection({
+const identicalCarrierProjection: any = compareCarrierProjection({
   carrierId: 'fixture-codex',
   configPath: 'fixture.toml',
   generatedContent: 'same\n',
@@ -42,32 +42,32 @@ assert.deepEqual(identicalCarrierProjection.change_scopes, []);
 assert.equal(identicalCarrierProjection.explanation_code, 'carrier_projection_exact_match');
 
 async function observeToolsList(entrypoint: string, args: string[]): Promise<string[]> {
-  const child = spawn(process.execPath, [entrypoint, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  const child: any = spawn(process.execPath, [entrypoint, ...args], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  let stdout = '';
-  let stderr = '';
+  let stdout: any = '';
+  let stderr: any = '';
   return new Promise<string[]>((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new Error(`tools_list_timeout:${stderr.slice(-2000)}`)), 5000);
-    let initialized = false;
-    const finish = (error: Error | null, tools?: string[]) => {
+    const timeout: any = setTimeout(() => finish(new Error(`tools_list_timeout:${stderr.slice(-2000)}`)), 5000);
+    let initialized: any = false;
+    const finish: any = (error: Error | null, tools?: string[]) => {
       clearTimeout(timeout);
       if (!child.killed) child.kill();
       if (error) reject(error);
       else resolve(tools ?? []);
     };
-    child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-2000); });
-    child.once('error', (error) => finish(error));
-    child.once('exit', (code) => {
+    child.stderr.on('data', (chunk: any) => { stderr = (stderr + String(chunk)).slice(-2000); });
+    child.once('error', (error: any) => finish(error));
+    child.once('exit', (code: any) => {
       if (!initialized && code !== null) finish(new Error(`tools_list_child_exited:${code}:${stderr}`));
     });
-    child.stdout.on('data', (chunk) => {
+    child.stdout.on('data', (chunk: any) => {
       stdout += String(chunk);
-      const lines = stdout.split(/\r?\n/);
+      const lines: any = stdout.split(/\r?\n/);
       stdout = lines.pop() ?? '';
       for (const line of lines) {
         if (!line.trim()) continue;
-        const message = JSON.parse(line) as Record<string, any>;
+        const message: any = JSON.parse(line) as Record<string, any>;
         if (message.id === 100) {
           initialized = true;
           child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} })}\n`);
@@ -82,7 +82,7 @@ async function observeToolsList(entrypoint: string, args: string[]): Promise<str
 }
 
 try {
-  const state = createServerState({});
+  const state: any = createServerState({});
 
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -91,7 +91,7 @@ try {
     return res.result.structuredContent as Record<string, any>;
   }
   function assertRuntimeProxy(server: Record<string, any>, childEntrypoint: string): void {
-    const args = server.args as string[];
+    const args: any = server.args as string[];
     assert.equal(server.command, 'node');
     assert.match(args[0].replace(/\\/g, '/'), /packages\/shared\/mcp-runtime-proxy\/dist\/src\/main\.js$/);
     assert.equal(args[args.indexOf('--entrypoint') + 1].replace(/\\/g, '/'), childEntrypoint.replace(/\\/g, '/'));
@@ -138,11 +138,11 @@ try {
     };
   }
   function assertOutputReaderClosure(registry: Record<string, any>, label: string): void {
-    const result = checkOutputReaderClosureForRegistry(registry, { site_id: label, site_root: root, registry_path: join(root, `${label}-mcp-surfaces.json`) });
+    const result: any = checkOutputReaderClosureForRegistry(registry, { site_id: label, site_root: root, registry_path: join(root, `${label}-mcp-surfaces.json`) });
     assert.equal(result.status, 'ok', `${label} output reader closure violations: ${JSON.stringify(result.violations)}`);
   }
 
-  const missingReaderCheck = checkOutputReaderClosureForRegistry(
+  const missingReaderCheck: any = checkOutputReaderClosureForRegistry(
     registryWithMailboxSurface(['mailbox_message_show'], ['mailbox_message_show']),
     { site_id: 'missing-reader', site_root: root, registry_path: join(root, 'missing-reader-mcp-surfaces.json') },
   );
@@ -156,7 +156,7 @@ try {
     'mailbox_output_show',
   ]);
 
-  const missingReadOnlyCheck = checkOutputReaderClosureForRegistry(
+  const missingReadOnlyCheck: any = checkOutputReaderClosureForRegistry(
     registryWithMailboxSurface(['mailbox_message_show', 'mailbox_output_show'], ['mailbox_message_show']),
     { site_id: 'missing-read-only', site_root: root, registry_path: join(root, 'missing-read-only-mcp-surfaces.json') },
   );
@@ -165,22 +165,22 @@ try {
     'missing_read_only_admission',
   ]);
 
-  const goodReaderCheck = checkOutputReaderClosureForRegistry(
+  const goodReaderCheck: any = checkOutputReaderClosureForRegistry(
     registryWithMailboxSurface(['mailbox_message_show', 'mailbox_output_show'], ['mailbox_message_show', 'mailbox_output_show']),
     { site_id: 'good-reader', site_root: root, registry_path: join(root, 'good-reader-mcp-surfaces.json') },
   );
   assert.equal(goodReaderCheck.status, 'ok');
   assert.deepEqual(goodReaderCheck.violations, []);
 
-  const surfaces = await call('registrar_surface_list', {});
-  const surfaceData = view(surfaces);
+  const surfaces: any = await call('registrar_surface_list', {});
+  const surfaceData: any = view(surfaces);
   assert.ok(Array.isArray(surfaceData.items));
   assert.ok(surfaceData.count >= 10);
-  const sched = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'scheduler');
+  const sched: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'scheduler');
   assert.ok(sched);
   assert.ok(sched.tools.includes('scheduler_task_list'));
   assert.equal(sched.injection_scope, 'local_site');
-  const speech = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'speech');
+  const speech: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'speech');
   assert.ok(speech);
   assert.equal(speech.injection_scope, 'host');
   assert.deepEqual(speech.authority_locus, { kind: 'host' });
@@ -189,21 +189,21 @@ try {
   assert.equal(speech.default_injection, 'all_carrier_sessions');
   assert.deepEqual(speech.args, ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
   assert.deepEqual(speech.tools, ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
-  const operatorRouting = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
+  const operatorRouting: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'operator-routing');
   assert.ok(operatorRouting);
   assert.equal(operatorRouting.injection_scope, 'user_site');
   assert.equal(operatorRouting.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(operatorRouting.tools, ['operator_routing_guidance', 'operator_route_doctor', 'operator_route_request']);
-  const artifacts = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'artifacts');
+  const artifacts: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'artifacts');
   assert.ok(artifacts);
   assert.equal(artifacts.injection_scope, 'local_site');
   assert.equal(artifacts.default_injection, 'all_site_bound_sessions');
   assert.deepEqual(artifacts.env_vars, ['NARADA_SESSION_ID', 'NARADA_SITE_ROOT', 'NARADA_NARS_BASE_URL']);
   assert.ok(artifacts.tools.includes('artifact_register_file'));
-  const agentContextSurface = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'agent-context');
+  const agentContextSurface: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'agent-context');
   assert.ok(agentContextSurface);
   assert.deepEqual(agentContextSurface.env_vars, ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT']);
-  const narsSession = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'nars-session');
+  const narsSession: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'nars-session');
   assert.ok(narsSession);
   assert.equal(narsSession.injection_scope, undefined);
   assert.deepEqual((narsSession.projections as Array<Record<string, any>>).map((projection) => ({
@@ -225,24 +225,24 @@ try {
       runtime_requirements: ['nars'],
     },
   ]);
-  const fixtureSite = {
+  const fixtureSite: any = {
     site_id: 'fixture-site',
     root,
     config_path: join(root, 'config.json'),
     surfaces: [],
   };
-  const agentContextBindConfig = buildSiteBindConfig(fixtureSite, agentContextSurface as any);
-  const agentContextBoundServer = (agentContextBindConfig.config.mcpServers as Record<string, any>)[agentContextBindConfig.serverKey];
+  const agentContextBindConfig: any = buildSiteBindConfig(fixtureSite, agentContextSurface as any);
+  const agentContextBoundServer: any = (agentContextBindConfig.config.mcpServers as Record<string, any>)[agentContextBindConfig.serverKey];
   assert.deepEqual(agentContextBoundServer.env_vars, ['NARADA_AGENT_ID', 'NARADA_AGENT_START_EVENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_SITE_ROOT']);
   assert.throws(
     () => buildSiteBindConfig(fixtureSite, narsSession as any),
     /registrar_surface_projection_required:nars-session/,
   );
-  const operatorProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator');
-  const operatorProjectionServer = (operatorProjectionConfig.config.mcpServers as Record<string, any>)[operatorProjectionConfig.serverKey];
+  const operatorProjectionConfig: any = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator');
+  const operatorProjectionServer: any = (operatorProjectionConfig.config.mcpServers as Record<string, any>)[operatorProjectionConfig.serverKey];
   assert.equal(operatorProjectionServer.surface_projection.projection_id, 'user-site-operator');
 
-  const quotaMeter = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'quota-meter');
+  const quotaMeter: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'quota-meter');
   assert.ok(quotaMeter);
   assert.equal(quotaMeter.injection_scope, 'host');
   assert.deepEqual(quotaMeter.projections?.map((projection: Record<string, any>) => ({
@@ -257,39 +257,39 @@ try {
     'quota_meter_overlay_stop',
   ]);
   assert.equal(operatorProjectionServer.surface_projection.injection_scope, 'user_site');
-  const narsProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'local-site-nars-runtime');
-  const narsProjectionServer = (narsProjectionConfig.config.mcpServers as Record<string, any>)[narsProjectionConfig.serverKey];
+  const narsProjectionConfig: any = buildSiteBindConfig(fixtureSite, narsSession as any, 'local-site-nars-runtime');
+  const narsProjectionServer: any = (narsProjectionConfig.config.mcpServers as Record<string, any>)[narsProjectionConfig.serverKey];
   assert.equal(narsProjectionServer.surface_projection.projection_id, 'local-site-nars-runtime');
   assert.equal(narsProjectionServer.surface_projection.injection_scope, 'local_site');
   assert.deepEqual(narsProjectionServer.surface_projection.runtime_requirements, ['nars']);
-  const narsRuntimeSelectedConfig = buildSiteBindConfig(fixtureSite, narsSession as any, undefined, 'nars');
-  const narsRuntimeSelectedServer = (narsRuntimeSelectedConfig.config.mcpServers as Record<string, any>)[narsRuntimeSelectedConfig.serverKey];
+  const narsRuntimeSelectedConfig: any = buildSiteBindConfig(fixtureSite, narsSession as any, undefined, 'nars');
+  const narsRuntimeSelectedServer: any = (narsRuntimeSelectedConfig.config.mcpServers as Record<string, any>)[narsRuntimeSelectedConfig.serverKey];
   assert.equal(narsRuntimeSelectedServer.surface_projection.projection_id, 'local-site-nars-runtime');
   assert.equal(narsRuntimeSelectedServer.surface_projection.runtime_kind, 'nars');
-  const neutralRuntimeConfig = buildSiteBindConfig(fixtureSite, artifacts as any, undefined, 'nars');
-  const neutralRuntimeServer = (neutralRuntimeConfig.config.mcpServers as Record<string, any>)[neutralRuntimeConfig.serverKey];
+  const neutralRuntimeConfig: any = buildSiteBindConfig(fixtureSite, artifacts as any, undefined, 'nars');
+  const neutralRuntimeServer: any = (neutralRuntimeConfig.config.mcpServers as Record<string, any>)[neutralRuntimeConfig.serverKey];
   assert.equal(neutralRuntimeServer.surface_projection.projection_id, 'default');
   assert.equal(neutralRuntimeServer.surface_projection.runtime_kind, 'nars');
-  const explicitNeutralProjectionConfig = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator', 'nars');
-  const explicitNeutralProjectionServer = (explicitNeutralProjectionConfig.config.mcpServers as Record<string, any>)[explicitNeutralProjectionConfig.serverKey];
+  const explicitNeutralProjectionConfig: any = buildSiteBindConfig(fixtureSite, narsSession as any, 'user-site-operator', 'nars');
+  const explicitNeutralProjectionServer: any = (explicitNeutralProjectionConfig.config.mcpServers as Record<string, any>)[explicitNeutralProjectionConfig.serverKey];
   assert.equal(explicitNeutralProjectionServer.surface_projection.projection_id, 'user-site-operator');
   assert.equal(explicitNeutralProjectionServer.surface_projection.runtime_kind, 'nars');
-  const sharedSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] });
+  const sharedSurfaceIds: any = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', surfaces: ['agent-context'] });
   assert.ok(sharedSurfaceIds.includes('speech'));
   assert.ok(sharedSurfaceIds.includes('operator-routing'));
   assert.ok(sharedSurfaceIds.includes('artifacts'));
   assert.ok(sharedSurfaceIds.includes('nars-session'));
-  assert.equal(sharedSurfaceIds.filter((surfaceId) => surfaceId === 'speech').length, 1);
-  const narsRuntimeSurfaceIds = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', runtime_kind: 'nars', surfaces: ['agent-context'] });
+  assert.equal(sharedSurfaceIds.filter((surfaceId: any) => surfaceId === 'speech').length, 1);
+  const narsRuntimeSurfaceIds: any = sharedSurfaceIdsForBinding({ site_id: 'narada-test', prefix: 'narada-test', runtime_kind: 'nars', surfaces: ['agent-context'] });
   assert.ok(narsRuntimeSurfaceIds.includes('nars-session'));
-  const registrar = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
+  const registrar: any = (surfaceData.items as Array<Record<string, any>>).find((s) => s.id === 'mcp-registrar');
   assert.ok(registrar);
   assert.equal(registrar.injection_scope, 'user_site');
   assert.deepEqual(registrar.authority_locus, { kind: 'user_site', site_root: 'C:/Users/Andrey/Narada' });
   assert.ok(registrar.tools.includes('registrar_surface_tool_inventory_check'));
   assert.ok(registrar.tools.includes('registrar_site_registry_conformance_check'));
   assert.ok(registrar.tools.includes('registrar_site_output_reader_closure_check'));
-  const bySurface = new Map((surfaceData.items as Array<Record<string, any>>).map((surface) => [surface.id, surface]));
+  const bySurface: any = new Map((surfaceData.items as Array<Record<string, any>>).map((surface) => [surface.id, surface]));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_changed_summary'));
   assert.ok((bySurface.get('git')?.tools as string[]).includes('git_unstage'));
   assert.ok((bySurface.get('graph-mail')?.tools as string[]).includes('graph_mail_attachment_upload_file'));
@@ -331,7 +331,7 @@ try {
   assert.equal(bySurface.get('mcp-loader')?.injection_scope, 'user_site');
   assert.equal(bySurface.get('mcp-loader')?.default_injection, 'all_site_bound_sessions');
   assert.equal(bySurface.get('mcp-loader')?.restart_owner, 'user_site');
-  const surfaceFeedback = bySurface.get('surface-feedback');
+  const surfaceFeedback: any = bySurface.get('surface-feedback');
   assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_import'));
   assert.ok((surfaceFeedback?.tools as string[]).includes('surface_feedback_actionable_queue'));
   assert.deepEqual(surfaceFeedback?.args, [
@@ -341,17 +341,17 @@ try {
     '--site-id', '{site_id}',
   ]);
   assert.ok(surfaceFeedback?.env_vars?.includes('NARADA_SURFACE_FEEDBACK_ROOT'));
-  assert.equal(surfaceFeedback?.args.some((arg) => /D:\/code|C:\/Users\/Andrey/i.test(arg)), false);
+  assert.equal(surfaceFeedback?.args.some((arg: any) => /D:\/code|C:\/Users\/Andrey/i.test(arg)), false);
 
-  const localFilesystemEntrypoint = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
-  const observedLocalFilesystemTools = await observeToolsList(localFilesystemEntrypoint, [
+  const localFilesystemEntrypoint: any = fileURLToPath(new URL('../../../local-filesystem-mcp/dist/src/main.js', import.meta.url));
+  const observedLocalFilesystemTools: any = await observeToolsList(localFilesystemEntrypoint, [
     '--mode', 'write',
     '--allowed-root', root,
     '--output-root', root,
   ]);
-  const mailboxEntrypoint = fileURLToPath(new URL('../../../mailbox-mcp/dist/src/main.js', import.meta.url));
-  const observedMailboxTools = await observeToolsList(mailboxEntrypoint, ['--site-root', root]);
-  const liveInventoryCheck = view(await call('registrar_surface_tool_inventory_check', {
+  const mailboxEntrypoint: any = fileURLToPath(new URL('../../../mailbox-mcp/dist/src/main.js', import.meta.url));
+  const observedMailboxTools: any = await observeToolsList(mailboxEntrypoint, ['--site-root', root]);
+  const liveInventoryCheck: any = view(await call('registrar_surface_tool_inventory_check', {
     observed_tools: {
       'local-filesystem': observedLocalFilesystemTools,
       mailbox: observedMailboxTools,
@@ -363,9 +363,9 @@ try {
   assert.ok(observedMailboxTools.includes('mailbox_guidance'));
   assert.ok(observedMailboxTools.includes('mailbox_output_show'));
 
-  const conformanceSiteRoot = join(root, 'registry-conformance-site');
+  const conformanceSiteRoot: any = join(root, 'registry-conformance-site');
   mkdirSync(join(conformanceSiteRoot, '.ai', 'mcp'), { recursive: true });
-  const mailboxCatalogTools = bySurface.get('mailbox')?.tools as string[];
+  const mailboxCatalogTools: any = bySurface.get('mailbox')?.tools as string[];
   writeFileSync(join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-mailbox-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',
     site_id: 'registry-conformance-site',
@@ -378,7 +378,7 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const conformanceSite = {
+  const conformanceSite: any = {
     site_id: 'registry-conformance-site',
     root: conformanceSiteRoot,
     config_path: join(conformanceSiteRoot, 'config.json'),
@@ -398,12 +398,12 @@ try {
     observed_read_only_tools: {},
     observed_mutating_tools: {},
   }), /registrar_inventory_observation_site_mismatch/);
-  const conformingRegistry = buildSiteSurfaceRegistry(conformanceSite);
-  const conformingSurface = (conformingRegistry.surfaces as Array<Record<string, any>>)[0];
-  const observedConformanceTools = { 'fixture-mailbox': mailboxCatalogTools };
-  const observedConformanceReadOnlyTools = { 'fixture-mailbox': conformingSurface.tool_contract.read_only_tools as string[] };
-  const observedConformanceMutatingTools = { 'fixture-mailbox': conformingSurface.tool_contract.mutating_tools as string[] };
-  const conformingCheck = checkSiteRegistryConformance(
+  const conformingRegistry: any = buildSiteSurfaceRegistry(conformanceSite);
+  const conformingSurface: any = (conformingRegistry.surfaces as Array<Record<string, any>>)[0];
+  const observedConformanceTools: any = { 'fixture-mailbox': mailboxCatalogTools };
+  const observedConformanceReadOnlyTools: any = { 'fixture-mailbox': conformingSurface.tool_contract.read_only_tools as string[] };
+  const observedConformanceMutatingTools: any = { 'fixture-mailbox': conformingSurface.tool_contract.mutating_tools as string[] };
+  const conformingCheck: any = checkSiteRegistryConformance(
     conformanceSite,
     conformingRegistry,
     observedConformanceTools,
@@ -413,7 +413,7 @@ try {
   );
   assert.equal(conformingCheck.status, 'ok', JSON.stringify(conformingCheck));
   assert.equal(conformingCheck.violation_count, 0);
-  const observationPayload = payloadCreate({
+  const observationPayload: any = payloadCreate({
     siteRoot: conformanceSiteRoot,
     args: {
       payload_id: 'site-tools-fixture-observation',
@@ -429,7 +429,7 @@ try {
       created_by: 'mcp-loader-mcp',
     },
   });
-  const refConformanceCheck = checkSiteRegistryConformanceFromObservation(
+  const refConformanceCheck: any = checkSiteRegistryConformanceFromObservation(
     conformanceSite,
     conformingRegistry,
     observationPayload.ref,
@@ -437,10 +437,10 @@ try {
   assert.equal(refConformanceCheck.status, 'ok', JSON.stringify(refConformanceCheck));
   assert.equal(refConformanceCheck.observation_ref, observationPayload.ref);
   assert.equal(refConformanceCheck.observation_sha256, observationPayload.sha256);
-  const observationLineage = refConformanceCheck.observation_lineage as Record<string, any>;
+  const observationLineage: any = refConformanceCheck.observation_lineage as Record<string, any>;
   assert.equal(observationLineage.assurance, 'declarative_lineage_guard_not_cryptographic_provenance');
   assert.equal(observationLineage.authority_effect, 'none');
-  const forgedLineagePayload = payloadCreate({
+  const forgedLineagePayload: any = payloadCreate({
     siteRoot: conformanceSiteRoot,
     args: {
       payload_id: 'site-tools-wrong-lineage',
@@ -459,11 +459,11 @@ try {
     /registrar_inventory_observation_lineage_mismatch/,
   );
 
-  const staleRegistry = structuredClone(conformingRegistry);
-  const staleSurface = (staleRegistry.surfaces as Array<Record<string, any>>)[0];
+  const staleRegistry: any = structuredClone(conformingRegistry);
+  const staleSurface: any = (staleRegistry.surfaces as Array<Record<string, any>>)[0];
   staleSurface.registered_live_tools = (staleSurface.registered_live_tools as string[]).filter((tool) => tool !== 'mailbox_output_show');
   staleSurface.tool_contract.read_only_tools = (staleSurface.tool_contract.read_only_tools as string[]).filter((tool: string) => tool !== 'mailbox_output_show');
-  const staleCheck = checkSiteRegistryConformance(
+  const staleCheck: any = checkSiteRegistryConformance(
     conformanceSite,
     staleRegistry,
     observedConformanceTools,
@@ -471,26 +471,26 @@ try {
     observedConformanceMutatingTools,
   );
   assert.equal(staleCheck.status, 'drift');
-  const staleCodes = (staleCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  const staleCodes: any = (staleCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
   assert.ok(staleCodes.includes('registered_tools_differ_from_live'));
   assert.ok(staleCodes.includes('output_reader_closure_violation'));
 
-  const overlappingRegistry = structuredClone(conformingRegistry);
-  const overlappingSurface = (overlappingRegistry.surfaces as Array<Record<string, any>>)[0];
+  const overlappingRegistry: any = structuredClone(conformingRegistry);
+  const overlappingSurface: any = (overlappingRegistry.surfaces as Array<Record<string, any>>)[0];
   overlappingSurface.tool_contract.mutating_tools.push('mailbox_doctor');
-  const overlappingCheck = checkSiteRegistryConformance(
+  const overlappingCheck: any = checkSiteRegistryConformance(
     conformanceSite,
     overlappingRegistry,
     observedConformanceTools,
     observedConformanceReadOnlyTools,
     observedConformanceMutatingTools,
   );
-  const overlappingCodes = (overlappingCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  const overlappingCodes: any = (overlappingCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
   assert.ok(overlappingCodes.includes('tool_contract_partition_overlap'));
   assert.ok(overlappingCodes.includes('mutating_classification_differ_from_live'));
 
-  const missingEvidenceCheck = checkSiteRegistryConformance(conformanceSite, conformingRegistry, {}, {}, {});
-  const missingEvidenceCodes = (missingEvidenceCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
+  const missingEvidenceCheck: any = checkSiteRegistryConformance(conformanceSite, conformingRegistry, {}, {}, {});
+  const missingEvidenceCodes: any = (missingEvidenceCheck.violations as Array<Record<string, any>>).map((violation) => violation.code);
   assert.ok(missingEvidenceCodes.includes('live_tool_observation_missing'));
   assert.ok(missingEvidenceCodes.includes('live_read_only_observation_missing'));
   assert.ok(missingEvidenceCodes.includes('live_mutating_observation_missing'));
@@ -507,8 +507,8 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const partialRegistry = buildSiteSurfaceRegistry(conformanceSite);
-  const partialCheck = checkSiteRegistryConformance(
+  const partialRegistry: any = buildSiteSurfaceRegistry(conformanceSite);
+  const partialCheck: any = checkSiteRegistryConformance(
     conformanceSite,
     partialRegistry,
     observedConformanceTools,
@@ -516,26 +516,26 @@ try {
     observedConformanceMutatingTools,
   );
   assert.equal(partialCheck.status, 'incomplete', JSON.stringify(partialCheck));
-  const partialCoverage = partialCheck.observation_coverage as Record<string, any>;
+  const partialCoverage: any = partialCheck.observation_coverage as Record<string, any>;
   assert.equal(partialCoverage.status, 'partial');
   assert.ok((partialCoverage.unobserved_server_names as string[]).includes('fixture-git'));
-  const partialGitViolations = (partialCheck.violations as Array<Record<string, any>>)
+  const partialGitViolations: any = (partialCheck.violations as Array<Record<string, any>>)
     .filter((violation) => violation.server_name === 'fixture-git')
     .map((violation) => violation.code);
   assert.ok(!partialGitViolations.includes('live_tool_observation_missing'));
   assert.ok(!partialGitViolations.includes('live_read_only_observation_missing'));
   assert.ok(!partialGitViolations.includes('live_mutating_observation_missing'));
 
-  const violationCodes = (check: Record<string, any>) =>
+  const violationCodes: any = (check: Record<string, any>) =>
     new Set((check.violations as Array<Record<string, any>>).map((violation) => violation.code));
 
-  const provenanceRegistry = structuredClone(conformingRegistry);
+  const provenanceRegistry: any = structuredClone(conformingRegistry);
   provenanceRegistry.schema = 'wrong.schema';
   provenanceRegistry.site_id = 'wrong-site';
   provenanceRegistry.generated_by = 'manual';
   provenanceRegistry.generated_at = 'not-a-time';
   provenanceRegistry.generation_policy = { mode: 'manual', source: 'unknown', note: 'unknown' };
-  const provenanceCodes = violationCodes(checkSiteRegistryConformance(
+  const provenanceCodes: any = violationCodes(checkSiteRegistryConformance(
     conformanceSite,
     provenanceRegistry,
     observedConformanceTools,
@@ -552,7 +552,7 @@ try {
     'registry_generated_at_invalid',
   ]) assert.ok(provenanceCodes.has(code), code);
 
-  const missingSurfaceRegistry = structuredClone(conformingRegistry);
+  const missingSurfaceRegistry: any = structuredClone(conformingRegistry);
   missingSurfaceRegistry.surfaces = [];
   assert.ok(violationCodes(checkSiteRegistryConformance(
     conformanceSite,
@@ -562,7 +562,7 @@ try {
     observedConformanceMutatingTools,
   )).has('registry_surface_missing'));
 
-  const extraSurfaceRegistry = structuredClone(conformingRegistry);
+  const extraSurfaceRegistry: any = structuredClone(conformingRegistry);
   (extraSurfaceRegistry.surfaces as Array<Record<string, any>>).push({ ...structuredClone(conformingSurface), server_name: 'not-in-fabric', surface_id: 'not-in-fabric.local' });
   assert.ok(violationCodes(checkSiteRegistryConformance(
     conformanceSite,
@@ -572,7 +572,7 @@ try {
     observedConformanceMutatingTools,
   )).has('registry_surface_not_in_fabric'));
 
-  const duplicateSurfaceRegistry = structuredClone(conformingRegistry);
+  const duplicateSurfaceRegistry: any = structuredClone(conformingRegistry);
   (duplicateSurfaceRegistry.surfaces as Array<Record<string, any>>).push(structuredClone(conformingSurface));
   assert.ok(violationCodes(checkSiteRegistryConformance(
     conformanceSite,
@@ -582,8 +582,8 @@ try {
     observedConformanceMutatingTools,
   )).has('registry_surface_server_name_duplicate'));
 
-  const incompleteContractRegistry = structuredClone(conformingRegistry);
-  const incompleteContractSurface = incompleteContractRegistry.surfaces[0];
+  const incompleteContractRegistry: any = structuredClone(conformingRegistry);
+  const incompleteContractSurface: any = incompleteContractRegistry.surfaces[0];
   incompleteContractSurface.tool_contract.read_only_tools =
     incompleteContractSurface.tool_contract.read_only_tools.filter((tool: string) => tool !== 'mailbox_doctor');
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -594,8 +594,8 @@ try {
     observedConformanceMutatingTools,
   )).has('tool_contract_partition_incomplete'));
 
-  const refusedContractRegistry = structuredClone(conformingRegistry);
-  const refusedContractSurface = refusedContractRegistry.surfaces[0];
+  const refusedContractRegistry: any = structuredClone(conformingRegistry);
+  const refusedContractSurface: any = refusedContractRegistry.surfaces[0];
   refusedContractSurface.tool_contract.read_only_tools =
     refusedContractSurface.tool_contract.read_only_tools.filter((tool: string) => tool !== 'mailbox_doctor');
   refusedContractSurface.tool_contract.refused_tools.push('mailbox_doctor');
@@ -607,7 +607,7 @@ try {
     observedConformanceMutatingTools,
   )).has('tool_contract_contains_external_refusals'));
 
-  const duplicateContractRegistry = structuredClone(conformingRegistry);
+  const duplicateContractRegistry: any = structuredClone(conformingRegistry);
   duplicateContractRegistry.surfaces[0].registered_live_tools.push('mailbox_doctor');
   duplicateContractRegistry.surfaces[0].tool_contract.read_only_tools.push('mailbox_doctor');
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -618,7 +618,7 @@ try {
     observedConformanceMutatingTools,
   )).has('tool_contract_contains_duplicates'));
 
-  const incompleteLiveReadOnly = {
+  const incompleteLiveReadOnly: any = {
     'fixture-mailbox': observedConformanceReadOnlyTools['fixture-mailbox'].slice(1),
   };
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -629,7 +629,7 @@ try {
     observedConformanceMutatingTools,
   )).has('live_tool_semantics_partition_incomplete'));
 
-  const overlappingLiveMutating = {
+  const overlappingLiveMutating: any = {
     'fixture-mailbox': [...observedConformanceMutatingTools['fixture-mailbox'], 'mailbox_doctor'],
   };
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -640,7 +640,7 @@ try {
     overlappingLiveMutating,
   )).has('live_tool_semantics_partition_overlap'));
 
-  const duplicateLiveTools = {
+  const duplicateLiveTools: any = {
     'fixture-mailbox': [...mailboxCatalogTools, mailboxCatalogTools[0]],
   };
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -651,7 +651,7 @@ try {
     observedConformanceMutatingTools,
   )).has('live_tools_duplicate'));
 
-  const projectionDriftRegistry = structuredClone(conformingRegistry);
+  const projectionDriftRegistry: any = structuredClone(conformingRegistry);
   projectionDriftRegistry.surfaces[0].display_name = 'manually changed';
   assert.ok(violationCodes(checkSiteRegistryConformance(
     conformanceSite,
@@ -661,7 +661,7 @@ try {
     observedConformanceMutatingTools,
   )).has('registry_surface_projection_drift'));
 
-  const missingCatalogRegistry = structuredClone(conformingRegistry);
+  const missingCatalogRegistry: any = structuredClone(conformingRegistry);
   missingCatalogRegistry.surfaces[0].catalog_surface_id = 'missing-catalog-surface';
   assert.ok(violationCodes(checkSiteRegistryConformance(
     conformanceSite,
@@ -671,8 +671,8 @@ try {
     observedConformanceMutatingTools,
   )).has('catalog_surface_missing'));
 
-  const conformanceFabricPath = join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-mailbox-mcp.json');
-  const duplicateFabricConfig = JSON.parse(readFileSync(conformanceFabricPath, 'utf8'));
+  const conformanceFabricPath: any = join(conformanceSiteRoot, '.ai', 'mcp', 'fixture-mailbox-mcp.json');
+  const duplicateFabricConfig: any = JSON.parse(readFileSync(conformanceFabricPath, 'utf8'));
   duplicateFabricConfig.mcpServers['fixture-mailbox'].tools.push('mailbox_doctor');
   writeFileSync(conformanceFabricPath, JSON.stringify(duplicateFabricConfig, null, 2), 'utf8');
   assert.ok(violationCodes(checkSiteRegistryConformance(
@@ -685,7 +685,7 @@ try {
   duplicateFabricConfig.mcpServers['fixture-mailbox'].tools.pop();
   writeFileSync(conformanceFabricPath, JSON.stringify(duplicateFabricConfig, null, 2), 'utf8');
 
-  const inventoryCheck = view(await call('registrar_surface_tool_inventory_check', {
+  const inventoryCheck: any = view(await call('registrar_surface_tool_inventory_check', {
     include_ok: true,
     observed_tools: {
       git: bySurface.get('git')?.tools,
@@ -697,41 +697,41 @@ try {
   assert.equal(inventoryCheck.status, 'ok');
   assert.equal(inventoryCheck.checked_count, 4);
   assert.equal((inventoryCheck.findings as Array<Record<string, any>>).length, 4);
-  const driftCheck = view(await call('registrar_surface_tool_inventory_check', {
+  const driftCheck: any = view(await call('registrar_surface_tool_inventory_check', {
     observed_tools: { git: ['git_status', 'git_extra_observed'] },
   }));
   assert.equal(driftCheck.status, 'drift');
-  const gitDrift = (driftCheck.findings as Array<Record<string, any>>).find((finding) => finding.surface_id === 'git');
+  const gitDrift: any = (driftCheck.findings as Array<Record<string, any>>).find((finding: any) => finding.surface_id === 'git');
   assert.ok(gitDrift);
   assert.deepEqual(gitDrift.missing_from_registrar, ['git_extra_observed']);
   assert.ok((gitDrift.extra_in_registrar as string[]).includes('git_policy_inspect'));
 
-  const badMaterializedSiteRoot = join(root, 'bad-materialized-site');
+  const badMaterializedSiteRoot: any = join(root, 'bad-materialized-site');
   mkdirSync(join(badMaterializedSiteRoot, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(
     join(badMaterializedSiteRoot, '.narada', 'capabilities', 'mcp-surfaces.json'),
     JSON.stringify(registryWithMailboxSurface(['mailbox_message_show'], ['mailbox_message_show']), null, 2),
     'utf8',
   );
-  const materializedClosureCheck = view(await call('registrar_site_output_reader_closure_check', {
+  const materializedClosureCheck: any = view(await call('registrar_site_output_reader_closure_check', {
     site_roots: [badMaterializedSiteRoot],
   }));
   assert.equal(materializedClosureCheck.status, 'drift');
   assert.equal(materializedClosureCheck.violation_count, 2);
-  const materializedViolations = materializedClosureCheck.violations as Array<Record<string, any>>;
+  const materializedViolations: any = materializedClosureCheck.violations as Array<Record<string, any>>;
   assert.equal(materializedViolations[0].site_root, badMaterializedSiteRoot);
   assert.equal(materializedViolations[0].registry_path, join(badMaterializedSiteRoot, '.narada', 'capabilities', 'mcp-surfaces.json'));
   assert.equal(materializedViolations[0].server_name, 'fixture-mailbox');
   assert.equal(materializedViolations[0].producer_tool, 'mailbox_message_show');
   assert.equal(materializedViolations[0].required_reader_tool, 'mailbox_output_show');
-  const missingMaterializedClosureCheck = view(await call('registrar_site_output_reader_closure_check', {
+  const missingMaterializedClosureCheck: any = view(await call('registrar_site_output_reader_closure_check', {
     site_roots: [join(root, 'site-without-materialized-registry')],
   }));
   assert.equal(missingMaterializedClosureCheck.status, 'missing');
   assert.equal(missingMaterializedClosureCheck.missing_count, 1);
   assert.equal(missingMaterializedClosureCheck.violation_count, 0);
 
-  const missingCalendarReaderCheck = checkOutputReaderClosureForRegistry(
+  const missingCalendarReaderCheck: any = checkOutputReaderClosureForRegistry(
     registryWithSurface('calendar', ['calendar_event_query'], ['calendar_event_query']),
     { site_id: 'missing-calendar-reader', site_root: root, registry_path: join(root, 'missing-calendar-reader-mcp-surfaces.json') },
   );
@@ -741,14 +741,14 @@ try {
     'calendar_output_show',
   ]);
 
-  const goodSiteLoopReaderCheck = checkOutputReaderClosureForRegistry(
+  const goodSiteLoopReaderCheck: any = checkOutputReaderClosureForRegistry(
     registryWithSurface('site-loop', ['site_loop_guidance', 'site_loop_output_show'], ['site_loop_guidance', 'site_loop_output_show']),
     { site_id: 'good-site-loop-reader', site_root: root, registry_path: join(root, 'good-site-loop-reader-mcp-surfaces.json') },
   );
   assert.equal(goodSiteLoopReaderCheck.status, 'ok');
 
-  const catalogDbPath = join(root, 'site-registry.db');
-  const catalogDb = new DatabaseSync(catalogDbPath);
+  const catalogDbPath: any = join(root, 'site-registry.db');
+  const catalogDb: any = new DatabaseSync(catalogDbPath);
   catalogDb.exec(`
     CREATE TABLE site_registry (
       site_id TEXT PRIMARY KEY,
@@ -758,11 +758,11 @@ try {
   `);
   catalogDb.prepare('INSERT INTO site_registry (site_id, site_root, created_at) VALUES (?, ?, ?)').run('fixture-canonical', root, '2026-07-10T00:00:00Z');
   catalogDb.close();
-  const previousCatalogPath = process.env.NARADA_SITE_REGISTRY_DB;
+  const previousCatalogPath: any = process.env.NARADA_SITE_REGISTRY_DB;
   process.env.NARADA_SITE_REGISTRY_DB = catalogDbPath;
   try {
-    const sites = await call('registrar_site_list', {});
-    const siteData = view(sites);
+    const sites: any = await call('registrar_site_list', {});
+    const siteData: any = view(sites);
     assert.equal(siteData.catalog_source, 'user_site_site_registry');
     assert.equal(siteData.compatibility_fallback_used, false);
     assert.deepEqual((siteData.items as Array<Record<string, unknown>>).map((site) => site.site_id), ['fixture-canonical']);
@@ -771,35 +771,35 @@ try {
     else process.env.NARADA_SITE_REGISTRY_DB = previousCatalogPath;
   }
 
-  const carriers = await call('registrar_carrier_list', {});
-  const carrierData = view(carriers);
+  const carriers: any = await call('registrar_carrier_list', {});
+  const carrierData: any = view(carriers);
   assert.ok((carrierData.items as Array<unknown>).length >= 3);
-  const carrierIds = (carrierData.items as Array<Record<string, any>>).map((carrier) => carrier.carrier_id);
+  const carrierIds: any = (carrierData.items as Array<Record<string, any>>).map((carrier) => carrier.carrier_id);
   assert.deepEqual(carrierIds.sort(), ['codex-andrey', 'kimi-andrey', 'opencode-andrey']);
   assert.equal(carrierIds.includes('opencode-sonar'), false);
 
-  const materialize = await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey' });
-  const matData = view(materialize);
+  const materialize: any = await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey' });
+  const matData: any = view(materialize);
   assert.equal(matData.status, 'materialized');
   assert.equal(matData.carrier_id, 'kimi-andrey');
   assert.ok(matData.byte_size > 0);
   assert.ok((matData.injection_scopes as Record<string, any>).counts.host >= 1);
   assert.ok(((matData.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).some((server) => server.surface_id === 'speech' && server.injection_scope === 'host'));
-  const materializedSpeech = ((matData.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).find((server) => server.surface_id === 'speech');
+  const materializedSpeech: any = ((matData.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).find((server) => server.surface_id === 'speech');
   assert.ok(materializedSpeech);
   assert.equal((materializedSpeech.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
-  const materializedPath = join(root, 'kimi-generated.json');
+  const materializedPath: any = join(root, 'kimi-generated.json');
   view(await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey', output_path: materializedPath }));
-  const materializedConfig = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
-  const materializedFilesystem = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
+  const materializedConfig: any = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
+  const materializedFilesystem: any = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
   assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
-  const materializedSpeechConfig = materializedConfig.mcpServers['narada-site-andrey-user-speech'];
+  const materializedSpeechConfig: any = materializedConfig.mcpServers['narada-site-andrey-user-speech'];
   assert.deepEqual(materializedSpeechConfig.args.slice(-2), ['--provider-registry-path', 'D:/code/mcp-surfaces/packages/speech-mcp/config/provider-registry.v2.json']);
   for (const carrierId of ['codex-andrey', 'kimi-andrey', 'opencode-andrey']) {
-    const generatedPath = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
+    const generatedPath: any = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
     view(await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: generatedPath }));
-    const generatedText = readFileSync(generatedPath, 'utf8');
-    const normalizedGeneratedText = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
+    const generatedText: any = readFileSync(generatedPath, 'utf8');
+    const normalizedGeneratedText: any = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
     assert.equal(normalizedGeneratedText.includes('site-registry-mcp/dist/src/main.js'), true);
     assert.equal(generatedText.includes('opencode-sonar'), false);
     assert.equal(generatedText.includes('tools/typed-mcp/inbox-mcp-server.mjs'), false);
@@ -816,16 +816,24 @@ try {
     }
   }
 
-  const carrierValidate = view(await call('registrar_carrier_validate', { carrier_id: 'kimi-andrey', include_ok: true }));
-  const validateFindings = carrierValidate.findings as Array<Record<string, any>>;
-  const speechFinding = validateFindings.find((finding) => finding.surface_id === 'speech');
+  const carrierValidate: any = view(await call('registrar_carrier_validate', { carrier_id: 'kimi-andrey', include_ok: true }));
+  const validateFindings: any = carrierValidate.findings as Array<Record<string, any>>;
+  const speechFinding: any = validateFindings.find((finding: any) => finding.surface_id === 'speech');
   assert.ok(speechFinding);
   assert.equal(speechFinding.injection_scope, 'host');
   assert.equal(speechFinding.diagnostic_class, 'host_injected_surface_missing_or_misconfigured_in_session');
   assert.deepEqual(speechFinding.required_repair_locus, { kind: 'host' });
   assert.equal((speechFinding.narada_scope as Record<string, any>).injection_scope, 'host');
   assert.deepEqual(speechFinding.required_repair_locus, (speechFinding.narada_scope as Record<string, any>).mutation_locus);
-  const filesystemFinding = validateFindings.find((finding) => finding.surface_id === 'local-filesystem');
+  assert.equal(
+    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada2/mcp-fabric-contracts'),
+    false,
+  );
+  assert.equal(
+    validateFindings.some((finding: any) => finding.code === 'registrar_runtime_dependency_missing' && finding.dependency === '@narada2/mcp-loader-mcp'),
+    false,
+  );
+  const filesystemFinding: any = validateFindings.find((finding: any) => finding.surface_id === 'local-filesystem');
   assert.ok(filesystemFinding);
   assert.equal(filesystemFinding.injection_scope, 'local_site');
   assert.equal(filesystemFinding.diagnostic_class, 'local_site_surface_missing_or_misconfigured');
@@ -833,21 +841,21 @@ try {
   assert.equal((filesystemFinding.narada_scope as Record<string, any>).injection_scope, 'local_site');
   assert.deepEqual(filesystemFinding.required_repair_locus, (filesystemFinding.narada_scope as Record<string, any>).mutation_locus);
 
-  const siteDir = join(root, '.ai', 'mcp');
+  const siteDir: any = join(root, '.ai', 'mcp');
   mkdirSync(siteDir, { recursive: true });
   writeFileSync(join(root, 'site.json'), JSON.stringify({ site_id: 'test-site' }), 'utf8');
 
   assert.equal(siteSurfaceServerKey('narada-sonar', 'scheduler'), 'narada-sonar-scheduler');
   assert.equal(siteSurfaceServerKey('smart-scheduling', 'scheduler'), 'narada-smart-scheduling-scheduler');
   assert.equal(siteSurfaceServerKey('andrey-user', 'task-lifecycle'), 'narada-site-andrey-user-task-lifecycle');
-  const userTaskBindConfig = buildSiteBindConfig(
+  const userTaskBindConfig: any = buildSiteBindConfig(
     { site_id: 'andrey-user', root, config_path: join(root, 'site.json'), surfaces: [] },
     { id: 'task-lifecycle', package: 'task-lifecycle-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js', kind: 'mcp_surface', args: ['--site-root', '{site_root}'], tools: ['task_lifecycle_guidance'] },
   );
-  const userTaskServer = (userTaskBindConfig.config.mcpServers as Record<string, any>)['narada-site-andrey-user-task-lifecycle'];
+  const userTaskServer: any = (userTaskBindConfig.config.mcpServers as Record<string, any>)['narada-site-andrey-user-task-lifecycle'];
   assert.ok(userTaskServer.args.includes(root));
   assert.ok(!userTaskServer.args.includes('{site_root}'));
-  const bindConfig = buildSiteBindConfig(
+  const bindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
     { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
@@ -855,7 +863,7 @@ try {
   assert.equal(bindConfig.serverKey, 'narada-sonar-scheduler');
   assert.ok((bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler']);
   assert.ok(!(bindConfig.config.mcpServers as Record<string, any>)['sonar-scheduler']);
-  const schedServer = (bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler'];
+  const schedServer: any = (bindConfig.config.mcpServers as Record<string, any>)['narada-sonar-scheduler'];
   assert.equal(schedServer.surface_id, 'scheduler');
   assertRuntimeProxy(schedServer, 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js');
   assert.equal(schedServer.injection_scope, 'local_site');
@@ -863,7 +871,7 @@ try {
   assert.equal(schedServer.narada_scope.scope_source, 'registrar_surface_catalog');
   assert.equal(schedServer.narada_scope.bound_into_site, 'narada-sonar');
 
-  const smartSchedulingBindConfig = buildSiteBindConfig(
+  const smartSchedulingBindConfig: any = buildSiteBindConfig(
     { site_id: 'smart-scheduling', root, config_path: join(root, 'site.json'), surfaces: [] },
     { id: 'scheduler', package: 'scheduler-mcp', entrypoint: 'D:/code/mcp-surfaces/packages/scheduler-mcp/dist/src/main.js', kind: 'mcp_surface', args: ['--allowed-root', '{site_root}'], tools: ['scheduler_task_list'] },
   );
@@ -872,7 +880,7 @@ try {
   assert.ok((smartSchedulingBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-scheduler']);
   assert.ok(!(smartSchedulingBindConfig.config.mcpServers as Record<string, any>)['smart-scheduling-scheduler']);
 
-  const speechBindConfig = buildSiteBindConfig(
+  const speechBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-staccato', root, config_path: join(root, 'site.json'), surfaces: [] },
     {
       id: 'speech',
@@ -883,7 +891,7 @@ try {
       tools: ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop'],
     },
   );
-  const speechServer = (speechBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-speech'];
+  const speechServer: any = (speechBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-speech'];
   assert.equal(speechServer.injection_scope, 'host');
   assertRuntimeProxy(speechServer, 'D:/code/mcp-surfaces/packages/speech-mcp/dist/src/main.js');
   assert.equal(speechServer.authority_posture, 'host_injected_mcp_surface');
@@ -894,7 +902,7 @@ try {
   assert.equal(speechServer.narada_scope.bound_into_site, 'narada-staccato');
   assert.deepEqual(speechServer.tools, ['speech_speak', 'speech_voices', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_status', 'speech_listen_start', 'speech_listen_stop']);
 
-  const workerBindConfig = buildSiteBindConfig(
+  const workerBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root, config_path: join(root, 'site.json'), surfaces: [] },
     {
       id: 'worker-delegation',
@@ -906,7 +914,7 @@ try {
       env_vars: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'],
     },
   );
-  const workerServer = (workerBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-worker-delegation'];
+  const workerServer: any = (workerBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-worker-delegation'];
   assert.equal(workerServer.surface_id, 'worker-delegation');
   assertRuntimeProxy(workerServer, 'D:/code/mcp-surfaces/packages/worker-delegation-mcp/dist/src/main.js');
   assert.ok(workerServer.args.includes('--site-root'));
@@ -916,11 +924,11 @@ try {
   assert.ok(workerServer.env_vars.includes('DEEPSEEK_API_BASE_URL'));
   assert.ok(workerServer.env_vars.includes('NARADA_WORKER_MCP_CONFIG'));
 
-  const controlRootSite = join(root, 'control-root-site', '.narada');
-  const controlRootWorkspace = join(root, 'control-root-site');
+  const controlRootSite: any = join(root, 'control-root-site', '.narada');
+  const controlRootWorkspace: any = join(root, 'control-root-site');
   mkdirSync(controlRootSite, { recursive: true });
   writeFileSync(join(controlRootSite, 'config.json'), JSON.stringify({ workspace_root: controlRootWorkspace }), 'utf8');
-  const controlRootWorkerBindConfig = buildSiteBindConfig(
+  const controlRootWorkerBindConfig: any = buildSiteBindConfig(
     { site_id: 'smart-scheduling', root: controlRootSite, config_path: join(controlRootSite, 'config.json'), surfaces: [] },
     {
       id: 'worker-delegation',
@@ -931,14 +939,14 @@ try {
       tools: ['worker_run'],
     },
   );
-  const controlRootWorkerServer = (controlRootWorkerBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-worker-delegation'];
-  const controlRootRunRoot = String(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--run-root') + 1]);
+  const controlRootWorkerServer: any = (controlRootWorkerBindConfig.config.mcpServers as Record<string, any>)['narada-smart-scheduling-worker-delegation'];
+  const controlRootRunRoot: any = String(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--run-root') + 1]);
   assert.equal(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--site-root') + 1], controlRootWorkspace);
   assert.equal(controlRootWorkerServer.args[controlRootWorkerServer.args.indexOf('--allowed-root') + 1], controlRootWorkspace);
   assert.equal(controlRootRunRoot.replace(/\\/g, '/'), join(controlRootSite, 'runtime', 'worker-delegation').replace(/\\/g, '/'));
   assert.equal(controlRootRunRoot.replace(/\\/g, '/').includes('/.narada/.narada/'), false);
 
-  const surfaceFeedbackBindConfig = buildSiteBindConfig(
+  const surfaceFeedbackBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-staccato', root, config_path: join(root, 'site.json'), surfaces: [] },
     {
       id: 'surface-feedback',
@@ -954,14 +962,14 @@ try {
       tools: ['surface_feedback_submit'],
     },
   );
-  const surfaceFeedbackServer = (surfaceFeedbackBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-surface-feedback'];
+  const surfaceFeedbackServer: any = (surfaceFeedbackBindConfig.config.mcpServers as Record<string, any>)['narada-staccato-surface-feedback'];
   assertRuntimeProxy(surfaceFeedbackServer, 'D:/code/mcp-surfaces/packages/surface-feedback-mcp/dist/src/main.js');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--feedback-root') + 1], 'D:/code/mcp-surfaces');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--canonical-feedback-root') + 1], 'D:/code/mcp-surfaces');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--site-id') + 1], 'narada-staccato');
   assert.equal(surfaceFeedbackServer.args[surfaceFeedbackServer.args.indexOf('--owned-surface-id') + 1], 'surface-feedback');
 
-  const scopeReadbackRoot = join(root, 'scope-readback-site');
+  const scopeReadbackRoot: any = join(root, 'scope-readback-site');
   mkdirSync(join(scopeReadbackRoot, '.ai', 'mcp'), { recursive: true });
   writeFileSync(join(scopeReadbackRoot, '.ai', 'mcp', 'narada-staccato-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',
@@ -1001,26 +1009,26 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const scopeReadback = validateSiteMcpFabric({ site_id: 'narada-staccato', root: scopeReadbackRoot, config_path: join(scopeReadbackRoot, 'site.json'), surfaces: [] }, true);
-  const scopeFindings = scopeReadback.findings as Array<Record<string, any>>;
-  const speechScopeFinding = scopeFindings.find((finding) => finding.server_key === 'staccato-speech' && finding.code === 'registrar_site_fabric_server_key_ok');
+  const scopeReadback: any = validateSiteMcpFabric({ site_id: 'narada-staccato', root: scopeReadbackRoot, config_path: join(scopeReadbackRoot, 'site.json'), surfaces: [] }, true);
+  const scopeFindings: any = scopeReadback.findings as Array<Record<string, any>>;
+  const speechScopeFinding: any = scopeFindings.find((finding: any) => finding.server_key === 'staccato-speech' && finding.code === 'registrar_site_fabric_server_key_ok');
   assert.ok(speechScopeFinding);
   assert.equal(speechScopeFinding.scope_source, 'site_config_narada_scope');
   assert.equal(speechScopeFinding.injection_scope, 'host');
   assert.equal((speechScopeFinding.narada_scope as Record<string, any>).scope_source, 'site_config_narada_scope');
   assert.deepEqual(speechScopeFinding.required_repair_locus, (speechScopeFinding.narada_scope as Record<string, any>).mutation_locus);
-  const registrarScopeFinding = scopeFindings.find((finding) => finding.server_key === 'staccato-mcp-registrar' && finding.code === 'registrar_site_fabric_server_key_ok');
+  const registrarScopeFinding: any = scopeFindings.find((finding: any) => finding.server_key === 'staccato-mcp-registrar' && finding.code === 'registrar_site_fabric_server_key_ok');
   assert.ok(registrarScopeFinding);
   assert.equal(registrarScopeFinding.scope_source, 'site_config_legacy_top_level');
   assert.equal(registrarScopeFinding.injection_scope, 'user_site');
   assert.equal((registrarScopeFinding.narada_scope as Record<string, any>).scope_source, 'site_config_legacy_top_level');
-  const filesystemScopeFinding = scopeFindings.find((finding) => finding.server_key === 'staccato-local-filesystem' && finding.code === 'registrar_site_fabric_server_key_ok');
+  const filesystemScopeFinding: any = scopeFindings.find((finding: any) => finding.server_key === 'staccato-local-filesystem' && finding.code === 'registrar_site_fabric_server_key_ok');
   assert.ok(filesystemScopeFinding);
   assert.equal(filesystemScopeFinding.scope_source, 'registrar_surface_catalog');
   assert.equal(filesystemScopeFinding.injection_scope, 'local_site');
   assert.equal((filesystemScopeFinding.narada_scope as Record<string, any>).scope_source, 'registrar_surface_catalog');
 
-  const missingDefaultRoot = join(root, 'missing-default-site');
+  const missingDefaultRoot: any = join(root, 'missing-default-site');
   mkdirSync(join(missingDefaultRoot, '.ai', 'mcp'), { recursive: true });
   writeFileSync(join(missingDefaultRoot, 'site.json'), JSON.stringify({ site_id: 'narada-sonar' }), 'utf8');
   writeFileSync(join(missingDefaultRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
@@ -1033,13 +1041,13 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const missingDefault = validateSiteMcpFabric({ site_id: 'narada-sonar', root: missingDefaultRoot, config_path: join(missingDefaultRoot, 'site.json'), surfaces: [] }, false);
-  const missingDefaultFinding = (missingDefault.findings as Array<Record<string, any>>).find((finding) => finding.code === 'registrar_site_fabric_missing_default_surface' && finding.surface_id === 'artifacts');
+  const missingDefault: any = validateSiteMcpFabric({ site_id: 'narada-sonar', root: missingDefaultRoot, config_path: join(missingDefaultRoot, 'site.json'), surfaces: [] }, false);
+  const missingDefaultFinding: any = (missingDefault.findings as Array<Record<string, any>>).find((finding: any) => finding.code === 'registrar_site_fabric_missing_default_surface' && finding.surface_id === 'artifacts');
   assert.ok(missingDefaultFinding);
   assert.equal(missingDefault.status, 'invalid');
 
-  const staleProjectionRoot = join(root, 'stale-carrier-projection-site');
-  const staleProjectionMcpRoot = join(staleProjectionRoot, '.ai', 'mcp');
+  const staleProjectionRoot: any = join(root, 'stale-carrier-projection-site');
+  const staleProjectionMcpRoot: any = join(staleProjectionRoot, '.ai', 'mcp');
   mkdirSync(join(staleProjectionMcpRoot, 'carriers'), { recursive: true });
   writeFileSync(join(staleProjectionRoot, 'site.json'), JSON.stringify({ site_id: 'andrey-user' }), 'utf8');
   writeFileSync(join(staleProjectionMcpRoot, 'narada-site-andrey-user-site-inbox-mcp.json'), JSON.stringify({
@@ -1082,24 +1090,24 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const staleProjectionValidation = validateSiteMcpFabric({
+  const staleProjectionValidation: any = validateSiteMcpFabric({
     site_id: 'andrey-user',
     root: staleProjectionRoot,
     config_path: join(staleProjectionRoot, 'site.json'),
     surfaces: [],
   }, false);
-  const staleProjectionFindings = staleProjectionValidation.findings as Array<Record<string, any>>;
+  const staleProjectionFindings: any = staleProjectionValidation.findings as Array<Record<string, any>>;
   assert.equal(staleProjectionValidation.status, 'invalid');
-  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_carrier_projection_entrypoint_drift' && finding.surface_id === 'site-inbox'));
-  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_carrier_projection_missing_site_root' && finding.surface_id === 'delegated-task'));
-  assert.ok(staleProjectionFindings.some((finding) => finding.code === 'registrar_site_fabric_duplicate_canonical_surface' && finding.canonical_surface_id === 'site-inbox'));
+  assert.ok(staleProjectionFindings.some((finding: any) => finding.code === 'registrar_carrier_projection_entrypoint_drift' && finding.surface_id === 'site-inbox'));
+  assert.ok(staleProjectionFindings.some((finding: any) => finding.code === 'registrar_carrier_projection_missing_site_root' && finding.surface_id === 'delegated-task'));
+  assert.ok(staleProjectionFindings.some((finding: any) => finding.code === 'registrar_site_fabric_duplicate_canonical_surface' && finding.canonical_surface_id === 'site-inbox'));
   assert.equal(staleProjectionValidation.carrier_projection_count, 2);
 
   for (const carrierId of ['opencode-andrey', 'kimi-andrey', 'codex-andrey']) {
-    const outputPath = join(root, `${carrierId}.generated`);
-    const materializedCarrier = await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: outputPath });
+    const outputPath: any = join(root, `${carrierId}.generated`);
+    const materializedCarrier: any = await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: outputPath });
     assert.equal(view(materializedCarrier).status, 'materialized');
-    const content = readFileSync(outputPath, 'utf8');
+    const content: any = readFileSync(outputPath, 'utf8');
     assert.match(content, /surface-feedback/);
     assert.match(content, /--feedback-root/);
     assert.match(content, /--canonical-feedback-root/);
@@ -1120,7 +1128,7 @@ try {
     }
   }
 
-  const aggregateSiteRoot = join(root, 'aggregate-site');
+  const aggregateSiteRoot: any = join(root, 'aggregate-site');
   mkdirSync(join(aggregateSiteRoot, '.ai', 'mcp'), { recursive: true });
   writeFileSync(join(aggregateSiteRoot, 'site.json'), JSON.stringify({ site_id: 'narada-sonar' }), 'utf8');
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-mcp.json'), JSON.stringify({
@@ -1133,22 +1141,22 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const aggregateBindConfig = buildSiteBindConfig(
+  const aggregateBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     sched as any,
   );
   assert.equal(aggregateBindConfig.serverKey, 'narada-sonar-scheduler');
-  const artifactsBindConfig = buildSiteBindConfig(
+  const artifactsBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     artifacts as any,
   );
-  const artifactsServer = (artifactsBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-artifacts'];
+  const artifactsServer: any = (artifactsBindConfig.config.mcpServers as Record<string, any>)['narada-sonar-artifacts'];
   assert.equal(artifactsServer.surface_id, 'artifacts');
   assert.ok((artifactsServer.env_vars as string[]).includes('NARADA_SESSION_ID'));
   assert.equal((artifactsServer.env_vars as string[]).length, new Set(artifactsServer.env_vars as string[]).size);
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', artifactsBindConfig.fileName), JSON.stringify(artifactsBindConfig.config, null, 2), 'utf8');
-  const aggregateWithArtifacts = validateSiteMcpFabric({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] }, true);
-  const aggregateArtifactFinding = (aggregateWithArtifacts.findings as Array<Record<string, any>>).find((finding) => finding.server_key === 'narada-sonar-artifacts' && finding.code === 'registrar_site_fabric_server_key_ok');
+  const aggregateWithArtifacts: any = validateSiteMcpFabric({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] }, true);
+  const aggregateArtifactFinding: any = (aggregateWithArtifacts.findings as Array<Record<string, any>>).find((finding: any) => finding.server_key === 'narada-sonar-artifacts' && finding.code === 'registrar_site_fabric_server_key_ok');
   assert.ok(aggregateArtifactFinding);
   assert.equal(aggregateArtifactFinding.surface_id, 'artifacts');
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', 'narada-sonar-inbox-mcp.json'), JSON.stringify({
@@ -1162,16 +1170,16 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const narsBindConfig = buildSiteBindConfig(
+  const narsBindConfig: any = buildSiteBindConfig(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     narsSession as any,
     'local-site-nars-runtime',
   );
   writeFileSync(join(aggregateSiteRoot, '.ai', 'mcp', narsBindConfig.fileName), JSON.stringify(narsBindConfig.config, null, 2), 'utf8');
-  const surfaceRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const surfaceRegistry: any = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
   assert.equal(surfaceRegistry.artifact_role, 'site_capability_surface_registry_not_mcp_client_config');
   assertOutputReaderClosure(surfaceRegistry, 'aggregate surface registry');
-  const inboxRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-inbox');
+  const inboxRegistry: any = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-inbox');
   assert.ok(inboxRegistry);
   assert.equal(inboxRegistry.surface_type, 'mcp_surface');
   assert.equal(inboxRegistry.runtime_binding.runtime_kind, 'node-stdio');
@@ -1193,7 +1201,7 @@ try {
   assert.equal(inboxRegistry.catalog_surface_id, 'site-inbox');
   assert.ok((inboxRegistry.registered_live_tools as string[]).includes('inbox_acknowledge'));
   assert.ok((inboxRegistry.tool_contract.mutating_tools as string[]).includes('inbox_acknowledge'));
-  const narsRegistry = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-nars-session');
+  const narsRegistry: any = (surfaceRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.server_name === 'narada-sonar-nars-session');
   assert.ok(narsRegistry);
   assert.equal(narsRegistry.catalog_surface_id, 'nars-session');
   assert.equal(narsRegistry.surface_projection.projection_id, 'local-site-nars-runtime');
@@ -1221,14 +1229,14 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const mailRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const mailRegistry: any = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
   assertOutputReaderClosure(mailRegistry, 'mail surface registry');
-  const mailboxRegistry = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mailbox');
+  const mailboxRegistry: any = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'mailbox');
   assert.ok(mailboxRegistry);
   assert.ok((mailboxRegistry.registered_live_tools as string[]).includes('mailbox_output_show'));
   assert.ok((mailboxRegistry.tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
   assert.deepEqual(mailboxRegistry.tool_contract.mutating_tools, []);
-  const graphMailRegistry = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'graph-mail');
+  const graphMailRegistry: any = (mailRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'graph-mail');
   assert.ok(graphMailRegistry);
   assert.ok((graphMailRegistry.registered_live_tools as string[]).includes('graph_mail_output_show'));
   assert.ok((graphMailRegistry.tool_contract.read_only_tools as string[]).includes('graph_mail_output_show'));
@@ -1265,8 +1273,8 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const feedbackRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
-  const feedbackSurface = (feedbackRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'surface-feedback');
+  const feedbackRegistry: any = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] });
+  const feedbackSurface: any = (feedbackRegistry.surfaces as Array<Record<string, any>>).find((surface) => surface.catalog_surface_id === 'surface-feedback');
   assert.ok(feedbackSurface);
   assert.ok((feedbackSurface.registered_live_tools as string[]).includes('surface_feedback_actionable_queue'));
   assert.ok((feedbackSurface.registered_live_tools as string[]).includes('surface_feedback_convert_to_task'));
@@ -1274,7 +1282,7 @@ try {
   assert.equal((feedbackSurface.tool_contract.read_only_tools as string[]).includes('surface_feedback_convert_to_task'), false);
   assert.ok((feedbackSurface.tool_contract.mutating_tools as string[]).includes('surface_feedback_convert_to_task'));
 
-  const nestedSiteRoot = join(root, 'nested-control-site');
+  const nestedSiteRoot: any = join(root, 'nested-control-site');
   mkdirSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp'), { recursive: true });
   writeFileSync(join(nestedSiteRoot, '.narada', '.ai', 'mcp', 'narada-sonar-mailbox-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',
@@ -1287,11 +1295,11 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const nestedRegistry = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: nestedSiteRoot, config_path: join(nestedSiteRoot, '.narada', 'config.json'), surfaces: [] });
+  const nestedRegistry: any = buildSiteSurfaceRegistry({ site_id: 'narada-sonar', root: nestedSiteRoot, config_path: join(nestedSiteRoot, '.narada', 'config.json'), surfaces: [] });
   assertOutputReaderClosure(nestedRegistry, 'nested surface registry');
   assert.equal((nestedRegistry.surfaces as Array<Record<string, any>>).length, 1);
   assert.ok(((nestedRegistry.surfaces as Array<Record<string, any>>)[0].tool_contract.read_only_tools as string[]).includes('mailbox_output_show'));
-  const sidecarRefusal = siteBindSidecarRefusal(
+  const sidecarRefusal: any = siteBindSidecarRefusal(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [] },
     'scheduler',
   );
@@ -1303,7 +1311,7 @@ try {
     'scheduler',
     { allow_sidecar: true },
   ), null);
-  const disabledSidecarRefusal = siteBindSidecarRefusal(
+  const disabledSidecarRefusal: any = siteBindSidecarRefusal(
     { site_id: 'narada-sonar', root: aggregateSiteRoot, config_path: join(aggregateSiteRoot, 'site.json'), surfaces: [], surface_overrides: { scheduler: { enabled: false } } },
     'scheduler',
   );
@@ -1316,7 +1324,7 @@ try {
     { allow_disabled_sidecar: true, allow_sidecar: true },
   ), null);
 
-  const unresolvedTemplateRoot = join(root, 'unresolved-template-site');
+  const unresolvedTemplateRoot: any = join(root, 'unresolved-template-site');
   mkdirSync(join(unresolvedTemplateRoot, '.ai', 'mcp'), { recursive: true });
   writeFileSync(join(unresolvedTemplateRoot, '.ai', 'mcp', 'narada-sonar-task-lifecycle-mcp.json'), JSON.stringify({
     schema: 'narada.mcp.client_config.v0',
@@ -1329,9 +1337,9 @@ try {
       },
     },
   }, null, 2), 'utf8');
-  const unresolvedTemplateCheck = validateSiteMcpFabric({ site_id: 'narada-sonar', root: unresolvedTemplateRoot, config_path: join(unresolvedTemplateRoot, 'config.json'), surfaces: [] });
+  const unresolvedTemplateCheck: any = validateSiteMcpFabric({ site_id: 'narada-sonar', root: unresolvedTemplateRoot, config_path: join(unresolvedTemplateRoot, 'config.json'), surfaces: [] });
   assert.ok((unresolvedTemplateCheck.findings as Array<Record<string, any>>)
-    .some((finding) => finding.code === 'registrar_site_fabric_unresolved_template'));
+    .some((finding: any) => finding.code === 'registrar_site_fabric_unresolved_template'));
 
   console.log('mcp-registrar behavior ok');
 } finally {

@@ -1605,6 +1605,31 @@ type RuntimeDependencyCheck = {
   exists: boolean;
 };
 
+function runtimeExportTargetExists(exportPath: string): boolean {
+  const wildcardIndex = exportPath.search(/[*?]/);
+  if (wildcardIndex < 0) return existsSync(exportPath);
+
+  // Package export patterns such as ./dist/schema/* name a family of
+  // runtime artifacts, not a literal filesystem entry containing '*'.
+  const staticPrefix = exportPath.slice(0, wildcardIndex);
+  const directory = staticPrefix.endsWith('/') || staticPrefix.endsWith('\\')
+    ? staticPrefix.slice(0, -1)
+    : dirname(staticPrefix);
+  if (!existsSync(directory)) return false;
+  try {
+    return readdirSync(directory, { withFileTypes: true }).some((entry) => entry.isFile() || entry.isDirectory());
+  } catch {
+    return false;
+  }
+}
+
+function dependencyPackageRoot(dependency: string): string {
+  const packageName = dependency.replace('@narada2/', '');
+  const sharedRoot = `${MCP_SURFACES_ROOT}/shared/${packageName}`;
+  if (existsSync(`${sharedRoot}/package.json`)) return sharedRoot;
+  return `${MCP_SURFACES_ROOT}/${packageName}`;
+}
+
 function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): RuntimeDependencyCheck[] {
   const packageRoot = `${MCP_SURFACES_ROOT}/${surface.package}`;
   const packagePath = `${packageRoot}/package.json`;
@@ -1618,8 +1643,7 @@ function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): Runtime
   const dependencies = asRecord(packageJson.dependencies);
   const checks: RuntimeDependencyCheck[] = [];
   for (const dependency of Object.keys(dependencies).filter((name) => name.startsWith('@narada2/mcp-'))) {
-    const sharedName = dependency.replace('@narada2/', '');
-    const dependencyRoot = `${MCP_SURFACES_ROOT}/shared/${sharedName}`;
+    const dependencyRoot = dependencyPackageRoot(dependency);
     const dependencyPackagePath = `${dependencyRoot}/package.json`;
     if (!existsSync(dependencyPackagePath)) {
       checks.push({ dependency, package_root: dependencyRoot, export_path: dependencyPackagePath, exists: false });
@@ -1634,7 +1658,7 @@ function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): Runtime
     }
     for (const exportTarget of packageExportRuntimeTargets(dependencyPackageJson)) {
       const exportPath = `${dependencyRoot}/${exportTarget.replace(/^\.\//, '')}`;
-      checks.push({ dependency, package_root: dependencyRoot, export_path: exportPath, exists: existsSync(exportPath) });
+      checks.push({ dependency, package_root: dependencyRoot, export_path: exportPath, exists: runtimeExportTargetExists(exportPath) });
     }
   }
   return checks;

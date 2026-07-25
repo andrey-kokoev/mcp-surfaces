@@ -53,22 +53,30 @@ function canonicalizeMaterializedConfiguration(carrierKind: string, content: str
   const normalized = content.replace(/\r\n?/g, '\n');
   if (carrierKind !== 'codex') return normalized;
 
-  // Codex may add or update project trust tables after registrar materialization.
-  // Those tables are outside Narada's MCP launch projection; retain the MCP
-  // sections in the fingerprint so launch/config mutations remain detectable.
+  // The registrar owns the Codex MCP launch projection. Codex may add or update
+  // unrelated user settings (including project trust, approvals, TUI, and
+  // Windows tables) after materialization. Fingerprint only the MCP sections so
+  // those carrier-owned settings cannot invalidate an otherwise unchanged MCP
+  // launch configuration.
   const lines = normalized.split('\n');
   const canonical: string[] = [];
-  let inProjectTrustTable = false;
+  let inMcpTable = false;
+  let sawMcpTable = false;
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('[projects.') && trimmed.endsWith(']')) {
-      inProjectTrustTable = true;
+    if (trimmed.startsWith('[mcp_servers.') && trimmed.endsWith(']')) {
+      inMcpTable = true;
+      sawMcpTable = true;
+      canonical.push(line);
       continue;
     }
-    if (trimmed.startsWith('[') && trimmed.endsWith(']')) inProjectTrustTable = false;
-    if (!inProjectTrustTable) canonical.push(line);
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) inMcpTable = false;
+    if (inMcpTable) canonical.push(line);
   }
-  return canonical.join('\n').replace(/\n+$/, '');
+  // Preserve the old whole-file behavior for malformed/non-TOML fixtures that
+  // contain no MCP table; otherwise an empty projection could mask deletion of
+  // the managed launch configuration.
+  return (sawMcpTable ? canonical.join('\n') : normalized).replace(/\n+$/, '');
 }
 
 export function materializationConfigFingerprint(input: { carrierKind: string; content: string }): string {

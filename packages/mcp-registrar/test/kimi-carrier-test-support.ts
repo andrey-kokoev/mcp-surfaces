@@ -15,10 +15,10 @@ export type KimiCarrierConfig = {
 };
 
 export async function materializeKimiCarrierConfig(outputPath: string): Promise<KimiCarrierConfig> {
-  const response = await handleRequest({
+  const response = await ((handleRequest({
     jsonrpc: '2.0', id: 1, method: 'tools/call',
     params: { name: 'registrar_carrier_materialize', arguments: { carrier_id: 'kimi-andrey', output_path: outputPath } },
-  }, createServerState({})) as Record<string, any>;
+  }, createServerState({}))) as any) as any as Record<string, any>;
   assert.equal(response.error, undefined, JSON.stringify(response.error));
   const result = response.result?.structuredContent as Record<string, unknown> | undefined;
   assert.equal(result?.status, 'materialized');
