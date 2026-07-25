@@ -172,7 +172,7 @@ export const TOOLS = [
     ensureResident: { type: 'boolean', description: 'Ensure the configured resident carrier before dispatch when allowed.' },
     requireLiveCarrier: { type: 'boolean', description: 'Require a live resident carrier for dispatch. Set false for fixture/test-authority runs.' },
   }),
-].map((tool) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
+].map((tool: any) => ({ ...tool, annotations: toolAnnotations(tool.name), outputSchema: genericToolOutputSchema() }));
 
 function toolAnnotations(name: string) {
   const readOnly = READ_ONLY_TOOL_NAMES.has(name);
@@ -205,18 +205,18 @@ const activeRequests = new Map<string, AbortController>();
 const isMainModule = process.argv[1] != null && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMainModule) {
   process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (chunk) => {
+  process.stdin.on('data', (chunk: any) => {
     inputBuffer += chunk;
     processInputBuffer();
   });
 }
 
-function parseArgs(argv) {
+function parseArgs(argv: any) {
   const parsed: SiteOpsServerArgs = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
-    const key = arg.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    const key = arg.slice(2).replace(/-([a-z])/g, (_: any, c: any) => c.toUpperCase());
     const next = argv[i + 1];
     if (next && !next.startsWith('--')) {
       parsed[key] = next;
@@ -268,7 +268,7 @@ function readFramedMessage() {
   return body;
 }
 
-async function handleMessage(message) {
+async function handleMessage(message: any) {
   if (!message?.id && message?.method === 'notifications/cancelled') {
     const requestId = String(message.params?.requestId ?? '');
     activeRequests.get(requestId)?.abort();
@@ -278,7 +278,7 @@ async function handleMessage(message) {
   const id = message?.id ?? null;
   const requestId = id == null ? null : String(id);
   const abortController = requestId == null ? null : new AbortController();
-  if (requestId) activeRequests.set(requestId, abortController);
+  if (requestId && abortController) activeRequests.set(requestId, abortController);
   try {
     sendProgress(message, 0, 'started');
     if (message.method === 'initialize') {
@@ -337,7 +337,7 @@ function listPrompts() {
   ];
 }
 
-function promptGet(params) {
+function promptGet(params: any) {
   const name = String(params.name ?? '');
   if (name !== 'site_loop_workflow') throw new Error(`unknown_prompt: ${name}`);
   return {
@@ -346,9 +346,9 @@ function promptGet(params) {
   };
 }
 
-function completeArgument(params) {
+function completeArgument(params: any) {
   const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
-  const values = argumentName === 'name' ? TOOLS.map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+  const values = argumentName === 'name' ? TOOLS.map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
 
@@ -366,7 +366,7 @@ function toolResult(value: unknown, toolName: string) {
   });
 }
 
-async function callTool(name, args, context: SiteOpsRequestContext = {}) {
+async function callTool(name: any, args: any, context: SiteOpsRequestContext = {}) {
   if (name !== 'site_loop_guidance' && name !== 'site_loop_doctor' && name !== 'site_loop_config_validate' && name !== 'site_loop_output_show') {
     requireActiveSiteLoopConfig();
   }
@@ -390,7 +390,7 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
         dependency_boundaries: siteLoopDependencyBoundaries(),
         read_only_docs: config.docs.length,
         approved_tests: Object.keys(config.tests),
-        site_loop_tools: TOOLS.filter((item) => item.name.startsWith('site_loop_')).map((item) => item.name),
+        site_loop_tools: TOOLS.filter((item: any) => item.name.startsWith('site_loop_')).map((item: any) => item.name),
       };
     }
     case 'site_loop_config_validate': {
@@ -421,7 +421,7 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       return {
         status: 'ok',
         site_root: siteRoot,
-        tests: Object.entries(activeTests()).map(([selector, command]) => ({
+        tests: Object.entries(activeTests()).map(([selector, command]: any) => ({
           selector,
           command: [command.command, ...command.args].join(' '),
         })),
@@ -466,7 +466,7 @@ async function callTool(name, args, context: SiteOpsRequestContext = {}) {
       assertRunOnceTransportBudget(args);
       return runSiteLoopWithCanonicalRuntimeHost(
         siteRoot,
-        () => loadSiteLoopModule().then((module) => module.runSiteLoop(siteRoot, normalizeLoopOptions(args))),
+        () => loadSiteLoopModule().then((module: any) => module.runSiteLoop(siteRoot, normalizeLoopOptions(args))),
         normalizeLoopOptions(args),
       );
     default:
@@ -813,19 +813,19 @@ function normalizeLoopControl(args: LoopControlToolArgs = {}) {
   };
 }
 
-function optionalString(value) {
+function optionalString(value: any) {
   if (value == null) return undefined;
   const text = String(value).trim();
   return text ? text : undefined;
 }
 
-function optionalNumber(value) {
+function optionalNumber(value: any) {
   if (value == null) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
 }
-function showDoc(path) {
-  const doc = activeDocs().find((item) => item.path === path);
+function showDoc(path: any) {
+  const doc = activeDocs().find((item: any) => item.path === path);
   if (!doc) throw new Error(`doc_not_allowlisted: ${path}`);
   const absolutePath = resolve(siteRoot, doc.path);
   if (!isPathInside(absolutePath, siteRoot)) throw new Error(`doc_outside_site_root: ${path}`);
@@ -838,7 +838,7 @@ function showDoc(path) {
   };
 }
 
-async function runTest(selector, context: SiteOpsRequestContext = {}) {
+async function runTest(selector: any, context: SiteOpsRequestContext = {}) {
   const tests = activeTests();
   if (!Object.hasOwn(tests, selector)) throw new Error(`test_selector_not_approved: ${selector}`);
   const { command, args } = tests[selector];
@@ -861,14 +861,14 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
   const config = requireActiveSiteLoopConfig();
   const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? config.scheduler.default_task_name;
   const [loopStatus, loopHealth, operating, scheduledTask] = await Promise.all([
-    loadSiteLoopModule().then((module) => module.siteLoopStatus(siteRoot)).catch((error) => statusError(error)),
-    loadSiteLoopModule().then((module) => module.siteLoopHealth(siteRoot)).catch((error) => statusError(error)),
-    loadSiteLoopModule().then((module) => module.siteLoopOperatingLayerStatus(siteRoot, { limit: 25 })).catch((error) => statusError(error)),
+    loadSiteLoopModule().then((module: any) => module.siteLoopStatus(siteRoot)).catch((error: any) => statusError(error)),
+    loadSiteLoopModule().then((module: any) => module.siteLoopHealth(siteRoot)).catch((error: any) => statusError(error)),
+    loadSiteLoopModule().then((module: any) => module.siteLoopOperatingLayerStatus(siteRoot, { limit: 25 })).catch((error: any) => statusError(error)),
     readScheduledTaskStatus(taskName),
   ]);
-  const pidFiles = config.scheduler.pid_files.map((name) => readPidFileStatus(name));
-  const stalePidFiles = pidFiles.filter((item) => item.exists && item.pid && item.process_alive === false).map((item) => item.name);
-  const livePidFiles = pidFiles.filter((item) => item.exists && item.process_alive === true).map((item) => item.name);
+  const pidFiles = config.scheduler.pid_files.map((name: any) => readPidFileStatus(name));
+  const stalePidFiles = pidFiles.filter((item: any) => item.exists && item.pid && item.process_alive === false).map((item: any) => item.name);
+  const livePidFiles = pidFiles.filter((item: any) => item.exists && item.process_alive === true).map((item: any) => item.name);
   const logicalLoopEnabled = loopStatus?.control?.enabled ?? loopStatus?.enabled;
   const logicalLoopPaused = loopStatus?.control?.paused ?? loopStatus?.paused;
   const healthStatus = loopHealth?.status ?? loopHealth?.overall_status ?? loopHealth?.health;
@@ -879,7 +879,7 @@ async function unifiedSiteLoopStatus(args: SiteOpsServerArgs = {}) {
   const openAttention = Number(operationalBacklog.open_attention ?? loopHealth?.attention?.open_count ?? 0);
   const stalePending = Number(operationalBacklog.stale_pending_directives ?? 0);
   const unresolved = Number(operationalBacklog.unresolved_directives ?? loopHealth?.unresolved_backlog?.unresolved_count ?? 0);
-  const errorAttention = operationalAlerts.some((item) => item && (item.severity === 'critical' || item.severity === 'error'));
+  const errorAttention = operationalAlerts.some((item: any) => item && (item.severity === 'critical' || item.severity === 'error'));
   const computedHealthStatus = healthStatus === 'healthy' && (
     operating?.status === 'attention_needed'
       || openAttention > 0
@@ -934,7 +934,7 @@ async function siteLoopRecoveryPlan(args: SiteOpsServerArgs = {}) {
   const taskName = optionalString(args.task_name) ?? optionalString(args.taskName) ?? config.scheduler.default_task_name;
   const includeCommands = args.include_commands !== false && args.includeCommands !== false;
   const status = await unifiedSiteLoopStatus({ ...args, task_name: taskName });
-  const steps = config.recovery_plan.steps.map((step) => ({
+  const steps = config.recovery_plan.steps.map((step: any) => ({
     ...step,
     command: step.command == null ? undefined : renderRecoveryTemplate(step.command, { siteRoot, taskName }),
   }));
@@ -946,7 +946,7 @@ async function siteLoopRecoveryPlan(args: SiteOpsServerArgs = {}) {
     task_name: taskName,
     current_posture: status.posture,
     current_blockers: status.blockers,
-    recommended_order: includeCommands ? steps : steps.map(({ id, reason }) => ({ id, reason })),
+    recommended_order: includeCommands ? steps : steps.map(({ id, reason }: any) => ({ id, reason })),
     guardrails: config.recovery_plan.guardrails,
     status_snapshot: status,
   };
@@ -1020,7 +1020,7 @@ function parseListOutput(output: string) {
   return fields;
 }
 
-function summarizeUsefulWork(loopStatus, loopHealth) {
+function summarizeUsefulWork(loopStatus: any, loopHealth: any) {
   return {
     last_run_id: loopStatus?.last_run_id ?? loopStatus?.lastRunId ?? loopHealth?.last_run_id,
     last_run_at: loopStatus?.last_run_at ?? loopStatus?.lastRunAt ?? loopHealth?.last_run_at,
@@ -1029,12 +1029,12 @@ function summarizeUsefulWork(loopStatus, loopHealth) {
   };
 }
 
-function statusError(error) {
+function statusError(error: any) {
   return { status: 'error', error: error instanceof Error ? error.message : String(error) };
 }
 
-function runChildProcess(command, args, options): Promise<SiteOpsChildResult> {
-  return new Promise((resolveResult) => {
+function runChildProcess(command: any, args: any, options: any): Promise<SiteOpsChildResult> {
+  return new Promise((resolveResult: any) => {
     if (options.abortSignal?.aborted) {
       resolveResult({ status: null, stdout: '', stderr: '', signal: null, cancelled: true });
       return;
@@ -1051,7 +1051,7 @@ function runChildProcess(command, args, options): Promise<SiteOpsChildResult> {
     let settled = false;
     let timedOut = false;
     let cancelled = false;
-    const settle = (value) => {
+    const settle = (value: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -1070,26 +1070,26 @@ function runChildProcess(command, args, options): Promise<SiteOpsChildResult> {
     options.abortSignal?.addEventListener('abort', abortHandler, { once: true });
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk) => {
+    child.stdout?.on('data', (chunk: any) => {
       stdout += chunk;
     });
-    child.stderr?.on('data', (chunk) => {
+    child.stderr?.on('data', (chunk: any) => {
       stderr += chunk;
     });
-    child.on('error', (error) => {
+    child.on('error', (error: any) => {
       settle({ status: null, stdout, stderr: stderr ? `${stderr}\n${error.message}` : error.message, signal: null, cancelled });
     });
-    child.on('close', (status, signal) => {
+    child.on('close', (status: any, signal: any) => {
       settle({ status, stdout, stderr: timedOut ? `${stderr}\ntimed_out`.trim() : stderr, signal, cancelled });
     });
   });
 }
 
-function respond(id, result) {
+function respond(id: any, result: any) {
   writeMessage({ jsonrpc: '2.0', id, result });
 }
 
-function respondError(id, error) {
+function respondError(id: any, error: any) {
   writeMessage({
     jsonrpc: '2.0',
     id,
@@ -1101,7 +1101,7 @@ export function listTools() {
   return TOOLS;
 }
 
-function sendProgress(message, progress, progressMessage) {
+function sendProgress(message: any, progress: any, progressMessage: any) {
   const progressToken = message?.params?._meta?.progressToken;
   if (progressToken === undefined) return;
   writeMessage({
@@ -1111,19 +1111,19 @@ function sendProgress(message, progress, progressMessage) {
   });
 }
 
-function writeMessage(message) {
+function writeMessage(message: any) {
   const body = JSON.stringify(message);
   process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}
 
 ${body}`);
 }
 
-function isPathInside(candidate, root) {
+function isPathInside(candidate: any, root: any) {
   const rel = relative(resolve(root), resolve(candidate));
   return rel === '' || (!rel.startsWith('..') && !/^[A-Za-z]:/.test(rel));
 }
 
-function tool(name, description, properties, required = []) {
+function tool(name: any, description: any, properties: any, required : any= []) {
   return {
     name,
     description,

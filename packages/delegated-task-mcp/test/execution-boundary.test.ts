@@ -79,12 +79,12 @@ try {
 }
 
 async function call(state: ReturnType<typeof createServerState>, argumentsValue: JsonRecord): Promise<JsonRecord> {
-  const response = await handleRequest({
+  const response = await ((handleRequest({
     jsonrpc: '2.0',
     id: `boundary-${Date.now()}-${Math.random()}`,
     method: 'tools/call',
     params: { name: 'delegated_task_run', arguments: argumentsValue },
-  }, state);
+  }, state)) as any) as any;
   const result = response?.result as JsonRecord | undefined;
   return (result?.structuredContent as JsonRecord | undefined) ?? { error_code: String(response?.error?.message ?? 'missing_result') };
 }

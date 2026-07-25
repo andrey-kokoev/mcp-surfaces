@@ -110,12 +110,12 @@ async function runProviderIntegration(): Promise<void> {
 }
 
 async function callTool(state: ReturnType<typeof createServerState>, name: string, arguments_: Record<string, unknown>) {
-  return await handleRequest({
+  return await ((handleRequest({
     jsonrpc: '2.0',
     id: `${name}-${Date.now()}-${Math.random()}`,
     method: 'tools/call',
     params: { name, arguments: arguments_ },
-  }, state);
+  }, state)) as any) as any;
 }
 
 async function cleanupRoot(root: string): Promise<void> {

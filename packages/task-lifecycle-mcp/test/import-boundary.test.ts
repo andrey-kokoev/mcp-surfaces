@@ -23,7 +23,7 @@ for (const file of walk(srcRoot)) {
 
 console.log('task-lifecycle-mcp import boundary ok');
 
-function* walk(dir) {
+function* walk(dir: any): Generator<string> {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) yield* walk(path);

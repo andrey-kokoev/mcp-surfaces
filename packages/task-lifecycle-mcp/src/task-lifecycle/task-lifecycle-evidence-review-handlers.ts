@@ -15,7 +15,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function latestEvidenceAdmission(store, taskNumber) {
+function latestEvidenceAdmission(store: any, taskNumber: any) {
   try {
     return store.db.prepare(`
       SELECT admission_id, verdict, admitted_by, admitted_at
@@ -29,12 +29,12 @@ function latestEvidenceAdmission(store, taskNumber) {
   }
 }
 
-function buildCanonicalFinishResponse({ store, taskNumber, payload }) {
+function buildCanonicalFinishResponse({ store, taskNumber, payload }: any) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   const persistedStatus = lifecycle?.status ?? payload.new_status ?? null;
   const reviewDependency = lifecycle
     ? (store.listTaskDependenciesForParent?.(lifecycle.task_id) ?? [])
-      .find((dependency) => dependency.kind === 'review') ?? null
+      .find((dependency: any) => dependency.kind === 'review') ?? null
     : null;
   const reviewLifecycle = reviewDependency ? store.getLifecycle?.(reviewDependency.required_task_id) : null;
   const evidenceAdmission = latestEvidenceAdmission(store, taskNumber);
@@ -108,7 +108,7 @@ function buildCanonicalFinishResponse({ store, taskNumber, payload }) {
 }
 
 function normalizeBlockedReportBlockers(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value.filter((item) => item !== null && item !== undefined);
+  if (Array.isArray(value)) return value.filter((item: any) => item !== null && item !== undefined);
   const text = nonEmptyString(value);
   return text ? [text] : [];
 }
@@ -117,7 +117,7 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }): GovernedTestEvidenceResolution {
+function resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }: any): GovernedTestEvidenceResolution {
   const structuredMatch = /^structured_command_execution:([A-Za-z0-9._:-]+)$/.exec(ref);
   if (structuredMatch) {
     const executionPath = join(siteRoot, 'executions', `${structuredMatch[1]}.json`);
@@ -186,7 +186,7 @@ function outcomeIsSingleOperatorReview(outcome: Record<string, unknown> | null |
   if (!outcome || typeof outcome.findings_json !== 'string') return false;
   try {
     const findings = JSON.parse(outcome.findings_json);
-    return Array.isArray(findings) && findings.some((finding) => {
+    return Array.isArray(findings) && findings.some((finding: any) => {
       const record = asRecord(finding);
       return record?.location === 'review_authority'
         && typeof record.description === 'string'
@@ -203,7 +203,7 @@ function siteRelativePath(siteRoot: string, filePath: string): string {
 }
 
 function siteRelativeChangedFiles(siteRoot: string, files: string[]): string[] {
-  return files.map((file) => siteRelativePath(siteRoot, file)).filter((file) => file && !file.startsWith('..'));
+  return files.map((file: any) => siteRelativePath(siteRoot, file)).filter((file: any) => file && !file.startsWith('..'));
 }
 
 function markdownSectionHasContent(body: string, heading: string): boolean {
@@ -229,8 +229,8 @@ function repairCompatibilityAcceptanceSection(body: string): string {
   const nextHeading = body.indexOf('\n## ', contentStart + 1);
   const sectionEnd = nextHeading < 0 ? body.length : nextHeading;
   const section = body.slice(contentStart + 1, sectionEnd);
-  const repaired = section.split('\n').map((line) => line.includes('- [ ]') ? line.replace('- [ ]', '- [x]') : line).join('\n');
-  const hasCheckedCriterion = repaired.split('\n').some((line) => line.includes('- [x]') || line.includes('- [X]'));
+  const repaired = section.split('\n').map((line: any) => line.includes('- [ ]') ? line.replace('- [ ]', '- [x]') : line).join('\n');
+  const hasCheckedCriterion = repaired.split('\n').some((line: any) => line.includes('- [x]') || line.includes('- [X]'));
   const finalSection = hasCheckedCriterion
     ? repaired
     : `${repaired.trimEnd()}\n\n- [x] The compatibility review outcome is represented by the authoritative task outcome contract.\n`;
@@ -289,7 +289,7 @@ function updateMarkdownFrontMatterFields(path: string, fields: Record<string, st
   writeFileSync(path, `${match[1]}${frontMatter}${match[3]}${before.slice(match[0].length)}`, 'utf8');
 }
 
-function ensureCompatibilityReviewTaskProjection({ siteRoot, store, reviewTask, parentLifecycle, agentId, outcomeContract }) {
+function ensureCompatibilityReviewTaskProjection({ siteRoot, store, reviewTask, parentLifecycle, agentId, outcomeContract }: any) {
   const now = new Date().toISOString();
   const generatedSpec = {
     title: `Compatibility review for task #${parentLifecycle.task_number}`,
@@ -321,7 +321,7 @@ function ensureCompatibilityReviewTaskProjection({ siteRoot, store, reviewTask, 
   let createdFile = false;
   if (taskFileExisted) {
     const before = readFileSync(taskPath, 'utf8');
-    const declaredNumberLine = before.split('\n').find((line) => {
+    const declaredNumberLine = before.split('\n').find((line: any) => {
       const trimmed = line.trim();
       return trimmed.startsWith('number:') || trimmed.startsWith('task_number:');
     });
@@ -390,12 +390,12 @@ function ensureCompatibilityReviewTaskProjection({ siteRoot, store, reviewTask, 
   };
 }
 
-async function backfillReviewOutcomeEvidence({ siteRoot, store, taskNumber, agentId, outcome, summary, findings, outcomeContract, findTaskFile, replaceTaskSection, proveTaskCriteria }) {
+async function backfillReviewOutcomeEvidence({ siteRoot, store, taskNumber, agentId, outcome, summary, findings, outcomeContract, findTaskFile, replaceTaskSection, proveTaskCriteria }: any) {
   if (outcomeContract?.outcome_type !== 'review') return null;
   const taskFile = await findTaskFile(siteRoot, taskNumber);
   if (!taskFile) return { status: 'skipped', reason: 'task_file_not_found' };
   const findingsText = Array.isArray(findings) && findings.length > 0
-    ? findings.map((finding, index) => `${index + 1}. ${typeof finding === 'string' ? finding : JSON.stringify(finding)}`).join('\n')
+    ? findings.map((finding: any, index: any) => `${index + 1}. ${typeof finding === 'string' ? finding : JSON.stringify(finding)}`).join('\n')
     : 'No findings recorded.';
   const executionNotes = [
     `Outcome-contract review completed by ${agentId}.`,
@@ -426,7 +426,7 @@ function parseStringArrayJson(value: string | null | undefined): string[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((item: any): item is string => typeof item === 'string') : [];
   } catch {
     return [];
   }
@@ -436,10 +436,10 @@ function parseCapabilityList(value: unknown): string[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(String(value)) as unknown;
-    if (Array.isArray(parsed)) return parsed.filter((item): item is string => typeof item === 'string');
+    if (Array.isArray(parsed)) return parsed.filter((item: any): item is string => typeof item === 'string');
     const record = asRecord(parsed);
     const capabilities = record?.capabilities;
-    return Array.isArray(capabilities) ? capabilities.filter((item): item is string => typeof item === 'string') : [];
+    return Array.isArray(capabilities) ? capabilities.filter((item: any): item is string => typeof item === 'string') : [];
   } catch {
     return [];
   }
@@ -451,22 +451,22 @@ function capabilitySatisfiesRequirement(capability: string, requirement: string)
   return false;
 }
 
-function findCapabilityEligibleAgents(store, requirement: string) {
+function findCapabilityEligibleAgents(store: any, requirement: string) {
   try {
     const rows = store.db.prepare('SELECT agent_id, role, capabilities_json FROM agent_roster WHERE status = ?').all('active');
     return rows
-      .map((row) => ({
+      .map((row: any) => ({
         agent_id: row.agent_id,
         role: row.role ?? null,
         capabilities: parseCapabilityList(row.capabilities_json),
       }))
-      .filter((row) => row.capabilities.some((capability) => capabilitySatisfiesRequirement(capability, requirement)));
+      .filter((row: any) => row.capabilities.some((capability: any) => capabilitySatisfiesRequirement(capability, requirement)));
   } catch {
     return [];
   }
 }
 
-function evaluateOutcomeCapabilityPolicy({ store, agentId, capabilityRequirement, authorityBasis }) {
+function evaluateOutcomeCapabilityPolicy({ store, agentId, capabilityRequirement, authorityBasis }: any) {
   const requirement = nonEmptyString(capabilityRequirement);
   if (!requirement) {
     return {
@@ -481,7 +481,7 @@ function evaluateOutcomeCapabilityPolicy({ store, agentId, capabilityRequirement
   }
   const rosterEntry = store.getRosterEntry?.(agentId) ?? null;
   const capabilities = parseCapabilityList(rosterEntry?.capabilities_json);
-  const agentHasCapability = capabilities.some((capability) => capabilitySatisfiesRequirement(capability, requirement));
+  const agentHasCapability = capabilities.some((capability: any) => capabilitySatisfiesRequirement(capability, requirement));
   const overrideProvided = asRecord(authorityBasis) !== null;
   return {
     capability_requirement: requirement,
@@ -587,7 +587,7 @@ function rosterOperatorIdentity(store: DependencyConflictStore, agentId: string 
 function hasAgentRosterColumn(store: DependencyConflictStore, columnName: string): boolean {
   try {
     const statement = store.db.prepare('PRAGMA table_info(agent_roster)') as unknown as { all: () => Array<{ name?: unknown }> };
-    return statement.all().some((column) => column.name === columnName);
+    return statement.all().some((column: any) => column.name === columnName);
   } catch {
     return false;
   }
@@ -607,7 +607,7 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
   const singletonReviewerAgentId = eligibleReviewers.length === 1
     ? (eligibleReviewers[0] as { agent_id?: unknown }).agent_id
     : null;
-  const evaluations: DependencyConflictEvaluation[] = dependencies.map((dependency) => {
+  const evaluations: DependencyConflictEvaluation[] = dependencies.map((dependency: any) => {
     const gatedAgentId = latestReportAgentId(store, dependency.parent_task_id)
       ?? (dependency.kind === 'review' ? dependency.created_by ?? null : null);
     const gatedOperatorIdentity = rosterOperatorIdentity(store, gatedAgentId);
@@ -634,7 +634,7 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
       satisfied: !conflictDetected || singleOperatorReview || Boolean(authorityBasis),
     };
   });
-  const blocked = evaluations.filter((evaluation) => !evaluation.satisfied);
+  const blocked = evaluations.filter((evaluation: any) => !evaluation.satisfied);
   return {
     evaluations,
     blocked,
@@ -644,7 +644,7 @@ function dependencyConflictPolicyEvaluations({ store, lifecycle, outcomeId, agen
       schema: 'narada.task.mcp.finish.dependency_conflict_policy.v0',
       required_task_id: lifecycle.task_id,
       agent_id: agentId,
-      conflicts: blocked.map((evaluation) => ({
+      conflicts: blocked.map((evaluation: any) => ({
         dependency_id: evaluation.dependency.dependency_id,
         parent_task_id: evaluation.dependency.parent_task_id,
         required_task_id: evaluation.dependency.required_task_id,
@@ -696,10 +696,10 @@ function dispositionString(value: unknown): string | null {
     ?? nonEmptyString(record.question);
 }
 
-function validateBlockingFindingDispositions(findings: unknown, store): { ok: true } | { ok: false; errors: string[]; examples: Record<string, unknown> } {
+function validateBlockingFindingDispositions(findings: unknown, store: any): { ok: true } | { ok: false; errors: string[]; examples: Record<string, unknown> } {
   if (!Array.isArray(findings)) return { ok: true };
   const errors: string[] = [];
-  findings.forEach((finding, index) => {
+  findings.forEach((finding: any, index: any) => {
     const record = asRecord(finding);
     if (!record || record.severity !== 'blocking') return;
 
@@ -709,7 +709,7 @@ function validateBlockingFindingDispositions(findings: unknown, store): { ok: tr
       ['reopened_task_number', record.reopened_task_number],
       ['covered_by_existing_task', record.covered_by_existing_task],
     ] as const;
-    const taskDisposition = taskBacked.find(([, value]) => taskNumberFromDisposition(value) !== null);
+    const taskDisposition = taskBacked.find(([, value]: any) => taskNumberFromDisposition(value) !== null);
     if (taskDisposition) {
       const taskNumber = taskNumberFromDisposition(taskDisposition[1])!;
       const lifecycle = store.getLifecycleByNumber(taskNumber);
@@ -764,7 +764,7 @@ function validateBlockingFindingDispositions(findings: unknown, store): { ok: tr
   };
 }
 
-function dependencyDispositionCommandFromFindings(findings: unknown, store, dependencyId: string, agentId: string): Record<string, unknown> | null {
+function dependencyDispositionCommandFromFindings(findings: unknown, store: any, dependencyId: string, agentId: string): Record<string, unknown> | null {
   if (!Array.isArray(findings)) return null;
   for (const finding of findings) {
     const record = asRecord(finding);
@@ -832,7 +832,7 @@ export const TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES = Object.freeze([
   "task_lifecycle_compatibility_reconcile"
 ]);
 
-export function createTaskLifecycleEvidenceReviewHandlers(context) {
+export function createTaskLifecycleEvidenceReviewHandlers(context: any) {
   const {
     NO_FILES_CHANGED_MARKER,
     store,
@@ -885,13 +885,13 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     markParentAwaitingDependencies,
   } = context;
 
-  async function admitReviewMigrationOutcome(options) {
+  async function admitReviewMigrationOutcome(options: any) {
     let projectionSnapshot: CompatibilityProjectionSnapshot | null = null;
     let preallocatedReviewTaskNumber: number | undefined;
     let lastRollback = { sqlite: 'rolled_back', projection: 'unchanged' };
     const parentLifecycle = store.getLifecycleByNumber(options.taskNumber);
     const existingDependency = parentLifecycle
-      ? (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? []).find((candidate) => candidate.kind === 'review')
+      ? (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? []).find((candidate: any) => candidate.kind === 'review')
       : null;
     const existingRequiredLifecycle = existingDependency ? store.getLifecycle?.(existingDependency.required_task_id) : undefined;
     try {
@@ -973,13 +973,13 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     }
   }
 
-  async function admitReviewMigrationOutcomeUnsafe({ taskNumber, agentId, verdict, summary, findings, structuralReviewInfo, effectiveSingleOperatorReview, conflictPolicyAuthorization, captureProjectionSnapshot, preallocatedReviewTaskNumber }) {
+  async function admitReviewMigrationOutcomeUnsafe({ taskNumber, agentId, verdict, summary, findings, structuralReviewInfo, effectiveSingleOperatorReview, conflictPolicyAuthorization, captureProjectionSnapshot, preallocatedReviewTaskNumber }: any) {
     const parentLifecycle = store.getLifecycleByNumber(taskNumber);
     if (!parentLifecycle) return null;
     const normalizedOutcome = verdict === 'needs_changes' ? 'rejected' : verdict;
     if (!['accepted', 'accepted_with_notes', 'rejected'].includes(normalizedOutcome)) return null;
     let dependency = (store.listTaskDependenciesForParent?.(parentLifecycle.task_id) ?? [])
-      .find((candidate) => candidate.kind === 'review');
+      .find((candidate: any) => candidate.kind === 'review');
     let requiredLifecycle = dependency ? store.getLifecycle?.(dependency.required_task_id) : undefined;
     const now = new Date().toISOString();
 
@@ -1139,19 +1139,19 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       parent_dependency_wait_status: parentDependencyWaitStatus,
       outcome_contract: contract,
       task_outcome: taskOutcome,
-      conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation) => evaluation.evidence),
+      conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation: any) => evaluation.evidence),
       dependency_satisfaction: dependencySatisfaction.dependency_satisfaction ?? null,
     };
   }
 
   function compatibilityReviewCandidates(taskNumbers: unknown, limit: number) {
     const requested = Array.isArray(taskNumbers)
-      ? [...new Set(taskNumbers.filter((value): value is number => Number.isInteger(value) && value > 0))]
+      ? [...new Set(taskNumbers.filter((value: any): value is number => Number.isInteger(value) && value > 0))]
       : [];
     if (requested.length > 100) throw new Error('task_numbers_limit_exceeded: maximum 100 explicit task numbers');
     if (requested.length > 0) {
       return requested
-        .map((taskNumber) => store.getLifecycleByNumber(taskNumber))
+        .map((taskNumber: any) => store.getLifecycleByNumber(taskNumber))
         .filter(Boolean);
     }
     const boundedLimit = Math.max(1, Math.min(100, Number.isFinite(limit) ? Math.floor(limit) : 25));
@@ -1164,16 +1164,16 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       ORDER BY task_number ASC
       LIMIT ?
     `).all(boundedLimit) as Array<Record<string, unknown>>;
-    return rows.map((row) => store.getLifecycleByNumber(Number(row.task_number))).filter(Boolean);
+    return rows.map((row: any) => store.getLifecycleByNumber(Number(row.task_number))).filter(Boolean);
   }
 
-  async function reconcileCompatibilityReviews({ agentId, taskNumbers, limit = 25, dryRun = false }) {
+  async function reconcileCompatibilityReviews({ agentId, taskNumbers, limit = 25, dryRun = false }: any) {
     enforceSessionIdentity(agentId);
     const candidates = compatibilityReviewCandidates(taskNumbers, limit);
     const results: Array<Record<string, unknown>> = [];
     for (const lifecycle of candidates) {
       const reviewDependencies = store.listTaskDependenciesForRequired?.(lifecycle.task_id) ?? [];
-      const dependency = reviewDependencies.find((candidate) => candidate.kind === 'review') ?? null;
+      const dependency = reviewDependencies.find((candidate: any) => candidate.kind === 'review') ?? null;
       const parentLifecycle = dependency ? store.getLifecycle?.(dependency.parent_task_id) ?? null : null;
       const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
       const latestOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
@@ -1292,14 +1292,14 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     }
     return {
       schema: 'narada.task.compatibility_review_reconciliation.v0',
-      status: results.some((result) => result.status === 'error' || result.status === 'blocked' || result.status === 'incomplete') ? 'attention_needed' : 'ok',
+      status: results.some((result: any) => result.status === 'error' || result.status === 'blocked' || result.status === 'incomplete') ? 'attention_needed' : 'ok',
       dry_run: dryRun,
       selected_count: candidates.length,
       results,
     };
   }
 
-  async function dispatchEvidenceReviewTool(canonicalName, args, dispatchContext = {}) {
+  async function dispatchEvidenceReviewTool(canonicalName: any, args: any, dispatchContext : any= {}) {
     switch (canonicalName) {
     case 'task_lifecycle_self_certification_preflight': {
       const packet = objectField(args, 'self_certification');
@@ -1449,7 +1449,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       if (!taskNumber) throw new Error('task_number_required');
       if (!agentId) throw new Error('agent_id_required');
       const evidenceRefsValidation = validateGovernedTestEvidenceRefs(evidenceRefs, {
-        resolve: (ref) => resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }),
+        resolve: (ref: any) => resolveGovernedTestEvidenceRef({ ref, siteRoot, store, taskNumber }),
       });
       if (args.findings !== undefined && !Array.isArray(args.findings)) throw new Error('findings_must_be_array');
       const validReviewVerdicts = ['accepted', 'accepted_with_notes', 'rejected'];
@@ -1543,8 +1543,8 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
         : { status: 'not_applicable' as const };
       if (lineageGuard.status === 'blocked') {
         return jsonToolResult({
-          status: 'blocked',
           ...lineageGuard,
+          status: 'blocked',
           operation: 'finish',
         }, true);
       }
@@ -1742,7 +1742,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           outcome_contract: outcomeContract,
           allowed_outcomes: allowedOutcomes,
           outcome_capability_policy: outcomeCapabilityPolicy,
-          conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation) => evaluation.evidence),
+          conflict_policy_evidence: conflictPolicy.evaluations.map((evaluation: any) => evaluation.evidence),
         };
         if (reviewEvidenceBackfill) payload.review_evidence_backfill = reviewEvidenceBackfill;
         if (identityWarning) payload.identity_warning = identityWarning;
@@ -1883,7 +1883,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
       }
       if (!isBlocked && result.exitCode === 0 && reviewer && lifecycle && typeof ensureReviewContractDependency === 'function') {
         const existingReviewDependency = (store.listTaskDependenciesForParent?.(lifecycle.task_id) ?? [])
-          .find((dependency) => dependency.kind === 'review');
+          .find((dependency: any) => dependency.kind === 'review');
         const existingReviewLifecycle = existingReviewDependency ? store.getLifecycle?.(existingReviewDependency.required_task_id) : null;
         const reviewDependency = existingReviewDependency
           ? {
@@ -2183,7 +2183,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
           required_capability: 'review',
           eligible_alternative_agents: eligibleReviewers,
           remediation: eligibleReviewers.length > 0
-            ? `Use a dependency task agent with admitted review capability: ${eligibleReviewers.map((r) => r.agent_id).join(', ')}.`
+            ? `Use a dependency task agent with admitted review capability: ${eligibleReviewers.map((r: any) => r.agent_id).join(', ')}.`
             : 'No agents with admitted review capability are present in the roster. Admit a capable identity with task_lifecycle_roster_admit before completing this outcome contract.',
         }, true);
       }
@@ -2387,5 +2387,5 @@ export function createTaskLifecycleEvidenceReviewHandlers(context) {
     }
   }
 
-  return Object.fromEntries(TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES.map((name) => [name, (args, dispatchContext) => dispatchEvidenceReviewTool(name, args, dispatchContext)]));
+  return Object.fromEntries(TASK_LIFECYCLE_EVIDENCE_REVIEW_TOOL_NAMES.map((name: any) => [name, (args: any, dispatchContext: any) => dispatchEvidenceReviewTool(name, args, dispatchContext)]));
 }

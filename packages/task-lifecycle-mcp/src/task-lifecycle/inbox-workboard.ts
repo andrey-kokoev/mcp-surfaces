@@ -12,7 +12,7 @@ type InboxWorkboardItem = TaskLifecyclePayload & {
   received_at: string | null;
 };
 
-function findExactLinkedTask(store, envelope) {
+function findExactLinkedTask(store: any, envelope: any) {
   if (!store || !envelope?.envelope_id) return null;
   const envelopeId = envelope.envelope_id;
 
@@ -49,7 +49,7 @@ function findExactLinkedTask(store, envelope) {
   };
 }
 
-export function buildInboxWorkboard(siteRoot, { store }: Record<string, unknown> = {}) {
+export function buildInboxWorkboard(siteRoot: any, { store }: Record<string, unknown> = {}) {
   const index = readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }) as TaskLifecyclePayload;
   const rows = Array.isArray(index.rows) ? index.rows as TaskLifecyclePayload[] : [];
   const backlog: InboxWorkboardItem[] = [];
@@ -87,7 +87,7 @@ export function buildInboxWorkboard(siteRoot, { store }: Record<string, unknown>
   }
 
   // Sort by severity descending, then by received_at ascending (oldest first)
-  backlog.sort((a, b) => {
+  backlog.sort((a: any, b: any) => {
     if (b.severity !== a.severity) return b.severity - a.severity;
     return (a.received_at ?? '').localeCompare(b.received_at ?? '');
   });
@@ -108,10 +108,10 @@ export function buildInboxWorkboard(siteRoot, { store }: Record<string, unknown>
     counts: {
       total: backlog.length,
       high_severity: highSeverity,
-      incidents: backlog.filter((e) => e.kind === 'incident').length,
-      capa_requests: backlog.filter((e) => e.action === 'review_capa_request').length,
-      observations: backlog.filter((e) => e.kind === 'observation').length,
-      proposals: backlog.filter((e) => e.kind === 'proposal').length,
+      incidents: backlog.filter((e: any) => e.kind === 'incident').length,
+      capa_requests: backlog.filter((e: any) => e.action === 'review_capa_request').length,
+      observations: backlog.filter((e: any) => e.kind === 'observation').length,
+      proposals: backlog.filter((e: any) => e.kind === 'proposal').length,
       linked_task_suppressed: linkedTaskSuppressed.length,
     },
     linked_task_suppressed: linkedTaskSuppressed,

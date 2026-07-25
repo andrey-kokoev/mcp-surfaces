@@ -12,11 +12,11 @@ import { withAuthoredRosterJsonPreserved } from '../src/task-lifecycle/task-life
 
 const domainTools = ['task_lifecycle_status', 'task_lifecycle_claim', 'task_lifecycle_close'];
 const toolNames = [...domainTools, ...PAYLOAD_OUTPUT_TOOL_NAMES];
-const payloadOutputHandlers = Object.fromEntries(PAYLOAD_OUTPUT_TOOL_NAMES.map((name) => [name, () => ({ status: 'ok' })]));
+const payloadOutputHandlers = Object.fromEntries(PAYLOAD_OUTPUT_TOOL_NAMES.map((name: any) => [name, () => ({ status: 'ok' })]));
 const handlers = createTaskLifecycleHandlerRegistry({
   toolNames,
   payloadOutputHandlers,
-  domainDispatch: (name) => ({ status: 'domain', name }),
+  domainDispatch: (name: any) => ({ status: 'domain', name }),
 });
 
 const coverage = assertTaskLifecycleHandlerCoverage({ toolNames, handlers });
@@ -50,7 +50,7 @@ const pipelineCaller = createTaskLifecycleToolCaller({
     throw new Error('database is not open');
   },
   refreshStore: () => true,
-  jsonToolResult: (payload: unknown, isError = false) => ({ payload, isError }),
+  jsonToolResult: (payload: unknown, isError : any= false) => ({ payload, isError }),
   resolveToolPayloadArgs: ({ args }: { args: Record<string, unknown> }) => ({ args, payloadSource: null }),
   enforceInlinePayloadLimit: () => {},
   locusGuardedMutationTools: new Set(),

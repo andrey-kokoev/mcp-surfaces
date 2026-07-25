@@ -8,11 +8,11 @@ type AgentRoleDiagnostics = TaskLifecyclePayload & {
   static_roster_config: TaskLifecyclePayload;
 };
 
-export function resolveAgentRole(store, siteRoot, agentId) {
+export function resolveAgentRole(store: any, siteRoot: any, agentId: any) {
   return resolveAgentRoleWithDiagnostics(store, siteRoot, agentId).role;
 }
 
-export function buildAgentRoleBindingProjection({ agentId, role, source }) {
+export function buildAgentRoleBindingProjection({ agentId, role, source }: any) {
   return {
     schema: 'narada.agent.role_binding.v0',
     agent_id: agentId,
@@ -24,7 +24,7 @@ export function buildAgentRoleBindingProjection({ agentId, role, source }) {
   };
 }
 
-export function resolveAgentRoleWithDiagnostics(store, siteRoot, agentId) {
+export function resolveAgentRoleWithDiagnostics(store: any, siteRoot: any, agentId: any) {
   const diagnostics: AgentRoleDiagnostics = {
     schema: 'narada.task.agent_role_resolution.v0',
     agent_id: agentId,
@@ -86,7 +86,7 @@ export function resolveAgentRoleWithDiagnostics(store, siteRoot, agentId) {
   return diagnostics;
 }
 
-export function checkTaskRoleEligibilityLocal({ store, siteRoot, taskId, taskNumber = null, agentId }) {
+export function checkTaskRoleEligibilityLocal({ store, siteRoot, taskId, taskNumber = null, agentId }: any) {
   const routing = resolveTaskRouting(store, taskId, taskNumber);
   const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
   const targetRole = routing.targetRole;
@@ -123,7 +123,7 @@ export function checkTaskRoleEligibilityLocal({ store, siteRoot, taskId, taskNum
   };
 }
 
-export function roleExistsInRoster(store, siteRoot, role) {
+export function roleExistsInRoster(store: any, siteRoot: any, role: any) {
   if (!role) return false;
   try {
     const sql = store.db.prepare('SELECT 1 FROM agent_roster WHERE role = ? LIMIT 1').get(role);
@@ -131,15 +131,15 @@ export function roleExistsInRoster(store, siteRoot, role) {
   } catch {
     // Fall back to authored roster below.
   }
-  return readStaticRoster(siteRoot).agents.some((agent) => agent.role === role);
+  return readStaticRoster(siteRoot).agents.some((agent: any) => agent.role === role);
 }
 
-export function agentExistsWithRole(store, siteRoot, agentId) {
+export function agentExistsWithRole(store: any, siteRoot: any, agentId: any) {
   const resolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
   return resolution.role ? { exists: true, role: resolution.role, role_resolution: resolution } : { exists: false, role: null, role_resolution: resolution };
 }
 
-function resolveTaskRouting(store, taskId, taskNumber) {
+function resolveTaskRouting(store: any, taskId: any, taskNumber: any) {
   let targetRole = null;
   let preferredAgentId = null;
   try {
@@ -158,7 +158,7 @@ function resolveTaskRouting(store, taskId, taskNumber) {
   return { targetRole, preferredAgentId };
 }
 
-function readStaticRosterRole(siteRoot, agentId, diagnostics) {
+function readStaticRosterRole(siteRoot: any, agentId: any, diagnostics: any) {
   const path = rosterPath(siteRoot);
   if (!existsSync(path)) {
     diagnostics.static_roster_config = { status: 'missing', path };
@@ -166,7 +166,7 @@ function readStaticRosterRole(siteRoot, agentId, diagnostics) {
   }
   try {
     const roster = JSON.parse(readFileSync(path, 'utf8'));
-    const agent = Array.isArray(roster.agents) ? roster.agents.find((entry) => entry?.agent_id === agentId) : null;
+    const agent = Array.isArray(roster.agents) ? roster.agents.find((entry: any) => entry?.agent_id === agentId) : null;
     if (!agent) {
       diagnostics.static_roster_config = { status: 'missing_agent', path };
       return null;
@@ -183,7 +183,7 @@ function readStaticRosterRole(siteRoot, agentId, diagnostics) {
   }
 }
 
-function readStaticRoster(siteRoot) {
+function readStaticRoster(siteRoot: any) {
   const path = rosterPath(siteRoot);
   if (!existsSync(path)) return { agents: [] };
   try {
@@ -194,6 +194,6 @@ function readStaticRoster(siteRoot) {
   }
 }
 
-function rosterPath(siteRoot) {
+function rosterPath(siteRoot: any) {
   return join(resolve(siteRoot), '.ai', 'agents', 'roster.json');
 }

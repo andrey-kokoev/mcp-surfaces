@@ -25,9 +25,9 @@ export function createTaskLifecycleNavigationHandlers({
   buildConciseNextActionView,
   buildWorkboardSnapshotPacket,
   verifySessionIdentity,
-}) {
+}: any) {
   return {
-    task_lifecycle_next: (args) => {
+    task_lifecycle_next: (args: any) => {
       const agentId = stringField(args, 'agent_id');
       const limit = numberField(args, 'limit') ?? 8;
       const lastWorkboardCheckAt = stringField(args, 'last_workboard_check_at');
@@ -52,10 +52,10 @@ export function createTaskLifecycleNavigationHandlers({
       } : { status: 'clear', executable_by_agent: false, pressure: null };
       const finalRecommendation = recommendation ?? null;
       const nextWorkContract = buildNextWorkContract(board, finalRecommendation);
-      const myInProgress = board.in_progress.filter((task) => task.assigned_agent === agentId);
-      const myNeedsContinuation = board.needs_continuation.filter((task) => task.assigned_agent === agentId);
-      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation) => obligation.task_id));
-      const dependencyObligationTasks = board.legacy_pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
+      const myInProgress = board.in_progress.filter((task: any) => task.assigned_agent === agentId);
+      const myNeedsContinuation = board.needs_continuation.filter((task: any) => task.assigned_agent === agentId);
+      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation: any) => obligation.task_id));
+      const dependencyObligationTasks = board.legacy_pending_reviews.filter((task: any) => obligatedTaskIds.has(task.task_id));
       const responseCounts = {
         ...board.counts,
         dependency_waiting_parents: board.counts.dependency_waiting_parents,
@@ -136,7 +136,7 @@ export function createTaskLifecycleNavigationHandlers({
       return jsonToolResult(conciseOnly ? responsePayload.concise_next_action : responsePayload);
     },
 
-    task_lifecycle_workboard_snapshot: (args) => {
+    task_lifecycle_workboard_snapshot: (args: any) => {
       const agentId = stringField(args, 'agent_id');
       const limit = numberField(args, 'limit') ?? 8;
       const lastWorkboardCheckAt = stringField(args, 'last_workboard_check_at');
@@ -149,10 +149,10 @@ export function createTaskLifecycleNavigationHandlers({
       const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit });
       const generatedAt = new Date().toISOString();
       const recommendation = deriveNextRecommendation(board, agentId);
-      const myInProgress = board.in_progress.filter((task) => task.assigned_agent === agentId);
-      const myNeedsContinuation = board.needs_continuation.filter((task) => task.assigned_agent === agentId);
-      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation) => obligation.task_id));
-      const pendingReviews = board.legacy_pending_reviews.filter((task) => obligatedTaskIds.has(task.task_id));
+      const myInProgress = board.in_progress.filter((task: any) => task.assigned_agent === agentId);
+      const myNeedsContinuation = board.needs_continuation.filter((task: any) => task.assigned_agent === agentId);
+      const obligatedTaskIds = new Set((board.dependency_obligations || []).map((obligation: any) => obligation.task_id));
+      const pendingReviews = board.legacy_pending_reviews.filter((task: any) => obligatedTaskIds.has(task.task_id));
       const responseCounts = {
         ...board.counts,
         dependency_waiting_parents: board.counts.dependency_waiting_parents,
@@ -179,7 +179,7 @@ export function createTaskLifecycleNavigationHandlers({
       return jsonToolResult(snapshot);
     },
 
-    task_lifecycle_obligations: (args) => {
+    task_lifecycle_obligations: (args: any) => {
       const agentId = stringField(args, 'agent_id');
       const status = stringField(args, 'status') || 'open';
       const limit = numberField(args, 'limit') ?? 50;
@@ -189,7 +189,7 @@ export function createTaskLifecycleNavigationHandlers({
       const all = store.getAllLifecycle();
       const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit });
       const obligations = store.listDirectedObligationsForTarget(agentId, agentRole, status)
-        .map((obligation) => {
+        .map((obligation: any) => {
           const spec = obligation.task_number ? store.getTaskSpecByNumber(obligation.task_number) : null;
           const dependencyObligation = normalizeDependencyObligation(obligation);
           return {
@@ -215,8 +215,8 @@ export function createTaskLifecycleNavigationHandlers({
         ...(board.role_wide_followups || []),
         ...(board.actionable_deferred || []),
       ]
-        .filter((item) => item?.dependency_id)
-        .map((item) => ({
+        .filter((item: any) => item?.dependency_id)
+        .map((item: any) => ({
           type: 'dependency_work',
           task_number: item.task_number,
           task_id: item.task_id,
@@ -255,7 +255,7 @@ export function createTaskLifecycleNavigationHandlers({
   };
 }
 
-function normalizeDependencyObligation(obligation) {
+function normalizeDependencyObligation(obligation: any) {
   if (!obligation || (obligation.kind !== 'review_request' && obligation.kind !== 'dependency_request')) return null;
   const evidence = parseJsonObject(obligation.evidence_json);
   const evidenceDependencyKind = typeof evidence.dependency_kind === 'string' && evidence.dependency_kind.trim().length > 0
@@ -268,7 +268,7 @@ function normalizeDependencyObligation(obligation) {
   };
 }
 
-function parseJsonObject(value) {
+function parseJsonObject(value: any) {
   if (typeof value !== 'string' || value.trim().length === 0) return {};
   try {
     const parsed = JSON.parse(value);

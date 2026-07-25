@@ -7,6 +7,7 @@ type JsonObject = Record<string, unknown>;
 
 export type SiteLoopCommandConfig = {
   execution: 'direct_spawn';
+  enabled?: boolean;
   command: string;
   args: string[];
   working_directory?: string;
@@ -129,10 +130,10 @@ export type SiteLoopConfig = {
   notes: string[];
 };
 
-export const SITE_LOOP_CONFIG_SCHEMA = 'narada.site_loop.config.v1';
-export const SITE_LOOP_CONFIG_PATH = '.narada/capabilities/site-loop-config.json';
+export const SITE_LOOP_CONFIG_SCHEMA: any = 'narada.site_loop.config.v1';
+export const SITE_LOOP_CONFIG_PATH: any = '.narada/capabilities/site-loop-config.json';
 
-const ajv = new Ajv({ allErrors: true, strict: false });
+const ajv: any = new Ajv({ allErrors: true, strict: false });
 const validateSiteLoopConfigSchemaDocument: ValidateFunction = ajv.compile(SITE_LOOP_CONFIG_JSON_SCHEMA);
 
 export function siteLoopConfigJsonSchema() {
@@ -144,9 +145,9 @@ function validateScheduledSops(errors: string[], schedules: SiteLoopScheduledSop
     errors.push('scheduled_sops_array_required');
     return;
   }
-  const ids = new Set<string>();
+  const ids: any = new Set<string>();
   for (const [index, schedule] of schedules.entries()) {
-    const path = `scheduled_sops[${index}]`;
+    const path: any = `scheduled_sops[${index}]`;
     for (const key of ['id', 'sop_id', 'title', 'instructions', 'anchor_at', 'target_role', 'preferred_agent_id'] as const) {
       requireNonEmptyString(errors, schedule?.[key], `${path}.${key}`);
     }
@@ -158,7 +159,7 @@ function validateScheduledSops(errors: string[], schedules: SiteLoopScheduledSop
 }
 
 export function validateSiteLoopConfigDocument(document: unknown) {
-  const ok = validateSiteLoopConfigSchemaDocument(document);
+  const ok: any = validateSiteLoopConfigSchemaDocument(document);
   return ok ? [] : (validateSiteLoopConfigSchemaDocument.errors ?? []).map(siteLoopConfigSchemaError);
 }
 
@@ -315,6 +316,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
   commands: {
     source_sync: {
       execution: 'direct_spawn',
+      enabled: true,
       command: 'pnpm',
       args: ['cli', '--', '--json', 'sync'],
       working_directory: undefined,
@@ -324,6 +326,7 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     },
     ticket_task_reconciliation: {
       execution: 'direct_spawn',
+      enabled: true,
       command: 'pnpm',
       args: ['cli', '--', '--json', 'ticket', 'task', 'reconcile'],
       working_directory: undefined,
@@ -415,19 +418,19 @@ function validateResidentRuntime(errors: string[], runtime: SiteLoopConfig['resi
 }
 
 export function loadSiteLoopConfig(siteRoot: string): { status: 'ok' | 'missing' | 'invalid'; path: string; config: SiteLoopConfig; errors: string[] } {
-  const path = siteLoopConfigPath(siteRoot);
+  const path: any = siteLoopConfigPath(siteRoot);
   if (!existsSync(path)) {
-    const errors = validateSiteLoopConfig(DEFAULT_SITE_LOOP_CONFIG);
+    const errors: any = validateSiteLoopConfig(DEFAULT_SITE_LOOP_CONFIG);
     return { status: errors.length === 0 ? 'missing' : 'invalid', path, config: DEFAULT_SITE_LOOP_CONFIG, errors };
   }
   try {
-    const override = JSON.parse(readFileSync(path, 'utf8')) as JsonObject;
-    const schemaErrors = validateSiteLoopConfigDocument(override);
-    const overrideErrors = validateOverrideShape(DEFAULT_SITE_LOOP_CONFIG, override);
-    const config = mergeConfig(DEFAULT_SITE_LOOP_CONFIG, override) as SiteLoopConfig;
-    const errors = [...schemaErrors, ...overrideErrors, ...validateSiteLoopConfig(config)];
+    const override: any = JSON.parse(readFileSync(path, 'utf8')) as JsonObject;
+    const schemaErrors: any = validateSiteLoopConfigDocument(override);
+    const overrideErrors: any = validateOverrideShape(DEFAULT_SITE_LOOP_CONFIG, override);
+    const config: any = mergeConfig(DEFAULT_SITE_LOOP_CONFIG, override) as SiteLoopConfig;
+    const errors: any = [...schemaErrors, ...overrideErrors, ...validateSiteLoopConfig(config)];
     return { status: errors.length === 0 ? 'ok' : 'invalid', path, config, errors };
-  } catch (error) {
+  } catch (error: any) {
     return {
       status: 'invalid',
       path,
@@ -438,7 +441,7 @@ export function loadSiteLoopConfig(siteRoot: string): { status: 'ok' | 'missing'
 }
 
 export function requireSiteLoopConfig(siteRoot: string): SiteLoopConfig {
-  const loaded = loadSiteLoopConfig(siteRoot);
+  const loaded: any = loadSiteLoopConfig(siteRoot);
   if (loaded.status === 'missing') {
     throw new SiteLoopConfigError(loaded.path, ['site_loop_config_missing']);
   }
@@ -487,7 +490,7 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   validateExecutableCommand(errors, config.commands?.source_sync, 'commands.source_sync');
   validateExecutableCommand(errors, config.commands?.ticket_task_reconciliation, 'commands.ticket_task_reconciliation');
   for (const key of ['status', 'readiness', 'projection_drift', 'run_once', 'supervise', 'agent_cli_resident', 'live_fixture_proof', 'mailbox_proof', 'background_agent_cli']) {
-    requireNonEmptyString(errors, config.commands?.[key], `commands.${key}`);
+    requireNonEmptyString(errors, (config.commands as Record<string, unknown> | undefined)?.[key], `commands.${key}`);
   }
   requireNonEmptyString(errors, config.policy?.schema, 'policy.schema');
   requireStringArray(errors, config.policy?.allowed_preferred_carriers, 'policy.allowed_preferred_carriers');
@@ -569,7 +572,7 @@ function validateDocs(errors: string[], docs: unknown) {
     return;
   }
   for (const [index, doc] of docs.entries()) {
-    const record = isPlainObject(doc) ? doc : null;
+    const record: any = isPlainObject(doc) ? doc : null;
     requireSafeRelativePath(errors, record?.path, `docs[${index}].path`);
     requireNonEmptyString(errors, record?.description, `docs[${index}].description`);
   }
@@ -587,7 +590,7 @@ function validateTests(errors: string[], tests: unknown) {
 }
 
 function validateCommand(errors: string[], command: unknown, path: string) {
-  const record = isPlainObject(command) ? command : null;
+  const record: any = isPlainObject(command) ? command : null;
   requireNonEmptyString(errors, record?.command, `${path}.command`);
   requireStringArray(errors, record?.args, `${path}.args`);
   for (const key of ['working_directory', 'dry_run_arg', 'limit_arg', 'preferred_role_arg']) {
@@ -596,8 +599,9 @@ function validateCommand(errors: string[], command: unknown, path: string) {
 }
 
 function validateExecutableCommand(errors: string[], command: unknown, path: string) {
-  const record = isPlainObject(command) ? command : null;
+  const record: any = isPlainObject(command) ? command : null;
   if (record?.execution !== 'direct_spawn') errors.push(`${path}.execution_direct_spawn_required`);
+  if (record?.enabled != null && typeof record.enabled !== 'boolean') errors.push(`${path}.enabled_boolean_required`);
   validateCommand(errors, command, path);
 }
 
@@ -622,7 +626,7 @@ function requireStringArray(errors: string[], value: unknown, path: string) {
 function requireSafeRelativePath(errors: string[], value: unknown, path: string) {
   requireNonEmptyString(errors, value, path);
   if (typeof value !== 'string') return;
-  const normalized = normalize(value).replace(/\\/g, '/');
+  const normalized: any = normalize(value).replace(/\\/g, '/');
   if (isAbsolute(value) || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
     errors.push(`${path}_safe_relative_path_required`);
   }
@@ -634,13 +638,13 @@ function validateOverrideShape(base: unknown, override: unknown, path = 'config'
   if (isOpenKeyMapPath(path)) return [];
   const errors: string[] = [];
   for (const [key, value] of Object.entries(override)) {
-    const childPath = `${path}.${key}`;
+    const childPath: any = `${path}.${key}`;
     if (!(key in base)) {
       if (isKnownOptionalOverrideKey(path, key)) continue;
       errors.push(`${childPath}_unknown_key`);
       continue;
     }
-    const baseValue = base[key];
+    const baseValue: any = base[key];
     if (Array.isArray(baseValue)) {
       if (!Array.isArray(value)) errors.push(`${childPath}_array_required`);
       continue;
@@ -685,13 +689,13 @@ function isReplaceMapPath(path: string) {
 }
 
 function siteLoopConfigSchemaError(error: ErrorObject) {
-  const path = schemaErrorPath(error);
+  const path: any = schemaErrorPath(error);
   if (error.keyword === 'additionalProperties' && isPlainObject(error.params)) {
-    const property = error.params.additionalProperty;
+    const property: any = error.params.additionalProperty;
     if (typeof property === 'string' && property.trim()) return `${path}.${property}_unknown_key`;
   }
   if (error.keyword === 'required' && isPlainObject(error.params)) {
-    const property = error.params.missingProperty;
+    const property: any = error.params.missingProperty;
     if (typeof property === 'string' && property.trim()) return `${path}.${property}_required`;
   }
   if (error.keyword === 'const') return `${path}_const_required`;
@@ -703,7 +707,7 @@ function siteLoopConfigSchemaError(error: ErrorObject) {
 
 function schemaErrorPath(error: ErrorObject) {
   if (!error.instancePath) return 'config';
-  const path = error.instancePath
+  const path: any = error.instancePath
     .split('/')
     .filter(Boolean)
     .map((part) => part.replace(/~1/g, '/').replace(/~0/g, '~'))

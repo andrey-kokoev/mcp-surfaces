@@ -16,13 +16,13 @@ type JsonRpcTestResponse = {
   };
 };
 
-const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+const rpc: any = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
 
-const root = mkdtempSync(join(tmpdir(), 'inbox-mcp-'));
+const root: any = mkdtempSync(join(tmpdir(), 'inbox-mcp-'));
 
 try {
-  const state = createServerState({ siteRoot: root });
-  const submit = rpc({
+  const state: any = createServerState({ siteRoot: root });
+  const submit: any = rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -37,33 +37,33 @@ try {
     },
   }, state);
   assert.equal(submit.error, undefined);
-  const submitted = submit.result.structuredContent;
+  const submitted: any = submit.result.structuredContent;
   assert.equal(submitted.status, 'admitted');
   assert.equal(existsSync(submitted.envelope_path), true);
 
-  const next = rpc({
+  const next: any = rpc({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/call',
     params: { name: 'inbox_next', arguments: {} },
   }, state);
   assert.equal(next.error, undefined);
-  const nextPayload = next.result.structuredContent;
+  const nextPayload: any = next.result.structuredContent;
   assert.equal(nextPayload.status, 'ok');
   assert.equal(nextPayload.envelope.kind, 'incident');
   assert.equal(nextPayload.envelope.action, 'materialize');
 
-  const doctor = rpc({
+  const doctor: any = rpc({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
     params: { name: 'inbox_doctor', arguments: {} },
   }, state);
   assert.equal(doctor.error, undefined);
-  const doctorPayload = doctor.result.structuredContent;
+  const doctorPayload: any = doctor.result.structuredContent;
   assert.equal(doctorPayload.storage_mode, 'node_sqlite');
 
-  const filtered = rpc({
+  const filtered: any = rpc({
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -77,7 +77,7 @@ try {
     },
   }, state);
   assert.equal(filtered.error, undefined);
-  const filteredPayload = filtered.result.structuredContent;
+  const filteredPayload: any = filtered.result.structuredContent;
   assert.deepEqual(filteredPayload.filters, {
     status: 'received',
     kind: 'incident',
@@ -87,7 +87,7 @@ try {
   assert.equal(filteredPayload.count, 1);
   assert.equal(filteredPayload.envelopes[0].envelope_id, submitted.envelope_id);
 
-  const rejected = rpc({
+  const rejected: any = rpc({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -95,40 +95,40 @@ try {
   }, state);
   assert.match(rejected.error.message, /kind_must_be_one_of/);
 
-  const queue = rpc({
+  const queue: any = rpc({
     jsonrpc: '2.0',
     id: 6,
     method: 'tools/call',
     params: { name: 'capa_queue', arguments: {} },
   }, state);
   assert.equal(queue.error, undefined);
-  const queuePayload = queue.result.structuredContent;
+  const queuePayload: any = queue.result.structuredContent;
   assert.equal(queuePayload.count, 1);
 
-  const audit = rpc({
+  const audit: any = rpc({
     jsonrpc: '2.0',
     id: 7,
     method: 'tools/call',
     params: { name: 'inbox_audit', arguments: { limit: 10 } },
   }, state);
   assert.equal(audit.error, undefined);
-  const auditPayload = audit.result.structuredContent;
+  const auditPayload: any = audit.result.structuredContent;
   assert.ok(auditPayload.total_entries);
   assert.ok(auditPayload.entries.length);
   assert.ok(auditPayload.entries[0].event_kind);
 
-  const ack = rpc({
+  const ack: any = rpc({
     jsonrpc: '2.0',
     id: 8,
     method: 'tools/call',
     params: { name: 'inbox_acknowledge', arguments: { envelope_id: submitted.envelope_id, principal: 'test-architect', reason: 'Not actionable.' } },
   }, state);
   assert.equal(ack.error, undefined);
-  const ackPayload = ack.result.structuredContent;
+  const ackPayload: any = ack.result.structuredContent;
   assert.equal(ackPayload.status, 'acknowledged');
   assert.equal(ackPayload.envelope_id, submitted.envelope_id);
 
-  const afterAck = rpc({
+  const afterAck: any = rpc({
     jsonrpc: '2.0',
     id: 9,
     method: 'tools/call',

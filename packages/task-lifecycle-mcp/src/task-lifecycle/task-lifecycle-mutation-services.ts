@@ -6,10 +6,10 @@ import { admitTaskEvidence } from '@narada2/task-governance-core/evidence-admiss
 import { taskAgentIdentityRefJson } from '@narada2/task-governance-core/agent-identity-ref';
 import { deriveClosureAuthority, terminalTaskMutationGuard } from './closure-authority.js';
 
-export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const terminalGuard = terminalTaskMutationGuard(lifecycle, 'claim');
+  const terminalGuard: any = terminalTaskMutationGuard(lifecycle, 'claim');
   if (terminalGuard) {
     return {
       status: 'closure_authority_blocks_claim',
@@ -19,10 +19,10 @@ export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId 
       remediation: 'Use a valid reopen/continue transition before claiming this task.',
     };
   }
-  const existing = store.getActiveAssignment(lifecycle.task_id);
+  const existing: any = store.getActiveAssignment(lifecycle.task_id);
   if (existing) return { status: 'already_claimed', assignment: existing, lifecycle };
 
-  const assignmentId = `assign-${randomUUID()}`;
+  const assignmentId: any = `assign-${randomUUID()}`;
   withStoreSavepoint(store, () => {
     store.insertAssignment({
       assignment_id: assignmentId,
@@ -40,27 +40,27 @@ export async function claimLifecycleTask({ siteRoot, store, taskNumber, agentId 
   return { status: 'claimed', assignment_id: assignmentId, task_number: taskNumber, lifecycle };
 }
 
-function withStoreSavepoint<T>(store, action: () => T): T {
-  const name = `narada_lifecycle_${randomUUID().replaceAll('-', '')}`;
+function withStoreSavepoint<T>(store: any, action: () => T): T {
+  const name: any = `narada_lifecycle_${randomUUID().replaceAll('-', '')}`;
   store.db.exec(`SAVEPOINT ${name}`);
   try {
-    const result = action();
+    const result: any = action();
     store.db.exec(`RELEASE SAVEPOINT ${name}`);
     return result;
-  } catch (error) {
+  } catch (error: any) {
     try { store.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
     try { store.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original failure */ }
     throw error;
   }
 }
 
-export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentId, reason }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentId, reason }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const existing = store.getActiveAssignment(lifecycle.task_id);
+  const existing: any = store.getActiveAssignment(lifecycle.task_id);
   if (!existing) return { status: 'not_claimed', task_number: taskNumber };
   if (agentId && existing.agent_id !== agentId) return { status: 'claimed_by_other', claimed_by: existing.agent_id };
-  const terminalGuard = terminalTaskMutationGuard(lifecycle, 'unclaim');
+  const terminalGuard: any = terminalTaskMutationGuard(lifecycle, 'unclaim');
   if (terminalGuard) {
     return {
       status: 'closure_authority_blocks_unclaim',
@@ -79,8 +79,8 @@ export async function unclaimLifecycleTask({ siteRoot, store, taskNumber, agentI
   return { status: 'unclaimed', task_number: taskNumber, previous_agent: existing.agent_id, task_id: lifecycle.task_id };
 }
 
-export async function transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus, resultStatus, closureMode = 'transition', projectionMode = 'best_effort' }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+export async function transitionLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, toStatus, resultStatus, closureMode = 'transition', projectionMode = 'best_effort' }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   if (!isValidTransition(lifecycle.status, toStatus)) {
     return {
@@ -109,8 +109,8 @@ export async function transitionLifecycleTask({ siteRoot, store, taskNumber, age
   return { status: resultStatus, task_number: taskNumber, task_id: lifecycle.task_id };
 }
 
-export async function unDeferLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, authorityBasis }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+export async function unDeferLifecycleTask({ siteRoot, store, taskNumber, agentId, reason, authorityBasis }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   if (lifecycle.status !== 'deferred') {
     return {
@@ -123,8 +123,8 @@ export async function unDeferLifecycleTask({ siteRoot, store, taskNumber, agentI
     };
   }
 
-  const assignment = store.getActiveAssignment(lifecycle.task_id) ?? null;
-  const nextStatus = assignment ? 'claimed' : 'opened';
+  const assignment: any = store.getActiveAssignment(lifecycle.task_id) ?? null;
+  const nextStatus: any = assignment ? 'claimed' : 'opened';
   if (assignment && assignment.agent_id !== agentId && !isOperatorDirectAuthority(authorityBasis)) {
     return {
       status: 'error',
@@ -158,25 +158,25 @@ export async function unDeferLifecycleTask({ siteRoot, store, taskNumber, agentI
   };
 }
 
-export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const taskPath = resolve(siteRoot, '.ai', 'do-not-open', 'tasks', `${lifecycle.task_id}.md`);
-  let body;
+  const taskPath: any = resolve(siteRoot, '.ai', 'do-not-open', 'tasks', `${lifecycle.task_id}.md`);
+  let body: any;
   try {
     body = readFileSync(taskPath, 'utf8');
-  } catch (err) {
+  } catch (err: any) {
     throw new Error(`Failed to read task file: ${err.message}`);
   }
 
-  const updatedBody = body.replace(/^(\s*)- \[ \](.*)$/gm, '$1- [x]$2');
+  const updatedBody: any = body.replace(/^(\s*)- \[ \](.*)$/gm, '$1- [x]$2');
   if (updatedBody === body) return { status: 'no_changes', task_number: taskNumber, message: 'No unchecked acceptance criteria found.' };
 
-  const now = new Date().toISOString();
-  let updatedContent = updatedBody;
+  const now: any = new Date().toISOString();
+  let updatedContent: any = updatedBody;
   if (/^---\r?\n/.test(updatedBody)) {
-    updatedContent = updatedBody.replace(/^(---\r?\n[\s\S]*?\r?\n---)/, (match) => {
-      let fm = match;
+    updatedContent = updatedBody.replace(/^(---\r?\n[\s\S]*?\r?\n---)/, (match: any) => {
+      let fm: any = match;
       if (!fm.includes('criteria_proved_by:')) {
         fm = fm.replace(/\n---$/, `\ncriteria_proved_by: ${agentId}\ncriteria_proved_at: ${now}\n---`);
       }
@@ -184,10 +184,10 @@ export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }
     });
   }
   writeFileSync(taskPath, updatedContent, 'utf8');
-  let admission;
+  let admission: any;
   try {
     admission = await admitTaskEvidence({ cwd: siteRoot, store, taskNumber, admittedBy: agentId, methods: ['criteria_proof'] });
-  } catch (error) {
+  } catch (error: any) {
     writeFileSync(taskPath, body, 'utf8');
     throw error;
   }
@@ -204,18 +204,18 @@ export async function proveTaskCriteria({ siteRoot, store, taskNumber, agentId }
   };
 }
 
-function isOperatorDirectAuthority(value) {
+function isOperatorDirectAuthority(value: any) {
   return value && typeof value === 'object' && value.kind === 'operator_direct_instruction' && typeof value.summary === 'string' && value.summary.trim().length > 0;
 }
 
-async function writeTaskStatusProjection(siteRoot, taskNumber, status, throwOnError = false) {
+async function writeTaskStatusProjection(siteRoot: any, taskNumber: any, status: any, throwOnError : any= false) {
   try {
-    const taskFile = await findTaskFile(siteRoot, taskNumber);
+    const taskFile: any = await findTaskFile(siteRoot, taskNumber);
     if (!taskFile) return;
     const { frontMatter, body } = await readTaskFile(taskFile.path);
     frontMatter.status = status;
     await writeTaskProjection(taskFile.path, frontMatter, body);
-  } catch (error) {
+  } catch (error: any) {
     // Projection writes are compatibility updates; SQLite remains authoritative.
     if (throwOnError) throw error;
   }

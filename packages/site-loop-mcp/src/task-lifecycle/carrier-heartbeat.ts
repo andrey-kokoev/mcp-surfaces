@@ -5,24 +5,30 @@ export type CarrierHeartbeatRecord = Record<string, unknown>;
 export function classifyResidentCarrierLiveness({
   heartbeat,
   process_count: processCount,
+  process_ids: processIds,
   session_readiness: sessionReadiness,
 }: {
   heartbeat: CarrierHeartbeatRecord;
   process_count: number;
+  process_ids?: number[];
   session_readiness: CarrierHeartbeatRecord;
 }) {
   const count = Number.isFinite(Number(processCount)) ? Number(processCount) : 0;
+  const processEvidence = Array.isArray(processIds)
+    ? { process_ids: processIds.map((pid) => Number(pid)).filter((pid) => Number.isInteger(pid) && pid > 0) }
+    : {};
   if (Boolean(heartbeat.fresh) && Boolean(sessionReadiness.ready) && count > 0) {
     return {
       live: true,
       reason: 'fresh_heartbeat_session_ready_process_present',
       process_count: count,
+      ...processEvidence,
       heartbeat,
       session_readiness: sessionReadiness,
     };
   }
   return count > 0
-    ? { live: false, reason: heartbeat.fresh ? 'session_not_ready_process_present' : 'stale_carrier_heartbeat_process_present', process_count: count, heartbeat, session_readiness: sessionReadiness }
+    ? { live: false, reason: heartbeat.fresh ? 'session_not_ready_process_present' : 'stale_carrier_heartbeat_process_present', process_count: count, ...processEvidence, heartbeat, session_readiness: sessionReadiness }
     : { live: false, reason: 'carrier_session_not_found_in_process_command_line', heartbeat, session_readiness: sessionReadiness };
 }
 

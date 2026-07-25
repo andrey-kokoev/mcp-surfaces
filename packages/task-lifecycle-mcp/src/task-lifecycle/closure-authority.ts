@@ -1,8 +1,8 @@
-export function deriveClosureAuthority(lifecycle) {
-  const terminalStatus = ['closed', 'confirmed'].includes(lifecycle?.status);
-  const closedAt = lifecycle?.closed_at ?? null;
-  const closedBy = lifecycle?.closed_by ?? null;
-  const hasClosureEvidence = Boolean(closedAt && closedBy);
+export function deriveClosureAuthority(lifecycle: any) {
+  const terminalStatus: any = ['closed', 'confirmed'].includes(lifecycle?.status);
+  const closedAt: any = lifecycle?.closed_at ?? null;
+  const closedBy: any = lifecycle?.closed_by ?? null;
+  const hasClosureEvidence: any = Boolean(closedAt && closedBy);
   if (!hasClosureEvidence && !terminalStatus) {
     return {
       status: 'no_closure_evidence',
@@ -13,14 +13,14 @@ export function deriveClosureAuthority(lifecycle) {
     };
   }
 
-  const reopenedAfterClosure = closedAt
+  const reopenedAfterClosure: any = closedAt
     ? isAfter(lifecycle?.reopened_at, closedAt)
     : isIsoTimestamp(lifecycle?.reopened_at);
-  const continuationAfterClosure = hasContinuationAfterClosure(lifecycle?.continuation_packet_json, closedAt);
-  const traceableReopenOrContinue = reopenedAfterClosure || continuationAfterClosure;
-  const contradictoryStatus = !terminalStatus && hasClosureEvidence && !traceableReopenOrContinue;
-  const terminalStateRequiresReopen = terminalStatus && !traceableReopenOrContinue;
-  const closureDominates = contradictoryStatus || terminalStateRequiresReopen;
+  const continuationAfterClosure: any = hasContinuationAfterClosure(lifecycle?.continuation_packet_json, closedAt);
+  const traceableReopenOrContinue: any = reopenedAfterClosure || continuationAfterClosure;
+  const contradictoryStatus: any = !terminalStatus && hasClosureEvidence && !traceableReopenOrContinue;
+  const terminalStateRequiresReopen: any = terminalStatus && !traceableReopenOrContinue;
+  const closureDominates: any = contradictoryStatus || terminalStateRequiresReopen;
 
   return {
     status: closureDominates
@@ -47,32 +47,32 @@ export function deriveClosureAuthority(lifecycle) {
   };
 }
 
-function isIsoTimestamp(value) {
+function isIsoTimestamp(value: any) {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 
-function isAfter(candidate, baseline) {
+function isAfter(candidate: any, baseline: any) {
   if (!candidate || !baseline) return false;
-  const candidateMs = Date.parse(candidate);
-  const baselineMs = Date.parse(baseline);
+  const candidateMs: any = Date.parse(candidate);
+  const baselineMs: any = Date.parse(baseline);
   return Number.isFinite(candidateMs) && Number.isFinite(baselineMs) && candidateMs > baselineMs;
 }
 
-function hasContinuationAfterClosure(packetJson, closedAt) {
+function hasContinuationAfterClosure(packetJson: any, closedAt: any) {
   if (!packetJson) return false;
-  let packet;
+  let packet: any;
   try {
     packet = JSON.parse(packetJson);
   } catch {
     return false;
   }
-  const timestamps = [];
+  const timestamps: any[] = [];
   collectIsoLikeValues(packet, timestamps);
-  return closedAt ? timestamps.some((value) => isAfter(value, closedAt)) : timestamps.length > 0;
+  return closedAt ? timestamps.some((value: any) => isAfter(value, closedAt)) : timestamps.length > 0;
 }
 
-export function terminalTaskMutationGuard(lifecycle, operation) {
-  const closureAuthority = deriveClosureAuthority(lifecycle);
+export function terminalTaskMutationGuard(lifecycle: any, operation: any) {
+  const closureAuthority: any = deriveClosureAuthority(lifecycle);
   if (!closureAuthority.closure_dominates) return null;
   return {
     error: 'terminal_task_mutation_requires_reopen',
@@ -86,7 +86,7 @@ export function terminalTaskMutationGuard(lifecycle, operation) {
   };
 }
 
-function collectIsoLikeValues(value, out) {
+function collectIsoLikeValues(value: any, out: any) {
   if (!value) return;
   if (typeof value === 'string') {
     if (/^\d{4}-\d{2}-\d{2}T/.test(value)) out.push(value);

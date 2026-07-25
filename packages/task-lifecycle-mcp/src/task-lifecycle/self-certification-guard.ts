@@ -1,15 +1,15 @@
 type TaskLifecyclePayload = Record<string, unknown>;
 
-const TARGET_CATEGORIES = Object.freeze([
+const TARGET_CATEGORIES: any = Object.freeze([
   'architect_failure',
   'deception_trust',
   'misleading_completion',
   'self_certification',
 ]);
 
-const NON_TARGET_CATEGORY = 'non_target_low_risk';
+const NON_TARGET_CATEGORY: any = 'non_target_low_risk';
 
-const ALLOWED_PENDING_STATES = Object.freeze([
+const ALLOWED_PENDING_STATES: any = Object.freeze([
   'review_required',
   'corrective_complete_pending_review',
   'blocked_missing_reviewer',
@@ -19,7 +19,7 @@ const ALLOWED_PENDING_STATES = Object.freeze([
   NON_TARGET_CATEGORY,
 ]);
 
-const TERMINAL_STATES = Object.freeze([
+const TERMINAL_STATES: any = Object.freeze([
   'corrected',
   'closed',
   'accepted',
@@ -28,7 +28,7 @@ const TERMINAL_STATES = Object.freeze([
   'no_residuals',
 ]);
 
-const REQUIRED_TARGET_FIELDS = Object.freeze([
+const REQUIRED_TARGET_FIELDS: any = Object.freeze([
   'target_category',
   'subject_principal',
   'requires_independent_review',
@@ -36,19 +36,19 @@ const REQUIRED_TARGET_FIELDS = Object.freeze([
   'allowed_pending_state',
 ]);
 
-function text(value) {
+function text(value: any) {
   if (value == null) return '';
   if (Array.isArray(value)) return value.join('\n');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
 
-function normalizePrincipal(value) {
+function normalizePrincipal(value: any) {
   return text(value).trim().toLowerCase();
 }
 
-function normalizeCategory(value) {
-  const category = text(value).trim().toLowerCase().replace(/[-\s/]+/g, '_');
+function normalizeCategory(value: any) {
+  const category: any = text(value).trim().toLowerCase().replace(/[-\s/]+/g, '_');
   if (['architect_failure', 'architect_duty_failure', 'authority_failure'].includes(category)) return 'architect_failure';
   if (['deception_trust', 'trust_deception', 'operator_trust', 'deception', 'trust'].includes(category)) return 'deception_trust';
   if (['misleading_completion', 'false_completion', 'misleading_closeout'].includes(category)) return 'misleading_completion';
@@ -57,7 +57,7 @@ function normalizeCategory(value) {
   return category;
 }
 
-function combinedText(packet) {
+function combinedText(packet: any) {
   return [
     packet.title,
     packet.summary,
@@ -70,10 +70,10 @@ function combinedText(packet) {
   ].map(text).join('\n');
 }
 
-function inferTargetCategory(packet) {
-  const explicit = normalizeCategory(packet.target_category ?? packet.capa_category ?? packet.category);
+function inferTargetCategory(packet: any) {
+  const explicit: any = normalizeCategory(packet.target_category ?? packet.capa_category ?? packet.category);
   if (TARGET_CATEGORIES.includes(explicit) || explicit === NON_TARGET_CATEGORY) return explicit;
-  const haystack = combinedText(packet);
+  const haystack: any = combinedText(packet);
   if (/\b(architect[-\s]?failure|architect duty failure|architect[-\s]?duty)\b/i.test(haystack)) return 'architect_failure';
   if (/\b(deceiv|deception|mislead|trust[-\s]?repair|operator trust)\b/i.test(haystack)) return 'deception_trust';
   if (/\b(false complete|misleading completion|misleading closeout|terminal correction claim)\b/i.test(haystack)) return 'misleading_completion';
@@ -81,20 +81,20 @@ function inferTargetCategory(packet) {
   return NON_TARGET_CATEGORY;
 }
 
-function hasTerminalClaim(packet) {
+function hasTerminalClaim(packet: any) {
   if (packet.terminal_correction_claim === true) return true;
-  const state = normalizeCategory(packet.closure_state ?? packet.state ?? packet.claimed_state);
+  const state: any = normalizeCategory(packet.closure_state ?? packet.state ?? packet.claimed_state);
   if (TERMINAL_STATES.includes(state)) return true;
-  const haystack = combinedText(packet);
+  const haystack: any = combinedText(packet);
   if (/\b(corrected|fully\s+corrected|terminal(?:ly)?\s+complete|no\s+residuals?|closed\s+as\s+corrected|accepted\s+as\s+corrected)\b/i.test(haystack)) {
     return !/\b(pending\s+review|review\s+required|blocked|remaining|residual|not\s+terminal|not\s+corrected|corrective[_\s-]complete[_\s-]pending[_\s-]review)\b/i.test(haystack);
   }
   return false;
 }
 
-function hasIndependentReview(packet) {
-  const reviewer = normalizePrincipal(packet.reviewer_principal);
-  const subject = normalizePrincipal(packet.subject_principal);
+function hasIndependentReview(packet: any) {
+  const reviewer: any = normalizePrincipal(packet.reviewer_principal);
+  const subject: any = normalizePrincipal(packet.subject_principal);
   return Boolean(
     packet.independent_review_ref
     && packet.reviewer_eligibility_ref
@@ -103,13 +103,13 @@ function hasIndependentReview(packet) {
   );
 }
 
-function hasOperatorAcceptance(packet) {
+function hasOperatorAcceptance(packet: any) {
   return text(packet.operator_acceptance_ref).trim().length > 0;
 }
 
-function parseSelfCertificationSection(section) {
+function parseSelfCertificationSection(section: any) {
   if (!section) return {};
-  const aliases = new Map([
+  const aliases: any = new Map([
     ['target category', 'target_category'],
     ['target_category', 'target_category'],
     ['capa category', 'target_category'],
@@ -135,34 +135,34 @@ function parseSelfCertificationSection(section) {
     ['closure state', 'closure_state'],
     ['closure_state', 'closure_state'],
   ]);
-  const packet = {};
+  const packet: any = {};
   for (const rawLine of section.split(/\r?\n/)) {
-    const line = rawLine.trim().replace(/^[-*]\s+/, '');
+    const line: any = rawLine.trim().replace(/^[-*]\s+/, '');
     if (!line || line.startsWith('<!--')) continue;
-    const match = line.match(/^([A-Za-z_ ]+):\s*(.+)$/);
+    const match: any = line.match(/^([A-Za-z_ ]+):\s*(.+)$/);
     if (!match) continue;
-    const field = aliases.get(match[1].toLowerCase().trim());
+    const field: any = aliases.get(match[1].toLowerCase().trim());
     if (!field) continue;
     packet[field] = match[2].trim();
   }
   return packet;
 }
 
-function extractMarkdownSection(body, heading) {
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`^##\\s+${escaped}\\s*$`, 'mi');
-  const match = body.match(pattern);
+function extractMarkdownSection(body: any, heading: any) {
+  const escaped: any = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern: any = new RegExp(`^##\\s+${escaped}\\s*$`, 'mi');
+  const match: any = body.match(pattern);
   if (!match) return null;
-  const start = match.index + match[0].length;
-  const rest = body.slice(start);
-  const nextHeading = rest.match(/^##\s/m);
-  const end = nextHeading ? start + nextHeading.index : body.length;
+  const start: any = match.index + match[0].length;
+  const rest: any = body.slice(start);
+  const nextHeading: any = rest.match(/^##\s/m);
+  const end: any = nextHeading ? start + nextHeading.index : body.length;
   return body.slice(start, end).trim();
 }
 
-function coerceBoolean(value) {
+function coerceBoolean(value: any) {
   if (value === true || value === false) return value;
-  const normalized = text(value).trim().toLowerCase();
+  const normalized: any = text(value).trim().toLowerCase();
   if (['true', 'yes', 'required'].includes(normalized)) return true;
   if (['false', 'no', 'not required'].includes(normalized)) return false;
   return null;
@@ -192,16 +192,16 @@ export function selfCertificationGuardContract() {
 }
 
 export function evaluateSelfCertificationGuard(packet: TaskLifecyclePayload = {}) {
-  const targetCategory = inferTargetCategory(packet);
-  const target = TARGET_CATEGORIES.includes(targetCategory);
-  const subjectPrincipal = normalizePrincipal(packet.subject_principal);
-  const actorPrincipal = normalizePrincipal(packet.actor_principal ?? packet.closer_principal ?? packet.reviewer_principal);
-  const sameSubject = Boolean(target && subjectPrincipal && actorPrincipal && subjectPrincipal === actorPrincipal);
-  const independentReviewSatisfied = hasIndependentReview(packet);
-  const operatorAcceptanceSatisfied = hasOperatorAcceptance(packet);
-  const terminalClaim = hasTerminalClaim(packet);
-  const allowedPendingState = normalizeCategory(packet.allowed_pending_state ?? packet.fallback_state);
-  const missingCapability = packet.missing_capability === true || allowedPendingState === 'terminal_blocked_missing_enforcement';
+  const targetCategory: any = inferTargetCategory(packet);
+  const target: any = TARGET_CATEGORIES.includes(targetCategory);
+  const subjectPrincipal: any = normalizePrincipal(packet.subject_principal);
+  const actorPrincipal: any = normalizePrincipal(packet.actor_principal ?? packet.closer_principal ?? packet.reviewer_principal);
+  const sameSubject: any = Boolean(target && subjectPrincipal && actorPrincipal && subjectPrincipal === actorPrincipal);
+  const independentReviewSatisfied: any = hasIndependentReview(packet);
+  const operatorAcceptanceSatisfied: any = hasOperatorAcceptance(packet);
+  const terminalClaim: any = hasTerminalClaim(packet);
+  const allowedPendingState: any = normalizeCategory(packet.allowed_pending_state ?? packet.fallback_state);
+  const missingCapability: any = packet.missing_capability === true || allowedPendingState === 'terminal_blocked_missing_enforcement';
 
   return {
     schema: 'narada.self_certification.guard_evaluation.v0',
@@ -222,12 +222,12 @@ export function evaluateSelfCertificationGuard(packet: TaskLifecyclePayload = {}
 }
 
 export function validateSelfCertificationPacket(packet: TaskLifecyclePayload = {}) {
-  const evaluation = evaluateSelfCertificationGuard(packet);
-  const errors = [];
+  const evaluation: any = evaluateSelfCertificationGuard(packet);
+  const errors: any[] = [];
 
   if (!evaluation.target) return { ok: true, evaluation, errors };
 
-  const missingFields = REQUIRED_TARGET_FIELDS.filter((field) => {
+  const missingFields: any = REQUIRED_TARGET_FIELDS.filter((field: any) => {
     if (field === 'requires_independent_review') return coerceBoolean(packet[field]) !== true;
     return text(packet[field]).trim().length === 0;
   });
@@ -251,8 +251,8 @@ export function validateSelfCertificationPacket(packet: TaskLifecyclePayload = {
 }
 
 export function validateSelfCertificationBody({ body = '', summary = '', actor_principal = '' }: TaskLifecyclePayload = {}) {
-  const section = extractMarkdownSection(body, 'Self-Certification Guard');
-  const parsed = parseSelfCertificationSection(section) as TaskLifecyclePayload;
+  const section: any = extractMarkdownSection(body, 'Self-Certification Guard');
+  const parsed: any = parseSelfCertificationSection(section) as TaskLifecyclePayload;
   return validateSelfCertificationPacket({
     ...parsed,
     actor_principal: parsed.actor_principal ?? actor_principal,

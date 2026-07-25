@@ -30,9 +30,9 @@ export function createTaskLifecycleAssignmentHandlers({
   continueTaskService,
   unclaimLifecycleTask,
   withAuthoredRosterJsonPreserved,
-}) {
+}: any) {
   return {
-    task_lifecycle_claim: async (args) => {
+    task_lifecycle_claim: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       const agentId = stringField(args, 'agent_id');
       if (!taskNumber) throw new Error('task_number_required');
@@ -45,8 +45,8 @@ export function createTaskLifecycleAssignmentHandlers({
       const lineageGuard = inspectSupersededTaskGuard({ store, lifecycle, authorityBasis: args.authority_basis });
       if (lineageGuard.status === 'blocked') {
         return jsonToolResult({
-          status: 'blocked',
           ...lineageGuard,
+          status: 'blocked',
           operation: 'claim',
         }, true);
       }
@@ -155,7 +155,7 @@ export function createTaskLifecycleAssignmentHandlers({
       return jsonToolResult(result);
     },
 
-    task_lifecycle_continue: async (args) => {
+    task_lifecycle_continue: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       const agentId = stringField(args, 'agent_id');
       const reason = stringField(args, 'reason');
@@ -169,8 +169,8 @@ export function createTaskLifecycleAssignmentHandlers({
       const lineageGuard = inspectSupersededTaskGuard({ store, lifecycle, authorityBasis: args.authority_basis });
       if (lineageGuard.status === 'blocked') {
         return jsonToolResult({
-          status: 'blocked',
           ...lineageGuard,
+          status: 'blocked',
           operation: 'continue',
         }, true);
       }
@@ -196,7 +196,7 @@ export function createTaskLifecycleAssignmentHandlers({
       return jsonToolResult(result.result || result, result.exitCode !== 0);
     },
 
-    task_lifecycle_unclaim: async (args) => {
+    task_lifecycle_unclaim: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       const agentId = stringField(args, 'agent_id');
       const reason = stringField(args, 'reason') ?? 'mcp_unclaim';
@@ -208,7 +208,7 @@ export function createTaskLifecycleAssignmentHandlers({
   };
 }
 
-function safeRecordClaimIntent(recordClaimIntent, input) {
+function safeRecordClaimIntent(recordClaimIntent: any, input: any) {
   try {
     recordClaimIntent(input);
     return null;
@@ -252,7 +252,7 @@ function validateGenericEngineerClaimAuthority({ args, eligibility, lifecycle, t
   };
 }
 
-function normalizeGenericEngineerAuthorityBasis(value) {
+function normalizeGenericEngineerAuthorityBasis(value: any) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const kind = typeof value.kind === 'string' ? value.kind.trim() : '';
   const summary = typeof value.summary === 'string' ? value.summary.trim() : '';

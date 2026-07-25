@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_events_agent ON agent_events(agent_id, emit
 CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_events(task_number, emitted_at DESC);
 `;
 
-function openAgentContextDb(cwd) {
+function openAgentContextDb(cwd: any) {
   const siteRoot = resolve(cwd);
   const dbDir = join(siteRoot, '.ai', 'state');
   const dbPath = join(dbDir, 'agent-context.sqlite');
@@ -39,7 +39,7 @@ function openAgentContextDb(cwd) {
   }
 }
 
-export function emitCheckpoint(options) {
+export function emitCheckpoint(options: any) {
   const {
     cwd,
     agentId,

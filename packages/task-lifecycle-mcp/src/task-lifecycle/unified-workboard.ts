@@ -6,7 +6,7 @@
 import { buildWorkboard } from './workboard.js';
 import { buildInboxWorkboard } from './inbox-workboard.js';
 
-export function buildNextWorkContract(board, recommendation = null) {
+export function buildNextWorkContract(board: any, recommendation : any= null) {
   const executableCounts = {
     in_progress: board.in_progress?.length ?? 0,
     needs_continuation: board.needs_continuation?.length ?? 0,
@@ -15,9 +15,9 @@ export function buildNextWorkContract(board, recommendation = null) {
     local_followups: board.local_followups?.length ?? 0,
     role_wide_followups: board.role_wide_followups?.length ?? 0,
     actionable_deferred: board.actionable_deferred?.length ?? 0,
-    high_severity_inbox: (board.inbox_backlog || []).filter((item) => item.severity >= 70).length,
+    high_severity_inbox: (board.inbox_backlog || []).filter((item: any) => item.severity >= 70).length,
   };
-  const executableTotal = Object.values(executableCounts).reduce((sum, count) => sum + count, 0);
+  const executableTotal = Object.values(executableCounts).reduce((sum: any, count: any) => sum + count, 0);
   const roleWidePresent = executableCounts.role_wide_followups > 0;
 
   return {
@@ -38,7 +38,7 @@ export function buildNextWorkContract(board, recommendation = null) {
   };
 }
 
-function findTaskBoardItemByTaskId(taskBoard, taskId) {
+function findTaskBoardItemByTaskId(taskBoard: any, taskId: any) {
   if (!taskId) return null;
   const buckets = [
     taskBoard.in_progress,
@@ -48,17 +48,17 @@ function findTaskBoardItemByTaskId(taskBoard, taskId) {
     taskBoard.actionable_deferred,
   ];
   for (const bucket of buckets) {
-    const match = (bucket || []).find((item) => item.task_id === taskId);
+    const match = (bucket || []).find((item: any) => item.task_id === taskId);
     if (match) return match;
   }
   return null;
 }
 
-function isDependencyDirectedObligation(obligation) {
+function isDependencyDirectedObligation(obligation: any) {
   return obligation?.kind === 'review_request' || obligation?.kind === 'dependency_request';
 }
 
-function normalizeDependencyObligation(obligation) {
+function normalizeDependencyObligation(obligation: any) {
   if (!isDependencyDirectedObligation(obligation)) return null;
   return {
     ...obligation,
@@ -68,7 +68,7 @@ function normalizeDependencyObligation(obligation) {
   };
 }
 
-function dependencyRecommendationFields(item) {
+function dependencyRecommendationFields(item: any) {
   if (!item?.dependency_id) return {};
   return {
     dependency_id: item.dependency_id,
@@ -85,10 +85,10 @@ function dependencyRecommendationFields(item) {
   };
 }
 
-export function deriveNextRecommendation(board, agentId) {
-  const myInProgress = board.in_progress.filter((t) => t.assigned_agent === agentId);
-  const myNeedsContinuation = board.needs_continuation.filter((t) => t.assigned_agent === agentId);
-  const highSeverityInbox = board.inbox_backlog.filter((b) => b.severity >= 70);
+export function deriveNextRecommendation(board: any, agentId: any) {
+  const myInProgress = board.in_progress.filter((t: any) => t.assigned_agent === agentId);
+  const myNeedsContinuation = board.needs_continuation.filter((t: any) => t.assigned_agent === agentId);
+  const highSeverityInbox = board.inbox_backlog.filter((b: any) => b.severity >= 70);
 
   if (highSeverityInbox.length > 0) {
     return {
@@ -119,7 +119,7 @@ export function deriveNextRecommendation(board, agentId) {
     };
   }
   if (board.local_followups.length > 0) {
-    const claimable = board.local_followups.filter((t) => !t.assigned_agent);
+    const claimable = board.local_followups.filter((t: any) => !t.assigned_agent);
     if (claimable.length > 0) {
       return {
         action: 'claim',
@@ -129,7 +129,7 @@ export function deriveNextRecommendation(board, agentId) {
     }
   }
   if ((board.role_wide_followups || []).length > 0) {
-    const claimable = board.role_wide_followups.filter((t) => !t.assigned_agent);
+    const claimable = board.role_wide_followups.filter((t: any) => !t.assigned_agent);
     if (claimable.length > 0) {
       const task = claimable[0];
       return {
@@ -151,7 +151,7 @@ export function deriveNextRecommendation(board, agentId) {
   return null;
 }
 
-export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks, limit = 8 }) {
+export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks, limit = 8 }: any) {
   // Build task workboard
   const taskBoard = buildWorkboard({ store, siteRoot, agentId, agentRole, allTasks });
 
@@ -162,7 +162,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
   let obligations = [];
   if (agentId) {
     const rawObligations = store.listDirectedObligationsForTarget(agentId, agentRole, 'open');
-    obligations = rawObligations.map((o) => ({
+    obligations = rawObligations.map((o: any) => ({
       obligation_id: o.obligation_id,
       kind: o.kind,
       task_number: o.task_number,
@@ -185,7 +185,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
   const recommendations = [];
 
   // 1. High-severity inbox
-  for (const item of inboxBoard.backlog.filter((e) => e.severity >= 70)) {
+  for (const item of inboxBoard.backlog.filter((e: any) => e.severity >= 70)) {
     recommendations.push({
       type: 'inbox_high_severity',
       priority: 1,
@@ -342,7 +342,7 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
   }
 
   // 9. Lower-severity inbox
-  for (const item of inboxBoard.backlog.filter((e) => e.severity < 70)) {
+  for (const item of inboxBoard.backlog.filter((e: any) => e.severity < 70)) {
     recommendations.push({
       type: 'inbox_backlog',
       priority: 8,
@@ -375,9 +375,9 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
   const recentlyMaterialized = [
     ...taskBoard.local_followups,
     ...(taskBoard.role_wide_followups || []),
-  ].filter((t) => t.updated_at && t.updated_at > oneHourAgo);
+  ].filter((t: any) => t.updated_at && t.updated_at > oneHourAgo);
 
-  const dependencyTasks = recommendations.filter((item) => item.dependency_id);
+  const dependencyTasks = recommendations.filter((item: any) => item.dependency_id);
   return {
     dependency_waiting_parents: (taskBoard.dependency_waiting_parents || []).slice(0, limit),
     dependency_tasks: dependencyTasks.slice(0, limit),
@@ -393,8 +393,8 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
     deferred: taskBoard.deferred.slice(0, limit),
     actionable_deferred: taskBoard.actionable_deferred.slice(0, limit),
     dependency_obligations: dependencyObligations.slice(0, limit),
-    dependency_obligations_compat_review: obligations.filter((o) => o.kind === 'review_request').slice(0, limit),
-    my_review_obligations: obligations.filter((o) => o.kind === 'review_request').slice(0, limit),
+    dependency_obligations_compat_review: obligations.filter((o: any) => o.kind === 'review_request').slice(0, limit),
+    my_review_obligations: obligations.filter((o: any) => o.kind === 'review_request').slice(0, limit),
     inbox_backlog: inboxBoard.backlog.slice(0, limit),
     inbox_linked_task_suppressed: inboxBoard.linked_task_suppressed.slice(0, limit),
     inbox_counts: inboxBoard.counts,
@@ -417,8 +417,8 @@ export function buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, all
       deferred: taskBoard.deferred.length,
       actionable_deferred: taskBoard.actionable_deferred.length,
       dependency_obligations: dependencyObligations.length,
-      dependency_obligations_compat_review: obligations.filter((o) => o.kind === 'review_request').length,
-      my_review_obligations: obligations.filter((o) => o.kind === 'review_request').length,
+      dependency_obligations_compat_review: obligations.filter((o: any) => o.kind === 'review_request').length,
+      my_review_obligations: obligations.filter((o: any) => o.kind === 'review_request').length,
       inbox_total: inboxBoard.counts.total,
       inbox_high_severity: inboxBoard.counts.high_severity,
       inbox_linked_task_suppressed: inboxBoard.counts.linked_task_suppressed,

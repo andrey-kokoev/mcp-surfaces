@@ -7,19 +7,19 @@ import { resolveAgentRoleWithDiagnostics } from './agent-role-resolution.js';
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
-let readModelSiteRoot = null;
-let readModelStore = null;
+let readModelSiteRoot: any = null;
+let readModelStore: any = null;
 
-export function setTaskLifecycleReadModelContext({ siteRoot, store }) {
+export function setTaskLifecycleReadModelContext({ siteRoot, store }: any) {
   readModelSiteRoot = siteRoot;
   readModelStore = store;
 }
 
-export function computeStateFreshness(lastWorkboardCheckAt, generatedAt) {
-  const now = new Date();
-  const generated = generatedAt ? new Date(generatedAt) : now;
-  const lastCheck = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
-  const staleThresholdMs = 10 * 60 * 1000;
+export function computeStateFreshness(lastWorkboardCheckAt: any, generatedAt: any) {
+  const now: any = new Date();
+  const generated: any = generatedAt ? new Date(generatedAt) : now;
+  const lastCheck: any = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
+  const staleThresholdMs: any = 10 * 60 * 1000;
   if (!lastCheck) {
     return {
       status: 'unknown',
@@ -30,8 +30,8 @@ export function computeStateFreshness(lastWorkboardCheckAt, generatedAt) {
       seconds_since_check: null,
     };
   }
-  const secondsSinceCheck = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
-  const stale = secondsSinceCheck > staleThresholdMs / 1000;
+  const secondsSinceCheck: any = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
+  const stale: any = secondsSinceCheck > staleThresholdMs / 1000;
   return {
     status: stale ? 'stale' : 'fresh',
     stale,
@@ -44,18 +44,18 @@ export function computeStateFreshness(lastWorkboardCheckAt, generatedAt) {
   };
 }
 
-export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, generatedAt, board, recommendation, myInProgress, myNeedsContinuation, pendingReviews, responseCounts, lastWorkboardCheckAt, previousSnapshot, limit }) {
-  const freshness = computeStateFreshness(lastWorkboardCheckAt, generatedAt);
-  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
-  const localFollowups = board.local_followups.slice(0, limit);
-  const roleWideFollowups = (board.role_wide_followups || []).slice(0, limit);
-  const dependencyWaitingParents = (board.dependency_waiting_parents || []).slice(0, limit);
-  const dependencyObligations = (board.dependency_obligations || []).slice(0, limit);
-  const dependencyTasks = (board.dependency_tasks || []).slice(0, limit);
-  const nonActionableParentFollowups = (board.non_actionable_parent_followups || []).slice(0, limit);
-  const closureAuthorityConflicts = (board.closure_authority_conflicts || []).slice(0, limit);
-  const recommendationTask = recommendation?.task ?? null;
-  const preferredAgentMismatch = recommendationTask?.preferred_agent_id && recommendationTask.preferred_agent_id !== agentId
+export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, generatedAt, board, recommendation, myInProgress, myNeedsContinuation, pendingReviews, responseCounts, lastWorkboardCheckAt, previousSnapshot, limit }: any) {
+  const freshness: any = computeStateFreshness(lastWorkboardCheckAt, generatedAt);
+  const nextWorkContract: any = buildNextWorkContract(board, recommendation ?? null);
+  const localFollowups: any = board.local_followups.slice(0, limit);
+  const roleWideFollowups: any = (board.role_wide_followups || []).slice(0, limit);
+  const dependencyWaitingParents: any = (board.dependency_waiting_parents || []).slice(0, limit);
+  const dependencyObligations: any = (board.dependency_obligations || []).slice(0, limit);
+  const dependencyTasks: any = (board.dependency_tasks || []).slice(0, limit);
+  const nonActionableParentFollowups: any = (board.non_actionable_parent_followups || []).slice(0, limit);
+  const closureAuthorityConflicts: any = (board.closure_authority_conflicts || []).slice(0, limit);
+  const recommendationTask: any = recommendation?.task ?? null;
+  const preferredAgentMismatch: any = recommendationTask?.preferred_agent_id && recommendationTask.preferred_agent_id !== agentId
     ? {
         present: true,
         task_number: recommendationTask.task_number,
@@ -63,17 +63,17 @@ export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, 
         claiming_agent: agentId,
       }
     : { present: false };
-  const current = {
+  const current: any = {
     recommendation_action: recommendation?.action ?? null,
     recommendation_task_number: recommendationTask?.task_number ?? null,
     counts: responseCounts,
   };
-  const prior = previousSnapshot?.snapshot ? {
+  const prior: any = previousSnapshot?.snapshot ? {
     recommendation_action: previousSnapshot.snapshot.recommendation?.action ?? null,
     recommendation_task_number: previousSnapshot.snapshot.recommendation?.task?.task_number ?? null,
     counts: previousSnapshot.snapshot.counts ?? null,
   } : null;
-  const drift = prior ? {
+  const drift: any = prior ? {
     status: JSON.stringify(prior) === JSON.stringify(current) ? 'unchanged' : 'changed',
     previous: prior,
     current,
@@ -127,7 +127,7 @@ export function buildWorkboardSnapshotPacket({ agentId, agentRole, roleBinding, 
   };
 }
 
-function summarizeWorkboardTask(task) {
+function summarizeWorkboardTask(task: any) {
   if (!task) return null;
   return {
     task_number: task.task_number,
@@ -151,17 +151,17 @@ function summarizeWorkboardTask(task) {
   };
 }
 
-export function buildCorrectiveDebtReadiness({ allTasks = [] } = {}) {
-  const inboxCapas = readActiveInboxCapaItems();
-  const capabilityCapas = readPendingCapabilityCapaItems();
-  const activeItems = [...inboxCapas.active, ...capabilityCapas.active]
-    .map((item) => ({ ...item, corrective_task_coverage: detectCorrectiveTaskCoverage({ item, allTasks }) }))
-    .sort((a, b) => b.severity - a.severity || String(a.capa_id).localeCompare(String(b.capa_id)));
-  const terminalCoverageItems = activeItems.filter((item) => item.corrective_task_coverage.status === 'closed_corrective_implementation_coverage');
-  const highSeverityItems = activeItems.filter((item) => item.severity >= 75);
-  const correctiveCoveragePressureStatuses = new Set(['missing_corrective_task_coverage', 'historical_only_no_open_corrective_task']);
-  const missingCoverageItems = highSeverityItems.filter((item) => correctiveCoveragePressureStatuses.has(item.corrective_task_coverage.status));
-  const state = activeItems.length === 0 ? 'terminal_corrected' : terminalCoverageItems.length === activeItems.length ? 'corrective_complete_pending_review' : missingCoverageItems.length > 0 ? 'inventory_complete_corrective_open' : 'corrective_in_progress';
+export function buildCorrectiveDebtReadiness({ allTasks = [] } : any= {}) {
+  const inboxCapas: any = readActiveInboxCapaItems();
+  const capabilityCapas: any = readPendingCapabilityCapaItems();
+  const activeItems: any = [...inboxCapas.active, ...capabilityCapas.active]
+    .map((item: any) => ({ ...item, corrective_task_coverage: detectCorrectiveTaskCoverage({ item, allTasks }) }))
+    .sort((a: any, b: any) => b.severity - a.severity || String(a.capa_id).localeCompare(String(b.capa_id)));
+  const terminalCoverageItems: any = activeItems.filter((item: any) => item.corrective_task_coverage.status === 'closed_corrective_implementation_coverage');
+  const highSeverityItems: any = activeItems.filter((item: any) => item.severity >= 75);
+  const correctiveCoveragePressureStatuses: any = new Set(['missing_corrective_task_coverage', 'historical_only_no_open_corrective_task']);
+  const missingCoverageItems: any = highSeverityItems.filter((item: any) => correctiveCoveragePressureStatuses.has(item.corrective_task_coverage.status));
+  const state: any = activeItems.length === 0 ? 'terminal_corrected' : terminalCoverageItems.length === activeItems.length ? 'corrective_complete_pending_review' : missingCoverageItems.length > 0 ? 'inventory_complete_corrective_open' : 'corrective_in_progress';
   return {
     schema: 'narada.task.corrective_debt_readiness.v0',
     authority: 'read_model_from_inbox_admission_log_capas_and_capability_announcements',
@@ -175,11 +175,11 @@ export function buildCorrectiveDebtReadiness({ allTasks = [] } = {}) {
       active_capability_reviews: capabilityCapas.active.length,
       high_severity: highSeverityItems.length,
       missing_corrective_task_coverage: missingCoverageItems.length,
-      linked_or_covered: activeItems.filter((item) => ['covered_by_open_task', 'closed_corrective_implementation_coverage'].includes(item.corrective_task_coverage.status)).length,
+      linked_or_covered: activeItems.filter((item: any) => ['covered_by_open_task', 'closed_corrective_implementation_coverage'].includes(item.corrective_task_coverage.status)).length,
       terminal_or_suppressed_sources: terminalCoverageItems.length + inboxCapas.suppressed_count + capabilityCapas.suppressed_count,
     },
     active_items: activeItems.slice(0, 25),
-    missing_corrective_task_coverage: missingCoverageItems.slice(0, 25).map((item) => ({ capa_id: item.capa_id, capa_type: item.capa_type, severity: item.severity, concept_name: item.concept_name, corrective_task_coverage: item.corrective_task_coverage })),
+    missing_corrective_task_coverage: missingCoverageItems.slice(0, 25).map((item: any) => ({ capa_id: item.capa_id, capa_type: item.capa_type, severity: item.severity, concept_name: item.concept_name, corrective_task_coverage: item.corrective_task_coverage })),
     residual_surfaces: [
       'Coverage detection is a read model over task text/spec linkage; it does not mutate CAPA state or prove semantic correction.',
       'Startup hydration and post-closeout terminal guards must explicitly consume this evidence before it can block terminal readiness claims.',
@@ -189,16 +189,16 @@ export function buildCorrectiveDebtReadiness({ allTasks = [] } = {}) {
   };
 }
 
-export function buildPostCloseoutContinuation({ agentId, result }) {
+export function buildPostCloseoutContinuation({ agentId, result }: any) {
   ensureReadModelContext();
-  const roleResolution = resolveAgentRoleWithDiagnostics(readModelStore, readModelSiteRoot, agentId);
-  const agentRole = roleResolution.role;
-  const all = readModelStore.getAllLifecycle();
-  const board = buildUnifiedWorkboard({ store: readModelStore, siteRoot: readModelSiteRoot, agentId, agentRole, allTasks: all, limit: 8 });
-  const recommendation = deriveNextRecommendation(board, agentId);
-  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
-  const correctiveDebtReadiness = buildCorrectiveDebtReadiness({ allTasks: all });
-  const workboard = {
+  const roleResolution: any = resolveAgentRoleWithDiagnostics(readModelStore, readModelSiteRoot, agentId);
+  const agentRole: any = roleResolution.role;
+  const all: any = readModelStore.getAllLifecycle();
+  const board: any = buildUnifiedWorkboard({ store: readModelStore, siteRoot: readModelSiteRoot, agentId, agentRole, allTasks: all, limit: 8 });
+  const recommendation: any = deriveNextRecommendation(board, agentId);
+  const nextWorkContract: any = buildNextWorkContract(board, recommendation ?? null);
+  const correctiveDebtReadiness: any = buildCorrectiveDebtReadiness({ allTasks: all });
+  const workboard: any = {
     status: 'ok',
     agent_id: agentId,
     agent_role: agentRole,
@@ -219,8 +219,8 @@ export function buildPostCloseoutContinuation({ agentId, result }) {
   return classifyPostCloseoutContinuation({ result, workboard });
 }
 
-export function buildConciseNextActionView(result) {
-  const recommendation = result.recommendation ?? null;
+export function buildConciseNextActionView(result: any) {
+  const recommendation: any = result.recommendation ?? null;
   return {
     schema: 'narada.task.mcp.next.concise.v0',
     status: result.status,
@@ -256,31 +256,31 @@ function ensureReadModelContext() {
 
 function readActiveInboxCapaItems() {
   try {
-    const events = readAdmissionLog(readModelSiteRoot);
-    const byEnvelope = new Map();
-    const latestPromotion = new Map();
+    const events: any = readAdmissionLog(readModelSiteRoot);
+    const byEnvelope: any = new Map();
+    const latestPromotion: any = new Map();
     for (const event of events) {
       if (!event.envelope_id) continue;
-      const list = byEnvelope.get(event.envelope_id) ?? [];
+      const list: any = byEnvelope.get(event.envelope_id) ?? [];
       list.push(event);
       byEnvelope.set(event.envelope_id, list);
       if (event.event_kind === 'envelope_promoted') {
-        const current = latestPromotion.get(event.envelope_id);
+        const current: any = latestPromotion.get(event.envelope_id);
         if (!current || (event.event_sequence ?? 0) > (current.event_sequence ?? 0)) latestPromotion.set(event.envelope_id, event);
       }
     }
-    const active = [];
-    let suppressedCount = 0;
+    const active: any[] = [];
+    let suppressedCount: any = 0;
     for (const [envelopeId, promotionEvent] of latestPromotion.entries()) {
-      const history = byEnvelope.get(envelopeId) ?? [];
-      const effectiveStatus = resolveEnvelopeStatus(history);
+      const history: any = byEnvelope.get(envelopeId) ?? [];
+      const effectiveStatus: any = resolveEnvelopeStatus(history);
       if (['acknowledged', 'dismissed'].includes(effectiveStatus)) {
         suppressedCount += 1;
         continue;
       }
-      const promotion = promotionEvent.event_payload?.promotion ?? {};
-      const severity = finiteNumber(promotion.severity, 60);
-      const correctiveAction = stringOrNull(promotion.corrective_action);
+      const promotion: any = promotionEvent.event_payload?.promotion ?? {};
+      const severity: any = finiteNumber(promotion.severity, 60);
+      const correctiveAction: any = stringOrNull(promotion.corrective_action);
       active.push({
         capa_id: envelopeId,
         capa_type: 'inbox_capa',
@@ -302,28 +302,28 @@ function readActiveInboxCapaItems() {
 }
 
 function readPendingCapabilityCapaItems() {
-  const capPath = join(readModelSiteRoot, 'operator-surfaces', 'capability-announcements.json');
+  const capPath: any = join(readModelSiteRoot, 'operator-surfaces', 'capability-announcements.json');
   if (!existsSync(capPath)) return { active: [], suppressed_count: 0 };
-  let capabilities = [];
+  let capabilities: any[] = [];
   try {
-    const doc = JSON.parse(readFileSync(capPath, 'utf8'));
+    const doc: any = JSON.parse(readFileSync(capPath, 'utf8'));
     capabilities = Array.isArray(doc.capabilities) ? doc.capabilities : [];
   } catch {
     return { active: [], suppressed_count: 0 };
   }
-  const now = Date.now();
-  const dayMs = 24 * 60 * 60 * 1000;
-  const active = [];
-  let suppressedCount = 0;
+  const now: any = Date.now();
+  const dayMs: any = 24 * 60 * 60 * 1000;
+  const active: any[] = [];
+  let suppressedCount: any = 0;
   for (const cap of capabilities) {
-    const reviewStatus = cap.review_status ?? 'pending';
+    const reviewStatus: any = cap.review_status ?? 'pending';
     if (reviewStatus === 'completed') {
       suppressedCount += 1;
       continue;
     }
-    const reviewDueMs = cap.review_due ? new Date(cap.review_due).getTime() : NaN;
-    const daysUntilDue = Number.isFinite(reviewDueMs) ? Math.floor((reviewDueMs - now) / dayMs) : null;
-    const severity = Number.isFinite(cap.severity) ? cap.severity : daysUntilDue === null ? 0 : daysUntilDue < 0 ? 85 : daysUntilDue <= 14 ? 60 : daysUntilDue <= 30 ? 40 : 0;
+    const reviewDueMs: any = cap.review_due ? new Date(cap.review_due).getTime() : NaN;
+    const daysUntilDue: any = Number.isFinite(reviewDueMs) ? Math.floor((reviewDueMs - now) / dayMs) : null;
+    const severity: any = Number.isFinite(cap.severity) ? cap.severity : daysUntilDue === null ? 0 : daysUntilDue < 0 ? 85 : daysUntilDue <= 14 ? 60 : daysUntilDue <= 30 ? 40 : 0;
     if (severity <= 0) continue;
     active.push({
       capa_id: cap.capability_id,
@@ -345,25 +345,25 @@ function readPendingCapabilityCapaItems() {
   return { active, suppressed_count: suppressedCount };
 }
 
-function detectCorrectiveTaskCoverage({ item, allTasks }) {
-  const matches = [];
-  const normalizedConcept = normalizeLinkText(item.concept_name);
+function detectCorrectiveTaskCoverage({ item, allTasks }: any) {
+  const matches: any[] = [];
+  const normalizedConcept: any = normalizeLinkText(item.concept_name);
   for (const row of allTasks ?? []) {
-    const spec = row.task_number ? readModelStore.getTaskSpecByNumber(row.task_number) : null;
-    const projectedTaskBody = readProjectedTaskBody(row.task_id);
-    const text = normalizeLinkText([spec?.title, spec?.goal_markdown, spec?.context_markdown, spec?.required_work_markdown, spec?.non_goals_markdown, projectedTaskBody, row.task_id].filter(Boolean).join(' '));
-    const reasons = [];
+    const spec: any = row.task_number ? readModelStore.getTaskSpecByNumber(row.task_number) : null;
+    const projectedTaskBody: any = readProjectedTaskBody(row.task_id);
+    const text: any = normalizeLinkText([spec?.title, spec?.goal_markdown, spec?.context_markdown, spec?.required_work_markdown, spec?.non_goals_markdown, projectedTaskBody, row.task_id].filter(Boolean).join(' '));
+    const reasons: any[] = [];
     if (item.capa_id && text.includes(normalizeLinkText(item.capa_id))) reasons.push('capa_id_link');
     if (normalizedConcept.length >= 16 && text.includes(normalizedConcept)) reasons.push('concept_name_link');
     if (reasons.length === 0) continue;
     matches.push({ task_number: row.task_number, task_id: row.task_id, status: row.status, title: spec?.title ?? row.title ?? '', reasons, closed_corrective_implementation: isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody }) });
   }
-  const openStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies']);
-  const openMatches = matches.filter((match) => openStatuses.has(match.status));
+  const openStatuses: any = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies']);
+  const openMatches: any = matches.filter((match: any) => openStatuses.has(match.status));
   if (openMatches.length > 0) {
     return { status: 'covered_by_open_task', reason: 'open linked task can carry the CAPA corrective implementation to terminal evidence', open_task_count: openMatches.length, historical_task_count: matches.length - openMatches.length, tasks: openMatches.slice(0, 5), actionable_next_states: correctiveCoverageNextStates(), remediation: 'Continue or finish the linked implementation task, then verify it contains completed acceptance criteria, execution notes, and verification evidence.' };
   }
-  const terminalMatches = matches.filter((match) => match.closed_corrective_implementation === true);
+  const terminalMatches: any = matches.filter((match: any) => match.closed_corrective_implementation === true);
   if (terminalMatches.length > 0) {
     return { status: 'closed_corrective_implementation_coverage', reason: 'closed linked task has completed acceptance criteria, execution notes, and verification and is not disposition/audit-only', open_task_count: 0, historical_task_count: matches.length, terminal_task_count: terminalMatches.length, tasks: terminalMatches.slice(0, 5), actionable_next_states: [], remediation: null };
   }
@@ -378,40 +378,40 @@ function detectCorrectiveTaskCoverage({ item, allTasks }) {
 
 function correctiveCoverageNextStates() { return ['linked_corrective_implementation_task', 'explicit_defer_or_blocker_state', 'admitted_no_action_rationale']; }
 
-function isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody = null }) {
+function isClosedCorrectiveImplementationTask({ row, spec, item, projectedTaskBody = null }: any) {
   if (!['closed', 'confirmed'].includes(row.status)) return false;
-  const title = String(spec?.title ?? row.title ?? '');
-  const taskText = [title, spec?.goal_markdown, spec?.context_markdown, spec?.required_work_markdown, spec?.non_goals_markdown, projectedTaskBody ?? readProjectedTaskBody(row.task_id)].filter(Boolean).join('\n');
-  const normalized = normalizeLinkText(taskText);
+  const title: any = String(spec?.title ?? row.title ?? '');
+  const taskText: any = [title, spec?.goal_markdown, spec?.context_markdown, spec?.required_work_markdown, spec?.non_goals_markdown, projectedTaskBody ?? readProjectedTaskBody(row.task_id)].filter(Boolean).join('\n');
+  const normalized: any = normalizeLinkText(taskText);
   if (/\b(disposition|intake|triage|audit|cluster|inventory|review)\b/i.test(title)) return false;
   if (!/(implement|implemented|fix|fixed|guard|guarded|prevent|prevented|refuse|refused|enforce|enforced|validate|validated|test|coverage)/i.test(taskText)) return false;
   if (item.capa_id && !normalized.includes(normalizeLinkText(item.capa_id))) return false;
-  const evidence = classifyProjectedTaskEvidence(taskText);
+  const evidence: any = classifyProjectedTaskEvidence(taskText);
   return evidence.acceptance_complete && evidence.execution_notes_present && evidence.verification_present;
 }
 
-function readProjectedTaskBody(taskId) {
+function readProjectedTaskBody(taskId: any) {
   if (!taskId) return '';
-  const path = join(readModelSiteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`);
+  const path: any = join(readModelSiteRoot, '.ai', 'do-not-open', 'tasks', `${taskId}.md`);
   if (!existsSync(path)) return '';
   try { return readFileSync(path, 'utf8'); } catch { return ''; }
 }
 
-function classifyProjectedTaskEvidence(body) {
-  const acceptanceMatches = [...String(body).matchAll(/^\s*-\s+\[(x|X| )\]\s+\S.*$/gm)];
-  const checkedCount = acceptanceMatches.filter((match) => match[1].toLowerCase() === 'x').length;
+function classifyProjectedTaskEvidence(body: any) {
+  const acceptanceMatches: any = [...String(body).matchAll(/^\s*-\s+\[(x|X| )\]\s+\S.*$/gm)];
+  const checkedCount: any = acceptanceMatches.filter((match: any) => match[1].toLowerCase() === 'x').length;
   return { acceptance_complete: acceptanceMatches.length > 0 && checkedCount === acceptanceMatches.length, execution_notes_present: sectionHasSubstantiveContent(body, 'Execution Notes'), verification_present: sectionHasSubstantiveContent(body, 'Verification') };
 }
 
-function sectionHasSubstantiveContent(body, heading) {
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = String(body).match(new RegExp(`(?:^|\\n)## ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i'));
+function sectionHasSubstantiveContent(body: any, heading: any) {
+  const escaped: any = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match: any = String(body).match(new RegExp(`(?:^|\\n)## ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i'));
   if (!match) return false;
-  const normalized = match[1].replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*[-*]\s*/gm, '').trim();
+  const normalized: any = match[1].replace(/<!--[\s\S]*?-->/g, '').replace(/^\s*[-*]\s*/gm, '').trim();
   return normalized.length >= 20;
 }
 
-function normalizeLinkText(value) { return String(value ?? '').toLowerCase().replace(/[^a-z0-9_\-]+/g, ' ').replace(/\s+/g, ' ').trim(); }
-function finiteNumber(value, fallback) { const number = Number(value); return Number.isFinite(number) ? number : fallback; }
-function stringOrNull(value) { return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null; }
-function compactNextActionTask(task) { if (!task) return null; return { task_number: task.task_number ?? null, title: task.title ?? null, status: task.status ?? null, target_role: task.target_role ?? null, assigned_agent: task.assigned_agent ?? null, claim_authority: task.claim_authority ?? null, executability_posture: task.executability_posture ?? null }; }
+function normalizeLinkText(value: any) { return String(value ?? '').toLowerCase().replace(/[^a-z0-9_\-]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+function finiteNumber(value: any, fallback: any) { const number: any = Number(value); return Number.isFinite(number) ? number : fallback; }
+function stringOrNull(value: any) { return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null; }
+function compactNextActionTask(task: any) { if (!task) return null; return { task_number: task.task_number ?? null, title: task.title ?? null, status: task.status ?? null, target_role: task.target_role ?? null, assigned_agent: task.assigned_agent ?? null, claim_authority: task.claim_authority ?? null, executability_posture: task.executability_posture ?? null }; }

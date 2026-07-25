@@ -14,7 +14,7 @@ export function createTaskLifecycleAdminHandlers({
   buildLifecycleTargetLocusStatus,
   taskLifecycleRestart,
   getSurfaceLifecycle,
-}) {
+}: any) {
   return {
     task_lifecycle_doctor: (args: any = {}) => {
       const registeredTools = getRegisteredTools();
@@ -85,6 +85,6 @@ export function createTaskLifecycleAdminHandlers({
         },
       });
     },
-    task_lifecycle_restart: (args) => jsonToolResult(taskLifecycleRestart(args)),
+    task_lifecycle_restart: (args: any) => jsonToolResult(taskLifecycleRestart(args)),
   };
 }

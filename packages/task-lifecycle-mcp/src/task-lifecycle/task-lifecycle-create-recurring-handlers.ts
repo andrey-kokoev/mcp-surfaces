@@ -79,7 +79,7 @@ export const TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES = Object.freeze([
   "task_lifecycle_recurring_runs"
 ]);
 
-export function createTaskLifecycleCreateRecurringHandlers(context) {
+export function createTaskLifecycleCreateRecurringHandlers(context: any) {
   const {
     store,
     siteRoot,
@@ -118,7 +118,7 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
     getSitePolicy,
   } = context;
 
-  async function dispatchCreateRecurringTool(canonicalName, args, dispatchContext: TaskLifecyclePayload = {}) {
+  async function dispatchCreateRecurringTool(canonicalName: any, args: any, dispatchContext: TaskLifecyclePayload = {}) {
     switch (canonicalName) {
     case 'task_lifecycle_roster_admit': {
       return jsonToolResult(admitRosterIdentity(args));
@@ -700,10 +700,10 @@ export function createTaskLifecycleCreateRecurringHandlers(context) {
     return getSitePolicy().policy.roster.roles_are_obligation_targets;
   }
 
-  return Object.fromEntries(TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES.map((name) => [name, (args, dispatchContext) => dispatchCreateRecurringTool(name, args, dispatchContext)]));
+  return Object.fromEntries(TASK_LIFECYCLE_CREATE_RECURRING_TOOL_NAMES.map((name: any) => [name, (args: any, dispatchContext: any) => dispatchCreateRecurringTool(name, args, dispatchContext)]));
 }
 
-function roleObligationTargetsDisabledResult({ preferredRole, targetRole }) {
+function roleObligationTargetsDisabledResult({ preferredRole, targetRole }: any) {
   return {
     status: 'blocked',
     reason: 'roles_are_obligation_targets_false',

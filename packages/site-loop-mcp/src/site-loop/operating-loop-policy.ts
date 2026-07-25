@@ -14,7 +14,7 @@ export const DEFAULT_SITE_LOOP_OPERATING_POLICY = siteLoopOperatingPolicy(DEFAUL
 
 type SiteLoopPolicyValidationContext = { cwd?: string; config?: SiteLoopConfig };
 
-function siteLoopOperatingPolicy(config) {
+function siteLoopOperatingPolicy(config: any) {
   return mergeSiteOperatingLoopPolicy(DEFAULT_SITE_OPERATING_LOOP_POLICY, {
     schema: config.policy.schema,
     loop_id: config.loop_id,
@@ -42,7 +42,7 @@ function siteLoopConfigFromValidationContext(context: SiteLoopPolicyValidationCo
   return DEFAULT_SITE_LOOP_CONFIG;
 }
 
-export function loadSiteLoopOperatingPolicy(cwd) {
+export function loadSiteLoopOperatingPolicy(cwd: any) {
   const loopConfig = requireSiteLoopConfig(cwd);
   const defaults = siteLoopOperatingPolicy(loopConfig);
   const loaded = loadSiteOperatingLoopPolicy(cwd, {
@@ -59,11 +59,10 @@ export function loadSiteLoopOperatingPolicy(cwd) {
   };
 }
 
-export function validateSiteLoopOperatingPolicy(policy, context: SiteLoopPolicyValidationContext = {}) {
+export function validateSiteLoopOperatingPolicy(policy: any, context: SiteLoopPolicyValidationContext = {}) {
   const validation = validateSiteOperatingLoopPolicy(policy, validationForSiteLoopConfig(siteLoopConfigFromValidationContext(context)));
   return {
     ...validation,
     schema: 'narada.site_loop.operating_policy_validation.v1',
   };
 }
-

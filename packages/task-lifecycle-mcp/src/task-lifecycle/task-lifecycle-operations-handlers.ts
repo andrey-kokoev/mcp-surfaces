@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { requireTaskTagsArray } from '@narada2/task-governance-core/task-tags';
 import { resolveFreshServerPath } from './fresh-server-path.js';
 
-export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
+export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES: any = Object.freeze([
   "task_lifecycle_submit_observation",
   "task_lifecycle_evidence_supersede",
   "task_lifecycle_bridge_poll",
@@ -15,7 +15,7 @@ export const TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES = Object.freeze([
   "task_lifecycle_run_tests"
 ]);
 
-export function createTaskLifecycleOperationsHandlers(context) {
+export function createTaskLifecycleOperationsHandlers(context: any) {
   const {
     store,
     siteRoot,
@@ -41,16 +41,16 @@ export function createTaskLifecycleOperationsHandlers(context) {
     randomUUID,
   } = context;
 
-  async function dispatchOperationsTool(canonicalName, args, dispatchContext = {}) {
+  async function dispatchOperationsTool(canonicalName: any, args: any, dispatchContext : any= {}) {
     switch (canonicalName) {
     case 'task_lifecycle_submit_observation': {
-      const taskNumber = numberField(args, 'task_number');
-      const artifactUri = stringField(args, 'artifact_uri');
-      const content = args.content;
+      const taskNumber: any = numberField(args, 'task_number');
+      const artifactUri: any = stringField(args, 'artifact_uri');
+      const content: any = args.content;
       if (!artifactUri) throw new Error('artifact_uri_required');
-      const taskId = taskNumber ? store.getLifecycleByNumber(taskNumber)?.task_id : null;
-      const artifactId = randomUUID();
-      const admittedView = JSON.stringify(content ?? {});
+      const taskId: any = taskNumber ? store.getLifecycleByNumber(taskNumber)?.task_id : null;
+      const artifactId: any = randomUUID();
+      const admittedView: any = JSON.stringify(content ?? {});
       store.upsertObservationArtifact({
         artifact_id: artifactId,
         artifact_type: 'observation',
@@ -67,18 +67,18 @@ export function createTaskLifecycleOperationsHandlers(context) {
     }
 
     case 'task_lifecycle_evidence_supersede': {
-      const taskNumber = numberField(args, 'task_number');
-      const agentId = stringField(args, 'agent_id');
-      const supersedesReportId = stringField(args, 'supersedes_report_id');
-      const artifactUri = stringField(args, 'artifact_uri');
-      const summary = stringField(args, 'summary');
-      const verificationSummary = stringField(args, 'verification_summary');
-      const noFilesChanged = booleanField(args, 'no_files_changed') ?? false;
-      const changedFiles = args.changed_files === undefined
+      const taskNumber: any = numberField(args, 'task_number');
+      const agentId: any = stringField(args, 'agent_id');
+      const supersedesReportId: any = stringField(args, 'supersedes_report_id');
+      const artifactUri: any = stringField(args, 'artifact_uri');
+      const summary: any = stringField(args, 'summary');
+      const verificationSummary: any = stringField(args, 'verification_summary');
+      const noFilesChanged: any = booleanField(args, 'no_files_changed') ?? false;
+      const changedFiles: any = args.changed_files === undefined
         ? []
         : Array.isArray(args.changed_files)
           && args.changed_files.length > 0
-          && args.changed_files.every((value) => typeof value === 'string' && value.trim())
+          && args.changed_files.every((value: any) => typeof value === 'string' && value.trim())
           ? args.changed_files
           : null;
       if (!taskNumber) throw new Error('task_number_required');
@@ -90,7 +90,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
       if (changedFiles === null) throw new Error('changed_files_must_be_nonempty_string_array');
       if (noFilesChanged === (changedFiles.length > 0)) throw new Error('exactly_one_of_changed_files_or_no_files_changed_required');
       enforceSessionIdentity(agentId);
-      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const lifecycle: any = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
       if (lifecycle.status !== 'in_review') {
         return jsonToolResult({
@@ -101,7 +101,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
           remediation: 'Use task_lifecycle_finish for active work or task_lifecycle_reopen for closed/confirmed work before submitting replacement evidence.',
         }, true);
       }
-      const report = store.db.prepare('SELECT report_id FROM task_reports WHERE task_id = ? AND report_id = ?').get(lifecycle.task_id, supersedesReportId);
+      const report: any = store.db.prepare('SELECT report_id FROM task_reports WHERE task_id = ? AND report_id = ?').get(lifecycle.task_id, supersedesReportId);
       if (!report) {
         return jsonToolResult({
           status: 'blocked',
@@ -110,8 +110,8 @@ export function createTaskLifecycleOperationsHandlers(context) {
           supersedes_report_id: supersedesReportId,
         }, true);
       }
-      const artifactId = randomUUID();
-      const supersession = {
+      const artifactId: any = randomUUID();
+      const supersession: any = {
         schema: 'narada.task.evidence_supersession.v1',
         task_number: taskNumber,
         supersedes_report_id: supersedesReportId,
@@ -144,39 +144,39 @@ export function createTaskLifecycleOperationsHandlers(context) {
     }
 
     case 'task_lifecycle_bridge_poll': {
-      const dryRun = booleanField(args, 'dry_run') ?? false;
-      const threshold = numberField(args, 'threshold');
-      const limit = numberField(args, 'limit');
-      const result = await pollInboxBridge(siteRoot, { dryRun, threshold, limit });
+      const dryRun: any = booleanField(args, 'dry_run') ?? false;
+      const threshold: any = numberField(args, 'threshold');
+      const limit: any = numberField(args, 'limit');
+      const result: any = await pollInboxBridge(siteRoot, { dryRun, threshold, limit });
       return jsonToolResult(result, result.status === 'error');
     }
 
     case 'task_lifecycle_inbox_target': {
-      const envelopeId = stringField(args, 'envelope_id');
-      const dryRun = booleanField(args, 'dry_run') ?? false;
-      const disposition = stringField(args, 'disposition') ?? 'materialize';
-      const principal = stringField(args, 'principal') ?? stringField(args, 'agent_id') ?? 'task_lifecycle_mcp';
-      const reason = stringField(args, 'reason');
-      const result = await targetInboxEnvelope(siteRoot, { envelopeId, dryRun, disposition, principal, reason });
+      const envelopeId: any = stringField(args, 'envelope_id');
+      const dryRun: any = booleanField(args, 'dry_run') ?? false;
+      const disposition: any = stringField(args, 'disposition') ?? 'materialize';
+      const principal: any = stringField(args, 'principal') ?? stringField(args, 'agent_id') ?? 'task_lifecycle_mcp';
+      const reason: any = stringField(args, 'reason');
+      const result: any = await targetInboxEnvelope(siteRoot, { envelopeId, dryRun, disposition, principal, reason });
       return jsonToolResult(result, result.status === 'not_found');
     }
 
     case 'task_lifecycle_tags_update': {
-      const taskNumber = numberField(args, 'task_number');
-      const agentId = stringField(args, 'agent_id');
-      const reason = stringField(args, 'reason');
+      const taskNumber: any = numberField(args, 'task_number');
+      const agentId: any = stringField(args, 'agent_id');
+      const reason: any = stringField(args, 'reason');
       if (!taskNumber) throw new Error('task_number_required');
       if (!agentId) throw new Error('agent_id_required');
       if (!reason) throw new Error('reason_required');
-      const tags = requireTaskTagsArray(args.tags);
+      const tags: any = requireTaskTagsArray(args.tags);
       enforceSessionIdentity(agentId);
-      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const lifecycle: any = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-      const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
-      const actorRole = roleResolution.role;
-      const activeAssignment = store.getActiveAssignment(lifecycle.task_id);
-      const isTaskOwner = activeAssignment?.agent_id === agentId;
-      const isOperator = actorRole === 'architect' || actorRole === 'operator';
+      const roleResolution: any = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+      const actorRole: any = roleResolution.role;
+      const activeAssignment: any = store.getActiveAssignment(lifecycle.task_id);
+      const isTaskOwner: any = activeAssignment?.agent_id === agentId;
+      const isOperator: any = actorRole === 'architect' || actorRole === 'operator';
       if (!isTaskOwner && !isOperator) {
         return jsonToolResult({
           schema: 'narada.task.tags.v0',
@@ -191,17 +191,17 @@ export function createTaskLifecycleOperationsHandlers(context) {
           message: 'Tag updates are allowed for the active task owner or an architect/operator; tags do not alter task routing or authorization.',
         }, true);
       }
-      const result = store.replaceTaskTags({
+      const result: any = store.replaceTaskTags({
         taskId: lifecycle.task_id,
         tags,
         actorAgentId: agentId,
         reason,
         updateId: `tag-${randomUUID()}`,
       });
-      let projectionStatus = 'not_found';
-      let projectionError = null;
+      let projectionStatus: any = 'not_found';
+      let projectionError: any = null;
       try {
-        const taskFile = await findTaskFile(siteRoot, taskNumber);
+        const taskFile: any = await findTaskFile(siteRoot, taskNumber);
         if (taskFile) {
           const { frontMatter, body } = await readTaskFile(taskFile.path);
           if (result.tags.length > 0) frontMatter.tags = result.tags.join(', ');
@@ -209,7 +209,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
           await writeTaskProjection(taskFile.path, frontMatter, body);
           projectionStatus = 'projected';
         }
-      } catch (error) {
+      } catch (error: any) {
         projectionStatus = 'failed';
         projectionError = error instanceof Error ? error.message : String(error);
       }
@@ -228,12 +228,12 @@ export function createTaskLifecycleOperationsHandlers(context) {
     }
 
     case 'task_lifecycle_set_routing': {
-      const taskNumber = numberField(args, 'task_number');
-      const actorAgentId = stringField(args, 'actor_agent_id');
-      const targetRole = nullableStringField(args, 'target_role');
-      const preferredAgentId = nullableStringField(args, 'preferred_agent_id');
-      const relativePriority = numberField(args, 'relative_priority');
-      const reason = stringField(args, 'reason');
+      const taskNumber: any = numberField(args, 'task_number');
+      const actorAgentId: any = stringField(args, 'actor_agent_id');
+      const targetRole: any = nullableStringField(args, 'target_role');
+      const preferredAgentId: any = nullableStringField(args, 'preferred_agent_id');
+      const relativePriority: any = numberField(args, 'relative_priority');
+      const reason: any = stringField(args, 'reason');
       if (!taskNumber) throw new Error('task_number_required');
       if (!actorAgentId) throw new Error('actor_agent_id_required');
       if (!reason) throw new Error('reason_required');
@@ -256,7 +256,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
         }, true);
       }
 
-      const lifecycle = store.getLifecycleByNumber(taskNumber);
+      const lifecycle: any = store.getLifecycleByNumber(taskNumber);
       if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
       if (lifecycle.status !== 'opened') {
         return jsonToolResult({
@@ -268,8 +268,8 @@ export function createTaskLifecycleOperationsHandlers(context) {
         }, true);
       }
 
-      const actorRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, actorAgentId);
-      const actorRole = actorRoleResolution.role;
+      const actorRoleResolution: any = resolveAgentRoleWithDiagnostics(store, siteRoot, actorAgentId);
+      const actorRole: any = actorRoleResolution.role;
       if (!['architect', 'operator'].includes(actorRole)) {
         return jsonToolResult({
           status: 'blocked',
@@ -286,7 +286,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
       }
 
       if (preferredAgentId) {
-        const preferred = agentExistsWithRole(store, siteRoot, preferredAgentId);
+        const preferred: any = agentExistsWithRole(store, siteRoot, preferredAgentId);
         if (!preferred.exists) {
           return jsonToolResult({ status: 'blocked', reason: 'preferred_agent_not_in_roster', preferred_agent_id: preferredAgentId, role_resolution: preferred.role_resolution }, true);
         }
@@ -303,14 +303,14 @@ export function createTaskLifecycleOperationsHandlers(context) {
       }
 
       ensureTaskRoutingTables(store);
-      const now = new Date().toISOString();
-      const previousRouting = getTaskRouting(store, lifecycle.task_id);
-      const nextRouting = {
+      const now: any = new Date().toISOString();
+      const previousRouting: any = getTaskRouting(store, lifecycle.task_id);
+      const nextRouting: any = {
         target_role: targetRole !== undefined ? targetRole : previousRouting.target_role,
         preferred_agent_id: preferredAgentId !== undefined ? preferredAgentId : previousRouting.preferred_agent_id,
         relative_priority: relativePriority !== undefined ? relativePriority : previousRouting.relative_priority,
       };
-      const changedFields = {};
+      const changedFields: any = {};
       for (const field of ['target_role', 'preferred_agent_id', 'relative_priority']) {
         if (previousRouting[field] !== nextRouting[field]) {
           changedFields[field] = { before: previousRouting[field], after: nextRouting[field] };
@@ -342,7 +342,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
           SET relative_priority = ?, priority_reason = ?, updated_at = ?
           WHERE task_id = ?
         `).run(nextRouting.relative_priority, reason, now, lifecycle.task_id);
-        const eventId = `route-${randomUUID()}`;
+        const eventId: any = `route-${randomUUID()}`;
         store.db.prepare(`
           INSERT INTO task_routing_events (
             event_id, task_id, task_number, actor_agent_id, actor_role,
@@ -363,7 +363,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
         store.db.exec('COMMIT');
 
         try {
-          const taskFile = await findTaskFile(siteRoot, taskNumber);
+          const taskFile: any = await findTaskFile(siteRoot, taskNumber);
           if (taskFile) {
             const { frontMatter, body } = await readTaskFile(taskFile.path);
             if (nextRouting.target_role) {
@@ -378,7 +378,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
             } else {
               delete frontMatter.preferred_agent_id;
             }
-            const shouldProjectPriority = nextRouting.relative_priority !== null
+            const shouldProjectPriority: any = nextRouting.relative_priority !== null
               && nextRouting.relative_priority !== undefined
               && (
                 relativePriority !== undefined
@@ -408,21 +408,21 @@ export function createTaskLifecycleOperationsHandlers(context) {
           routing: nextRouting,
           audit_event_id: eventId,
         });
-      } catch (error) {
+      } catch (error: any) {
         try { store.db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
         throw error;
       }
     }
 
     case 'task_lifecycle_test_mcp_tool': {
-      const serverPath = stringField(args, 'server_path');
-      const toolName = stringField(args, 'tool_name');
-      const toolArgs = args.arguments ?? {};
-      const timeoutSeconds = numberField(args, 'timeout_seconds');
+      const serverPath: any = stringField(args, 'server_path');
+      const toolName: any = stringField(args, 'tool_name');
+      const toolArgs: any = args.arguments ?? {};
+      const timeoutSeconds: any = numberField(args, 'timeout_seconds');
       if (!serverPath) throw new Error('server_path_required');
       if (!toolName) throw new Error('tool_name_required');
 
-      const admission = resolveFreshServerPath({
+      const admission: any = resolveFreshServerPath({
         siteRoot,
         serverPath,
         runtimeModulePath: fileURLToPath(import.meta.url),
@@ -436,24 +436,24 @@ export function createTaskLifecycleOperationsHandlers(context) {
           remediation: 'Use a site-root-relative MCP server script, a script under the running @narada2/task-lifecycle-mcp package root, or configure an explicit root with NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
         }, true);
       }
-      const result = await testMcpTool(siteRoot, admission.resolved_path, toolName, toolArgs, { timeoutSeconds });
-      const payload = result && typeof result === 'object' && !Array.isArray(result)
+      const result: any = await testMcpTool(siteRoot, admission.resolved_path, toolName, toolArgs, { timeoutSeconds });
+      const payload: any = result && typeof result === 'object' && !Array.isArray(result)
         ? { ...result, server_path_admission: admission }
         : { status: 'ok', result, server_path_admission: admission };
       return jsonToolResult(payload);
     }
     case 'task_lifecycle_run_tests': {
-      const selector = stringField(args, 'selector') || 'task-lifecycle';
-      const taskNumber = numberField(args, 'task_number');
-      const agentId = stringField(args, 'agent_id');
-      const timeoutSeconds = numberField(args, 'timeout_seconds') || 120;
+      const selector: any = stringField(args, 'selector') || 'task-lifecycle';
+      const taskNumber: any = numberField(args, 'task_number');
+      const agentId: any = stringField(args, 'agent_id');
+      const timeoutSeconds: any = numberField(args, 'timeout_seconds') || 120;
       if (!agentId) throw new Error('agent_id_required');
       enforceSessionIdentity(agentId);
-      const lifecycle = taskNumber ? store.getLifecycleByNumber(taskNumber) : null;
+      const lifecycle: any = taskNumber ? store.getLifecycleByNumber(taskNumber) : null;
       if (taskNumber && !lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-      const targets = testTargetsForSelector(selector);
-      const results = [];
-      const testServer = resolveTestMcpServerPath(siteRoot);
+      const targets: any = testTargetsForSelector(selector);
+      const results: any[] = [];
+      const testServer: any = resolveTestMcpServerPath(siteRoot);
       if (!testServer.found) {
         return jsonToolResult({
           schema: 'narada.task_lifecycle.run_tests.v0',
@@ -471,10 +471,10 @@ export function createTaskLifecycleOperationsHandlers(context) {
       }
       for (const target of targets) {
         try {
-          const result = await testMcpTool(testServer.root, testServer.path, 'run_test', target, { timeoutSeconds, agentId });
+          const result: any = await testMcpTool(testServer.root, testServer.path, 'run_test', target, { timeoutSeconds, agentId });
           results.push(result);
-        } catch (error) {
-          const diagnostic = error instanceof Error ? error.message : String(error);
+        } catch (error: any) {
+          const diagnostic: any = error instanceof Error ? error.message : String(error);
           results.push({
             status: 'failed',
             error: 'test_mcp_execution_failed',
@@ -486,7 +486,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
           });
         }
       }
-      const failed = results.filter((result) => result.status !== 'passed');
+      const failed: any = results.filter((result: any) => result.status !== 'passed');
       const payload: Record<string, unknown> = {
         schema: 'narada.task_lifecycle.run_tests.v0',
         status: failed.length === 0 ? 'passed' : 'failed',
@@ -500,7 +500,7 @@ export function createTaskLifecycleOperationsHandlers(context) {
         results,
       };
       if (taskNumber) {
-        const artifactId = randomUUID();
+        const artifactId: any = randomUUID();
         store.upsertObservationArtifact({
           artifact_id: artifactId,
           artifact_type: 'test_result',
@@ -523,33 +523,33 @@ export function createTaskLifecycleOperationsHandlers(context) {
     }
   }
 
-  return Object.fromEntries(TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES.map((name) => [name, (args, dispatchContext) => dispatchOperationsTool(name, args, dispatchContext)]));
+  return Object.fromEntries(TASK_LIFECYCLE_OPERATIONS_TOOL_NAMES.map((name: any) => [name, (args: any, dispatchContext: any) => dispatchOperationsTool(name, args, dispatchContext)]));
 }
 
-function resolveTestMcpServerPath(siteRoot) {
-  const candidates = [
+function resolveTestMcpServerPath(siteRoot: any) {
+  const candidates: any = [
     'tools/mcp-servers/test/test-mcp-server.mjs',
     'packages/test-mcp-server/dist/test-mcp-server.mjs',
     'tools/mcp-servers/test/test-mcp-server.js',
     'packages/test-mcp-server/dist/test-mcp-server.js',
   ];
-  const configuredRoot = typeof process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT === 'string'
+  const configuredRoot: any = typeof process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT === 'string'
     && process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT.trim()
     ? resolve(process.env.NARADA_TASK_LIFECYCLE_TEST_ROOT.trim())
     : null;
-  const roots = configuredRoot
+  const roots: any = configuredRoot
     ? [{ root: configuredRoot, source: 'env:NARADA_TASK_LIFECYCLE_TEST_ROOT' }]
     : [{ root: siteRoot, source: 'task_lifecycle_site_root' }];
   for (const candidateRoot of roots) {
     for (const candidate of candidates) {
-      const fullPath = resolve(candidateRoot.root, candidate);
+      const fullPath: any = resolve(candidateRoot.root, candidate);
       if (existsSync(fullPath)) {
         return {
           found: true,
           root: candidateRoot.root,
           path: candidate,
           primary: resolve(candidateRoot.root, candidates[0]),
-          candidates: candidates.map((item) => resolve(candidateRoot.root, item)),
+          candidates: candidates.map((item: any) => resolve(candidateRoot.root, item)),
           binding: { task_lifecycle_site_root: siteRoot, test_root: candidateRoot.root, source: candidateRoot.source },
         };
       }
@@ -560,7 +560,7 @@ function resolveTestMcpServerPath(siteRoot) {
     path: null,
     root: configuredRoot ?? siteRoot,
     primary: resolve(configuredRoot ?? siteRoot, candidates[0]),
-    candidates: candidates.map((item) => resolve(configuredRoot ?? siteRoot, item)),
+    candidates: candidates.map((item: any) => resolve(configuredRoot ?? siteRoot, item)),
     binding: {
       task_lifecycle_site_root: siteRoot,
       test_root: configuredRoot ?? siteRoot,

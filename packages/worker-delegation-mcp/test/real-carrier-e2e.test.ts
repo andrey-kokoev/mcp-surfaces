@@ -206,8 +206,10 @@ async function main(): Promise<void> {
     if (firstPage.schema === 'narada.producer_output_page.v1') {
       const outputRef = String(firstPage.output_ref ?? '');
       assert.ok(outputRef, JSON.stringify(firstPage));
+      const carrierClient = client;
+      assert.ok(carrierClient);
       const output = await readMcpOutputText(firstPage, async ({ offset, limit, pageNumber }) => {
-        const page = structured(await client.request(10 + pageNumber, 'tools/call', {
+        const page = structured(await carrierClient.request(10 + pageNumber, 'tools/call', {
           name: 'worker_output_show',
           arguments: { ref: outputRef, offset, limit },
         }));

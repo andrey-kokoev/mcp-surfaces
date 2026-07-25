@@ -53,18 +53,18 @@ function record(value: unknown): SiteLoopPayload {
 }
 
 function items(value: unknown): SiteLoopPayload[] {
-  return Array.isArray(value) ? value.filter((item) => item && typeof item === 'object') as SiteLoopPayload[] : [];
+  return Array.isArray(value) ? value.filter((item: any) => item && typeof item === 'object') as SiteLoopPayload[] : [];
 }
 
-function bridgeResult(context): unknown {
-  return context.steps.find((step) => step.step_id === 'inbox_bridge')?.result ?? null;
+function bridgeResult(context: any): unknown {
+  return context.steps.find((step: any) => step.step_id === 'inbox_bridge')?.result ?? null;
 }
 
-function bridgeDirectiveIds(context, deps: SiteLoopPhaseDeps): string[] {
-  return deps.residentDirectiveRefs(bridgeResult(context)).map((ref) => String(ref.ref)).filter(Boolean);
+function bridgeDirectiveIds(context: any, deps: SiteLoopPhaseDeps): string[] {
+  return deps.residentDirectiveRefs(bridgeResult(context)).map((ref: any) => String(ref.ref)).filter(Boolean);
 }
 
-function skippedOutcome(context, reason: string) {
+function skippedOutcome(context: any, reason: string) {
   return {
     schema: schemaName(context.siteLoopConfig, 'agent_outcome_reconciliation'),
     status: 'skipped',
@@ -75,17 +75,17 @@ function skippedOutcome(context, reason: string) {
   };
 }
 
-function dispatchRunner(context, deps: SiteLoopPhaseDeps) {
+function dispatchRunner(context: any, deps: SiteLoopPhaseDeps) {
   return typeof context.options.dispatchRunner === 'function'
     ? context.options.dispatchRunner
     : deps.dispatchPendingDirectives;
 }
 
-function testAuthorityMode(context): boolean {
+function testAuthorityMode(context: any): boolean {
   return context.options.testAuthority === true || context.options.test_authority === true;
 }
 
-function fixtureResident(context): SiteLoopPayload {
+function fixtureResident(context: any): SiteLoopPayload {
   return {
     status: 'fixture',
     authority_mode: 'test',
@@ -94,7 +94,7 @@ function fixtureResident(context): SiteLoopPayload {
   };
 }
 
-function fixtureDirectiveDispatch(context): SiteLoopPayload {
+function fixtureDirectiveDispatch(context: any): SiteLoopPayload {
   return {
     schema: schemaName(context.siteLoopConfig, 'directive_dispatch'),
     status: 'ok',
@@ -110,56 +110,58 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
   return [
     {
       id: 'source_sync',
-      shouldRun: (context) => context.state.sourceSyncRequested && !context.drain,
-      inputRefs: (context) => [{ kind: 'site_root', ref: context.siteRoot }],
-      execute: (context) => deps.runSourceSync(context.siteRoot, {
+      shouldRun: (context: any) => context.state.sourceSyncRequested
+        && context.siteLoopConfig.commands.source_sync.enabled !== false
+        && !context.drain,
+      inputRefs: (context: any) => [{ kind: 'site_root', ref: context.siteRoot }],
+      execute: (context: any) => deps.runSourceSync(context.siteRoot, {
         dryRun: context.dryRun,
         runner: context.options.sourceSyncRunner,
         commandConfig: context.siteLoopConfig.commands.source_sync,
         schema: schemaName(context.siteLoopConfig, 'source_sync'),
         timeoutMs: context.options.sourceSyncTimeoutMs ?? context.options.source_sync_timeout_ms,
       }),
-      outputRefs: (result) => deps.sourceSyncRefs(result),
-      evidence: (result, context) => deps.summarizeSourceSync(result, context.siteLoopConfig),
+      outputRefs: (result: any) => deps.sourceSyncRefs(result),
+      evidence: (result: any, context: any) => deps.summarizeSourceSync(result, context.siteLoopConfig),
     },
     {
       id: 'scheduled_sop_triggers',
-      shouldRun: (context) => !context.drain && context.siteLoopConfig.scheduled_sops.length > 0,
-      inputRefs: (context) => context.siteLoopConfig.scheduled_sops.map((schedule) => ({ kind: 'sop_schedule', ref: schedule.id })),
-      execute: (context) => deps.emitScheduledSopTriggers(context.siteRoot, context.siteLoopConfig, {
+      shouldRun: (context: any) => !context.drain && context.siteLoopConfig.scheduled_sops.length > 0,
+      inputRefs: (context: any) => context.siteLoopConfig.scheduled_sops.map((schedule: any) => ({ kind: 'sop_schedule', ref: schedule.id })),
+      execute: (context: any) => deps.emitScheduledSopTriggers(context.siteRoot, context.siteLoopConfig, {
         dryRun: context.dryRun,
         now: context.options.now,
       }),
-      outputRefs: (result) => items(record(result).results)
-        .filter((item) => typeof item.envelope_id === 'string')
-        .map((item) => ({ kind: 'inbox_envelope', ref: item.envelope_id })),
-      evidence: (result) => result,
+      outputRefs: (result: any) => items(record(result).results)
+        .filter((item: any) => typeof item.envelope_id === 'string')
+        .map((item: any) => ({ kind: 'inbox_envelope', ref: item.envelope_id })),
+      evidence: (result: any) => result,
     },
     {
       id: 'inbox_bridge',
-      shouldRun: (context) => !context.drain,
-      inputRefs: (context) => [{ kind: 'site_root', ref: context.siteRoot }],
-      execute: (context) => deps.runInboxBridge(context.siteRoot, {
+      shouldRun: (context: any) => !context.drain,
+      inputRefs: (context: any) => [{ kind: 'site_root', ref: context.siteRoot }],
+      execute: (context: any) => deps.runInboxBridge(context.siteRoot, {
         dryRun: context.dryRun,
         limit: context.limit,
         threshold: context.threshold,
       }),
-      outputRefs: (result) => deps.bridgeOutputRefs(result),
-      evidence: (result) => deps.summarizeBridgeResult(result),
+      outputRefs: (result: any) => deps.bridgeOutputRefs(result),
+      evidence: (result: any) => deps.summarizeBridgeResult(result),
     },
     {
       id: 'task_materialization',
       synthetic: true,
-      shouldRun: (context) => context.steps.some((step) => step.step_id === 'inbox_bridge'),
+      shouldRun: (context: any) => context.steps.some((step: any) => step.step_id === 'inbox_bridge'),
       inputRefs: () => [{ kind: 'step', ref: 'inbox_bridge' }],
-      execute: (context) => bridgeResult(context),
-      outputRefs: (result) => deps.materializedTaskRefs(result),
-      evidence: (result) => deps.summarizeTaskMaterialization(result),
+      execute: (context: any) => bridgeResult(context),
+      outputRefs: (result: any) => deps.materializedTaskRefs(result),
+      evidence: (result: any) => deps.summarizeTaskMaterialization(result),
     },
     {
       id: 'task_executability_reconciliation',
-      shouldRun: (context) => !context.dryRun && !context.drain,
-      skipStep: (context) => ({
+      shouldRun: (context: any) => !context.dryRun && !context.drain,
+      skipStep: (context: any) => ({
         stepId: 'task_executability_reconciliation',
         status: 'skipped',
         inputRefs: [{ kind: 'task_lifecycle', ref: 'executability_requests' }],
@@ -171,33 +173,36 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         },
       }),
       inputRefs: () => [{ kind: 'task_lifecycle', ref: 'executability_requests' }],
-      execute: (context) => deps.runTaskExecutabilityReconciliation(context.siteRoot, {
+      execute: (context: any) => deps.runTaskExecutabilityReconciliation(context.siteRoot, {
         store: context.store,
         limit: context.limit,
         orchestrator: context.options.taskExecutabilityOrchestrator,
         max_attempts: context.options.taskExecutabilityMaxAttempts,
         max_run_ms: context.options.taskExecutabilityMaxRunMs,
       }),
-      outputRefs: (result) => items(record(result).results).map((item) => ({
+      outputRefs: (result: any) => items(record(result).results).map((item: any) => ({
         kind: 'task_executability_request',
         ref: item.request_id,
         outcome: item.outcome,
       })),
-      evidence: (result) => result,
+      evidence: (result: any) => result,
     },
     {
       id: 'resident_directive_emission',
       synthetic: true,
-      shouldRun: (context) => context.steps.some((step) => step.step_id === 'inbox_bridge'),
-      inputRefs: (context) => deps.materializedTaskRefs(bridgeResult(context)),
-      execute: (context) => bridgeResult(context),
-      outputRefs: (result) => deps.residentDirectiveRefs(result),
-      evidence: (result) => deps.summarizeResidentDirectiveEmission(result),
+      shouldRun: (context: any) => context.steps.some((step: any) => step.step_id === 'inbox_bridge'),
+      inputRefs: (context: any) => deps.materializedTaskRefs(bridgeResult(context)),
+      execute: (context: any) => bridgeResult(context),
+      outputRefs: (result: any) => deps.residentDirectiveRefs(result),
+      evidence: (result: any) => deps.summarizeResidentDirectiveEmission(result),
     },
     {
       id: 'ticket_task_reconciliation',
-      shouldRun: (context) => !context.dryRun && !context.drain && context.state.sourceSyncRequested,
-      skipStep: (context) => {
+      shouldRun: (context: any) => !context.dryRun
+        && !context.drain
+        && context.state.sourceSyncRequested
+        && context.siteLoopConfig.commands.ticket_task_reconciliation.enabled !== false,
+      skipStep: (context: any) => {
         const result = {
           schema: schemaName(context.siteLoopConfig, 'ticket_task_reconciliation'),
           status: 'skipped',
@@ -215,11 +220,11 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
           evidence: deps.summarizeTicketTaskReconciliation(result, context.siteLoopConfig),
         };
       },
-      inputRefs: (context) => [
+      inputRefs: (context: any) => [
         ...deps.outputRefsForStep(context.steps, 'source_sync'),
         context.state.ticketProjectionRef,
       ],
-      execute: (context) => deps.runTicketTaskReconcile(context.siteRoot, {
+      execute: (context: any) => deps.runTicketTaskReconcile(context.siteRoot, {
         dryRun: context.dryRun,
         limit: context.limit,
         preferredRole: context.state.residentRole,
@@ -228,14 +233,14 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         schema: schemaName(context.siteLoopConfig, 'ticket_task_reconciliation'),
         timeoutMs: context.options.ticketTaskReconciliationTimeoutMs ?? context.options.ticket_task_reconciliation_timeout_ms,
       }),
-      outputRefs: (result) => deps.ticketTaskRefs(result),
-      evidence: (result, context) => deps.summarizeTicketTaskReconciliation(result, context.siteLoopConfig),
+      outputRefs: (result: any) => deps.ticketTaskRefs(result),
+      evidence: (result: any, context: any) => deps.summarizeTicketTaskReconciliation(result, context.siteLoopConfig),
     },
     {
       id: 'pre_backlog_outcome_reconciliation',
       synthetic: true,
-      inputRefs: (context) => bridgeDirectiveIds(context, deps).map((ref) => ({ kind: 'directive', ref })),
-      execute: (context) => {
+      inputRefs: (context: any) => bridgeDirectiveIds(context, deps).map((ref: any) => ({ kind: 'directive', ref })),
+      execute: (context: any) => {
         const directiveIds = bridgeDirectiveIds(context, deps);
         const resident = context.dryRun
           ? { status: 'skipped', reason: 'dry_run' }
@@ -254,24 +259,24 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         context.state.preBacklogOutcome = outcome;
         return outcome;
       },
-      outputRefs: (result) => items(record(result).output_refs),
-      evidence: (result) => result,
+      outputRefs: (result: any) => items(record(result).output_refs),
+      evidence: (result: any) => result,
     },
     {
       id: 'reported_resident_task_state_reconciliation',
       synthetic: true,
-      inputRefs: (context) => [{ kind: 'resident_backlog', ref: context.state.residentAgentId }],
-      execute: (context) => context.dryRun
+      inputRefs: (context: any) => [{ kind: 'resident_backlog', ref: context.state.residentAgentId }],
+      execute: (context: any) => context.dryRun
         ? { schema: schemaName(context.siteLoopConfig, 'reported_resident_task_state_reconciliation'), status: 'skipped', reason: 'dry_run', repaired: [] }
         : deps.reconcileReportedResidentTaskLifecycleState(context.siteRoot, { limit: 100 }),
-      outputRefs: (result) => items(record(result).repaired).map((item) => ({ kind: 'task', ref: item.task_id })),
-      evidence: (result) => result,
+      outputRefs: (result: any) => items(record(result).repaired).map((item: any) => ({ kind: 'task', ref: item.task_id })),
+      evidence: (result: any) => result,
     },
     {
       id: 'resident_backlog_recovery_emission',
       synthetic: true,
-      inputRefs: (context) => [{ kind: 'resident_backlog', ref: context.state.residentAgentId }],
-      execute: (context) => {
+      inputRefs: (context: any) => [{ kind: 'resident_backlog', ref: context.state.residentAgentId }],
+      execute: (context: any) => {
         const rateLimits = record(context.state.operatingPolicy.rate_limits);
         const result = context.dryRun
           ? {
@@ -289,27 +294,27 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         context.state.backlogRecovery = result;
         return result;
       },
-      outputRefs: (result) => deps.residentBacklogRecoveryDirectiveRefs(result),
-      evidence: (result, context) => deps.summarizeResidentBacklogRecovery(result, context.siteLoopConfig),
+      outputRefs: (result: any) => deps.residentBacklogRecoveryDirectiveRefs(result),
+      evidence: (result: any, context: any) => deps.summarizeResidentBacklogRecovery(result, context.siteLoopConfig),
     },
     {
       id: 'resident_supervisor',
-      shouldRun: (context) => !context.dryRun && context.options.ensureResident === true,
-      inputRefs: (context) => [{ kind: 'agent', ref: context.state.residentAgentId }],
-      execute: (context) => deps.ensureResidentCarrier(context.siteRoot, {
+      shouldRun: (context: any) => !context.dryRun && context.options.ensureResident === true,
+      inputRefs: (context: any) => [{ kind: 'agent', ref: context.state.residentAgentId }],
+      execute: (context: any) => deps.ensureResidentCarrier(context.siteRoot, {
         runner: context.options.residentSupervisorRunner,
         requireLiveCarrier: context.options.requireLiveCarrier !== false,
       }),
-      outputRefs: (result) => {
+      outputRefs: (result: any) => {
         const launch = record(record(result).launch);
         return launch.event_path ? [{ kind: 'agent_start_event', ref: launch.event_path }] : [];
       },
-      evidence: (result) => result,
+      evidence: (result: any) => result,
     },
     {
       id: 'resident_directive_dispatch',
-      shouldRun: (context) => !context.dryRun,
-      skipStep: (context) => {
+      shouldRun: (context: any) => !context.dryRun,
+      skipStep: (context: any) => {
         const dispatch = {
           schema: schemaName(context.siteLoopConfig, 'directive_dispatch'),
           status: 'skipped',
@@ -329,13 +334,13 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
           evidence: dispatch,
         };
       },
-      inputRefs: (context) => context.drain
+      inputRefs: (context: any) => context.drain
         ? []
         : [
             ...deps.residentDirectiveRefs(bridgeResult(context)),
             ...deps.residentBacklogRecoveryDirectiveRefs(context.state.backlogRecovery),
           ],
-      execute: async (context) => {
+      execute: async (context: any) => {
         if (testAuthorityMode(context)) {
           const result = fixtureDirectiveDispatch(context);
           context.state.dispatch = result;
@@ -353,24 +358,24 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         context.state.dispatch = result;
         return result;
       },
-      outputRefs: (result, context) => context.drain ? [] : deps.dispatchedDirectiveRefs(result),
-      evidence: (result, context) => context.drain
+      outputRefs: (result: any, context: any) => context.drain ? [] : deps.dispatchedDirectiveRefs(result),
+      evidence: (result: any, context: any) => context.drain
         ? { ...deps.summarizeDirectiveDispatch(result), drain: true }
         : deps.summarizeDirectiveDispatch(result),
     },
     {
       id: 'receipt_reconciliation',
       synthetic: true,
-      inputRefs: (context) => deps.dispatchedDirectiveRefs(context.state.dispatch),
-      execute: (context) => context.state.dispatch ?? null,
-      outputRefs: (result) => deps.receiptRefs(result),
-      evidence: (result) => deps.summarizeReceiptReconciliation(result),
+      inputRefs: (context: any) => deps.dispatchedDirectiveRefs(context.state.dispatch),
+      execute: (context: any) => context.state.dispatch ?? null,
+      outputRefs: (result: any) => deps.receiptRefs(result),
+      evidence: (result: any) => deps.summarizeReceiptReconciliation(result),
     },
     {
       id: 'agent_outcome_reconciliation',
       synthetic: true,
-      inputRefs: (context) => bridgeDirectiveIds(context, deps).map((ref) => ({ kind: 'directive', ref })),
-      execute: (context) => {
+      inputRefs: (context: any) => bridgeDirectiveIds(context, deps).map((ref: any) => ({ kind: 'directive', ref })),
+      execute: (context: any) => {
         const directiveIds = bridgeDirectiveIds(context, deps);
         const resident = context.dryRun
           ? { status: 'skipped', reason: 'dry_run' }
@@ -389,28 +394,28 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         context.state.outcome = outcome;
         return outcome;
       },
-      outputRefs: (result) => items(record(result).output_refs),
-      evidence: (result) => result,
+      outputRefs: (result: any) => items(record(result).output_refs),
+      evidence: (result: any) => result,
     },
     {
       id: 'stale_escalation_reconciliation',
       synthetic: true,
-      inputRefs: (context) => items(record(context.state.outcome).output_refs),
-      execute: (context) => context.store && !context.dryRun
+      inputRefs: (context: any) => items(record(context.state.outcome).output_refs),
+      execute: (context: any) => context.store && !context.dryRun
         ? deps.reconcileLoopEscalations(context.siteRoot, context.store, context.state.outcome, { runId: context.runId, nowIso: context.options.nowIso })
         : { status: 'skipped', reason: context.dryRun ? 'dry_run' : 'store_unavailable', created: [] },
-      outputRefs: (result) => items(record(result).created).map((item) => ({
+      outputRefs: (result: any) => items(record(result).created).map((item: any) => ({
         kind: 'operator_attention_envelope',
         ref: item.envelope_id,
         directive_id: item.directive_id,
       })),
-      evidence: (result) => result,
+      evidence: (result: any) => result,
     },
     {
       id: 'operating_alert_reconciliation',
       synthetic: true,
       inputRefs: () => [],
-      execute: (context) => testAuthorityMode(context)
+      execute: (context: any) => testAuthorityMode(context)
         ? { status: 'skipped', reason: 'test_authority_fixture', created: [] }
         : context.store && !context.dryRun
         ? deps.persistOperatingLayerAlerts(context.siteRoot, context.store, {
@@ -419,12 +424,12 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
             requireFreshProductionProof: context.options.requireFreshProductionProof === true || context.options.require_fresh_production_proof === true,
           })
         : { status: 'skipped', reason: context.dryRun ? 'dry_run' : 'store_unavailable', created: [] },
-      outputRefs: (result) => items(record(result).created).map((item) => ({
+      outputRefs: (result: any) => items(record(result).created).map((item: any) => ({
         kind: 'operator_attention_envelope',
         ref: item.envelope_id,
         classification: item.classification,
       })),
-      evidence: (result) => result,
+      evidence: (result: any) => result,
     },
   ];
 }

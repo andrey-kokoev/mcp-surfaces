@@ -39,12 +39,12 @@ function fixture(overrides: JsonRecord = {}): JsonRecord {
 }
 
 async function callTool(state: ReturnType<typeof createServerState>, name: string, args: JsonRecord) {
-  return await handleRequest({
+  return await ((handleRequest({
     jsonrpc: '2.0',
     id: `${name}-${Date.now()}-${Math.random()}`,
     method: 'tools/call',
     params: { name, arguments: args },
-  }, state);
+  }, state)) as any) as any;
 }
 
 try {

@@ -3,24 +3,24 @@ import { dirname, join, resolve } from 'node:path';
 import { Database } from '@narada2/task-governance-core/sqlite-database';
 import { getLatestEventsByEnvelope } from './admission-log.js';
 
-const INBOX_DIR = '.ai/inbox-envelopes';
-const INDEX_PATH = '.ai/state/inbox-index.sqlite';
-const INDEX_SCHEMA_VERSION = 1;
-const ENVELOPE_ID_PATTERN = /^env_[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const INBOX_DIR: any = '.ai/inbox-envelopes';
+const INDEX_PATH: any = '.ai/state/inbox-index.sqlite';
+const INDEX_SCHEMA_VERSION: any = 1;
+const ENVELOPE_ID_PATTERN: any = /^env_[A-Za-z0-9][A-Za-z0-9_-]*$/;
 type TaskLifecyclePayload = Record<string, unknown>;
 
-export function isValidEnvelopeId(envelopeId) {
+export function isValidEnvelopeId(envelopeId: any) {
   return typeof envelopeId === 'string' && ENVELOPE_ID_PATTERN.test(envelopeId);
 }
 
-function indexPath(siteRoot) {
+function indexPath(siteRoot: any) {
   return join(resolve(siteRoot), INDEX_PATH);
 }
 
-function openInboxIndex(siteRoot) {
-  const dbPath = indexPath(siteRoot);
+function openInboxIndex(siteRoot: any) {
+  const dbPath: any = indexPath(siteRoot);
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
+  const db: any = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma(`user_version = ${INDEX_SCHEMA_VERSION}`);
   db.exec(`
@@ -52,7 +52,7 @@ function openInboxIndex(siteRoot) {
     CREATE INDEX IF NOT EXISTS idx_inbox_envelopes_severity
       ON inbox_envelopes(status, severity DESC, received_at);
   `);
-  const now = new Date().toISOString();
+  const now: any = new Date().toISOString();
   db.prepare(`
     INSERT INTO inbox_index_meta (key, value, updated_at)
     VALUES ('schema_version', ?, ?)
@@ -61,18 +61,18 @@ function openInboxIndex(siteRoot) {
   return { db, dbPath };
 }
 
-function envelopeFiles(siteRoot) {
-  const envelopeDir = join(resolve(siteRoot), INBOX_DIR);
+function envelopeFiles(siteRoot: any) {
+  const envelopeDir: any = join(resolve(siteRoot), INBOX_DIR);
   if (!existsSync(envelopeDir)) return [];
   return readdirSync(envelopeDir)
-    .filter((fileName) => fileName.endsWith('.json'))
-    .map((fileName) => join(envelopeDir, fileName));
+    .filter((fileName: any) => fileName.endsWith('.json'))
+    .map((fileName: any) => join(envelopeDir, fileName));
 }
 
-function readEnvelopeFile(filePath) {
+function readEnvelopeFile(filePath: any) {
   try {
-    const text = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
-    const envelope = JSON.parse(text);
+    const text: any = readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
+    const envelope: any = JSON.parse(text);
     if (!isValidEnvelopeId(envelope?.envelope_id)) return null;
     return { envelope, text };
   } catch {
@@ -80,23 +80,23 @@ function readEnvelopeFile(filePath) {
   }
 }
 
-function effectiveStatus(envelope, latestEvents) {
-  const latest = latestEvents.get(envelope.envelope_id);
+function effectiveStatus(envelope: any, latestEvents: any) {
+  const latest: any = latestEvents.get(envelope.envelope_id);
   if (latest?.event_kind === 'envelope_acknowledged') return 'acknowledged';
   if (latest?.event_kind === 'envelope_dismissed') return 'dismissed';
   if (latest?.event_kind === 'envelope_promoted') return 'promoted';
   return envelope.status ?? 'received';
 }
-export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
-  const severityEvaluator = typeof evaluateEnvelopeSeverity === 'function' ? evaluateEnvelopeSeverity as (envelope: TaskLifecyclePayload) => TaskLifecyclePayload : null;
+export function refreshInboxIndex(siteRoot: any, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
+  const severityEvaluator: any = typeof evaluateEnvelopeSeverity === 'function' ? evaluateEnvelopeSeverity as (envelope: TaskLifecyclePayload) => TaskLifecyclePayload : null;
   const { db, dbPath } = openInboxIndex(siteRoot);
-  const now = new Date().toISOString();
-  const latestEvents = getLatestEventsByEnvelope(siteRoot);
-  const files = envelopeFiles(siteRoot);
+  const now: any = new Date().toISOString();
+  const latestEvents: any = getLatestEventsByEnvelope(siteRoot);
+  const files: any = envelopeFiles(siteRoot);
 
-  const seen = new Set();
-  const invalidRecords = [];
-  const upsert = db.prepare(`
+  const seen: any = new Set();
+  const invalidRecords: any[] = [];
+  const upsert: any = db.prepare(`
     INSERT INTO inbox_envelopes (
       envelope_id, file_path, status, kind, authority_level, title, summary,
       principal, source_ref, received_at, target_role, severity, severity_reason,
@@ -124,17 +124,17 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLi
       indexed_at = excluded.indexed_at
   `);
 
-  const purgeMissing = db.prepare('DELETE FROM inbox_envelopes WHERE envelope_id NOT IN (SELECT value FROM json_each(?))');
-  const transaction = db.transaction(() => {
+  const purgeMissing: any = db.prepare('DELETE FROM inbox_envelopes WHERE envelope_id NOT IN (SELECT value FROM json_each(?))');
+  const transaction: any = db.transaction(() => {
     for (const filePath of files) {
-      const raw = readEnvelopeFile(filePath);
+      const raw: any = readEnvelopeFile(filePath);
       if (!raw) {
         invalidRecords.push({ file_path: filePath, reason: 'invalid_json_or_envelope_id' });
         continue;
       }
       const { envelope, text } = raw;
-      const severity = severityEvaluator ? severityEvaluator(envelope) : {};
-      const envelopeId = envelope.envelope_id;
+      const severity: any = severityEvaluator ? severityEvaluator(envelope) : {};
+      const envelopeId: any = envelope.envelope_id;
       seen.add(envelopeId);
       upsert.run({
         envelope_id: envelopeId,
@@ -168,7 +168,7 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLi
   });
   transaction();
 
-  const total = (db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get() as TaskLifecyclePayload).count;
+  const total: any = (db.prepare('SELECT COUNT(*) AS count FROM inbox_envelopes').get() as TaskLifecyclePayload).count;
   return {
     status: 'ok',
     db,
@@ -180,10 +180,10 @@ export function refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity }: TaskLi
   };
 }
 
-export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
-  const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
+export function readIndexedInboxBacklog(siteRoot: any, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
+  const index: any = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
-    const rows = index.db.prepare(`
+    const rows: any = index.db.prepare(`
       SELECT *
       FROM inbox_envelopes
       WHERE status = 'received'
@@ -191,7 +191,7 @@ export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: 
     `).all() as TaskLifecyclePayload[];
     return {
       ...index,
-      rows: rows.map((row) => ({
+      rows: rows.map((row: any) => ({
         ...row,
         envelope: JSON.parse(String(row.payload_json)),
       })),
@@ -201,11 +201,11 @@ export function readIndexedInboxBacklog(siteRoot, { evaluateEnvelopeSeverity }: 
   }
 }
 
-export function readInboxIndexCounts(siteRoot, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
-  const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
+export function readInboxIndexCounts(siteRoot: any, { evaluateEnvelopeSeverity }: TaskLifecyclePayload = {}) {
+  const index: any = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
-    const receivedStatus = { status: 'received' };
-    const count = (where, params: TaskLifecyclePayload = {}) => (index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params) as TaskLifecyclePayload).count;
+    const receivedStatus: any = { status: 'received' };
+    const count: any = (where: any, params: TaskLifecyclePayload = {}) => (index.db.prepare(`SELECT COUNT(*) AS count FROM inbox_envelopes ${where}`).get(params) as TaskLifecyclePayload).count;
     return {
       ...index,
       counts: {

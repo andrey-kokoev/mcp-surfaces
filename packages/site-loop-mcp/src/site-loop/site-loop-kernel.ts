@@ -77,7 +77,7 @@ export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
   'operating_alert_reconciliation',
 ] as const;
 
-export async function runSiteLoopStep({ store, runId, stepId, inputRefs = [], execute, outputRefs, evidence, onFailedStep = null }) {
+export async function runSiteLoopStep({ store, runId, stepId, inputRefs = [], execute, outputRefs, evidence, onFailedStep = null }: any) {
   const startedAt = new Date().toISOString();
   try {
     const result = await execute();
@@ -124,13 +124,13 @@ function errorToPayload(error: unknown): SiteLoopPayload {
       name: error.name,
       message: error.message,
       stack: error.stack,
-      ...Object.fromEntries(Object.entries(error).filter(([, value]) => value !== undefined)),
+      ...Object.fromEntries(Object.entries(error).filter(([, value]: any) => value !== undefined)),
     };
   }
   return { message: String(error) };
 }
 
-export async function runSiteLoopPhaseAdapter({ adapter, context, store, runId, onFailedStep = null }) {
+export async function runSiteLoopPhaseAdapter({ adapter, context, store, runId, onFailedStep = null }: any) {
   if (adapter.shouldRun && !adapter.shouldRun(context)) {
     const skipped = adapter.skipStep?.(context);
     return skipped ? recordSiteLoopSyntheticStep({ store, runId, ...skipped }) : null;
@@ -154,12 +154,12 @@ export async function runSiteLoopPhaseAdapter({ adapter, context, store, runId, 
     stepId: adapter.id,
     inputRefs: adapter.inputRefs(context),
     execute: () => adapter.execute(context),
-    outputRefs: (result) => adapter.outputRefs(result, context),
-    evidence: (result) => adapter.evidence(result, context),
+    outputRefs: (result: any) => adapter.outputRefs(result, context),
+    evidence: (result: any) => adapter.evidence(result, context),
   });
 }
 
-export async function runSiteLoopPhasePlan({ adapters, context, store, runId, onFailedStep = null }) {
+export async function runSiteLoopPhasePlan({ adapters, context, store, runId, onFailedStep = null }: any) {
   const steps: SiteLoopStep[] = [];
   const byId: Record<string, SiteLoopStep> = {};
   for (const adapter of adapters) {

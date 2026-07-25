@@ -34,9 +34,9 @@ export function createTaskLifecycleInspectionHandlers({
   buildRoutingAssignmentDivergence,
   searchTasksService,
   findRelatedTasks,
-}) {
+}: any) {
   return {
-    task_lifecycle_show: async (args) => {
+    task_lifecycle_show: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       if (!taskNumber) throw new Error('task_number_required');
       const lifecycle = store.getLifecycleByNumber(taskNumber);
@@ -48,7 +48,7 @@ export function createTaskLifecycleInspectionHandlers({
       const currentExecutionEvidence = readCurrentExecutionEvidence(store, lifecycle.task_id);
       const reviewRows = store.db.prepare('SELECT * FROM task_reviews WHERE task_id = ? ORDER BY reviewed_at DESC').all(lifecycle.task_id);
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
-      const reviews = reviewRows.map((review) => ({
+      const reviews = reviewRows.map((review: any) => ({
         review_id: review.review_id,
         reviewer_agent_id: review.reviewer_agent_id,
         verdict: review.verdict,
@@ -143,7 +143,7 @@ export function createTaskLifecycleInspectionHandlers({
       });
     },
 
-    task_lifecycle_inspect: async (args) => {
+    task_lifecycle_inspect: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       if (!taskNumber) throw new Error('task_number_required');
       const lifecycle = store.getLifecycleByNumber(taskNumber);
@@ -160,7 +160,7 @@ export function createTaskLifecycleInspectionHandlers({
       const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle });
       const assignmentIntents = store.listAssignmentIntentsForTask ? store.listAssignmentIntentsForTask(lifecycle.task_id) : [];
 
-      const reviews = reviewRows.map((review) => ({
+      const reviews = reviewRows.map((review: any) => ({
         review_id: review.review_id,
         reviewer_agent_id: review.reviewer_agent_id,
         verdict: review.verdict,
@@ -211,12 +211,12 @@ export function createTaskLifecycleInspectionHandlers({
         dependency_context: dependencyReadback.dependency_context,
         outcome_contract: dependencyReadback.outcome_contract,
         latest_task_outcome: dependencyReadback.latest_task_outcome,
-        obligations: obligations.map((obligation) => summarizeObligationForInspection({ obligation, lifecycle })),
+        obligations: obligations.map((obligation: any) => summarizeObligationForInspection({ obligation, lifecycle })),
         schema: 'narada.task.mcp.inspect.v0',
       });
     },
 
-    task_lifecycle_inspect_range: async (args) => {
+    task_lifecycle_inspect_range: async (args: any) => {
       const chapterId = stringField(args, 'chapter_id');
       const startTaskNumber = numberField(args, 'start_task_number');
       const endTaskNumber = numberField(args, 'end_task_number');
@@ -225,7 +225,7 @@ export function createTaskLifecycleInspectionHandlers({
       let rows = [];
       if (chapterId) {
         const chapterTaskNumbers = readChapterTaskNumbers(siteRoot, chapterId).slice(0, limit);
-        rows = chapterTaskNumbers.map((taskNumber) => store.getLifecycleByNumber(taskNumber)).filter(Boolean);
+        rows = chapterTaskNumbers.map((taskNumber: any) => store.getLifecycleByNumber(taskNumber)).filter(Boolean);
       } else {
         if (!startTaskNumber || !endTaskNumber) throw new Error('start_task_number_and_end_task_number_required');
         const low = Math.min(startTaskNumber, endTaskNumber);
@@ -237,7 +237,7 @@ export function createTaskLifecycleInspectionHandlers({
         const taskNumber = lifecycle.task_number;
         const spec = store.getTaskSpecByNumber(taskNumber);
         const evidence = await inspectTaskEvidence(siteRoot, String(taskNumber), store).catch(() => null);
-        const evidencePreflight = await buildTaskEvidencePreflight({ siteRoot, store, taskNumber }).catch((error) => ({ status: 'unavailable', error: error instanceof Error ? error.message : String(error) }));
+        const evidencePreflight = await buildTaskEvidencePreflight({ siteRoot, store, taskNumber }).catch((error: any) => ({ status: 'unavailable', error: error instanceof Error ? error.message : String(error) }));
         const closureAuthority = deriveClosureAuthority(lifecycle);
         let body = null;
         if (includeBody) {
@@ -285,7 +285,7 @@ export function createTaskLifecycleInspectionHandlers({
       });
     },
 
-    task_lifecycle_diagnose_task_ref: async (args) => {
+    task_lifecycle_diagnose_task_ref: async (args: any) => {
       const taskId = stringField(args, 'task_id');
       const taskNumber = numberField(args, 'task_number');
       if (!taskId && !taskNumber) throw new Error('task_id_or_task_number_required');
@@ -296,7 +296,7 @@ export function createTaskLifecycleInspectionHandlers({
       const effectiveNumber = taskNumber ?? lifecycleById?.task_number;
       const numberOwner = effectiveNumber ? store.getLifecycleByNumber(effectiveNumber) : null;
       const taskFile = effectiveNumber ? await findTaskFile(siteRoot, String(effectiveNumber)).catch(() => null) : null;
-      const requestedTaskFileMatches = taskFile && taskId ? taskFile.path.includes(taskId) || readTaskFile(taskFile.path).then((file) => file.taskId === taskId).catch(() => false) : null;
+      const requestedTaskFileMatches = taskFile && taskId ? taskFile.path.includes(taskId) || readTaskFile(taskFile.path).then((file: any) => file.taskId === taskId).catch(() => false) : null;
       const projectionMatchesRequestedTask = typeof requestedTaskFileMatches?.then === 'function' ? await requestedTaskFileMatches : requestedTaskFileMatches;
       const collision = Boolean(taskId && numberOwner && numberOwner.task_id !== taskId);
       const missingProjection = Boolean(lifecycleById && effectiveNumber && !taskFile);
@@ -328,13 +328,13 @@ export function createTaskLifecycleInspectionHandlers({
       });
     },
 
-    task_lifecycle_evidence_preflight: async (args) => {
+    task_lifecycle_evidence_preflight: async (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       if (!taskNumber) throw new Error('task_number_required');
       return jsonToolResult(await buildTaskEvidencePreflight({ siteRoot, store, taskNumber }));
     },
 
-    task_lifecycle_audit: (args) => {
+    task_lifecycle_audit: (args: any) => {
       const since = stringField(args, 'since');
       const until = stringField(args, 'until');
       const now = new Date();
@@ -388,7 +388,7 @@ export function createTaskLifecycleInspectionHandlers({
         sinceVal, untilVal,
         sinceVal, untilVal,
       );
-      const events = rows.map((row) => row.event_type === 'legacy_review'
+      const events = rows.map((row: any) => row.event_type === 'legacy_review'
         ? {
             ...row,
             authority_role: 'legacy_compatibility_projection',
@@ -406,7 +406,7 @@ export function createTaskLifecycleInspectionHandlers({
       });
     },
 
-    task_lifecycle_search: async (args) => {
+    task_lifecycle_search: async (args: any) => {
       const query = stringField(args, 'query');
       const statusFilter = stringField(args, 'status');
       const limit = numberField(args, 'limit') ?? 20;
@@ -415,17 +415,17 @@ export function createTaskLifecycleInspectionHandlers({
       const output = result.result || result;
       if (Array.isArray(output.results)) {
         const authoritativeResults = output.results
-          .map((item) => annotateSearchResultAuthority(store, item))
-          .filter((item) => statusFilter ? item.authority?.status === 'authoritative' && item.status === statusFilter : true);
+          .map((item: any) => annotateSearchResultAuthority(store, item))
+          .filter((item: any) => statusFilter ? item.authority?.status === 'authoritative' && item.status === statusFilter : true);
         output.results = authoritativeResults.slice(0, limit);
         output.count = authoritativeResults.length;
-        output.authoritative_result_count = authoritativeResults.filter((item) => item.authority?.status === 'authoritative').length;
-        output.stale_result_count = authoritativeResults.filter((item) => item.authority?.status === 'stale_projection').length;
+        output.authoritative_result_count = authoritativeResults.filter((item: any) => item.authority?.status === 'authoritative').length;
+        output.stale_result_count = authoritativeResults.filter((item: any) => item.authority?.status === 'stale_projection').length;
       }
       return jsonToolResult(output, result.exitCode !== 0);
     },
 
-    task_lifecycle_related: (args) => {
+    task_lifecycle_related: (args: any) => {
       const taskNumber = numberField(args, 'task_number');
       const limit = numberField(args, 'limit') ?? 8;
       if (!taskNumber) throw new Error('task_number_required');
@@ -465,7 +465,7 @@ function firstReference(spec: Record<string, unknown> | null | undefined, keys: 
   return null;
 }
 
-function annotateSearchResultAuthority(store, item) {
+function annotateSearchResultAuthority(store: any, item: any) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
   const taskNumber = Number(item.task_number ?? item.taskNumber ?? item.number);
   const lifecycle = Number.isInteger(taskNumber) && taskNumber > 0 ? store.getLifecycleByNumber(taskNumber) : null;
@@ -488,16 +488,16 @@ function annotateSearchResultAuthority(store, item) {
   };
 }
 
-function buildTaskDependencyReadback({ store, lifecycle }) {
+function buildTaskDependencyReadback({ store, lifecycle }: any) {
   const parentDependencies = store.listTaskDependenciesForParent?.(lifecycle.task_id) ?? [];
   const dependencySatisfaction = evaluateTaskDependencySatisfaction(store, lifecycle.task_id);
   const requiredByDependencies = store.listTaskDependenciesForRequired?.(lifecycle.task_id) ?? [];
   const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
   const latestTaskOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
   return {
-    dependencies_blocking_this_task: parentDependencies.map((dependency) => summarizeDependencyEdge({ store, dependency })),
+    dependencies_blocking_this_task: parentDependencies.map((dependency: any) => summarizeDependencyEdge({ store, dependency })),
     dependency_satisfaction: dependencySatisfaction,
-    dependency_context: requiredByDependencies.map((dependency) => summarizeRequiredDependencyContext({
+    dependency_context: requiredByDependencies.map((dependency: any) => summarizeRequiredDependencyContext({
       store,
       dependency,
       lifecycle,
@@ -509,11 +509,11 @@ function buildTaskDependencyReadback({ store, lifecycle }) {
   };
 }
 
-function buildReviewAuthorityReadback({ legacyReviewRows, dependencyReadback }) {
+function buildReviewAuthorityReadback({ legacyReviewRows, dependencyReadback }: any) {
   const dependencyReviewCount = (dependencyReadback.dependencies_blocking_this_task ?? [])
-    .filter((dependency) => dependency.dependency_kind === 'review').length;
+    .filter((dependency: any) => dependency.dependency_kind === 'review').length;
   const requiredReviewContextCount = (dependencyReadback.dependency_context ?? [])
-    .filter((dependency) => dependency.dependency_kind === 'review').length;
+    .filter((dependency: any) => dependency.dependency_kind === 'review').length;
   return {
     primary_authority: 'task_dependencies.task_outcomes',
     legacy_review_rows_authority: 'compatibility_projection_only',
@@ -525,7 +525,7 @@ function buildReviewAuthorityReadback({ legacyReviewRows, dependencyReadback }) 
   };
 }
 
-function summarizeDependencyEdge({ store, dependency }) {
+function summarizeDependencyEdge({ store, dependency }: any) {
   const requiredLifecycle = store.getLifecycle?.(dependency.required_task_id);
   const contract = store.getLatestTaskOutcomeContract?.(dependency.required_task_id) ?? null;
   const latestOutcome = store.getLatestTaskOutcome?.(dependency.required_task_id) ?? null;
@@ -543,7 +543,7 @@ function summarizeDependencyEdge({ store, dependency }) {
   };
 }
 
-function summarizeRequiredDependencyContext({ store, dependency, lifecycle, outcomeContract, latestTaskOutcome }) {
+function summarizeRequiredDependencyContext({ store, dependency, lifecycle, outcomeContract, latestTaskOutcome }: any) {
   const parentLifecycle = store.getLifecycle?.(dependency.parent_task_id);
   const parentTaskNumber = parentLifecycle?.task_number ?? lookupTaskNumber(store, dependency.parent_task_id);
   const contract = outcomeContract ? summarizeOutcomeContract(outcomeContract) : null;
@@ -579,7 +579,7 @@ function summarizeRequiredDependencyContext({ store, dependency, lifecycle, outc
   };
 }
 
-function lookupTaskNumber(store, taskId) {
+function lookupTaskNumber(store: any, taskId: any) {
   if (!taskId) return null;
   try {
     const row = store.db.prepare('select task_number from task_lifecycle where task_id = ?').get(taskId);
@@ -589,7 +589,7 @@ function lookupTaskNumber(store, taskId) {
   }
 }
 
-function summarizeOutcomeContract(contract) {
+function summarizeOutcomeContract(contract: any) {
   return {
     contract_id: contract.contract_id,
     task_id: contract.task_id,
@@ -604,17 +604,17 @@ function summarizeOutcomeContract(contract) {
   };
 }
 
-function parseJsonStringArray(value) {
+function parseJsonStringArray(value: any) {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((item: any) => typeof item === 'string') : [];
   } catch {
     return [];
   }
 }
 
-function readCurrentExecutionEvidence(store, taskId) {
+function readCurrentExecutionEvidence(store: any, taskId: any) {
   const row = store.db.prepare(`
     SELECT artifact_id, artifact_uri, agent_id, admitted_view_json, created_at
     FROM observation_artifacts
@@ -640,7 +640,7 @@ function readCurrentExecutionEvidence(store, taskId) {
   };
 }
 
-function summarizeObligationForInspection({ obligation, lifecycle }) {
+function summarizeObligationForInspection({ obligation, lifecycle }: any) {
   const active = lifecycle.status !== 'closed' && lifecycle.status !== 'confirmed' && obligation.status === 'open';
   return {
     obligation_id: obligation.obligation_id,
@@ -651,7 +651,7 @@ function summarizeObligationForInspection({ obligation, lifecycle }) {
   };
 }
 
-function readChapterTaskNumbers(siteRoot, chapterId) {
+function readChapterTaskNumbers(siteRoot: any, chapterId: any) {
   const path = join(siteRoot, '.ai', 'do-not-open', 'task-chapters.json');
   if (!existsSync(path)) return [];
   try {
@@ -659,16 +659,16 @@ function readChapterTaskNumbers(siteRoot, chapterId) {
     const memberships = parsed?.chapters?.[chapterId]?.memberships;
     if (!Array.isArray(memberships)) return [];
     return memberships
-      .map((item) => ({ task_number: Number(item.task_number), order_index: Number(item.order_index ?? 0) }))
-      .filter((item) => Number.isInteger(item.task_number) && item.task_number > 0)
-      .sort((a, b) => a.order_index - b.order_index || a.task_number - b.task_number)
-      .map((item) => item.task_number);
+      .map((item: any) => ({ task_number: Number(item.task_number), order_index: Number(item.order_index ?? 0) }))
+      .filter((item: any) => Number.isInteger(item.task_number) && item.task_number > 0)
+      .sort((a: any, b: any) => a.order_index - b.order_index || a.task_number - b.task_number)
+      .map((item: any) => item.task_number);
   } catch {
     return [];
   }
 }
 
-function closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight }) {
+function closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight }: any) {
   const status = String(lifecycle.status ?? '');
   const preflight = evidencePreflight && typeof evidencePreflight === 'object' ? evidencePreflight : {};
   const blockers = Array.isArray(preflight.blockers) ? preflight.blockers : [];
@@ -689,7 +689,7 @@ function closureEvidencePosture({ lifecycle, closureAuthority, evidencePreflight
   };
 }
 
-function buildTaskRefRepairGuidance({ state, taskId, taskNumber, lifecycleById, numberOwner }) {
+function buildTaskRefRepairGuidance({ state, taskId, taskNumber, lifecycleById, numberOwner }: any) {
   if (state === 'task_number_collision') {
     return {
       safe_next_tool: 'task_lifecycle_diagnose_task_ref',

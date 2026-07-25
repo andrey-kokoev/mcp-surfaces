@@ -38,24 +38,25 @@ const triages = [];
 const db = new DatabaseSync(':memory:');
 const store = {
   db,
-  getDirective(directiveId) {
+  getDirective(directiveId: any) {
     return directives.get(directiveId);
   },
-  recordReceipt(directiveId, receipt) {
+  recordReceipt(directiveId: any, receipt: any) {
     const receiptRecord = { receipt_id: `receipt_${directiveId}`, directive_id: directiveId, ...receipt };
     receipts.push(receiptRecord);
     const directive = directives.get(directiveId);
-    directives.set(directiveId, { ...directive, delivery: { ...(directive?.delivery ?? {}), receipt_id: receiptRecord.receipt_id } });
+    if (!directive) throw new Error('directive_not_found:' + directiveId);
+    directives.set(directiveId, { ...directive, delivery: { ...(directive.delivery ?? {}), receipt_id: receiptRecord.receipt_id } });
     return receiptRecord;
   },
-  recordTriage(directiveId, triage) {
+  recordTriage(directiveId: any, triage: any) {
     const triageRecord = { triage_id: `triage_${directiveId}`, directive_id: directiveId, ...triage };
     triages.push(triageRecord);
     return triageRecord;
   },
 };
 
-function receiptEvent(directiveId) {
+function receiptEvent(directiveId: any) {
   return JSON.stringify({
     event: 'directive_receipt_recorded',
     directive_id: directiveId,

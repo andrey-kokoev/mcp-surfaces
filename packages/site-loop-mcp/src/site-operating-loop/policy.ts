@@ -52,16 +52,16 @@ export const DEFAULT_SITE_OPERATING_LOOP_POLICY = {
   attention: {},
 };
 
-export function operatingLoopPolicyPath(cwd) {
+export function operatingLoopPolicyPath(cwd: any) {
   return join(siteControlRoot(cwd), 'capabilities', 'operating-loop-policy.json');
 }
 
-function siteControlRoot(siteRoot) {
+function siteControlRoot(siteRoot: any) {
   const root = resolve(siteRoot);
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-export function loadSiteOperatingLoopPolicy(cwd, options: LoadSiteOperatingLoopPolicyOptions = {}) {
+export function loadSiteOperatingLoopPolicy(cwd: any, options: LoadSiteOperatingLoopPolicyOptions = {}) {
   const path = options.path ?? operatingLoopPolicyPath(cwd);
   const defaults = options.defaults ?? DEFAULT_SITE_OPERATING_LOOP_POLICY;
   const loaded = existsSync(path) ? readPolicy(path, defaults.schema) : {};
@@ -93,7 +93,7 @@ export function loadSiteOperatingLoopPolicy(cwd, options: LoadSiteOperatingLoopP
   };
 }
 
-export function validateSiteOperatingLoopPolicy(policy, options: ValidateSiteOperatingLoopPolicyOptions = {}) {
+export function validateSiteOperatingLoopPolicy(policy: any, options: ValidateSiteOperatingLoopPolicyOptions = {}) {
   const errors: string[] = [];
   const expectedSchema = options.expectedSchema ?? SITE_OPERATING_LOOP_POLICY_SCHEMA;
   if (policy?.schema !== expectedSchema) errors.push('schema_mismatch');
@@ -119,7 +119,7 @@ export function validateSiteOperatingLoopPolicy(policy, options: ValidateSiteOpe
     ['rate_limits.max_restarts_per_window', 0],
     ['rate_limits.restart_window_ms', 60_000],
   ] as Array<[string, number]>) {
-    const value = path.split('.').reduce((cursor, key) => cursor?.[key], policy);
+    const value = path.split('.').reduce((cursor: any, key: any) => cursor?.[key], policy);
     if (!Number.isFinite(Number(value)) || Number(value) < min) errors.push(`invalid_policy_number:${path}`);
   }
   if (typeof policy?.quiet_hours?.enabled !== 'boolean') errors.push('invalid_quiet_hours:enabled');
@@ -134,7 +134,7 @@ export function validateSiteOperatingLoopPolicy(policy, options: ValidateSiteOpe
   };
 }
 
-export function currentQuietHoursState(policy, options: QuietHoursStateOptions = {}) {
+export function currentQuietHoursState(policy: any, options: QuietHoursStateOptions = {}) {
   const quiet = policy?.quiet_hours ?? {};
   if (quiet.enabled !== true) {
     return {
@@ -172,7 +172,7 @@ export function currentQuietHoursState(policy, options: QuietHoursStateOptions =
   };
 }
 
-export function mergeSiteOperatingLoopPolicy(base, override) {
+export function mergeSiteOperatingLoopPolicy(base: any, override: any) {
   return {
     ...base,
     ...override,
@@ -203,7 +203,7 @@ export function mergeSiteOperatingLoopPolicy(base, override) {
   };
 }
 
-function readPolicy(path, fallbackSchema) {
+function readPolicy(path: any, fallbackSchema: any) {
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
@@ -214,7 +214,7 @@ function readPolicy(path, fallbackSchema) {
   }
 }
 
-function parseClockMinutes(value) {
+function parseClockMinutes(value: any) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(String(value ?? ''));
   if (!match) return null;
   const hours = Number(match[1]);
@@ -223,7 +223,7 @@ function parseClockMinutes(value) {
   return hours * 60 + minutes;
 }
 
-function localClockMinutes(now, timezone) {
+function localClockMinutes(now: any, timezone: any) {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: timezone || 'UTC',
@@ -231,8 +231,8 @@ function localClockMinutes(now, timezone) {
       minute: '2-digit',
       hour12: false,
     }).formatToParts(now);
-    const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
-    const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
+    const hour = Number(parts.find((part: any) => part.type === 'hour')?.value ?? 0);
+    const minute = Number(parts.find((part: any) => part.type === 'minute')?.value ?? 0);
     return (hour % 24) * 60 + minute;
   } catch {
     return now.getUTCHours() * 60 + now.getUTCMinutes();

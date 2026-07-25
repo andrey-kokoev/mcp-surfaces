@@ -1,13 +1,13 @@
-export function normalizeToolName(name, aliases: Record<string, unknown> = {}) {
+export function normalizeToolName(name: any, aliases: Record<string, unknown> = {}) {
   return aliases[name] ?? name;
 }
 
-export function tool(name, description, inputSchema) {
+export function tool(name: any, description: any, inputSchema: any) {
   return { name, description, inputSchema, annotations: toolAnnotations(name), outputSchema: genericToolOutputSchema() };
 }
 
-function toolAnnotations(name) {
-  const writes = /create|claim|handoff|finish|accept|reject|close|defer|reopen|review|submit|bridge|target|assign|update|admit|derive/.test(String(name));
+function toolAnnotations(name: any) {
+  const writes: any = /create|claim|handoff|finish|accept|reject|close|defer|reopen|review|submit|bridge|target|assign|update|admit|derive/.test(String(name));
   return {
     title: String(name),
     readOnlyHint: !writes,
@@ -21,8 +21,8 @@ function genericToolOutputSchema() {
   return { type: 'object', additionalProperties: true };
 }
 
-export function objectSchema(properties, required = [], options: Record<string, unknown> = {}) {
-  const schemaProperties = options.payloadRef === true
+export function objectSchema(properties: any, required : any= [], options: Record<string, unknown> = {}) {
+  const schemaProperties: any = options.payloadRef === true
     ? {
       ...properties,
       payload_ref: stringSchema('Optional MCP payload ref carrying the complete argument object, e.g. mcp_payload:<id>@v1. Use this when an inline string/object would exceed the payload limit.'),
@@ -36,27 +36,27 @@ export function objectSchema(properties, required = [], options: Record<string, 
   };
 }
 
-export function stringSchema(description) {
+export function stringSchema(description: any) {
   return { type: 'string', description };
 }
 
-export function nullableStringSchema(description) {
+export function nullableStringSchema(description: any) {
   return { type: 'string', nullable: true, description };
 }
 
-export function numberSchema(description) {
+export function numberSchema(description: any) {
   return { type: 'number', description };
 }
 
-export function enumStringSchema(values, description) {
+export function enumStringSchema(values: any, description: any) {
   return { type: 'string', enum: values, description };
 }
 
-export function arraySchema(items, description) {
+export function arraySchema(items: any, description: any) {
   return { type: 'array', items, description };
 }
 
-export function authorityBasisSchema(description) {
+export function authorityBasisSchema(description: any) {
   return {
     type: 'object',
     description,
@@ -69,16 +69,16 @@ export function authorityBasisSchema(description) {
   };
 }
 
-export function validateArgs(toolName, args, schema) {
-  const errors = [];
+export function validateArgs(toolName: any, args: any, schema: any) {
+  const errors: any[] = [];
   validateValue('', args, schema, errors);
   return errors.length > 0 ? errors : null;
 }
 
-function validateValue(path, value, schema, errors) {
+function validateValue(path: any, value: any, schema: any, errors: any) {
   if (!schema || typeof schema !== 'object') return;
-  const field = path || '<root>';
-  const expectedType = schema.type;
+  const field: any = path || '<root>';
+  const expectedType: any = schema.type;
 
   if (value === null && schema.nullable === true) return;
 
@@ -87,18 +87,18 @@ function validateValue(path, value, schema, errors) {
       errors.push({ field, expected: 'object', received: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value, message: `Field ${field} must be an object, got ${value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value}` });
       return;
     }
-    const record = value;
-    const props = schema.properties ?? {};
-    const required = schema.required ?? [];
+    const record: any = value;
+    const props: any = schema.properties ?? {};
+    const required: any = schema.required ?? [];
     for (const key of required) {
       if (!(key in record) || record[key] === undefined || record[key] === null) {
-        const childPath = path ? `${path}.${key}` : key;
+        const childPath: any = path ? `${path}.${key}` : key;
         errors.push({ field: childPath, expected: props[key]?.type ?? 'unknown', received: 'missing', message: `Missing required field: ${childPath}` });
       }
     }
     for (const [key, childValue] of Object.entries(record)) {
-      const childSchema = props[key];
-      const childPath = path ? `${path}.${key}` : key;
+      const childSchema: any = props[key];
+      const childPath: any = path ? `${path}.${key}` : key;
       if (!childSchema) {
         if (schema.additionalProperties === false) {
           errors.push({ field: childPath, expected: 'none', received: Array.isArray(childValue) ? 'array' : typeof childValue, message: `Unexpected field: ${childPath}` });
@@ -116,7 +116,7 @@ function validateValue(path, value, schema, errors) {
       return;
     }
     if (schema.items) {
-      value.forEach((item, index) => validateValue(`${field}[${index}]`, item, schema.items, errors));
+      value.forEach((item: any, index: any) => validateValue(`${field}[${index}]`, item, schema.items, errors));
     }
     return;
   }
@@ -134,7 +134,7 @@ function validateValue(path, value, schema, errors) {
   }
 }
 
-export function validationErrorResult(validationErrors) {
+export function validationErrorResult(validationErrors: any) {
   return {
     status: 'error',
     schema: 'narada.task.mcp.validation_error.v0',
@@ -143,9 +143,9 @@ export function validationErrorResult(validationErrors) {
   };
 }
 
-function buildAcceptedPayloadShapeHints(validationErrors) {
-  const hints = [];
-  if (validationErrors.some((error) => String(error.field).startsWith('findings'))) {
+function buildAcceptedPayloadShapeHints(validationErrors: any) {
+  const hints: any[] = [];
+  if (validationErrors.some((error: any) => String(error.field).startsWith('findings'))) {
     hints.push({
       field: 'findings',
       accepted_shape: [{ severity: 'note|blocking', description: '<finding text>', location: '<optional location>' }],

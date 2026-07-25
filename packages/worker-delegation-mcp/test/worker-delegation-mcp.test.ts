@@ -405,7 +405,7 @@ assert.equal(properRootState.policy.defaultNaradaAgentRuntimeProvider, 'kimi-cod
 assert.equal(properRootState.policy.providerCognitionDefaults['codex-subscription'].low.model, 'gpt-5.6-luna');
 
 const tools = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state);
-assert.deepEqual(tools.result?.tools.map((tool) => tool.name), [
+assert.deepEqual(tools.result?.tools.map((tool: any) => tool.name), [
   'worker_guidance',
   'worker_output_show',
   'worker_operator_affordances',
@@ -430,43 +430,43 @@ for (const tool of tools.result?.tools ?? []) {
   assert.equal(typeof tool.annotations?.title, 'string', tool.name);
   assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', tool.name);
 }
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.annotations?.readOnlyHint, false);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.annotations?.readOnlyHint, false);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.annotations?.readOnlyHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_cognition_defaults_inspect')?.annotations?.readOnlyHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_cognition_defaults_update')?.annotations?.readOnlyHint, false);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.annotations?.readOnlyHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_config_resolve')?.outputSchema?.properties?.schema?.const, 'narada.worker.config_resolve.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_reap.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait_batch.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.requested_count?.type, 'integer');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.timing?.type, 'object');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.finished_count?.type, 'integer');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.elapsed_ms?.type, 'integer');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.outputSchema?.properties?.schema?.const, 'narada.worker.dashboard.v1');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.annotations?.readOnlyHint, false);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run_reap')?.annotations?.destructiveHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_runs_synthesize')?.annotations?.readOnlyHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_dashboard_describe')?.annotations?.readOnlyHint, true);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_output_show')?.annotations?.readOnlyHint, true);
-assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.authority?.enum, ['read', 'write', 'command']);
-assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.wait_for_completion?.type, 'boolean');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.exit_interview?.type, 'boolean');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.provider?.type, 'string');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.verification_budget?.type, 'object');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.test_budget?.type, 'object');
-assert.deepEqual(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.intent?.properties?.mode?.enum, ['audit_only', 'plan_only', 'implement', 'implement_and_verify']);
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.preflight_paths?.type, 'array');
-assert.equal(tools.result?.tools.find((tool) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.required_mcp_tools?.type, 'array');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_edit')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_policy_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_cognition_defaults_inspect')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_cognition_defaults_update')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_config_resolve')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_policy_inspect')?.outputSchema?.properties?.schema?.const, 'narada.worker.policy.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_config_resolve')?.outputSchema?.properties?.schema?.const, 'narada.worker.config_resolve.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_edit')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_status')?.outputSchema?.properties?.schema?.const, 'narada.worker.run.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_reap')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_reap.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_wait')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_runs_list')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_list.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_batch.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.schema?.const, 'narada.worker.run_wait_batch.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.requested_count?.type, 'integer');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_batch')?.outputSchema?.properties?.timing?.type, 'object');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.finished_count?.type, 'integer');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_wait_batch')?.outputSchema?.properties?.elapsed_ms?.type, 'integer');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_runs_synthesize')?.outputSchema?.properties?.schema?.const, 'narada.worker.runs_synthesis.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_dashboard_describe')?.outputSchema?.properties?.schema?.const, 'narada.worker.dashboard.v1');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_batch')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_reap')?.annotations?.readOnlyHint, false);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run_reap')?.annotations?.destructiveHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_runs_synthesize')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_dashboard_describe')?.annotations?.readOnlyHint, true);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_output_show')?.annotations?.readOnlyHint, true);
+assert.deepEqual(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.authority?.enum, ['read', 'write', 'command']);
+assert.deepEqual(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.cognition?.enum, ['low', 'medium', 'high']);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.wait_for_completion?.type, 'boolean');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.exit_interview?.type, 'boolean');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.provider?.type, 'string');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.verification_budget?.type, 'object');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.test_budget?.type, 'object');
+assert.deepEqual(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.intent?.properties?.mode?.enum, ['audit_only', 'plan_only', 'implement', 'implement_and_verify']);
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.preflight_paths?.type, 'array');
+assert.equal(tools.result?.tools.find((tool: any) => tool.name === 'worker_run')?.inputSchema?.properties?.constraints?.properties?.required_mcp_tools?.type, 'array');
 const guidance = await rpc({ jsonrpc: '2.0', id: 1_1, method: 'tools/call', params: { name: 'worker_guidance', arguments: { workflow: 'delegation', tool: 'worker_run' } } }, state);
 assert.equal(guidance.result?.structuredContent.schema, 'narada.mcp_surface.guidance.v0');
 assert.match(guidance.result?.content[0].text, /"guidance_tool": "worker_guidance"/);
@@ -1007,7 +1007,7 @@ assert.equal(allowedConfigRun.result?.structuredContent.edits_performed, false);
 assert.equal(allowedConfigRun.result?.structuredContent.target_state_changed, false);
 assert.equal(allowedConfigRun.result?.structuredContent.confidence, 'complete');
 assert.equal(allowedConfigRun.result?.structuredContent.completion_state, 'complete');
-assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
+assert.equal(allowedConfigRun.result?.structuredContent.preflight.some((check: any) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 
 const managedCancellationState = createServerState({ allowedRoot: root, runRoot: join(root, 'managed-cancellation'), defaultRuntime: 'codex', codexCommand: process.execPath, codexCommandArgs: [fakeCodexHangScript], providerRegistryPath: defaultProviderRegistryPath });
 const managedCancellationStart = await rpc({ jsonrpc: '2.0', id: 501, method: 'tools/call', params: { name: 'worker_run', arguments: { intent: { instruction: 'managed cancellation run' }, constraints: { cwd: root } } } }, managedCancellationState);
@@ -1130,7 +1130,7 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification
 assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.enforcement_surface, null);
 assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.verification_state, 'no_tools_projected');
 assert.equal(agentRuntimeResolve.result?.structuredContent.mcp_tool_verification.no_tools_posture, true);
-assert.equal(agentRuntimeResolve.result?.structuredContent.preflight.some((check) => check.name === 'mcp_tool_projection' && check.status === 'warning'), true);
+assert.equal(agentRuntimeResolve.result?.structuredContent.preflight.some((check: any) => check.name === 'mcp_tool_projection' && check.status === 'warning'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.runtime_availability.available, true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_bound, true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.site_root_source, 'nearest_marker');
@@ -1344,13 +1344,13 @@ if (process.platform === 'win32') {
     params: { name: 'worker_run', arguments: runArgs(platformRootCase, { model: 'gpt-test', reasoning_effort: 'low', config: { model: 'gpt-test' } }) },
   }, state);
   assert.equal(caseInsensitiveRun.error, undefined);
-  assert.equal(caseInsensitiveRun.result?.structuredContent.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
+  assert.equal(caseInsensitiveRun.result?.structuredContent.preflight.some((check: any) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 }
 assert.deepEqual(allowedConfigRun.result?.structuredContent.final_checklist, ['state whether files were edited', 'list evidence inspected', 'list blocked or unreadable paths', 'separate recommendations from completed work']);
 const completedRunDir = allowedConfigRun.result?.structuredContent.run_dir;
-assert.deepEqual(allowedConfigRun.result?.content.map((item) => item.type), ['text']);
+assert.deepEqual(allowedConfigRun.result?.content.map((item: any) => item.type), ['text']);
 const listedResources = await rpc({ jsonrpc: '2.0', id: 51, method: 'resources/list', params: {} }, state);
-const promptArtifact = listedResources.result?.resources.find((resource) => String(resource.uri).startsWith('worker-artifact:') && resource.name.endsWith('/worker_prompt.txt'));
+const promptArtifact = listedResources.result?.resources.find((resource: any) => String(resource.uri).startsWith('worker-artifact:') && resource.name.endsWith('/worker_prompt.txt'));
 assert.ok(promptArtifact);
 const promptResource = await rpc({ jsonrpc: '2.0', id: 52, method: 'resources/read', params: { uri: promptArtifact.uri } }, state);
 assert.match(promptResource.result?.contents[0].text, /Do not call any worker_\* MCP tools\./);
@@ -1392,7 +1392,7 @@ assert.equal(executorRequest.schema, 'narada.worker.executor_request.v1');
 assert.equal(executorRequest.intent.instruction, 'run with allowed config');
 assert.equal(executorRequest.intent.mode, 'audit_only');
 assert.equal(executorRequest.requested_mode, 'audit_only');
-assert.equal(executorRequest.preflight.some((check) => check.name === 'cwd_readable' && check.status === 'ok'), true);
+assert.equal(executorRequest.preflight.some((check: any) => check.name === 'cwd_readable' && check.status === 'ok'), true);
 assert.equal(executorRequest.resolved_execution_policy.cwd, root);
 assert.equal(executorRequest.resolved_execution_policy.authority, 'read');
 assert.equal(executorRequest.resolved_execution_policy.cognition, 'low');
@@ -1425,7 +1425,7 @@ writeFileSync(join(legacyRunDir, 'result.json'), JSON.stringify({
   error: null,
 }), 'utf8');
 const legacyList = await rpc({ jsonrpc: '2.0', id: 520, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 200 } } }, state);
-const legacyListItem = legacyList.result?.structuredContent.runs.find((run) => run.run_id === legacyRunId);
+const legacyListItem = legacyList.result?.structuredContent.runs.find((run: any) => run.run_id === legacyRunId);
 assert.equal(legacyListItem?.requested_mode, 'audit_only');
 assert.equal(legacyListItem?.requested_mode_inferred, false);
 
@@ -1441,13 +1441,13 @@ assert.equal(asyncRun.result?.structuredContent.completion_state, 'pending');
 assert.equal(asyncRun.result?.structuredContent.result_state.state, 'pending');
 assert.equal(asyncRun.result?.structuredContent.result_state.scaffold, true);
 assert.equal(asyncRun.result?.structuredContent.result_state.terminal, false);
-assert.deepEqual(asyncRun.result?.content.map((item) => item.type), ['text']);
+assert.deepEqual(asyncRun.result?.content.map((item: any) => item.type), ['text']);
 assert.equal(asyncRun.result?.structuredContent.timing.finished_at, null);
 assert.deepEqual(asyncRun.result?.structuredContent.progress, { event_count: 0, latest_event_type: null, latest_event_preview: null, latest_event_at: null, readable: true, tail_truncated: false });
 assert.equal(state.activeRunCount, 1);
 const listedRuns = await rpc({ jsonrpc: '2.0', id: 522, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 20 } } }, state);
 assert.ok(listedRuns.result, JSON.stringify(listedRuns.error));
-assert.equal(listedRuns.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), true);
+assert.equal(listedRuns.result?.structuredContent.runs.some((run: any) => run.run_id === asyncRun.result?.structuredContent.run_id), true);
 assert.equal(listedRuns.result?.structuredContent.runs[0].summary, undefined);
 assert.equal(typeof listedRuns.result?.structuredContent.runs[0].summary_preview === 'string' || listedRuns.result?.structuredContent.runs[0].summary_preview === null, true);
 assert.equal(['complete', 'partial', 'pending', null].includes(listedRuns.result?.structuredContent.runs[0].completion_state), true);
@@ -1480,21 +1480,21 @@ assert.equal(runDashboard.result?.structuredContent.schema, 'narada.worker.dashb
 assert.equal(runDashboard.result?.structuredContent.mode, 'single_run');
 assert.equal(runDashboard.result?.structuredContent.include_terminal, true);
 assert.equal(runDashboard.result?.structuredContent.dashboard.server.started, false);
-assert.equal(runDashboard.result?.structuredContent.dashboard.api_endpoints.some((endpoint) => endpoint.path === 'mcp://tools/worker_run_status'), true);
+assert.equal(runDashboard.result?.structuredContent.dashboard.api_endpoints.some((endpoint: any) => endpoint.path === 'mcp://tools/worker_run_status'), true);
 assert.equal(runDashboard.result?.structuredContent.runs[0].run_id, asyncRun.result?.structuredContent.run_id);
 assert.equal(runDashboard.result?.structuredContent.runs[0].progress_state.state, 'completed');
 assert.equal(typeof runDashboard.result?.structuredContent.runs[0].budget_status.event_count, 'number');
 assert.equal(runDashboard.result?.structuredContent.runs[0].recent_activity.length > 0, true);
 assert.equal(runDashboard.result?.structuredContent.runs[0].worker_session_id, 'thread-created');
-assert.equal(runDashboard.result?.structuredContent.runs[0].result_refs.some((ref) => ref.name === 'events.jsonl'), true);
+assert.equal(runDashboard.result?.structuredContent.runs[0].result_refs.some((ref: any) => ref.name === 'events.jsonl'), true);
 assert.equal(runDashboard.result?.structuredContent.topology.nodes[0].id, asyncRun.result?.structuredContent.run_id);
 assert.deepEqual(runDashboard.result?.structuredContent.topology.edges, []);
 assert.equal(runDashboard.result?.structuredContent.steps[0].step_id, `run:${asyncRun.result?.structuredContent.run_id}`);
-assert.equal(runDashboard.result?.structuredContent.event_stream.some((event) => event.run_id === asyncRun.result?.structuredContent.run_id && String(event.preview).includes('thread-created')), true);
+assert.equal(runDashboard.result?.structuredContent.event_stream.some((event: any) => event.run_id === asyncRun.result?.structuredContent.run_id && String(event.preview).includes('thread-created')), true);
 assert.match(runDashboard.result?.content[0].text, /"schema": "narada\.worker\.dashboard\.v1"/);
 const activeDashboard = await rpc({ jsonrpc: '2.0', id: 52316, method: 'tools/call', params: { name: 'worker_dashboard_describe', arguments: { mode: 'all_active', limit: 50 } } }, state);
 assert.equal(activeDashboard.result?.structuredContent.mode, 'all_active');
-assert.equal(activeDashboard.result?.structuredContent.runs.some((run) => run.run_id === asyncRun.result?.structuredContent.run_id), false);
+assert.equal(activeDashboard.result?.structuredContent.runs.some((run: any) => run.run_id === asyncRun.result?.structuredContent.run_id), false);
 assert.equal(activeDashboard.result?.structuredContent.counts.terminal, 0);
 const batchRun = await rpc({ jsonrpc: '2.0', id: 52311, method: 'tools/call', params: { name: 'worker_run_batch', arguments: { requests: [
                 { intent: { instruction: 'batch one' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true } },
@@ -1819,16 +1819,16 @@ assert.match(eventRecoveredStatus.result?.structuredContent.error, /worker_run_r
 assert.equal(eventRecoveredStatus.result?.structuredContent.timing.finished_at, '2000-01-01T00:00:05.000Z');
 assert.equal(JSON.parse(readFileSync(join(eventRecoveredRunDir, 'result.json'), 'utf8')).status, 'completed_with_errors');
 const recoveredResources = await rpc({ jsonrpc: '2.0', id: 52322, method: 'resources/list', params: {} }, state);
-const recoveredLastMessageResource = recoveredResources.result?.resources.find((resource) => resource.name === `${eventRecoveredRunId}/last_message.json`);
+const recoveredLastMessageResource = recoveredResources.result?.resources.find((resource: any) => resource.name === `${eventRecoveredRunId}/last_message.json`);
 assert.ok(recoveredLastMessageResource);
 const recoveredLastMessage = await rpc({ jsonrpc: '2.0', id: 52323, method: 'resources/read', params: { uri: recoveredLastMessageResource.uri } }, state);
 assert.match(recoveredLastMessage.result?.contents[0].text, /Recovered recommendation from events/);
 const recentRuns = await rpc({ jsonrpc: '2.0', id: 524, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 10 } } }, state);
-const recentAsyncRun = recentRuns.result?.structuredContent.runs.find((run) => run.run_id === asyncRun.result?.structuredContent.run_id);
+const recentAsyncRun = recentRuns.result?.structuredContent.runs.find((run: any) => run.run_id === asyncRun.result?.structuredContent.run_id);
 assert.ok(recentAsyncRun);
 assert.match(String(recentAsyncRun.progress_preview), /thread-created/);
 const verboseRuns = await rpc({ jsonrpc: '2.0', id: 525, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { limit: 20, verbose: true } } }, state);
-const verboseAsyncRun = verboseRuns.result?.structuredContent.runs.find((run) => run.run_id === asyncRun.result?.structuredContent.run_id);
+const verboseAsyncRun = verboseRuns.result?.structuredContent.runs.find((run: any) => run.run_id === asyncRun.result?.structuredContent.run_id);
 assert.equal(verboseAsyncRun.summary, 'worker ok');
 assert.equal(typeof verboseAsyncRun.run_dir, 'string');
 assert.equal(verboseAsyncRun.progress.readable, true);
@@ -2061,7 +2061,7 @@ assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /
 assert.match(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /Audit only: inspect and report/);
 assert.doesNotMatch(readFileSync(join(completedRunDir, 'worker_prompt.txt'), 'utf8'), /NARS worker completion guard/);
 assert.match(readFileSync(join(completedRunDir, 'events.jsonl'), 'utf8'), /thread-created/);
-assert.equal(readdirSync(runRoot).some((name) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);
+assert.equal(readdirSync(runRoot).some((name: any) => /^run-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(name)), true);
 assert.equal(existsSync(join(auditLogDir, 'worker-delegation-mcp.jsonl')), true);
 
 const argv = buildCodexArgv({
@@ -2162,7 +2162,7 @@ assert.equal(completedWithToolError.result?.structuredContent.error, null);
 assert.equal(completedWithToolError.result?.structuredContent.warning_count, 1);
 assert.deepEqual(completedWithToolError.result?.structuredContent.runtime_warnings, ['simulated mcp tool error']);
 const filteredCompletedWithErrors = await rpc({ jsonrpc: '2.0', id: 622, method: 'tools/call', params: { name: 'worker_runs_list', arguments: { include_completed: false } } }, completedWithToolErrorState);
-assert.equal(filteredCompletedWithErrors.result?.structuredContent.runs.some((run) => run.status === 'completed'), false);
+assert.equal(filteredCompletedWithErrors.result?.structuredContent.runs.some((run: any) => run.status === 'completed'), false);
 
 const preflightRun = await rpc({
   jsonrpc: '2.0',
@@ -2172,14 +2172,14 @@ const preflightRun = await rpc({
 }, state);
 assert.equal(preflightRun.result?.structuredContent.requested_mode, 'plan_only');
 assert.equal(preflightRun.result?.structuredContent.edits_performed, false);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.message.includes('old authority') && check.status === 'ok'), true);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'effective_authority' && check.status === 'warning' && check.message.includes('raw MCP surfaces may advertise mutation-capable tools')), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check: any) => check.message.includes('old authority') && check.status === 'ok'), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check: any) => check.name === 'effective_authority' && check.status === 'warning' && check.message.includes('raw MCP surfaces may advertise mutation-capable tools')), true);
 assert.equal(preflightRun.result?.structuredContent.output_contract.effective_authority, 'read');
 assert.match(preflightRun.result?.structuredContent.output_contract.tool_capability_note, /mutation tools/);
 assert.match(preflightRun.result?.structuredContent.output_contract.focused_readback.behavior, /ordinary target source files directly/);
 assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /effective_authority=read/);
 assert.match(readFileSync(join(preflightRun.result?.structuredContent.run_dir, 'worker_prompt.txt'), 'utf8'), /Do not ask the delegating caller to provide output_refs/);
-assert.equal(preflightRun.result?.structuredContent.preflight.some((check) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('runtime_inventory_not_preflighted') && check.message.includes('structured-command.structured_command_execute')), true);
+assert.equal(preflightRun.result?.structuredContent.preflight.some((check: any) => check.name === 'required_mcp_tools' && check.status === 'warning' && check.message.includes('runtime_inventory_not_preflighted') && check.message.includes('structured-command.structured_command_execute')), true);
 
 const recursiveRequiredToolPreflight = await rpc({
   jsonrpc: '2.0',
@@ -2188,7 +2188,7 @@ const recursiveRequiredToolPreflight = await rpc({
   params: { name: 'worker_run', arguments: { intent: { instruction: 'repair worker delegation recursively', mode: 'plan_only' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, required_mcp_tools: ['worker-delegation.worker_run_status'] } } },
 }, state);
 assert.equal(recursiveRequiredToolPreflight.error?.data.code, 'worker_preflight_blocked');
-assert.equal(recursiveRequiredToolPreflight.error?.data.details.blocked_preflight.some((check) => check.name === 'required_mcp_tools_self_deadlock' && check.message.includes('reroute')), true);
+assert.equal(recursiveRequiredToolPreflight.error?.data.details.blocked_preflight.some((check: any) => check.name === 'required_mcp_tools_self_deadlock' && check.message.includes('reroute')), true);
 
 const readOnlyCreatePreflight = await rpc({
   jsonrpc: '2.0',
@@ -2197,7 +2197,7 @@ const readOnlyCreatePreflight = await rpc({
   params: { name: 'worker_run', arguments: { intent: { instruction: 'read authority cannot create paths', mode: 'plan_only' }, constraints: { cwd: root, authority: 'read', cognition: 'low', wait_for_completion: true, preflight_paths: [{ path: join(root, 'new-repo'), access: 'create', label: 'new repo' }] } } },
 }, state);
 assert.equal(readOnlyCreatePreflight.error?.data.code, 'worker_preflight_blocked');
-assert.equal(readOnlyCreatePreflight.error?.data.details.blocked_preflight.some((check) => check.name === 'read_authority_mutation_boundary' && check.message.includes('create')), true);
+assert.equal(readOnlyCreatePreflight.error?.data.details.blocked_preflight.some((check: any) => check.name === 'read_authority_mutation_boundary' && check.message.includes('create')), true);
 
 const blockedPreflight = await rpc({
   jsonrpc: '2.0',
@@ -2207,8 +2207,8 @@ const blockedPreflight = await rpc({
 }, state);
 assert.equal(blockedPreflight.error?.data.code, 'worker_preflight_blocked');
 assert.equal(blockedPreflight.error?.data.details.requested_mode, 'implement');
-assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check) => check.message.includes('missing input')), true);
-assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check) => check.name === 'mode_authority_alignment'), true);
+assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check: any) => check.message.includes('missing input')), true);
+assert.equal(blockedPreflight.error?.data.details.blocked_preflight.some((check: any) => check.name === 'mode_authority_alignment'), true);
 
 const runtimeErrorRoot = mkdtempSync(join(testTempRoot(), 'worker-delegation-runtime-error-'));
 const runtimeErrorScript = join(runtimeErrorRoot, 'exec.cjs');
@@ -2287,7 +2287,7 @@ const prestartFailure = await rpc({
   params: { name: 'worker_run', arguments: { intent: { instruction: 'prestart failure' }, constraints: { cwd: root, wait_for_completion: true } } },
 }, prestartFailureState);
 assert.equal(prestartFailure.error?.data.code, 'worker_runtime_failed');
-const prestartRunId = readdirSync(join(root, 'prestart-failure')).find((entry) => entry.startsWith('run-'));
+const prestartRunId = readdirSync(join(root, 'prestart-failure')).find((entry: any) => entry.startsWith('run-'));
 assert.ok(prestartRunId);
 const prestartStatus = await rpc({ jsonrpc: '2.0', id: 632, method: 'tools/call', params: { name: 'worker_run_status', arguments: { run_id: prestartRunId } } }, prestartFailureState);
 assert.equal(prestartStatus.result?.structuredContent.error_classification, 'codex_untrusted_directory');
@@ -2303,10 +2303,10 @@ assert.equal(materialized.result?.structuredContent.result_materialized, true);
 assert.equal(materialized.result?.structuredContent.reader_tool, 'worker_output_show');
 assert.equal(materialized.result?.structuredContent.tool_name, 'worker_policy_inspect');
 assert.equal(String(materialized.result?.content[0].text).includes('provider_cognition_defaults'), false);
-assert.deepEqual(materialized.result?.content.map((item) => item.type), ['text']);
+assert.deepEqual(materialized.result?.content.map((item: any) => item.type), ['text']);
 const materializedResources = await rpc({ jsonrpc: '2.0', id: 71, method: 'resources/list', params: {} }, materializedState);
-assert.equal(materializedResources.result?.resources.some((resource) => String(resource.uri).startsWith('worker-output:')), false);
-const executorRequestResource = (await rpc({ jsonrpc: '2.0', id: 72, method: 'resources/list', params: {} }, state)).result?.resources.find((resource) => resource.name === `${allowedConfigRun.result?.structuredContent.run_id}/executor_request.json`);
+assert.equal(materializedResources.result?.resources.some((resource: any) => String(resource.uri).startsWith('worker-output:')), false);
+const executorRequestResource = (await rpc({ jsonrpc: '2.0', id: 72, method: 'resources/list', params: {} }, state)).result?.resources.find((resource: any) => resource.name === `${allowedConfigRun.result?.structuredContent.run_id}/executor_request.json`);
 assert.ok(executorRequestResource);
 const shownArtifact = await rpc({ jsonrpc: '2.0', id: 801, method: 'resources/read', params: { uri: executorRequestResource.uri } }, state);
 assert.match(shownArtifact.result?.contents[0].text, /narada.worker.executor_request.v1/);
@@ -2328,7 +2328,7 @@ function hasCode(code: string): (error: unknown) => boolean {
   return (error: any) => error?.codeName === code;
 }
 
-function runArgs(instruction: string, constraints: Record<string, unknown> = {}, authority = 'read', cognition = 'low'): Record<string, unknown> {
+function runArgs(instruction: string, constraints: Record<string, unknown> = {}, authority : any= 'read', cognition : any= 'low'): Record<string, unknown> {
   return {
     intent: { instruction },
     constraints: { cwd: root, authority, cognition, wait_for_completion: true, overrides: constraints },

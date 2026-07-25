@@ -63,10 +63,10 @@ writeFileSync(join(root, '.narada', 'site-continuity', 'health', 'cloudflare-con
 
 const state = createServerState({ repoRoot: root, workerUrl: 'https://cloudflare.example.test' });
 
-const doctor = await handleRequest({
+const doctor = await ((handleRequest({
   jsonrpc: '2.0', id: 1, method: 'tools/call',
   params: { name: 'site_coherence_doctor', arguments: {} },
-}, state);
+}, state)) as any) as any;
 assert.equal(doctor.error, undefined);
 const docContent = (doctor.result as any).structuredContent;
 assert.equal(docContent.status, 'ok');
@@ -76,10 +76,10 @@ assert.equal(docContent.bindings_count, 1);
 assert.equal(docContent.session_exists, true);
 assert.equal(docContent.session_has_cookie, true);
 
-const checkLocal = await handleRequest({
+const checkLocal = await ((handleRequest({
   jsonrpc: '2.0', id: 2, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'site_live_smoke', fetch_cloudflare: false } },
-}, state);
+}, state)) as any) as any;
 assert.equal(checkLocal.error, undefined);
 const checkLocalContent = (checkLocal.result as any).structuredContent;
 assert.equal(checkLocalContent.status, 'ok');
@@ -93,30 +93,30 @@ assert.equal(checkLocalContent.coherence.posture_agrees, null);
 
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async () => new Response(JSON.stringify({ ok: false, code: 'unauthorized' }), { status: 401, headers: { 'content-type': 'application/json' } });
-const checkUnauthorized = await handleRequest({
+const checkUnauthorized = await ((handleRequest({
   jsonrpc: '2.0', id: 21, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'site_live_smoke', fetch_cloudflare: true } },
-}, state);
+}, state)) as any) as any;
 globalThis.fetch = originalFetch;
 const unauthorizedContent = (checkUnauthorized.result as any).structuredContent;
 assert.equal(unauthorizedContent.coherence.state, 'degraded');
 assert.equal(unauthorizedContent.coherence.operator_action, 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human');
 assert.ok(unauthorizedContent.coherence.attention.includes('cloudflare_error:site_read_failed:401:unauthorized'));
 
-const checkMissing = await handleRequest({
+const checkMissing = await ((handleRequest({
   jsonrpc: '2.0', id: 3, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'nonexistent_site', fetch_cloudflare: false } },
-}, state);
+}, state)) as any) as any;
 assert.equal((checkMissing.result as any).structuredContent.status, 'ok');
 assert.equal((checkMissing.result as any).structuredContent.local.overall_product_next_action, 'monitor_sites');
 assert.equal((checkMissing.result as any).structuredContent.local.has_site_sync, false);
 
 const missingHealthState = createServerState({ repoRoot: join(root, 'nonexistent'), workerUrl: 'https://cloudflare.example.test' });
 
-const checkNoHealth = await handleRequest({
+const checkNoHealth = await ((handleRequest({
   jsonrpc: '2.0', id: 4, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'any', fetch_cloudflare: false } },
-}, missingHealthState);
+}, missingHealthState)) as any) as any;
 const noHealthContent = (checkNoHealth.result as any).structuredContent;
 assert.equal(noHealthContent.status, 'missing_local');
 assert.equal(noHealthContent.local, null);
@@ -130,10 +130,10 @@ writeFileSync(join(root, '.ai', 'mcp-telemetry.json'), JSON.stringify({
   },
 }, null, 2), 'utf8');
 
-const telemetryCheck = await handleRequest({
+const telemetryCheck = await ((handleRequest({
   jsonrpc: '2.0', id: 5, method: 'tools/call',
   params: { name: 'site_coherence_check', arguments: { site_id: 'site_live_smoke', fetch_cloudflare: false } },
-}, state);
+}, state)) as any) as any;
 assert.equal(telemetryCheck.error, undefined);
 const telemetryPath = join(root, '.ai', 'telemetry', 'site-coherence.jsonl');
 const telemetryLines = readFileSync(telemetryPath, 'utf8').trim().split('\n').filter(Boolean);

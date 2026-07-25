@@ -10,7 +10,7 @@ import { buildCompactExecutabilityPosture } from './task-lifecycle-executability
 
 type TaskLifecyclePayload = Record<string, unknown>;
 
-export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, allTasks }) {
+export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, allTasks }: any) {
   const legacy_review_tasks: TaskLifecyclePayload[] = [];
   const in_progress: TaskLifecyclePayload[] = [];
   const needs_continuation: TaskLifecyclePayload[] = [];
@@ -22,7 +22,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
   const downstream_role_followups: TaskLifecyclePayload[] = [];
   const deferred: TaskLifecyclePayload[] = [];
   const actionable_deferred: TaskLifecyclePayload[] = [];
-  const lifecycleByNumber = new Map((allTasks || []).map((t) => [t.task_number, t]));
+  const lifecycleByNumber = new Map((allTasks || []).map((t: any) => [t.task_number, t]));
 
   // Preload operator identities for agents in the workboard
   const operatorIdentities = new Map();
@@ -80,7 +80,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
     let hasOpenParentDependencies = false;
     try {
       hasOpenParentDependencies = (store.listTaskDependenciesForParent?.(task.task_id) ?? [])
-        .some((dependency) => dependency.status !== 'satisfied');
+        .some((dependency: any) => dependency.status !== 'satisfied');
     } catch {
       hasOpenParentDependencies = false;
     }
@@ -188,7 +188,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
     }
   }
 
-  const sortByPriorityThenPreferred = (a, b) => {
+  const sortByPriorityThenPreferred = (a: any, b: any) => {
     const prioDiff = (b.relative_priority ?? 0) - (a.relative_priority ?? 0);
     if (prioDiff !== 0) return prioDiff;
     const aPref = a.preferred_agent_id === agentId ? 0 : 1;
@@ -224,7 +224,7 @@ export function buildWorkboard({ store, siteRoot = null, agentId, agentRole, all
 
 const ACTIVE_CHILD_STATUSES = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies', 'deferred']);
 
-function deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber }) {
+function deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber }: any) {
   if (task.status !== 'opened') {
     return { status: 'not_applicable', reason: 'task is not opened' };
   }
@@ -242,7 +242,7 @@ function deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber })
   if (childTaskNumbers.length === 0) {
     return { status: 'ordinary_leaf_or_unclassified', reason: 'parent/coordinator wording has no numbered child refs' };
   }
-  const activeChildTaskNumbers = childTaskNumbers.filter((number) => {
+  const activeChildTaskNumbers = childTaskNumbers.filter((number: any) => {
     const child = lifecycleByNumber.get(number);
     return child && ACTIVE_CHILD_STATUSES.has(child.status);
   });
@@ -256,13 +256,13 @@ function deriveParentCoordinatorActionability({ task, spec, lifecycleByNumber })
   }
   return {
     status: 'non_actionable_parent',
-    reason: `Parent/coordinator task has active child task(s): ${activeChildTaskNumbers.map((n) => `#${n}`).join(', ')}.`,
+    reason: `Parent/coordinator task has active child task(s): ${activeChildTaskNumbers.map((n: any) => `#${n}`).join(', ')}.`,
     child_task_numbers: childTaskNumbers,
     active_child_task_numbers: activeChildTaskNumbers,
   };
 }
 
-function extractChildTaskNumbers(text, parentTaskNumber) {
+function extractChildTaskNumbers(text: any, parentTaskNumber: any) {
   const refs = new Set<number>();
   const childRefPattern = /(?:^|\n)\s*(?:[-*]\s*)?`?#(\d+)`?/g;
   let match;
@@ -272,10 +272,10 @@ function extractChildTaskNumbers(text, parentTaskNumber) {
       refs.add(number);
     }
   }
-  return [...refs].sort((a, b) => a - b);
+  return [...refs].sort((a: any, b: any) => a - b);
 }
 
-function buildPreClaimWarnings({ item, assignment, agentId }) {
+function buildPreClaimWarnings({ item, assignment, agentId }: any) {
   const warnings = [];
   if (assignment?.agent_id && assignment.agent_id !== agentId) {
     warnings.push({
@@ -298,13 +298,13 @@ function buildPreClaimWarnings({ item, assignment, agentId }) {
   return warnings;
 }
 
-function preferredAgentRelation(preferredAgentId, agentId) {
+function preferredAgentRelation(preferredAgentId: any, agentId: any) {
   if (!preferredAgentId) return 'none';
   if (agentId && preferredAgentId === agentId) return 'self';
   return 'other';
 }
 
-function buildDependencyTaskContext({ store, task, agentId }) {
+function buildDependencyTaskContext({ store, task, agentId }: any) {
   const dependencies = store.listTaskDependenciesForRequired?.(task.task_id) ?? [];
   const dependency = dependencies[0];
   if (!dependency) return null;
@@ -341,7 +341,7 @@ function buildDependencyTaskContext({ store, task, agentId }) {
   };
 }
 
-function buildDependencyConflictRisk({ store, dependency, agentId }) {
+function buildDependencyConflictRisk({ store, dependency, agentId }: any) {
   const effectiveOperatorIdentity = agentId ? readOperatorIdentity(store, agentId) : null;
   const gatedWorkAgentId = readLatestReportAgentId(store, dependency.parent_task_id);
   const gatedWorkOperatorIdentity = gatedWorkAgentId ? readOperatorIdentity(store, gatedWorkAgentId) : null;
@@ -362,7 +362,7 @@ function buildDependencyConflictRisk({ store, dependency, agentId }) {
   };
 }
 
-function readLatestReportAgentId(store, taskId) {
+function readLatestReportAgentId(store: any, taskId: any) {
   try {
     const row = store.db.prepare('select agent_id from task_reports where task_id = ? order by submitted_at desc, rowid desc limit 1').get(taskId);
     return typeof row?.agent_id === 'string' ? row.agent_id : null;
@@ -371,7 +371,7 @@ function readLatestReportAgentId(store, taskId) {
   }
 }
 
-function readOperatorIdentity(store, agentId) {
+function readOperatorIdentity(store: any, agentId: any) {
   try {
     if (!hasAgentRosterColumn(store, 'operator_identity')) return null;
     const row = store.db.prepare('select operator_identity from agent_roster where agent_id = ?').get(agentId);
@@ -381,25 +381,25 @@ function readOperatorIdentity(store, agentId) {
   }
 }
 
-function hasAgentRosterColumn(store, columnName) {
+function hasAgentRosterColumn(store: any, columnName: any) {
   try {
-    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column) => column.name === columnName);
+    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column: any) => column.name === columnName);
   } catch {
     return false;
   }
 }
 
-function parseJsonStringArray(raw) {
+function parseJsonStringArray(raw: any) {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((item: any) => typeof item === 'string') : [];
   } catch {
     return [];
   }
 }
 
-function deriveDeferredActionability({ siteRoot, task, spec, observationText = '', lifecycleByNumber = new Map() }) {
+function deriveDeferredActionability({ siteRoot, task, spec, observationText = '', lifecycleByNumber = new Map() }: any) {
   const text = loadDeferredTaskText({ siteRoot, task, spec, observationText });
   const normalized = text.toLowerCase();
   const coordinatorBlocker = detectDeferredCoordinatorChildBlocker({ text, task, lifecycleByNumber });
@@ -441,7 +441,7 @@ function deriveDeferredActionability({ siteRoot, task, spec, observationText = '
   };
 }
 
-function detectExternalDeferredBlocker(normalizedText) {
+function detectExternalDeferredBlocker(normalizedText: any) {
   const hasBlockerLanguage = /\b(blocked|blocker|refused|rejects|rejected|invalid --kind|still fails|still rejects|unresolved)\b/.test(normalizedText);
   const hasExternalBoundary = /\b(external|upstream|outside (?:this )?(?:workspace|user site|writable roots)|canonical .*cli|d:\\code\\narada|missing .*capability)\b/.test(normalizedText);
   const hasNoLocalPath = /\b(cannot honestly|cannot .* from .*workspace|no local executable path|outside .*authority|outside .*writable roots|awaiting upstream|until canonical)\b/.test(normalizedText);
@@ -454,27 +454,27 @@ function detectExternalDeferredBlocker(normalizedText) {
   return null;
 }
 
-function detectDeferredCoordinatorChildBlocker({ text, task, lifecycleByNumber }) {
+function detectDeferredCoordinatorChildBlocker({ text, task, lifecycleByNumber }: any) {
   if (!/\b(child tasks?|children|parent\/coordinator|coordinator|blocked on|blocked until|blocked by)\b/i.test(text)) {
     return null;
   }
   const childTaskNumbers = extractTaskRefsAndRanges(text, task.task_number);
   if (childTaskNumbers.length === 0) return null;
-  const activeChildTaskNumbers = childTaskNumbers.filter((number) => {
+  const activeChildTaskNumbers = childTaskNumbers.filter((number: any) => {
     const child = lifecycleByNumber.get(number);
     return child && ACTIVE_CHILD_STATUSES.has(child.status);
   });
   if (activeChildTaskNumbers.length === 0) return null;
   return {
     kind: 'deferred_parent_coordinator_child_blockers',
-    reason: `deferred parent/coordinator has unresolved child task blocker evidence: ${activeChildTaskNumbers.map((n) => `#${n}`).join(', ')}`,
+    reason: `deferred parent/coordinator has unresolved child task blocker evidence: ${activeChildTaskNumbers.map((n: any) => `#${n}`).join(', ')}`,
     child_task_numbers: childTaskNumbers,
     active_child_task_numbers: activeChildTaskNumbers,
     evidence_source: 'task_text_or_observation_artifact',
   };
 }
 
-function extractTaskRefsAndRanges(text, parentTaskNumber) {
+function extractTaskRefsAndRanges(text: any, parentTaskNumber: any) {
   const refs = new Set<number>();
   const rangePattern = /#(\d+)\s*-\s*#?(\d+)/g;
   let range;
@@ -495,10 +495,10 @@ function extractTaskRefsAndRanges(text, parentTaskNumber) {
     const number = Number(match[1]);
     if (Number.isInteger(number) && number !== parentTaskNumber) refs.add(number);
   }
-  return [...refs].sort((a, b) => a - b);
+  return [...refs].sort((a: any, b: any) => a - b);
 }
 
-function loadDeferredTaskText({ siteRoot, task, spec, observationText = '' }) {
+function loadDeferredTaskText({ siteRoot, task, spec, observationText = '' }: any) {
   const chunks = [
     spec?.title,
     spec?.goal_markdown,
@@ -520,7 +520,7 @@ function loadDeferredTaskText({ siteRoot, task, spec, observationText = '' }) {
   return chunks.join('\n\n');
 }
 
-function loadObservationArtifactText({ store, task }) {
+function loadObservationArtifactText({ store, task }: any) {
   if (!store?.db || !task?.task_id) return '';
   try {
     const rows = store.db.prepare(`
@@ -530,7 +530,7 @@ function loadObservationArtifactText({ store, task }) {
       ORDER BY created_at DESC
       LIMIT 8
     `).all(task.task_id);
-    return rows.map((row) => `${row.artifact_uri ?? ''}\n${row.admitted_view_json ?? ''}`).join('\n\n');
+    return rows.map((row: any) => `${row.artifact_uri ?? ''}\n${row.admitted_view_json ?? ''}`).join('\n\n');
   } catch {
     return '';
   }

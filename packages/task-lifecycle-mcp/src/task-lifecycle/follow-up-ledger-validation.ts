@@ -7,9 +7,9 @@ const ACCEPTED_LEDGER_ENTRY_EXAMPLES = [
   'deferred: <reason and revisit condition>',
   'no follow-up needed: <rationale>',
 ];
-const FOLLOW_UP_LEDGER_REMEDIATION = `Accepted Follow-Up Ledger line forms: ${ACCEPTED_LEDGER_ENTRY_EXAMPLES.map((entry) => `\`${entry}\``).join(', ')}. Prefix matching is case-insensitive, but use these exact prefixes for readability.`;
+const FOLLOW_UP_LEDGER_REMEDIATION = `Accepted Follow-Up Ledger line forms: ${ACCEPTED_LEDGER_ENTRY_EXAMPLES.map((entry: any) => `\`${entry}\``).join(', ')}. Prefix matching is case-insensitive, but use these exact prefixes for readability.`;
 
-function extractSection(body, heading) {
+function extractSection(body: any, heading: any) {
   const pattern = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, 'mi');
   const match = body.match(pattern);
   if (!match) return null;
@@ -20,17 +20,17 @@ function extractSection(body, heading) {
   return body.slice(start, end).trim();
 }
 
-function escapeRegex(value) {
+function escapeRegex(value: any) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function needsFollowUpLedger(body) {
+function needsFollowUpLedger(body: any) {
   const dispositionSignal = /\b(disposition|acknowledge(?:d)?|acknowledge(?:d)? with corrections|dismiss(?:ed)?|escalat(?:e|ed|ion)|supersed(?:e|ed)|stale|remaining)\b/i;
   const followUpSignal = /\b(follow-?up|remaining (?:work|concern|finding)s?|split(?:ting)?|create(?:d)? (?:a )?(?:follow-?up )?task|covered by|deferred)\b/i;
   return dispositionSignal.test(body) && followUpSignal.test(body);
 }
 
-function normalizeLedgerLine(line) {
+function normalizeLedgerLine(line: any) {
   return line
     .trim()
     .replace(/^[-*]\s+/, '')
@@ -38,7 +38,7 @@ function normalizeLedgerLine(line) {
     .trim();
 }
 
-function isValidLedgerEntry(line) {
+function isValidLedgerEntry(line: any) {
   const normalized = normalizeLedgerLine(line);
   if (/\b(created|covered by)\s+#\d+\b/i.test(normalized)) return true;
   if (/\benvelope\s+env_[A-Za-z0-9_-]+\s*:\s*\S.{10,}/i.test(normalized)) return true;
@@ -48,14 +48,14 @@ function isValidLedgerEntry(line) {
   return false;
 }
 
-function ledgerLines(section) {
+function ledgerLines(section: any) {
   return section
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith('<!--'));
+    .map((line: any) => line.trim())
+    .filter((line: any) => line.length > 0 && !line.startsWith('<!--'));
 }
 
-export function validateFollowUpLedger(body) {
+export function validateFollowUpLedger(body: any) {
   if (!needsFollowUpLedger(body)) {
     return { ok: true, required: false, errors: [], ledger: null };
   }
@@ -71,13 +71,13 @@ export function validateFollowUpLedger(body) {
     return { ok: false, required: true, errors: [baseError], ledger };
   }
 
-  const invalidEntries = entries.filter((line) => !isValidLedgerEntry(line));
+  const invalidEntries = entries.filter((line: any) => !isValidLedgerEntry(line));
   if (invalidEntries.length > 0) {
     return {
       ok: false,
       required: true,
       errors: [
-        `${baseError} Invalid ledger entries: ${invalidEntries.map((line) => `"${normalizeLedgerLine(line)}"`).join('; ')}`,
+        `${baseError} Invalid ledger entries: ${invalidEntries.map((line: any) => `"${normalizeLedgerLine(line)}"`).join('; ')}`,
       ],
       ledger,
     };

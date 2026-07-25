@@ -52,7 +52,7 @@ function makeHandlers(store: ReturnType<typeof makeStore>, siteRoot: string) {
 }
 
 const siteRoot = mkdtempSync(join(process.cwd(), '.tmp-tests', 'task-exec-test-'));
-let store: ReturnType<typeof makeStore>;
+let store: ReturnType<typeof makeStore> | undefined;
 
 try {
   store = makeStore(siteRoot);

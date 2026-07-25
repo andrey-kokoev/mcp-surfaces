@@ -3,7 +3,7 @@ import { normalizeTaskTags, parseStoredTaskTags } from '@narada2/task-governance
 import { withSqliteBusyRetry, withStoreSavepoint } from './sqlite-contention.js';
 import { buildCompactExecutabilityPosture } from './task-lifecycle-executability-handlers.js';
 
-export const TASK_LIFECYCLE_READ_TOOL_NAMES = Object.freeze([
+export const TASK_LIFECYCLE_READ_TOOL_NAMES: any = Object.freeze([
   'task_lifecycle_list',
   'task_lifecycle_roster',
   'task_lifecycle_guidance',
@@ -17,25 +17,25 @@ export function createTaskLifecycleReadHandlers({
   stringField,
   numberField,
   getSitePolicy,
-}) {
+}: any) {
   return {
-    task_lifecycle_list: async (args) => {
-      const statusFilter = stringField(args, 'status');
-      const agentFilter = stringField(args, 'agent_id');
-      const limit = Math.max(1, Math.min(numberField(args, 'limit') ?? 50, 200));
-      const tagFilter = normalizeTaskTags(args?.tags);
-      const tagMatch = stringField(args, 'tag_match') ?? 'all';
+    task_lifecycle_list: async (args: any) => {
+      const statusFilter: any = stringField(args, 'status');
+      const agentFilter: any = stringField(args, 'agent_id');
+      const limit: any = Math.max(1, Math.min(numberField(args, 'limit') ?? 50, 200));
+      const tagFilter: any = normalizeTaskTags(args?.tags);
+      const tagMatch: any = stringField(args, 'tag_match') ?? 'all';
       if (!['any', 'all'].includes(tagMatch)) throw new Error('tag_match_must_be_any_or_all');
-      const snapshot = await withSqliteBusyRetry(() => withStoreSavepoint(store, () => {
-        const needsFullScan = Boolean(statusFilter || agentFilter || tagFilter.length > 0);
-        const rows = needsFullScan
+      const snapshot: any = await withSqliteBusyRetry(() => withStoreSavepoint(store, () => {
+        const needsFullScan: any = Boolean(statusFilter || agentFilter || tagFilter.length > 0);
+        const rows: any = needsFullScan
           ? store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC').all()
           : store.db.prepare('SELECT * FROM task_lifecycle ORDER BY task_number DESC LIMIT ?').all(limit);
-        const tasks = rows.map((row) => {
-          const spec = store.getTaskSpec(row.task_id);
-          const assignment = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(row.task_id);
-          const tags = parseStoredTaskTags(spec?.tags_json);
-          const projectionConsistency = classifyTaskListProjectionConsistency({
+        const tasks: any = rows.map((row: any) => {
+          const spec: any = store.getTaskSpec(row.task_id);
+          const assignment: any = store.db.prepare('SELECT * FROM task_assignments WHERE task_id = ? AND released_at IS NULL ORDER BY claimed_at DESC LIMIT 1').get(row.task_id);
+          const tags: any = parseStoredTaskTags(spec?.tags_json);
+          const projectionConsistency: any = classifyTaskListProjectionConsistency({
             lifecycle: row,
             latestOutcome: store.getLatestTaskOutcome?.(row.task_id) ?? null,
             activeAssignment: assignment ?? null,
@@ -55,20 +55,20 @@ export function createTaskLifecycleReadHandlers({
             executability_posture: buildCompactExecutabilityPosture({ store, taskId: row.task_id, siteRoot }),
           };
         });
-        const filtered = tasks.filter((task) => {
+        const filtered: any = tasks.filter((task: any) => {
           if (statusFilter && task.status !== statusFilter) return false;
           if (agentFilter && task.assigned_to !== agentFilter) return false;
           if (tagFilter.length > 0) {
-            const matches = tagFilter.filter((tag) => task.tags.includes(tag)).length;
+            const matches: any = tagFilter.filter((tag: any) => task.tags.includes(tag)).length;
             if (tagMatch === 'all' && matches !== tagFilter.length) return false;
             if (tagMatch === 'any' && matches === 0) return false;
           }
           return true;
         }).slice(0, limit);
-        const staleTasks = filtered.filter((task) => task.projection_consistency.status === 'stale');
+        const staleTasks: any = filtered.filter((task: any) => task.projection_consistency.status === 'stale');
         return { tasks, filtered, staleTasks };
       }));
-      const consistencyStatus = snapshot.value.staleTasks.length > 0
+      const consistencyStatus: any = snapshot.value.staleTasks.length > 0
         ? 'stale'
         : snapshot.retries > 0
           ? 'contention_observed'
@@ -85,7 +85,7 @@ export function createTaskLifecycleReadHandlers({
           returned_count: snapshot.value.filtered.length,
           stale_count: snapshot.value.staleTasks.length,
           contention: { attempts: snapshot.attempts, retries: snapshot.retries },
-          stale_tasks: snapshot.value.staleTasks.map((task) => ({
+          stale_tasks: snapshot.value.staleTasks.map((task: any) => ({
             task_number: task.task_number,
             task_id: task.task_id,
             reasons: task.projection_consistency.reasons,
@@ -123,17 +123,17 @@ export function createTaskLifecycleReadHandlers({
       build_pinning: 'A session-bound MCP server runs the build loaded when its child process started. Source or build fixes do not appear in that process until the carrier/runtime supervisor performs a real child restart; task_lifecycle_test_mcp_tool is only a one-shot recovery route.',
     },
     task_lifecycle_roster: () => {
-      const roster = store.getRoster();
+      const roster: any = store.getRoster();
       return jsonToolResult({ status: 'ok', roster: roster ?? [] });
     },
-    task_lifecycle_guidance: (args) => {
-      const workflow = stringField(args, 'workflow') ?? 'all';
-      const tool = stringField(args, 'tool');
+    task_lifecycle_guidance: (args: any) => {
+      const workflow: any = stringField(args, 'workflow') ?? 'all';
+      const tool: any = stringField(args, 'tool');
       return jsonToolResult(taskLifecycleGuidance({ workflow, tool, sitePolicy: getSitePolicy() }));
     },
-    task_lifecycle_payload_schema: (args) => {
-      const tool = stringField(args, 'tool');
-      const schemas = taskLifecyclePayloadSchemas();
+    task_lifecycle_payload_schema: (args: any) => {
+      const tool: any = stringField(args, 'tool');
+      const schemas: any = taskLifecyclePayloadSchemas();
       return jsonToolResult({
         status: 'ok',
         schema: 'narada.task_lifecycle.payload_schema.v0',
@@ -151,9 +151,9 @@ function buildStableTaskReference({ siteRoot, lifecycle, spec, taskFile = null }
   spec?: Record<string, unknown> | null;
   taskFile?: string | null;
 }) {
-  const taskNumber = Number(lifecycle.task_number);
-  const taskId = String(lifecycle.task_id ?? '');
-  const goalRef = firstReference(spec, ['goal_ref', 'goal_id', 'goal_number', 'source_goal_ref']);
+  const taskNumber: any = Number(lifecycle.task_number);
+  const taskId: any = String(lifecycle.task_id ?? '');
+  const goalRef: any = firstReference(spec, ['goal_ref', 'goal_id', 'goal_number', 'source_goal_ref']);
   return {
     schema: 'narada.task.reference.v1',
     task_ref: `task #${taskNumber}`,
@@ -168,15 +168,15 @@ function buildStableTaskReference({ siteRoot, lifecycle, spec, taskFile = null }
 
 function firstReference(spec: Record<string, unknown> | null | undefined, keys: string[]) {
   for (const key of keys) {
-    const value = spec?.[key];
+    const value: any = spec?.[key];
     if (typeof value === 'string' && value.trim()) return value.trim();
     if (typeof value === 'number' && Number.isFinite(value)) return value;
   }
   return null;
 }
 
-export function classifyTaskListProjectionConsistency({ lifecycle, latestOutcome, activeAssignment }) {
-  const compatibilityReview = lifecycle?.governed_by === 'review'
+export function classifyTaskListProjectionConsistency({ lifecycle, latestOutcome, activeAssignment }: any) {
+  const compatibilityReview: any = lifecycle?.governed_by === 'review'
     && String(lifecycle?.task_id ?? '').includes('-legacy-review-');
   const reasons: string[] = [];
   let expectedStatus: string | null = null;
@@ -206,10 +206,10 @@ export function classifyTaskListProjectionConsistency({ lifecycle, latestOutcome
   };
 }
 
-function taskLifecycleGuidance({ workflow, tool, sitePolicy }) {
-  const sections = taskLifecycleGuidanceSections();
-  const normalizedWorkflow = sections[workflow] ? workflow : 'all';
-  const selectedSections = normalizedWorkflow === 'all'
+function taskLifecycleGuidance({ workflow, tool, sitePolicy }: any) {
+  const sections: any = taskLifecycleGuidanceSections();
+  const normalizedWorkflow: any = sections[workflow] ? workflow : 'all';
+  const selectedSections: any = normalizedWorkflow === 'all'
     ? sections
     : { [normalizedWorkflow]: sections[normalizedWorkflow] };
   return {
@@ -530,8 +530,8 @@ function taskLifecycleGuidanceSections() {
   };
 }
 
-function taskLifecycleToolGuidance(tool) {
-  const guidance = {
+function taskLifecycleToolGuidance(tool: any) {
+  const guidance: any = {
     task_lifecycle_submit_work: {
       preferred_for: 'Ordinary task completion with execution notes, verification, evidence admission, and finish/report in one call.',
       caveat: 'A successful submit_work can still return in_review or awaiting_dependencies rather than closed. Use resume_existing_work:true only to continue prior same-agent admitted work without rewriting notes or duplicating proof/admission. Inline companion fields are accepted up to the governed threshold; use payload_ref or opt in with auto_materialize_payload:true for larger artifacts.',

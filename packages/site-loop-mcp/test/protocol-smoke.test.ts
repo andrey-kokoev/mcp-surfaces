@@ -18,10 +18,10 @@ let stdout = '';
 let stderr = '';
 proc.stdout.setEncoding('utf8');
 proc.stderr.setEncoding('utf8');
-proc.stdout.on('data', (chunk) => { stdout += chunk; });
-proc.stderr.on('data', (chunk) => { stderr += chunk; });
+proc.stdout.on('data', (chunk: any) => { stdout += chunk; });
+proc.stderr.on('data', (chunk: any) => { stderr += chunk; });
 
-function writeMessage(message) {
+function writeMessage(message: any) {
   const body = JSON.stringify(message);
   proc.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\n\n${body}`);
 }
@@ -43,18 +43,18 @@ function readOne() {
   return JSON.parse(body);
 }
 
-async function waitFor(id) {
+async function waitFor(id: any) {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const message = readOne();
     if (message?.id === id) return message;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve: any) => setTimeout(resolve, 20));
   }
   throw new Error(`timeout:${id}; stderr=${stderr}`);
 }
 
 let nextToolId = 100;
-async function parseToolPayload(message) {
+async function parseToolPayload(message: any) {
   const payload = JSON.parse(message.result.content[0].text);
   if (payload.schema !== 'narada.producer_output_page.v1') return payload;
   const outputReadId = nextToolId++;
@@ -87,7 +87,7 @@ try {
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);
   assert.equal(tools.error, undefined);
-  const names = tools.result.tools.map((tool) => tool.name);
+  const names = tools.result.tools.map((tool: any) => tool.name);
   assert.equal(names.includes('site_loop_guidance'), true);
   assert.equal(names.includes('site_loop_doctor'), true);
   assert.equal(names.includes('site_loop_config_validate'), true);
@@ -96,7 +96,7 @@ try {
   assert.equal(names.includes('site_loop_proof_run'), true);
   assert.equal(names.includes('site_loop_recovery_drill'), true);
   assert.equal(names.includes('site_loop_status'), true);
-  const toolsByName = new Map<string, any>(tools.result.tools.map((tool) => [tool.name, tool]));
+  const toolsByName = new Map<string, any>(tools.result.tools.map((tool: any) => [tool.name, tool]));
   assert.equal(toolsByName.get('site_loop_runs_list')?.annotations?.readOnlyHint, true);
   assert.equal(toolsByName.get('site_loop_run_show')?.annotations?.readOnlyHint, true);
   assert.equal(toolsByName.get('site_loop_run_once')?.annotations?.readOnlyHint, false);
@@ -137,11 +137,11 @@ try {
   assert.equal(validateAffordanceDocument(affordancesPayload).status, 'ok');
   assert.equal(affordancesPayload.surface_id, 'site-loop');
   assert.equal(affordancesPayload.source.site_id, 'narada-protocol');
-  assert.equal(affordancesPayload.actions.some((action) => action.id === 'run_once'), false);
-  assert.equal(affordancesPayload.actions.some((action) => action.id === 'dry_run_once' && action.tool === 'site_loop_run_once'), true);
-  assert.equal(affordancesPayload.actions.some((action) => action.id === 'run_resident_proof' && action.tool === 'site_loop_proof_run'), true);
-  assert.equal(affordancesPayload.actions.some((action) => action.id === 'run_mailbox_proof' && action.tool === 'site_loop_proof_run'), true);
-  assert.equal(affordancesPayload.panels.some((panel) => panel.id === 'controls' && panel.actions.includes('pause_loop')), true);
+  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_once'), false);
+  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'dry_run_once' && action.tool === 'site_loop_run_once'), true);
+  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_resident_proof' && action.tool === 'site_loop_proof_run'), true);
+  assert.equal(affordancesPayload.actions.some((action: any) => action.id === 'run_mailbox_proof' && action.tool === 'site_loop_proof_run'), true);
+  assert.equal(affordancesPayload.panels.some((panel: any) => panel.id === 'controls' && panel.actions.includes('pause_loop')), true);
 
   writeMessage({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'site_loop_proof_run', arguments: { proof_kind: 'resident_production', wait_for_completion: true, timeout_ms: 120000 } } });
   const longProof = await waitFor(8);

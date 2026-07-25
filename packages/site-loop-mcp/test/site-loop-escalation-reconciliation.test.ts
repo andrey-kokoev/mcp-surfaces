@@ -34,7 +34,7 @@ const baseClassification = {
   status: 'delivery_stale',
 };
 
-function reconcile(status, at) {
+function reconcile(status: any, at: any) {
   return reconcileLoopEscalations(
     siteRoot,
     store,
@@ -48,7 +48,7 @@ const initialRuns = [
   reconcile('delivery_stale', '2026-07-22T02:01:00.000Z'),
   reconcile('delivery_stale', '2026-07-22T02:02:00.000Z'),
 ];
-assert.deepEqual(initialRuns.map((run) => run.created_count), [0, 0, 1]);
+assert.deepEqual(initialRuns.map((run: any) => run.created_count), [0, 0, 1]);
 
 let escalation = getLoopEscalation(store, {
   loopId: 'ack.suppression.loop',
@@ -71,7 +71,7 @@ const ongoingStaleRuns = [
   reconcile('delivery_stale', '2026-07-22T02:05:00.000Z'),
   reconcile('delivery_stale', '2026-07-22T02:06:00.000Z'),
 ];
-assert.deepEqual(ongoingStaleRuns.map((run) => run.created_count), [0, 0, 0]);
+assert.deepEqual(ongoingStaleRuns.map((run: any) => run.created_count), [0, 0, 0]);
 escalation = getLoopEscalation(store, {
   loopId: 'ack.suppression.loop',
   directiveId,
@@ -86,7 +86,7 @@ const recoveredStaleRuns = [
   reconcile('delivery_stale', '2026-07-22T02:09:00.000Z'),
   reconcile('delivery_stale', '2026-07-22T02:10:00.000Z'),
 ];
-assert.deepEqual(recoveredStaleRuns.map((run) => run.created_count), [0, 0, 1]);
+assert.deepEqual(recoveredStaleRuns.map((run: any) => run.created_count), [0, 0, 1]);
 escalation = getLoopEscalation(store, {
   loopId: 'ack.suppression.loop',
   directiveId,

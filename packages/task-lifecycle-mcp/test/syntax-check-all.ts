@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const files = [...walk(join(packageRoot, 'src')), ...walk(join(packageRoot, 'test'))]
-  .filter((file) => file.endsWith('.js'))
-  .filter((file) => !file.endsWith('syntax-check-all.js'));
+  .filter((file: any) => file.endsWith('.js'))
+  .filter((file: any) => !file.endsWith('syntax-check-all.js'));
 
 for (const file of files) {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', windowsHide: true });
@@ -19,7 +19,7 @@ for (const file of files) {
 
 console.log(`task-lifecycle-mcp syntax ok (${files.length} files)`);
 
-function* walk(dir) {
+function* walk(dir: any): Generator<string> {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     if (statSync(path).isDirectory()) yield* walk(path);

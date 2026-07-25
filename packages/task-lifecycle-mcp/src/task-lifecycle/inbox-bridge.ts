@@ -19,64 +19,64 @@ import {
   levenshteinDistance,
 } from '../inbox/inbox-policy.js';
 
-const INBOX_DIR = '.ai/inbox-envelopes';
-const TASKS_DIR = '.ai/do-not-open/tasks';
+const INBOX_DIR: any = '.ai/inbox-envelopes';
+const TASKS_DIR: any = '.ai/do-not-open/tasks';
 type TaskLifecyclePayload = Record<string, unknown>;
 
 function asPayload(value: unknown): TaskLifecyclePayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as TaskLifecyclePayload : {};
 }
 
-const AUTO_MATERIALIZE_THRESHOLD = 50;
+const AUTO_MATERIALIZE_THRESHOLD: any = 50;
 
 export { evaluateEnvelopeSeverity, levenshteinDistance };
 
-const OWNERSHIP_FIELD_PRECEDENCE = [
+const OWNERSHIP_FIELD_PRECEDENCE: any = [
   'preferred_agent_id',
   'assigned_agent_id',
   'responsible_agent_id',
   'owner',
 ];
-const ROLE_FIELD_PRECEDENCE = ['target_role', 'requested_role'];
+const ROLE_FIELD_PRECEDENCE: any = ['target_role', 'requested_role'];
 
-function normalizedNonEmptyString(value) {
+function normalizedNonEmptyString(value: any) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function firstPayloadString(payload, fields) {
+function firstPayloadString(payload: any, fields: any) {
   for (const field of fields) {
-    const value = normalizedNonEmptyString(payload?.[field]);
+    const value: any = normalizedNonEmptyString(payload?.[field]);
     if (!value) continue;
     return { field, value };
   }
   return null;
 }
 
-function firstEnvelopeOrPayloadString(envelope, field) {
-  const envelopeValue = normalizedNonEmptyString(envelope?.[field]);
+function firstEnvelopeOrPayloadString(envelope: any, field: any) {
+  const envelopeValue: any = normalizedNonEmptyString(envelope?.[field]);
   if (envelopeValue) return { field: `envelope.${field}`, value: envelopeValue };
-  const payloadValue = normalizedNonEmptyString(envelope?.payload?.[field]);
+  const payloadValue: any = normalizedNonEmptyString(envelope?.payload?.[field]);
   return payloadValue ? { field: `payload.${field}`, value: payloadValue } : null;
 }
 
-function isCanonicalScheduledSopReplacement(envelope) {
+function isCanonicalScheduledSopReplacement(envelope: any) {
   return envelope?.kind === 'command_request'
     && envelope?.source?.kind === 'site_loop_schedule'
     && normalizedNonEmptyString(envelope?.supersedes_envelope_id) !== null
     && normalizedNonEmptyString(envelope?.payload?.sop_id) !== null;
 }
 
-function resolveAgentRoleFromStore(store, agentId) {
+function resolveAgentRoleFromStore(store: any, agentId: any) {
   if (!store || !agentId) return null;
   try {
-    const row = store.db.prepare('SELECT role FROM agent_roster WHERE agent_id = ?').get(agentId);
+    const row: any = store.db.prepare('SELECT role FROM agent_roster WHERE agent_id = ?').get(agentId);
     return normalizedNonEmptyString(row?.role);
   } catch {
     return null;
   }
 }
 
-function ensureTaskRolePreferencesTable(store) {
+function ensureTaskRolePreferencesTable(store: any) {
   store.db.exec(`
     CREATE TABLE IF NOT EXISTS narada_andrey_task_role_preferences (
       task_id TEXT PRIMARY KEY,
@@ -98,22 +98,22 @@ function ensureTaskRolePreferencesTable(store) {
   }
 }
 
-export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskLifecyclePayload = {}, store = null) {
-  const payload = envelope?.payload ?? {};
-  const ownership = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE);
-  const explicitRole = firstEnvelopeOrPayloadString(envelope, 'target_role')
+export function deriveRoutingFromEnvelopePayload(envelope: any, severityResult: TaskLifecyclePayload = {}, store : any= null) {
+  const payload: any = envelope?.payload ?? {};
+  const ownership: any = firstPayloadString(payload, OWNERSHIP_FIELD_PRECEDENCE);
+  const explicitRole: any = firstEnvelopeOrPayloadString(envelope, 'target_role')
     ?? firstPayloadString(payload, ROLE_FIELD_PRECEDENCE);
-  const preferredAgentId = ownership?.value ?? null;
-  const agentRole = resolveAgentRoleFromStore(store, preferredAgentId);
-  let targetRole = explicitRole?.value ?? agentRole ?? severityResult.targetRole ?? null;
-  const warnings = [];
+  const preferredAgentId: any = ownership?.value ?? null;
+  const agentRole: any = resolveAgentRoleFromStore(store, preferredAgentId);
+  let targetRole: any = explicitRole?.value ?? agentRole ?? severityResult.targetRole ?? null;
+  const warnings: any[] = [];
 
-  const ownershipValues = new Map();
+  const ownershipValues: any = new Map();
   for (const field of OWNERSHIP_FIELD_PRECEDENCE) {
-    const value = normalizedNonEmptyString(payload[field]);
+    const value: any = normalizedNonEmptyString(payload[field]);
     if (value) ownershipValues.set(field, value);
   }
-  const uniqueOwners = new Set(ownershipValues.values());
+  const uniqueOwners: any = new Set(ownershipValues.values());
   if (uniqueOwners.size > 1) {
     warnings.push({
       kind: 'ambiguous_payload_ownership',
@@ -150,13 +150,13 @@ export function deriveRoutingFromEnvelopePayload(envelope, severityResult: TaskL
  * Check whether an envelope already has a corresponding open task.
  * Returns { isDuplicate, duplicateTaskId, duplicateTaskNumber, matchType }.
  */
-export function checkDuplicateTask(store, envelope) {
-  const envelopeId = envelope.envelope_id;
-  const title = String(envelope.title ?? envelope.payload?.title ?? '').trim();
+export function checkDuplicateTask(store: any, envelope: any) {
+  const envelopeId: any = envelope.envelope_id;
+  const title: any = String(envelope.title ?? envelope.payload?.title ?? '').trim();
 
   // 1. Fast path: check durable envelope_task_mappings table
   if (envelopeId && store.getTaskByEnvelopeId) {
-    const mapping = store.getTaskByEnvelopeId(envelopeId);
+    const mapping: any = store.getTaskByEnvelopeId(envelopeId);
     if (mapping) {
       return {
         isDuplicate: true,
@@ -169,14 +169,14 @@ export function checkDuplicateTask(store, envelope) {
 
   // 2. Scan ALL tasks (including closed and in_review) to prevent re-materialization
   // of envelopes that were already processed, regardless of final disposition.
-  const sql = `
+  const sql: any = `
     SELECT s.task_id, s.task_number, s.title, s.context_markdown, s.goal_markdown,
            s.required_work_markdown, s.non_goals_markdown, l.status
     FROM task_specs s
     INNER JOIN task_lifecycle l ON s.task_id = l.task_id
   `;
 
-  const rows = store.db.prepare(sql).all();
+  const rows: any = store.db.prepare(sql).all();
 
   for (const row of rows) {
     if (hasEnvelopeCoverageEvidence(row, envelopeId)) {
@@ -208,16 +208,16 @@ export function checkDuplicateTask(store, envelope) {
 /**
  * Build a task spec from an inbox envelope and severity evaluation.
  */
-export function buildTaskSpecFromEnvelope(envelope, severityResult, options: TaskLifecyclePayload = {}) {
-  const payload = envelope.payload ?? {};
-  const title = `[From Inbox] ${envelope.title ?? payload.title ?? 'Untitled'}`;
-  const goal = envelope.summary ?? payload.summary ?? payload.description ?? '';
-  const routing = asPayload(options.routing ?? deriveRoutingFromEnvelopePayload(envelope, severityResult, options.store ?? null));
+export function buildTaskSpecFromEnvelope(envelope: any, severityResult: any, options: TaskLifecyclePayload = {}) {
+  const payload: any = envelope.payload ?? {};
+  const title: any = `[From Inbox] ${envelope.title ?? payload.title ?? 'Untitled'}`;
+  const goal: any = envelope.summary ?? payload.summary ?? payload.description ?? '';
+  const routing: any = asPayload(options.routing ?? deriveRoutingFromEnvelopePayload(envelope, severityResult, options.store ?? null));
 
-  const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
-  const proposals = Array.isArray(payload.proposal) ? payload.proposal : [];
+  const evidence: any = Array.isArray(payload.evidence) ? payload.evidence : [];
+  const proposals: any = Array.isArray(payload.proposal) ? payload.proposal : [];
 
-  const contextLines = [
+  const contextLines: any = [
     `**Envelope ID:** ${envelope.envelope_id}`,
     `**Received:** ${envelope.received_at}`,
     `**Kind:** ${envelope.kind}`,
@@ -227,7 +227,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     `**Authority:** ${envelope.authority?.level ?? 'unknown'} (${envelope.authority?.principal ?? 'unknown'})`,
     `**Source:** ${envelope.source?.ref ?? 'unknown'}`,
   ];
-  const routingWarnings = Array.isArray(routing.warnings) ? routing.warnings : [];
+  const routingWarnings: any = Array.isArray(routing.warnings) ? routing.warnings : [];
   if (routing.preferredAgentId || routing.targetRole || routingWarnings.length > 0) {
     contextLines.push(
       '',
@@ -245,15 +245,15 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     '**Payload:**',
     JSON.stringify(payload, null, 2),
   );
-  const context = contextLines.join('\n');
+  const context: any = contextLines.join('\n');
 
-  const workItems = [];
+  const workItems: any[] = [];
   if (proposals.length > 0) {
-    for (let i = 0; i < proposals.length; i++) {
+    for (let i: any = 0; i < proposals.length; i++) {
       workItems.push(`${i + 1}. ${proposals[i]}`);
     }
   } else if (typeof payload.sop_id === 'string' && payload.sop_id.trim()) {
-    const triggeredBy = routing.preferredAgentId ?? envelope.target_role ?? 'operator';
+    const triggeredBy: any = routing.preferredAgentId ?? envelope.target_role ?? 'operator';
     workItems.push(
       `Start SOP ${payload.sop_id.trim()} through SOP MCP with trigger_source_kind="inbox_event", trigger_source_ref="${envelope.envelope_id}", and triggered_by="${triggeredBy}".`,
     );
@@ -261,7 +261,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
     workItems.push('1. Review envelope content and determine disposition');
   }
 
-  const acceptanceCriteria = [];
+  const acceptanceCriteria: any[] = [];
   if (evidence.length > 0) {
     acceptanceCriteria.push('Review and acknowledge evidence');
   }
@@ -275,7 +275,7 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
   }
   acceptanceCriteria.push('Submit disposition to inbox (acknowledge / dismiss / escalate)');
 
-  const nonGoals = ['Do not leave envelope in unprocessed state'];
+  const nonGoals: any = ['Do not leave envelope in unprocessed state'];
 
   return {
     title,
@@ -301,9 +301,9 @@ export function buildTaskSpecFromEnvelope(envelope, severityResult, options: Tas
  * - duplicate: an existing task/mapping already covers the envelope
  * - materializable: write-side handler may create a task and mark the envelope
  */
-export function decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun = false }) {
-  const routing = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
-  const base = {
+export function decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun = false }: any) {
+  const routing: any = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
+  const base: any = {
     schema: 'narada.bridge.outcome.v0',
     envelopeId: envelope.envelope_id,
     kind: envelope.kind,
@@ -324,7 +324,7 @@ export function decideEnvelopeBridgeOutcome({ store, envelope, severityResult, d
     };
   }
 
-  const dupCheck = checkDuplicateTask(store, envelope);
+  const dupCheck: any = checkDuplicateTask(store, envelope);
   if (dupCheck.isDuplicate) {
     return {
       ...base,
@@ -345,7 +345,7 @@ export function decideEnvelopeBridgeOutcome({ store, envelope, severityResult, d
   };
 }
 
-export function summarizeBridgeOutcome(outcome) {
+export function summarizeBridgeOutcome(outcome: any) {
   return {
     envelopeId: outcome.envelopeId,
     kind: outcome.kind,
@@ -359,7 +359,7 @@ export function summarizeBridgeOutcome(outcome) {
   };
 }
 
-function slugify(text) {
+function slugify(text: any) {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -368,10 +368,10 @@ function slugify(text) {
 }
 
 function todayYmd() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const d: any = new Date();
+  const y: any = d.getFullYear();
+  const m: any = String(d.getMonth() + 1).padStart(2, '0');
+  const day: any = String(d.getDate()).padStart(2, '0');
   return `${y}${m}${day}`;
 }
 
@@ -379,8 +379,8 @@ function todayYmd() {
  * Materialize a single inbox envelope as a task.
  * Returns { status, taskNumber?, taskId?, filePath?, error?, envelopeId? }.
  */
-export async function materializeEnvelopeAsTask(cwd, envelope) {
-  const severityResult = evaluateEnvelopeSeverity(envelope);
+export async function materializeEnvelopeAsTask(cwd: any, envelope: any) {
+  const severityResult: any = evaluateEnvelopeSeverity(envelope);
   if (severityResult.action !== 'materialize') {
     return {
       status: 'skipped_not_materializable',
@@ -390,42 +390,42 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
     };
   }
 
-  const store = openTaskLifecycleStore(cwd);
-  const routing = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
-  const spec = buildTaskSpecFromEnvelope(envelope, severityResult, { routing });
-  const specRecord = asPayload(spec);
-  const requiredWork = Array.isArray(specRecord.requiredWork) ? specRecord.requiredWork.map(String) : [];
-  const nonGoals = Array.isArray(specRecord.nonGoals) ? specRecord.nonGoals.map(String) : [];
-  const acceptanceCriteria = Array.isArray(specRecord.acceptanceCriteria) ? specRecord.acceptanceCriteria.map(String) : [];
-  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(cwd).policy.roster.roles_are_obligation_targets;
-  const preferredRole = rolesAreObligationTargets && typeof specRecord.preferredRole === 'string' ? specRecord.preferredRole : null;
-  const targetRole = rolesAreObligationTargets && typeof specRecord.targetRole === 'string' ? specRecord.targetRole : null;
-  const preferredAgentId = typeof specRecord.preferredAgentId === 'string' ? specRecord.preferredAgentId : null;
-  const relativePriority = typeof specRecord.relativePriority === 'number' ? specRecord.relativePriority : 0;
-  const priorityReason = typeof specRecord.priorityReason === 'string' ? specRecord.priorityReason : null;
-  const taskNumber = (await allocateTaskNumbers(cwd, 1))[0];
-  const slug = slugify(String(specRecord.title ?? 'inbox-task'));
-  const taskId = `${todayYmd()}-${taskNumber}-${slug}`;
-  const tasksDir = join(resolve(cwd), TASKS_DIR);
-  const filePath = join(tasksDir, `${taskId}.md`);
+  const store: any = openTaskLifecycleStore(cwd);
+  const routing: any = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
+  const spec: any = buildTaskSpecFromEnvelope(envelope, severityResult, { routing });
+  const specRecord: any = asPayload(spec);
+  const requiredWork: any = Array.isArray(specRecord.requiredWork) ? specRecord.requiredWork.map(String) : [];
+  const nonGoals: any = Array.isArray(specRecord.nonGoals) ? specRecord.nonGoals.map(String) : [];
+  const acceptanceCriteria: any = Array.isArray(specRecord.acceptanceCriteria) ? specRecord.acceptanceCriteria.map(String) : [];
+  const rolesAreObligationTargets: any = readTaskLifecycleSitePolicy(cwd).policy.roster.roles_are_obligation_targets;
+  const preferredRole: any = rolesAreObligationTargets && typeof specRecord.preferredRole === 'string' ? specRecord.preferredRole : null;
+  const targetRole: any = rolesAreObligationTargets && typeof specRecord.targetRole === 'string' ? specRecord.targetRole : null;
+  const preferredAgentId: any = typeof specRecord.preferredAgentId === 'string' ? specRecord.preferredAgentId : null;
+  const relativePriority: any = typeof specRecord.relativePriority === 'number' ? specRecord.relativePriority : 0;
+  const priorityReason: any = typeof specRecord.priorityReason === 'string' ? specRecord.priorityReason : null;
+  const taskNumber: any = (await allocateTaskNumbers(cwd, 1))[0];
+  const slug: any = slugify(String(specRecord.title ?? 'inbox-task'));
+  const taskId: any = `${todayYmd()}-${taskNumber}-${slug}`;
+  const tasksDir: any = join(resolve(cwd), TASKS_DIR);
+  const filePath: any = join(tasksDir, `${taskId}.md`);
 
   // Extract proposal content from envelope payload to seed Execution Notes
-  const payload = envelope.payload ?? {};
-  const proposals = Array.isArray(payload.proposal) ? payload.proposal : [];
-  const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
-  let executionNotes = null;
+  const payload: any = envelope.payload ?? {};
+  const proposals: any = Array.isArray(payload.proposal) ? payload.proposal : [];
+  const evidence: any = Array.isArray(payload.evidence) ? payload.evidence : [];
+  let executionNotes: any = null;
   if (proposals.length > 0 || evidence.length > 0) {
-    const parts = [];
+    const parts: any[] = [];
     if (evidence.length > 0) {
-      parts.push('Evidence:', ...evidence.map((e) => `- ${e}`));
+      parts.push('Evidence:', ...evidence.map((e: any) => `- ${e}`));
     }
     if (proposals.length > 0) {
-      parts.push('Proposals:', ...proposals.map((p) => `- ${p}`));
+      parts.push('Proposals:', ...proposals.map((p: any) => `- ${p}`));
     }
     executionNotes = parts.join('\n');
   }
 
-  const body = renderTaskBodyFromSpec({
+  const body: any = renderTaskBodyFromSpec({
     spec: {
       title: String(specRecord.title ?? ''),
       goal: String(specRecord.goal ?? ''),
@@ -439,7 +439,7 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
     verification: null,
   });
 
-  const frontMatterLines = [
+  const frontMatterLines: any = [
     '---',
     `number: ${taskNumber}`,
     `governed_by: ${preferredRole || 'unknown'}`,
@@ -460,10 +460,10 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
   }
   frontMatterLines.push('---');
 
-  const fileContent = `${frontMatterLines.join('\n')}\n${body}`;
+  const fileContent: any = `${frontMatterLines.join('\n')}\n${body}`;
   writeFileSync(filePath, fileContent, 'utf8');
 
-  const now = new Date().toISOString();
+  const now: any = new Date().toISOString();
   try {
     store.upsertLifecycle({
       task_id: taskId,
@@ -527,9 +527,9 @@ export async function materializeEnvelopeAsTask(cwd, envelope) {
  * Primary: append envelope_promoted event to admission log.
  * Fallback: rewrite filesystem JSON for backward compatibility.
  */
-export function markEnvelopeMaterialized(cwd, envelope, taskNumber, taskId) {
+export function markEnvelopeMaterialized(cwd: any, envelope: any, taskNumber: any, taskId: any) {
   // Primary: append promotion event to admission log
-  let logEvent = null;
+  let logEvent: any = null;
   try {
     logEvent = appendAdmissionEvent(cwd, {
       event_kind: 'envelope_promoted',
@@ -551,20 +551,20 @@ export function markEnvelopeMaterialized(cwd, envelope, taskNumber, taskId) {
   }
 
   // Fallback: rewrite filesystem JSON for backward compatibility
-  const envelopeDir = join(resolve(cwd), INBOX_DIR);
-  const fileName = `${envelope.envelope_id}.json`;
-  const filePath = join(envelopeDir, fileName);
-  const altFilePath = join(envelopeDir, envelope.received_at
+  const envelopeDir: any = join(resolve(cwd), INBOX_DIR);
+  const fileName: any = `${envelope.envelope_id}.json`;
+  const filePath: any = join(envelopeDir, fileName);
+  const altFilePath: any = join(envelopeDir, envelope.received_at
     ? `${envelope.received_at.replace(/[:.]/g, '-').replace('Z', 'Z')}-${fileName}`
     : fileName);
 
-  let pathToUpdate = null;
+  let pathToUpdate: any = null;
   if (existsSync(filePath)) {
     pathToUpdate = filePath;
   } else if (existsSync(altFilePath)) {
     pathToUpdate = altFilePath;
   } else {
-    const files = readdirSync(envelopeDir).filter((f) => f.endsWith('.json'));
+    const files: any = readdirSync(envelopeDir).filter((f: any) => f.endsWith('.json'));
     for (const f of files) {
       if (f.endsWith(fileName)) {
         pathToUpdate = join(envelopeDir, f);
@@ -574,7 +574,7 @@ export function markEnvelopeMaterialized(cwd, envelope, taskNumber, taskId) {
   }
 
   if (pathToUpdate) {
-    const updated = {
+    const updated: any = {
       ...envelope,
       status: 'promoted',
       promotion: {
@@ -596,7 +596,7 @@ export function markEnvelopeMaterialized(cwd, envelope, taskNumber, taskId) {
   };
 }
 
-export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome }) {
+export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome }: any) {
   if (outcome.status !== 'materializable') {
     return { status: 'not_materializable', outcome };
   }
@@ -613,7 +613,7 @@ export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, o
     };
   }
 
-  const result = await materializeEnvelopeAsTask(cwd, envelope);
+  const result: any = await materializeEnvelopeAsTask(cwd, envelope);
   if (result.status !== 'materialized') {
     return {
       status: result.status,
@@ -624,10 +624,10 @@ export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, o
     };
   }
 
-  const markResult = markEnvelopeMaterialized(cwd, envelope, result.taskNumber, result.taskId);
-  let materializationEventId = null;
+  const markResult: any = markEnvelopeMaterialized(cwd, envelope, result.taskNumber, result.taskId);
+  let materializationEventId: any = null;
   try {
-    const event = appendAdmissionEvent(cwd, {
+    const event: any = appendAdmissionEvent(cwd, {
       event_kind: 'bridge_materialized',
       envelope_id: envelope.envelope_id,
       principal: 'inbox-bridge',
@@ -648,8 +648,8 @@ export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, o
     // Non-blocking: log emission failure should not prevent materialization
   }
 
-  let mappingWritten = false;
-  let mappingError = null;
+  let mappingWritten: any = false;
+  let mappingError: any = null;
   try {
     store.upsertEnvelopeTaskMapping(
       envelope.envelope_id,
@@ -658,11 +658,11 @@ export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, o
       new Date().toISOString()
     );
     mappingWritten = true;
-  } catch (err) {
+  } catch (err: any) {
     mappingError = err instanceof Error ? err.message : String(err);
   }
 
-  const committablePathSet = buildBridgeCommittablePathSet(cwd, result, markResult);
+  const committablePathSet: any = buildBridgeCommittablePathSet(cwd, result, markResult);
   return {
     status: 'materialized',
     envelopeId: envelope.envelope_id,
@@ -682,10 +682,10 @@ export async function applyMaterializableBridgeOutcome({ cwd, store, envelope, o
   };
 }
 
-function buildBridgeCommittablePathSet(cwd, materializeResult, markResult) {
-  const taskPath = relativeSitePath(cwd, materializeResult.filePath);
-  const envelopePath = markResult?.path ? relativeSitePath(cwd, markResult.path) : null;
-  const ignoredEnvelopeProjectionPaths = envelopePath && envelopePath.startsWith(`${INBOX_DIR}/`) ? [envelopePath] : [];
+function buildBridgeCommittablePathSet(cwd: any, materializeResult: any, markResult: any) {
+  const taskPath: any = relativeSitePath(cwd, materializeResult.filePath);
+  const envelopePath: any = markResult?.path ? relativeSitePath(cwd, markResult.path) : null;
+  const ignoredEnvelopeProjectionPaths: any = envelopePath && envelopePath.startsWith(`${INBOX_DIR}/`) ? [envelopePath] : [];
   return {
     schema: 'narada.inbox_bridge.committable_path_set.v0',
     task_owned_paths: [taskPath],
@@ -698,7 +698,7 @@ function buildBridgeCommittablePathSet(cwd, materializeResult, markResult) {
   };
 }
 
-function relativeSitePath(cwd, path) {
+function relativeSitePath(cwd: any, path: any) {
   return relative(resolve(cwd), path).replace(/\\/g, '/');
 }
 
@@ -709,47 +709,47 @@ function relativeSitePath(cwd, path) {
  * processed/unprocessed status, but falls back to filesystem scan for
  * envelopes that predate the log.
  */
-function readEnvelopeFiles(cwd) {
-  const envelopeDir = join(resolve(cwd), INBOX_DIR);
+function readEnvelopeFiles(cwd: any) {
+  const envelopeDir: any = join(resolve(cwd), INBOX_DIR);
   if (!existsSync(envelopeDir)) {
     return [];
   }
   return readdirSync(envelopeDir)
-    .filter((f) => f.endsWith('.json'))
-    .map((fileName) => {
-      const filePath = join(envelopeDir, fileName);
+    .filter((f: any) => f.endsWith('.json'))
+    .map((fileName: any) => {
+      const filePath: any = join(envelopeDir, fileName);
       try {
         return { envelope: JSON.parse(readFileSync(filePath, 'utf8')), fileName, filePath };
       } catch {
         return null;
       }
     })
-    .filter((entry) => entry?.envelope);
+    .filter((entry: any) => entry?.envelope);
 }
 
-export function readEnvelopeById(cwd, envelopeId) {
-  return readEnvelopeFiles(cwd).find((entry) => entry.envelope?.envelope_id === envelopeId) ?? null;
+export function readEnvelopeById(cwd: any, envelopeId: any) {
+  return readEnvelopeFiles(cwd).find((entry: any) => entry.envelope?.envelope_id === envelopeId) ?? null;
 }
 
-function updateEnvelopeDispositionFile(entry, status, resolution) {
+function updateEnvelopeDispositionFile(entry: any, status: any, resolution: any) {
   if (!entry?.filePath) return false;
-  const updated = { ...entry.envelope, status, resolution };
+  const updated: any = { ...entry.envelope, status, resolution };
   writeFileSync(entry.filePath, JSON.stringify(updated, null, 2), 'utf8');
   entry.envelope = updated;
   return true;
 }
 
-export function readUnprocessedEnvelopes(cwd) {
-  const fileEnvelopes = readEnvelopeFiles(cwd).map((entry) => entry.envelope);
+export function readUnprocessedEnvelopes(cwd: any) {
+  const fileEnvelopes: any = readEnvelopeFiles(cwd).map((entry: any) => entry.envelope);
 
   // Try admission log first
   try {
-    const latestEvents = getLatestEventsByEnvelope(cwd);
-    const processedKinds = new Set(['envelope_promoted', 'envelope_dismissed', 'envelope_acknowledged', 'bridge_materialized']);
-    const logEnvelopes = [];
+    const latestEvents: any = getLatestEventsByEnvelope(cwd);
+    const processedKinds: any = new Set(['envelope_promoted', 'envelope_dismissed', 'envelope_acknowledged', 'bridge_materialized']);
+    const logEnvelopes: any[] = [];
 
     for (const envelope of fileEnvelopes) {
-      const latest = latestEvents.get(envelope.envelope_id);
+      const latest: any = latestEvents.get(envelope.envelope_id);
       if (latest) {
         if (!processedKinds.has(latest.event_kind)) {
           logEnvelopes.push(envelope);
@@ -764,20 +764,20 @@ export function readUnprocessedEnvelopes(cwd) {
     return logEnvelopes;
   } catch {
     // Admission log unavailable — fall back to pure filesystem scan
-    return fileEnvelopes.filter((e) => (e.status ?? 'received') === 'received');
+    return fileEnvelopes.filter((e: any) => (e.status ?? 'received') === 'received');
   }
 }
 
-export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {}) {
-  const envelopeId = options.envelopeId ?? options.envelope_id;
+export async function targetInboxEnvelope(cwd: any, options: TaskLifecyclePayload = {}) {
+  const envelopeId: any = options.envelopeId ?? options.envelope_id;
   if (!envelopeId) throw new Error('envelope_id_required');
 
-  const dryRun = Boolean(options.dryRun ?? options.dry_run ?? false);
-  const disposition = options.disposition ?? 'materialize';
-  const principal = options.principal ?? 'task-lifecycle-targeted-inbox';
-  const reason = options.reason ?? null;
+  const dryRun: any = Boolean(options.dryRun ?? options.dry_run ?? false);
+  const disposition: any = options.disposition ?? 'materialize';
+  const principal: any = options.principal ?? 'task-lifecycle-targeted-inbox';
+  const reason: any = options.reason ?? null;
 
-  const entry = readEnvelopeById(cwd, envelopeId);
+  const entry: any = readEnvelopeById(cwd, envelopeId);
   if (!entry) {
     return {
       schema: 'narada.bridge.target_envelope.v0',
@@ -787,13 +787,13 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
     };
   }
 
-  const envelope = entry.envelope;
-  const severityResult = evaluateEnvelopeSeverity(envelope);
-  let store = null;
+  const envelope: any = entry.envelope;
+  const severityResult: any = evaluateEnvelopeSeverity(envelope);
+  let store: any = null;
   try {
     store = openTaskLifecycleStore(cwd);
-    const outcome = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun });
-    const base = {
+    const outcome: any = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun });
+    const base: any = {
       schema: 'narada.bridge.target_envelope.v0',
       status: 'ok',
       envelope_id: envelopeId,
@@ -830,14 +830,14 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
       if (outcome.status !== 'materializable') {
         return { ...base, status: outcome.status, result: { status: outcome.status, outcome } };
       }
-      const result = await applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome });
+      const result: any = await applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome });
       return { ...base, status: result.status, result };
     }
 
     if (disposition === 'acknowledge' || disposition === 'already_routed') {
-      const eventReason = reason ?? (disposition === 'already_routed' ? 'Envelope already routed outside broad bridge polling.' : 'Envelope acknowledged through targeted disposition.');
-      const event = acknowledgeEnvelope(cwd, envelopeId, principal, eventReason);
-      const filesystemUpdated = updateEnvelopeDispositionFile(entry, 'acknowledged', {
+      const eventReason: any = reason ?? (disposition === 'already_routed' ? 'Envelope already routed outside broad bridge polling.' : 'Envelope acknowledged through targeted disposition.');
+      const event: any = acknowledgeEnvelope(cwd, envelopeId, principal, eventReason);
+      const filesystemUpdated: any = updateEnvelopeDispositionFile(entry, 'acknowledged', {
         action: disposition,
         resolved_at: event.timestamp,
         resolved_by: principal,
@@ -855,8 +855,8 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
 
     if (disposition === 'dismiss') {
       if (!reason) throw new Error('reason_required_for_dismiss');
-      const event = dismissEnvelope(cwd, envelopeId, principal, reason);
-      const filesystemUpdated = updateEnvelopeDispositionFile(entry, 'dismissed', {
+      const event: any = dismissEnvelope(cwd, envelopeId, principal, reason);
+      const filesystemUpdated: any = updateEnvelopeDispositionFile(entry, 'dismissed', {
         action: 'dismissed',
         resolved_at: event.timestamp,
         resolved_by: principal,
@@ -873,7 +873,7 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
     }
 
     if (disposition === 'defer') {
-      const event = appendAdmissionEvent(cwd, {
+      const event: any = appendAdmissionEvent(cwd, {
         envelope_id: envelopeId,
         event_kind: 'envelope_deferred',
         principal,
@@ -908,28 +908,28 @@ export async function targetInboxEnvelope(cwd, options: TaskLifecyclePayload = {
  *
  * Returns { evaluated, materialized, skipped, duplicates, errors }.
  */
-export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
-  const dryRun = Boolean(options.dryRun ?? false);
-  const threshold = options.threshold ?? AUTO_MATERIALIZE_THRESHOLD;
-  const limit = typeof options.limit === 'number' ? options.limit : 20;
+export async function pollInboxBridge(cwd: any, options: TaskLifecyclePayload = {}) {
+  const dryRun: any = Boolean(options.dryRun ?? false);
+  const threshold: any = options.threshold ?? AUTO_MATERIALIZE_THRESHOLD;
+  const limit: any = typeof options.limit === 'number' ? options.limit : 20;
 
-  let envelopes = readUnprocessedEnvelopes(cwd);
+  let envelopes: any = readUnprocessedEnvelopes(cwd);
   // Sort by severity descending so highest-priority items are processed first
   envelopes = envelopes
-    .map((e) => ({ envelope: e, severityResult: evaluateEnvelopeSeverity(e) }))
-    .sort((a, b) => b.severityResult.severity - a.severityResult.severity)
-    .map((item) => item.envelope);
+    .map((e: any) => ({ envelope: e, severityResult: evaluateEnvelopeSeverity(e) }))
+    .sort((a: any, b: any) => b.severityResult.severity - a.severityResult.severity)
+    .map((item: any) => item.envelope);
 
-  const evaluated = [];
-  const materialized = [];
-  const skipped = [];
-  const duplicates = [];
-  const errors = [];
+  const evaluated: any[] = [];
+  const materialized: any[] = [];
+  const skipped: any[] = [];
+  const duplicates: any[] = [];
+  const errors: any[] = [];
 
-  let store = null;
+  let store: any = null;
   try {
     store = openTaskLifecycleStore(cwd);
-  } catch (e) {
+  } catch (e: any) {
     return {
       status: 'error',
       error: `failed_to_open_store: ${e.message}`,
@@ -942,13 +942,13 @@ export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
   }
 
   try {
-    let processed = 0;
+    let processed: any = 0;
     for (const envelope of envelopes) {
       if (processed >= limit) break;
       processed++;
 
-      const severityResult = evaluateEnvelopeSeverity(envelope);
-      const outcome = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun }) as TaskLifecyclePayload;
+      const severityResult: any = evaluateEnvelopeSeverity(envelope);
+      const outcome: any = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun }) as TaskLifecyclePayload;
       evaluated.push(summarizeBridgeOutcome(outcome));
 
       if (outcome.status === 'ignored') {
@@ -988,7 +988,7 @@ export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
       }
 
       try {
-        const result = await applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome });
+        const result: any = await applyMaterializableBridgeOutcome({ cwd, store, envelope, outcome });
         if (result.status === 'materialized') {
           materialized.push({
             envelopeId: envelope.envelope_id,
@@ -1010,7 +1010,7 @@ export async function pollInboxBridge(cwd, options: TaskLifecyclePayload = {}) {
             outcome: result.outcome?.outcome ?? result.status,
           });
         }
-      } catch (err) {
+      } catch (err: any) {
         errors.push({
           envelopeId: envelope.envelope_id,
           error: err instanceof Error ? err.message : String(err),

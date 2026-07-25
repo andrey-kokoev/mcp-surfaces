@@ -166,7 +166,7 @@ export function updateCognitionDefault(options: {
       options.persistence,
     );
     commitCognitionDefaults(options.state, options.defaults, staged);
-    return { schema: 'narada.worker.cognition_defaults.update.v1', status: 'updated', ...event, persistence: { path: options.state.path, audit_path: options.state.auditPath } };
+    return { ...event, schema: 'narada.worker.cognition_defaults.update.v1', status: 'updated', persistence: { path: options.state.path, audit_path: options.state.auditPath } };
   } finally {
     releaseLock();
   }

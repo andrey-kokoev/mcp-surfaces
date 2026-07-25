@@ -11,7 +11,7 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--task-root',
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'delegated-task-mcp' });
-  const tools = protocol.tools.tools as Record<string, any>[];
+  const tools = protocol.tools.tools as any[];
   const unsupportedMethodResponse = await server.client.request(3, 'delegated/unknown', {});
   assert.equal(asRecord(asRecord(unsupportedMethodResponse.error).data).code, 'unsupported_mcp_method');
   const unknownToolResponse = await server.client.request(4, 'tools/call', { name: 'delegated_task_not_real', arguments: {} });

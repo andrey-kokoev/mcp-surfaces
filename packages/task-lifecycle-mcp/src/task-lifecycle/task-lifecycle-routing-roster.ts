@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'path';
 
-export function readTaskRouting(store, taskId, spec = null) {
+export function readTaskRouting(store: any, taskId: any, spec : any= null) {
   let rolePref = null;
   try {
     rolePref = store.db.prepare(
@@ -20,10 +20,10 @@ export function readTaskRouting(store, taskId, spec = null) {
   };
 }
 
-export function buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, reports }) {
+export function buildRoutingAssignmentDivergence({ lifecycle, routing, assignment, reports }: any) {
   const preferredAgentId = routing?.preferred_agent_id ?? null;
   const activeAgentId = assignment?.agent_id ?? null;
-  const reportAgentIds = [...new Set((reports || []).map((report) => report.agent_id).filter(Boolean))];
+  const reportAgentIds = [...new Set((reports || []).map((report: any) => report.agent_id).filter(Boolean))];
   const finishedBy = lifecycle.closed_by ?? (reportAgentIds.length === 1 ? reportAgentIds[0] : null);
   const activeMismatch = Boolean(preferredAgentId && activeAgentId && preferredAgentId !== activeAgentId);
   const finishedMismatch = Boolean(preferredAgentId && finishedBy && preferredAgentId !== finishedBy);
@@ -41,7 +41,7 @@ export function buildRoutingAssignmentDivergence({ lifecycle, routing, assignmen
   };
 }
 
-export function validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId }) {
+export function validatePreferredAgentMismatchAuthority({ args, eligibility, lifecycle, taskNumber, agentId }: any) {
   if (!eligibility.warning || !eligibility.preferredAgentId || eligibility.preferredAgentId === agentId) {
     return { status: 'not_required', authority_basis: null, preferred_agent_warning: null };
   }
@@ -75,7 +75,7 @@ export function validatePreferredAgentMismatchAuthority({ args, eligibility, lif
   };
 }
 
-export function normalizeClaimAuthorityBasis(value) {
+export function normalizeClaimAuthorityBasis(value: any) {
   const record = asRecord(value);
   const kind = stringField(record, 'kind');
   const summary = stringField(record, 'summary');
@@ -84,7 +84,7 @@ export function normalizeClaimAuthorityBasis(value) {
   return { kind, summary };
 }
 
-export function recordClaimIntent({ store, lifecycle, taskNumber, agentId, status, assignmentId = null, rejectionReason = null, authorityBasis = null, preferredAgentWarning = null }) {
+export function recordClaimIntent({ store, lifecycle, taskNumber, agentId, status, assignmentId = null, rejectionReason = null, authorityBasis = null, preferredAgentWarning = null }: any) {
   if (!store.upsertAssignmentIntent) return;
   const now = new Date().toISOString();
   const record = {
@@ -114,7 +114,7 @@ export function recordClaimIntent({ store, lifecycle, taskNumber, agentId, statu
   store.upsertAssignmentIntent(record);
 }
 
-export function normalizeRosterAuthorityBasis(value) {
+export function normalizeRosterAuthorityBasis(value: any) {
   const record = asRecord(value);
   const kind = stringField(record, 'kind');
   const summary = stringField(record, 'summary');
@@ -123,14 +123,14 @@ export function normalizeRosterAuthorityBasis(value) {
   return { kind, summary };
 }
 
-export function validateRosterIdentifier(value, fieldName) {
+export function validateRosterIdentifier(value: any, fieldName: any) {
   if (!value) throw new Error(`${fieldName}_required`);
   if (!/^[A-Za-z0-9._-]+$/.test(value)) {
     throw new Error(`${fieldName}_invalid: expected letters, numbers, dot, underscore, or hyphen only`);
   }
 }
 
-export function admitRosterIdentity(args, { store, enforceSessionIdentity }) {
+export function admitRosterIdentity(args: any, { store, enforceSessionIdentity }: any) {
   const agentId = stringField(args, 'agent_id');
   const role = stringField(args, 'role');
   const actorAgentId = stringField(args, 'actor_agent_id');
@@ -150,7 +150,7 @@ export function admitRosterIdentity(args, { store, enforceSessionIdentity }) {
   ensureAgentRosterEventsTable(store);
   const now = new Date().toISOString();
   const existing = store.db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(agentId);
-  const operatorIdentityCol = store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column) => column.name === 'operator_identity');
+  const operatorIdentityCol = store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column: any) => column.name === 'operator_identity');
   const projectedCapabilitiesJson = capabilitiesProvided
     ? JSON.stringify(capabilities)
     : (existing?.capabilities_json ?? JSON.stringify(capabilities));
@@ -268,7 +268,7 @@ export function admitRosterIdentity(args, { store, enforceSessionIdentity }) {
   };
 }
 
-export function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
+export function ensureStaticRosterAgentInSql(taskStore: any, root: any, agentId: any) {
   if (!agentId) return;
   try {
     const existing = taskStore.db.prepare('SELECT agent_id FROM agent_roster WHERE agent_id = ?').get(agentId);
@@ -281,7 +281,7 @@ export function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
   let staticAgent = null;
   try {
     const roster = JSON.parse(readFileSync(rosterPath, 'utf8'));
-    staticAgent = Array.isArray(roster.agents) ? roster.agents.find((agent) => agent?.agent_id === agentId) : null;
+    staticAgent = Array.isArray(roster.agents) ? roster.agents.find((agent: any) => agent?.agent_id === agentId) : null;
   } catch {
     return;
   }
@@ -302,7 +302,7 @@ export function ensureStaticRosterAgentInSql(taskStore, root, agentId) {
   });
 }
 
-export async function withAuthoredRosterJsonPreserved(root, fn, store = null) {
+export async function withAuthoredRosterJsonPreserved(root: any, fn: any, store : any= null) {
   const rosterPath = join(root, '.ai', 'agents', 'roster.json');
   let before = null;
   try {
@@ -329,7 +329,7 @@ export async function withAuthoredRosterJsonPreserved(root, fn, store = null) {
   }
 }
 
-export function sanitizeSqlRosterCapabilities(store) {
+export function sanitizeSqlRosterCapabilities(store: any) {
   try {
     const rows = store.db.prepare('SELECT agent_id, capabilities_json FROM agent_roster').all();
     const update = store.db.prepare('UPDATE agent_roster SET capabilities_json = ? WHERE agent_id = ?');
@@ -342,17 +342,17 @@ export function sanitizeSqlRosterCapabilities(store) {
   }
 }
 
-export function sanitizeRosterCapabilitiesJson(text) {
+export function sanitizeRosterCapabilitiesJson(text: any) {
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed?.agents)) return text;
     let changed = false;
-    const agents = parsed.agents.map((agent) => {
+    const agents = parsed.agents.map((agent: any) => {
       if (!agent || typeof agent !== 'object' || Array.isArray(agent)) return agent;
       const capabilities = agent.capabilities;
       if (Array.isArray(capabilities)) return agent;
       const nested = capabilities && typeof capabilities === 'object' && Array.isArray(capabilities.capabilities)
-        ? capabilities.capabilities.filter((item) => typeof item === 'string')
+        ? capabilities.capabilities.filter((item: any) => typeof item === 'string')
         : [];
       changed = true;
       return { ...agent, capabilities: nested };
@@ -363,46 +363,46 @@ export function sanitizeRosterCapabilitiesJson(text) {
   }
 }
 
-export function normalizeCapabilitiesJson(value) {
+export function normalizeCapabilitiesJson(value: any) {
   try {
     const parsed = JSON.parse(String(value ?? '[]'));
-    if (Array.isArray(parsed)) return JSON.stringify(parsed.filter((item) => typeof item === 'string'));
-    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.capabilities)) return JSON.stringify(parsed.capabilities.filter((item) => typeof item === 'string'));
+    if (Array.isArray(parsed)) return JSON.stringify(parsed.filter((item: any) => typeof item === 'string'));
+    if (parsed && typeof parsed === 'object' && Array.isArray(parsed.capabilities)) return JSON.stringify(parsed.capabilities.filter((item: any) => typeof item === 'string'));
     return JSON.stringify([]);
   } catch {
     return JSON.stringify([]);
   }
 }
 
-function asRecord(value) {
+function asRecord(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function booleanField(record, key) {
+function booleanField(record: any, key: any) {
   return record[key] === true;
 }
 
-function stringField(record, key) {
+function stringField(record: any, key: any) {
   return typeof record[key] === 'string' && record[key].trim().length > 0 ? record[key].trim() : null;
 }
 
-function stringArrayField(record, key) {
-  return Array.isArray(record[key]) ? record[key].filter((value) => typeof value === 'string' && value.trim().length > 0) : null;
+function stringArrayField(record: any, key: any) {
+  return Array.isArray(record[key]) ? record[key].filter((value: any) => typeof value === 'string' && value.trim().length > 0) : null;
 }
 
-function sqliteText(value) {
+function sqliteText(value: any) {
   if (value === undefined || value === null) return null;
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
   return JSON.stringify(value);
 }
 
-function sqliteInteger(value) {
+function sqliteInteger(value: any) {
   const number = Number(value);
   return Number.isInteger(number) ? number : null;
 }
 
-function ensureAgentRosterEventsTable(store) {
+function ensureAgentRosterEventsTable(store: any) {
   store.db.exec(`
     CREATE TABLE IF NOT EXISTS agent_roster_events (
       event_id TEXT PRIMARY KEY,

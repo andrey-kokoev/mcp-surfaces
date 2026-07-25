@@ -148,7 +148,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
       let offset = 0;
       let outputText = '';
       while (true) {
-        const pageResponse = await handleTaskLifecycleMcpRequest({
+        const pageResponse = await (handleTaskLifecycleMcpRequest({
           jsonrpc: '2.0',
           id,
           method: 'tools/call',
@@ -156,7 +156,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
             name: 'mcp_output_show',
             arguments: { ref: structured.output_ref, offset, limit: 20000 },
           },
-        }, runtimeOptions);
+        }, runtimeOptions)) as any;
         if (pageResponse.error) throw new Error('output_ref_read_error: ' + (pageResponse.error.message ?? JSON.stringify(pageResponse.error)));
         const page = pageResponse.result?.structuredContent;
         if (!page?.output_text) throw new Error('output_ref_page_missing_output_text');
@@ -172,7 +172,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     throw new Error('unexpected_output_ref_without_structured_content');
   }
 
-  const missingProjectionCloseout = await handleTaskLifecycleMcpRequest({
+  const missingProjectionCloseout = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 11,
     method: 'tools/call',
@@ -185,7 +185,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
         no_files_changed: true,
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(missingProjectionCloseout.error, undefined);
   const missingProjectionCloseoutPayload = await readToolPayload(missingProjectionCloseout, 13);
   assert.equal(missingProjectionCloseoutPayload.status, 'error');
@@ -195,7 +195,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.match(missingProjectionCloseoutPayload.expected_path, /20260604-9002-db-only-task\.md$/);
   assert.equal(missingProjectionCloseoutPayload.recommended_next_tool, 'task_lifecycle_show');
 
-  const missingProjectionFinish = await handleTaskLifecycleMcpRequest({
+  const missingProjectionFinish = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 12,
     method: 'tools/call',
@@ -208,7 +208,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
         no_files_changed: true,
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(missingProjectionFinish.error, undefined);
   const missingProjectionFinishPayload = await readToolPayload(missingProjectionFinish, 14);
   assert.equal(missingProjectionFinishPayload.status, 'error');
@@ -216,7 +216,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(missingProjectionFinishPayload.surface, 'task_lifecycle_finish');
   assert.equal(missingProjectionFinishPayload.lifecycle_row_exists, true);
 
-  const response = await handleTaskLifecycleMcpRequest({
+  const response = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -231,7 +231,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
         finish: true,
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
 
   assert.equal(response.error, undefined);
   const payload = await readToolPayload(response, 15);
@@ -256,7 +256,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     stderr: { write: () => true },
   };
 
-  const showResponse = await handleTaskLifecycleMcpRequest({
+  const showResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
@@ -264,7 +264,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
       name: 'task_lifecycle_show',
       arguments: { task_number: 9001 },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(showResponse.error, undefined);
   const showPayload = await readToolPayload(showResponse, 16);
   assert.equal(Object.hasOwn(showPayload, 'eligible_reviewers'), false);
@@ -277,7 +277,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(typeof generatedReviewTaskNumber, 'number');
   assert.ok(Array.isArray(payload.finish_result.post_closeout_continuation.downstream_role_followups));
   assert.equal(payload.finish_result.post_closeout_continuation.next_recommendation.task.task_number, generatedReviewTaskNumber);
-  const reviewClaimResponse = await handleTaskLifecycleMcpRequest({
+  const reviewClaimResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -288,7 +288,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
         agent_id: 'smart-scheduling.architect',
       },
     },
-  }, architectRuntimeOptions);
+  }, architectRuntimeOptions)) as any;
   assert.equal(reviewClaimResponse.error, undefined);
   const operatorIdentityStore = openTaskLifecycleStore(siteRoot);
   try {
@@ -303,7 +303,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     operatorIdentityStore.db.close();
   }
 
-  const reviewResponse = await handleTaskLifecycleMcpRequest({
+  const reviewResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 6,
     method: 'tools/call',
@@ -318,7 +318,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
         no_files_changed: true,
       },
     },
-  }, architectRuntimeOptions);
+  }, architectRuntimeOptions)) as any;
   assert.equal(reviewResponse.error, undefined);
   const reviewPayload = await readToolPayload(reviewResponse, 17);
   assert.equal(reviewPayload.status, 'success');
@@ -404,7 +404,7 @@ Submit report with an old agent_roster schema.
   } finally {
     legacyStore.db.close();
   }
-  const legacyReportResponse = await handleTaskLifecycleMcpRequest({
+  const legacyReportResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 7,
     method: 'tools/call',
@@ -418,7 +418,7 @@ Submit report with an old agent_roster schema.
         no_files_changed: true,
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(legacyReportResponse.error, undefined);
   const legacyReportPayload = legacyReportResponse.result.structuredContent;
   assert.notEqual(legacyReportPayload.status, 'error');

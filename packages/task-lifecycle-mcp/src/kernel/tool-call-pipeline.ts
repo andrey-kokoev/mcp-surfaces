@@ -14,8 +14,8 @@ export function createTaskLifecycleToolCaller({
   locusGuardedMutationTools,
   setActiveOutputToolName = (_name?: unknown) => {},
   env = process.env,
-}) {
-  return async function callTaskLifecycleTool(params, requestContext = {}) {
+}: any) {
+  return async function callTaskLifecycleTool(params: any, requestContext : any= {}) {
     const record = asRecord(params);
     const name = stringField(record, 'name');
     const args = asRecord(record.arguments);
@@ -27,7 +27,7 @@ export function createTaskLifecycleToolCaller({
       const createArgs = resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloadArgs });
       const locusGuard = guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env, locusGuardedMutationTools });
       if (locusGuard.status === 'refused') return jsonToolResult(locusGuard, true);
-      const toolDef = taskLifecycleTools().find((tool) => tool.name === canonicalName);
+      const toolDef = taskLifecycleTools().find((tool: any) => tool.name === canonicalName);
       return await dispatchWithStoreRecovery({
         canonicalName,
         args: createArgs.args,
@@ -40,7 +40,7 @@ export function createTaskLifecycleToolCaller({
     }
 
     const tools = taskLifecycleTools();
-    const registeredToolNames = tools.map((tool) => tool.name);
+    const registeredToolNames = tools.map((tool: any) => tool.name);
     const payloadResolution = canonicalName === 'task_lifecycle_test_mcp_tool'
       ? resolveFreshServerInvocationPayload({
           args,
@@ -63,7 +63,7 @@ export function createTaskLifecycleToolCaller({
     const finishVerdictMismatch = detectFinishVerdictMismatch(canonicalName, effectiveArgs);
     if (finishVerdictMismatch) return jsonToolResult(finishVerdictMismatch, true);
 
-    const toolDef = tools.find((tool) => tool.name === canonicalName);
+    const toolDef = tools.find((tool: any) => tool.name === canonicalName);
     if (toolDef?.inputSchema) {
       const validationErrors = validateArgs(canonicalName, effectiveArgs, toolDef.inputSchema);
       if (validationErrors) return jsonToolResult(validationErrorResult(validationErrors), true);
@@ -92,7 +92,7 @@ export function resolveFreshServerInvocationPayload({
   siteRoot,
   registeredToolNames,
   resolveToolPayloadArgs,
-}) {
+}: any) {
   const input = asRecord(args);
   const payloadRef = stringField(input, 'payload_ref');
   if (!payloadRef) {
@@ -126,7 +126,7 @@ export function resolveFreshServerInvocationPayload({
   };
 }
 
-async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, toolDef, dispatchTool, refreshStore, requestContext = {} }) {
+async function dispatchWithStoreRecovery({ canonicalName, args, payloadSource, toolDef, dispatchTool, refreshStore, requestContext = {} }: any) {
   try {
     return await dispatchTool(canonicalName, args, { payloadSource, ...requestContext });
   } catch (error) {
@@ -187,7 +187,7 @@ function findSqliteErrorCode(error: unknown): string | null {
   return null;
 }
 
-function describeStoreError(error) {
+function describeStoreError(error: any) {
   const record = asErrorRecord(error);
   const message = error instanceof Error
     ? error.message
@@ -199,7 +199,7 @@ function describeStoreError(error) {
   return String(error);
 }
 
-export function isStoreRetrySafe({ canonicalName, args, toolDef }) {
+export function isStoreRetrySafe({ canonicalName, args, toolDef }: any) {
   const annotations = toolDef?.annotations ?? {};
   if (annotations.readOnlyHint === true || annotations.idempotentHint === true) return true;
   const input = asRecord(args);
@@ -207,7 +207,7 @@ export function isStoreRetrySafe({ canonicalName, args, toolDef }) {
     || canonicalName === 'task_lifecycle_create' && typeof input.payload_ref === 'string' && input.payload_ref.trim().length > 0;
 }
 
-export function isStoreError(error) {
+export function isStoreError(error: any) {
   let current = error;
   for (let depth = 0; depth <= 4; depth += 1) {
     const record = asErrorRecord(current);
@@ -226,11 +226,11 @@ export function isStoreError(error) {
   }
   return false;
 }
-function detectReviewSurfaceMismatch(_canonicalName, _args) {
+function detectReviewSurfaceMismatch(_canonicalName: any, _args: any) {
   return null;
 }
 
-function detectFinishVerdictMismatch(canonicalName, args) {
+function detectFinishVerdictMismatch(canonicalName: any, args: any) {
   if (canonicalName !== 'task_lifecycle_finish') return null;
   const verdict = stringField(args, 'verdict');
   if (!verdict) return null;
@@ -262,7 +262,7 @@ function detectFinishVerdictMismatch(canonicalName, args) {
   };
 }
 
-export function buildLifecycleTargetLocusStatus({ siteRoot, env = process.env }) {
+export function buildLifecycleTargetLocusStatus({ siteRoot, env = process.env }: any) {
   const operatorStatedRoot = env.NARADA_OPERATOR_STATED_SITE_ROOT
     || env.NARADA_REQUESTED_WORK_ROOT
     || env.NARADA_TARGET_SITE_ROOT
@@ -279,7 +279,7 @@ export function buildLifecycleTargetLocusStatus({ siteRoot, env = process.env })
   };
 }
 
-export function guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env = process.env, locusGuardedMutationTools }) {
+export function guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env = process.env, locusGuardedMutationTools }: any) {
   if (!locusGuardedMutationTools.has(canonicalName)) return { status: 'clear' };
   if ((canonicalName === 'task_lifecycle_bridge_poll' || canonicalName === 'task_lifecycle_inbox_target') && booleanField(args, 'dry_run') === true) {
     return { status: 'clear' };
@@ -295,7 +295,7 @@ export function guardLifecycleTargetLocus({ canonicalName, args, siteRoot, env =
   };
 }
 
-export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloadArgs }) {
+export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloadArgs }: any) {
   const input = asRecord(args);
   const inlineTaskFields = [
     'title',
@@ -310,7 +310,7 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
     'idempotency_key',
     'execution_binding',
   ];
-  const inlineFields = inlineTaskFields.filter((field) => Object.prototype.hasOwnProperty.call(input, field));
+  const inlineFields = inlineTaskFields.filter((field: any) => Object.prototype.hasOwnProperty.call(input, field));
   if (inlineFields.length > 0) {
     throw new Error(`task_lifecycle_create_inline_definition_refused: task definition fields must be supplied by immutable payload_ref, not inline tool arguments; fields=${inlineFields.join(',')}`);
   }
@@ -337,7 +337,7 @@ export function resolveTaskCreatePayloadArgs({ args, siteRoot, resolveToolPayloa
   };
 }
 
-export function normalizeTaskCreatePayload(args) {
+export function normalizeTaskCreatePayload(args: any) {
   const input = asRecord(args);
   return {
     ...input,
@@ -349,13 +349,13 @@ export function normalizeTaskCreatePayload(args) {
   };
 }
 
-export function validateTaskCreatePayload(args) {
+export function validateTaskCreatePayload(args: any) {
   if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length === 0) {
     throw new Error('task_lifecycle_create_payload_empty_object_refused');
   }
   const title = stringField(args, 'title');
   if (!title) throw new Error('task_lifecycle_create_payload_title_required');
-  if (args.acceptance_criteria !== undefined && (!Array.isArray(args.acceptance_criteria) || args.acceptance_criteria.some((item) => typeof item !== 'string'))) {
+  if (args.acceptance_criteria !== undefined && (!Array.isArray(args.acceptance_criteria) || args.acceptance_criteria.some((item: any) => typeof item !== 'string'))) {
     throw new Error('task_lifecycle_create_payload_acceptance_criteria_must_be_string_array');
   }
   if (args.tags !== undefined) {
@@ -376,27 +376,27 @@ export function validateTaskCreatePayload(args) {
   }
 }
 
-function normalizeOptionalMarkdownField(record, key) {
+function normalizeOptionalMarkdownField(record: any, key: any) {
   const value = asRecord(record)[key];
   if (value === undefined || value === null) return value;
   if (typeof value === 'string') return value;
-  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
-    const lines = value.map((item) => item.trim()).filter(Boolean);
+  if (Array.isArray(value) && value.every((item: any) => typeof item === 'string')) {
+    const lines = value.map((item: any) => item.trim()).filter(Boolean);
     return lines.length > 0 ? lines.join('\n') : '';
   }
   return value;
 }
 
-function asRecord(value) {
+function asRecord(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
-function stringField(record, key) {
+function stringField(record: any, key: any) {
   const value = asRecord(record)[key];
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-function booleanField(record, key) {
+function booleanField(record: any, key: any) {
   const value = asRecord(record)[key];
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {

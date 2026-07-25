@@ -18,8 +18,8 @@ const publishedSchema = JSON.parse(readFileSync(new URL('../schemas/site-loop-co
 assert.deepEqual(publishedSchema, siteLoopConfigJsonSchema());
 
 const boundaries = siteLoopDependencyBoundaries();
-assert.equal(boundaries.some((item) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
-assert.equal(boundaries.some((item) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
+assert.equal(boundaries.some((item: any) => item.surface === 'task-lifecycle' && item.owner.includes('task-lifecycle')), true);
+assert.equal(boundaries.some((item: any) => item.surface === 'structured-command' && item.kind === 'configured_command'), true);
 assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
   'source_sync',
   'scheduled_sop_triggers',
@@ -38,6 +38,28 @@ assert.deepEqual([...DEFAULT_SITE_LOOP_PHASE_PLAN], [
   'stale_escalation_reconciliation',
   'operating_alert_reconciliation',
 ]);
+
+const phasePlanDisabledRoot = mkdtempSync(join(tmpdir(), 'site-loop-phase-plan-disabled-'));
+writeSiteLoopConfig(phasePlanDisabledRoot, {
+  schema: SITE_LOOP_CONFIG_SCHEMA,
+  loop_id: 'phase.plan.disabled.loop',
+  site_id: 'narada-phase-plan-disabled',
+  display_name: 'Phase plan disabled loop',
+  resident: { agent_id: 'phase.plan.disabled.resident', role: 'resident' },
+  refs: { ticket_projection: { kind: 'ticket_projection', ref: 'phase-plan-disabled' } },
+  commands: {
+    source_sync: { enabled: false, execution: 'direct_spawn', command: 'disabled-source-sync', args: [] },
+    ticket_task_reconciliation: { enabled: false, execution: 'direct_spawn', command: 'disabled-ticket-reconcile', args: [] },
+  },
+});
+const phasePlanDisabledRun = await runSiteLoop(phasePlanDisabledRoot, {
+  dryRun: true,
+  sourceSync: true,
+  runId: 'phase-plan-disabled-runtime-test',
+  sourceSyncRunner: () => { throw new Error('disabled source sync must not execute'); },
+});
+assert.equal(phasePlanDisabledRun.steps.find((step: any) => step.step_id === 'source_sync'), undefined);
+assert.equal(phasePlanDisabledRun.steps.find((step: any) => step.step_id === 'ticket_task_reconciliation')?.status, 'skipped');
 assert.deepEqual([...SITE_LOOP_ADAPTER_PHASE_PLAN], [...DEFAULT_SITE_LOOP_PHASE_PLAN]);
 
 assert.deepEqual(processLaunchRequiredEnvironment({
@@ -126,7 +148,7 @@ assert.equal(modernBoundary.status, 'ok');
 assert.equal(modernBoundary.boundary_mode, 'shared_mcp_package');
 assert.equal(modernBoundary.task_lifecycle_root, modernTaskLifecyclePackageRoot);
 
-function writeSiteLoopConfig(root, config) {
+function writeSiteLoopConfig(root: any, config: any) {
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify(config, null, 2), 'utf8');
 }
@@ -252,7 +274,7 @@ const phasePlanRun = await runSiteLoop(phasePlanRoot, {
   runId: 'phase-plan-runtime-test',
   sourceSyncRunner: () => ({ status: 'ok', schema: 'narada.site_loop.source_sync.v1', cursor_path: '.ai/state/source.cursor' }),
 });
-assert.deepEqual(phasePlanRun.steps.map((step) => step.step_id), [
+assert.deepEqual(phasePlanRun.steps.map((step: any) => step.step_id), [
   'source_sync',
   'inbox_bridge',
   'task_materialization',
@@ -342,6 +364,7 @@ const minimalSiteLoopConfig = {
   commands: {
     source_sync: {
       execution: 'direct_spawn',
+      enabled: true,
       command: 'example-sync',
       args: ['--json'],
       working_directory: 'D:/code/narada',
@@ -412,6 +435,7 @@ assert.equal(overrideLoad.config.resident.role, 'operator');
 assert.equal(overrideLoad.config.resident.required_task_tools.length, DEFAULT_SITE_LOOP_CONFIG.resident.required_task_tools.length);
 assert.deepEqual(overrideLoad.config.refs.ticket_projection, { kind: 'ticket_projection', ref: 'example' });
 assert.equal(overrideLoad.config.commands.source_sync.command, 'example-sync');
+assert.equal(overrideLoad.config.commands.source_sync.enabled, true);
 assert.deepEqual(overrideLoad.config.commands.source_sync.args, ['--json']);
 assert.equal(overrideLoad.config.commands.source_sync.working_directory, 'D:/code/narada');
 assert.equal(overrideLoad.config.commands.source_sync.dry_run_arg, '--dry-run');
@@ -483,7 +507,7 @@ writeSiteLoopConfig(invalidUnknownRoot, {
 });
 const unknownRootLoad = loadSiteLoopConfig(invalidUnknownRoot);
 assert.equal(unknownRootLoad.status, 'invalid');
-assert.equal(unknownRootLoad.errors.some((error) => error.includes('unexpected_root_key_unknown_key')), true);
+assert.equal(unknownRootLoad.errors.some((error: any) => error.includes('unexpected_root_key_unknown_key')), true);
 assert.throws(() => requireSiteLoopConfig(invalidUnknownRoot), /site_loop_config_invalid/);
 
 const invalidMissingSchemaRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-missing-schema-'));
@@ -496,7 +520,7 @@ writeSiteLoopConfig(invalidMissingSchemaRoot, {
 });
 const invalidMissingSchemaLoad = loadSiteLoopConfig(invalidMissingSchemaRoot);
 assert.equal(invalidMissingSchemaLoad.status, 'invalid');
-assert.equal(invalidMissingSchemaLoad.errors.some((error) => error.includes('config.schema_required')), true);
+assert.equal(invalidMissingSchemaLoad.errors.some((error: any) => error.includes('config.schema_required')), true);
 
 const invalidPathRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-path-'));
 writeSiteLoopConfig(invalidPathRoot, {
@@ -510,7 +534,7 @@ writeSiteLoopConfig(invalidPathRoot, {
 });
 const invalidPathLoad = loadSiteLoopConfig(invalidPathRoot);
 assert.equal(invalidPathLoad.status, 'invalid');
-assert.equal(invalidPathLoad.errors.some((error) => error.includes('safe_relative_path_required')), true);
+assert.equal(invalidPathLoad.errors.some((error: any) => error.includes('safe_relative_path_required')), true);
 
 const invalidCommandRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-command-'));
 writeSiteLoopConfig(invalidCommandRoot, {
@@ -524,7 +548,7 @@ writeSiteLoopConfig(invalidCommandRoot, {
 });
 const invalidCommandLoad = loadSiteLoopConfig(invalidCommandRoot);
 assert.equal(invalidCommandLoad.status, 'invalid');
-assert.equal(invalidCommandLoad.errors.some((error) => error.includes('commands.source_sync.args')), true);
+assert.equal(invalidCommandLoad.errors.some((error: any) => error.includes('commands.source_sync.args')), true);
 
 const invalidExecutionRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-execution-'));
 writeSiteLoopConfig(invalidExecutionRoot, {
@@ -538,7 +562,7 @@ writeSiteLoopConfig(invalidExecutionRoot, {
 });
 const invalidExecutionLoad = loadSiteLoopConfig(invalidExecutionRoot);
 assert.equal(invalidExecutionLoad.status, 'invalid');
-assert.equal(invalidExecutionLoad.errors.some((error) => error.includes('commands.source_sync.execution_direct_spawn_required')), true);
+assert.equal(invalidExecutionLoad.errors.some((error: any) => error.includes('commands.source_sync.execution_direct_spawn_required')), true);
 
 const invalidRuntimeRoot = mkdtempSync(join(tmpdir(), 'site-loop-config-invalid-runtime-'));
 writeSiteLoopConfig(invalidRuntimeRoot, {
@@ -552,6 +576,6 @@ writeSiteLoopConfig(invalidRuntimeRoot, {
 });
 const invalidRuntimeLoad = loadSiteLoopConfig(invalidRuntimeRoot);
 assert.equal(invalidRuntimeLoad.status, 'invalid');
-assert.equal(invalidRuntimeLoad.errors.some((error) => error.includes('resident_runtime.process_probe_patterns')), true);
+assert.equal(invalidRuntimeLoad.errors.some((error: any) => error.includes('resident_runtime.process_probe_patterns')), true);
 
 console.log('site-loop config ok');

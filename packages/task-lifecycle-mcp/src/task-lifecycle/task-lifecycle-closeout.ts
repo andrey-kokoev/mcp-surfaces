@@ -4,7 +4,7 @@ import { join, relative, resolve } from 'path';
 
 const NO_FILES_CHANGED_MARKER = '__narada_no_files_changed_declared__';
 
-export function buildStateAwareFinishBlockerRemediation({ taskNumber, agentId, lifecycle, payload }) {
+export function buildStateAwareFinishBlockerRemediation({ taskNumber, agentId, lifecycle, payload }: any) {
   const summary = String(payload?.summary ?? '').trim();
   const changedFiles = Array.isArray(payload?.changed_files) ? payload.changed_files : [];
   const noFilesChanged = payload?.no_files_changed === true;
@@ -22,7 +22,7 @@ export function buildStateAwareFinishBlockerRemediation({ taskNumber, agentId, l
   };
 }
 
-export async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber, findTaskFile, inspectTaskEvidence, buildBlockedTaskReportPosture, buildTaskFileResolutionFailure }) {
+export async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber, findTaskFile, inspectTaskEvidence, buildBlockedTaskReportPosture, buildTaskFileResolutionFailure }: any) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) {
     return {
@@ -93,7 +93,7 @@ export async function taskLifecycleDispositionCloseout({
   evaluatePostTransitionFollowups,
   detectGitChangedFiles,
   scopeChangedFiles,
-}) {
+}: any) {
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
   const taskFile = await findTaskFile(siteRoot, taskNumber);
@@ -209,7 +209,7 @@ export async function taskLifecycleDispositionCloseout({
       task_owned_paths: gitVisibleChangedFiles,
       ordinary_task_closeout_paths: gitVisibleChangedFiles,
       lifecycle_store_paths: changedFiles,
-      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
+      non_committable_lifecycle_store_paths: changedFiles.filter((file: any) => !gitVisibleChangedFiles.includes(file)),
       ignored_envelope_projection_paths: [],
       envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
       guidance: 'Stage ordinary_task_closeout_paths only. lifecycle_store_paths are durable closeout records and may be outside Git or ignored by repository policy.',
@@ -221,7 +221,7 @@ export async function taskLifecycleDispositionCloseout({
       stage_paths: gitVisibleChangedFiles,
       ordinary_task_closeout_paths: gitVisibleChangedFiles,
       lifecycle_store_paths: changedFiles,
-      non_committable_lifecycle_store_paths: changedFiles.filter((file) => !gitVisibleChangedFiles.includes(file)),
+      non_committable_lifecycle_store_paths: changedFiles.filter((file: any) => !gitVisibleChangedFiles.includes(file)),
       ignored_envelope_projection_paths: [],
       envelope_handoff_tool: 'git_handoff_inbox_envelope_export',
       exclude_unrelated_dirty_files: true,
@@ -229,7 +229,7 @@ export async function taskLifecycleDispositionCloseout({
   };
 }
 
-export function buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface }) {
+export function buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, lifecycle, surface }: any) {
   const expectedPath = resolve(siteRoot, '.ai', 'do-not-open', 'tasks', `${lifecycle.task_id}.md`);
   const spec = store.getTaskSpec(lifecycle.task_id) ?? store.getTaskSpecByNumber?.(taskNumber) ?? null;
   const assignment = store.getActiveAssignment?.(lifecycle.task_id) ?? null;
@@ -270,7 +270,7 @@ export function buildTaskFileResolutionFailure({ siteRoot, store, taskNumber, li
   };
 }
 
-export function validateCapaDispositionCorrectiveCoverage({ envelope, body, store }) {
+export function validateCapaDispositionCorrectiveCoverage({ envelope, body, store }: any) {
   const payload = envelope?.envelope?.payload ?? envelope?.envelope ?? envelope?.payload ?? {};
   const envelopeId = envelope?.envelope_id ?? envelope?.envelope?.envelope_id ?? null;
   const classification = String(payload.classification ?? envelope?.kind ?? '').toLowerCase();
@@ -296,7 +296,7 @@ export function validateCapaDispositionCorrectiveCoverage({ envelope, body, stor
     };
   }
 
-  const lines = ledger.split(/\r?\n/).map((line) => line.trim().replace(/^[-*]\s+/, '')).filter(Boolean);
+  const lines = ledger.split(/\r?\n/).map((line: any) => line.trim().replace(/^[-*]\s+/, '')).filter(Boolean);
   const activeStatuses = new Set(['opened', 'claimed', 'needs_continuation', 'in_review', 'awaiting_dependencies']);
   const taskLinks = [];
   for (const line of lines) {
@@ -312,9 +312,9 @@ export function validateCapaDispositionCorrectiveCoverage({ envelope, body, stor
       });
     }
   }
-  const activeTaskLinks = taskLinks.filter((link) => link.active_implementation_coverage);
-  const deferredOrBlocked = lines.find((line) => /\b(?:deferred|blocked|blocker)\s*:/i.test(line));
-  const noAction = lines.find((line) => /\bno follow-?up needed\s*:/i.test(line) || /\bno[- ]action rationale\s*:/i.test(line));
+  const activeTaskLinks = taskLinks.filter((link: any) => link.active_implementation_coverage);
+  const deferredOrBlocked = lines.find((line: any) => /\b(?:deferred|blocked|blocker)\s*:/i.test(line));
+  const noAction = lines.find((line: any) => /\bno follow-?up needed\s*:/i.test(line) || /\bno[- ]action rationale\s*:/i.test(line));
   if (activeTaskLinks.length > 0 || deferredOrBlocked || noAction) {
     return {
       ok: true,
@@ -341,7 +341,7 @@ export function validateCapaDispositionCorrectiveCoverage({ envelope, body, stor
   };
 }
 
-function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
+function collectChangedFileEvidenceFromReports(reportRecords: any, sqliteReports: any) {
   const changedFiles = new Set();
   const noFilesChangedDeclarations = [];
   for (const record of [...reportRecords, ...sqliteReports]) {
@@ -371,24 +371,24 @@ function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
   };
 }
 
-function extractTaskSection(body, heading) {
+function extractTaskSection(body: any, heading: any) {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = String(body).match(new RegExp(`(?:^|\\n)## ${escaped}\\s*\\n([\\s\\S]*?)(?=\\n## |$)`, 'i'));
   return match ? match[1].trim() : null;
 }
 
-export function detectGitChangedFiles(cwd, basePath = cwd) {
+export function detectGitChangedFiles(cwd: any, basePath : any= cwd) {
   const result = spawnSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) return [];
   return result.stdout
     .split(/\r?\n/)
-    .map((line) => line.slice(3).trim())
+    .map((line: any) => line.slice(3).trim())
     .filter(Boolean)
-    .map((file) => resolve(basePath, file));
+    .map((file: any) => resolve(basePath, file));
 }
 
-export function scopeChangedFiles(siteRoot, files, { includeUnrelated = false, taskFilePath = null } = {}) {
-  const normalized = [...new Set(files.filter((file) => typeof file === 'string' && file.trim().length > 0 && file !== NO_FILES_CHANGED_MARKER))] as string[];
+export function scopeChangedFiles(siteRoot: any, files: any, { includeUnrelated = false, taskFilePath = null } : any= {}) {
+  const normalized = [...new Set(files.filter((file: any) => typeof file === 'string' && file.trim().length > 0 && file !== NO_FILES_CHANGED_MARKER))] as string[];
   if (includeUnrelated) return { files: normalized, included_count: normalized.length, excluded_count: 0 };
   const scoped = normalized.filter((file: string) => {
     if (taskFilePath && file === taskFilePath) return true;
@@ -400,12 +400,12 @@ export function scopeChangedFiles(siteRoot, files, { includeUnrelated = false, t
   return { files: scoped, included_count: scoped.length, excluded_count: normalized.length - scoped.length };
 }
 
-function relativeSitePath(siteRoot, filePath) {
+function relativeSitePath(siteRoot: any, filePath: any) {
   return relative(resolve(siteRoot), resolve(filePath)).replace(/\\/g, '/');
 }
 
-function gitVisiblePathSubset(cwd, files) {
-  return files.filter((file) => {
+function gitVisiblePathSubset(cwd: any, files: any) {
+  return files.filter((file: any) => {
     const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     if (tracked.status === 0) return true;
     const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
@@ -413,7 +413,7 @@ function gitVisiblePathSubset(cwd, files) {
   });
 }
 
-function readIndexedEnvelope(siteRoot, envelopeId, refreshInboxIndex, evaluateEnvelopeSeverity) {
+function readIndexedEnvelope(siteRoot: any, envelopeId: any, refreshInboxIndex: any, evaluateEnvelopeSeverity: any) {
   const index = refreshInboxIndex(siteRoot, { evaluateEnvelopeSeverity });
   try {
     const row = index.db.prepare('SELECT * FROM inbox_envelopes WHERE envelope_id = ?').get(envelopeId);

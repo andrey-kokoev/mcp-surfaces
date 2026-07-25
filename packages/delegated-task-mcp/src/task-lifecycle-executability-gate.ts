@@ -183,7 +183,7 @@ function isFixedAssessmentWorkflow(workflow: JsonRecord): boolean {
     && step.kind === expectedStep.kind
     && step.profile === TASK_EXECUTABILITY_ASSESSMENT_PROFILE_VERSION
     && JSON.stringify(step.write_set ?? null) === JSON.stringify(expectedStep.write_set ?? null)
-    && step.output_schema && rec(step.output_schema).name === TASK_EXECUTABILITY_ASSESSMENT_TEMPLATE_ID
+    && rec(step.output_schema).name === TASK_EXECUTABILITY_ASSESSMENT_TEMPLATE_ID
     && constraints.authority === expectedConstraints.authority
     && constraints.cognition === expectedConstraints.cognition
     && constraints.runtime === expectedConstraints.runtime

@@ -1,6 +1,6 @@
 type TaskLifecyclePayload = Record<string, unknown>;
 
-const SERIOUS_FAILURE_STATES = Object.freeze([
+const SERIOUS_FAILURE_STATES: any = Object.freeze([
   'inventory_in_progress',
   'inventory_complete_corrective_open',
   'corrective_in_progress',
@@ -9,7 +9,7 @@ const SERIOUS_FAILURE_STATES = Object.freeze([
   'terminal_blocked',
 ]);
 
-const REQUIRED_TRUTHFULNESS_FIELDS = Object.freeze([
+const REQUIRED_TRUTHFULNESS_FIELDS: any = Object.freeze([
   'known_facts',
   'inferences',
   'uncertainty',
@@ -21,14 +21,14 @@ const REQUIRED_TRUTHFULNESS_FIELDS = Object.freeze([
   'state',
 ]);
 
-const TERMINAL_CORRECTED_REQUIRED_FIELDS = Object.freeze([
+const TERMINAL_CORRECTED_REQUIRED_FIELDS: any = Object.freeze([
   'remaining_work',
   'capa_open_status',
   'repository_durability',
   'changed',
 ]);
 
-const TRIGGER_SURFACES = Object.freeze([
+const TRIGGER_SURFACES: any = Object.freeze([
   'task_lifecycle_finish',
   'task_lifecycle_submit_report',
   'task_lifecycle_closeout',
@@ -37,7 +37,7 @@ const TRIGGER_SURFACES = Object.freeze([
   'operator_final_summary',
 ]);
 
-const TRIGGER_DEFINITIONS = Object.freeze([
+const TRIGGER_DEFINITIONS: any = Object.freeze([
   {
     code: 'high_severity_or_recurrent_capa',
     description: 'A CAPA or corrective obligation is high severity, recurring, or explicitly about failed recovery from prior serious operator harm.',
@@ -72,36 +72,36 @@ const TRIGGER_DEFINITIONS = Object.freeze([
   },
 ]);
 
-function text(value) {
+function text(value: any) {
   if (value == null) return '';
   if (Array.isArray(value)) return value.join('\n');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
 
-function unique(values) {
+function unique(values: any) {
   return [...new Set(values)];
 }
 
-function escapeRegex(value) {
+function escapeRegex(value: any) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function extractMarkdownSection(body, heading) {
-  const pattern = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, 'mi');
-  const match = body.match(pattern);
+function extractMarkdownSection(body: any, heading: any) {
+  const pattern: any = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, 'mi');
+  const match: any = body.match(pattern);
   if (!match) return null;
-  const start = match.index + match[0].length;
-  const rest = body.slice(start);
-  const nextHeading = rest.match(/^##\s/m);
-  const end = nextHeading ? start + nextHeading.index : body.length;
+  const start: any = match.index + match[0].length;
+  const rest: any = body.slice(start);
+  const nextHeading: any = rest.match(/^##\s/m);
+  const end: any = nextHeading ? start + nextHeading.index : body.length;
   return body.slice(start, end).trim();
 }
 
-function parseRecoveryTruthfulnessSection(section) {
+function parseRecoveryTruthfulnessSection(section: any) {
   if (!section) return {};
-  const packet = {};
-  const aliases = new Map([
+  const packet: any = {};
+  const aliases: any = new Map([
     ['known facts', 'known_facts'],
     ['known_facts', 'known_facts'],
     ['inferences', 'inferences'],
@@ -125,11 +125,11 @@ function parseRecoveryTruthfulnessSection(section) {
   ]);
 
   for (const rawLine of section.split(/\r?\n/)) {
-    const line = rawLine.trim().replace(/^[-*]\s+/, '');
+    const line: any = rawLine.trim().replace(/^[-*]\s+/, '');
     if (!line || line.startsWith('<!--')) continue;
-    const match = line.match(/^([A-Za-z_ ]+):\s*(.+)$/);
+    const match: any = line.match(/^([A-Za-z_ ]+):\s*(.+)$/);
     if (!match) continue;
-    const field = aliases.get(match[1].toLowerCase().trim());
+    const field: any = aliases.get(match[1].toLowerCase().trim());
     if (!field) continue;
     if (packet[field]) {
       packet[field] = `${packet[field]}\n${match[2].trim()}`;
@@ -140,8 +140,8 @@ function parseRecoveryTruthfulnessSection(section) {
   return packet;
 }
 
-function recoveryTruthfulnessRequiredFromFrontMatter(body) {
-  const match = String(body).match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/);
+function recoveryTruthfulnessRequiredFromFrontMatter(body: any) {
+  const match: any = String(body).match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/);
   if (!match) return false;
   return /^recovery_truthfulness_required\s*:\s*true\s*$/mi.test(match[1]);
 }
@@ -162,8 +162,8 @@ export function recoveryTruthfulnessTriggerContract() {
 }
 
 export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload = {}) {
-  const triggers = [];
-  const capa = packet.capa && typeof packet.capa === 'object' ? packet.capa as TaskLifecyclePayload : {};
+  const triggers: any[] = [];
+  const capa: any = packet.capa && typeof packet.capa === 'object' ? packet.capa as TaskLifecyclePayload : {};
 
   if (packet.recovery_truthfulness_required === true) triggers.push('explicit_recovery_truthfulness_required');
   if (packet.serious_failure_recovery === true) triggers.push('explicit_serious_failure_recovery');
@@ -194,8 +194,8 @@ export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload
     triggers.push('authority_or_locus_boundary_error');
   }
 
-  const normalizedTriggers = unique(triggers);
-  const triggered = normalizedTriggers.length > 0;
+  const normalizedTriggers: any = unique(triggers);
+  const triggered: any = normalizedTriggers.length > 0;
   return {
     schema: 'narada.recovery_truthfulness.trigger_evaluation.v0',
     triggered,
@@ -207,31 +207,31 @@ export function evaluateRecoveryTruthfulnessTrigger(packet: TaskLifecyclePayload
   };
 }
 
-export function validateRecoveryTruthfulnessBody({ body = '', summary = '', context = '' } = {}) {
-  const recoverySection = extractMarkdownSection(body, 'Recovery Truthfulness');
-  const parsedPacket = parseRecoveryTruthfulnessSection(recoverySection);
-  const packet = {
+export function validateRecoveryTruthfulnessBody({ body = '', summary = '', context = '' } : any= {}) {
+  const recoverySection: any = extractMarkdownSection(body, 'Recovery Truthfulness');
+  const parsedPacket: any = parseRecoveryTruthfulnessSection(recoverySection);
+  const packet: any = {
     ...parsedPacket,
     recovery_truthfulness_required: recoveryTruthfulnessRequiredFromFrontMatter(body),
     summary,
     context,
     closeout_text: body,
   };
-  const validation = validateRecoveryTruthfulnessPacket(packet);
+  const validation: any = validateRecoveryTruthfulnessPacket(packet);
   if (validation.ok) return { ...validation, recovery_section_present: Boolean(recoverySection) };
   return {
     ...validation,
     recovery_section_present: Boolean(recoverySection),
-    errors: validation.errors.map((error) => `${error} Add or repair a ## Recovery Truthfulness section with labels: Known facts, Inferences, Uncertainty, Changed, Not changed, Remaining work, Evidence limits, CAPA open status, State. For terminal_corrected, also include Repository durability / commit-push state.`),
+    errors: validation.errors.map((error: any) => `${error} Add or repair a ## Recovery Truthfulness section with labels: Known facts, Inferences, Uncertainty, Changed, Not changed, Remaining work, Evidence limits, CAPA open status, State. For terminal_corrected, also include Repository durability / commit-push state.`),
   };
 }
 
-function normalizedText(value) {
+function normalizedText(value: any) {
   return text(value).toLowerCase();
 }
 
-function claimsNoRemainingWork(value) {
-  const content = normalizedText(value);
+function claimsNoRemainingWork(value: any) {
+  const content: any = normalizedText(value);
   if (!content.trim()) return false;
   if (/\b#\d+\b/.test(content)) return false;
   if (/\b(no|none|zero)\b.{0,40}\b(remaining|residual|open|pending|corrective|follow[- ]?up|work|tasks?|capas?|reviews?)\b/i.test(content)) return true;
@@ -239,8 +239,8 @@ function claimsNoRemainingWork(value) {
   return false;
 }
 
-function claimsCapaClosed(value) {
-  const content = normalizedText(value);
+function claimsCapaClosed(value: any) {
+  const content: any = normalizedText(value);
   if (!content.trim()) return false;
   if (/\b(no|none|zero)\b.{0,40}\b(open|active|pending)\b.{0,40}\b(capas?|corrective)\b/i.test(content)) return true;
   if (/\bcapas?\b.{0,40}\b(closed|resolved|none|not\s+applicable|n\/a)\b/i.test(content)) return true;
@@ -248,29 +248,29 @@ function claimsCapaClosed(value) {
   return false;
 }
 
-function claimsRepositoryDurable(value) {
-  const content = normalizedText(value);
+function claimsRepositoryDurable(value: any) {
+  const content: any = normalizedText(value);
   if (!content.trim()) return false;
   if (/\b(not|no|uncommitted|unpushed|pending|missing|failed|cannot|unable)\b.{0,40}\b(commit|push|pushed|durable|repository)\b/i.test(content)) return false;
   return /\b(commit(?:ted)?\b.{0,80}\bpush(?:ed)?\b|push(?:ed)?\b.{0,80}\bcommit(?:ted)?\b|durable\b.{0,40}\b(commit|push|git|repository))\b/i.test(content);
 }
 
-function hasDurableChangeEvidence(packet) {
-  const changed = packet.changed;
+function hasDurableChangeEvidence(packet: any) {
+  const changed: any = packet.changed;
   if (Array.isArray(changed)) {
-    return changed.some((item) => text(item).trim().length > 0 && text(item).trim() !== '__narada_no_files_changed_declared__');
+    return changed.some((item: any) => text(item).trim().length > 0 && text(item).trim() !== '__narada_no_files_changed_declared__');
   }
-  const content = text(changed).trim();
+  const content: any = text(changed).trim();
   return content.length > 0 && content !== '__narada_no_files_changed_declared__' && !/\bno\s+files?\s+changed\b/i.test(content);
 }
 
 export function validateRecoveryTruthfulnessPacket(packet: TaskLifecyclePayload = {}) {
-  const evaluation = evaluateRecoveryTruthfulnessTrigger(packet);
+  const evaluation: any = evaluateRecoveryTruthfulnessTrigger(packet);
   if (!evaluation.triggered) return { ok: true, evaluation, errors: [] };
 
-  const errors = [];
-  const missingFields = REQUIRED_TRUTHFULNESS_FIELDS.filter((field) => {
-    const value = packet[field];
+  const errors: any[] = [];
+  const missingFields: any = REQUIRED_TRUTHFULNESS_FIELDS.filter((field: any) => {
+    const value: any = packet[field];
     if (Array.isArray(value)) return value.length === 0;
     return text(value).trim().length === 0;
   });

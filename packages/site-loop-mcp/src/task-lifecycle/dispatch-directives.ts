@@ -28,13 +28,13 @@ function asRecord(value: unknown): DirectiveDispatchPayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as DirectiveDispatchPayload : {};
 }
 
-function stringValue(value: unknown, fallback = ''): string {
+function stringValue(value: unknown, fallback : any= ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
 function requireResidentCarrierSiteLoopConfig(value: unknown): SiteLoopConfig {
-  const record = asRecord(value);
-  const resident = asRecord(record.resident);
+  const record: any = asRecord(value);
+  const resident: any = asRecord(record.resident);
   if (typeof record.loop_id === 'string' && typeof resident.agent_id === 'string' && typeof resident.role === 'string') {
     return record as SiteLoopConfig;
   }
@@ -42,12 +42,12 @@ function requireResidentCarrierSiteLoopConfig(value: unknown): SiteLoopConfig {
 }
 
 function configuredSessionRoot(cwd: string, siteLoopConfig: SiteLoopConfig = requireSiteLoopConfig(cwd)) {
-  const sessionRoot = siteLoopConfig.resident_runtime.session_root;
+  const sessionRoot: any = siteLoopConfig.resident_runtime.session_root;
   return isAbsolute(sessionRoot) ? sessionRoot : join(cwd, sessionRoot);
 }
 
 function configuredExternalSessionRoots(cwd: string, siteLoopConfig: SiteLoopConfig = requireSiteLoopConfig(cwd)) {
-  return siteLoopConfig.resident_runtime.external_session_roots.map((root) => isAbsolute(root) ? root : join(cwd, root));
+  return siteLoopConfig.resident_runtime.external_session_roots.map((root: any) => isAbsolute(root) ? root : join(cwd, root));
 }
 
 export async function dispatchPendingDirectives({
@@ -58,25 +58,25 @@ export async function dispatchPendingDirectives({
   dryRun = false,
   requireLiveCarrier = true,
   blockBusyCarrier = true,
-}) {
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const effectiveAgentId = stringValue(agentId, siteLoopConfig.resident.agent_id);
-  const effectiveRole = stringValue(role, siteLoopConfig.resident.role);
-  const loopId = siteLoopConfig.loop_id;
-  const dispatchSchema = schemaName(siteLoopConfig, 'directive_dispatch');
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
-  const store = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+}: any) {
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const effectiveAgentId: any = stringValue(agentId, siteLoopConfig.resident.agent_id);
+  const effectiveRole: any = stringValue(role, siteLoopConfig.resident.role);
+  const loopId: any = siteLoopConfig.loop_id;
+  const dispatchSchema: any = schemaName(siteLoopConfig, 'directive_dispatch');
+  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
+  const store: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   store.initSchema();
   const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, effectiveAgentId, { requireLiveCarrier }) as ResidentControlTarget | null;
-  const receiptReconciliation = reconcileCarrierReceipts(cwd, store, {
+  const receiptReconciliation: any = reconcileCarrierReceipts(cwd, store, {
     carrierSessionIds: carrier?.carrierSessionId ? [carrier.carrierSessionId] : [],
   });
-  const leaseRecovery = recoverExpiredLeases(store);
-  const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
-  const eventEndpoint = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
-  const inputTransport = selectResidentInputTransport({ controlPath, eventEndpoint });
-  const deliveryTarget = inputTransport.target;
-  const pending = dedupeDirectives([
+  const leaseRecovery: any = recoverExpiredLeases(store);
+  const controlPath: any = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
+  const eventEndpoint: any = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
+  const inputTransport: any = selectResidentInputTransport({ controlPath, eventEndpoint });
+  const deliveryTarget: any = inputTransport.target;
+  const pending: any = dedupeDirectives([
     ...store.listPending({ target: { kind: 'agent', id: effectiveAgentId }, limit }),
     ...store.listPending({ target: { kind: 'role', id: effectiveRole }, limit }),
   ]).slice(0, limit);
@@ -98,15 +98,15 @@ export async function dispatchPendingDirectives({
       receipt_reconciliation: receiptReconciliation,
       lease_recovery: leaseRecovery,
       dispatched: [],
-      skipped: pending.map((directive) => ({ directive_id: directive.directive_id, reason: carrier?.reason ?? 'no_live_resident_input_target' })),
+      skipped: pending.map((directive: any) => ({ directive_id: directive.directive_id, reason: carrier?.reason ?? 'no_live_resident_input_target' })),
     };
   }
 
-  const carrierSessionId = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
-  const sessionState = carrierSessionId ? inferAgentCliSessionState(cwd, carrierSessionId) : { active_turn_state: 'unknown' };
-  const host = carrierSessionId ? readResidentHostEvidence(cwd, carrierSessionId) : null;
-  const policy = loadSiteLoopOperatingPolicy(cwd).policy;
-  const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
+  const carrierSessionId: any = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
+  const sessionState: any = carrierSessionId ? inferAgentCliSessionState(cwd, carrierSessionId) : { active_turn_state: 'unknown' };
+  const host: any = carrierSessionId ? readResidentHostEvidence(cwd, carrierSessionId) : null;
+  const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
+  const carrierState: any = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
   if (blockBusyCarrier && ['busy', 'stale_busy', 'policy_stale'].includes(carrierState.state)) {
     lifecycleStore.db.close();
     return {
@@ -124,12 +124,12 @@ export async function dispatchPendingDirectives({
       receipt_reconciliation: receiptReconciliation,
       lease_recovery: leaseRecovery,
       dispatched: [],
-      skipped: pending.map((directive) => ({ directive_id: directive.directive_id, reason: carrierState.dispatch_skip_reason })),
+      skipped: pending.map((directive: any) => ({ directive_id: directive.directive_id, reason: carrierState.dispatch_skip_reason })),
     };
   }
 
   for (const directive of pending) {
-    const terminalOutcome = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id, loopId);
+    const terminalOutcome: any = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id, loopId);
     if (terminalOutcome) {
       failDirectiveDelivery(store, directive.directive_id, `terminal_outcome_${terminalOutcome.outcome}`);
       skipped.push({
@@ -139,11 +139,11 @@ export async function dispatchPendingDirectives({
       });
       continue;
     }
-    const activeCarrierSessionId = stringValue(
-      carrier.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath),
+    const activeCarrierSessionId: any = stringValue(
+      carrier?.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath),
       `${siteLoopConfig.resident_runtime.preferred_runtime}-control-jsonl`,
     );
-    const lease = {
+    const lease: any = {
       leaseId: leaseId(directive.directive_id, activeCarrierSessionId),
       leasedUntil: leaseExpiryIso(5),
       transport: inputTransport.transport,
@@ -153,8 +153,8 @@ export async function dispatchPendingDirectives({
       skipped.push({ directive_id: directive.directive_id, reason: 'dry_run' });
       continue;
     }
-    const attempt = store.leaseDelivery(directive.directive_id, lease);
-    const frame = {
+    const attempt: any = store.leaseDelivery(directive.directive_id, lease);
+    const frame: any = {
       id: `directive-${directive.directive_id}`,
       method: 'system_directive.deliver',
       params: {
@@ -172,7 +172,7 @@ export async function dispatchPendingDirectives({
       } else {
         throw new Error('resident_input_target_missing');
       }
-    } catch (error) {
+    } catch (error: any) {
       failDirectiveDelivery(store, directive.directive_id, inputTransport.kind === 'event_websocket' ? 'event_websocket_send_failed' : 'control_jsonl_append_failed');
       skipped.push({
         directive_id: directive.directive_id,
@@ -219,8 +219,8 @@ export async function dispatchPendingDirectives({
  * may not expose writable child stdin behind it. Prefer the durable control
  * sideband whenever it exists; use WebSocket input only as a fallback.
  */
-export function selectResidentInputTransport({ controlPath = null, eventEndpoint = null } = {}) {
-  const normalizedControlPath = typeof controlPath === 'string' && controlPath.trim() ? controlPath : null;
+export function selectResidentInputTransport({ controlPath = null, eventEndpoint = null } : any= {}) {
+  const normalizedControlPath: any = typeof controlPath === 'string' && controlPath.trim() ? controlPath : null;
   if (normalizedControlPath) {
     return {
       kind: 'control_jsonl',
@@ -228,7 +228,7 @@ export function selectResidentInputTransport({ controlPath = null, eventEndpoint
       transport: 'agent_cli_control_jsonl',
     };
   }
-  const normalizedEventEndpoint = typeof eventEndpoint === 'string' && eventEndpoint.trim() ? eventEndpoint : null;
+  const normalizedEventEndpoint: any = typeof eventEndpoint === 'string' && eventEndpoint.trim() ? eventEndpoint : null;
   if (normalizedEventEndpoint) {
     return {
       kind: 'event_websocket',
@@ -243,11 +243,11 @@ export function selectResidentInputTransport({ controlPath = null, eventEndpoint
   };
 }
 
-function directiveDeliveryMessage(directive, options: DirectiveDispatchPayload = {}) {
-  const text = String(directive?.content?.text ?? '').trim();
-  const directiveId = String(directive?.directive_id ?? '').trim();
+function directiveDeliveryMessage(directive: any, options: DirectiveDispatchPayload = {}) {
+  const text: any = String(directive?.content?.text ?? '').trim();
+  const directiveId: any = String(directive?.directive_id ?? '').trim();
   if (!directiveId) return text;
-  const mailboxTicketGuidance = directiveLooksLikeMailboxTicketDraftWork(directive)
+  const mailboxTicketGuidance: any = directiveLooksLikeMailboxTicketDraftWork(directive)
     ? [
         'Mailbox ticket rule: do not create or send a mere confirmation or acknowledgement for stale customer mail.',
         'If the inbound message is from a prior local day or otherwise old, inspect the ticket evidence first and create only a substantive follow-up draft, or record why no customer draft is appropriate.',
@@ -269,8 +269,8 @@ function directiveDeliveryMessage(directive, options: DirectiveDispatchPayload =
   ].filter(Boolean).join('\n\n');
 }
 
-function directiveLooksLikeMailboxTicketDraftWork(directive) {
-  const haystack = [
+function directiveLooksLikeMailboxTicketDraftWork(directive: any) {
+  const haystack: any = [
     directive?.title,
     directive?.source_id,
     directive?.sourceId,
@@ -284,9 +284,9 @@ function directiveLooksLikeMailboxTicketDraftWork(directive) {
     || /\bmail:[a-z0-9._-]+\b/.test(haystack);
 }
 
-function dedupeDirectives(directives) {
-  const seen = new Set();
-  const deduped = [];
+function dedupeDirectives(directives: any) {
+  const seen: any = new Set();
+  const deduped: any[] = [];
   for (const directive of directives) {
     if (!directive?.directive_id || seen.has(directive.directive_id)) continue;
     seen.add(directive.directive_id);
@@ -295,10 +295,10 @@ function dedupeDirectives(directives) {
   return deduped;
 }
 
-function latestTerminalDirectiveOutcome(db, directiveId, loopId) {
+function latestTerminalDirectiveOutcome(db: any, directiveId: any, loopId: any) {
   if (typeof loopId !== 'string' || !loopId.trim()) throw new Error('site_loop_id_required');
   try {
-    const row = db.prepare(`
+    const row: any = db.prepare(`
       SELECT outcome
       FROM directive_outcome_latest
       WHERE loop_id = ?
@@ -315,7 +315,7 @@ function latestTerminalDirectiveOutcome(db, directiveId, loopId) {
 
 function commandLinePatternExpression(patterns: string[]) {
   return patterns
-    .map((pattern) => `$_.CommandLine -like '*${escapePowerShellSingleQuotedString(pattern)}*'`)
+    .map((pattern: any) => `$_.CommandLine -like '*${escapePowerShellSingleQuotedString(pattern)}*'`)
     .join(' -or ');
 }
 
@@ -323,30 +323,30 @@ function escapePowerShellSingleQuotedString(value: string) {
   return value.replace(/'/g, "''");
 }
 
-export function getResidentStatus(cwd, { agentId, requireLiveCarrier = true }: ResidentStatusOptions = {}) {
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
+export function getResidentStatus(cwd: any, { agentId, requireLiveCarrier = true }: ResidentStatusOptions = {}) {
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
   try {
-    const agentIdString = stringValue(agentId, siteLoopConfig.resident.agent_id);
-    const requireLiveCarrierBool = requireLiveCarrier !== false;
+    const agentIdString: any = stringValue(agentId, siteLoopConfig.resident.agent_id);
+    const requireLiveCarrierBool: any = requireLiveCarrier !== false;
     const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentIdString, { requireLiveCarrier: requireLiveCarrierBool }) as ResidentControlTarget | null;
-    const latestReceipt = latestResidentReceipt(lifecycleStore.db, agentIdString);
-    const latestReport = lifecycleStore.db.prepare(`
+    const latestReceipt: any = latestResidentReceipt(lifecycleStore.db, agentIdString);
+    const latestReport: any = lifecycleStore.db.prepare(`
       SELECT report_id, task_id, agent_id, submitted_at, summary
       FROM task_reports
       WHERE agent_id = ?
       ORDER BY submitted_at DESC
       LIMIT 1
     `).get(agentIdString) ?? null;
-    const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
-    const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
-    const policy = loadSiteLoopOperatingPolicy(cwd).policy;
-    const carrierState = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
-    const status = residentAvailabilityStatus(carrier, sessionState, carrierState);
-    const proofDriver = host?.started_event?.resident_proof_driver === true;
-    const activeRuntime = carrier?.status === 'available' ? carrier.runtime ?? null : null;
-    const terminalWorkInflight = detectTerminalWorkInflight(lifecycleStore.db, { sessionState, host, siteLoopConfig });
-    const runtimeCoherent = ['available_idle', 'busy'].includes(carrierState?.state)
+    const sessionState: any = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
+    const host: any = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
+    const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
+    const carrierState: any = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
+    const status: any = residentAvailabilityStatus(carrier, sessionState, carrierState);
+    const proofDriver: any = host?.started_event?.resident_proof_driver === true;
+    const activeRuntime: any = carrier?.status === 'available' ? carrier.runtime ?? null : null;
+    const terminalWorkInflight: any = detectTerminalWorkInflight(lifecycleStore.db, { sessionState, host, siteLoopConfig });
+    const runtimeCoherent: any = ['available_idle', 'busy'].includes(carrierState?.state)
       && terminalWorkInflight.status !== 'terminal_inflight';
     return {
       schema: schemaName(siteLoopConfig, 'resident_status'),
@@ -376,8 +376,8 @@ export function getResidentStatus(cwd, { agentId, requireLiveCarrier = true }: R
   }
 }
 
-function latestResidentReceipt(db, agentId) {
-  const table = db.prepare(`
+function latestResidentReceipt(db: any, agentId: any) {
+  const table: any = db.prepare(`
     SELECT name
     FROM sqlite_master
     WHERE type = 'table' AND name = 'directive_receipts'
@@ -392,7 +392,7 @@ function latestResidentReceipt(db, agentId) {
   `).get(agentId) ?? null;
 }
 
-function residentAvailabilityDetail(carrier) {
+function residentAvailabilityDetail(carrier: any) {
   if (carrier?.status === 'available') {
     return {
       state: 'live_carrier',
@@ -406,13 +406,13 @@ function residentAvailabilityDetail(carrier) {
     return {
       state: 'stale_launch_records_only',
       preferred_interactive_reason: carrier.preferred_interactive?.reason ?? null,
-      fallback_legacy_reasons: (carrier.fallback_legacy ?? []).map((entry) => entry.carrier?.reason ?? null),
+      fallback_legacy_reasons: (carrier.fallback_legacy ?? []).map((entry: any) => entry.carrier?.reason ?? null),
     };
   }
   return { state: carrier?.reason ?? 'unknown' };
 }
 
-function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState = {}, carrierState = null) {
+function residentAvailabilityStatus(carrier: any, sessionState: ResidentSessionState = {}, carrierState : any= null) {
   if (carrierState?.state === 'policy_stale') return 'blocked';
   if (carrierState?.state === 'stale_busy') return 'blocked';
   if (carrier?.status === 'available') {
@@ -432,39 +432,39 @@ function residentAvailabilityStatus(carrier, sessionState: ResidentSessionState 
   return 'blocked';
 }
 
-function detectTerminalWorkInflight(db, { sessionState = {}, host = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
-  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
-  const sessionStateRecord = asRecord(sessionState);
-  const hostRecord = asRecord(host);
+function detectTerminalWorkInflight(db: any, { sessionState = {}, host = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
+  const loopConfig: any = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
+  const sessionStateRecord: any = asRecord(sessionState);
+  const hostRecord: any = asRecord(host);
   if (sessionStateRecord.active_turn_state !== 'running') {
     return { status: 'none', directive_id: null, outcome: null };
   }
-  const directiveId = runningTurnDirectiveId(hostRecord, sessionStateRecord)
+  const directiveId: any = runningTurnDirectiveId(hostRecord, sessionStateRecord)
     ?? sameTurnDirectiveId(hostRecord.last_protocol_event, sessionStateRecord)
     ?? sameTurnDirectiveId(hostRecord.last_host_event, sessionStateRecord)
     ?? null;
   if (!directiveId) return { status: 'unknown_running_directive', directive_id: null, outcome: null };
-  const terminal = latestTerminalDirectiveOutcome(db, directiveId, loopConfig.loop_id);
+  const terminal: any = latestTerminalDirectiveOutcome(db, directiveId, loopConfig.loop_id);
   return terminal
     ? { status: 'terminal_inflight', directive_id: directiveId, outcome: terminal.outcome }
     : { status: 'nonterminal_inflight', directive_id: directiveId, outcome: null };
 }
 
-function runningTurnDirectiveId(host, sessionState) {
-  const turnId = sessionState.turn_id ?? null;
-  const paths = [host?.paths?.protocol_stdout, host?.paths?.host_log].filter(Boolean);
+function runningTurnDirectiveId(host: any, sessionState: any) {
+  const turnId: any = sessionState.turn_id ?? null;
+  const paths: any = [host?.paths?.protocol_stdout, host?.paths?.host_log].filter(Boolean);
   for (const path of paths) {
     if (!existsSync(path)) continue;
-    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-300).reverse();
+    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-300).reverse();
     for (const line of lines) {
-      let event;
+      let event: any;
       try {
         event = JSON.parse(line);
       } catch {
         continue;
       }
       if ((event.event ?? event.type) !== 'turn_started') continue;
-      const eventTurnId = event.turn_id ?? event.turnId ?? event.request_id ?? event.id ?? null;
+      const eventTurnId: any = event.turn_id ?? event.turnId ?? event.request_id ?? event.id ?? null;
       if (turnId && eventTurnId !== turnId) continue;
       return event.directive_id ?? directiveIdFromRequestId(event.request_id) ?? null;
     }
@@ -472,34 +472,34 @@ function runningTurnDirectiveId(host, sessionState) {
   return null;
 }
 
-function sameTurnDirectiveId(event, sessionState) {
+function sameTurnDirectiveId(event: any, sessionState: any) {
   if (!event) return null;
-  const turnId = sessionState?.turn_id ?? null;
+  const turnId: any = sessionState?.turn_id ?? null;
   if (turnId) {
-    const eventTurnId = event.turn_id ?? event.turnId ?? event.request_id ?? event.id ?? null;
+    const eventTurnId: any = event.turn_id ?? event.turnId ?? event.request_id ?? event.id ?? null;
     if (eventTurnId !== turnId) return null;
   }
   return event.directive_id ?? directiveIdFromRequestId(event.request_id) ?? null;
 }
 
-function directiveIdFromRequestId(requestId) {
-  const match = String(requestId ?? '').match(/directive-(dir_[A-Za-z0-9]+)/);
+function directiveIdFromRequestId(requestId: any) {
+  const match: any = String(requestId ?? '').match(/directive-(dir_[A-Za-z0-9]+)/);
   return match?.[1] ?? null;
 }
 
-function residentStaleCarrierCount(carrier) {
+function residentStaleCarrierCount(carrier: any) {
   if (!carrier) return 0;
   return Number(carrier.stale_candidate_count ?? 0)
     + Number(carrier.preferred_interactive?.stale_candidate_count ?? 0)
-    + (carrier.fallback_legacy ?? []).reduce((sum, entry) => sum + Number(entry.carrier?.stale_candidate_count ?? 0), 0);
+    + (carrier.fallback_legacy ?? []).reduce((sum: any, entry: any) => sum + Number(entry.carrier?.stale_candidate_count ?? 0), 0);
 }
 
 export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
-  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
-  const carrierStateSchema = schemaName(loopConfig, 'resident_carrier_state');
-  const carrierRecord = asRecord(carrier);
-  const sessionStateRecord = asRecord(sessionState);
-  const hostRecord = asRecord(host);
+  const loopConfig: any = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
+  const carrierStateSchema: any = schemaName(loopConfig, 'resident_carrier_state');
+  const carrierRecord: any = asRecord(carrier);
+  const sessionStateRecord: any = asRecord(sessionState);
+  const hostRecord: any = asRecord(host);
   if (!carrier || carrierRecord.status !== 'available') {
     return {
       schema: carrierStateSchema,
@@ -508,8 +508,8 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
       dispatch_skip_reason: carrierRecord.reason ?? 'no_live_resident_control_target',
     };
   }
-  const policyLoaded = asRecord(policy ?? loadSiteLoopOperatingPolicy(process.cwd()).policy);
-  const carrierPolicy = asRecord(policyLoaded.carrier);
+  const policyLoaded: any = asRecord(policy ?? loadSiteLoopOperatingPolicy(process.cwd()).policy);
+  const carrierPolicy: any = asRecord(policyLoaded.carrier);
   if (carrierPolicy.require_policy_current !== false && carrierPolicyStale(carrierRecord, hostRecord)) {
     return {
       schema: carrierStateSchema,
@@ -521,10 +521,10 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
     };
   }
   if (sessionStateRecord.active_turn_state === 'running') {
-    const startedAt = Date.parse(stringValue(sessionStateRecord.turn_started_at));
-    const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : null;
-    const timeoutMs = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
-    const stale = ageMs != null && ageMs > timeoutMs;
+    const startedAt: any = Date.parse(stringValue(sessionStateRecord.turn_started_at));
+    const ageMs: any = Number.isFinite(startedAt) ? Date.now() - startedAt : null;
+    const timeoutMs: any = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
+    const stale: any = ageMs != null && ageMs > timeoutMs;
     return {
       schema: carrierStateSchema,
       state: stale ? 'stale_busy' : 'busy',
@@ -546,48 +546,48 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
   };
 }
 
-function carrierPolicyStale(carrier, host) {
-  const siteRoot = host?.session_dir ? resolve(host.session_dir, '..', '..', '..', '..') : null;
-  const policyPath = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
+function carrierPolicyStale(carrier: any, host: any) {
+  const siteRoot: any = host?.session_dir ? resolve(host.session_dir, '..', '..', '..', '..') : null;
+  const policyPath: any = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
   if (!policyPath || !existsSync(policyPath)) return false;
-  const policyMtime = statSync(policyPath).mtimeMs;
-  const startedAt = Date.parse(host?.started_event?.timestamp ?? carrier?.startedAt ?? '');
+  const policyMtime: any = statSync(policyPath).mtimeMs;
+  const startedAt: any = Date.parse(host?.started_event?.timestamp ?? carrier?.startedAt ?? '');
   return Number.isFinite(startedAt) && startedAt < policyMtime;
 }
 
 function siteControlRoot(siteRoot: string): string {
-  const root = resolve(siteRoot);
+  const root: any = resolve(siteRoot);
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
-export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchPayload = {}) {
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const carrierSessionIds = new Set([
+export function reconcileCarrierReceipts(cwd: any, store: any, options: DirectiveDispatchPayload = {}) {
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const carrierSessionIds: any = new Set([
     ...activeLeaseCarrierSessionIds(store.db),
     ...(Array.isArray(options.carrierSessionIds) ? options.carrierSessionIds.map(String) : []),
   ]);
-  const sessionPaths = receiptSessionPaths(cwd, { sessionIds: [...carrierSessionIds] });
-  const recorded = [];
-  const carrierAccepted = [];
-  const skipped = [];
+  const sessionPaths: any = receiptSessionPaths(cwd, { sessionIds: [...carrierSessionIds] });
+  const recorded: any[] = [];
+  const carrierAccepted: any[] = [];
+  const skipped: any[] = [];
   if (sessionPaths.length === 0) {
     return { status: 'ok', scanned: 0, scanned_bytes: 0, events_scanned: 0, recorded: [], carrier_accepted: [], skipped: [], reason: carrierSessionIds.size === 0 ? 'no_targeted_session_ids' : 'targeted_session_paths_missing' };
   }
-  const events = [];
-  const scans = [];
+  const events: any[] = [];
+  const scans: any[] = [];
   ensureReceiptScanCursorTable(store.db);
   for (const sessionPath of sessionPaths) {
-    const scan = readReceiptEventsIncrementally(store.db, sessionPath);
+    const scan: any = readReceiptEventsIncrementally(store.db, sessionPath);
     scans.push(scan);
     for (const event of scan.events) events.push({ event, sessionPath });
   }
-  for (const { event, sessionPath } of events.filter((item) => item.event.event === 'directive_receipt_recorded')) {
-      const directive = store.getDirective(event.directive_id);
+  for (const { event, sessionPath } of events.filter((item: any) => item.event.event === 'directive_receipt_recorded')) {
+      const directive: any = store.getDirective(event.directive_id);
       if (!directive) {
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
+      const validation: any = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -596,7 +596,7 @@ export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchP
         skipped.push({ directive_id: event.directive_id, reason: 'receipt_already_recorded', receipt_id: directive.delivery.receipt_id });
         continue;
       }
-      const receipt = store.recordReceipt(event.directive_id, {
+      const receipt: any = store.recordReceipt(event.directive_id, {
         received_at: event.received_at ?? event.timestamp ?? new Date().toISOString(),
         carrier_session_id: event.carrier_session_id ?? carrierSessionIdFromSessionPath(sessionPath) ?? `${siteLoopConfig.resident_runtime.preferred_runtime}-session`,
         agent_id: event.agent_id ?? siteLoopConfig.resident.agent_id,
@@ -604,13 +604,13 @@ export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchP
       });
       recorded.push({ directive_id: event.directive_id, receipt_id: receipt.receipt_id, session_path: sessionPath });
   }
-  for (const { event, sessionPath } of events.filter((item) => ['directive_accepted_recorded', 'directive_carrier_accepted_recorded'].includes(item.event.event))) {
-      const directive = store.getDirective(event.directive_id);
+  for (const { event, sessionPath } of events.filter((item: any) => ['directive_accepted_recorded', 'directive_carrier_accepted_recorded'].includes(item.event.event))) {
+      const directive: any = store.getDirective(event.directive_id);
       if (!directive) {
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
+      const validation: any = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -619,7 +619,7 @@ export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchP
         skipped.push({ directive_id: event.directive_id, reason: 'receipt_required_before_carrier_acceptance', session_path: sessionPath });
         continue;
       }
-      const triage = store.recordTriage(event.directive_id, {
+      const triage: any = store.recordTriage(event.directive_id, {
         triaged_at: event.accepted_at ?? event.timestamp ?? new Date().toISOString(),
         agent_id: event.agent_id ?? siteLoopConfig.resident.agent_id,
         status: 'carrier_accepted',
@@ -632,8 +632,8 @@ export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchP
   return {
     status: 'ok',
     scanned: sessionPaths.length,
-    scanned_bytes: scans.reduce((total, scan) => total + scan.bytes_read, 0),
-    events_scanned: scans.reduce((total, scan) => total + scan.events.length, 0),
+    scanned_bytes: scans.reduce((total: any, scan: any) => total + scan.bytes_read, 0),
+    events_scanned: scans.reduce((total: any, scan: any) => total + scan.events.length, 0),
     targeted_session_ids: [...carrierSessionIds],
     recorded,
     carrier_accepted: carrierAccepted,
@@ -641,50 +641,50 @@ export function reconcileCarrierReceipts(cwd, store, options: DirectiveDispatchP
   };
 }
 
-function validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig: SiteLoopConfig) {
-  const sessionCarrierId = carrierSessionIdFromSessionPath(sessionPath);
-  const eventCarrierId = event.carrier_session_id ? String(event.carrier_session_id) : null;
-  const leasedCarrierId = directive.delivery?.carrier_session_id ? String(directive.delivery.carrier_session_id) : null;
+function validateCarrierEventForDirective(directive: any, event: any, sessionPath: any, siteLoopConfig: SiteLoopConfig) {
+  const sessionCarrierId: any = carrierSessionIdFromSessionPath(sessionPath);
+  const eventCarrierId: any = event.carrier_session_id ? String(event.carrier_session_id) : null;
+  const leasedCarrierId: any = directive.delivery?.carrier_session_id ? String(directive.delivery.carrier_session_id) : null;
   if (eventCarrierId && sessionCarrierId && eventCarrierId !== sessionCarrierId) {
     return { status: 'skipped', reason: 'carrier_session_mismatch_session_path' };
   }
   if (eventCarrierId && leasedCarrierId && eventCarrierId !== leasedCarrierId) {
     return { status: 'skipped', reason: 'carrier_session_mismatch_delivery_lease' };
   }
-  const agentId = event.agent_id ? String(event.agent_id) : siteLoopConfig.resident.agent_id;
-  const target = directive.target ?? {};
+  const agentId: any = event.agent_id ? String(event.agent_id) : siteLoopConfig.resident.agent_id;
+  const target: any = directive.target ?? {};
   if (target.kind === 'agent' && target.id && String(target.id) !== agentId) {
     return { status: 'skipped', reason: 'agent_mismatch_directive_target' };
   }
   if (target.kind === 'role' && target.id === siteLoopConfig.resident.role && agentId !== siteLoopConfig.resident.agent_id) {
     return { status: 'skipped', reason: 'agent_mismatch_resident_role' };
   }
-  const transport = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
+  const transport: any = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
   if (!['agent_cli_control_jsonl', 'agent_runtime_event_websocket', 'control_jsonl', 'jsonl_stdio'].includes(transport)) {
     return { status: 'skipped', reason: 'unsupported_carrier_event_transport' };
   }
   return { status: 'ok' };
 }
 
-function directiveTaskRef(directive) {
-  const taskId = (directive?.content?.refs ?? []).find((ref) => ref.kind === 'task')?.id
+function directiveTaskRef(directive: any) {
+  const taskId: any = (directive?.content?.refs ?? []).find((ref: any) => ref.kind === 'task')?.id
     ?? directive?.content?.data?.task_id
     ?? null;
   return taskId ? { kind: 'task', id: taskId } : null;
 }
 
-export function recoverExpiredLeases(store, now = new Date().toISOString()) {
-  const recovered = [];
-  const rows = store.db.prepare(`
+export function recoverExpiredLeases(store: any, now : any= new Date().toISOString()) {
+  const recovered: any[] = [];
+  const rows: any = store.db.prepare(`
     select directive_id, directive_json
     from directive_records
     where delivery_status = 'leased'
   `).all();
   for (const row of rows) {
-    const directive = JSON.parse(row.directive_json);
-    const leasedUntil = directive.delivery?.leased_until;
+    const directive: any = JSON.parse(row.directive_json);
+    const leasedUntil: any = directive.delivery?.leased_until;
     if (!leasedUntil || leasedUntil > now || directive.delivery?.receipt_id) continue;
-    const recoveredDirective = {
+    const recoveredDirective: any = {
       ...directive,
       delivery: {
         ...(directive.delivery ?? {}),
@@ -699,13 +699,13 @@ export function recoverExpiredLeases(store, now = new Date().toISOString()) {
   return { status: 'ok', recovered };
 }
 
-export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarrier = true } = {}) {
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const runtimeConfig = siteLoopConfig.resident_runtime;
-  const policy = loadSiteLoopOperatingPolicy(cwd).policy;
-  const interactive = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.preferred_runtime, { requireLiveCarrier });
+export function findLatestResidentControlTarget(cwd: any, agentId: any, { requireLiveCarrier = true } : any= {}) {
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const runtimeConfig: any = siteLoopConfig.resident_runtime;
+  const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
+  const interactive: any = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.preferred_runtime, { requireLiveCarrier });
   if (interactive.status === 'available') {
-    const preferred = { ...interactive, preference: runtimeConfig.preferred_preference };
+    const preferred: any = { ...interactive, preference: runtimeConfig.preferred_preference };
     if (residentControlTargetSelectable(cwd, preferred, policy, siteLoopConfig)) return preferred;
     (interactive as DirectiveDispatchPayload).selection_block = 'preferred_carrier_policy_stale';
   }
@@ -717,18 +717,18 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
       preferred_interactive: interactive,
     };
   }
-  const fallbackRuntimes = fallbackRuntimeCandidates(runtimeConfig);
+  const fallbackRuntimes: any = fallbackRuntimeCandidates(runtimeConfig);
   const [fallbackRuntime, ...legacyFallbackRuntimes] = fallbackRuntimes;
-  const agentRuntimeServer = findLatestControlTargetByRuntime(cwd, agentId, fallbackRuntime, { requireLiveCarrier });
+  const agentRuntimeServer: any = findLatestControlTargetByRuntime(cwd, agentId, fallbackRuntime, { requireLiveCarrier });
   if (agentRuntimeServer.status === 'available') return { ...agentRuntimeServer, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive };
-  const legacyFallbacks = legacyFallbackRuntimes.map((runtime) => ({
+  const legacyFallbacks: any = legacyFallbackRuntimes.map((runtime: any) => ({
     runtime,
     carrier: findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier }),
   }));
-  const availableLegacy = legacyFallbacks.find((item) => item.carrier.status === 'available');
+  const availableLegacy: any = legacyFallbacks.find((item: any) => item.carrier.status === 'available');
   if (availableLegacy) return { ...availableLegacy.carrier, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive, legacy_runtime: availableLegacy.runtime };
-  const allFallbacksMissing = [interactive, agentRuntimeServer, ...legacyFallbacks.map((item) => item.carrier)]
-    .every((carrier) => carrier.reason === noLaunchResultReason(String(carrier.runtime ?? '')));
+  const allFallbacksMissing: any = [interactive, agentRuntimeServer, ...legacyFallbacks.map((item: any) => item.carrier)]
+    .every((carrier: any) => carrier.reason === noLaunchResultReason(String(carrier.runtime ?? '')));
   return {
     status: 'unavailable',
     controlPath: null,
@@ -741,18 +741,18 @@ export function findLatestResidentControlTarget(cwd, agentId, { requireLiveCarri
   };
 }
 
-function fallbackRuntimeCandidates(runtimeConfig) {
+function fallbackRuntimeCandidates(runtimeConfig: any) {
   return [
     runtimeConfig.fallback_runtime,
     'narada-agent-runtime-server',
     ...runtimeConfig.legacy_fallback_runtimes,
-  ].filter((runtime, index, runtimes) => typeof runtime === 'string' && runtime.length > 0 && runtimes.indexOf(runtime) === index);
+  ].filter((runtime: any, index: any, runtimes: any) => typeof runtime === 'string' && runtime.length > 0 && runtimes.indexOf(runtime) === index);
 }
 
-function residentControlTargetSelectable(cwd, carrier, policy, siteLoopConfig: SiteLoopConfig) {
-  const sessionState = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
-  const host = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
-  const state = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
+function residentControlTargetSelectable(cwd: any, carrier: any, policy: any, siteLoopConfig: SiteLoopConfig) {
+  const sessionState: any = carrier?.carrierSessionId ? inferAgentCliSessionState(cwd, carrier.carrierSessionId) : { active_turn_state: 'unknown' };
+  const host: any = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
+  const state: any = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
   return state.state !== 'policy_stale';
 }
 
@@ -760,36 +760,36 @@ function noLaunchResultReason(runtime: string) {
   return `no_${runtime.replace(/[^a-z0-9]+/gi, '_')}_launch_result`;
 }
 
-export function findLatestAgentCliControlTarget(cwd, agentId, { requireLiveCarrier = true } = {}) {
+export function findLatestAgentCliControlTarget(cwd: any, agentId: any, { requireLiveCarrier = true } : any= {}) {
   return findLatestControlTargetByRuntime(cwd, agentId, requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime, { requireLiveCarrier });
 }
 
-function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCarrier = true, maxLivenessCandidates = 5, max_liveness_candidates }: RuntimeControlTargetOptions = {}) {
-  const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
+function findLatestControlTargetByRuntime(cwd: any, agentId: any, runtime: any, { requireLiveCarrier = true, maxLivenessCandidates = 5, max_liveness_candidates }: RuntimeControlTargetOptions = {}) {
+  const resultsDir: any = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing', runtime };
-  const maxCandidates = Math.max(1, Number(max_liveness_candidates ?? maxLivenessCandidates ?? 5));
-  const allCandidates: ResidentControlTarget[] = readdirSync(resultsDir)
-    .filter((name) => name.endsWith('.result.json'))
-    .map((name) => {
+  const maxCandidates: any = Math.max(1, Number(max_liveness_candidates ?? maxLivenessCandidates ?? 5));
+  const allCandidates: any[] = readdirSync(resultsDir)
+    .filter((name: any) => name.endsWith('.result.json'))
+    .map((name: any) => {
       try {
-        const path = join(resultsDir, name);
-        const packet = JSON.parse(readFileSync(path, 'utf8'));
-        const controlFlagIndex = Array.isArray(packet.runtime_args) ? packet.runtime_args.indexOf('--control-jsonl') : -1;
-        const controlPath = (controlFlagIndex >= 0 ? packet.runtime_args[controlFlagIndex + 1] : null)
+        const path: any = join(resultsDir, name);
+        const packet: any = JSON.parse(readFileSync(path, 'utf8'));
+        const controlFlagIndex: any = Array.isArray(packet.runtime_args) ? packet.runtime_args.indexOf('--control-jsonl') : -1;
+        const controlPath: any = (controlFlagIndex >= 0 ? packet.runtime_args[controlFlagIndex + 1] : null)
           ?? packet.resident_launch?.control_path
           ?? packet.nars_launch?.control_path
           ?? packet.agent_runtime_server_launch?.control_path
           ?? packet.agent_cli_launch?.control_path
           ?? packet.control_path
           ?? null;
-        const carrierSessionId = packet.carrier_session?.carrier_session_id
+        const carrierSessionId: any = packet.carrier_session?.carrier_session_id
           ?? packet.carrier_session_id
           ?? carrierSessionIdFromControlPath(controlPath);
-        const sessionIndex = carrierSessionId ? readResidentSessionIndex(cwd, carrierSessionId) : null;
-        const eventEndpoint = sessionIndex?.event_endpoint ?? packet.event_endpoint ?? packet.websocket_endpoint ?? null;
-        const healthEndpoint = sessionIndex?.health_endpoint ?? packet.health_endpoint ?? null;
-        const packetRuntime = typeof packet.runtime === 'string' ? packet.runtime : null;
-        const configuredRuntime = typeof packet.configured_runtime === 'string' ? packet.configured_runtime : null;
+        const sessionIndex: any = carrierSessionId ? readResidentSessionIndex(cwd, carrierSessionId) : null;
+        const eventEndpoint: any = sessionIndex?.event_endpoint ?? packet.event_endpoint ?? packet.websocket_endpoint ?? null;
+        const healthEndpoint: any = sessionIndex?.health_endpoint ?? packet.health_endpoint ?? null;
+        const packetRuntime: any = typeof packet.runtime === 'string' ? packet.runtime : null;
+        const configuredRuntime: any = typeof packet.configured_runtime === 'string' ? packet.configured_runtime : null;
         return packet.identity === agentId && (packetRuntime === runtime || configuredRuntime === runtime) && (controlPath || eventEndpoint)
           ? { path, controlPath, eventEndpoint, healthEndpoint, carrierSessionId, runtime, actual_runtime: packetRuntime, configured_runtime: configuredRuntime, startedAt: packet.started_at ?? packet.agent_start_event ?? name }
           : null;
@@ -798,20 +798,20 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
       }
     })
     .filter(Boolean)
-    .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
-  const candidates = allCandidates.slice(0, maxCandidates);
-  const uninspectedCandidateCount = Math.max(0, allCandidates.length - candidates.length);
+    .sort((a: any, b: any) => String(b.startedAt).localeCompare(String(a.startedAt)));
+  const candidates: any = allCandidates.slice(0, maxCandidates);
+  const uninspectedCandidateCount: any = Math.max(0, allCandidates.length - candidates.length);
   for (const candidate of candidates) {
-    const retirement = readCarrierRetirement(cwd, candidate.carrierSessionId);
+    const retirement: any = readCarrierRetirement(cwd, candidate.carrierSessionId);
     if (retirement) {
       candidate.retired = retirement;
       continue;
     }
-    const live = requireLiveCarrier ? isResidentCarrierLive(candidate.carrierSessionId, cwd) : { status: 'skipped', live: true };
+    const live: any = requireLiveCarrier ? isResidentCarrierLive(candidate.carrierSessionId, cwd) : { status: 'skipped', live: true };
     if (!live.live) continue;
     return { status: 'available', ...candidate, live };
   }
-  const activeStaleCandidates = candidates.filter((candidate) => !candidate.retired);
+  const activeStaleCandidates: any = candidates.filter((candidate: any) => !candidate.retired);
   return {
     status: 'unavailable',
     controlPath: null,
@@ -821,7 +821,7 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
     retired_candidate_count: candidates.length - activeStaleCandidates.length,
     uninspected_candidate_count: uninspectedCandidateCount,
     total_candidate_count: allCandidates.length,
-    stale_candidates: activeStaleCandidates.map((candidate) => ({
+    stale_candidates: activeStaleCandidates.map((candidate: any) => ({
       path: candidate.path,
       controlPath: candidate.controlPath,
       eventEndpoint: candidate.eventEndpoint,
@@ -832,18 +832,18 @@ function findLatestControlTargetByRuntime(cwd, agentId, runtime, { requireLiveCa
   };
 }
 
-function readResidentSessionIndex(cwd, carrierSessionId) {
+function readResidentSessionIndex(cwd: any, carrierSessionId: any) {
   if (!carrierSessionId) return null;
   return readJsonIfExists(join(configuredSessionRoot(cwd), carrierSessionId, 'session-index-record.json'));
 }
 
-async function sendWebSocketJsonFrame(endpoint, frame, timeoutMs = 5000) {
-  const url = new URL(String(endpoint));
+async function sendWebSocketJsonFrame(endpoint: any, frame: any, timeoutMs : any= 5000) {
+  const url: any = new URL(String(endpoint));
   if (url.protocol !== 'ws:') throw new Error(`unsupported_websocket_protocol:${url.protocol}`);
-  const port = Number(url.port || 80);
-  const path = `${url.pathname || '/'}${url.search || ''}`;
-  const key = randomBytes(16).toString('base64');
-  const request = [
+  const port: any = Number(url.port || 80);
+  const path: any = `${url.pathname || '/'}${url.search || ''}`;
+  const key: any = randomBytes(16).toString('base64');
+  const request: any = [
     `GET ${path} HTTP/1.1`,
     `Host: ${url.hostname}:${port}`,
     'Upgrade: websocket',
@@ -851,18 +851,17 @@ async function sendWebSocketJsonFrame(endpoint, frame, timeoutMs = 5000) {
     `Sec-WebSocket-Key: ${key}`,
     'Sec-WebSocket-Version: 13',
     '',
-    '',
   ].join('\r\n');
-  const expectedAccept = createHash('sha1')
+  const expectedAccept: any = createHash('sha1')
     .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
     .digest('base64');
-  const payload = JSON.stringify(frame);
-  const encoded = encodeClientWebSocketTextFrame(payload);
-  return await new Promise((resolvePromise, reject) => {
-    const socket = new Socket();
-    let settled = false;
-    let buffer = Buffer.alloc(0);
-    const settle = (error = null) => {
+  const payload: any = JSON.stringify(frame);
+  const encoded: any = encodeClientWebSocketTextFrame(payload);
+  return await new Promise((resolvePromise: any, reject: any) => {
+    const socket: any = new Socket();
+    let settled: any = false;
+    let buffer: any = Buffer.alloc(0);
+    const settle: any = (error : any= null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -870,15 +869,15 @@ async function sendWebSocketJsonFrame(endpoint, frame, timeoutMs = 5000) {
       if (error) reject(error);
       else resolvePromise({ status: 'sent', endpoint, bytes: Buffer.byteLength(payload) });
     };
-    const timer = setTimeout(() => settle(new Error('websocket_send_timeout')), timeoutMs);
+    const timer: any = setTimeout(() => settle(new Error('websocket_send_timeout')), timeoutMs);
     socket.once('error', settle);
     socket.connect(port, url.hostname, () => socket.write(request));
-    socket.on('data', (chunk) => {
+    socket.on('data', (chunk: any) => {
       buffer = Buffer.concat([buffer, chunk]);
-      const text = buffer.toString('utf8');
-      const headerEnd = text.indexOf('\r\n\r\n');
+      const text: any = buffer.toString('utf8');
+      const headerEnd: any = text.indexOf('\r\n\r\n');
       if (headerEnd === -1) return;
-      const header = text.slice(0, headerEnd);
+      const header: any = text.slice(0, headerEnd);
       if (!/^HTTP\/1\.1 101\b/.test(header)) {
         settle(new Error(`websocket_handshake_failed:${header.split(/\r?\n/)[0] ?? 'unknown'}`));
         return;
@@ -887,15 +886,15 @@ async function sendWebSocketJsonFrame(endpoint, frame, timeoutMs = 5000) {
         settle(new Error('websocket_accept_mismatch'));
         return;
       }
-      socket.write(encoded, (error) => settle(error ?? null));
+      socket.write(encoded, (error: any) => settle(error ?? null));
     });
   });
 }
 
-function encodeClientWebSocketTextFrame(text) {
-  const body = Buffer.from(text, 'utf8');
-  const mask = randomBytes(4);
-  let header;
+function encodeClientWebSocketTextFrame(text: any) {
+  const body: any = Buffer.from(text, 'utf8');
+  const mask: any = randomBytes(4);
+  let header: any;
   if (body.length < 126) {
     header = Buffer.from([0x81, 0x80 | body.length]);
   } else if (body.length < 65536) {
@@ -909,13 +908,13 @@ function encodeClientWebSocketTextFrame(text) {
     header[1] = 0x80 | 127;
     header.writeBigUInt64BE(BigInt(body.length), 2);
   }
-  const masked = Buffer.alloc(body.length);
-  for (let index = 0; index < body.length; index += 1) masked[index] = body[index] ^ mask[index % 4];
+  const masked: any = Buffer.alloc(body.length);
+  for (let index: any = 0; index < body.length; index += 1) masked[index] = body[index] ^ mask[index % 4];
   return Buffer.concat([header, mask, masked]);
 }
-function readCarrierRetirement(cwd, carrierSessionId) {
+function readCarrierRetirement(cwd: any, carrierSessionId: any) {
   if (!carrierSessionId) return null;
-  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
+  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
   if (!existsSync(path)) return null;
   try {
     return { path, ...JSON.parse(readFileSync(path, 'utf8')) };
@@ -924,24 +923,24 @@ function readCarrierRetirement(cwd, carrierSessionId) {
   }
 }
 
-function appendControlFrame(controlPath, frame) {
+function appendControlFrame(controlPath: any, frame: any) {
   mkdirSync(dirname(controlPath), { recursive: true });
   appendFileSync(controlPath, `${JSON.stringify(frame)}\n`, 'utf8');
 }
 
-function carrierSessionIdFromControlPath(controlPath) {
-  const match = String(controlPath).match(/[\\/]([^\\/]+)[\\/]control\.jsonl$/);
+function carrierSessionIdFromControlPath(controlPath: any) {
+  const match: any = String(controlPath).match(/[\\/]([^\\/]+)[\\/]control\.jsonl$/);
   return match?.[1] ?? null;
 }
 
-function carrierSessionIdFromSessionPath(sessionPath) {
-  const siteLocal = String(sessionPath).match(/[\\/]([^\\/]+)[\\/](?:session|events)\.jsonl$/);
+function carrierSessionIdFromSessionPath(sessionPath: any) {
+  const siteLocal: any = String(sessionPath).match(/[\\/]([^\\/]+)[\\/](?:session|events)\.jsonl$/);
   if (siteLocal) return siteLocal[1];
-  const pcRuntime = String(sessionPath).match(/[\\/]([^\\/]+)\.jsonl$/);
+  const pcRuntime: any = String(sessionPath).match(/[\\/]([^\\/]+)\.jsonl$/);
   return pcRuntime?.[1] ?? null;
 }
 
-function activeLeaseCarrierSessionIds(db, now = new Date().toISOString()) {
+function activeLeaseCarrierSessionIds(db: any, now : any= new Date().toISOString()) {
   try {
     return db.prepare(`
       SELECT DISTINCT carrier_session_id
@@ -949,17 +948,17 @@ function activeLeaseCarrierSessionIds(db, now = new Date().toISOString()) {
       WHERE status = 'leased'
         AND carrier_session_id IS NOT NULL
         AND (leased_until IS NULL OR leased_until > ?)
-    `).all(now).map((row) => String(row.carrier_session_id)).filter(Boolean);
+    `).all(now).map((row: any) => String(row.carrier_session_id)).filter(Boolean);
   } catch {
     return [];
   }
 }
 
-function receiptSessionPaths(cwd, { sessionIds = [] } = {}) {
-  const paths = [];
-  const ids = [...new Set(sessionIds.map(String).filter(Boolean))];
+function receiptSessionPaths(cwd: any, { sessionIds = [] } : any= {}) {
+  const paths: any[] = [];
+  const ids: any = [...new Set(sessionIds.map(String).filter(Boolean))];
   if (ids.length === 0) return paths;
-  const siteSessionRoot = configuredSessionRoot(cwd);
+  const siteSessionRoot: any = configuredSessionRoot(cwd);
   if (existsSync(siteSessionRoot)) {
     for (const sessionId of ids) {
       paths.push(join(siteSessionRoot, sessionId, 'session.jsonl'));
@@ -972,10 +971,10 @@ function receiptSessionPaths(cwd, { sessionIds = [] } = {}) {
       paths.push(join(externalSessionRoot, `${sessionId}.jsonl`));
     }
   }
-  return [...new Set(paths)].filter((path) => existsSync(path));
+  return [...new Set(paths)].filter((path: any) => existsSync(path));
 }
 
-function ensureReceiptScanCursorTable(db) {
+function ensureReceiptScanCursorTable(db: any) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS site_loop_receipt_scan_cursors (
       session_path TEXT PRIMARY KEY,
@@ -985,37 +984,37 @@ function ensureReceiptScanCursorTable(db) {
   `);
 }
 
-function readReceiptEventsIncrementally(db, path) {
-  const size = statSync(path).size;
-  const cursor = db.prepare(`
+function readReceiptEventsIncrementally(db: any, path: any) {
+  const size: any = statSync(path).size;
+  const cursor: any = db.prepare(`
     SELECT byte_offset
     FROM site_loop_receipt_scan_cursors
     WHERE session_path = ?
   `).get(path);
-  const startOffset = Math.min(Math.max(0, Number(cursor?.byte_offset ?? 0)), size);
-  const fd = openSync(path, 'r');
-  const events = [];
-  const chunkSize = 64 * 1024;
-  let readPosition = startOffset;
-  let pending = Buffer.alloc(0);
-  let pendingStartOffset = startOffset;
+  const startOffset: any = Math.min(Math.max(0, Number(cursor?.byte_offset ?? 0)), size);
+  const fd: any = openSync(path, 'r');
+  const events: any[] = [];
+  const chunkSize: any = 64 * 1024;
+  let readPosition: any = startOffset;
+  let pending: any = Buffer.alloc(0);
+  let pendingStartOffset: any = startOffset;
   try {
     while (readPosition < size) {
-      const buffer = Buffer.alloc(Math.min(chunkSize, size - readPosition));
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, readPosition);
+      const buffer: any = Buffer.alloc(Math.min(chunkSize, size - readPosition));
+      const bytesRead: any = readSync(fd, buffer, 0, buffer.length, readPosition);
       if (bytesRead <= 0) break;
       readPosition += bytesRead;
       pending = pending.length === 0
         ? buffer.subarray(0, bytesRead)
         : Buffer.concat([pending, buffer.subarray(0, bytesRead)]);
-      let newlineIndex = pending.indexOf(0x0a);
+      let newlineIndex: any = pending.indexOf(0x0a);
       while (newlineIndex >= 0) {
-        const line = pending.subarray(0, newlineIndex);
+        const line: any = pending.subarray(0, newlineIndex);
         pending = pending.subarray(newlineIndex + 1);
         pendingStartOffset += newlineIndex + 1;
         if (line.length > 0) {
           try {
-            const event = JSON.parse(line.toString('utf8'));
+            const event: any = JSON.parse(line.toString('utf8'));
             if (['directive_receipt_recorded', 'directive_accepted_recorded', 'directive_carrier_accepted_recorded'].includes(event.event) && event.directive_id) {
               events.push(event);
             }
@@ -1038,7 +1037,7 @@ function readReceiptEventsIncrementally(db, path) {
   };
 }
 
-function persistReceiptScanCursor(db, path, byteOffset) {
+function persistReceiptScanCursor(db: any, path: any, byteOffset: any) {
   db.prepare(`
     INSERT INTO site_loop_receipt_scan_cursors (session_path, byte_offset, updated_at)
     VALUES (?, ?, ?)
@@ -1046,16 +1045,16 @@ function persistReceiptScanCursor(db, path, byteOffset) {
   `).run(path, byteOffset, new Date().toISOString());
 }
 
-function agentCliCarrierSessionIds(cwd) {
-  const preferredRuntime = requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime;
-  const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
+function agentCliCarrierSessionIds(cwd: any) {
+  const preferredRuntime: any = requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime;
+  const resultsDir: any = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return [];
-  const ids = new Set();
-  for (const name of readdirSync(resultsDir).filter((entry) => entry.endsWith('.result.json'))) {
+  const ids: any = new Set();
+  for (const name of readdirSync(resultsDir).filter((entry: any) => entry.endsWith('.result.json'))) {
     try {
-      const packet = JSON.parse(readFileSync(join(resultsDir, name), 'utf8'));
+      const packet: any = JSON.parse(readFileSync(join(resultsDir, name), 'utf8'));
       if (packet.runtime !== preferredRuntime) continue;
-      const id = packet.carrier_session?.carrier_session_id
+      const id: any = packet.carrier_session?.carrier_session_id
         ?? packet.carrier_session_id
         ?? packet.required_environment?.NARADA_CARRIER_SESSION_ID
         ?? null;
@@ -1067,10 +1066,10 @@ function agentCliCarrierSessionIds(cwd) {
   return [...ids];
 }
 
-function failDirectiveDelivery(store, directiveId, reason) {
-  const directive = store.getDirective(directiveId);
+function failDirectiveDelivery(store: any, directiveId: any, reason: any) {
+  const directive: any = store.getDirective(directiveId);
   if (!directive) return null;
-  const failed = {
+  const failed: any = {
     ...directive,
     delivery: {
       ...(directive.delivery ?? {}),
@@ -1083,31 +1082,12 @@ function failDirectiveDelivery(store, directiveId, reason) {
   return failed;
 }
 
-export function isResidentCarrierLive(carrierSessionId, cwd) {
+export function isResidentCarrierLive(carrierSessionId: any, cwd: any) {
   if (!carrierSessionId) return { status: 'unavailable', live: false, reason: 'carrier_session_id_missing' };
   if (!cwd) return { status: 'unavailable', live: false, reason: 'site_root_required_for_carrier_liveness' };
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
-  const heartbeat = readCarrierHeartbeat(cwd, carrierSessionId);
-  if (heartbeat.live) {
-    const operational = readResidentCarrierOperationalEvidence(cwd, carrierSessionId);
-    if (operational.usable === false) {
-      return {
-        status: 'degraded',
-        live: false,
-        reason: operational.reason,
-        heartbeat,
-        operational,
-      };
-    }
-    return {
-      status: 'ok',
-      live: true,
-      reason: 'fresh_carrier_heartbeat',
-      heartbeat,
-      operational,
-    };
-  }
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const processPatternExpression: any = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
+  const heartbeat: any = readCarrierHeartbeat(cwd, carrierSessionId);
   if (heartbeat.status === 'stopped') {
     return {
       status: 'stale',
@@ -1116,32 +1096,59 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
       heartbeat,
     };
   }
-  const sessionReadiness = readCarrierSessionReadiness(
+  const sessionReadiness: any = readCarrierSessionReadiness(
     join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl'),
     carrierSessionId,
   );
   try {
-    const output = execFileSync('powershell.exe', [
+    const output: any = execFileSync('powershell.exe', [
       '-NoProfile',
       '-Command',
-      `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $p = Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (${processPatternExpression}) -and $_.CommandLine.Contains($needle) } | Select-Object -First 1 -ExpandProperty ProcessId; if ($p) { $p }`,
+      `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $p = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (${processPatternExpression}) -and $_.CommandLine.Contains($needle) } | Select-Object -ExpandProperty ProcessId); if ($p) { $p -join ',' }`,
     ], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 5000,
       env: { ...process.env, NARADA_RESIDENT_CARRIER_PROBE_ID: String(carrierSessionId) },
     }).trim();
-    const classification = classifyResidentCarrierLiveness({
+    const processIds: any = output.split(',').map((value: any) => Number(value.trim())).filter((value: any) => Number.isInteger(value) && value > 0);
+    const processCount: any = processIds.length;
+    if (heartbeat.live) {
+      const operational: any = readResidentCarrierOperationalEvidence(cwd, carrierSessionId);
+      if (operational.usable === false) {
+        return {
+          status: 'degraded',
+          live: false,
+          reason: operational.reason,
+          heartbeat,
+          operational,
+          process_count: processCount,
+          process_ids: processIds,
+        };
+      }
+      return {
+        status: 'ok',
+        live: true,
+        reason: 'fresh_carrier_heartbeat',
+        heartbeat,
+        operational,
+        process_count: processCount,
+        process_ids: processIds,
+        pid: Number(heartbeat.record?.pid) || processIds[0] || null,
+      };
+    }
+    const classification: any = classifyResidentCarrierLiveness({
       heartbeat,
-      process_count: output ? 1 : 0,
+      process_count: processCount,
+      process_ids: processIds,
       session_readiness: sessionReadiness,
     });
     return classification.live
-      ? { status: 'ok', ...classification, pid: Number(output) || output }
-      : output
-        ? { status: 'stale', ...classification, pid: Number(output) || output }
+      ? { status: 'ok', ...classification, pid: processIds[0] ?? null }
+      : processCount > 0
+        ? { status: 'stale', ...classification, pid: processIds[0] ?? null }
         : { status: 'ok', ...classification };
-  } catch (error) {
+  } catch (error: any) {
     return {
       status: 'error',
       live: false,
@@ -1153,24 +1160,24 @@ export function isResidentCarrierLive(carrierSessionId, cwd) {
   }
 }
 
-function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
-  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl');
+function readResidentCarrierOperationalEvidence(cwd: any, carrierSessionId: any) {
+  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl');
   if (!existsSync(path)) {
     return { status: 'missing', usable: true, reason: 'carrier_operational_evidence_missing', path };
   }
   try {
-    const requests = new Map();
-    const inputs = new Map();
-    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+    const requests: any = new Map();
+    const inputs: any = new Map();
+    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
-      let event;
+      let event: any;
       try {
         event = JSON.parse(line);
       } catch {
         continue;
       }
-      const eventName = event.event ?? event.type ?? null;
-      const requestKey = event.runtime_request_id ?? event.request_id ?? null;
+      const eventName: any = event.event ?? event.type ?? null;
+      const requestKey: any = event.runtime_request_id ?? event.request_id ?? null;
       if (eventName === 'runtime_request_state_transition' && requestKey) {
         requests.set(String(requestKey), {
           state: event.request_state ?? event.terminal_state ?? null,
@@ -1179,7 +1186,7 @@ function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
       } else if (eventName === 'session_control_rejected' && requestKey) {
         requests.set(String(requestKey), { state: 'failed', terminal_state: 'failed' });
       }
-      const inputKey = event.input_event_id ?? event.event_id ?? event.turn_id ?? null;
+      const inputKey: any = event.input_event_id ?? event.event_id ?? event.turn_id ?? null;
       if (!inputKey) continue;
       if (eventName === 'input_event_queued') inputs.set(String(inputKey), 'queued');
       else if (['input_event_started', 'input_admitted_to_turn', 'turn_started'].includes(eventName)) inputs.set(String(inputKey), 'running');
@@ -1187,11 +1194,11 @@ function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
       else if (eventName === 'turn_lifecycle_transition' && event.terminal_state) inputs.set(String(inputKey), 'completed');
       else if (eventName === 'turn_lifecycle_transition' && event.turn_state === 'failed') inputs.set(String(inputKey), 'failed');
     }
-    const requestRows = [...requests.values()];
-    const failureCount = requestRows.filter((request) => request.state === 'failed' || request.terminal_state === 'failed').length;
-    const successfulRequestCount = requestRows.filter((request) => ['completed', 'succeeded', 'reported'].includes(String(request.state))).length;
-    const pendingInputCount = [...inputs.values()].filter((state) => !['completed', 'failed'].includes(state)).length;
-    const unusable = failureCount >= 3 && successfulRequestCount === 0;
+    const requestRows: any = [...requests.values()];
+    const failureCount: any = requestRows.filter((request: any) => request.state === 'failed' || request.terminal_state === 'failed').length;
+    const successfulRequestCount: any = requestRows.filter((request: any) => ['completed', 'succeeded', 'reported'].includes(String(request.state))).length;
+    const pendingInputCount: any = [...inputs.values()].filter((state: any) => !['completed', 'failed'].includes(state)).length;
+    const unusable: any = failureCount >= 3 && successfulRequestCount === 0;
     return {
       status: unusable ? 'runtime_failures' : 'usable',
       usable: !unusable,
@@ -1202,7 +1209,7 @@ function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
       successful_request_count: successfulRequestCount,
       pending_input_count: pendingInputCount,
     };
-  } catch (error) {
+  } catch (error: any) {
     return {
       status: 'unreadable',
       usable: true,
@@ -1213,38 +1220,38 @@ function readResidentCarrierOperationalEvidence(cwd, carrierSessionId) {
   }
 }
 
-function readCarrierHeartbeat(cwd, carrierSessionId, maxAgeMs = 30000) {
-  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
-  const heartbeat = readCarrierHeartbeatRecord(path, carrierSessionId, maxAgeMs);
+function readCarrierHeartbeat(cwd: any, carrierSessionId: any, maxAgeMs : any= 30000) {
+  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
+  const heartbeat: any = readCarrierHeartbeatRecord(path, carrierSessionId, maxAgeMs);
   return { ...heartbeat, max_age_ms: maxAgeMs };
 }
 
-function inferAgentCliSessionState(cwd, carrierSessionId) {
-  const sessionDir = join(configuredSessionRoot(cwd), carrierSessionId);
-  const paths = [
+function inferAgentCliSessionState(cwd: any, carrierSessionId: any) {
+  const sessionDir: any = join(configuredSessionRoot(cwd), carrierSessionId);
+  const paths: any = [
     join(sessionDir, 'session.jsonl'),
     join(sessionDir, 'events.jsonl'),
     join(sessionDir, 'protocol.stdout.jsonl'),
-    ...configuredExternalSessionRoots(cwd).map((root) => join(root, `${carrierSessionId}.jsonl`)),
+    ...configuredExternalSessionRoots(cwd).map((root: any) => join(root, `${carrierSessionId}.jsonl`)),
   ];
-  const readablePaths = paths.filter((path) => existsSync(path));
+  const readablePaths: any = paths.filter((path: any) => existsSync(path));
   if (readablePaths.length === 0) return { active_turn_state: 'unknown', reason: 'session_evidence_missing', session_dir: sessionDir };
   try {
-    const lines = readablePaths.flatMap((path) =>
-      readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-200).map((line) => ({ line, path })),
+    const lines: any = readablePaths.flatMap((path: any) =>
+      readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-200).map((line: any) => ({ line, path })),
     );
-    let lastTurnStarted = null;
-    let lastTurnStartedAt = null;
-    let lastTerminal = null;
-    let lastPath = null;
+    let lastTurnStarted: any = null;
+    let lastTurnStartedAt: any = null;
+    let lastTerminal: any = null;
+    let lastPath: any = null;
     for (const { line, path } of lines) {
-      let event;
+      let event: any;
       try {
         event = JSON.parse(line);
       } catch {
         continue;
       }
-      const eventName = event.event ?? event.type ?? null;
+      const eventName: any = event.event ?? event.type ?? null;
       if (eventName === 'turn_started') {
         lastTurnStarted = event.turn_id ?? event.turnId ?? event.request_id ?? event.id ?? null;
         lastTurnStartedAt = event.timestamp ?? event.started_at ?? event.created_at ?? statSync(path).mtime.toISOString();
@@ -1257,18 +1264,18 @@ function inferAgentCliSessionState(cwd, carrierSessionId) {
     }
     if (lastTurnStarted && lastTurnStarted !== lastTerminal) return { active_turn_state: 'running', turn_id: lastTurnStarted, turn_started_at: lastTurnStartedAt, session_path: lastPath, evidence_paths: readablePaths };
     return { active_turn_state: 'idle', session_path: lastPath ?? readablePaths[0], evidence_paths: readablePaths };
-  } catch (error) {
+  } catch (error: any) {
     return { active_turn_state: 'unknown', reason: error instanceof Error ? error.message : String(error), session_dir: sessionDir, evidence_paths: readablePaths };
   }
 }
 
-function readResidentHostEvidence(cwd, carrierSessionId) {
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const sessionDir = join(configuredSessionRoot(cwd, siteLoopConfig), carrierSessionId);
-  const hostLogPath = join(sessionDir, 'host.jsonl');
-  const protocolPath = join(sessionDir, 'protocol.stdout.jsonl');
-  const cursorPath = join(sessionDir, 'control.cursor.json');
-  const controlPath = join(sessionDir, 'control.jsonl');
+function readResidentHostEvidence(cwd: any, carrierSessionId: any) {
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const sessionDir: any = join(configuredSessionRoot(cwd, siteLoopConfig), carrierSessionId);
+  const hostLogPath: any = join(sessionDir, 'host.jsonl');
+  const protocolPath: any = join(sessionDir, 'protocol.stdout.jsonl');
+  const cursorPath: any = join(sessionDir, 'control.cursor.json');
+  const controlPath: any = join(sessionDir, 'control.jsonl');
   return {
     schema: schemaName(siteLoopConfig, 'resident_host_evidence'),
     carrier_session_id: carrierSessionId,
@@ -1286,43 +1293,43 @@ function readResidentHostEvidence(cwd, carrierSessionId) {
   };
 }
 
-function readJsonIfExists(path) {
+function readJsonIfExists(path: any) {
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, 'utf8'));
-  } catch (error) {
+  } catch (error: any) {
     return { status: 'unreadable', error: error instanceof Error ? error.message : String(error), path };
   }
 }
 
-function readLastJsonl(path) {
+function readLastJsonl(path: any) {
   if (!existsSync(path)) return null;
   try {
-    const line = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).at(-1);
+    const line: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).at(-1);
     return line ? JSON.parse(line) : null;
-  } catch (error) {
+  } catch (error: any) {
     return { status: 'unreadable', error: error instanceof Error ? error.message : String(error), path };
   }
 }
 
-function readLastJsonlEvent(path, eventName) {
+function readLastJsonlEvent(path: any, eventName: any) {
   if (!existsSync(path)) return null;
   try {
-    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).reverse();
+    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).reverse();
     for (const line of lines) {
-      const event = JSON.parse(line);
+      const event: any = JSON.parse(line);
       if (event?.event === eventName) return event;
     }
     return null;
-  } catch (error) {
+  } catch (error: any) {
     return { status: 'unreadable', error: error instanceof Error ? error.message : String(error), path };
   }
 }
 
-function parseArgs(argv) {
+function parseArgs(argv: any) {
   const parsed: DispatchCliArgs = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  for (let i: any = 0; i < argv.length; i++) {
+    const arg: any = argv[i];
     if (arg === '--agent') parsed.agent = argv[++i];
     else if (arg === '--role') parsed.role = argv[++i];
     else if (arg === '--limit') parsed.limit = Number(argv[++i]);
@@ -1332,25 +1339,25 @@ function parseArgs(argv) {
   return parsed;
 }
 
-const isEntrypoint = process.argv[1]
+const isEntrypoint: any = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
 
 if (isEntrypoint) {
-  const cwd = resolve(process.argv[2] || process.cwd());
-  const args = parseArgs(process.argv.slice(3));
-  const siteLoopConfig = requireSiteLoopConfig(cwd);
-  const agentId = stringValue(args.agent, siteLoopConfig.resident.agent_id);
-  const role = stringValue(args.role, siteLoopConfig.resident.role);
-  const limit = Number(args.limit ?? 25);
-  const dryRun = args.dry_run === true;
-  const requireLiveCarrier = args.require_live_carrier !== false;
+  const cwd: any = resolve(process.argv[2] || process.cwd());
+  const args: any = parseArgs(process.argv.slice(3));
+  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const agentId: any = stringValue(args.agent, siteLoopConfig.resident.agent_id);
+  const role: any = stringValue(args.role, siteLoopConfig.resident.role);
+  const limit: any = Number(args.limit ?? 25);
+  const dryRun: any = args.dry_run === true;
+  const requireLiveCarrier: any = args.require_live_carrier !== false;
 
-  let exitCode = 0;
+  let exitCode: any = 0;
   try {
-    const result = await dispatchPendingDirectives({ cwd, agentId, role, limit, dryRun, requireLiveCarrier });
+    const result: any = await dispatchPendingDirectives({ cwd, agentId, role, limit, dryRun, requireLiveCarrier });
     console.log(JSON.stringify(result, null, 2));
-  } catch (error) {
+  } catch (error: any) {
     console.error(JSON.stringify({
       schema: schemaName(siteLoopConfig, 'directive_dispatch'),
       status: 'error',

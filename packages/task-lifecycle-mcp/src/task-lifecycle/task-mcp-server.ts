@@ -118,11 +118,11 @@ import {
   normalizeCapabilitiesJson as normalizeCapabilitiesJsonCore,
 } from './task-lifecycle-routing-roster.js';
 
-const PROTOCOL_VERSION = '2026-04-18';
-const SERVER_NAME = 'narada-task-lifecycle-mcp';
-const SERVER_BOOTED_AT = new Date().toISOString();
-const NO_FILES_CHANGED_MARKER = '__narada_no_files_changed_declared__';
-const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
+const PROTOCOL_VERSION: any = '2026-04-18';
+const SERVER_NAME: any = 'narada-task-lifecycle-mcp';
+const SERVER_BOOTED_AT: any = new Date().toISOString();
+const NO_FILES_CHANGED_MARKER: any = '__narada_no_files_changed_declared__';
+const LOCUS_GUARDED_MUTATION_TOOLS: any = new Set([
   'task_lifecycle_claim',
   'task_lifecycle_continue',
   'task_lifecycle_unclaim',
@@ -152,7 +152,7 @@ const LOCUS_GUARDED_MUTATION_TOOLS = new Set([
   'task_lifecycle_recurring_retire',
 ]);
 
-const TASK_LIFECYCLE_READ_ONLY_TOOLS = new Set([
+const TASK_LIFECYCLE_READ_ONLY_TOOLS: any = new Set([
   'task_lifecycle_guidance',
   'task_lifecycle_doctor',
   'task_lifecycle_list',
@@ -178,7 +178,7 @@ const TASK_LIFECYCLE_READ_ONLY_TOOLS = new Set([
   'mcp_output_show',
 ]);
 
-const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS = new Set([
+const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS: any = new Set([
   'task_lifecycle_close',
   'task_lifecycle_defer',
   'task_lifecycle_recurring_retire',
@@ -186,11 +186,11 @@ const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS = new Set([
 
 // Session identity binding for mechanical identity verification.
 // If NARADA_AGENT_ID is set, mutating operations warn/block on mismatched agent_id params.
-let SESSION_IDENTITY = null;
-let taskLifecycleToolCaller = null;
-let taskLifecycleHandlerRegistry = null;
+let SESSION_IDENTITY: any = null;
+let taskLifecycleToolCaller: any = null;
+let taskLifecycleHandlerRegistry: any = null;
 
-const TOOL_ALIASES = TASK_LIFECYCLE_TOOL_ALIASES;
+const TOOL_ALIASES: any = TASK_LIFECYCLE_TOOL_ALIASES;
 
 function taskLifecycleTools() {
   return [
@@ -345,7 +345,7 @@ function taskLifecycleTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     ...listPayloadTools(),
-    ...listOutputTools().map((tool) => ({
+    ...listOutputTools().map((tool: any) => ({
       ...patchLocalToolDefinition(tool),
       outputSchema: { type: 'object', additionalProperties: true },
     })),
@@ -356,12 +356,12 @@ let taskLifecycleSurfaceCache: DefinedSurface | null = null;
 
 export function taskLifecycleSurfaceDefinition(): DefinedSurface {
   if (taskLifecycleSurfaceCache) return taskLifecycleSurfaceCache;
-  const definitions = taskLifecycleTools();
+  const definitions: any = taskLifecycleTools();
   taskLifecycleSurfaceCache = defineSurface({
     surface_id: 'task-lifecycle',
     surface_version: '0.1.0',
     package: '@narada2/task-lifecycle-mcp',
-    tools: definitions.map((definition) => ({
+    tools: definitions.map((definition: any) => ({
       definition,
       effect: taskLifecycleToolEffect(String(definition.name)),
     })),
@@ -408,22 +408,22 @@ function taskLifecycleToolEffect(name: string): ToolEffect {
   };
 }
 
-function ensureDownstreamDependencyOutcomeContracts(taskStore = store) {
+function ensureDownstreamDependencyOutcomeContracts(taskStore : any= store) {
   if (!taskStore) return;
-  const dependencies = taskStore.db.prepare(`
+  const dependencies: any = taskStore.db.prepare(`
     SELECT dependency_id, required_task_id, satisfying_outcomes_json, created_by, created_at
     FROM task_dependencies
     WHERE kind = 'downstream_work'
   `).all() as Array<Record<string, unknown>>;
   for (const dependency of dependencies) {
-    const requiredTaskId = String(dependency.required_task_id);
-    const contractId = `contract-downstream_work-${requiredTaskId}`;
-    const latestContract = taskStore.getLatestTaskOutcomeContract?.(requiredTaskId);
-    const existingDownstreamContract = taskStore.listTaskOutcomeContracts?.(requiredTaskId)
-      .some((contract) => contract.contract_id === contractId) ?? false;
+    const requiredTaskId: any = String(dependency.required_task_id);
+    const contractId: any = `contract-downstream_work-${requiredTaskId}`;
+    const latestContract: any = taskStore.getLatestTaskOutcomeContract?.(requiredTaskId);
+    const existingDownstreamContract: any = taskStore.listTaskOutcomeContracts?.(requiredTaskId)
+      .some((contract: any) => contract.contract_id === contractId) ?? false;
     if (existingDownstreamContract || latestContract?.outcome_type === 'completion') continue;
-    const satisfyingOutcomes = parseJsonStringArray(dependency.satisfying_outcomes_json);
-    const allowedOutcomes = [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])];
+    const satisfyingOutcomes: any = parseJsonStringArray(dependency.satisfying_outcomes_json);
+    const allowedOutcomes: any = [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])];
     taskStore.upsertTaskOutcomeContract({
       contract_id: contractId,
       task_id: requiredTaskId,
@@ -440,12 +440,12 @@ function ensureDownstreamDependencyOutcomeContracts(taskStore = store) {
 }
 
 function reconcileTaskLifecycleRestartAfterBoot() {
-  const requestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  const requestPath: any = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
   if (!existsSync(requestPath)) return;
-  const evidenceSource = process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
+  const evidenceSource: any = process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
     ? 'one_shot_verifier'
     : 'live_mcp_process_self_observation';
-  const result = acknowledgeMcpRestartRequest({
+  const result: any = acknowledgeMcpRestartRequest({
     siteRoot,
     serverName: SERVER_NAME,
     targetSurface: 'task-lifecycle-mcp.local',
@@ -453,8 +453,8 @@ function reconcileTaskLifecycleRestartAfterBoot() {
     restartRequestPath: requestPath,
     baselinePath: join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json'),
     watchedPaths: ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'],
-    expectedTools: taskLifecycleTools().map((tool) => tool.name),
-    registeredTools: taskLifecycleTools().map((tool) => tool.name),
+    expectedTools: taskLifecycleTools().map((tool: any) => tool.name),
+    registeredTools: taskLifecycleTools().map((tool: any) => tool.name),
     liveProcessEvidence: {
       pid: process.pid,
       booted_at: SERVER_BOOTED_AT,
@@ -474,14 +474,14 @@ function reconcileTaskLifecycleRestartAfterBoot() {
 function parseJsonStringArray(value: unknown): string[] {
   if (typeof value !== 'string') return [];
   try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()) : [];
+    const parsed: any = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item: any): item is string => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim()) : [];
   } catch {
     return [];
   }
 }
 
-function ensureRecurringTaskTables(taskStore) {
+function ensureRecurringTaskTables(taskStore: any) {
   taskStore.db.exec(`
     CREATE TABLE IF NOT EXISTS recurring_task_definitions (
       recurrence_id TEXT PRIMARY KEY,
@@ -514,16 +514,16 @@ function ensureRecurringTaskTables(taskStore) {
     CREATE INDEX IF NOT EXISTS idx_recurring_task_definitions_status ON recurring_task_definitions(status);
     CREATE INDEX IF NOT EXISTS idx_recurring_task_runs_recurrence ON recurring_task_runs(recurrence_id, created_at DESC);
   `);
-  const columns = taskStore.db.prepare('PRAGMA table_info(recurring_task_definitions)').all();
-  if (!columns.some((column) => column.name === 'last_due_key')) {
+  const columns: any = taskStore.db.prepare('PRAGMA table_info(recurring_task_definitions)').all();
+  if (!columns.some((column: any) => column.name === 'last_due_key')) {
     taskStore.db.exec('ALTER TABLE recurring_task_definitions ADD COLUMN last_due_key TEXT;');
   }
-  if (!columns.some((column) => column.name === 'last_auto_triggered_at')) {
+  if (!columns.some((column: any) => column.name === 'last_auto_triggered_at')) {
     taskStore.db.exec('ALTER TABLE recurring_task_definitions ADD COLUMN last_auto_triggered_at TEXT;');
   }
 }
 
-function insertRecurringDefinition(taskStore, definition) {
+function insertRecurringDefinition(taskStore: any, definition: any) {
   ensureRecurringTaskTables(taskStore);
   taskStore.db.prepare(`
     INSERT INTO recurring_task_definitions (recurrence_id, status, definition_json, last_due_key, last_auto_triggered_at, updated_at)
@@ -544,9 +544,9 @@ function insertRecurringDefinition(taskStore, definition) {
   );
 }
 
-function hydrateRecurringDefinition(row) {
+function hydrateRecurringDefinition(row: any) {
   if (!row) return null;
-  const parsed = typeof row.definition_json === 'string'
+  const parsed: any = typeof row.definition_json === 'string'
     ? (parseJsonOrNull(row.definition_json) ?? {})
     : row;
   return {
@@ -566,21 +566,21 @@ function hydrateRecurringDefinition(row) {
   };
 }
 
-function getRecurringDefinition(taskStore, recurrenceId) {
+function getRecurringDefinition(taskStore: any, recurrenceId: any) {
   ensureRecurringTaskTables(taskStore);
-  const row = taskStore.db.prepare('SELECT * FROM recurring_task_definitions WHERE recurrence_id = ?').get(recurrenceId);
+  const row: any = taskStore.db.prepare('SELECT * FROM recurring_task_definitions WHERE recurrence_id = ?').get(recurrenceId);
   return hydrateRecurringDefinition(row);
 }
 
-function listRecurringDefinitions(taskStore, { status = null, limit = 20 } = {}) {
+function listRecurringDefinitions(taskStore: any, { status = null, limit = 20 } : any= {}) {
   ensureRecurringTaskTables(taskStore);
-  const rows = status
+  const rows: any = status
     ? taskStore.db.prepare('SELECT * FROM recurring_task_definitions WHERE status = ? ORDER BY updated_at DESC LIMIT ?').all(status, limit)
     : taskStore.db.prepare('SELECT * FROM recurring_task_definitions ORDER BY updated_at DESC LIMIT ?').all(limit);
   return rows.map(hydrateRecurringDefinition);
 }
 
-function insertRecurringEvent(taskStore, { recurrenceId, eventType, actorAgentId, authorityBasis, event, now, stateAfter = null }) {
+function insertRecurringEvent(taskStore: any, { recurrenceId, eventType, actorAgentId, authorityBasis, event, now, stateAfter = null }: any) {
   ensureRecurringTaskTables(taskStore);
   taskStore.db.prepare(`
     INSERT INTO recurring_task_events (event_id, recurrence_id, event_type, actor_agent_id, authority_basis_json, event_json, created_at)
@@ -588,7 +588,7 @@ function insertRecurringEvent(taskStore, { recurrenceId, eventType, actorAgentId
   `).run(`rtevt_${randomUUID()}`, recurrenceId, eventType, actorAgentId, JSON.stringify(authorityBasis ?? null), JSON.stringify({ ...(event ?? {}), state_after: stateAfter }), now ?? new Date().toISOString());
 }
 
-function insertRecurringRun(taskStore, run) {
+function insertRecurringRun(taskStore: any, run: any) {
   ensureRecurringTaskTables(taskStore);
   taskStore.db.prepare(`
     INSERT INTO recurring_task_runs (run_id, recurrence_id, task_id, task_number, due_key, trigger_mode, reason, created_at, run_json)
@@ -596,20 +596,20 @@ function insertRecurringRun(taskStore, run) {
   `).run(run.run_id, run.recurrence_id, run.task_id ?? null, run.task_number ?? null, run.due_key ?? null, run.trigger_mode, run.reason, run.created_at, JSON.stringify(run));
 }
 
-function listRecurringRuns(taskStore, recurrenceId, limit = 20) {
+function listRecurringRuns(taskStore: any, recurrenceId: any, limit : any= 20) {
   ensureRecurringTaskTables(taskStore);
-  const rows = taskStore.db.prepare('SELECT run_json FROM recurring_task_runs WHERE recurrence_id = ? ORDER BY created_at DESC LIMIT ?').all(recurrenceId, limit);
-  return rows.map((row) => parseJsonOrNull(row.run_json)).filter(Boolean);
+  const rows: any = taskStore.db.prepare('SELECT run_json FROM recurring_task_runs WHERE recurrence_id = ? ORDER BY created_at DESC LIMIT ?').all(recurrenceId, limit);
+  return rows.map((row: any) => parseJsonOrNull(row.run_json)).filter(Boolean);
 }
 
-function listDueRecurringDefinitions(taskStore, now = new Date()) {
+function listDueRecurringDefinitions(taskStore: any, now : any= new Date()) {
   void now;
   return listRecurringDefinitions(taskStore, { status: 'active', limit: 100 });
 }
 
-function recordBlockedTaskReport({ store, report }) {
-  const reportJson = JSON.stringify(report);
-  const agentIdentityRefJson = taskAgentIdentityRefJson(report.agent_id, { siteId: process.env.NARADA_SITE_ID ?? null });
+function recordBlockedTaskReport({ store, report }: any) {
+  const reportJson: any = JSON.stringify(report);
+  const agentIdentityRefJson: any = taskAgentIdentityRefJson(report.agent_id, { siteId: process.env.NARADA_SITE_ID ?? null });
   if (store.upsertReportRecord) {
     store.upsertReportRecord({
       report_id: report.report_id,
@@ -621,7 +621,7 @@ function recordBlockedTaskReport({ store, report }) {
       report_json: reportJson,
     });
   }
-  const tableExists = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
+  const tableExists: any = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
   if (!tableExists) return;
   ensureTaskReportsIdentityRefColumn(store.db);
   store.db.prepare(`
@@ -648,44 +648,44 @@ function recordBlockedTaskReport({ store, report }) {
   );
 }
 
-function ensureTaskReportsIdentityRefColumn(db) {
-  const columns = db.prepare('pragma table_info(task_reports)').all();
-  if (!columns.some((column) => column.name === 'agent_identity_ref_json')) {
+function ensureTaskReportsIdentityRefColumn(db: any) {
+  const columns: any = db.prepare('pragma table_info(task_reports)').all();
+  if (!columns.some((column: any) => column.name === 'agent_identity_ref_json')) {
     db.exec('ALTER TABLE task_reports ADD COLUMN agent_identity_ref_json text');
   }
 }
 
-function gitVisiblePathSubset(cwd, files) {
-  return files.filter((file) => {
-    const tracked = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+function gitVisiblePathSubset(cwd: any, files: any) {
+  return files.filter((file: any) => {
+    const tracked: any = spawnSync('git', ['ls-files', '--error-unmatch', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     if (tracked.status === 0) return true;
-    const untracked = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    const untracked: any = spawnSync('git', ['ls-files', '--others', '--exclude-standard', '--', file], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
     return untracked.status === 0 && untracked.stdout.trim().length > 0;
   });
 }
 
-function extractEnvelopeId(body) {
-  const match = String(body ?? '').match(/\benv_[A-Za-z0-9_-]+\b/);
+function extractEnvelopeId(body: any) {
+  const match: any = String(body ?? '').match(/\benv_[A-Za-z0-9_-]+\b/);
   return match ? match[0] : null;
 }
 
-function inferDisposition(envelopeStatus) {
+function inferDisposition(envelopeStatus: any) {
   if (envelopeStatus === 'promoted') return 'already_promoted';
   if (envelopeStatus === 'dismissed') return 'dismissed';
   if (envelopeStatus === 'acknowledged') return 'acknowledged';
   return 'no_code';
 }
 
-function readIndexedEnvelope(root, envelopeId, refreshIndex, severityEvaluator) {
+function readIndexedEnvelope(root: any, envelopeId: any, refreshIndex: any, severityEvaluator: any) {
   try {
     refreshIndex(root);
   } catch {
     // Index refresh is opportunistic; direct admission-log readback follows.
   }
-  const events = readAdmissionLog(root).filter((event) => event.envelope_id === envelopeId);
-  const status = resolveEnvelopeStatus(events);
+  const events: any = readAdmissionLog(root).filter((event: any) => event.envelope_id === envelopeId);
+  const status: any = resolveEnvelopeStatus(events);
   if (!status || status === 'unknown') return null;
-  const latestPayload = events.at(-1)?.event_payload ?? {};
+  const latestPayload: any = events.at(-1)?.event_payload ?? {};
   return {
     envelope_id: envelopeId,
     status,
@@ -696,18 +696,18 @@ function readIndexedEnvelope(root, envelopeId, refreshIndex, severityEvaluator) 
   };
 }
 
-function buildPostCloseoutContinuation({ agentId, result }) {
+function buildPostCloseoutContinuation({ agentId, result }: any) {
   // Keep the request-owned store open. The caller may continue routing
   // dependencies after this read model is built, and the current handle
   // already sees the lifecycle writes made by the just-completed operation.
-  const roleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
-  const agentRole = roleResolution.role;
-  const all = store.getAllLifecycle();
-  const board = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit: 8 });
-  const recommendation = deriveNextRecommendation(board, agentId);
-  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
-  const correctiveDebtReadiness = buildCorrectiveDebtReadinessCore({ allTasks: all });
-  const workboard = {
+  const roleResolution: any = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+  const agentRole: any = roleResolution.role;
+  const all: any = store.getAllLifecycle();
+  const board: any = buildUnifiedWorkboard({ store, siteRoot, agentId, agentRole, allTasks: all, limit: 8 });
+  const recommendation: any = deriveNextRecommendation(board, agentId);
+  const nextWorkContract: any = buildNextWorkContract(board, recommendation ?? null);
+  const correctiveDebtReadiness: any = buildCorrectiveDebtReadinessCore({ allTasks: all });
+  const workboard: any = {
     status: 'ok',
     agent_id: agentId,
     agent_role: agentRole,
@@ -728,13 +728,13 @@ function buildPostCloseoutContinuation({ agentId, result }) {
   return classifyPostCloseoutContinuation({ result, workboard });
 }
 
-function patchLocalToolDefinition(toolDef) {
-  const name = String(toolDef?.name ?? '');
-  const readOnly = TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name);
-  const actionHint = name.startsWith('task_lifecycle_')
+function patchLocalToolDefinition(toolDef: any) {
+  const name: any = String(toolDef?.name ?? '');
+  const readOnly: any = TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name);
+  const actionHint: any = name.startsWith('task_lifecycle_')
     ? `Canonical action: ${name.replace(/^task_lifecycle_/, '').replaceAll('_', ' ')} (${name}).`
     : null;
-  const annotatedToolDef = {
+  const annotatedToolDef: any = {
     ...toolDef,
     ...(actionHint ? { description: `${actionHint} ${String(toolDef?.description ?? '')}` } : {}),
     annotations: {
@@ -769,12 +769,12 @@ function patchLocalToolDefinition(toolDef) {
   };
 }
 
-let siteRoot = null;
-let siteRootSource = 'unknown';
-let store = null;
-let runtimeConfigured = false;
-let runtimeStderr = process.stderr;
-const runtimeStoreOwnership = new RuntimeStoreOwnership<{ db: { close: () => void } }>((taskStore) => taskStore.db.close());
+let siteRoot: any = null;
+let siteRootSource: any = 'unknown';
+let store: any = null;
+let runtimeConfigured: any = false;
+let runtimeStderr: any = process.stderr;
+const runtimeStoreOwnership: any = new RuntimeStoreOwnership<{ db: { close: () => void } }>((taskStore: any) => taskStore.db.close());
 
 function closeTaskLifecycleStore(): void {
   if (!runtimeStoreOwnership.currentStore() && !store) return;
@@ -782,7 +782,7 @@ function closeTaskLifecycleStore(): void {
   store = null;
 }
 
-function publishTaskLifecycleRuntime(nextRoot, nextStore): void {
+function publishTaskLifecycleRuntime(nextRoot: any, nextStore: any): void {
   siteRoot = nextRoot;
   store = nextStore;
   taskLifecycleToolCaller = null;
@@ -797,15 +797,15 @@ function publishTaskLifecycleRuntime(nextRoot, nextStore): void {
  * only when the database row is missing/empty and has no tag-update history,
  * which preserves an intentional audited clear.
  */
-function backfillTaskSpecsFromTaskFiles(root = siteRoot, taskStore = store) {
+function backfillTaskSpecsFromTaskFiles(root : any= siteRoot, taskStore : any= store) {
   if (!root || !taskStore) return;
-  const tasksDir = join(root, '.ai', 'do-not-open', 'tasks');
+  const tasksDir: any = join(root, '.ai', 'do-not-open', 'tasks');
   if (!existsSync(tasksDir)) return;
 
-  const filesByNumber = new Map();
+  const filesByNumber: any = new Map();
   for (const file of readdirSync(tasksDir)) {
     if (!isExecutableTaskFile(file)) continue;
-    const taskNumber = extractTaskNumberFromFileName(file);
+    const taskNumber: any = extractTaskNumberFromFileName(file);
     if (taskNumber === null) continue;
     if (filesByNumber.has(taskNumber)) {
       filesByNumber.set(taskNumber, null);
@@ -816,17 +816,17 @@ function backfillTaskSpecsFromTaskFiles(root = siteRoot, taskStore = store) {
 
   for (const [taskNumber, file] of filesByNumber) {
     if (!file) continue;
-    const lifecycle = taskStore.getLifecycleByNumber(taskNumber);
+    const lifecycle: any = taskStore.getLifecycleByNumber(taskNumber);
     if (!lifecycle) continue;
     try {
       const { frontMatter, body } = parseFrontMatter(readFileSync(join(tasksDir, file), 'utf8'));
-      const parsed = parseTaskSpecFromMarkdown({
+      const parsed: any = parseTaskSpecFromMarkdown({
         taskId: lifecycle.task_id,
         taskNumber,
         frontMatter,
         body,
       });
-      const existing = taskStore.getTaskSpec(lifecycle.task_id);
+      const existing: any = taskStore.getTaskSpec(lifecycle.task_id);
       if (!existing) {
         taskStore.upsertTaskSpec({
           task_id: parsed.task_id,
@@ -845,7 +845,7 @@ function backfillTaskSpecsFromTaskFiles(root = siteRoot, taskStore = store) {
         continue;
       }
 
-      const hasTagHistory = taskStore.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
+      const hasTagHistory: any = taskStore.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
       if (parseStoredTaskTags(existing.tags_json).length === 0 && parsed.tags.length > 0 && !hasTagHistory) {
         // Import only the legacy projection's labels. Preserve all other
         // SQLite-backed authored fields and its existing timestamp.
@@ -854,21 +854,21 @@ function backfillTaskSpecsFromTaskFiles(root = siteRoot, taskStore = store) {
           tags_json: JSON.stringify(parsed.tags),
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       runtimeStderr.write(`Task tag/spec backfill skipped ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 }
 
-function prepareTaskLifecycleStore(root = siteRoot) {
+function prepareTaskLifecycleStore(root : any= siteRoot) {
   if (!root) throw new Error('task_lifecycle_site_root_required');
-  const next = openTaskLifecycleStore(root);
+  const next: any = openTaskLifecycleStore(root);
   try {
     ensureTaskExecutionTables(next);
     ensureDownstreamDependencyOutcomeContracts(next);
     backfillTaskSpecsFromTaskFiles(root, next);
     return next;
-  } catch (error) {
+  } catch (error: any) {
     try {
       next.db.close();
     } catch {
@@ -884,35 +884,35 @@ export function configureTaskLifecycleMcpRuntime({
   env = process.env,
   stdout = process.stdout,
   stderr = process.stderr,
-} = {}) {
-  const options = parseArgs(argv);
+} : any= {}) {
+  const options: any = parseArgs(argv);
   if (options.help) {
     stdout.write('Usage: task-lifecycle-mcp --site-root <path>\n');
     return { status: 'help' };
   }
 
   runtimeStderr = stderr;
-  const selectedRoot = options.siteRoot
+  const selectedRoot: any = options.siteRoot
     ?? env.NARADA_TASK_LIFECYCLE_ROOT
     ?? env.NARADA_SITE_ROOT
     ?? cwd;
-  const selectedRootSource = options.siteRoot
+  const selectedRootSource: any = options.siteRoot
     ? 'cli:--site-root'
     : env.NARADA_TASK_LIFECYCLE_ROOT
       ? 'env:NARADA_TASK_LIFECYCLE_ROOT'
       : env.NARADA_SITE_ROOT
         ? 'env:NARADA_SITE_ROOT'
         : 'process_cwd';
-  const nextRoot = resolve(String(selectedRoot));
-  const hadPublishedRuntime = runtimeConfigured;
+  const nextRoot: any = resolve(String(selectedRoot));
+  const hadPublishedRuntime: any = runtimeConfigured;
   if (hadPublishedRuntime && (runtimeStoreOwnership.activeRequestCount > 0 || runtimeStoreOwnership.isTransitioning)) {
     throw new Error('task_lifecycle_runtime_reconfigure_active_requests');
   }
 
-  let nextStore;
+  let nextStore: any;
   try {
     nextStore = prepareTaskLifecycleStore(nextRoot);
-  } catch (error) {
+  } catch (error: any) {
     throw new Error(`Failed to open task lifecycle store: ${error.message}`);
   }
 
@@ -922,7 +922,7 @@ export function configureTaskLifecycleMcpRuntime({
     } else {
       runtimeStoreOwnership.initialize(nextStore);
     }
-  } catch (error) {
+  } catch (error: any) {
     try {
       nextStore.db.close();
     } catch {
@@ -946,40 +946,40 @@ function ensureRuntimeConfigured() {
 
 async function refreshStore(requestContext: { requestId?: unknown } = {}) {
   ensureRuntimeConfigured();
-  const requestId = String(requestContext?.requestId ?? '').trim() || undefined;
+  const requestId: any = String(requestContext?.requestId ?? '').trim() || undefined;
   try {
     if (runtimeStoreOwnership.activeRequestCount > 0 && !requestId) {
       throw new Error('task_lifecycle_store_refresh_request_id_required');
     }
-    const nextRoot = siteRoot;
-    const nextStore = await runtimeStoreOwnership.replace({
+    const nextRoot: any = siteRoot;
+    const nextStore: any = await runtimeStoreOwnership.replace({
       requestId,
       open: () => prepareTaskLifecycleStore(nextRoot),
     });
     publishTaskLifecycleRuntime(nextRoot, nextStore);
     return true;
-  } catch (error) {
+  } catch (error: any) {
     runtimeStderr.write(`Failed to refresh task lifecycle store: ${error.message}\n`);
     return false;
   }
 }
 
 function readReviewerCapabilityPolicy(root: string) {
-  const allowedModes = ['strict', 'advisory', 'disabled'];
-  const defaultPolicy = { mode: 'advisory', source: 'default', config_path: null, allowed_modes: allowedModes };
+  const allowedModes: any = ['strict', 'advisory', 'disabled'];
+  const defaultPolicy: any = { mode: 'advisory', source: 'default', config_path: null, allowed_modes: allowedModes };
   for (const configPath of [
     join(root, '.ai', 'task-lifecycle-policy.json'),
     join(root, '.ai', 'task-lifecycle', 'config.json'),
   ]) {
     if (!existsSync(configPath)) continue;
     try {
-      const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-      const reviewConfig = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.review : null;
-      const nestedMode = reviewConfig && typeof reviewConfig === 'object' && !Array.isArray(reviewConfig) ? reviewConfig.reviewer_capability_enforcement : null;
-      const rawMode = parsed.reviewer_capability_enforcement ?? nestedMode;
-      const mode = rawMode === 'open' ? 'disabled' : allowedModes.includes(rawMode) ? rawMode : 'advisory';
+      const parsed: any = JSON.parse(readFileSync(configPath, 'utf8'));
+      const reviewConfig: any = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.review : null;
+      const nestedMode: any = reviewConfig && typeof reviewConfig === 'object' && !Array.isArray(reviewConfig) ? reviewConfig.reviewer_capability_enforcement : null;
+      const rawMode: any = parsed.reviewer_capability_enforcement ?? nestedMode;
+      const mode: any = rawMode === 'open' ? 'disabled' : allowedModes.includes(rawMode) ? rawMode : 'advisory';
       return { mode, source: rawMode ? 'site_config' : 'site_config_defaulted', config_path: configPath, allowed_modes: allowedModes };
-    } catch (error) {
+    } catch (error: any) {
       return {
         ...defaultPolicy,
         source: 'site_config_error_defaulted',
@@ -1005,13 +1005,13 @@ function recordTaskLifecycleRuntimeObservation() {
       freshnessEvidencePath: '.ai/runtime/typed-mcp/task-lifecycle-mcp',
       transport: { type: 'stdio', runtime_kind: 'node-stdio' },
     });
-  } catch (error) {
+  } catch (error: any) {
     runtimeStderr.write(`Failed to record task-lifecycle MCP runtime observation: ${error.message}\n`);
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runTaskLifecycleMcpStdioServer().catch((error) => {
+  runTaskLifecycleMcpStdioServer().catch((error: any) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });
@@ -1024,8 +1024,8 @@ export async function runTaskLifecycleMcpStdioServer({
   argv = process.argv.slice(2),
   cwd = process.cwd(),
   env = process.env,
-} = {}) {
-  const configured = configureTaskLifecycleMcpRuntime({ argv, cwd, env, stdout, stderr });
+} : any= {}) {
+  const configured: any = configureTaskLifecycleMcpRuntime({ argv, cwd, env, stdout, stderr });
   if (configured.status === 'help') return;
   try {
     await runJsonRpcStdioServer({
@@ -1046,26 +1046,26 @@ export async function runTaskLifecycleMcpStdioServer({
   }
 }
 
-export async function handleTaskLifecycleMcpRequest(request, runtimeOptions = null) {
+export async function handleTaskLifecycleMcpRequest(request: any, runtimeOptions : any= null) {
   if (runtimeOptions) configureTaskLifecycleMcpRuntime(runtimeOptions);
   ensureRuntimeConfigured();
   return handleRequest(request);
 }
 
-async function handleRequest(request, requestContext: { requestId?: unknown } = {}) {
+async function handleRequest(request: any, requestContext: { requestId?: unknown } = {}) {
   if (!request?.id && typeof request?.method === 'string' && request.method.startsWith('notifications/')) return null;
   // Pass through transport-level parse errors directly
   if (request?.error) {
     return { jsonrpc: '2.0', id: request.id ?? null, error: request.error };
   }
-  const requestId = String(requestContext.requestId ?? request.id ?? `direct-${randomUUID()}`);
+  const requestId: any = String(requestContext.requestId ?? request.id ?? `direct-${randomUUID()}`);
   let requestLease: { release: () => void } | null = null;
   try {
     requestLease = runtimeStoreOwnership.acquire(requestId);
-    const dispatchContext = { ...requestContext, requestId };
-    const result = await dispatchMethod(request.method, request.params ?? {}, dispatchContext);
+    const dispatchContext: any = { ...requestContext, requestId };
+    const result: any = await dispatchMethod(request.method, request.params ?? {}, dispatchContext);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
-  } catch (error) {
+  } catch (error: any) {
     return {
       jsonrpc: '2.0',
       id: request?.id ?? null,
@@ -1079,7 +1079,7 @@ async function handleRequest(request, requestContext: { requestId?: unknown } = 
   }
 }
 
-async function dispatchMethod(method, params, requestContext = {}) {
+async function dispatchMethod(method: any, params: any, requestContext : any= {}) {
   switch (method) {
     case 'initialize':
       return {
@@ -1123,8 +1123,8 @@ function listPrompts() {
   return [{ name: 'task_lifecycle_workflow', title: 'Task Lifecycle Workflow', description: 'Guidance for governed task lifecycle operations.', arguments: [] }];
 }
 
-function promptGet(params) {
-  const name = String(params.name ?? '');
+function promptGet(params: any) {
+  const name: any = String(params.name ?? '');
   if (name !== 'task_lifecycle_workflow') throw new Error(`unknown_prompt: ${name}`);
   return {
     description: 'Guidance for governed task lifecycle operations.',
@@ -1132,9 +1132,9 @@ function promptGet(params) {
   };
 }
 
-function completeArgument(params) {
-  const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
-  const values = argumentName === 'name' ? taskLifecycleTools().map((tool) => tool.name).filter(Boolean).slice(0, 100) : [];
+function completeArgument(params: any) {
+  const argumentName: any = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
+  const values: any = argumentName === 'name' ? taskLifecycleTools().map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
 
@@ -1144,7 +1144,7 @@ function completeArgument(params) {
  * does not match, returns an identity_mismatch warning object.
  * This is advisory (does not block) to avoid breaking sessions where env is not propagated.
  */
-function verifySessionIdentity(agentId) {
+function verifySessionIdentity(agentId: any) {
   if (!SESSION_IDENTITY || !agentId) return null;
   if (SESSION_IDENTITY !== agentId) {
     return {
@@ -1165,7 +1165,7 @@ function verifySessionIdentity(agentId) {
  * throws an error that blocks the operation.
  * Grace period: if NARADA_AGENT_ID is not set, this is a no-op.
  */
-function enforceSessionIdentity(agentId) {
+function enforceSessionIdentity(agentId: any) {
   if (!SESSION_IDENTITY || !agentId) return;
   if (SESSION_IDENTITY !== agentId) {
     throw new Error(
@@ -1195,7 +1195,7 @@ function getTaskLifecycleToolCaller() {
   return taskLifecycleToolCaller;
 }
 
-async function callTool(params, requestContext = {}) {
+async function callTool(params: any, requestContext : any= {}) {
   return getTaskLifecycleToolCaller()(params, requestContext);
 }
 
@@ -1208,7 +1208,7 @@ function getTaskLifecycleSitePolicy() {
 }
 
 function getTaskLifecycleSitePolicySummary() {
-  const sitePolicy = getTaskLifecycleSitePolicy();
+  const sitePolicy: any = getTaskLifecycleSitePolicy();
   return {
     roster: sitePolicy.policy.roster,
     source: sitePolicy.source,
@@ -1219,14 +1219,14 @@ function getTaskLifecycleSitePolicySummary() {
 function getTaskLifecycleHandlerRegistry() {
   if (!taskLifecycleHandlerRegistry) {
     taskLifecycleHandlerRegistry = createTaskLifecycleHandlerRegistry({
-      toolNames: taskLifecycleTools().map((tool) => tool.name),
-      domainDispatch: (name) => {
+      toolNames: taskLifecycleTools().map((tool: any) => tool.name),
+      domainDispatch: (name: any) => {
         throw new Error(`task_mcp_refused: ${name}`);
       },
       explicitHandlers: {
         ...createTaskLifecycleAdminHandlers({
           jsonToolResult,
-          getRegisteredTools: () => taskLifecycleTools().map((tool) => tool.name),
+          getRegisteredTools: () => taskLifecycleTools().map((tool: any) => tool.name),
           getSiteRoot: () => siteRoot,
           getSiteRootSource: () => siteRootSource,
           getToolAliases: () => TOOL_ALIASES,
@@ -1258,7 +1258,7 @@ function getTaskLifecycleHandlerRegistry() {
           claimLifecycleTask,
           continueTaskService,
           unclaimLifecycleTask,
-          withAuthoredRosterJsonPreserved: (root, fn) => withAuthoredRosterJsonPreservedCore(root, fn, store),
+          withAuthoredRosterJsonPreserved: (root: any, fn: any) => withAuthoredRosterJsonPreservedCore(root, fn, store),
         }),
         ...createTaskLifecycleNavigationHandlers({
           store,
@@ -1272,7 +1272,7 @@ function getTaskLifecycleHandlerRegistry() {
           buildUnifiedWorkboard,
           buildCorrectiveDebtReadiness: buildCorrectiveDebtReadinessCore,
           deriveNextRecommendation,
-          buildTaskLifecycleFreshness: ({ registeredTools }) => buildTaskLifecycleFreshness({ registeredTools: registeredTools ?? taskLifecycleTools().map((tool) => tool.name) }),
+          buildTaskLifecycleFreshness: ({ registeredTools }: any) => buildTaskLifecycleFreshness({ registeredTools: registeredTools ?? taskLifecycleTools().map((tool: any) => tool.name) }),
           buildMcpRestartPressure,
           buildStaleLiveNavigationDegradation,
           deriveMcpRestartPressureRecommendation,
@@ -1319,7 +1319,7 @@ function getTaskLifecycleHandlerRegistry() {
           validateRecoveryTruthfulnessBody,
           admitTaskEvidence,
           proveTaskCriteria,
-          taskLifecycleDispositionCloseout: (options) => taskLifecycleDispositionCloseoutCore({
+          taskLifecycleDispositionCloseout: (options: any) => taskLifecycleDispositionCloseoutCore({
             ...options,
             findTaskFile,
             buildTaskFileResolutionFailure: buildTaskFileResolutionFailureCore,
@@ -1404,7 +1404,7 @@ function getTaskLifecycleHandlerRegistry() {
           numberField,
           booleanField,
           arrayOfStrings,
-          admitRosterIdentity: (args) => admitRosterIdentityCore(args, { store, enforceSessionIdentity }),
+          admitRosterIdentity: (args: any) => admitRosterIdentityCore(args, { store, enforceSessionIdentity }),
           enforceSessionIdentity,
           allocateTaskNumbers,
           slugify,
@@ -1441,42 +1441,42 @@ function getTaskLifecycleHandlerRegistry() {
           numberField,
           enforceSessionIdentity,
         }),
-        mcp_payload_create: (args) => jsonToolResult(taskLifecyclePayloadCreate(args)),
-        mcp_payload_show: (args) => jsonToolResult(payloadShow({ siteRoot, args })),
-        mcp_payload_derive: (args) => jsonToolResult(payloadDerive({ siteRoot, args })),
-        mcp_payload_validate: (args) => jsonToolResult(payloadValidate({ siteRoot, args })),
-        mcp_output_show: (args) => jsonToolResult(outputShow({ siteRoot, args }), false, 'mcp_output_show'),
-        task_lifecycle_chapter_add_task: async (args, context) => jsonToolResult(await taskLifecycleChapterAddTask(args, context)),
-        task_lifecycle_chapter_show: (args) => jsonToolResult(taskLifecycleChapterShow(args)),
-        task_lifecycle_submit_work: (args, context) => taskLifecycleSubmitWork(args, context),
-        task_lifecycle_dependency_declare: (args) => taskLifecycleDependencyDeclare(args),
-        task_lifecycle_dependency_disposition_record: (args) => jsonToolResult(taskLifecycleDependencyDispositionRecord(args)),
+        mcp_payload_create: (args: any) => jsonToolResult(taskLifecyclePayloadCreate(args)),
+        mcp_payload_show: (args: any) => jsonToolResult(payloadShow({ siteRoot, args })),
+        mcp_payload_derive: (args: any) => jsonToolResult(payloadDerive({ siteRoot, args })),
+        mcp_payload_validate: (args: any) => jsonToolResult(payloadValidate({ siteRoot, args })),
+        mcp_output_show: (args: any) => jsonToolResult(outputShow({ siteRoot, args }), false, 'mcp_output_show'),
+        task_lifecycle_chapter_add_task: async (args: any, context: any) => jsonToolResult(await taskLifecycleChapterAddTask(args, context)),
+        task_lifecycle_chapter_show: (args: any) => jsonToolResult(taskLifecycleChapterShow(args)),
+        task_lifecycle_submit_work: (args: any, context: any) => taskLifecycleSubmitWork(args, context),
+        task_lifecycle_dependency_declare: (args: any) => taskLifecycleDependencyDeclare(args),
+        task_lifecycle_dependency_disposition_record: (args: any) => jsonToolResult(taskLifecycleDependencyDispositionRecord(args)),
       },
     });
   }
   return taskLifecycleHandlerRegistry;
 }
 
-async function dispatchTool(canonicalName, args, dispatchContext: Record<string, unknown> = {}) {
-  const handler = getTaskLifecycleHandlerRegistry().get(canonicalName);
+async function dispatchTool(canonicalName: any, args: any, dispatchContext: Record<string, unknown> = {}) {
+  const handler: any = getTaskLifecycleHandlerRegistry().get(canonicalName);
   if (!handler) throw new Error(`task_mcp_refused: ${canonicalName}`);
-  const result = await handler(args, dispatchContext);
+  const result: any = await handler(args, dispatchContext);
   return dispatchContext?.compound_tool ? unwrapInternalToolResult(result) : result;
 }
 
-function unwrapInternalToolResult(result) {
-  const structured = result?.structuredContent;
+function unwrapInternalToolResult(result: any) {
+  const structured: any = result?.structuredContent;
   if (structured?.schema !== 'narada.producer_output_page.v1' || typeof structured.output_ref !== 'string') return result;
-  let offset = 0;
-  let outputText = '';
+  let offset: any = 0;
+  let outputText: any = '';
   while (true) {
-    const page = outputShow({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
+    const page: any = outputShow({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
     if (!page?.output_text) throw new Error('internal_output_ref_page_missing_output_text');
     outputText += page.output_text;
     if (page.next_offset === null || page.next_offset === undefined) break;
     offset = page.next_offset;
   }
-  const value = JSON.parse(outputText);
+  const value: any = JSON.parse(outputText);
   return {
     ...result,
     content: [{ type: 'text', text: JSON.stringify(value), annotations: { audience: ['assistant'] } }],
@@ -1484,14 +1484,14 @@ function unwrapInternalToolResult(result) {
   };
 }
 
-function buildTaskLifecycleFreshness({ registeredTools }) {
+function buildTaskLifecycleFreshness({ registeredTools }: any) {
   return buildMcpFreshnessStatus({
     siteRoot,
     serverName: SERVER_NAME,
     serverEntryPoint: 'task-lifecycle-mcp',
     serverBootedAt: SERVER_BOOTED_AT,
     watchedPaths: ['node_modules/@narada2/task-lifecycle-mcp/src', 'node_modules/@narada2/mcp-transport'],
-    expectedTools: taskLifecycleTools().map((tool) => tool.name),
+    expectedTools: taskLifecycleTools().map((tool: any) => tool.name),
     registeredTools,
     restartRequestPath: join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json'),
     baselinePath: join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json'),
@@ -1499,15 +1499,15 @@ function buildTaskLifecycleFreshness({ registeredTools }) {
   });
 }
 
-function taskLifecycleRestart(args) {
-  const mode = stringField(args, 'mode') ?? 'request';
+function taskLifecycleRestart(args: any) {
+  const mode: any = stringField(args, 'mode') ?? 'request';
   if (!['request', 'status', 'acknowledge', 'clear'].includes(mode)) {
     throw new Error(`invalid_restart_mode: ${mode}`);
   }
-  const requestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
-  const baselinePath = join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json');
-  const watchedPaths = ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'];
-  const existingRequest = readMcpFreshnessJsonFile(requestPath);
+  const requestPath: any = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  const baselinePath: any = join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json');
+  const watchedPaths: any = ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'];
+  const existingRequest: any = readMcpFreshnessJsonFile(requestPath);
 
   if (mode === 'acknowledge' || mode === 'clear') {
     return acknowledgeMcpRestartRequest({
@@ -1518,8 +1518,8 @@ function taskLifecycleRestart(args) {
       restartRequestPath: requestPath,
       baselinePath,
       watchedPaths,
-      expectedTools: taskLifecycleTools().map((tool) => tool.name),
-      registeredTools: taskLifecycleTools().map((tool) => tool.name),
+      expectedTools: taskLifecycleTools().map((tool: any) => tool.name),
+      registeredTools: taskLifecycleTools().map((tool: any) => tool.name),
       liveProcessEvidence: {
         pid: process.pid,
         booted_at: SERVER_BOOTED_AT,
@@ -1544,7 +1544,7 @@ function taskLifecycleRestart(args) {
       request_path: requestPath,
       baseline_path: baselinePath,
       request: existingRequest,
-      mcp_freshness: buildTaskLifecycleFreshness({ registeredTools: taskLifecycleTools().map((tool) => tool.name) }),
+      mcp_freshness: buildTaskLifecycleFreshness({ registeredTools: taskLifecycleTools().map((tool: any) => tool.name) }),
       message: existingRequest
         ? 'Task-lifecycle MCP restart has been requested. Restart the carrier/session MCP servers externally to load new code.'
         : 'No task-lifecycle MCP restart request file is present.',
@@ -1569,29 +1569,29 @@ function chapterStorePath() {
 }
 
 function readChapterStore() {
-  const path = chapterStorePath();
+  const path: any = chapterStorePath();
   if (!existsSync(path)) {
     return { schema: 'narada.task.chapters.v1', chapters: {} };
   }
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    const parsed: any = JSON.parse(readFileSync(path, 'utf8'));
     return {
       schema: 'narada.task.chapters.v1',
       chapters: parsed && typeof parsed.chapters === 'object' && !Array.isArray(parsed.chapters) ? parsed.chapters : {},
     };
-  } catch (error) {
+  } catch (error: any) {
     throw new Error(`task_chapter_store_unreadable: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-function writeChapterStore(doc) {
+function writeChapterStore(doc: any) {
   mkdirSync(join(siteRoot, '.ai', 'do-not-open'), { recursive: true });
   writeFileSync(chapterStorePath(), JSON.stringify({ schema: 'narada.task.chapters.v1', updated_at: new Date().toISOString(), chapters: doc.chapters ?? {} }, null, 2) + '\n', 'utf8');
 }
 
-function taskLifecyclePayloadCreate(args) {
-  const input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
-  const payload = payloadObjectFromArgs(input, {
+function taskLifecyclePayloadCreate(args: any) {
+  const input: any = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  const payload: any = payloadObjectFromArgs(input, {
     objectField: 'payload',
     jsonField: 'payload_json',
     objectMessage: 'payload_create_payload_must_be_object',
@@ -1604,28 +1604,28 @@ function taskLifecyclePayloadCreate(args) {
   return payloadCreate({ siteRoot, args });
 }
 
-async function taskLifecycleChapterAddTask(args, requestContext = {}) {
-  const refreshed = await refreshStore(requestContext);
+async function taskLifecycleChapterAddTask(args: any, requestContext : any= {}) {
+  const refreshed: any = await refreshStore(requestContext);
   if (!refreshed) throw new Error('task_lifecycle_store_refresh_failed');
-  const chapterId = normalizeChapterId(args.chapter_id);
-  const taskNumber = normalizeChapterTaskNumber(args.task_number);
-  const taskSpec = store.getTaskSpecByNumber(taskNumber);
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+  const chapterId: any = normalizeChapterId(args.chapter_id);
+  const taskNumber: any = normalizeChapterTaskNumber(args.task_number);
+  const taskSpec: any = store.getTaskSpecByNumber(taskNumber);
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!taskSpec && !lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
 
-  const doc = readChapterStore();
-  const chapters = doc.chapters ?? {};
-  const chapter = chapters[chapterId] && typeof chapters[chapterId] === 'object' ? chapters[chapterId] : {};
-  const memberships = Array.isArray(chapter.memberships) ? chapter.memberships : [];
-  const existing = memberships.find((item) => Number(item.task_number) === taskNumber);
+  const doc: any = readChapterStore();
+  const chapters: any = doc.chapters ?? {};
+  const chapter: any = chapters[chapterId] && typeof chapters[chapterId] === 'object' ? chapters[chapterId] : {};
+  const memberships: any = Array.isArray(chapter.memberships) ? chapter.memberships : [];
+  const existing: any = memberships.find((item: any) => Number(item.task_number) === taskNumber);
   if (existing) {
     return buildChapterMembershipResult({ status: 'already_present', chapterId, taskNumber, memberships });
   }
 
-  const appendMode = args.append !== false || args.order_index === undefined || args.order_index === null;
-  const now = new Date().toISOString();
-  let orderIndex = appendMode
-    ? memberships.reduce((max, item) => Math.max(max, Number(item.order_index ?? 0)), 0) + 1
+  const appendMode: any = args.append !== false || args.order_index === undefined || args.order_index === null;
+  const now: any = new Date().toISOString();
+  let orderIndex: any = appendMode
+    ? memberships.reduce((max: any, item: any) => Math.max(max, Number(item.order_index ?? 0)), 0) + 1
     : normalizeOrderIndex(args.order_index);
   if (!appendMode) {
     for (const item of memberships) {
@@ -1645,11 +1645,11 @@ async function taskLifecycleChapterAddTask(args, requestContext = {}) {
   return buildChapterMembershipResult({ status: 'added', chapterId, taskNumber, memberships, appendMode });
 }
 
-function taskLifecycleChapterShow(args) {
-  const chapterId = normalizeChapterId(args.chapter_id);
-  const doc = readChapterStore();
-  const chapter = doc.chapters?.[chapterId];
-  const memberships = Array.isArray(chapter?.memberships) ? [...chapter.memberships].sort(compareChapterMemberships) : [];
+function taskLifecycleChapterShow(args: any) {
+  const chapterId: any = normalizeChapterId(args.chapter_id);
+  const doc: any = readChapterStore();
+  const chapter: any = doc.chapters?.[chapterId];
+  const memberships: any = Array.isArray(chapter?.memberships) ? [...chapter.memberships].sort(compareChapterMemberships) : [];
   return {
     schema: 'narada.task.chapter.v1',
     status: 'ok',
@@ -1659,18 +1659,18 @@ function taskLifecycleChapterShow(args) {
   };
 }
 
-async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unknown> = {}) {
-  const taskNumber = numberField(args, 'task_number');
-  const agentId = stringField(args, 'agent_id');
-  const summary = stringField(args, 'summary');
-  const executionNotes = stringField(args, 'execution_notes');
-  const verification = stringField(args, 'verification');
-  const reviewer = stringField(args, 'reviewer');
-  const changedFiles = stringArrayField(args, 'changed_files');
-  const noFilesChanged = booleanField(args, 'no_files_changed') === true;
-  const autoMaterializePayload = booleanField(args, 'auto_materialize_payload') === true;
-  const resumeExistingWork = booleanField(args, 'resume_existing_work') === true;
-  let payloadSource = dispatchContext.payloadSource;
+async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string, unknown> = {}) {
+  const taskNumber: any = numberField(args, 'task_number');
+  const agentId: any = stringField(args, 'agent_id');
+  const summary: any = stringField(args, 'summary');
+  const executionNotes: any = stringField(args, 'execution_notes');
+  const verification: any = stringField(args, 'verification');
+  const reviewer: any = stringField(args, 'reviewer');
+  const changedFiles: any = stringArrayField(args, 'changed_files');
+  const noFilesChanged: any = booleanField(args, 'no_files_changed') === true;
+  const autoMaterializePayload: any = booleanField(args, 'auto_materialize_payload') === true;
+  const resumeExistingWork: any = booleanField(args, 'resume_existing_work') === true;
+  let payloadSource: any = dispatchContext.payloadSource;
   if (!taskNumber) throw new Error('task_number_required');
   if (!agentId) throw new Error('agent_id_required');
   if (resumeExistingWork && (executionNotes || verification)) throw new Error('task_lifecycle_submit_work_resume_existing_work_conflicts_with_replacement_notes');
@@ -1685,20 +1685,20 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     payloadSource = autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args });
   }
 
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const primitiveResults = [];
-  let effectiveSummary = summary;
-  let effectiveChangedFiles = changedFiles;
-  let effectiveNoFilesChanged = noFilesChanged;
-  let effectiveOutcome = null;
-  let resumeTaskFile = null;
+  const primitiveResults: any[] = [];
+  let effectiveSummary: any = summary;
+  let effectiveChangedFiles: any = changedFiles;
+  let effectiveNoFilesChanged: any = noFilesChanged;
+  let effectiveOutcome: any = null;
+  let resumeTaskFile: any = null;
   if (resumeExistingWork) {
-    const previousReport = latestSubmitWorkReport(lifecycle.task_id, agentId);
+    const previousReport: any = latestSubmitWorkReport(lifecycle.task_id, agentId);
     if (!previousReport) throw new Error('task_lifecycle_submit_work_resume_existing_work_report_not_found');
     resumeTaskFile = await findTaskFile(siteRoot, String(taskNumber));
     if (!resumeTaskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
-    const existingBody = readFileSync(resumeTaskFile.path, 'utf8');
+    const existingBody: any = readFileSync(resumeTaskFile.path, 'utf8');
     assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Execution Notes'), 'existing_execution_notes');
     assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Verification'), 'existing_verification');
     effectiveSummary ||= previousReport.summary;
@@ -1710,15 +1710,15 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if ((!effectiveChangedFiles || effectiveChangedFiles.length === 0) && !effectiveNoFilesChanged) {
       throw new Error('task_lifecycle_submit_work_resume_existing_work_changed_file_evidence_not_found');
     }
-    const previousOutcome = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
-    const outcomeContract = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
-    const satisfyingOutcomes = parseStringArrayJson(outcomeContract?.satisfying_outcomes_json);
+    const previousOutcome: any = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
+    const outcomeContract: any = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
+    const satisfyingOutcomes: any = parseStringArrayJson(outcomeContract?.satisfying_outcomes_json);
     if (previousOutcome?.outcome && satisfyingOutcomes.includes(previousOutcome.outcome)) effectiveOutcome = previousOutcome.outcome;
     if (outcomeContract && !effectiveOutcome) throw new Error('task_lifecycle_submit_work_resume_existing_work_satisfying_outcome_not_found');
   }
-  const agentRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
+  const agentRoleResolution: any = resolveAgentRoleWithDiagnostics(store, siteRoot, agentId);
   if (!agentRoleResolution.role) {
-    const rosterResult = {
+    const rosterResult: any = {
       status: 'blocked',
       schema: 'narada.task.submit_work.roster_preflight.v1',
       error: 'submit_work_agent_not_in_roster',
@@ -1730,17 +1730,17 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     primitiveResults.push({ tool: 'task_lifecycle_submit_work.roster_preflight', result: rosterResult, is_error: true });
     return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_submit_work.roster_preflight', payloadSource }, true);
   }
-  const claim = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
+  const claim: any = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
   if (claim) {
     const claimArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
-    const authorityBasis = objectField(args, 'authority_basis');
+    const authorityBasis: any = objectField(args, 'authority_basis');
     if (authorityBasis) claimArgs.authority_basis = authorityBasis;
-    const claimResult = await dispatchTool('task_lifecycle_claim', claimArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    const claimResult: any = await dispatchTool('task_lifecycle_claim', claimArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_claim', result: claimResult.structuredContent ?? null, is_error: claimResult.isError === true });
     if (claimResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_claim', payloadSource }, true);
   }
 
-  const taskFile = resumeTaskFile ?? await findTaskFile(siteRoot, String(taskNumber));
+  const taskFile: any = resumeTaskFile ?? await findTaskFile(siteRoot, String(taskNumber));
   if (!taskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
   if (resumeExistingWork) {
     primitiveResults.push({
@@ -1749,9 +1749,9 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
       is_error: false,
     });
   } else {
-    const original = readFileSync(taskFile.path, 'utf8');
-    const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
-    const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
+    const original: any = readFileSync(taskFile.path, 'utf8');
+    const withExecution: any = replaceTaskSection(original, 'Execution Notes', executionNotes);
+    const withVerification: any = replaceTaskSection(withExecution, 'Verification', verification);
     writeFileSync(taskFile.path, withVerification, 'utf8');
     primitiveResults.push({
       tool: 'task_lifecycle_submit_work.write_task_notes',
@@ -1760,19 +1760,19 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     });
   }
 
-  const shouldProveCriteria = args.prove_criteria === undefined ? !resumeExistingWork : args.prove_criteria !== false;
+  const shouldProveCriteria: any = args.prove_criteria === undefined ? !resumeExistingWork : args.prove_criteria !== false;
   if (shouldProveCriteria) {
-    const proveResult = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
+    const proveResult: any = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_prove_criteria', result: proveResult.structuredContent ?? null, is_error: proveResult.isError === true });
     if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria', payloadSource }, true);
   }
 
-  const shouldAdmitEvidence = args.admit_evidence === undefined ? !resumeExistingWork : args.admit_evidence !== false;
+  const shouldAdmitEvidence: any = args.admit_evidence === undefined ? !resumeExistingWork : args.admit_evidence !== false;
   if (shouldAdmitEvidence) {
     const admitArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
-    const selfCertification = objectField(args, 'self_certification');
+    const selfCertification: any = objectField(args, 'self_certification');
     if (selfCertification) admitArgs.self_certification = selfCertification;
-    const admitResult = await dispatchTool('task_lifecycle_admit_evidence', admitArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    const admitResult: any = await dispatchTool('task_lifecycle_admit_evidence', admitArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_admit_evidence', result: admitResult.structuredContent ?? null, is_error: admitResult.isError === true });
     if (admitResult.isError || admitResult.structuredContent?.status === 'rejected') return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_admit_evidence', payloadSource }, true);
   }
@@ -1783,15 +1783,15 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
     if (reviewer) finishArgs.reviewer = reviewer;
     if (effectiveChangedFiles) finishArgs.changed_files = effectiveChangedFiles;
     if (effectiveNoFilesChanged) finishArgs.no_files_changed = true;
-    const recoveryTruthfulness = objectField(args, 'recovery_truthfulness');
-    const selfCertification = objectField(args, 'self_certification');
+    const recoveryTruthfulness: any = objectField(args, 'recovery_truthfulness');
+    const selfCertification: any = objectField(args, 'self_certification');
     if (recoveryTruthfulness) finishArgs.recovery_truthfulness = recoveryTruthfulness;
     if (selfCertification) finishArgs.self_certification = selfCertification;
-    const finishResult = await dispatchTool('task_lifecycle_finish', finishArgs, { compound_tool: 'task_lifecycle_submit_work' });
+    const finishResult: any = await dispatchTool('task_lifecycle_finish', finishArgs, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_finish', result: finishResult.structuredContent ?? null, is_error: finishResult.isError === true });
     if (finishResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_finish', payloadSource }, true);
-    const finishPayload = finishResult.structuredContent && typeof finishResult.structuredContent === 'object' && !Array.isArray(finishResult.structuredContent) ? finishResult.structuredContent as Record<string, unknown> : null;
-    const reviewDependency = finishPayload?.review_dependency;
+    const finishPayload: any = finishResult.structuredContent && typeof finishResult.structuredContent === 'object' && !Array.isArray(finishResult.structuredContent) ? finishResult.structuredContent as Record<string, unknown> : null;
+    const reviewDependency: any = finishPayload?.review_dependency;
     if (reviewDependency) {
       primitiveResults.push({ tool: 'task_lifecycle_submit_work.create_review_dependency', result: reviewDependency, is_error: false });
     }
@@ -1800,20 +1800,20 @@ async function taskLifecycleSubmitWork(args, dispatchContext: Record<string, unk
   return submitWorkResult({ status: 'submitted', taskNumber, agentId, primitiveResults, blockedAt: null, payloadSource }, false);
 }
 
-function parseStringArrayJson(value) {
-  if (Array.isArray(value)) return value.filter((item) => typeof item === 'string');
+function parseStringArrayJson(value: any) {
+  if (Array.isArray(value)) return value.filter((item: any) => typeof item === 'string');
   try {
-    const parsed = JSON.parse(typeof value === 'string' ? value : '[]');
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+    const parsed: any = JSON.parse(typeof value === 'string' ? value : '[]');
+    return Array.isArray(parsed) ? parsed.filter((item: any) => typeof item === 'string') : [];
   } catch {
     return [];
   }
 }
 
-function latestSubmitWorkReport(taskId, agentId) {
-  const tableExists = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
+function latestSubmitWorkReport(taskId: any, agentId: any) {
+  const tableExists: any = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get('task_reports');
   if (!tableExists) return null;
-  const row = store.db.prepare(`
+  const row: any = store.db.prepare(`
     SELECT report_id, summary, changed_files_json, submitted_at
     FROM task_reports
     WHERE task_id = ? AND agent_id = ?
@@ -1821,28 +1821,28 @@ function latestSubmitWorkReport(taskId, agentId) {
     LIMIT 1
   `).get(taskId, agentId);
   if (!row) return null;
-  let evidence = [];
+  let evidence: any[] = [];
   try {
-    const parsed = JSON.parse(row.changed_files_json ?? '[]');
-    if (Array.isArray(parsed)) evidence = parsed.filter((value) => typeof value === 'string' && value.trim());
+    const parsed: any = JSON.parse(row.changed_files_json ?? '[]');
+    if (Array.isArray(parsed)) evidence = parsed.filter((value: any) => typeof value === 'string' && value.trim());
   } catch {
     evidence = [];
   }
   return {
     report_id: row.report_id,
     summary: typeof row.summary === 'string' && row.summary.trim() ? row.summary.trim() : null,
-    changed_files: evidence.filter((value) => value !== NO_FILES_CHANGED_MARKER),
+    changed_files: evidence.filter((value: any) => value !== NO_FILES_CHANGED_MARKER),
     no_files_changed: evidence.includes(NO_FILES_CHANGED_MARKER),
     submitted_at: row.submitted_at ?? null,
   };
 }
 
-function autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args }) {
+function autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args }: any) {
   const payload: Record<string, unknown> = {};
   for (const field of ['summary', 'execution_notes', 'verification', 'changed_files', 'no_files_changed', 'resume_existing_work', 'recovery_truthfulness', 'self_certification']) {
     if (Object.prototype.hasOwnProperty.call(args, field)) payload[field] = args[field];
   }
-  const created = payloadCreate({
+  const created: any = payloadCreate({
     siteRoot,
     args: {
       payload,
@@ -1864,9 +1864,9 @@ function autoMaterializeSubmitWorkPayload({ taskNumber, agentId, args }) {
   };
 }
 
-async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, parentTaskNumber, reviewer, createdBy }) {
-  const existing = store.listTaskDependenciesForParent(parentLifecycle.task_id)
-    .find((dependency) => dependency.kind === 'review');
+async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, parentTaskNumber, reviewer, createdBy }: any) {
+  const existing: any = store.listTaskDependenciesForParent(parentLifecycle.task_id)
+    .find((dependency: any) => dependency.kind === 'review');
   if (existing) {
     store.db.prepare('delete from task_dependencies where parent_task_id = ? and kind = ? and dependency_id <> ?')
       .run(parentLifecycle.task_id, 'review', existing.dependency_id);
@@ -1880,25 +1880,25 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
     };
   }
 
-  const maxTaskRow = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
-  const maxTaskNumber = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : parentTaskNumber;
+  const maxTaskRow: any = store.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get();
+  const maxTaskNumber: any = typeof maxTaskRow?.max_task_number === 'number' ? maxTaskRow.max_task_number : parentTaskNumber;
   store.ensureTaskNumberFloor?.(maxTaskNumber);
   const [reviewTaskNumber] = await allocateTaskNumbers(siteRoot, 1);
   if (!reviewTaskNumber) throw new Error('review_dependency_task_number_allocation_failed');
-  const now = new Date().toISOString();
-  const safeParentId = parentLifecycle.task_id.replace(/[^A-Za-z0-9._-]+/g, '-');
-  const reviewTaskId = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${reviewTaskNumber}-review-${safeParentId}`;
-  const dependencyId = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
-  const contractId = `contract-review-${reviewTaskId}`;
-  const reviewerRosterEntry = store.getRosterEntry(reviewer);
-  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
-  const observedTargetRole = reviewerRosterEntry?.role ?? reviewer;
-  const targetRole = rolesAreObligationTargets ? observedTargetRole : null;
-  const preferredAgentId = reviewerRosterEntry ? reviewer : null;
-  const taskFilePath = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${reviewTaskId}.md`);
+  const now: any = new Date().toISOString();
+  const safeParentId: any = parentLifecycle.task_id.replace(/[^A-Za-z0-9._-]+/g, '-');
+  const reviewTaskId: any = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${reviewTaskNumber}-review-${safeParentId}`;
+  const dependencyId: any = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
+  const contractId: any = `contract-review-${reviewTaskId}`;
+  const reviewerRosterEntry: any = store.getRosterEntry(reviewer);
+  const rolesAreObligationTargets: any = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
+  const observedTargetRole: any = reviewerRosterEntry?.role ?? reviewer;
+  const targetRole: any = rolesAreObligationTargets ? observedTargetRole : null;
+  const preferredAgentId: any = reviewerRosterEntry ? reviewer : null;
+  const taskFilePath: any = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${reviewTaskId}.md`);
   mkdirSync(join(siteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
 
-  const body = renderTaskBodyFromSpec({
+  const body: any = renderTaskBodyFromSpec({
     spec: {
       title: `Review task #${parentTaskNumber}`,
       chapter: null,
@@ -1978,7 +1978,7 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
   });
   store.db.prepare('delete from task_dependencies where parent_task_id = ? and kind = ? and dependency_id <> ?')
     .run(parentLifecycle.task_id, 'review', dependencyId);
-  const parentDependencyWaitStatus = await markParentAwaitingDependencies({
+  const parentDependencyWaitStatus: any = await markParentAwaitingDependencies({
     parentLifecycle,
     parentTaskNumber,
     updatedBy: createdBy,
@@ -2010,16 +2010,16 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
   };
 }
 
-async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumber, updatedBy, updatedAt, targetStatus = 'awaiting_dependencies' }) {
+async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumber, updatedBy, updatedAt, targetStatus = 'awaiting_dependencies' }: any) {
   store.updateStatus(parentLifecycle.task_id, targetStatus, updatedBy, {
     governed_by: 'dependencies',
     updated_at: updatedAt,
   });
-  let projection_updated = false;
+  let projection_updated: any = false;
   try {
-    const taskFile = await findTaskFile(siteRoot, String(parentTaskNumber));
+    const taskFile: any = await findTaskFile(siteRoot, String(parentTaskNumber));
     if (taskFile) {
-      const fileData = await readTaskFile(taskFile.path);
+      const fileData: any = await readTaskFile(taskFile.path);
       await writeTaskProjection(taskFile.path, {
         ...fileData.frontMatter,
         status: targetStatus,
@@ -2040,13 +2040,13 @@ async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumbe
   };
 }
 
-async function taskLifecycleDependencyDeclare(args) {
-  const parentTaskNumber = numberField(args, 'parent_task_number');
-  const requiredTaskNumber = numberField(args, 'required_task_number');
-  const agentId = stringField(args, 'agent_id');
-  const kind = stringField(args, 'kind');
-  const satisfyingOutcomes = Array.isArray(args.satisfying_outcomes)
-    ? args.satisfying_outcomes.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+async function taskLifecycleDependencyDeclare(args: any) {
+  const parentTaskNumber: any = numberField(args, 'parent_task_number');
+  const requiredTaskNumber: any = numberField(args, 'required_task_number');
+  const agentId: any = stringField(args, 'agent_id');
+  const kind: any = stringField(args, 'kind');
+  const satisfyingOutcomes: any = Array.isArray(args.satisfying_outcomes)
+    ? args.satisfying_outcomes.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
     : [];
   if (!parentTaskNumber) throw new Error('parent_task_number_required');
   if (!requiredTaskNumber) throw new Error('required_task_number_required');
@@ -2055,18 +2055,18 @@ async function taskLifecycleDependencyDeclare(args) {
   if (satisfyingOutcomes.length === 0) throw new Error('satisfying_outcomes_required');
   enforceSessionIdentity(agentId);
 
-  const allowedKinds = new Set(['review', 'verification', 'operator_decision', 'downstream_work']);
+  const allowedKinds: any = new Set(['review', 'verification', 'operator_decision', 'downstream_work']);
   if (!allowedKinds.has(kind)) throw new Error(`unsupported_dependency_kind: ${kind}`);
-  const parentLifecycle = store.getLifecycleByNumber(parentTaskNumber);
+  const parentLifecycle: any = store.getLifecycleByNumber(parentTaskNumber);
   if (!parentLifecycle) throw new Error(`parent_task_not_found: ${parentTaskNumber}`);
-  const requiredLifecycle = store.getLifecycleByNumber(requiredTaskNumber);
+  const requiredLifecycle: any = store.getLifecycleByNumber(requiredTaskNumber);
   if (!requiredLifecycle) throw new Error(`required_task_not_found: ${requiredTaskNumber}`);
   if (parentLifecycle.task_id === requiredLifecycle.task_id) throw new Error('dependency_self_cycle_not_allowed');
 
-  const now = new Date().toISOString();
-  const dependencyId = stringField(args, 'dependency_id')
+  const now: any = new Date().toISOString();
+  const dependencyId: any = stringField(args, 'dependency_id')
     ?? `dep-${kind}-${parentLifecycle.task_id}-${requiredLifecycle.task_id}`.replace(/[^A-Za-z0-9._-]+/g, '-');
-  const dependency = {
+  const dependency: any = {
     dependency_id: dependencyId,
     parent_task_id: parentLifecycle.task_id,
     required_task_id: requiredLifecycle.task_id,
@@ -2076,8 +2076,8 @@ async function taskLifecycleDependencyDeclare(args) {
     created_by: agentId,
     created_at: now,
   };
-  let outcomeContract = null;
-  let outcomeContractInput = objectField(args, 'outcome_contract');
+  let outcomeContract: any = null;
+  let outcomeContractInput: any = objectField(args, 'outcome_contract');
   if (!outcomeContractInput && kind === 'downstream_work') {
     outcomeContractInput = {
       outcome_type: 'completion',
@@ -2089,18 +2089,18 @@ async function taskLifecycleDependencyDeclare(args) {
     };
   }
   if (outcomeContractInput) {
-    const outcomeType = nonEmptyString(outcomeContractInput.outcome_type) ?? kind;
-    const allowedOutcomes = Array.isArray(outcomeContractInput.allowed_outcomes)
-      ? outcomeContractInput.allowed_outcomes.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    const outcomeType: any = nonEmptyString(outcomeContractInput.outcome_type) ?? kind;
+    const allowedOutcomes: any = Array.isArray(outcomeContractInput.allowed_outcomes)
+      ? outcomeContractInput.allowed_outcomes.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
       : [];
-    const contractSatisfyingOutcomes = Array.isArray(outcomeContractInput.satisfying_outcomes)
-      ? outcomeContractInput.satisfying_outcomes.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    const contractSatisfyingOutcomes: any = Array.isArray(outcomeContractInput.satisfying_outcomes)
+      ? outcomeContractInput.satisfying_outcomes.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
       : satisfyingOutcomes;
-    const blockingOutcomes = Array.isArray(outcomeContractInput.blocking_outcomes)
-      ? outcomeContractInput.blocking_outcomes.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    const blockingOutcomes: any = Array.isArray(outcomeContractInput.blocking_outcomes)
+      ? outcomeContractInput.blocking_outcomes.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
       : [];
-    const requiredFields = Array.isArray(outcomeContractInput.required_fields)
-      ? outcomeContractInput.required_fields.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+    const requiredFields: any = Array.isArray(outcomeContractInput.required_fields)
+      ? outcomeContractInput.required_fields.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
       : ['summary'];
     if (allowedOutcomes.length === 0) throw new Error('outcome_contract_allowed_outcomes_required');
     if (contractSatisfyingOutcomes.length === 0) throw new Error('outcome_contract_satisfying_outcomes_required');
@@ -2118,7 +2118,7 @@ async function taskLifecycleDependencyDeclare(args) {
     };
   }
 
-  const parentDependencyWaitStatus = await withStoreSavepoint(store, async () => {
+  const parentDependencyWaitStatus: any = await withStoreSavepoint(store, async () => {
     store.upsertTaskDependency(dependency);
     if (outcomeContract) store.upsertTaskOutcomeContract(outcomeContract);
     return markParentAwaitingDependencies({
@@ -2140,32 +2140,32 @@ async function taskLifecycleDependencyDeclare(args) {
   });
 }
 
-async function withStoreSavepoint<T>(taskStore, action: () => Promise<T>): Promise<T> {
-  const name = `narada_task_mutation_${randomUUID().replaceAll('-', '')}`;
+async function withStoreSavepoint<T>(taskStore: any, action: () => Promise<T>): Promise<T> {
+  const name: any = `narada_task_mutation_${randomUUID().replaceAll('-', '')}`;
   taskStore.db.exec(`SAVEPOINT ${name}`);
   try {
-    const result = await action();
+    const result: any = await action();
     taskStore.db.exec(`RELEASE SAVEPOINT ${name}`);
     return result;
-  } catch (error) {
+  } catch (error: any) {
     try { taskStore.db.exec(`ROLLBACK TO SAVEPOINT ${name}`); } catch { /* preserve original error */ }
     try { taskStore.db.exec(`RELEASE SAVEPOINT ${name}`); } catch { /* preserve original error */ }
     throw error;
   }
 }
 
-function taskLifecycleDependencyDispositionRecord(args) {
-  const dependencyId = stringField(args, 'dependency_id');
-  const agentId = stringField(args, 'agent_id');
-  const kind = stringField(args, 'kind');
-  const summary = stringField(args, 'summary');
+function taskLifecycleDependencyDispositionRecord(args: any) {
+  const dependencyId: any = stringField(args, 'dependency_id');
+  const agentId: any = stringField(args, 'agent_id');
+  const kind: any = stringField(args, 'kind');
+  const summary: any = stringField(args, 'summary');
   if (!dependencyId) throw new Error('dependency_id_required');
   if (!agentId) throw new Error('agent_id_required');
   if (!kind) throw new Error('kind_required');
   if (!summary) throw new Error('summary_required');
   enforceSessionIdentity(agentId);
 
-  const allowedKinds = new Set([
+  const allowedKinds: any = new Set([
     'remediation_task',
     'covered_by_existing_task',
     'routed_obligation',
@@ -2175,29 +2175,29 @@ function taskLifecycleDependencyDispositionRecord(args) {
   ]);
   if (!allowedKinds.has(kind)) throw new Error(`unsupported_dependency_disposition_kind: ${kind}`);
 
-  const dependency = store.getTaskDependency(dependencyId);
+  const dependency: any = store.getTaskDependency(dependencyId);
   if (!dependency) throw new Error(`dependency_not_found: ${dependencyId}`);
-  const latestOutcome = store.getLatestTaskOutcome(dependency.required_task_id);
-  const explicitOutcomeId = stringField(args, 'required_outcome_id');
-  const requiredOutcomeId = explicitOutcomeId ?? latestOutcome?.outcome_id ?? null;
+  const latestOutcome: any = store.getLatestTaskOutcome(dependency.required_task_id);
+  const explicitOutcomeId: any = stringField(args, 'required_outcome_id');
+  const requiredOutcomeId: any = explicitOutcomeId ?? latestOutcome?.outcome_id ?? null;
   if (!requiredOutcomeId) throw new Error(`dependency_outcome_missing: ${dependencyId}`);
   if (explicitOutcomeId && latestOutcome?.outcome_id !== explicitOutcomeId) {
-    const matchingOutcome = store.listTaskOutcomes(dependency.required_task_id).find((outcome) => outcome.outcome_id === explicitOutcomeId);
+    const matchingOutcome: any = store.listTaskOutcomes(dependency.required_task_id).find((outcome: any) => outcome.outcome_id === explicitOutcomeId);
     if (!matchingOutcome) throw new Error(`required_outcome_not_found_for_dependency: ${explicitOutcomeId}`);
   }
 
-  const targetTaskId = stringField(args, 'target_task_id');
-  const routedObligationId = stringField(args, 'routed_obligation_id');
-  const authorityBasis = objectField(args, 'authority_basis');
+  const targetTaskId: any = stringField(args, 'target_task_id');
+  const routedObligationId: any = stringField(args, 'routed_obligation_id');
+  const authorityBasis: any = objectField(args, 'authority_basis');
   if ((kind === 'remediation_task' || kind === 'covered_by_existing_task') && !targetTaskId) throw new Error(`${kind}_target_task_id_required`);
   if (kind === 'routed_obligation' && !routedObligationId) throw new Error('routed_obligation_id_required');
   if ((kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected') && !authorityBasis) throw new Error(`${kind}_authority_basis_required`);
 
-  const status = stringField(args, 'status') ?? (kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected' ? 'deferred' : 'open');
-  const allowedStatuses = new Set(['open', 'deferred', 'resolved', 'superseded']);
+  const status: any = stringField(args, 'status') ?? (kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected' ? 'deferred' : 'open');
+  const allowedStatuses: any = new Set(['open', 'deferred', 'resolved', 'superseded']);
   if (!allowedStatuses.has(status)) throw new Error(`unsupported_dependency_disposition_status: ${status}`);
-  const now = new Date().toISOString();
-  const disposition = {
+  const now: any = new Date().toISOString();
+  const disposition: any = {
     disposition_id: `depdisp_${randomUUID()}`,
     dependency_id: dependencyId,
     required_outcome_id: requiredOutcomeId,
@@ -2222,10 +2222,10 @@ function taskLifecycleDependencyDispositionRecord(args) {
   };
 }
 
-function submitWorkResult({ status, taskNumber, agentId, primitiveResults, blockedAt, payloadSource }, isError) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
-  const finalLifecycleStatus = lifecycle?.status ?? null;
-  const closureStatus = status === 'blocked'
+function submitWorkResult({ status, taskNumber, agentId, primitiveResults, blockedAt, payloadSource }: any, isError: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
+  const finalLifecycleStatus: any = lifecycle?.status ?? null;
+  const closureStatus: any = status === 'blocked'
     ? 'blocked'
     : finalLifecycleStatus === 'closed' || finalLifecycleStatus === 'confirmed'
     ? 'closed'
@@ -2250,16 +2250,16 @@ function submitWorkResult({ status, taskNumber, agentId, primitiveResults, block
   }, isError);
 }
 
-function assertSubstantiveSubmitWorkText(value, field) {
-  const text = typeof value === 'string' ? value.trim() : '';
+function assertSubstantiveSubmitWorkText(value: any, field: any) {
+  const text: any = typeof value === 'string' ? value.trim() : '';
   if (text.length < 20 || /Record what was done|Record commands run|<!--|TODO|TBD/i.test(text)) {
     throw new Error(`task_lifecycle_submit_work_${field}_not_substantive`);
   }
 }
 
-function buildChapterMembershipResult({ status, chapterId, taskNumber, memberships, appendMode = null }) {
-  const ordered = [...memberships].sort(compareChapterMemberships);
-  const membership = ordered.find((item) => Number(item.task_number) === taskNumber) ?? null;
+function buildChapterMembershipResult({ status, chapterId, taskNumber, memberships, appendMode = null }: any) {
+  const ordered: any = [...memberships].sort(compareChapterMemberships);
+  const membership: any = ordered.find((item: any) => Number(item.task_number) === taskNumber) ?? null;
   return {
     schema: 'narada.task.chapter_membership.v1',
     status,
@@ -2273,49 +2273,49 @@ function buildChapterMembershipResult({ status, chapterId, taskNumber, membershi
   };
 }
 
-function compareChapterMemberships(a, b) {
+function compareChapterMemberships(a: any, b: any) {
   return Number(a.order_index ?? 0) - Number(b.order_index ?? 0) || Number(a.task_number ?? 0) - Number(b.task_number ?? 0);
 }
 
-function normalizeChapterId(value) {
-  const text = String(value ?? '').trim();
+function normalizeChapterId(value: any) {
+  const text: any = String(value ?? '').trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) throw new Error('invalid_chapter_id');
   return text;
 }
 
-function normalizeChapterTaskNumber(value) {
-  const number = Number(value);
+function normalizeChapterTaskNumber(value: any) {
+  const number: any = Number(value);
   if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_task_number: ${value}`);
   return number;
 }
 
-function normalizeOrderIndex(value) {
-  const number = Number(value);
+function normalizeOrderIndex(value: any) {
+  const number: any = Number(value);
   if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_order_index: ${value}`);
   return number;
 }
 
-async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
-  const lifecycle = store.getLifecycleByNumber(taskNumber);
+async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }: any) {
+  const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const evidence = await inspectTaskEvidence(siteRoot, String(taskNumber), store);
-  const taskFile = await findTaskFile(siteRoot, taskNumber);
-  let body = '';
+  const evidence: any = await inspectTaskEvidence(siteRoot, String(taskNumber), store);
+  const taskFile: any = await findTaskFile(siteRoot, taskNumber);
+  let body: any = '';
   if (taskFile) {
-    const taskData = await readTaskFile(taskFile.path);
+    const taskData: any = await readTaskFile(taskFile.path);
     body = taskData.body;
   }
-  const reports = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
-  const sqliteReports = store.listReports ? store.listReports(lifecycle.task_id) : [];
-  const verificationRuns = store.listVerificationRunsForTask ? store.listVerificationRunsForTask(lifecycle.task_id) : [];
-  const observations = store.db.prepare('SELECT artifact_uri, created_at FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
-  const changedFileEvidence = collectChangedFileEvidenceFromReports(reports, sqliteReports);
-  const blockedWorkPosture = buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence });
-  const dependencySatisfaction = evaluateTaskDependencySatisfaction(store, lifecycle.task_id);
-  const closedComplete = lifecycle.status === 'closed' && evidence.verdict === 'complete';
-  const followUpValidation = validateFollowUpLedger(body);
-  const recoveryTruthfulnessValidation = validateRecoveryTruthfulnessBody({ body, summary: '', context: `task:${taskNumber}` });
-  const requirements = [];
+  const reports: any = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
+  const sqliteReports: any = store.listReports ? store.listReports(lifecycle.task_id) : [];
+  const verificationRuns: any = store.listVerificationRunsForTask ? store.listVerificationRunsForTask(lifecycle.task_id) : [];
+  const observations: any = store.db.prepare('SELECT artifact_uri, created_at FROM observation_artifacts WHERE task_id = ? ORDER BY created_at DESC').all(lifecycle.task_id);
+  const changedFileEvidence: any = collectChangedFileEvidenceFromReports(reports, sqliteReports);
+  const blockedWorkPosture: any = buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence });
+  const dependencySatisfaction: any = evaluateTaskDependencySatisfaction(store, lifecycle.task_id);
+  const closedComplete: any = lifecycle.status === 'closed' && evidence.verdict === 'complete';
+  const followUpValidation: any = validateFollowUpLedger(body);
+  const recoveryTruthfulnessValidation: any = validateRecoveryTruthfulnessBody({ body, summary: '', context: `task:${taskNumber}` });
+  const requirements: any[] = [];
 
   addRequirement(requirements, {
     id: 'execution_notes',
@@ -2331,7 +2331,7 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
     label: 'Verification',
     satisfied: evidence.has_verification === true,
     observed: {
-      passed_verification_runs: verificationRuns.filter((run) => run.status === 'passed').map((run) => run.run_id),
+      passed_verification_runs: verificationRuns.filter((run: any) => run.status === 'passed').map((run: any) => run.run_id),
       report_verification_count: countReportVerificationEntries(reports, sqliteReports),
       observation_artifact_count: observations.length,
     },
@@ -2392,9 +2392,9 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
       : 'Complete each required dependency task with an admitted satisfying outcome before closing the parent task.',
   });
 
-  const blockers = requirements.filter((item) => item.satisfied !== true);
-  const remediationSummary = blockers.map((item) => `${item.id}: ${item.remediation}`);
-  const nextAction = blockedWorkPosture.state === 'blocked_reported'
+  const blockers: any = requirements.filter((item: any) => item.satisfied !== true);
+  const remediationSummary: any = blockers.map((item: any) => `${item.id}: ${item.remediation}`);
+  const nextAction: any = blockedWorkPosture.state === 'blocked_reported'
     ? 'Blocked report is recorded. Do not finish as complete until blockers are resolved; continue or defer the task instead.'
     : blockedWorkPosture.state === 'stale_blocked_report_superseded'
     ? 'Prior blocked report is superseded by newer completion evidence; continue normal finish/review checks.'
@@ -2418,19 +2418,19 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }) {
   };
 }
 
-function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence = null }) {
-  const reports = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
-  const blockedReports = [];
+function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence = null }: any) {
+  const reports: any = store.listReportRecords ? store.listReportRecords(lifecycle.task_id) : [];
+  const blockedReports: any[] = [];
   for (const report of reports) {
     try {
-      const parsed = JSON.parse(report.report_json);
+      const parsed: any = JSON.parse(report.report_json);
       if (parsed.report_status === 'blocked') blockedReports.push({ ...parsed, report_id: parsed.report_id ?? report.report_id, reported_at: parsed.reported_at ?? report.reported_at });
     } catch {
       // Ignore malformed historical report records.
     }
   }
-  blockedReports.sort((a, b) => String(b.reported_at ?? '').localeCompare(String(a.reported_at ?? '')));
-  const latest = blockedReports[0] ?? null;
+  blockedReports.sort((a: any, b: any) => String(b.reported_at ?? '').localeCompare(String(a.reported_at ?? '')));
+  const latest: any = blockedReports[0] ?? null;
   if (!latest) return { state: 'clear', report_id: null };
   if (lifecycle.status === 'closed' || lifecycle.status === 'confirmed') {
     return {
@@ -2440,7 +2440,7 @@ function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence =
       next_action: null,
     };
   }
-  const hasSupersedingChangeEvidence = Boolean(changedFileEvidence)
+  const hasSupersedingChangeEvidence: any = Boolean(changedFileEvidence)
     && (changedFileEvidence.changedFiles?.length > 0 || changedFileEvidence.noFilesChangedDeclarations?.length > 0);
   if (hasSupersedingChangeEvidence) {
     return { state: 'stale_blocked_report_superseded', report_id: latest.report_id, superseded_by: { evidence: changedFileEvidence } };
@@ -2455,20 +2455,20 @@ function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence =
   };
 }
 
-function validateTaskFinishRecoveryTruthfulness({ recoveryTruthfulness }) {
+function validateTaskFinishRecoveryTruthfulness({ recoveryTruthfulness }: any) {
   if (!recoveryTruthfulness) return { ok: true, evaluation: { triggered: false }, errors: [] };
   return validateRecoveryTruthfulnessPacket(recoveryTruthfulness);
 }
 
-function addRequirement(requirements, item) {
+function addRequirement(requirements: any, item: any) {
   requirements.push({
     required_for_finish: true,
     ...item,
   });
 }
 
-function finishGateExamples(kind) {
-  const examples = {
+function finishGateExamples(kind: any) {
+  const examples: any = {
     follow_up_ledger: {
       heading: '## Follow-Up Ledger',
       valid_entries: [
@@ -2513,35 +2513,35 @@ function finishGateExamples(kind) {
   return kind ? examples[kind] : examples;
 }
 
-function hasMaterialTaskSection(body, heading) {
-  const section = extractTaskSection(body, heading);
+function hasMaterialTaskSection(body: any, heading: any) {
+  const section: any = extractTaskSection(body, heading);
   if (!section) return false;
-  const cleaned = section.replace(/<!--.*?-->/gs, '').trim();
+  const cleaned: any = section.replace(/<!--.*?-->/gs, '').trim();
   return cleaned.length > 0;
 }
 
-function extractTaskSection(body, heading) {
-  const pattern = '^##\\s+' + escapeRegex(heading) + '\\s*$';
-  const match = body.match(new RegExp(pattern, 'mi'));
+function extractTaskSection(body: any, heading: any) {
+  const pattern: any = '^##\\s+' + escapeRegex(heading) + '\\s*$';
+  const match: any = body.match(new RegExp(pattern, 'mi'));
   if (!match) return null;
-  const start = match.index + match[0].length;
-  const rest = body.slice(start);
-  const nextHeading = rest.match(/^##\s/m);
-  const end = nextHeading ? start + nextHeading.index : body.length;
+  const start: any = match.index + match[0].length;
+  const rest: any = body.slice(start);
+  const nextHeading: any = rest.match(/^##\s/m);
+  const end: any = nextHeading ? start + nextHeading.index : body.length;
   return body.slice(start, end).trim();
 }
 
-function escapeRegex(value) {
-  const special = new Set(['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
-  return Array.from(String(value), (char) => special.has(char) ? `\\${char}` : char).join('');
+function escapeRegex(value: any) {
+  const special: any = new Set(['.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\']);
+  return Array.from(String(value), (char: any) => special.has(char) ? `\\${char}` : char).join('');
 }
 
-function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
-  const files = [];
-  const noFilesChangedDeclarations = [];
+function collectChangedFileEvidenceFromReports(reportRecords: any, sqliteReports: any) {
+  const files: any[] = [];
+  const noFilesChangedDeclarations: any[] = [];
   for (const report of reportRecords) {
     try {
-      const parsed = JSON.parse(report.report_json);
+      const parsed: any = JSON.parse(report.report_json);
       if (Array.isArray(parsed.changed_files)) files.push(...parsed.changed_files);
       if (parsed.no_files_changed === true || parsed.changed_files?.includes?.(NO_FILES_CHANGED_MARKER)) {
         noFilesChangedDeclarations.push({
@@ -2556,7 +2556,7 @@ function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
   }
   for (const report of sqliteReports) {
     try {
-      const parsed = JSON.parse(report.changed_files_json ?? '[]');
+      const parsed: any = JSON.parse(report.changed_files_json ?? '[]');
       if (Array.isArray(parsed)) {
         files.push(...parsed);
         if (parsed.includes(NO_FILES_CHANGED_MARKER)) {
@@ -2571,15 +2571,15 @@ function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
       // ignore malformed sqlite reports
     }
   }
-  const declarationKeys = new Set();
-  const uniqueDeclarations = [];
+  const declarationKeys: any = new Set();
+  const uniqueDeclarations: any[] = [];
   for (const declaration of noFilesChangedDeclarations) {
-    const key = declaration.report_id ?? `${declaration.agent_id ?? 'unknown'}:${declaration.declared_at ?? 'unknown'}`;
+    const key: any = declaration.report_id ?? `${declaration.agent_id ?? 'unknown'}:${declaration.declared_at ?? 'unknown'}`;
     if (declarationKeys.has(key)) continue;
     declarationKeys.add(key);
     uniqueDeclarations.push(declaration);
   }
-  const changedFiles = [...new Set(files.filter((file) => typeof file === 'string' && file.trim().length > 0 && file !== NO_FILES_CHANGED_MARKER))];
+  const changedFiles: any = [...new Set(files.filter((file: any) => typeof file === 'string' && file.trim().length > 0 && file !== NO_FILES_CHANGED_MARKER))];
   return {
     changedFiles,
     changed_files_count: changedFiles.length,
@@ -2588,11 +2588,11 @@ function collectChangedFileEvidenceFromReports(reportRecords, sqliteReports) {
   };
 }
 
-function countReportVerificationEntries(reportRecords, sqliteReports) {
-  let count = 0;
+function countReportVerificationEntries(reportRecords: any, sqliteReports: any) {
+  let count: any = 0;
   for (const report of reportRecords) {
     try {
-      const parsed = JSON.parse(report.report_json);
+      const parsed: any = JSON.parse(report.report_json);
       if (Array.isArray(parsed.verification)) count += parsed.verification.length;
     } catch {
       // ignore malformed report records
@@ -2600,7 +2600,7 @@ function countReportVerificationEntries(reportRecords, sqliteReports) {
   }
   for (const report of sqliteReports) {
     try {
-      const parsed = JSON.parse(report.verification_json ?? '[]');
+      const parsed: any = JSON.parse(report.verification_json ?? '[]');
       if (Array.isArray(parsed)) count += parsed.length;
     } catch {
       // ignore malformed sqlite reports
@@ -2609,24 +2609,24 @@ function countReportVerificationEntries(reportRecords, sqliteReports) {
   return count;
 }
 
-function testResultArtifactGate(store, taskId) {
-  const rows = store.db.prepare("SELECT artifact_id, artifact_uri, admitted_view_json, created_at FROM observation_artifacts WHERE task_id = ? AND artifact_type = 'test_result' ORDER BY created_at DESC, artifact_id DESC").all(taskId);
-  const latestBySelector = new Map<string, Record<string, unknown>>();
-  const latestPassing = new Map<string, Record<string, unknown>>();
+function testResultArtifactGate(store: any, taskId: any) {
+  const rows: any = store.db.prepare("SELECT artifact_id, artifact_uri, admitted_view_json, created_at FROM observation_artifacts WHERE task_id = ? AND artifact_type = 'test_result' ORDER BY created_at DESC, artifact_id DESC").all(taskId);
+  const latestBySelector: any = new Map<string, Record<string, unknown>>();
+  const latestPassing: any = new Map<string, Record<string, unknown>>();
   for (const artifact of rows.flatMap(parseTestResultArtifact)) {
-    const selectorKey = artifact.selector ?? '__unknown_selector__';
+    const selectorKey: any = artifact.selector ?? '__unknown_selector__';
     if (!latestBySelector.has(selectorKey)) latestBySelector.set(selectorKey, artifact);
     if (artifact.status === 'passed' && !latestPassing.has(selectorKey)) latestPassing.set(selectorKey, artifact);
   }
   return {
-    failed_test_artifacts: [...latestBySelector.values()].filter((artifact) => artifact.status === 'failed'),
+    failed_test_artifacts: [...latestBySelector.values()].filter((artifact: any) => artifact.status === 'failed'),
     latest_passing_artifacts: [...latestPassing.values()],
   };
 }
 
-function parseTestResultArtifact(row) {
+function parseTestResultArtifact(row: any) {
   try {
-    const payload = JSON.parse(row.admitted_view_json || '{}');
+    const payload: any = JSON.parse(row.admitted_view_json || '{}');
     if (!['failed', 'passed'].includes(payload.status)) return [];
     return [{
       artifact_id: row.artifact_id,
@@ -2643,8 +2643,8 @@ function parseTestResultArtifact(row) {
   }
 }
 
-function failedTestResultArtifacts(store, taskId) {
-  return testResultArtifactGate(store, taskId).failed_test_artifacts.map((artifact) => ({
+function failedTestResultArtifacts(store: any, taskId: any) {
+  return testResultArtifactGate(store, taskId).failed_test_artifacts.map((artifact: any) => ({
     artifact_id: artifact.artifact_id,
     artifact_uri: artifact.artifact_uri,
     created_at: artifact.created_at,
@@ -2653,7 +2653,7 @@ function failedTestResultArtifacts(store, taskId) {
   }));
 }
 
-function testTargetsForSelector(selector) {
+function testTargetsForSelector(selector: any) {
   switch (selector) {
     case 'task-lifecycle':
       return [
@@ -2683,11 +2683,11 @@ function testTargetsForSelector(selector) {
   }
 }
 
-function parseArgs(argv) {
+function parseArgs(argv: any) {
   const parsed: Record<string, unknown> = { help: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  for (let i: any = 0; i < argv.length; i += 1) {
+    const arg: any = argv[i];
+    const next: any = argv[i + 1];
     if (arg === '--site-root' && next) {
       parsed.siteRoot = next;
       i += 1;
@@ -2698,15 +2698,15 @@ function parseArgs(argv) {
   return parsed;
 }
 
-function parseJsonRpcInput(input) {
-  const trimmed = input.trim();
+function parseJsonRpcInput(input: any) {
+  const trimmed: any = input.trim();
   if (!trimmed) return [];
   if (/^Content-Length:/im.test(trimmed)) {
-    const parsed = drainFramedJsonRpcFrames(Buffer.from(input, 'utf8'));
+    const parsed: any = drainFramedJsonRpcFrames(Buffer.from(input, 'utf8'));
     if (parsed.remaining.toString('utf8').trim().length > 0) throw new Error('mcp_stdio_trailing_frame_bytes');
     return parsed.requests;
   }
-  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+  return trimmed.split(/\r?\n/).filter((line: any) => line.trim().length > 0).map((line: any) => {
     try {
       return JSON.parse(line);
     } catch {
@@ -2715,15 +2715,15 @@ function parseJsonRpcInput(input) {
   });
 }
 
-function objectSchema(properties, required = []) {
+function objectSchema(properties: any, required : any= []) {
   return { type: 'object', properties, additionalProperties: false, ...(required.length > 0 ? { required } : {}) };
 }
 
-function stringSchema(description) {
+function stringSchema(description: any) {
   return { type: 'string', description };
 }
 
-function authorityBasisSchema(description) {
+function authorityBasisSchema(description: any) {
   return {
     type: 'object',
     description,
@@ -2734,20 +2734,20 @@ function authorityBasisSchema(description) {
   };
 }
 
-function nullableStringSchema(description) {
+function nullableStringSchema(description: any) {
   return { type: 'string', nullable: true, description };
 }
 
-function numberSchema(description) {
+function numberSchema(description: any) {
   return { type: 'number', description };
 }
 
-function computeStateFreshness(lastWorkboardCheckAt, generatedAt) {
-  const now = new Date();
-  const generated = generatedAt ? new Date(generatedAt) : now;
-  const lastCheck = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
+function computeStateFreshness(lastWorkboardCheckAt: any, generatedAt: any) {
+  const now: any = new Date();
+  const generated: any = generatedAt ? new Date(generatedAt) : now;
+  const lastCheck: any = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
 
-  const staleThresholdMs = 10 * 60 * 1000; // 10 minutes
+  const staleThresholdMs: any = 10 * 60 * 1000; // 10 minutes
 
   if (!lastCheck) {
     return {
@@ -2760,8 +2760,8 @@ function computeStateFreshness(lastWorkboardCheckAt, generatedAt) {
     };
   }
 
-  const secondsSinceCheck = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
-  const stale = secondsSinceCheck > staleThresholdMs / 1000;
+  const secondsSinceCheck: any = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
+  const stale: any = secondsSinceCheck > staleThresholdMs / 1000;
 
   return {
     status: stale ? 'stale' : 'fresh',
@@ -2789,18 +2789,18 @@ function buildWorkboardSnapshotPacket({
   lastWorkboardCheckAt,
   previousSnapshot,
   limit,
-}) {
-  const freshness = computeStateFreshness(lastWorkboardCheckAt, generatedAt);
-  const nextWorkContract = buildNextWorkContract(board, recommendation ?? null);
-  const localFollowups = board.local_followups.slice(0, limit);
-  const roleWideFollowups = (board.role_wide_followups || []).slice(0, limit);
-  const dependencyWaitingParents = (board.dependency_waiting_parents || []).slice(0, limit);
-  const dependencyObligations = (board.dependency_obligations || []).slice(0, limit);
-  const dependencyTasks = (board.dependency_tasks || []).slice(0, limit);
-  const nonActionableParentFollowups = (board.non_actionable_parent_followups || []).slice(0, limit);
-  const closureAuthorityConflicts = (board.closure_authority_conflicts || []).slice(0, limit);
-  const recommendationTask = recommendation?.task ?? null;
-  const preferredAgentMismatch = recommendationTask?.preferred_agent_id && recommendationTask.preferred_agent_id !== agentId
+}: any) {
+  const freshness: any = computeStateFreshness(lastWorkboardCheckAt, generatedAt);
+  const nextWorkContract: any = buildNextWorkContract(board, recommendation ?? null);
+  const localFollowups: any = board.local_followups.slice(0, limit);
+  const roleWideFollowups: any = (board.role_wide_followups || []).slice(0, limit);
+  const dependencyWaitingParents: any = (board.dependency_waiting_parents || []).slice(0, limit);
+  const dependencyObligations: any = (board.dependency_obligations || []).slice(0, limit);
+  const dependencyTasks: any = (board.dependency_tasks || []).slice(0, limit);
+  const nonActionableParentFollowups: any = (board.non_actionable_parent_followups || []).slice(0, limit);
+  const closureAuthorityConflicts: any = (board.closure_authority_conflicts || []).slice(0, limit);
+  const recommendationTask: any = recommendation?.task ?? null;
+  const preferredAgentMismatch: any = recommendationTask?.preferred_agent_id && recommendationTask.preferred_agent_id !== agentId
     ? {
         present: true,
         task_number: recommendationTask.task_number,
@@ -2808,17 +2808,17 @@ function buildWorkboardSnapshotPacket({
         claiming_agent: agentId,
       }
     : { present: false };
-  const current = {
+  const current: any = {
     recommendation_action: recommendation?.action ?? null,
     recommendation_task_number: recommendationTask?.task_number ?? null,
     counts: responseCounts,
   };
-  const prior = previousSnapshot?.snapshot ? {
+  const prior: any = previousSnapshot?.snapshot ? {
     recommendation_action: previousSnapshot.snapshot.recommendation?.action ?? null,
     recommendation_task_number: previousSnapshot.snapshot.recommendation?.task?.task_number ?? null,
     counts: previousSnapshot.snapshot.counts ?? null,
   } : null;
-  const drift = prior ? {
+  const drift: any = prior ? {
     status: JSON.stringify(prior) === JSON.stringify(current) ? 'unchanged' : 'changed',
     previous: prior,
     current,
@@ -2882,7 +2882,7 @@ function buildWorkboardSnapshotPacket({
   };
 }
 
-function summarizeWorkboardTask(task) {
+function summarizeWorkboardTask(task: any) {
   if (!task) return null;
   return {
     task_number: task.task_number,
@@ -2905,10 +2905,10 @@ function summarizeWorkboardTask(task) {
   };
 }
 
-function jsonToolResult(value, isError = false, toolName = null) {
+function jsonToolResult(value: any, isError : any= false, toolName : any= null) {
   void toolName;
-  const text = JSON.stringify(value);
-  const inlineLimit = 4000;
+  const text: any = JSON.stringify(value);
+  const inlineLimit: any = 4000;
   if (text.length > inlineLimit) {
     return buildBoundedToolResult({
       siteRoot,
@@ -2919,8 +2919,8 @@ function jsonToolResult(value, isError = false, toolName = null) {
       readerTool: 'mcp_output_show',
     });
   }
-  const truncated = text.length > inlineLimit;
-  const renderedText = truncated
+  const truncated: any = text.length > inlineLimit;
+  const renderedText: any = truncated
     ? `Output truncated; use structuredContent for the complete payload. ${text.slice(0, inlineLimit)}`
     : text;
   return {
@@ -2935,66 +2935,66 @@ function jsonToolResult(value, isError = false, toolName = null) {
   };
 }
 
-function numberField(record, key) {
-  const value = record[key];
+function numberField(record: any, key: any) {
+  const value: any = record[key];
   if (typeof value === 'number') return value;
   if (typeof value === 'string') {
-    const parsed = Number(value);
+    const parsed: any = Number(value);
     if (!Number.isNaN(parsed)) return parsed;
   }
   return undefined;
 }
 
-function asRecord(value) {
+function asRecord(value: any) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 }
 
-function stringField(record, key) {
-  const value = record?.[key];
+function stringField(record: any, key: any) {
+  const value: any = record?.[key];
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function nonEmptyString(value) {
+function nonEmptyString(value: any) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function nullableStringField(record, key) {
-  const value = record?.[key];
+function nullableStringField(record: any, key: any) {
+  const value: any = record?.[key];
   if (value === null) return null;
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-function booleanField(record, key) {
+function booleanField(record: any, key: any) {
   return record?.[key] === true ? true : record?.[key] === false ? false : null;
 }
 
-function objectField(record, key) {
+function objectField(record: any, key: any) {
   return asRecord(record?.[key]);
 }
 
-function stringArrayField(record, key) {
-  const value = record?.[key];
-  return Array.isArray(value) && value.every((item) => typeof item === 'string') ? value : null;
+function stringArrayField(record: any, key: any) {
+  const value: any = record?.[key];
+  return Array.isArray(value) && value.every((item: any) => typeof item === 'string') ? value : null;
 }
 
-function relativeSitePath(root, targetPath) {
-  const resolvedRoot = resolve(root);
-  const resolvedTarget = resolve(targetPath);
+function relativeSitePath(root: any, targetPath: any) {
+  const resolvedRoot: any = resolve(root);
+  const resolvedTarget: any = resolve(targetPath);
   return relative(resolvedRoot, resolvedTarget).split(sep).join('/');
 }
 
-function replaceTaskSection(body, heading, replacement) {
-  const pattern = '^##\\s+' + escapeRegex(heading) + '\\s*$';
-  const match = body.match(new RegExp(pattern, 'mi'));
+function replaceTaskSection(body: any, heading: any, replacement: any) {
+  const pattern: any = '^##\\s+' + escapeRegex(heading) + '\\s*$';
+  const match: any = body.match(new RegExp(pattern, 'mi'));
   if (!match) return `${body.trimEnd()}\n\n## ${heading}\n\n${replacement.trim()}\n`;
-  const start = match.index + match[0].length;
-  const rest = body.slice(start);
-  const nextHeading = rest.match(/^##\s/m);
-  const end = nextHeading ? start + nextHeading.index : body.length;
+  const start: any = match.index + match[0].length;
+  const rest: any = body.slice(start);
+  const nextHeading: any = rest.match(/^##\s/m);
+  const end: any = nextHeading ? start + nextHeading.index : body.length;
   return `${body.slice(0, start)}\n\n${replacement.trim()}\n\n${body.slice(end).trimStart()}`;
 }
 
-function slugify(title) {
+function slugify(title: any) {
   return title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -3003,41 +3003,41 @@ function slugify(title) {
 }
 
 function todayYmd() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const d: any = new Date();
+  const y: any = d.getFullYear();
+  const m: any = String(d.getMonth() + 1).padStart(2, '0');
+  const day: any = String(d.getDate()).padStart(2, '0');
   return `${y}${m}${day}`;
 }
 
-function normalizeRecurringAuthorityBasis(value) {
-  const record = asRecord(value);
-  const kind = stringField(record, 'kind');
-  const summary = stringField(record, 'summary');
-  const allowedKinds = new Set(['operator_direct_instruction', 'architect_review', 'task_acceptance', 'manual_trigger', 'scheduled_trigger']);
+function normalizeRecurringAuthorityBasis(value: any) {
+  const record: any = asRecord(value);
+  const kind: any = stringField(record, 'kind');
+  const summary: any = stringField(record, 'summary');
+  const allowedKinds: any = new Set(['operator_direct_instruction', 'architect_review', 'task_acceptance', 'manual_trigger', 'scheduled_trigger']);
   if (!kind || !allowedKinds.has(kind) || !summary) return null;
   return { kind, summary };
 }
 
-function parseIsoOrNow(value) {
+function parseIsoOrNow(value: any) {
   if (!value) return new Date();
-  const parsed = new Date(value);
+  const parsed: any = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error('invalid_current_time');
   return parsed;
 }
 
-async function createRecurringTaskInstance({ store, siteRoot, definition, actorAgentId, actorRole, authorityBasis, triggerMode, runReason, eventType, now, dueKey = null }) {
-  const nowIso = now instanceof Date ? now.toISOString() : new Date().toISOString();
-  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
-  const taskNumber = (await allocateTaskNumbers(siteRoot, 1))[0];
-  const taskTitle = `${definition.title} (${nowIso.slice(0, 10)})`;
-  const taskId = `${todayYmd()}-${taskNumber}-${slugify(taskTitle)}`;
-  const tasksDir = join(siteRoot, '.ai', 'do-not-open', 'tasks');
-  const filePath = join(tasksDir, `${taskId}.md`);
-  const evidenceRequirements = definition.evidence_requirements;
-  const tags = normalizeTaskTags(definition.tags);
-  const triggerLabel = triggerMode === 'schedule' ? 'Scheduled run reason' : 'Manual run reason';
-  const recurrenceContext = [
+async function createRecurringTaskInstance({ store, siteRoot, definition, actorAgentId, actorRole, authorityBasis, triggerMode, runReason, eventType, now, dueKey = null }: any) {
+  const nowIso: any = now instanceof Date ? now.toISOString() : new Date().toISOString();
+  const rolesAreObligationTargets: any = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
+  const taskNumber: any = (await allocateTaskNumbers(siteRoot, 1))[0];
+  const taskTitle: any = `${definition.title} (${nowIso.slice(0, 10)})`;
+  const taskId: any = `${todayYmd()}-${taskNumber}-${slugify(taskTitle)}`;
+  const tasksDir: any = join(siteRoot, '.ai', 'do-not-open', 'tasks');
+  const filePath: any = join(tasksDir, `${taskId}.md`);
+  const evidenceRequirements: any = definition.evidence_requirements;
+  const tags: any = normalizeTaskTags(definition.tags);
+  const triggerLabel: any = triggerMode === 'schedule' ? 'Scheduled run reason' : 'Manual run reason';
+  const recurrenceContext: any = [
     definition.context_markdown,
     '',
     `Recurring task definition: ${definition.recurrence_id}`,
@@ -3045,7 +3045,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
     dueKey ? `Scheduled due key: ${dueKey}` : null,
     evidenceRequirements.length > 0 ? `Evidence requirements: ${evidenceRequirements.join('; ')}` : null,
   ].filter(Boolean).join('\n');
-  const body = renderTaskBodyFromSpec({
+  const body: any = renderTaskBodyFromSpec({
     spec: {
       title: taskTitle,
       goal: definition.goal_markdown || definition.title,
@@ -3058,7 +3058,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
     executionNotes: null,
     verification: null,
   });
-  const frontMatterLines = [
+  const frontMatterLines: any = [
     '---',
     `number: ${taskNumber}`,
     `governed_by: ${rolesAreObligationTargets ? (definition.preferred_role || definition.target_role || 'unknown') : 'unknown'}`,
@@ -3071,11 +3071,11 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
   if (rolesAreObligationTargets && definition.preferred_role) frontMatterLines.push(`preferred_role: ${definition.preferred_role}`);
   if (rolesAreObligationTargets && definition.target_role) frontMatterLines.push(`target_role: ${definition.target_role}`);
   frontMatterLines.push('---');
-  const runId = `rtrun_${randomUUID()}`;
+  const runId: any = `rtrun_${randomUUID()}`;
   store.db.exec('BEGIN');
   try {
     if (triggerMode === 'schedule' && dueKey) {
-      const fresh = getRecurringDefinition(store, definition.recurrence_id);
+      const fresh: any = getRecurringDefinition(store, definition.recurrence_id);
       if (!fresh || fresh.status !== 'active') {
         store.db.exec('ROLLBACK');
         return { status: 'skipped', recurrence_id: definition.recurrence_id, reason: 'recurrence_not_active' };
@@ -3153,7 +3153,7 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
       now: nowIso,
     });
     store.db.exec('COMMIT');
-  } catch (error) {
+  } catch (error: any) {
     try { store.db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
     throw error;
   }
@@ -3169,23 +3169,23 @@ async function createRecurringTaskInstance({ store, siteRoot, definition, actorA
   };
 }
 
-function updateRecurringDefinitionStatus({ store, siteRoot, recurrenceId, actorAgentId, authorityBasis, nextStatus, eventType, reason }) {
+function updateRecurringDefinitionStatus({ store, siteRoot, recurrenceId, actorAgentId, authorityBasis, nextStatus, eventType, reason }: any) {
   if (!recurrenceId) throw new Error('recurrence_id_required');
   if (!actorAgentId) throw new Error('actor_agent_id_required');
   if (!authorityBasis) throw new Error('valid_authority_basis_required');
   if (!reason) throw new Error('reason_required');
   enforceSessionIdentity(actorAgentId);
-  const actorRole = requireRecurringAuthorityActor({ store, siteRoot, actorAgentId });
-  const definition = getRecurringDefinition(store, recurrenceId);
+  const actorRole: any = requireRecurringAuthorityActor({ store, siteRoot, actorAgentId });
+  const definition: any = getRecurringDefinition(store, recurrenceId);
   if (!definition) return { status: 'not_found', recurrence_id: recurrenceId };
   if (definition.status === 'retired' && nextStatus !== 'retired') {
     return { status: 'blocked', reason: 'recurrence_retired', recurrence_id: recurrenceId };
   }
-  const now = new Date().toISOString();
+  const now: any = new Date().toISOString();
   ensureRecurringTaskTables(store);
   store.db.exec('BEGIN');
   try {
-    const timestampColumn = nextStatus === 'retired' ? 'retired_at' : 'suspended_at';
+    const timestampColumn: any = nextStatus === 'retired' ? 'retired_at' : 'suspended_at';
     store.db.prepare(`
       UPDATE recurring_task_definitions
       SET status = ?, updated_at = ?, ${timestampColumn} = ?
@@ -3201,7 +3201,7 @@ function updateRecurringDefinitionStatus({ store, siteRoot, recurrenceId, actorA
       now,
     });
     store.db.exec('COMMIT');
-  } catch (error) {
+  } catch (error: any) {
     try { store.db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
     throw error;
   }
@@ -3213,38 +3213,38 @@ function updateRecurringDefinitionStatus({ store, siteRoot, recurrenceId, actorA
   };
 }
 
-function requireRecurringAuthorityActor({ store, siteRoot, actorAgentId }) {
-  const actorRoleResolution = resolveAgentRoleWithDiagnostics(store, siteRoot, actorAgentId);
-  const actorRole = actorRoleResolution.role;
+function requireRecurringAuthorityActor({ store, siteRoot, actorAgentId }: any) {
+  const actorRoleResolution: any = resolveAgentRoleWithDiagnostics(store, siteRoot, actorAgentId);
+  const actorRole: any = actorRoleResolution.role;
   if (!['architect', 'operator'].includes(String(actorRole))) {
     throw new Error(`recurring_task_actor_not_authorized: ${actorAgentId}`);
   }
   return String(actorRole);
 }
 
-function recurringDueKey(definition, now) {
+function recurringDueKey(definition: any, now: any) {
   if (definition.trigger_mode !== 'schedule') return null;
   if (definition.schedule_kind !== 'daily') return null;
   return now.toISOString().slice(0, 10);
 }
 
 
-function arrayOfStrings(value, fallback = []) {
+function arrayOfStrings(value: any, fallback : any= []) {
   if (!Array.isArray(value)) return fallback;
-  const strings = value.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
+  const strings: any = value.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim());
   return strings.length > 0 ? strings : fallback;
 }
 
-function parseJsonArray(value) {
+function parseJsonArray(value: any) {
   try {
-    const parsed = JSON.parse(value ?? '[]');
+    const parsed: any = JSON.parse(value ?? '[]');
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function parseJsonOrNull(value) {
+function parseJsonOrNull(value: any) {
   try {
     return JSON.parse(value);
   } catch {
@@ -3252,7 +3252,7 @@ function parseJsonOrNull(value) {
   }
 }
 
-function ensureTaskRoutingTables(taskStore) {
+function ensureTaskRoutingTables(taskStore: any) {
   taskStore.db.exec(`
     CREATE TABLE IF NOT EXISTS narada_andrey_task_role_preferences (
       task_id TEXT PRIMARY KEY,
@@ -3283,10 +3283,10 @@ function ensureTaskRoutingTables(taskStore) {
   ensureColumn(taskStore, 'narada_andrey_task_role_preferences', 'preferred_agent_id', 'TEXT');
 }
 
-function getTaskRouting(taskStore, taskId) {
+function getTaskRouting(taskStore: any, taskId: any) {
   ensureTaskRoutingTables(taskStore);
-  const lifecycle = taskStore.getLifecycle(taskId);
-  const rolePref = taskStore.db.prepare(`
+  const lifecycle: any = taskStore.getLifecycle(taskId);
+  const rolePref: any = taskStore.db.prepare(`
     SELECT target_role, preferred_role, preferred_agent_id
     FROM narada_andrey_task_role_preferences
     WHERE task_id = ?
@@ -3298,14 +3298,14 @@ function getTaskRouting(taskStore, taskId) {
   };
 }
 
-function ensureColumn(taskStore, tableName, columnName, columnType) {
-  const columns = taskStore.db.prepare(`PRAGMA table_info(${tableName})`).all();
-  if (!columns.some((column) => column.name === columnName)) {
+function ensureColumn(taskStore: any, tableName: any, columnName: any, columnType: any) {
+  const columns: any = taskStore.db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some((column: any) => column.name === columnName)) {
     taskStore.db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
   }
 }
 
-function ensureAgentRosterEventsTable(taskStore) {
+function ensureAgentRosterEventsTable(taskStore: any) {
   taskStore.db.exec(`
     CREATE TABLE IF NOT EXISTS agent_roster_events (
       event_id TEXT PRIMARY KEY,
@@ -3331,32 +3331,32 @@ function ensureAgentRosterEventsTable(taskStore) {
   `);
 }
 
-function normalizeRosterAuthorityBasis(value) {
-  const record = asRecord(value);
-  const kind = stringField(record, 'kind');
-  const summary = stringField(record, 'summary');
-  const allowedKinds = new Set(['operator_direct_instruction', 'directed_obligation', 'task_owner_handoff']);
+function normalizeRosterAuthorityBasis(value: any) {
+  const record: any = asRecord(value);
+  const kind: any = stringField(record, 'kind');
+  const summary: any = stringField(record, 'summary');
+  const allowedKinds: any = new Set(['operator_direct_instruction', 'directed_obligation', 'task_owner_handoff']);
   if (!kind || !allowedKinds.has(kind) || !summary) return null;
   return { kind, summary };
 }
 
-function validateRosterIdentifier(value, fieldName) {
+function validateRosterIdentifier(value: any, fieldName: any) {
   if (!value) throw new Error(`${fieldName}_required`);
   if (!/^[A-Za-z0-9._-]+$/.test(value)) {
     throw new Error(`${fieldName}_invalid: expected letters, numbers, dot, underscore, or hyphen only`);
   }
 }
 
-function admitRosterIdentity(args) {
-  const agentId = stringField(args, 'agent_id');
-  const role = stringField(args, 'role');
-  const actorAgentId = stringField(args, 'actor_agent_id');
-  const capabilitiesProvided = Object.prototype.hasOwnProperty.call(args, 'capabilities');
-  const capabilities = stringArrayField(args, 'capabilities') ?? [];
-  const operatorIdentity = stringField(args, 'operator_identity') ?? null;
-  const authorityBasis = normalizeRosterAuthorityBasis(args.authority_basis);
-  const reason = stringField(args, 'reason') ?? authorityBasis?.summary ?? null;
-  const dryRun = booleanField(args, 'dry_run') === true;
+function admitRosterIdentity(args: any) {
+  const agentId: any = stringField(args, 'agent_id');
+  const role: any = stringField(args, 'role');
+  const actorAgentId: any = stringField(args, 'actor_agent_id');
+  const capabilitiesProvided: any = Object.prototype.hasOwnProperty.call(args, 'capabilities');
+  const capabilities: any = stringArrayField(args, 'capabilities') ?? [];
+  const operatorIdentity: any = stringField(args, 'operator_identity') ?? null;
+  const authorityBasis: any = normalizeRosterAuthorityBasis(args.authority_basis);
+  const reason: any = stringField(args, 'reason') ?? authorityBasis?.summary ?? null;
+  const dryRun: any = booleanField(args, 'dry_run') === true;
 
   validateRosterIdentifier(agentId, 'agent_id');
   validateRosterIdentifier(role, 'role');
@@ -3365,13 +3365,13 @@ function admitRosterIdentity(args) {
   if (!authorityBasis) throw new Error('authority_basis_required: kind must be operator_direct_instruction, directed_obligation, or task_owner_handoff and summary is required');
 
   ensureAgentRosterEventsTable(store);
-  const now = new Date().toISOString();
-  const existing = store.db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(agentId);
-  const operatorIdentityCol = store.db.prepare("PRAGMA table_info(agent_roster)").all().some((column) => column.name === 'operator_identity');
-  const projectedCapabilitiesJson = capabilitiesProvided
+  const now: any = new Date().toISOString();
+  const existing: any = store.db.prepare('SELECT * FROM agent_roster WHERE agent_id = ?').get(agentId);
+  const operatorIdentityCol: any = store.db.prepare("PRAGMA table_info(agent_roster)").all().some((column: any) => column.name === 'operator_identity');
+  const projectedCapabilitiesJson: any = capabilitiesProvided
     ? JSON.stringify(capabilities)
     : (existing?.capabilities_json ?? JSON.stringify(capabilities));
-  const projectedRosterEntry = existing ? {
+  const projectedRosterEntry: any = existing ? {
     ...existing,
     role,
     capabilities_json: projectedCapabilitiesJson,
@@ -3386,11 +3386,11 @@ function admitRosterIdentity(args) {
     last_done: null,
     ...(operatorIdentityCol ? { operator_identity: operatorIdentity } : {}),
   };
-  const capabilitiesChanged = existing
+  const capabilitiesChanged: any = existing
     ? JSON.stringify(existing?.capabilities_json ? JSON.parse(existing.capabilities_json) : []) !== projectedCapabilitiesJson
     : false;
-  const projectionChanged = !existing || capabilitiesChanged || role !== (existing.role ?? null) || (operatorIdentityCol && operatorIdentity !== (existing.operator_identity ?? null));
-  const event = {
+  const projectionChanged: any = !existing || capabilitiesChanged || role !== (existing.role ?? null) || (operatorIdentityCol && operatorIdentity !== (existing.operator_identity ?? null));
+  const event: any = {
     event_id: `roster-${randomUUID()}`,
     event_type: 'admit_agent',
     agent_id: agentId,
@@ -3423,7 +3423,7 @@ function admitRosterIdentity(args) {
     };
   }
 
-  const insertEvent = store.db.prepare(`
+  const insertEvent: any = store.db.prepare(`
     INSERT INTO agent_roster_events (
       event_id, event_type, agent_id, role, capabilities_json, operator_identity,
       requested_by, requested_at, authority_basis_json, admission_status,
@@ -3485,51 +3485,51 @@ function admitRosterIdentity(args) {
   };
 }
 
-async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<string, unknown> = {}) {
-  const fullServerPath = resolve(cwd, serverPath);
-  const init = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test_mcp_tool', version: '1.0' } } });
-  const req = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: toolName, arguments: toolArgs } });
-  const stdin = init + '\n' + req + '\n';
-  const timeoutSeconds = Math.min(300, Math.max(1, typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) ? options.timeoutSeconds : 10));
-  const timeoutMs = timeoutSeconds * 1000;
-  const agentId = typeof options.agentId === 'string' && options.agentId.trim()
+async function testMcpTool(cwd: any, serverPath: any, toolName: any, toolArgs: any, options: Record<string, unknown> = {}) {
+  const fullServerPath: any = resolve(cwd, serverPath);
+  const init: any = JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test_mcp_tool', version: '1.0' } } });
+  const req: any = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: toolName, arguments: toolArgs } });
+  const stdin: any = init + '\n' + req + '\n';
+  const timeoutSeconds: any = Math.min(300, Math.max(1, typeof options.timeoutSeconds === 'number' && Number.isFinite(options.timeoutSeconds) ? options.timeoutSeconds : 10));
+  const timeoutMs: any = timeoutSeconds * 1000;
+  const agentId: any = typeof options.agentId === 'string' && options.agentId.trim()
     ? options.agentId.trim()
     : process.env.NARADA_AGENT_ID;
 
-  return new Promise((res, rej) => {
-    const childEnv = {
+  return new Promise((res: any, rej: any) => {
+    const childEnv: any = {
       ...process.env,
       NARADA_MCP_ONE_SHOT_VERIFIER: '1',
       ...(agentId ? { NARADA_AGENT_ID: agentId } : {}),
     };
-    const proc = spawn(process.execPath, [fullServerPath, '--site-root', cwd], {
+    const proc: any = spawn(process.execPath, [fullServerPath, '--site-root', cwd], {
       cwd,
       env: childEnv,
       windowsHide: true,
     });
-    let out = '';
-    let err = '';
-    let settled = false;
-    proc.stdout.on('data', (d) => { out += d.toString(); });
-    proc.stderr.on('data', (d) => { err += d.toString(); });
+    let out: any = '';
+    let err: any = '';
+    let settled: any = false;
+    proc.stdout.on('data', (d: any) => { out += d.toString(); });
+    proc.stderr.on('data', (d: any) => { err += d.toString(); });
     proc.stdin.write(stdin);
     proc.stdin.end();
 
-    const timeout = setTimeout(() => {
+    const timeout: any = setTimeout(() => {
       if (settled) return;
       settled = true;
       if (!proc.killed) proc.kill();
       rej(new Error(`test_mcp_tool timed out after ${timeoutSeconds}s. stderr: ${err}`));
     }, timeoutMs);
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      const results = out.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+      const results: any = out.split(/\r?\n/).filter((line: any) => line.trim().length > 0).map((line: any) => {
         try { return JSON.parse(line); } catch { return null; }
       }).filter(Boolean);
-      const callResult = results.find(r => r.id === 1);
+      const callResult: any = results.find((r: any )=> r.id === 1);
       if (!callResult) {
         rej(new Error(`No tools/call response from ${serverPath}. stderr: ${err}`));
         return;
@@ -3538,11 +3538,11 @@ async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<
         rej(new Error(`MCP error from ${serverPath}: ${callResult.error.message}`));
         return;
       }
-      const content = callResult.result?.content;
+      const content: any = callResult.result?.content;
       if (content && content[0]?.type === 'text') {
         try {
           res(JSON.parse(content[0].text));
-        } catch (e) {
+        } catch (e: any) {
           res({ raw_text: content[0].text });
         }
       } else {
@@ -3550,7 +3550,7 @@ async function testMcpTool(cwd, serverPath, toolName, toolArgs, options: Record<
       }
     });
 
-    proc.on('error', (e) => {
+    proc.on('error', (e: any) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);

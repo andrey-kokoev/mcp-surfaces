@@ -167,7 +167,7 @@ export function classifyPostCloseoutContinuation(input: TaskLifecyclePayload = {
   });
 }
 
-function baseContinuation({ status, expected_agent_behavior: expectedAgentBehavior, reason, workboard, result, pauseTrigger = null, correctiveDebtPressure = null }) {
+function baseContinuation({ status, expected_agent_behavior: expectedAgentBehavior, reason, workboard, result, pauseTrigger = null, correctiveDebtPressure = null }: any) {
   return {
     schema: POST_CLOSEOUT_CONTINUATION_SCHEMA,
     status,
@@ -187,7 +187,7 @@ function baseContinuation({ status, expected_agent_behavior: expectedAgentBehavi
   };
 }
 
-function classifyCorrectiveDebtPressure(correctiveDebtReadiness) {
+function classifyCorrectiveDebtPressure(correctiveDebtReadiness: any) {
   if (!correctiveDebtReadiness || typeof correctiveDebtReadiness !== 'object') {
     return { status: 'unknown', reason: 'corrective_debt_readiness_unavailable' };
   }
@@ -207,15 +207,15 @@ function classifyCorrectiveDebtPressure(correctiveDebtReadiness) {
   return { status: 'clear', reason: 'no_high_severity_corrective_debt_detected', state };
 }
 
-function taskCandidate(args) {
+function taskCandidate(args: any) {
   return candidate({ ...args, action: 'generated_task', route: 'task_materialization' });
 }
 
-function observationCandidate(args) {
+function observationCandidate(args: any) {
   return candidate({ ...args, action: 'observation', route: 'inbox_or_observation' });
 }
 
-function candidate({ action, route, followUpKind, title, summary, targetPrincipal, sourceTaskNumber, sourceTaskId, transitionKind, reason }) {
+function candidate({ action, route, followUpKind, title, summary, targetPrincipal, sourceTaskNumber, sourceTaskId, transitionKind, reason }: any) {
   return {
     action,
     route,
@@ -231,35 +231,35 @@ function candidate({ action, route, followUpKind, title, summary, targetPrincipa
   };
 }
 
-function buildDedupeKey({ sourceTaskNumber, sourceTaskId, transitionKind, followUpKind, targetPrincipal }) {
+function buildDedupeKey({ sourceTaskNumber, sourceTaskId, transitionKind, followUpKind, targetPrincipal }: any) {
   const source = sourceTaskNumber ? `task:${sourceTaskNumber}` : `task_id:${sourceTaskId || 'unknown'}`;
   return [source, transitionKind || 'unknown', followUpKind, targetPrincipal || 'unassigned'].join('|');
 }
 
-function isEvidenceBlocked(result, signals) {
+function isEvidenceBlocked(result: any, signals: any) {
   return result.close_blocked === true
     || result.close_action === 'blocked'
     || signals.evidence_blocked === true
     || Array.isArray(result.close_blockers) && result.close_blockers.length > 0;
 }
 
-function hasFollowUpLedgerBlocker(result) {
+function hasFollowUpLedgerBlocker(result: any) {
   const blockers = [
     ...arrayValue(result.close_blockers),
     ...arrayValue(result.blockers),
-  ].map((entry) => String(entry).toLowerCase());
-  return blockers.some((entry) => entry.includes('follow-up ledger') || entry.includes('follow_up_ledger'));
+  ].map((entry: any) => String(entry).toLowerCase());
+  return blockers.some((entry: any) => entry.includes('follow-up ledger') || entry.includes('follow_up_ledger'));
 }
 
-function stringValue(value) {
+function stringValue(value: any) {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function numberValue(value) {
+function numberValue(value: any) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
-function arrayValue(value) {
+function arrayValue(value: any) {
   return Array.isArray(value) ? value : [];
 }

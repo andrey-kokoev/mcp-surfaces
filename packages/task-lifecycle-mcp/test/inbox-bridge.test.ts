@@ -58,7 +58,7 @@ appendAdmissionEvent(siteRoot, {
 
 const unprocessed = readUnprocessedEnvelopes(siteRoot);
 assert.equal(
-  unprocessed.some((item) => item.envelope_id === envelope.envelope_id),
+  unprocessed.some((item: { envelope_id?: string }) => item.envelope_id === envelope.envelope_id),
   false,
   'bridge_materialized as latest admission event must keep an envelope out of unprocessed polling',
 );

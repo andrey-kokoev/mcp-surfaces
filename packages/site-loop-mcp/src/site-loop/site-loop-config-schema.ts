@@ -183,6 +183,7 @@ export const SITE_LOOP_CONFIG_JSON_SCHEMA = {
       required: ['execution', 'command', 'args'],
       properties: {
         execution: { const: 'direct_spawn' },
+        enabled: { type: 'boolean' },
         command: { $ref: '#/$defs/nonEmptyString' },
         args: { $ref: '#/$defs/stringArray' },
         working_directory: { $ref: '#/$defs/nonEmptyString' },

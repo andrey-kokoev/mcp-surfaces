@@ -179,7 +179,7 @@ export function refreshInboxIndex(siteRoot: string, options: unknown = {}): Inde
   return { status: 'ok', storage: 'node_sqlite', db, db_path: dbPath, indexed_count: Number(totalRow.count ?? 0), invalid_count: invalidRecords.length, invalid_records: invalidRecords, refreshed_at: now };
 }
 
-function runStatement(statement: { run: (...args: unknown[]) => unknown }, ...args: unknown[]): unknown {
+function runStatement(statement: { run: (...args: any[]) => unknown }, ...args: any[]): unknown {
   if (args.length === 0) return statement.run();
   if (args.length === 1) return statement.run(args[0]);
   return statement.run(...args);

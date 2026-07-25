@@ -215,7 +215,7 @@ try {
   assert.equal(catalogView.templates[0].authority_gates.push.required_authority, 'command');
   assert.equal(catalogView.templates[0].worker_delegation_contract.routed_feedback_ids.includes('sfb_7e043d77-074'), true);
 
-  const tools = await handleRequest({ jsonrpc: '2.0', id: 'tools-list', method: 'tools/list', params: {} }, state);
+  const tools = await ((handleRequest({ jsonrpc: '2.0', id: 'tools-list', method: 'tools/list', params: {} }, state)) as any) as any;
   const toolsView = tools?.result as Record<string, any>;
   const runTool = toolsView.tools.find((item: Record<string, any>) => item.name === 'delegated_task_run');
   assert.equal(Array.isArray(runTool.inputSchema.properties.workflow.examples), true);
@@ -1541,11 +1541,11 @@ try {
   rmSync(root, { recursive: true, force: true });
 }
 
-async function callTool(state: ReturnType<typeof createServerState>, name: string, arguments_: Record<string, unknown>) {
-  return await handleRequest({
+async function callTool(state: ReturnType<typeof createServerState>, name: string, arguments_: Record<string, unknown>): Promise<any> {
+  return await ((handleRequest({
     jsonrpc: '2.0',
     id: `${name}-${Date.now()}-${Math.random()}`,
     method: 'tools/call',
     params: { name, arguments: arguments_ },
-  }, state);
+  }, state)) as any) as any;
 }

@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
  * @param {string} filePath
  * @param {string} content
  */
-export function writeFileUtf8(filePath, content) {
+export function writeFileUtf8(filePath: any, content: any) {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, content, { encoding: 'utf8' });
 }
@@ -31,7 +31,7 @@ export function writeFileUtf8(filePath, content) {
  * @param {unknown} data
  * @param {string | number} [space=2]
  */
-export function writeJsonFile(filePath, data, space = 2) {
+export function writeJsonFile(filePath: any, data: any, space : any= 2) {
   const json = JSON.stringify(data, null, space);
   writeFileUtf8(filePath, json);
 }
@@ -44,9 +44,9 @@ export function writeJsonFile(filePath, data, space = 2) {
  * @param {object} frontmatter
  * @param {string} body
  */
-export function writeMarkdownWithFrontmatter(filePath, frontmatter, body) {
+export function writeMarkdownWithFrontmatter(filePath: any, frontmatter: any, body: any) {
   const yaml = Object.entries(frontmatter)
-    .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+    .map(([k, v]: any) => `${k}: ${JSON.stringify(v)}`)
     .join('\n');
   const content = `---\n${yaml}\n---\n\n${body.trim()}\n`;
   writeFileUtf8(filePath, content);

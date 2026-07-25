@@ -10,7 +10,7 @@ import {
 } from '../src/site-loop/site-operating-runtime-host.js';
 
 function makeSiteRoot(prefix: string) {
-  const root = mkdtempSync(join(tmpdir(), prefix));
+  const root: any = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify({
     schema: 'narada.site_loop.config.v1',
@@ -23,16 +23,16 @@ function makeSiteRoot(prefix: string) {
   return root;
 }
 
-const siteRoot = makeSiteRoot('site-loop-canonical-host-');
+const siteRoot: any = makeSiteRoot('site-loop-canonical-host-');
 try {
-  const first = openSiteOperatingRuntimeHost(siteRoot, { owner_id: 'first-supervisor', runtime_lease_ttl_ms: 30_000 });
-  const claim = first.claim();
+  const first: any = openSiteOperatingRuntimeHost(siteRoot, { owner_id: 'first-supervisor', runtime_lease_ttl_ms: 30_000 });
+  const claim: any = first.claim();
   assert.equal(claim.schema, 'narada.site_operating_loop.runtime_host_claim.v1');
   assert.equal(typeof claim.event.event_id, 'string');
   assert.equal(claim.host.runtime_host_state, 'created');
   assert.equal(claim.host.authority_epoch, 1);
 
-  const second = openSiteOperatingRuntimeHost(siteRoot, { owner_id: 'second-supervisor', runtime_lease_ttl_ms: 30_000 });
+  const second: any = openSiteOperatingRuntimeHost(siteRoot, { owner_id: 'second-supervisor', runtime_lease_ttl_ms: 30_000 });
   assert.throws(() => second.claim(), /site_operating_loop_runtime_host_already_owned/);
   second.close();
 
@@ -46,7 +46,7 @@ try {
   assert.equal(first.snapshot()?.runtime_host_state, 'stopped');
   first.close();
 
-  const result = await runSiteLoopWithCanonicalRuntimeHost(siteRoot, async () => ({
+  const result: any = await runSiteLoopWithCanonicalRuntimeHost(siteRoot, async () => ({
     status: 'ok',
     synthetic: true,
   }), { owner_id: 'bounded-operation' }) as Record<string, any>;
@@ -63,16 +63,16 @@ try {
     /synthetic-runtime-host-failure/,
   );
 
-  const statusStore = openSiteLoopStore(siteRoot, { write: false });
+  const statusStore: any = openSiteLoopStore(siteRoot, { write: false });
   try {
-    const row = statusStore.db.prepare('SELECT runtime_host_state, lifecycle_json FROM site_loop_runtime_hosts WHERE loop_id = ?').get('canonical-host.test.loop');
+    const row: any = statusStore.db.prepare('SELECT runtime_host_state, lifecycle_json FROM site_loop_runtime_hosts WHERE loop_id = ?').get('canonical-host.test.loop');
     assert.equal(row.runtime_host_state, 'stopped');
     assert.deepEqual(JSON.parse(row.lifecycle_json).lifecycle_history, ['created', 'binding', 'ready', 'serving', 'failed', 'stopped']);
   } finally {
     statusStore.close();
   }
 
-  const supervisorResult = await runSiteLoopSupervisorWithCanonicalRuntimeHost(siteRoot, async () => ({
+  const supervisorResult: any = await runSiteLoopSupervisorWithCanonicalRuntimeHost(siteRoot, async () => ({
     status: 'stopped',
     health_status: 'healthy',
     cycles_completed: 1,

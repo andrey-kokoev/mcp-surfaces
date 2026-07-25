@@ -19,27 +19,27 @@ const DISPOSITION_EVENT_KINDS = new Set(['envelope_acknowledged', 'envelope_dism
 const ROTATION_THRESHOLD_BYTES = 10 * 1024 * 1024; // 10 MB
 type TaskLifecyclePayload = Record<string, unknown>;
 
-function logPath(cwd) {
+function logPath(cwd: any) {
   return join(resolve(cwd), LOG_DIR, LOG_FILE);
 }
 
-function ensureDir(cwd) {
+function ensureDir(cwd: any) {
   const dir = join(resolve(cwd), LOG_DIR);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 }
 
-function hashPayload(payload) {
+function hashPayload(payload: any) {
   return 'sha256:' + createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
-function getNextSequence(cwd) {
+function getNextSequence(cwd: any) {
   const path = logPath(cwd);
   if (!existsSync(path)) return 1;
   const lines = readFileSync(path, 'utf8')
     .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0);
+    .filter((l: any) => l.trim().length > 0);
   if (lines.length === 0) return 1;
   try {
     const last = JSON.parse(lines[lines.length - 1]);
@@ -49,7 +49,7 @@ function getNextSequence(cwd) {
   }
 }
 
-function rotateIfNeeded(cwd) {
+function rotateIfNeeded(cwd: any) {
   const path = logPath(cwd);
   if (!existsSync(path)) return;
   const stats = statSync(path);
@@ -68,7 +68,7 @@ function rotateIfNeeded(cwd) {
  * @param {object} event - Event object (without event_id, event_sequence, timestamp)
  * @returns {object} The full event with generated fields
  */
-export function appendAdmissionEvent(cwd, event) {
+export function appendAdmissionEvent(cwd: any, event: any) {
   ensureDir(cwd);
   rotateIfNeeded(cwd);
 
@@ -98,7 +98,7 @@ export function appendAdmissionEvent(cwd, event) {
  * @param {object} meta - Submission metadata
  * @returns {object} The admitted event
  */
-export function admitEnvelope(cwd, envelope) {
+export function admitEnvelope(cwd: any, envelope: any) {
   const envelopesPath = join(resolve(cwd), ENVELOPES_DIR);
   if (!existsSync(envelopesPath)) {
     mkdirSync(envelopesPath, { recursive: true });
@@ -128,7 +128,7 @@ export function admitEnvelope(cwd, envelope) {
   return { envelopePath, event: { ...event, event_seq: event.event_sequence } };
 }
 
-export function emitEnvelopeAdmitted(cwd, envelope, meta: TaskLifecyclePayload = {}) {
+export function emitEnvelopeAdmitted(cwd: any, envelope: any, meta: TaskLifecyclePayload = {}) {
   const payloadHash = hashPayload(envelope);
   const payloadUri = meta.payload_uri ?? `.ai/inbox-envelopes/${envelope.envelope_id}.json`;
 
@@ -173,7 +173,7 @@ export function emitEnvelopeAdmitted(cwd, envelope, meta: TaskLifecyclePayload =
  * @param {string} [reason] - Optional reason for acknowledgment
  * @returns {object} The acknowledgment event
  */
-export function acknowledgeEnvelope(cwd, envelopeId, principal, reason) {
+export function acknowledgeEnvelope(cwd: any, envelopeId: any, principal: any, reason: any) {
   return appendAdmissionEvent(cwd, {
     envelope_id: envelopeId,
     event_kind: 'envelope_acknowledged',
@@ -196,7 +196,7 @@ export function acknowledgeEnvelope(cwd, envelopeId, principal, reason) {
  * @param {string} [reason] - Required reason for dismissal
  * @returns {object} The dismissal event
  */
-export function dismissEnvelope(cwd, envelopeId, principal, reason) {
+export function dismissEnvelope(cwd: any, envelopeId: any, principal: any, reason: any) {
   return appendAdmissionEvent(cwd, {
     envelope_id: envelopeId,
     event_kind: 'envelope_dismissed',
@@ -216,22 +216,22 @@ export function dismissEnvelope(cwd, envelopeId, principal, reason) {
  * @param {string} cwd - Site root
  * @returns {Array<object>} Events in chronological order
  */
-export function readAdmissionLog(cwd) {
+export function readAdmissionLog(cwd: any) {
   const path = logPath(cwd);
   if (!existsSync(path)) return [];
 
   return readFileSync(path, 'utf8')
     .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0)
-    .map((l) => JSON.parse(l));
+    .filter((l: any) => l.trim().length > 0)
+    .map((l: any) => JSON.parse(l));
 }
 
-export function exportDispositionLedger(cwd, options: TaskLifecyclePayload = {}) {
+export function exportDispositionLedger(cwd: any, options: TaskLifecyclePayload = {}) {
   const outputPath = typeof options.output_path === 'string' ? options.output_path : DEFAULT_DISPOSITION_EXPORT_PATH;
   const siteId = typeof options.site_id === 'string' ? options.site_id : 'Narada';
   const events = readAdmissionLog(cwd)
-    .filter((event) => DISPOSITION_EVENT_KINDS.has(event.event_kind))
-    .map((event) => ({
+    .filter((event: any) => DISPOSITION_EVENT_KINDS.has(event.event_kind))
+    .map((event: any) => ({
       event_id: event.event_id,
       event_sequence: event.event_sequence,
       timestamp: event.timestamp,
@@ -277,7 +277,7 @@ export function exportDispositionLedger(cwd, options: TaskLifecyclePayload = {})
  * @param {string} cwd - Site root
  * @returns {Map<string, object>} Map of envelope_id -> latest event
  */
-export function getLatestEventsByEnvelope(cwd) {
+export function getLatestEventsByEnvelope(cwd: any) {
   const events = readAdmissionLog(cwd);
   const map = new Map();
   for (const evt of events) {
@@ -296,8 +296,8 @@ export function getLatestEventsByEnvelope(cwd) {
  * @param {Array<object>} events - All events for a single envelope_id
  * @returns {string} Effective status: received, admitted, promoted, acknowledged, dismissed
  */
-export function resolveEnvelopeStatus(events) {
-  const kinds = new Set(events.map((e) => e.event_kind));
+export function resolveEnvelopeStatus(events: any) {
+  const kinds = new Set(events.map((e: any) => e.event_kind));
   if (kinds.has('envelope_dismissed')) return 'dismissed';
   if (kinds.has('envelope_acknowledged')) return 'acknowledged';
   if (kinds.has('envelope_promoted')) return 'promoted';
@@ -314,7 +314,7 @@ export function resolveEnvelopeStatus(events) {
  * @param {object} promotion - Promotion details
  * @returns {object} The promotion event
  */
-export function recordPromotion(cwd, envelopeId, promotion) {
+export function recordPromotion(cwd: any, envelopeId: any, promotion: any) {
   return appendAdmissionEvent(cwd, {
     envelope_id: envelopeId,
     event_kind: 'envelope_promoted',

@@ -114,7 +114,7 @@ try {
       let offset = 0;
       let outputText = '';
       while (true) {
-        const pageResponse = await handleTaskLifecycleMcpRequest({
+        const pageResponse = await (handleTaskLifecycleMcpRequest({
           jsonrpc: '2.0',
           id,
           method: 'tools/call',
@@ -122,7 +122,7 @@ try {
             name: 'mcp_output_show',
             arguments: { ref: structured.output_ref, offset, limit: 20000 },
           },
-        }, runtimeOptions);
+        }, runtimeOptions)) as any;
         if (pageResponse.error) throw new Error('output_ref_read_error: ' + (pageResponse.error.message ?? JSON.stringify(pageResponse.error)));
         const page = pageResponse.result?.structuredContent;
         if (!page?.output_text) throw new Error('output_ref_page_missing_output_text');
@@ -138,7 +138,7 @@ try {
     throw new Error('unexpected_output_ref_without_structured_content');
   }
 
-  const invalidResponse = await handleTaskLifecycleMcpRequest({
+  const invalidResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -157,7 +157,7 @@ try {
         ],
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(invalidResponse.error, undefined);
   const invalidPayload = await responsePayload(invalidResponse, 2);
   assert.equal(invalidPayload.status, 'blocked');
@@ -167,7 +167,7 @@ try {
   assert.equal(invalidPayload.next_tool, 'task_lifecycle_dependency_disposition_record');
   assert.equal(invalidPayload.example_args.kind, 'remediation_task');
 
-  const validResponse = await handleTaskLifecycleMcpRequest({
+  const validResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
@@ -190,7 +190,7 @@ try {
         ],
       },
     },
-  }, runtimeOptions);
+  }, runtimeOptions)) as any;
   assert.equal(validResponse.error, undefined);
   const validPayload = await responsePayload(validResponse, 4);
   assert.notEqual(validPayload.error, 'blocking_outcome_disposition_required');

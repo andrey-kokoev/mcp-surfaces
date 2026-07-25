@@ -15,33 +15,33 @@ interface TaskLifecycleSqliteOptions {
   integrityCheck?: boolean;
 }
 
-const heldLocks = new Map();
+const heldLocks: any = new Map();
 
-export function openTaskLifecycleStoreWithDiscipline(cwd, options: TaskLifecycleSqliteOptions = {}) {
-  const siteRoot = resolve(cwd);
-  const write = options.write !== false;
-  const lock = write ? acquireWriteLock(siteRoot, options) : null;
-  let store = null;
+export function openTaskLifecycleStoreWithDiscipline(cwd: any, options: TaskLifecycleSqliteOptions = {}) {
+  const siteRoot: any = resolve(cwd);
+  const write: any = options.write !== false;
+  const lock: any = write ? acquireWriteLock(siteRoot, options) : null;
+  let store: any = null;
   try {
     store = openTaskLifecycleStore(siteRoot);
     applyDbPragmas(store.db, options);
     if (lock && !lock.reentrant) refreshWriteLock(lock);
-    const originalClose = store.db.close.bind(store.db);
+    const originalClose: any = store.db.close.bind(store.db);
     store.db.close = () => {
-      let finalizeError = null;
-      let closeError = null;
-      let closeResult;
+      let finalizeError: any = null;
+      let closeError: any = null;
+      let closeResult: any;
       try {
         if (lock && !lock.reentrant) {
           try {
             finalizeWriteConnection(store.db);
-          } catch (error) {
+          } catch (error: any) {
             finalizeError = error;
           }
         }
         try {
           closeResult = originalClose();
-        } catch (error) {
+        } catch (error: any) {
           closeError = error;
         }
       } finally {
@@ -52,33 +52,33 @@ export function openTaskLifecycleStoreWithDiscipline(cwd, options: TaskLifecycle
       return closeResult;
     };
     return store;
-  } catch (error) {
+  } catch (error: any) {
     if (lock) releaseWriteLock(lock);
     throw error;
   }
 }
 
-function pragmaValue(row) {
+function pragmaValue(row: any) {
   return Object.values(row ?? {})[0] ?? null;
 }
 
-export function taskLifecycleDbHealth(cwd, options: TaskLifecycleSqliteOptions = {}) {
-  const siteLoopConfig = requireSiteLoopConfig(resolve(cwd));
-  const deep = options.mode === 'deep' || options.integrityCheck === true;
-  let store = null;
+export function taskLifecycleDbHealth(cwd: any, options: TaskLifecycleSqliteOptions = {}) {
+  const siteLoopConfig: any = requireSiteLoopConfig(resolve(cwd));
+  const deep: any = options.mode === 'deep' || options.integrityCheck === true;
+  let store: any = null;
   try {
     store = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
     // The Site Loop calls this from its bounded hot path. A full integrity_check
     // scans the entire database and is intentionally opt-in for large task DBs.
-    const schemaVersion = store.db.prepare('PRAGMA schema_version').get();
-    const pageCount = store.db.prepare('PRAGMA page_count').get();
-    const freelistCount = store.db.prepare('PRAGMA freelist_count').get();
-    const wal = store.db.prepare('PRAGMA journal_mode').get();
-    const busyTimeout = store.db.prepare('PRAGMA busy_timeout').get();
-    const tableProbe = store.db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'task_lifecycle'").get();
-    const integrity = deep ? store.db.prepare('PRAGMA integrity_check').get() : null;
-    const integrityValue = pragmaValue(integrity);
-    const tablePresent = tableProbe?.present === 1;
+    const schemaVersion: any = store.db.prepare('PRAGMA schema_version').get();
+    const pageCount: any = store.db.prepare('PRAGMA page_count').get();
+    const freelistCount: any = store.db.prepare('PRAGMA freelist_count').get();
+    const wal: any = store.db.prepare('PRAGMA journal_mode').get();
+    const busyTimeout: any = store.db.prepare('PRAGMA busy_timeout').get();
+    const tableProbe: any = store.db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'task_lifecycle'").get();
+    const integrity: any = deep ? store.db.prepare('PRAGMA integrity_check').get() : null;
+    const integrityValue: any = pragmaValue(integrity);
+    const tablePresent: any = tableProbe?.present === 1;
     return {
       schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
       status: deep
@@ -97,7 +97,7 @@ export function taskLifecycleDbHealth(cwd, options: TaskLifecycleSqliteOptions =
         ? 'pnpm cli -- task db repair-indexes --ack-repair'
         : null,
     };
-  } catch (error) {
+  } catch (error: any) {
     return {
       schema: schemaName(siteLoopConfig, 'task_lifecycle_db_health'),
       status: 'error',
@@ -110,9 +110,9 @@ export function taskLifecycleDbHealth(cwd, options: TaskLifecycleSqliteOptions =
   }
 }
 
-export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOptions = {}) {
-  const siteRoot = resolve(cwd);
-  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
+export function repairTaskLifecycleDbIndexes(cwd: any, options: TaskLifecycleSqliteOptions = {}) {
+  const siteRoot: any = resolve(cwd);
+  const siteLoopConfig: any = requireSiteLoopConfig(siteRoot);
   if (options.ackRepair !== true) {
     return {
       schema: schemaName(siteLoopConfig, 'task_lifecycle_db_repair'),
@@ -122,10 +122,10 @@ export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOp
       db_path: join(siteRoot, '.ai', 'task-lifecycle.db'),
     };
   }
-  const dbPath = join(siteRoot, '.ai', 'task-lifecycle.db');
-  const backupDir = join(siteRoot, '.ai', `db-repair-${timestampForPath(new Date())}`);
-  const lock = acquireWriteLock(siteRoot, options);
-  let store = null;
+  const dbPath: any = join(siteRoot, '.ai', 'task-lifecycle.db');
+  const backupDir: any = join(siteRoot, '.ai', `db-repair-${timestampForPath(new Date())}`);
+  const lock: any = acquireWriteLock(siteRoot, options);
+  let store: any = null;
   try {
     mkdirSync(backupDir, { recursive: true });
     store = openTaskLifecycleStore(siteRoot);
@@ -136,11 +136,11 @@ export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOp
       // A repair backup must continue even if SQLite cannot checkpoint.
     }
     copyTaskLifecycleDbFiles(siteRoot, backupDir);
-    const before = String(Object.values(store.db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
+    const before: any = String(Object.values(store.db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
     store.db.exec('REINDEX');
     store.db.exec('ANALYZE');
-    let after = String(Object.values(store.db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
-    let vacuumPerformed = false;
+    let after: any = String(Object.values(store.db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
+    let vacuumPerformed: any = false;
     if (after !== 'ok') {
       store.db.exec('VACUUM');
       store.db.exec('ANALYZE');
@@ -166,7 +166,7 @@ export function repairTaskLifecycleDbIndexes(cwd, options: TaskLifecycleSqliteOp
   }
 }
 
-function applyDbPragmas(db, options: TaskLifecycleSqliteOptions = {}) {
+function applyDbPragmas(db: any, options: TaskLifecycleSqliteOptions = {}) {
   db.pragma(`busy_timeout = ${Number(options.busyTimeoutMs ?? 10_000)}`);
   if (process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE !== '1') {
     db.pragma('journal_mode = WAL');
@@ -174,15 +174,15 @@ function applyDbPragmas(db, options: TaskLifecycleSqliteOptions = {}) {
   }
 }
 
-function finalizeWriteConnection(db) {
+function finalizeWriteConnection(db: any) {
   // Full quick_check/integrity_check scans the entire task database. It is
   // reserved for explicit repair/diagnostic runs, never for the bounded Site
   // Loop write hot path or ordinary connection close.
   if (process.env.NARADA_TASK_LIFECYCLE_AUTO_REPAIR_INDEXES === '1') {
-    const quick = String(Object.values(db.prepare('PRAGMA quick_check').get() ?? {})[0] ?? '');
+    const quick: any = String(Object.values(db.prepare('PRAGMA quick_check').get() ?? {})[0] ?? '');
     if (quick !== 'ok') {
       db.exec('REINDEX');
-      const after = String(Object.values(db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
+      const after: any = String(Object.values(db.prepare('PRAGMA integrity_check').get() ?? {})[0] ?? '');
       if (after !== 'ok') {
         throw new Error(`task_lifecycle_integrity_after_reindex:${after}`);
       }
@@ -195,8 +195,8 @@ function finalizeWriteConnection(db) {
   }
 }
 
-function copyTaskLifecycleDbFiles(siteRoot, backupDir) {
-  const dbPath = join(siteRoot, '.ai', 'task-lifecycle.db');
+function copyTaskLifecycleDbFiles(siteRoot: any, backupDir: any) {
+  const dbPath: any = join(siteRoot, '.ai', 'task-lifecycle.db');
   for (const [source, target] of [
     [dbPath, 'task-lifecycle.db.before-reindex'],
     [`${dbPath}-wal`, 'task-lifecycle.db-wal.before-reindex'],
@@ -207,18 +207,18 @@ function copyTaskLifecycleDbFiles(siteRoot, backupDir) {
 }
 
 
-function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
-  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
-  const lockDir = join(siteRoot, '.ai', 'task-lifecycle.write.lock');
-  const staleMs = Number(options.staleMs ?? 10 * 60_000);
-  const timeoutMs = Number(options.timeoutMs ?? 30_000);
-  const pollMs = Number(options.pollMs ?? 50);
-  const existing = heldLocks.get(lockDir);
+function acquireWriteLock(siteRoot: any, options: TaskLifecycleSqliteOptions = {}) {
+  const siteLoopConfig: any = requireSiteLoopConfig(siteRoot);
+  const lockDir: any = join(siteRoot, '.ai', 'task-lifecycle.write.lock');
+  const staleMs: any = Number(options.staleMs ?? 10 * 60_000);
+  const timeoutMs: any = Number(options.timeoutMs ?? 30_000);
+  const pollMs: any = Number(options.pollMs ?? 50);
+  const existing: any = heldLocks.get(lockDir);
   if (existing) {
     existing.depth += 1;
     return { lockDir, reentrant: true };
   }
-  const deadline = Date.now() + timeoutMs;
+  const deadline: any = Date.now() + timeoutMs;
   mkdirSync(join(siteRoot, '.ai'), { recursive: true });
   while (true) {
     try {
@@ -231,7 +231,7 @@ function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
       }, null, 2), 'utf8');
       heldLocks.set(lockDir, { depth: 1 });
       return { lockDir, reentrant: false };
-    } catch (error) {
+    } catch (error: any) {
       if (error?.code !== 'EEXIST') throw error;
       if (lockIsStale(lockDir, staleMs)) {
         rmSync(lockDir, { recursive: true, force: true });
@@ -245,8 +245,8 @@ function acquireWriteLock(siteRoot, options: TaskLifecycleSqliteOptions = {}) {
   }
 }
 
-function releaseWriteLock(lock) {
-  const state = heldLocks.get(lock.lockDir);
+function releaseWriteLock(lock: any) {
+  const state: any = heldLocks.get(lock.lockDir);
   if (!state) return;
   state.depth -= 1;
   if (state.depth > 0) return;
@@ -254,16 +254,16 @@ function releaseWriteLock(lock) {
   rmSync(lock.lockDir, { recursive: true, force: true });
 }
 
-function lockIsStale(lockDir, staleMs) {
+function lockIsStale(lockDir: any, staleMs: any) {
   try {
-    const owner = readLockOwner(lockDir);
-    const ownerPid = Number(owner?.pid);
+    const owner: any = readLockOwner(lockDir);
+    const ownerPid: any = Number(owner?.pid);
     // A dead owner is definitive evidence of a stale lock. Do not make every
     // restart wait for the conservative heartbeat TTL before recovering it.
     if (Number.isFinite(ownerPid) && ownerPid > 0
       && (ownerPid === process.pid || !processIsLive(ownerPid))) return true;
-    const heartbeatMs = Date.parse(owner?.heartbeat_at ?? owner?.acquired_at ?? '');
-    const ageMs = Date.now() - (Number.isFinite(heartbeatMs) ? heartbeatMs : statSync(lockDir).mtimeMs);
+    const heartbeatMs: any = Date.parse(owner?.heartbeat_at ?? owner?.acquired_at ?? '');
+    const ageMs: any = Date.now() - (Number.isFinite(heartbeatMs) ? heartbeatMs : statSync(lockDir).mtimeMs);
     if (ageMs <= staleMs) return false;
     if (ownerPid > 0 && ownerPid !== process.pid && processIsLive(ownerPid)) return false;
     return true;
@@ -272,11 +272,11 @@ function lockIsStale(lockDir, staleMs) {
   }
 }
 
-function refreshWriteLock(lock) {
-  const siteRoot = resolve(lock.lockDir, '..', '..');
-  const siteLoopConfig = requireSiteLoopConfig(siteRoot);
-  const ownerPath = join(lock.lockDir, 'owner.json');
-  const owner = readLockOwner(lock.lockDir) ?? {};
+function refreshWriteLock(lock: any) {
+  const siteRoot: any = resolve(lock.lockDir, '..', '..');
+  const siteLoopConfig: any = requireSiteLoopConfig(siteRoot);
+  const ownerPath: any = join(lock.lockDir, 'owner.json');
+  const owner: any = readLockOwner(lock.lockDir) ?? {};
   writeFileSync(ownerPath, JSON.stringify({
     ...owner,
     schema: schemaName(siteLoopConfig, 'task_lifecycle_write_lock'),
@@ -285,7 +285,7 @@ function refreshWriteLock(lock) {
   }, null, 2), 'utf8');
 }
 
-function readLockOwner(lockDir) {
+function readLockOwner(lockDir: any) {
   try {
     return JSON.parse(readFileSync(join(lockDir, 'owner.json'), 'utf8'));
   } catch {
@@ -293,11 +293,11 @@ function readLockOwner(lockDir) {
   }
 }
 
-function processIsLive(pid) {
+function processIsLive(pid: any) {
   if (!Number.isFinite(pid) || pid <= 0) return false;
   if (pid === process.pid) return true;
   if (process.platform === 'win32') {
-    const result = spawnSync('powershell.exe', [
+    const result: any = spawnSync('powershell.exe', [
       '-NoProfile',
       '-Command',
       `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { 'live' }`,
@@ -312,8 +312,8 @@ function processIsLive(pid) {
   }
 }
 
-function sleepProcess(ms) {
-  const seconds = Math.max(1, Math.ceil(ms / 1000));
+function sleepProcess(ms: any) {
+  const seconds: any = Math.max(1, Math.ceil(ms / 1000));
   if (process.platform === 'win32') {
     spawnSync('powershell.exe', ['-NoProfile', '-Command', `Start-Sleep -Milliseconds ${Math.max(1, Math.floor(ms))}`], {
       stdio: 'ignore',
@@ -325,6 +325,6 @@ function sleepProcess(ms) {
   spawnSync('sleep', [String(seconds)], { stdio: 'ignore', timeout: (seconds + 1) * 1000 });
 }
 
-function timestampForPath(date) {
+function timestampForPath(date: any) {
   return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }

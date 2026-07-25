@@ -10,16 +10,16 @@ export function createTaskLifecycleHandlerRegistry({
   domainDispatch,
   payloadOutputHandlers = {},
   explicitHandlers = payloadOutputHandlers,
-}) {
+}: any) {
   const handlers = new Map();
   for (const name of toolNames) {
-    handlers.set(name, explicitHandlers[name] ?? ((args, dispatchContext = {}) => domainDispatch(name, args, dispatchContext)));
+    handlers.set(name, explicitHandlers[name] ?? ((args: any, dispatchContext : any= {}) => domainDispatch(name, args, dispatchContext)));
   }
   return handlers;
 }
 
-export function assertTaskLifecycleHandlerCoverage({ toolNames, handlers }) {
-  const missing = toolNames.filter((name) => !handlers.has(name));
+export function assertTaskLifecycleHandlerCoverage({ toolNames, handlers }: any) {
+  const missing = toolNames.filter((name: any) => !handlers.has(name));
   return {
     status: missing.length === 0 ? 'ok' : 'missing_handlers',
     tool_count: toolNames.length,

@@ -253,7 +253,7 @@ export async function delegatedTaskRun(args: JsonRecord, state: State): Promise<
   const explicitIdempotencyKey = opt(args.idempotency_key);
   const replayTaskId = explicitIdempotencyKey ? `task_${hash(explicitIdempotencyKey).slice(0, 16)}` : null;
   const replayPaths = replayTaskId ? taskPaths(state, replayTaskId) : null;
-  if (replayPaths && existsSync(replayPaths.taskPath) && args.objective === undefined && args.intent === undefined) {
+  if (replayTaskId && replayPaths && existsSync(replayPaths.taskPath) && args.objective === undefined && args.intent === undefined) {
     return runResult(await advanceTask(readTask(state, replayTaskId), state), replayPaths, false);
   }
   const taskIntent = normalizeIntent(args);
@@ -767,8 +767,9 @@ async function launchWorkerStep(task: Task, state: State, step: WorkflowStep, st
   const launch = resolveWorkerLaunch(task, state, step, stepState);
   stepState.affinity = launch.affinity;
   if (launch.blocked) {
-    markStep(stepState, 'failed', String(launch.affinity.reason ?? 'session_affinity_unavailable'));
-    appendEvent(state, task.task_id, 'step_affinity_failed', launch.affinity);
+    const blockedAffinity = launch.affinity ?? {};
+    markStep(stepState, 'failed', String(blockedAffinity.reason ?? 'session_affinity_unavailable'));
+    appendEvent(state, task.task_id, 'step_affinity_failed', blockedAffinity);
     return;
   }
   let workerResult: JsonRecord;
@@ -1849,7 +1850,7 @@ function gitPublishAuthorityDiagnostics(args: JsonRecord, steps: WorkflowStep[])
   return [];
 }
 function gitPublishRequest(texts: string[]): { commit: boolean; push: boolean } {
-  return texts.reduce((acc, text) => {
+  return texts.reduce<{ commit: boolean; push: boolean }>((acc, text) => {
     const request = gitPublishRequestFromText(text);
     return { commit: acc.commit || request.commit, push: acc.push || request.push };
   }, { commit: false, push: false });

@@ -10,7 +10,7 @@ import { listSiteLoopRuns, siteLoopStatus } from '../src/site-loop/site-loop.js'
 
 const serverPath = fileURLToPath(new URL('../src/site-loop-mcp-server.js', import.meta.url));
 
-function writeFixtureSite(prefix, configPatch = {}) {
+function writeFixtureSite(prefix: any, configPatch : any= {}) {
   const root = mkdtempSync(join(tmpdir(), `site-loop-${prefix}-`));
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   mkdirSync(join(root, '.ai', 'state'), { recursive: true });
@@ -79,10 +79,10 @@ let stdout = '';
 let stderr = '';
 proc.stdout.setEncoding('utf8');
 proc.stderr.setEncoding('utf8');
-proc.stdout.on('data', (chunk) => { stdout += chunk; });
-proc.stderr.on('data', (chunk) => { stderr += chunk; });
+proc.stdout.on('data', (chunk: any) => { stdout += chunk; });
+proc.stderr.on('data', (chunk: any) => { stderr += chunk; });
 
-function writeMessage(message) {
+function writeMessage(message: any) {
   const body = JSON.stringify(message);
   proc.stdin.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\n\n${body}`);
 }
@@ -104,22 +104,22 @@ function readOne() {
   return JSON.parse(body);
 }
 
-async function waitFor(id) {
+async function waitFor(id: any) {
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
     const message = readOne();
     if (message?.id === id) return message;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve: any) => setTimeout(resolve, 20));
   }
   throw new Error(`timeout:${id}; stderr=${stderr}`);
 }
 
-function callTool(id, name, args = {}) {
+function callTool(id: any, name: any, args : any= {}) {
   writeMessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
   return waitFor(id);
 }
 
-function contentText(label, response) {
+function contentText(label: any, response: any) {
   assert.equal(response.error, undefined, `${label}: ${JSON.stringify(response)}`);
   assert.equal(Array.isArray(response.result?.content), true, `${label}: ${JSON.stringify(response)}`);
   return JSON.parse(response.result.content[0].text);
@@ -132,7 +132,7 @@ try {
 
   writeMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
   const tools = await waitFor(2);
-  const names = tools.result.tools.map((tool) => tool.name);
+  const names = tools.result.tools.map((tool: any) => tool.name);
   assert.equal(names.includes('site_loop_guidance'), true);
   assert.equal(names.includes('site_loop_doctor'), true);
 

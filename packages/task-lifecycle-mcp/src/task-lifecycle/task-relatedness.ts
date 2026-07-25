@@ -16,24 +16,24 @@ const STOP_WORDS = new Set([
   'a','an','the','and','or','but','in','on','at','to','for','of','with','by','from','as','is','was','are','be','been','being','have','has','had','do','does','did','will','would','could','should','may','might','must','shall','can','need','dare','ought','used','this','that','these','those','i','you','he','she','it','we','they','me','him','her','us','them','my','your','his','her','its','our','their','mine','yours','hers','ours','theirs','what','which','who','whom','whose','where','when','why','how','all','each','every','both','few','more','most','other','some','such','no','nor','not','only','own','same','so','than','too','very','just','now','then','here','there','up','down','out','off','over','under','again','further','also','into','through','during','before','after','above','below','between','among','within','without','against','towards','upon','across','around','behind','beyond','except','inside','outside','until','via','per','amongst','amid','beside','besides','concerning','despite','following','like','minus','near','past','regarding','round','save','since','till','toward','underneath','unlike','versus','worth',
 ]);
 
-function tokenize(text) {
+function tokenize(text: any) {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s_-]/g, ' ')
     .split(/\s+/)
-    .filter((t) => t.length > 2 && !STOP_WORDS.has(t) && !/^\d+$/.test(t));
+    .filter((t: any) => t.length > 2 && !STOP_WORDS.has(t) && !/^\d+$/.test(t));
 }
 
-function deriveTags(sources) {
+function deriveTags(sources: any) {
   const counts = new Map();
   for (const token of tokenize(sources.filter(Boolean).join(' '))) {
     const tag = token.replace(/_/g, '-');
     counts.set(tag, (counts.get(tag) || 0) + 1);
   }
   return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .sort((a: any, b: any) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 12)
-    .map(([tag]) => tag);
+    .map(([tag]: any) => tag);
 }
 
 interface TaskTagInfo {
@@ -43,7 +43,7 @@ interface TaskTagInfo {
   derived_tags: string[];
 }
 
-function extractTaskTags(taskPath): TaskTagInfo {
+function extractTaskTags(taskPath: any): TaskTagInfo {
   const text = readFileSync(taskPath, 'utf8');
   const { frontMatter, body: parsedBody } = parseFrontMatter(text);
   const body = parsedBody.trim();
@@ -59,17 +59,17 @@ function extractTaskTags(taskPath): TaskTagInfo {
   if (titleMatch) sources.push(titleMatch[1]);
   const goalMatch = body.match(/^##\s+Goal\s*$/m);
   if (goalMatch) {
-    const start = goalMatch.index + goalMatch[0].length;
+    const start = (goalMatch.index ?? 0) + goalMatch[0].length;
     const rest = body.slice(start);
     const next = rest.match(/^##\s/m);
-    sources.push((next ? body.slice(start, start + next.index) : body.slice(start)).slice(0, 500));
+    sources.push((next ? body.slice(start, start + (next.index ?? 0)) : body.slice(start)).slice(0, 500));
   }
   const ctxMatch = body.match(/^##\s+Context\s*$/m);
   if (ctxMatch) {
-    const start = ctxMatch.index + ctxMatch[0].length;
+    const start = (ctxMatch.index ?? 0) + ctxMatch[0].length;
     const rest = body.slice(start);
     const next = rest.match(/^##\s/m);
-    sources.push((next ? body.slice(start, start + next.index) : body.slice(start)).slice(0, 300));
+    sources.push((next ? body.slice(start, start + (next.index ?? 0)) : body.slice(start)).slice(0, 300));
   }
   const derivedTags = deriveTags(sources);
   let explicitTags: string[] = [];
@@ -87,7 +87,7 @@ function extractTaskTags(taskPath): TaskTagInfo {
   };
 }
 
-function infoFromStoredSpec(spec, fallback: TaskTagInfo | undefined): TaskTagInfo {
+function infoFromStoredSpec(spec: any, fallback: TaskTagInfo | undefined): TaskTagInfo {
   const explicitTags = parseStoredTaskTags(spec.tags_json);
   const derivedTags = deriveTags([
     spec.title,
@@ -111,12 +111,12 @@ function effectiveTags(info: TaskTagInfo): string[] {
 
 function intersection(left: string[], right: string[]): string[] {
   const rightSet = new Set(right);
-  return left.filter((tag) => rightSet.has(tag));
+  return left.filter((tag: any) => rightSet.has(tag));
 }
 
-export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store = null }) {
+export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store = null }: any) {
   const dir = resolve(tasksDir);
-  const files = readdirSync(dir).filter((f) => f.endsWith('.md'));
+  const files = readdirSync(dir).filter((f: any) => f.endsWith('.md'));
   const byNumber = new Map<number, TaskTagInfo>();
   for (const f of files) {
     const info = extractTaskTags(join(dir, f));
@@ -155,7 +155,7 @@ export function findRelatedTasks({ tasksDir, targetTaskNumber, limit = 8, store 
     });
   }
 
-  scored.sort((a, b) => b.score - a.score || (a.task_number ?? 0) - (b.task_number ?? 0));
+  scored.sort((a: any, b: any) => b.score - a.score || (a.task_number ?? 0) - (b.task_number ?? 0));
   return {
     target: targetTaskNumber,
     target_tags: targetTags,

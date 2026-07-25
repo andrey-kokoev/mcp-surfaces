@@ -1,4 +1,4 @@
-export function levenshteinDistance(a, b) {
+export function levenshteinDistance(a: any, b: any) {
   const m = a.length;
   const n = b.length;
   if (m === 0) return n;
@@ -30,11 +30,11 @@ export function levenshteinDistance(a, b) {
   return prev[n];
 }
 
-export function normalizeTitle(title) {
+export function normalizeTitle(title: any) {
   return String(title ?? '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-export function classifyEnvelope(envelope) {
+export function classifyEnvelope(envelope: any) {
   const title = normalizeTitle(envelope.payload?.title ?? envelope.title ?? '');
   const summary = normalizeTitle(envelope.payload?.summary ?? '');
   const text = `${title} ${summary}`;
@@ -79,7 +79,7 @@ export function classifyEnvelope(envelope) {
   return { categories, recommendation };
 }
 
-export function determineTargetRole(envelope, categories) {
+export function determineTargetRole(envelope: any, categories: any) {
   const explicit = envelope.payload?.target_role ?? envelope.target_role ?? null;
   if (explicit) return explicit;
 
@@ -95,7 +95,7 @@ export function determineTargetRole(envelope, categories) {
   return 'architect';
 }
 
-export function determineAction(envelope, categories, recommendation, ageHours, duplicateInfo) {
+export function determineAction(envelope: any, categories: any, recommendation: any, ageHours: any, duplicateInfo: any) {
   if (duplicateInfo.isDuplicate) return 'acknowledge_duplicate';
 
   const kind = envelope.kind ?? 'unknown';
@@ -135,7 +135,7 @@ export function determineAction(envelope, categories, recommendation, ageHours, 
   return 'triage';
 }
 
-export function evaluateEnvelopeSeverity(envelope) {
+export function evaluateEnvelopeSeverity(envelope: any) {
   if (envelope.target_role) {
     const explicitSeverity = envelope.severity ?? 50;
     return {
@@ -240,7 +240,7 @@ export function evaluateEnvelopeSeverity(envelope) {
   };
 }
 
-export function matchNormalizedTitles(a, b, options: Record<string, unknown> = {}) {
+export function matchNormalizedTitles(a: any, b: any, options: Record<string, unknown> = {}) {
   const absoluteThreshold = typeof options.absoluteThreshold === 'number' ? options.absoluteThreshold : 10;
   const normalizedThreshold = typeof options.normalizedThreshold === 'number' ? options.normalizedThreshold : 0.25;
   const distance = levenshteinDistance(a, b);
@@ -254,7 +254,7 @@ export function matchNormalizedTitles(a, b, options: Record<string, unknown> = {
   };
 }
 
-export function findDuplicateInTitleIndex(titleIndex, title) {
+export function findDuplicateInTitleIndex(titleIndex: any, title: any) {
   const normTitle = normalizeTitle(title);
   if (normTitle.length === 0) {
     return { isDuplicate: false };
@@ -279,7 +279,7 @@ export function findDuplicateInTitleIndex(titleIndex, title) {
   return { isDuplicate: false };
 }
 
-export function findDuplicateTaskRows(taskRows, envelope) {
+export function findDuplicateTaskRows(taskRows: any, envelope: any) {
   const envelopeId = envelope.envelope_id;
   const title = String(envelope.payload?.title ?? envelope.title ?? '').trim();
 
@@ -325,11 +325,11 @@ export function findDuplicateTaskRows(taskRows, envelope) {
   };
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: any) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function hasEnvelopeCoverageEvidence(row, envelopeId) {
+export function hasEnvelopeCoverageEvidence(row: any, envelopeId: any) {
   if (!envelopeId || String(envelopeId).length < 8) return false;
 
   const context = String(row?.context_markdown ?? '');
@@ -347,13 +347,13 @@ export function hasEnvelopeCoverageEvidence(row, envelopeId) {
   return !hasPreservedResidualEvidence(row, envelopeId);
 }
 
-export function hasPreservedResidualEvidence(row, envelopeId) {
+export function hasPreservedResidualEvidence(row: any, envelopeId: any) {
   const fields = [
     row?.context_markdown,
     row?.required_work_markdown,
     row?.non_goals_markdown,
     row?.goal_markdown,
-  ].map((value) => String(value ?? ''));
+  ].map((value: any) => String(value ?? ''));
   const text = fields.join('\n').toLowerCase();
   if (!text.includes(String(envelopeId).toLowerCase())) return false;
 
@@ -367,5 +367,5 @@ export function hasPreservedResidualEvidence(row, envelopeId) {
     'preserves remaining',
     'remaining work',
     'deferred:',
-  ].some((marker) => text.includes(marker));
+  ].some((marker: any) => text.includes(marker));
 }

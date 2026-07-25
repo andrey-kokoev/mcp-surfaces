@@ -11,7 +11,7 @@ interface OpenSiteLoopStoreOptions {
   write?: boolean;
 }
 
-export function openSiteLoopStore(cwd, options: OpenSiteLoopStoreOptions = {}) {
+export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
   const write = options.write !== false;
   const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write });
   if (write) {

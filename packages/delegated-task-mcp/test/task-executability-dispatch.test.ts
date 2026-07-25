@@ -108,12 +108,12 @@ function runArgs(taskNumber: number, id: string, overrides: JsonRecord = {}): Js
 }
 
 async function call(state: ReturnType<typeof createServerState>, args: JsonRecord): Promise<JsonRecord> {
-  const response = await handleRequest({
+  const response = await ((handleRequest({
     jsonrpc: '2.0',
     id: `dispatch-${Date.now()}-${Math.random()}`,
     method: 'tools/call',
     params: { name: 'delegated_task_run', arguments: args },
-  }, state);
+  }, state)) as any) as any;
   if (response?.error) return { error: response.error };
   return (response?.result?.structuredContent as JsonRecord) ?? {};
 }

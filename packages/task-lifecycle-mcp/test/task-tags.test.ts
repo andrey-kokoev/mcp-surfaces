@@ -21,12 +21,12 @@ function payload(response: any): any {
 }
 
 async function call(id: number, name: string, arguments_: Record<string, unknown> = {}) {
-  return payload(await handleTaskLifecycleMcpRequest({
+  return payload(await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
     id,
     method: 'tools/call',
     params: { name, arguments: arguments_ },
-  }, runtime));
+  }, runtime)) as any);
 }
 
 mkdirSync(join(siteRoot, '.ai', 'agents'), { recursive: true });
@@ -120,7 +120,7 @@ try {
 }
 
 try {
-  const toolList = payload(await handleTaskLifecycleMcpRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, runtime));
+  const toolList = payload(await (handleTaskLifecycleMcpRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, runtime)) as any);
   const tagsTool = toolList.tools.find((tool: any) => tool.name === 'task_lifecycle_tags_update');
   assert.ok(tagsTool);
   assert.deepEqual(tagsTool.inputSchema.required, ['task_number', 'agent_id', 'tags', 'reason']);

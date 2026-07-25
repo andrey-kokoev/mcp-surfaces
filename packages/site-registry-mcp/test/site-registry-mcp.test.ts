@@ -15,7 +15,7 @@ assert.deepEqual(names.sort(), [
 ].sort());
 
 const missingState = createServerState({ naradaRoot: 'D:/definitely/missing/narada' });
-const doctorResponse = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'site_registry_doctor', arguments: {} } }, missingState);
+const doctorResponse = await ((handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'site_registry_doctor', arguments: {} } }, missingState)) as any) as any;
 const doctorPayload = JSON.parse((doctorResponse?.result as { content: { text: string }[] }).content[0].text);
 assert.equal(doctorPayload.status, 'cli_module_missing');
 
@@ -29,15 +29,15 @@ export async function sitesRegistryDiscoverCommand(options) { return { exitCode:
 
 try {
   const state = createServerState({ naradaRoot: fixtureDir, cliModulePath: fixturePath });
-  const list = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'site_registry_list', arguments: {} } }, state);
+  const list = await ((handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'site_registry_list', arguments: {} } }, state)) as any) as any;
   const listPayload = JSON.parse((list?.result as { content: { text: string }[] }).content[0].text);
   assert.equal(listPayload.result.kind, 'list');
 
-  const show = await handleRequest({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'site_registry_show', arguments: { reference: 'alias' } } }, state);
+  const show = await ((handleRequest({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'site_registry_show', arguments: { reference: 'alias' } } }, state)) as any) as any;
   const showPayload = JSON.parse((show?.result as { content: { text: string }[] }).content[0].text);
   assert.equal(showPayload.result.options.reference, 'alias');
 
-  const discover = await handleRequest({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'site_registry_discover_plan', arguments: { source: 'filesystem', apply: true } } }, state);
+  const discover = await ((handleRequest({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'site_registry_discover_plan', arguments: { source: 'filesystem', apply: true } } }, state)) as any) as any;
   const discoverPayload = JSON.parse((discover?.result as { content: { text: string }[] }).content[0].text);
   assert.equal(discoverPayload.result.options.dryRun, true);
   assert.equal(discoverPayload.result.options.apply, undefined);

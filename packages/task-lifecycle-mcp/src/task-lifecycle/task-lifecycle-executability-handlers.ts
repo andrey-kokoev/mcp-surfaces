@@ -37,7 +37,7 @@ export const TASK_LIFECYCLE_EXECUTABILITY_TOOL_NAMES = Object.freeze([
   'task_lifecycle_executability_dispatch_check',
 ]);
 
-export function createTaskLifecycleExecutabilityHandlers(context) {
+export function createTaskLifecycleExecutabilityHandlers(context: any) {
   const {
     store,
     siteRoot,
@@ -366,7 +366,7 @@ export function createTaskLifecycleExecutabilityHandlers(context) {
   }
 
   return Object.fromEntries(
-    TASK_LIFECYCLE_EXECUTABILITY_TOOL_NAMES.map((name) => [
+    TASK_LIFECYCLE_EXECUTABILITY_TOOL_NAMES.map((name: any) => [
       name,
       (args: Record<string, unknown>) => dispatchExecutabilityTool(name, args),
     ])
@@ -425,7 +425,7 @@ function parseJsonStringArray(json: string | null | undefined): string[] {
   if (!json) return [];
   try {
     const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((item: any) => typeof item === 'string') : [];
   } catch {
     return [];
   }
@@ -435,7 +435,7 @@ function parseJsonNumberArray(json: string | null | undefined): number[] {
   if (!json) return [];
   try {
     const parsed = JSON.parse(json);
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'number') : [];
+    return Array.isArray(parsed) ? parsed.filter((item: any) => typeof item === 'number') : [];
   } catch {
     return [];
   }

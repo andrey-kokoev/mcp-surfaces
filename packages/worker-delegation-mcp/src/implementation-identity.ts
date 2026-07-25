@@ -201,15 +201,18 @@ export function writeWorkerImplementationBuildManifest(options: ManifestWriteOpt
   if (dependencies.status !== 'ok') throw new Error(`worker_build_identity_dependencies_unavailable:${dependencies.error_code ?? 'unknown'}`);
   const implementationGraph = implementationGraphIdentity(artifact, dependencies);
   if (!implementationGraph) throw new Error('worker_build_identity_implementation_graph_unavailable');
+  const sourceTreeSha256 = source.sha256;
+  const artifactTreeSha256 = artifact.sha256;
+  if (!sourceTreeSha256 || !artifactTreeSha256) throw new Error('worker_build_identity_tree_fingerprint_unavailable');
   const manifest: BuildIdentityManifest = {
     schema: BUILD_MANIFEST_SCHEMA,
     package_name: '@narada2/worker-delegation-mcp',
     identity_algorithm: TREE_HASH_ALGORITHM,
     source_root: 'src',
-    source_tree_sha256: source.sha256,
+    source_tree_sha256: sourceTreeSha256,
     source_file_count: source.file_count,
     artifact_root: 'dist/src',
-    artifact_tree_sha256: artifact.sha256,
+    artifact_tree_sha256: artifactTreeSha256,
     artifact_file_count: artifact.file_count,
     runtime_dependencies: dependencies.dependencies,
     implementation_graph_sha256: implementationGraph,
@@ -255,7 +258,7 @@ function resolveStaleServerRisk(input: {
     return { status: 'not_observed', evidence: { materialized_implementation_identity: implementationGraphIdentity(materializedArtifact, materializedDependencies) } };
   }
   if (!buildManifest || buildManifest.status !== 'ok') {
-    return unavailableIdentity('build_manifest', { build_manifest_status: buildManifest?.status ?? 'missing', build_manifest_error: buildManifest?.status === 'ok' ? null : buildManifest?.error_code ?? null });
+    return unavailableIdentity('build_manifest', { build_manifest_status: buildManifest?.status ?? 'missing', build_manifest_error: buildManifest?.error_code ?? null });
   }
   if (buildManifest.value.artifact_tree_sha256 !== materializedArtifact.sha256) {
     return {

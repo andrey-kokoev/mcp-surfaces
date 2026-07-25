@@ -100,13 +100,13 @@ writeFileSync(join(root, '.narada', 'worker-cognition-defaults.json'), `${JSON.s
 }, null, 2)}\n`, 'utf8');
 
 const state = createServerState({ siteRoot: root, allowedRoot: root, defaultRuntime: 'codex', codexCommand: process.execPath }, { PATH: process.env.PATH, NARADA_PROVIDER_SECRET_STORE: 'disabled' });
-assert.equal(state.providerRegistryDiagnostics.status, 'available');
-assert.equal(state.providerRegistryDiagnostics.source, 'canonical_sqlite');
-assert.equal(state.providerRegistryDiagnostics.path, databasePath);
-assert.equal(state.cognitionDefaults.effectiveDefaults.low.provider, 'codex-subscription');
-assert.equal(state.cognitionDefaults.effectiveDefaults.low.model, 'gpt-5.6-luna');
-assert.equal(state.cognitionDefaults.effectiveDefaults.low.reasoningEffort, 'max');
-const resolved = await handleRequest({
+assert.equal(state.providerRegistryDiagnostics!.status, 'available');
+assert.equal(state.providerRegistryDiagnostics!.source, 'canonical_sqlite');
+assert.equal(state.providerRegistryDiagnostics!.path, databasePath);
+assert.equal(state.cognitionDefaults!.effectiveDefaults.low.provider, 'codex-subscription');
+assert.equal(state.cognitionDefaults!.effectiveDefaults.low.model, 'gpt-5.6-luna');
+assert.equal(state.cognitionDefaults!.effectiveDefaults.low.reasoningEffort, 'max');
+const resolved = await ((handleRequest({
   jsonrpc: '2.0',
   id: 'canonical-default',
   method: 'tools/call',
@@ -117,7 +117,7 @@ const resolved = await handleRequest({
       constraints: { cwd: root, authority: 'read', cognition: 'low', overrides: { runtime: 'codex' } },
     },
   },
-}, state) as { result?: { structuredContent?: Record<string, any> }; error?: unknown };
+}, state)) as any) as any as { result?: { structuredContent?: Record<string, any> }; error?: unknown };
 assert.equal(resolved.error, undefined);
 assert.match(String((resolved.result as any)?.content?.[0]?.text ?? ''), /gpt-5\.6-luna/);
 

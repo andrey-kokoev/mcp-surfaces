@@ -2,12 +2,12 @@
  * Determine whether a review record represents a single-operator review
  * by looking for the annotation in findings_json.
  */
-export function isSingleOperatorReview(reviewRow) {
+export function isSingleOperatorReview(reviewRow: any) {
   if (!reviewRow?.findings_json) return false;
   try {
     const findings = JSON.parse(reviewRow.findings_json);
     if (!Array.isArray(findings)) return false;
-    return findings.some((f) =>
+    return findings.some((f: any) =>
       f.location === 'review_authority' &&
       typeof f.description === 'string' &&
       f.description.includes('single_operator_review')
@@ -20,12 +20,12 @@ export function isSingleOperatorReview(reviewRow) {
 /**
  * Extract single-operator review metadata from a review row.
  */
-export function getSingleOperatorReviewMeta(reviewRow) {
+export function getSingleOperatorReviewMeta(reviewRow: any) {
   if (!reviewRow?.findings_json) return null;
   try {
     const findings = JSON.parse(reviewRow.findings_json);
     if (!Array.isArray(findings)) return null;
-    const annotation = findings.find((f) =>
+    const annotation = findings.find((f: any) =>
       f.location === 'review_authority' &&
       typeof f.description === 'string' &&
       f.description.includes('single_operator_review')
@@ -46,7 +46,7 @@ export function getSingleOperatorReviewMeta(reviewRow) {
  * Operator identity helpers for same-operator review and self-review detection.
  */
 
-export function getOperatorIdentity(store, agentId) {
+export function getOperatorIdentity(store: any, agentId: any) {
   try {
     if (!hasAgentRosterColumn(store, 'operator_identity')) return null;
     const row = store.db.prepare("SELECT operator_identity FROM agent_roster WHERE agent_id = ?").get(agentId);
@@ -56,15 +56,15 @@ export function getOperatorIdentity(store, agentId) {
   }
 }
 
-function hasAgentRosterColumn(store, columnName) {
+function hasAgentRosterColumn(store: any, columnName: any) {
   try {
-    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column) => column.name === columnName);
+    return store.db.prepare('PRAGMA table_info(agent_roster)').all().some((column: any) => column.name === columnName);
   } catch {
     return false;
   }
 }
 
-export function detectSameOperatorReview(store, reviewerAgent, taskNumber) {
+export function detectSameOperatorReview(store: any, reviewerAgent: any, taskNumber: any) {
   try {
     const reviewerIdentity = getOperatorIdentity(store, reviewerAgent);
     if (!reviewerIdentity) return { sameOperator: false };
@@ -99,7 +99,7 @@ export function detectSameOperatorReview(store, reviewerAgent, taskNumber) {
  * Detect true self-review (reviewer is the same agent who finished the task)
  * or singleton-role review (no other agents in the role with review capability).
  */
-export function detectSelfReview(store, reviewerAgent, taskNumber) {
+export function detectSelfReview(store: any, reviewerAgent: any, taskNumber: any) {
   try {
     const lifecycle = store.db.prepare("SELECT task_id FROM task_lifecycle WHERE task_number = ?").get(taskNumber);
     if (!lifecycle?.task_id) return { selfReview: false };
@@ -159,10 +159,10 @@ function parseCapabilities(capabilitiesJson: unknown): string[] {
   if (!capabilitiesJson) return [];
   try {
     const parsed = JSON.parse(String(capabilitiesJson));
-    if (Array.isArray(parsed)) return parsed.filter((c) => typeof c === 'string');
+    if (Array.isArray(parsed)) return parsed.filter((c: any) => typeof c === 'string');
     if (parsed && typeof parsed === 'object') {
       const capabilities = (parsed as Record<string, unknown>).capabilities;
-      return Array.isArray(capabilities) ? capabilities.filter((c) => typeof c === 'string') : [];
+      return Array.isArray(capabilities) ? capabilities.filter((c: any) => typeof c === 'string') : [];
     }
     return [];
   } catch {
@@ -171,10 +171,10 @@ function parseCapabilities(capabilitiesJson: unknown): string[] {
 }
 
 function hasReviewCapability(capabilities: string[]): boolean {
-  return capabilities.some((c) => c === 'review' || c === 'task_review' || c === 'architect_as_reviewer');
+  return capabilities.some((c: any) => c === 'review' || c === 'task_review' || c === 'architect_as_reviewer');
 }
 
-export function isReviewerCapable(store, agentId) {
+export function isReviewerCapable(store: any, agentId: any) {
   try {
     const row = store.db.prepare('SELECT capabilities_json FROM agent_roster WHERE agent_id = ?').get(agentId);
     return hasReviewCapability(parseCapabilities(row?.capabilities_json));
@@ -183,7 +183,7 @@ export function isReviewerCapable(store, agentId) {
   }
 }
 
-export function findReviewerCapableAgents(store) {
+export function findReviewerCapableAgents(store: any) {
   try {
     const rows = store.db.prepare(
       `SELECT agent_id, role, capabilities_json FROM agent_roster
@@ -191,7 +191,7 @@ export function findReviewerCapableAgents(store) {
           OR capabilities_json LIKE '%"task_review"%'
           OR capabilities_json LIKE '%"architect_as_reviewer"%'`
     ).all();
-    return rows.map((row) => ({
+    return rows.map((row: any) => ({
       agent_id: row.agent_id,
       role: row.role,
       capabilities: parseCapabilities(row.capabilities_json),

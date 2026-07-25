@@ -3,7 +3,7 @@ export async function runJsonRpcStdioServer({
   stdout,
   handleRequest,
   parseJsonRpcInput,
-}) {
+}: any) {
   const activeRequests = new Map();
   const pendingRequests = new Set();
   let buffer = Buffer.alloc(0) as Buffer<ArrayBufferLike>;
@@ -24,12 +24,12 @@ export async function runJsonRpcStdioServer({
   await Promise.allSettled([...pendingRequests]);
 }
 
-function trackRequest(promise, pendingRequests) {
+function trackRequest(promise: any, pendingRequests: any) {
   pendingRequests.add(promise);
   promise.finally(() => pendingRequests.delete(promise)).catch(() => {});
 }
 
-async function processRequest({ request, stdout, framed, handleRequest, activeRequests }) {
+async function processRequest({ request, stdout, framed, handleRequest, activeRequests }: any) {
   if (!request?.id && request?.method === 'notifications/cancelled') {
     const requestId = String(request.params?.requestId ?? '');
     activeRequests.get(requestId)?.abort();
@@ -52,7 +52,7 @@ async function processRequest({ request, stdout, framed, handleRequest, activeRe
   }
 }
 
-export function drainBufferedRequests(buffer, parseJsonRpcInput) {
+export function drainBufferedRequests(buffer: any, parseJsonRpcInput: any) {
   const bytes = toBuffer(buffer);
   if (bytes.includes('Content-Length:')) {
     return { ...drainJsonRpcFrames(bytes), framed: true };
@@ -76,7 +76,7 @@ export function drainBufferedRequests(buffer, parseJsonRpcInput) {
   return { requests, remaining: bytes.subarray(cursor), framed: false };
 }
 
-export function drainJsonRpcFrames(buffer) {
+export function drainJsonRpcFrames(buffer: any) {
   const requests = [];
   let remaining = toBuffer(buffer);
   while (true) {
@@ -99,11 +99,11 @@ export function drainJsonRpcFrames(buffer) {
   return { requests, remaining, framed: true };
 }
 
-function toBuffer(value) {
+function toBuffer(value: any) {
   return Buffer.isBuffer(value) ? value : Buffer.from(String(value), 'utf8');
 }
 
-function findHeaderSeparator(buffer) {
+function findHeaderSeparator(buffer: any) {
   const crlfOffset = buffer.indexOf(Buffer.from('\r\n\r\n', 'ascii'));
   if (crlfOffset >= 0) return { offset: crlfOffset, length: 4 };
   const lfOffset = buffer.indexOf(Buffer.from('\n\n', 'ascii'));
@@ -111,7 +111,7 @@ function findHeaderSeparator(buffer) {
   return null;
 }
 
-function writeJsonResponse(stdout, response, framed) {
+function writeJsonResponse(stdout: any, response: any, framed: any) {
   const body = JSON.stringify(response);
   if (framed) {
     stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
@@ -120,7 +120,7 @@ function writeJsonResponse(stdout, response, framed) {
   stdout.write(`${body}\n`);
 }
 
-function writeProgress(stdout, request, progress, message, framed) {
+function writeProgress(stdout: any, request: any, progress: any, message: any, framed: any) {
   const progressToken = request?.params?._meta?.progressToken;
   if (progressToken === undefined) return;
   writeJsonResponse(stdout, {
