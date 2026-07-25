@@ -137,3 +137,61 @@ test('materialized configuration refuses missing or obsolete launch invariants',
     rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test('Codex project trust updates do not invalidate the managed MCP projection', () => {
+  const f = fixture();
+  const configPath = join(f.root, 'carrier.toml');
+  const sidecarPath = materializationSidecarPath(configPath);
+  const args = f.args.map((arg) => arg === f.sidecarPath ? sidecarPath : arg);
+  const content = [
+    "[projects.'D:/code']",
+    'trust_level = "trusted"',
+    '',
+    '[mcp_servers.fixture]',
+    'command = "node"',
+    `args = ${JSON.stringify(args)}`,
+    '',
+  ].join('\n');
+  try {
+    const validation = validateMaterializedConfiguration({
+      structured: { mcpServers: { fixture: { command: 'node', args } } },
+      artifactManifestPath: f.manifestPath,
+      runtimeProxyEntrypoint: f.proxyPath,
+      expectedSidecarPath: sidecarPath,
+      requireSidecar: true,
+    });
+    assert.equal(validation.ok, true, JSON.stringify(validation));
+    writeFileSync(configPath, content, 'utf8');
+    const generation = buildMaterializationGeneration({
+      carrierId: 'fixture-carrier',
+      carrierKind: 'codex',
+      configPath,
+      content,
+      artifactManifestPath: f.manifestPath,
+      artifactManifestFingerprint: 'fixture-manifest-fingerprint',
+      registrarEntrypoint: f.registrarPath,
+      serverCount: validation.server_count,
+      proxyCount: validation.proxy_count,
+    });
+    writeMaterializationGeneration(sidecarPath, generation);
+
+    writeFileSync(configPath, `${content}[projects.'C:\\Users\\Andrey']\ntrust_level = "trusted"\n\n`, 'utf8');
+    assert.deepEqual(
+      preflightMaterializationGeneration({
+        sidecarPath,
+        manifestPath: f.manifestPath,
+        manifestFingerprint: 'fixture-manifest-fingerprint',
+      }),
+      { ok: true, generation_fingerprint: generation.generation_fingerprint },
+    );
+
+    writeFileSync(configPath, content.replace('command = "node"', 'command = "pnpm"'), 'utf8');
+    assert.equal(preflightMaterializationGeneration({
+      sidecarPath,
+      manifestPath: f.manifestPath,
+      manifestFingerprint: 'fixture-manifest-fingerprint',
+    }).code, 'materialization_generation_stale');
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});

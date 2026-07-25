@@ -49,10 +49,45 @@ function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+function canonicalizeMaterializedConfiguration(carrierKind: string, content: string): string {
+  const normalized = content.replace(/\r\n?/g, '\n');
+  if (carrierKind !== 'codex') return normalized;
+
+  // Codex may add or update project trust tables after registrar materialization.
+  // Those tables are outside Narada's MCP launch projection; retain the MCP
+  // sections in the fingerprint so launch/config mutations remain detectable.
+  const lines = normalized.split('\n');
+  const canonical: string[] = [];
+  let inProjectTrustTable = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[projects.') && trimmed.endsWith(']')) {
+      inProjectTrustTable = true;
+      continue;
+    }
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) inProjectTrustTable = false;
+    if (!inProjectTrustTable) canonical.push(line);
+  }
+  return canonical.join('\n').replace(/\n+$/, '');
+}
+
+export function materializationConfigFingerprint(input: { carrierKind: string; content: string }): string {
+  return sha256(canonicalizeMaterializedConfiguration(input.carrierKind, input.content));
+}
+
 function sha256File(path: string): string | null {
   if (!existsSync(path)) return null;
   try {
     return createHash('sha256').update(readFileSync(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+function materializationConfigFileFingerprint(path: string, carrierKind: string): string | null {
+  if (!existsSync(path)) return null;
+  try {
+    return materializationConfigFingerprint({ carrierKind, content: readFileSync(path, 'utf8') });
   } catch {
     return null;
   }
@@ -168,7 +203,7 @@ export function buildMaterializationGeneration(input: {
     carrier_id: input.carrierId,
     carrier_kind: input.carrierKind,
     config_path: resolve(input.configPath),
-    config_sha256: sha256(input.content),
+    config_sha256: materializationConfigFingerprint({ carrierKind: input.carrierKind, content: input.content }),
     artifact_manifest_path: resolve(input.artifactManifestPath),
     artifact_manifest_fingerprint: input.artifactManifestFingerprint,
     registrar_entrypoint: resolve(input.registrarEntrypoint),
@@ -255,7 +290,7 @@ export function preflightMaterializationGeneration(input: {
     return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar is not paired with its carrier configuration.', generation_fingerprint: generation.generation_fingerprint, details: { expected_config_path: expectedConfigPath, actual_config_path: generation.config_path } };
   }
   const configPath = resolve(generation.config_path);
-  const configFingerprint = sha256File(configPath);
+  const configFingerprint = materializationConfigFileFingerprint(configPath, generation.carrier_kind);
   if (!configFingerprint || configFingerprint !== generation.config_sha256) {
     return { ok: false, code: 'materialization_generation_stale', reason: 'The materialized configuration changed after generation.', generation_fingerprint: generation.generation_fingerprint, details: { config_path: configPath } };
   }
