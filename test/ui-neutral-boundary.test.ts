@@ -83,12 +83,12 @@ for (const packageRoot of [repositoryRoot, ...walkPackageRoots(packagesRoot)]) {
 
 console.log('mcp-surfaces UI-neutral boundary ok');
 
-function isForbiddenRendererPackage(specifier) {
+function isForbiddenRendererPackage(specifier: string): boolean {
   return forbiddenRendererPackages.some((packageName) => specifier === packageName || specifier.startsWith(packageName + '/'))
     || forbiddenRendererPackagePrefixes.some((prefix) => specifier.startsWith(prefix));
 }
 
-function* walkPackageRoots(directory) {
+function* walkPackageRoots(directory: string): Generator<string> {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (ignoredDirectoryNames.has(entry.name)) continue;
     const path = join(directory, entry.name);
@@ -102,7 +102,7 @@ function* walkPackageRoots(directory) {
   }
 }
 
-function* walkFiles(directory) {
+function* walkFiles(directory: string): Generator<string> {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) yield* walkFiles(path);
@@ -110,7 +110,7 @@ function* walkFiles(directory) {
   }
 }
 
-function statSafe(path) {
+function statSafe(path: string): ReturnType<typeof statSync> | undefined {
   try {
     return statSync(path);
   } catch {

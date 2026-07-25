@@ -18,7 +18,7 @@
       "@narada2/provider-registry": ["packages/shared/provider-registry/src/main.ts"],
       "@narada2/provider-registry/*": ["packages/shared/provider-registry/src/*.ts"]
     },
-    "strict": false,
+    "strict": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "esModuleInterop": true

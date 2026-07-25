@@ -25,10 +25,10 @@ try {
   const surface = launcherSurfaceDefinition();
   assert.equal(surface.descriptor.projections[0]!.lifecycle.mode, 'replayable');
   assert.equal(surface.descriptor.guidance_tool, 'launcher_guidance');
-  const liveList = await handleRequest(
+  const liveList = await ((handleRequest(
     { jsonrpc: '2.0', id: 99, method: 'tools/list', params: {} },
     state,
-  ) as Record<string, any>;
+  )) as any) as any as Record<string, any>;
   assertLiveToolsConform(surface.descriptor, liveList.result.tools);
   async function call(name: string, args: Record<string, unknown>): Promise<Record<string, any>> {
     return handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }, state) as Promise<Record<string, any>>;
@@ -51,7 +51,7 @@ try {
   assert.ok((options.declared_options as string[]).includes('LauncherUiPort'));
   assert.ok((options.declared_options as string[]).includes('LauncherUiPortFallback'));
 
-  const toolList = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state) as Record<string, any>;
+  const toolList = await ((handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, state)) as any) as any as Record<string, any>;
   const launcherPlanTool = toolList.result.tools.find((tool: Record<string, any>) => tool.name === 'launcher_plan');
   assert.deepEqual(launcherPlanTool.inputSchema.properties.mcp_scope.enum, ['all', 'host', 'user-site', 'local-site', 'none']);
 

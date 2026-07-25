@@ -28,6 +28,7 @@ export function surfaceDefinition(): DefinedSurface {
           'NARADA_OPERATOR_ROUTER_URL',
           'NARADA_OPERATOR_CONSOLE_HOST',
           'NARADA_OPERATOR_CONSOLE_PORT',
+          'NARADA_OPERATOR_CONSOLE_RUNTIME_STATE_ROOT',
           'NARADA_POWERSHELL',
         ],
       },

@@ -35,7 +35,8 @@ export function buildGuidanceResult(
       'Follow the returned state and document paths when diagnosing a local overlay.',
       'Call operator_console_overlay_refresh after an external console URL or document change.',
       'Call operator_console_overlay_close to stop only the Operator Console overlay owned by this surface.',
-      'Start or restart the Operator Router through the Narada console lifecycle command; this surface does not own the router.',
+      'Opening a local overlay establishes or verifies the Operator Console runtime before creating the window; use the returned diagnostics if readiness fails.',
+      'Use Narada console status/stop/restart commands when an explicit runtime lifecycle operation is needed; this MCP surface delegates rather than owning that authority.',
     ],
     tool_preference: [
       { step: 'orient', guidance: 'Use operator_console_overlay_guidance when the surface or recovery path is unfamiliar.' },
@@ -51,21 +52,21 @@ export function buildGuidanceResult(
     ],
     anti_patterns: [
       'Do not pass shell command strings or executable paths to this surface.',
-      'Do not use this surface to start, stop, or replace the Operator Router or console server.',
+      'Do not pass arbitrary process commands to this surface or treat it as a general process manager.',
       'Do not terminate arbitrary processes; close only the overlay identified by its canonical overlay id.',
       'Do not treat a stopped overlay as evidence that the Operator Router is stopped.',
     ],
     recovery: [
       'If operator_console_overlay_entrypoint_not_found is returned, verify NARADA_ROOT points to the Narada checkout and restart the MCP surface.',
       'If the overlay is stale, call operator_console_overlay_close and then operator_console_overlay_open.',
-      'If the console URL is unavailable, start or restart the console through the Narada console command, then refresh the overlay.',
+      'If local readiness fails, inspect the returned runtime log_path and state_path before retrying; do not create a second console process by hand.',
       'If the lifecycle result is unclear, inspect the returned state_directory and document_path rather than guessing.',
     ],
     boundaries: [
       'This surface owns only the Operator Console overlay projection.',
       'The canonical overlay implementation remains in Narada proper at packages/operator-console-overlay.',
       'The surface launches only that fixed entrypoint with a bounded argument set.',
-      'The Operator Router, console server, browser, and agent sessions remain owned by their respective Narada layers.',
+      'The Operator Console runtime owns local Router/Console readiness and lifecycle; the Router, console backend, browser, and agent sessions retain their respective domain boundaries.',
     ],
   };
 }

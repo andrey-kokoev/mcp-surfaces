@@ -47,12 +47,12 @@ test('builds agent-originated directive input without operator impersonation', (
 });
 
 test('guidance is available without constructing a site authority client', async () => {
-  const response = await handleRequest({
+  const response = await ((handleRequest({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
     params: { name: 'nars_session_guidance', arguments: {} },
-  });
+  })) as any) as any;
   assert.equal(response?.error, undefined);
   const result = record(response?.result);
   assert.equal(record(result.structuredContent).schema, 'narada.nars_session_mcp.guidance.v1');

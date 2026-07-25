@@ -399,7 +399,7 @@ async function launchAndExercise(label: string): Promise<LaunchEvidence> {
   launcherProcesses.push(launcher);
   activeLaunch.launcher_output = launcher.output();
 
-  const record = await waitFor(() => findSessionRecord(temporarySiteRoot, AGENT_ID, launchSessionId), `session_record_${label}`);
+  const record = await waitFor(() => findSessionRecord(temporarySiteRoot!, AGENT_ID, launchSessionId), `session_record_${label}`);
   recordProgress(`launch_${label}_session_record`, { launch_session_id: launchSessionId, session_id: record.session_id });
   activeLaunch.session_record = record;
   activeLaunch.launcher_output = launcher.output();
@@ -453,8 +453,8 @@ async function launchAndExercise(label: string): Promise<LaunchEvidence> {
   assert.equal(delivered.status, 'admitted', JSON.stringify(delivered));
   recordProgress(`launch_${label}_input_delivered`, { launch_session_id: launchSessionId, session_id: record.session_id });
 
-  await waitFor(() => provider?.requests.length > requestCountBefore, `provider_turn_${label}`);
-  const newRequests = provider.requests.slice(requestCountBefore);
+  await waitFor(() => provider!.requests.length > requestCountBefore, `provider_turn_${label}`);
+  const newRequests = provider!.requests.slice(requestCountBefore);
   const inheritedToolNames = newRequests.flatMap((request) => {
     const tools = Array.isArray(request.tools) ? request.tools : [];
     return tools.map((tool) => asRecord(asRecord(tool).function).name).filter((name): name is string => typeof name === 'string');

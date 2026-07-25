@@ -4,9 +4,9 @@ Host-level dedicated MCP surface for the Narada Operator Console Windows overlay
 
 The surface owns the bounded MCP command boundary only. It delegates overlay lifecycle operations to the canonical Narada proper package at:
 
-    packages/operator-console-overlay/src/cli.mjs
+    packages/operator-console-overlay/dist/cli.js
 
-It does not use structured-command MCP, start or stop the Operator Router, manage the console server, launch a browser, or terminate arbitrary processes.
+For a local URL, the canonical overlay package first asks `@narada2/operator-console-runtime` to prove or establish the Operator Router plus Console route. If readiness fails, no dead overlay is created and the returned diagnostics include the bounded failure reason and log/state paths. The MCP surface itself does not use structured-command MCP, launch a browser, or terminate arbitrary processes; runtime lifecycle remains owned by Narada proper.
 
 ## Tools
 

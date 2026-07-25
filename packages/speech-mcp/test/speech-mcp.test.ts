@@ -59,7 +59,7 @@ const secretLookupState = newState({ secretLookupCommand: process.execPath, secr
 assert.equal(resolveOpenAiApiKey(secretLookupState, 'openai-api', {}), 'secretstore-key');
 assert.equal(resolveOpenAiApiKey(state, 'openai-api', { NARADA_PROVIDER_SECRET_STORE: 'disabled' } as NodeJS.ProcessEnv), null);
 
-const tools = ((await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state)) as Record<string, any>).result.tools;
+const tools = ((await ((handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state)) as any) as any) as Record<string, any>).result.tools;
 const speakTool = tools.find((tool: Record<string, any>) => tool.name === 'speech_speak');
 assert.ok(speakTool.inputSchema.properties.selection);
 assert.equal(speakTool.inputSchema.properties.api_key, undefined);

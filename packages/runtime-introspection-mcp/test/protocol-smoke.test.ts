@@ -9,8 +9,8 @@ let stdout = '';
 let stderr = '';
 child.stdout.setEncoding('utf8');
 child.stderr.setEncoding('utf8');
-child.stdout.on('data', (chunk) => { stdout += chunk; });
-child.stderr.on('data', (chunk) => { stderr += chunk; });
+child.stdout.on('data', (chunk: any) => { stdout += chunk; });
+child.stderr.on('data', (chunk: any) => { stderr += chunk; });
 
 try {
   writeFrame({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
@@ -40,13 +40,13 @@ try {
   });
   child.stdin.end();
 
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve));
+  const exitCode = await new Promise<number | null>((resolve: any) => child.on('close', resolve));
   assert.equal(exitCode, 0, stderr);
 
   const responses = parseFrames(stdout);
-  assert.equal(responses.find((message) => message.id === 1)?.result.serverInfo.name, 'runtime-introspection-mcp');
-  const listedTools = responses.find((message) => message.id === 2)?.result.tools;
-  assert.deepEqual(listedTools.map((tool) => tool.name), [
+  assert.equal(responses.find((message: any) => message.id === 1)?.result.serverInfo.name, 'runtime-introspection-mcp');
+  const listedTools = responses.find((message: any) => message.id === 2)?.result.tools;
+  assert.deepEqual(listedTools.map((tool: any) => tool.name), [
     'runtime_introspection_guidance',
     'runtime_introspection_formats',
     'runtime_introspection_top_events',
@@ -56,8 +56,8 @@ try {
     'runtime_introspection_show',
     'runtime_introspection_show_event',
   ]);
-  assert.equal(listedTools.every((tool) => tool.annotations.readOnlyHint === true), true);
-  const analysis = responses.find((message) => message.id === 3)?.result.structuredContent;
+  assert.equal(listedTools.every((tool: any) => tool.annotations.readOnlyHint === true), true);
+  const analysis = responses.find((message: any) => message.id === 3)?.result.structuredContent;
   assert.equal(analysis.schema, 'narada.runtime_introspection.analysis.v0');
   assert.equal(analysis.summary.event_count, 1);
   assert.equal(analysis.counts.by_surface['local-filesystem'], 1);

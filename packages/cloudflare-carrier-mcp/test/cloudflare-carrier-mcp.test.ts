@@ -61,10 +61,10 @@ writeFileSync(join(root, '.narada', 'site-continuity', 'health', 'cloudflare-con
 
 const state = createServerState({ repoRoot: root, workerUrl: 'https://cloudflare.example.test' });
 
-const doctor = await handleRequest({
+const doctor = await ((handleRequest({
   jsonrpc: '2.0', id: 1, method: 'tools/call',
   params: { name: 'cloudflare_doctor', arguments: {} },
-}, state);
+}, state)) as any) as any;
 assert.equal(doctor.error, undefined);
 const doctorContent = (doctor.result as any).structuredContent;
 assert.equal(doctorContent.repo_root, root.replace(/\\/g, '/'));
@@ -78,19 +78,19 @@ const siteBoundState = createServerState({
   site_root: root,
   workerUrl: 'https://cloudflare.example.test',
 });
-const siteBoundDoctor = await handleRequest({
+const siteBoundDoctor = await ((handleRequest({
   jsonrpc: '2.0', id: 11, method: 'tools/call',
   params: { name: 'cloudflare_doctor', arguments: {} },
-}, siteBoundState);
+}, siteBoundState)) as any) as any;
 assert.equal(
   (siteBoundDoctor.result as any).structuredContent.projection_registry_root,
   join(root, '.narada', 'crew', 'nars-projections').replace(/\\/g, '/'),
 );
 
-const sessionStatus = await handleRequest({
+const sessionStatus = await ((handleRequest({
   jsonrpc: '2.0', id: 2, method: 'tools/call',
   params: { name: 'cloudflare_session_status', arguments: {} },
-}, state);
+}, state)) as any) as any;
 assert.equal(sessionStatus.error, undefined);
 const sessionContent = (sessionStatus.result as any).structuredContent;
 assert.equal(sessionContent.status, 'present');
@@ -98,10 +98,10 @@ assert.equal(sessionContent.has_cookie, true);
 assert.equal(sessionContent.age_minutes, 0);
 assert.equal(sessionContent.is_fresh, true);
 
-const missingSession = await handleRequest({
+const missingSession = await ((handleRequest({
   jsonrpc: '2.0', id: 3, method: 'tools/call',
   params: { name: 'cloudflare_session_status', arguments: { session_file: join(root, 'nonexistent.json') } },
-}, state);
+}, state)) as any) as any;
 assert.equal((missingSession.result as any).structuredContent.status, 'missing');
 
 const sessionFile = join(root, '.narada', 'auth', 'cloudflare-operator-session.json');
@@ -112,17 +112,17 @@ writeFileSync(sessionFile, JSON.stringify({
 }));
 const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
 utimesSync(sessionFile, staleMtime, staleMtime);
-const staleDoctor = await handleRequest({
+const staleDoctor = await ((handleRequest({
   jsonrpc: '2.0', id: 31, method: 'tools/call',
   params: { name: 'cloudflare_doctor', arguments: {} },
-}, state);
+}, state)) as any) as any;
 assert.equal((staleDoctor.result as any).structuredContent.session_fresh, false);
 assert.equal((staleDoctor.result as any).structuredContent.operator_action, 'run_pnpm_cloudflare_operator_login_then_cloudflare_operator_check_human');
 
-const health = await handleRequest({
+const health = await ((handleRequest({
   jsonrpc: '2.0', id: 4, method: 'tools/call',
   params: { name: 'cloudflare_health', arguments: {} },
-}, state);
+}, state)) as any) as any;
 assert.equal(health.error, undefined);
 const healthContent = (health.result as any).structuredContent;
 assert.equal(healthContent.status, 'ok');
@@ -132,10 +132,10 @@ assert.equal(healthContent.scheduler.task_state, 'Enabled');
 assert.equal(healthContent.cloudflare.next_action, 'monitor_sites');
 assert.equal(healthContent.alignment.state, 'aligned');
 
-const missingHealth = await handleRequest({
+const missingHealth = await ((handleRequest({
   jsonrpc: '2.0', id: 5, method: 'tools/call',
   params: { name: 'cloudflare_health', arguments: { health_file: join(root, 'nonexistent.json') } },
-}, state);
+}, state)) as any) as any;
 assert.equal((missingHealth.result as any).structuredContent.status, 'missing');
 
 writeFileSync(sessionFile, JSON.stringify({
@@ -196,10 +196,10 @@ const joinedState = createServerState({
   projectionRegistryRoot,
   fetch_impl: fetchImpl,
 });
-const joinedUnauthorized = await handleRequest({
+const joinedUnauthorized = await ((handleRequest({
   jsonrpc: '2.0', id: 6, method: 'tools/call',
   params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_health' } },
-}, joinedState);
+}, joinedState)) as any) as any;
 const joinedUnauthorizedContent = (joinedUnauthorized.result as any).structuredContent;
 assert.equal(joinedUnauthorizedContent.status, 'degraded');
 assert.equal(joinedUnauthorizedContent.code, 'carrier_api_unauthorized_projection_available');
@@ -215,10 +215,10 @@ writeFileSync(sessionFile, JSON.stringify({
   worker_url: 'https://cloudflare.example.test',
 }));
 carrierMode = 'ok';
-const joinedHealthy = await handleRequest({
+const joinedHealthy = await ((handleRequest({
   jsonrpc: '2.0', id: 7, method: 'tools/call',
   params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_health' } },
-}, joinedState);
+}, joinedState)) as any) as any;
 const joinedHealthyContent = (joinedHealthy.result as any).structuredContent;
 assert.equal(joinedHealthyContent.status, 'healthy');
 assert.equal(joinedHealthyContent.carrier_api.status, 'ok');
@@ -239,10 +239,10 @@ writeFileSync(join(unknownProjectionDir, 'remote-access.json'), JSON.stringify({
   browser_access_tokens: [{ kind: 'browser', status: 'active', token_fingerprint: 'fingerprint:proj_unknown:browser' }],
 }));
 const carrierCallCountBeforeUnknown = carrierCalls.length;
-const unknownLineage = await handleRequest({
+const unknownLineage = await ((handleRequest({
   jsonrpc: '2.0', id: 8, method: 'tools/call',
   params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_unknown' } },
-}, joinedState);
+}, joinedState)) as any) as any;
 const unknownLineageContent = (unknownLineage.result as any).structuredContent;
 assert.equal(unknownLineageContent.status, 'unverified');
 assert.equal(unknownLineageContent.code, 'projection_lineage_unknown');
@@ -264,10 +264,10 @@ writeFileSync(join(legacyProjectionDir, 'remote-access.json'), JSON.stringify({
   site_id: 'sonar',
   browser_access_tokens: [{ kind: 'browser', status: 'active', token_fingerprint: 'fingerprint:proj_legacy_registration:browser' }],
 }));
-const legacyRead = await handleRequest({
+const legacyRead = await ((handleRequest({
   jsonrpc: '2.0', id: 9, method: 'tools/call',
   params: { name: 'cloudflare_carrier_health', arguments: { projection_id: 'proj_legacy_registration' } },
-}, joinedState);
+}, joinedState)) as any) as any;
 const legacyReadContent = (legacyRead.result as any).structuredContent;
 assert.equal(legacyReadContent.status, 'unverified');
 assert.equal(legacyReadContent.code, 'projection_lineage_unknown');

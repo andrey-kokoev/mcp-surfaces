@@ -104,7 +104,7 @@ try {
   const envState = createServerState({ session_id: 'legacy', sessionId: 'canonical' });
   assert.equal(envState.sessionId, 'canonical');
 
-  const doctor = await handleRequest({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'artifacts_doctor', arguments: {} } }, state);
+  const doctor = await ((handleRequest({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'artifacts_doctor', arguments: {} } }, state)) as any) as any;
   assert.equal(doctor?.result.structuredContent.registration_configured, true);
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));

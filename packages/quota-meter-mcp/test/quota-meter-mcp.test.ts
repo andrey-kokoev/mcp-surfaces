@@ -41,7 +41,7 @@ try {
   assert.equal(status.running, false);
   assert.equal(status.position, null);
 
-  const response = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'quota_meter_guidance', arguments: {} } }, state);
+  const response = await ((handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'quota_meter_guidance', arguments: {} } }, state)) as any) as any;
   assert.equal((response as any).result.structuredContent.surface_id, 'quota-meter');
   assert.match((response as any).result.structuredContent.purpose, /overlay/);
 } finally {

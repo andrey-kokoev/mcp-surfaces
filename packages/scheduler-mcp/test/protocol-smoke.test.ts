@@ -11,7 +11,7 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--allowed-roo
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'scheduler-mcp' });
-  const tools = protocol.tools.tools as Record<string, any>[];
+  const tools = protocol.tools.tools as any[];
   const expectedTools = [
     'scheduler_guidance',
     'scheduler_task_list',

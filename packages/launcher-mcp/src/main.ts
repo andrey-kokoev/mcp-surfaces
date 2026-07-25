@@ -355,7 +355,7 @@ function launcherPlan(args: JsonRecord, state: LauncherState): JsonRecord {
   };
 }
 
-function startupProfilePlan(selectedRecords: AgentRecord[], launchProfile: string | null, staggerSeconds: number): JsonRecord {
+function startupProfilePlan(selectedRecords: AgentRecord[], launchProfile: string | null | undefined, staggerSeconds: number): JsonRecord {
   const entries = selectedRecords.map((record, index) => ({
     agent: record.agent,
     site: record.site,

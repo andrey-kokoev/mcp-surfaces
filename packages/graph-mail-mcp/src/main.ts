@@ -307,7 +307,6 @@ export function listTools(): unknown[] {
     tool('graph_mail_forward_draft_create', 'Create a forward draft for an existing message.', forwardDraftProperties(), ['message_id']),
     tool('graph_mail_reply_all_to_last_in_thread_draft_create', 'Create a reply-all draft addressed to the last message in a conversation thread.', replyAllToThreadProperties(), ['conversation_id']),
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
-      mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
       draft_id: { type: 'string', description: 'Draft message id.' },
       ...draftMessageProperties(),
     }, ['draft_id']),
@@ -1284,11 +1283,11 @@ function positiveInteger(value: unknown, fallback: number): number {
 }
 
 function loadGraphMailEnvironment(siteRoot: string): Record<string, string> {
-  return {
-    ...readEnvFile(resolve(siteRoot, '..', '.env')),
-    ...readEnvFile(resolve(siteRoot, '.env')),
-    ...process.env,
-  };
+  const env: Record<string, string> = { ...readEnvFile(resolve(siteRoot, '..', '.env')), ...readEnvFile(resolve(siteRoot, '.env')) };
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') env[key] = value;
+  }
+  return env;
 }
 
 function readEnvFile(path: string): Record<string, string> {

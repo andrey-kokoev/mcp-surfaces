@@ -11,7 +11,7 @@ type FetchLike = (input: string, init?: GraphMailRecord) => Promise<{
 
 export type GraphMailClientOptions = {
   policy: GraphMailPolicy;
-  accessToken: string;
+  accessToken: string | null;
   fetchImpl: FetchLike;
 };
 
@@ -51,6 +51,7 @@ export function buildGraphUrl(policy: GraphMailPolicy, path: string, query: Grap
 }
 
 export async function graphRequest(options: GraphMailClientOptions, request: GraphMailRequest): Promise<unknown> {
+  if (!options.accessToken) throw new Error('graph_access_token_missing');
   const method = String(request.method ?? 'GET').toUpperCase();
   const url = buildGraphUrl(options.policy, request.path, request.query);
   const headers: Record<string, string> = {

@@ -13,7 +13,7 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--provider-re
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'speech-mcp' });
-  const tools = protocol.tools.tools as Record<string, any>[];
+  const tools = protocol.tools.tools as any[];
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), ['speech_guidance', 'speech_speak', 'speech_voices', 'speech_listen_status', 'speech_capture_transcribe', 'speech_prompt_capture_response', 'speech_listen_start', 'speech_listen_stop']);
 
   const speakTool = tools.find((tool: { name: string; annotations: Record<string, unknown>; inputSchema: Record<string, any> }) => tool.name === 'speech_speak');

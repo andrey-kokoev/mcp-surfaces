@@ -11,7 +11,7 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--sop-root', 
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'sop-mcp' });
-  const tools = protocol.tools.tools as Record<string, any>[];
+  const tools = protocol.tools.tools as any[];
   const expectedTools = [
     'sop_guidance',
     'sop_doctor',

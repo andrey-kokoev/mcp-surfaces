@@ -445,7 +445,11 @@ async function resolveAccessToken(state: CalendarServerState, options: { probeOn
 }
 
 function loadCalendarEnvironment(siteRoot: string): Record<string, string> {
-  return { ...readEnvFile(resolve(siteRoot, '..', '.env')), ...readEnvFile(resolve(siteRoot, '.env')), ...process.env };
+  const env: Record<string, string> = { ...readEnvFile(resolve(siteRoot, '..', '.env')), ...readEnvFile(resolve(siteRoot, '.env')) };
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') env[key] = value;
+  }
+  return env;
 }
 
 function readEnvFile(path: string): Record<string, string> {

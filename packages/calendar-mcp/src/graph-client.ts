@@ -10,7 +10,7 @@ type FetchLike = (input: string, init?: CalendarRecord) => Promise<{
 
 export type CalendarClientOptions = {
   policy: CalendarPolicy;
-  accessToken: string;
+  accessToken: string | null;
   fetchImpl: FetchLike;
 };
 
@@ -49,6 +49,7 @@ export function buildGraphUrl(policy: CalendarPolicy, path: string, query: Calen
 }
 
 export async function graphRequest(options: CalendarClientOptions, request: CalendarRequest): Promise<unknown> {
+  if (!options.accessToken) throw new Error('graph_access_token_missing');
   const method = String(request.method ?? 'GET').toUpperCase();
   const url = buildGraphUrl(options.policy, request.path, request.query);
   const headers: Record<string, string> = {

@@ -113,7 +113,7 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 ## Development Rules
 
 - Use TypeScript sources under `packages/*/src` or `packages/shared/*/src` and tests under the matching package `test` directory.
-- Do not add new `.mjs` source files under `packages/*`; MCP package code and package tests are TypeScript. The root `test/ui-neutral-boundary.test.mjs` harness is a pre-existing exception, not a pattern to copy.
+- Do not add `.mjs` or `.js` source files under `packages/*`; MCP package code and package tests are strict TypeScript. The root `test/typescript-source-boundary.test.ts` and `test/ui-neutral-boundary.test.ts` harnesses are the canonical source and UI boundary tests.
 - Preserve ESM/NodeNext package behavior.
 - Prefer package-local tests for narrow changes, then root tests when shared behavior changes.
 - Keep MCP tool schemas explicit and conservative: no broad shell strings, wildcard filesystem access, or implicit mutation paths.

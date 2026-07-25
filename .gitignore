@@ -9,6 +9,8 @@ node_modules/
 /.narada/local-filesystem-mcp/patch-outcomes/
 packages/*/dist/
 packages/shared/*/dist/
+packages/shared/mcp-e2e-harness/legacy/
+packages/shared/mcp-transport/legacy/
 .feedback/
 .tmp/
 packages/*/.tmp-tests/

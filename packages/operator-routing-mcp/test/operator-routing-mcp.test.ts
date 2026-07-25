@@ -9,9 +9,9 @@ const logPath = resolve(siteRoot, '.narada', 'runtime', 'operator-routing', 'ope
 
 try {
   const state = createServerState({ siteRoot });
-  const init = handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }, state);
+  const init = (handleRequest({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } }, state)) as any;
   assert.equal(init?.result.serverInfo.name, 'operator-routing-mcp');
-  const listed = handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
+  const listed = (handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state)) as any;
   const names = (listed?.result.tools as Array<Record<string, unknown>>).map((tool) => tool.name);
   assert.ok(names.includes('operator_route_doctor'));
   assert.ok(names.includes('operator_route_request'));

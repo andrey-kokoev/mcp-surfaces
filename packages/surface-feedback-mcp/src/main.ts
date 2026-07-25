@@ -135,7 +135,7 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
     : createTaskLifecycleProcessClient({ siteRoot: taskLifecycleRoot });
   const taskLifecycleRequest = typeof options.taskLifecycleRequest === 'function'
     ? options.taskLifecycleRequest as TaskLifecycleRequest
-    : taskLifecycleClient.request.bind(taskLifecycleClient);
+    : taskLifecycleClient!.request.bind(taskLifecycleClient!);
   return {
     feedbackRoot,
     dbPath,

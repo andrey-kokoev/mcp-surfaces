@@ -97,7 +97,7 @@ try {
     taskLifecycleRoot: root,
     authoritySiteId: 'andrey-user',
   });
-  const noncanonicalDoctor = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'surface_feedback_doctor', arguments: {} } }, noncanonicalState) as Record<string, any>;
+  const noncanonicalDoctor = await ((handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'surface_feedback_doctor', arguments: {} } }, noncanonicalState)) as any) as any as Record<string, any>;
   assert.equal(view(noncanonicalDoctor).status, 'warning');
   assert.equal(view(noncanonicalDoctor).storage_posture, 'noncanonical_feedback_root');
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);

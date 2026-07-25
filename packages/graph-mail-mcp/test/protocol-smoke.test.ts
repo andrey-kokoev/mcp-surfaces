@@ -58,13 +58,13 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_auth_clear')?.inputSchema.properties.confirm_clear.default, false);
-  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_create')?.inputSchema.required.join(','), 'display_name');
-  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_message_move')?.inputSchema.required.join(','), 'message_id,destination_folder_id');
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_folder_create') as any)?.inputSchema?.required?.join(','), 'display_name');
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_message_move') as any)?.inputSchema?.required?.join(','), 'message_id,destination_folder_id');
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_get')?.inputSchema.properties.include_content.default, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_list')?.inputSchema.properties.limit.default, 20);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
-  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_chunk')?.inputSchema.required.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
-  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_file')?.inputSchema.required.join(','), 'file_path');
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_chunk') as any)?.inputSchema?.required?.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_attachment_upload_file') as any)?.inputSchema?.required?.join(','), 'file_path');
 
   console.log('graph-mail-mcp protocol smoke ok');
 } finally {

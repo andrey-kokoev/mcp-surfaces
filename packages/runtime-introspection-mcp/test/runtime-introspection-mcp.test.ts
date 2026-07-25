@@ -134,7 +134,7 @@ try {
   process.env.NARADA_SITE_ROOT = telemetrySite;
   process.env.NARADA_SITE_ID = 'test-site';
   const telemetryPath = join(telemetrySite, '.ai', 'telemetry', 'runtime-introspection.jsonl');
-  handleRequest({
+  (handleRequest({
     jsonrpc: '2.0',
     id: 9,
     method: 'tools/call',
@@ -142,12 +142,12 @@ try {
       name: 'runtime_introspection_formats',
       arguments: {},
     },
-  });
+  })) as any;
   assert.equal(existsSync(telemetryPath), false);
 
   mkdirSync(join(telemetrySite, '.ai'), { recursive: true });
   writeFileSync(join(telemetrySite, '.ai', 'mcp-telemetry.json'), JSON.stringify({ enabled: true, level: 'all' }), 'utf8');
-  handleRequest({
+  (handleRequest({
     jsonrpc: '2.0',
     id: 10,
     method: 'tools/call',
@@ -155,7 +155,7 @@ try {
       name: 'runtime_introspection_formats',
       arguments: {},
     },
-  });
+  })) as any;
   const event = JSON.parse(readFileSync(telemetryPath, 'utf8').trim());
   assert.equal(event.schema, 'narada.mcp_telemetry.event.v1');
   assert.equal(event.site_id, 'test-site');

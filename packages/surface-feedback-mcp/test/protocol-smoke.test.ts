@@ -17,7 +17,7 @@ const server = spawnJsonlMcpServer(process.execPath, [
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'surface-feedback-mcp' });
-  const tools = protocol.tools.tools as Record<string, any>[];
+  const tools = protocol.tools.tools as any[];
   assert.deepEqual(tools.map((t: { name: string }) => t.name), ['surface_feedback_guidance', 'surface_feedback_doctor', 'surface_feedback_submit', 'surface_feedback_live_proof_template', 'surface_feedback_update_status', 'surface_feedback_convert_to_task', 'surface_feedback_update_status_batch', 'surface_feedback_import', 'surface_feedback_list', 'surface_feedback_actionable_queue', 'surface_feedback_show', 'surface_feedback_stats']);
 
   const subTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'surface_feedback_submit');

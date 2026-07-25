@@ -342,7 +342,7 @@ async function schtasks(args: string[], timeoutMs = SCHTASKS_TIMEOUT_MS): Promis
   });
 }
 
-async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string, workingDir?: string, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
+async function setScheduledTaskAction(taskName: string, command: string, cmdArgs?: string | null, workingDir?: string | null, timeoutMs = SCHTASKS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut?: boolean }> {
   const script = [
     '$ErrorActionPreference = "Stop"',
     '$execute = [Environment]::GetEnvironmentVariable("NARADA_SCHEDULER_EXECUTE")',
@@ -609,7 +609,7 @@ async function schedulerTaskDelete(args: JsonRecord, _state: SchedulerState): Pr
   return { status: 'deleted', task_name: taskName };
 }
 
-export function buildTaskRunCommand(command: string, cmdArgs?: string): string {
+export function buildTaskRunCommand(command: string, cmdArgs?: string | null): string {
   return cmdArgs ? `${command} ${cmdArgs}` : command;
 }
 
