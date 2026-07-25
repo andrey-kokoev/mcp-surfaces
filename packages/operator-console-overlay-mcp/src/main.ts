@@ -44,6 +44,39 @@ if (isMainModule()) {
   });
 }
 
+async function materializeOverlayEntrypoint(state: OperatorConsoleOverlayState): Promise<void> {
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  let stdout = '';
+  let stderr = '';
+  const exitCode = await new Promise<number>((resolveResult, rejectResult) => {
+    const child = spawn(pnpm, ['--filter', '@narada2/operator-console-overlay', 'build'], {
+      cwd: state.naradaRoot,
+      env: state.env,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
+    child.stderr?.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
+    child.once('error', rejectResult);
+    child.once('close', (code) => resolveResult(code ?? 1));
+  }).catch((error) => {
+    throw diagnosticError(
+      'operator_console_overlay_build_failed',
+      'operator_console_overlay_build_failed:' + (error instanceof Error ? error.message : String(error)),
+      { narada_root: state.naradaRoot, stdout, stderr },
+    );
+  });
+  if (exitCode !== 0 || !existsSync(state.overlayEntrypoint)) {
+    throw diagnosticError(
+      'operator_console_overlay_build_failed',
+      'operator_console_overlay_build_failed',
+      { narada_root: state.naradaRoot, exit_code: exitCode, stdout, stderr, overlay_entrypoint: state.overlayEntrypoint },
+    );
+  }
+}
+
 export function createServerState(
   options: JsonRecord = {},
   env: NodeJS.ProcessEnv = process.env,
@@ -57,7 +90,7 @@ export function createServerState(
   const overlayEntrypoint = resolve(String(
     options.overlayEntrypoint
     ?? options.overlay_entrypoint
-    ?? join(naradaRoot, 'packages', 'operator-console-overlay', 'src', 'cli.mjs'),
+    ?? join(naradaRoot, 'packages', 'operator-console-overlay', 'dist', 'cli.js'),
   ));
   assertUnderRoot(overlayEntrypoint, naradaRoot, 'operator_console_overlay_entrypoint_outside_narada_root');
   const stateEnv = { ...env, NARADA_ROOT: env.NARADA_ROOT ?? naradaRoot };
@@ -154,6 +187,9 @@ export async function runOverlayCommand(
 ): Promise<JsonRecord> {
   if (!COMMANDS.includes(command)) {
     throw diagnosticError('operator_console_overlay_command_invalid', 'operator_console_overlay_command_invalid', { command });
+  }
+  if (!existsSync(state.overlayEntrypoint) && command === 'start') {
+    await materializeOverlayEntrypoint(state);
   }
   if (!existsSync(state.overlayEntrypoint)) {
     throw diagnosticError(
