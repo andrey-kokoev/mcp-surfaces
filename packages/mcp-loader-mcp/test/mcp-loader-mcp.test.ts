@@ -72,7 +72,10 @@ process.stdin.on('data', (chunk) => {
       const guidanceTools = process.argv.includes('--guidance')
         ? [{ name: 'guidance-surface_guidance', inputSchema: { type: 'object', additionalProperties: false }, annotations: { readOnlyHint: true } }]
         : [];
-      write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }, ...guidanceTools] } });
+      const runtimeProxyStatusTools = process.argv.includes('--runtime-proxy-status')
+        ? [{ name: 'mcp_runtime_proxy_status', inputSchema: { type: 'object', additionalProperties: false }, annotations: { readOnlyHint: true } }]
+        : [];
+      write({ jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object', additionalProperties: true }, ...(process.argv.includes('--unclassified') ? {} : { annotations: { readOnlyHint: false } }) }, ...guidanceTools, ...runtimeProxyStatusTools] } });
     }
     else if (request.method === 'tools/call') {
       const respond = () => write({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: 'ok' }], structuredContent: { status: 'ok', pid: process.pid, args: request.params?.arguments ?? {}, request_meta: request.params?._meta ?? {}, child_args: process.argv.slice(2), site_root: process.env.NARADA_SITE_ROOT ?? null, caller_agent_id: process.env.NARADA_AGENT_ID ?? null, carrier_session_id: process.env.NARADA_CARRIER_SESSION_ID ?? null, site_id: process.env.NARADA_SITE_ID ?? null } } });
@@ -102,6 +105,11 @@ process.stdin.on('data', (chunk) => {
     restartable: {
       command: 'node',
       args: [restartableEntrypoint, '--site-root', root, '--marker', 'fabric'],
+      tools: ['echo'],
+    },
+    'restartable-runtime-proxy': {
+      command: 'node',
+      args: [restartableEntrypoint, '--site-root', root, '--runtime-proxy-status'],
       tools: ['echo'],
     },
     'guidance-surface': {
@@ -329,6 +337,13 @@ try {
   assert.equal(inventoryOk?.observation_retention?.max_entries, 32);
   assert.equal(inventoryOk?.observation_retention?.max_age_ms, 7 * 24 * 60 * 60 * 1000);
   assert.ok(inventoryOk?.observation_retention?.retained_payload_ids.includes(materializedObservation.payload_id));
+  const runtimeProxyInventory = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-runtime-proxy'], include_ok: true } }, 231);
+  assert.equal(runtimeProxyInventory?.status, 'ok');
+  assert.equal(runtimeProxyInventory?.violation_count, 0);
+  assert.deepEqual(runtimeProxyInventory?.observed_tools?.['restartable-runtime-proxy'], ['echo']);
+  const runtimeProxyAttach = await call('tools/call', { name: 'mcp_loader_attach_surface', arguments: { site_root: root, surface_id: 'restartable-runtime-proxy' } }, 232);
+  assert.equal(runtimeProxyAttach?.schema, 'narada.mcp_loader.surface_attached.v1');
+  assert.match(String(runtimeProxyAttach?.tool_contract_digest), /^[a-f0-9]{64}$/);
   const inventoryDrift = await call('tools/call', { name: 'mcp_loader_site_tool_inventory_check', arguments: { site_root: root, surface_ids: ['restartable-drift'] } }, 24);
   assert.equal(inventoryDrift?.status, 'drift');
   assert.deepEqual(inventoryDrift?.findings?.[0]?.missing_from_fabric, ['echo']);

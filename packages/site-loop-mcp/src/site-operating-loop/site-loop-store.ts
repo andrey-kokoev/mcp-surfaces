@@ -1,5 +1,87 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost } from '@narada2/site-operating-loop/site-loop-store';
+import {
+  boundedSiteLoopSummary,
+  pruneSiteLoopEvidence,
+  readSiteLoopEvidence,
+  readSiteLoopEvidenceIfAvailable,
+  recordSiteLoopPayload,
+  removeSiteLoopEvidence,
+  siteLoopEvidenceStoreFromDb,
+  SiteLoopEvidenceError,
+  type SiteLoopEvidenceStore,
+} from './site-loop-evidence.js';
+
+export const SITE_LOOP_STORAGE_SCHEMA = 'narada.site_loop.storage.v3';
+const SITE_LOOP_MEMORY_EVIDENCE_ROOT = ':memory:';
+
+const SITE_LOOP_STORAGE_TABLES: Record<string, string[]> = {
+  site_loop_runs: [
+    'run_id', 'loop_id', 'status', 'dry_run', 'started_at', 'finished_at', 'summary_json', 'error_json',
+    'evidence_ref', 'evidence_sha256', 'evidence_bytes',
+  ],
+  site_loop_step_runs: [
+    'step_run_id', 'run_id', 'step_id', 'status', 'started_at', 'finished_at',
+    'input_ref_count', 'output_ref_count', 'input_refs_digest', 'output_refs_digest',
+    'summary_json', 'evidence_ref', 'evidence_sha256', 'evidence_bytes', 'error_json',
+  ],
+  site_loop_locks: [
+    'loop_id', 'run_id', 'owner_id', 'acquired_at', 'expires_at', 'stale_recovery_count', 'updated_at',
+  ],
+  site_loop_health: [
+    'loop_id', 'status', 'consecutive_failures', 'last_successful_run_id', 'last_success_at',
+    'last_run_id', 'last_run_at', 'failing_step', 'last_error_json', 'last_error_evidence_ref',
+    'last_error_evidence_sha256', 'last_error_evidence_bytes', 'updated_at',
+  ],
+  site_loop_control: ['loop_id', 'paused', 'mode', 'reason', 'updated_at'],
+  site_loop_classification_observations: [
+    'observation_id', 'loop_id', 'directive_id', 'classification', 'observed_at', 'run_id', 'task_id', 'observation_digest',
+  ],
+  site_loop_escalations: [
+    'escalation_id', 'loop_id', 'directive_id', 'classification', 'status', 'envelope_id', 'created_at',
+    'acknowledged_at', 'acknowledged_by', 'ack_reason', 'escalation_summary_json', 'escalation_ref',
+    'escalation_sha256', 'escalation_bytes',
+  ],
+  directive_outcomes: [
+    'outcome_id', 'loop_id', 'directive_id', 'outcome', 'agent_id', 'task_id', 'report_id', 'receipt_id',
+    'reason', 'event_at', 'observed_at', 'recorded_at', 'evidence_summary_json', 'evidence_ref',
+    'evidence_sha256', 'evidence_bytes',
+  ],
+  directive_outcome_latest: [
+    'loop_id', 'directive_id', 'outcome_id', 'outcome', 'agent_id', 'task_id', 'report_id', 'receipt_id',
+    'reason', 'event_at', 'observed_at', 'recorded_at', 'evidence_summary_json', 'evidence_ref',
+    'evidence_sha256', 'evidence_bytes',
+  ],
+  site_loop_classification_current: [
+    'loop_id', 'directive_id', 'classification', 'observation_id', 'observed_at', 'run_id', 'task_id', 'observation_digest',
+  ],
+  site_loop_storage_meta: [
+    'storage_id', 'schema', 'cutover_at', 'evidence_root', 'persistence_schema', 'last_pruned_at', 'evidence_prune_cursor',
+  ],
+};
+
+const SITE_LOOP_STORAGE_INDEXES = [
+  'idx_site_loop_runs_loop_started',
+  'idx_site_loop_runs_retention',
+  'idx_site_loop_step_runs_run',
+  'idx_site_loop_classification_directive',
+  'idx_site_loop_classification_retention',
+  'idx_site_loop_escalations_loop_status',
+  'idx_site_loop_escalations_retention',
+  'idx_directive_outcome_latest_outcome',
+  'idx_directive_outcomes_latest',
+  'idx_directive_outcomes_outcome',
+  'idx_directive_outcomes_retention',
+  'idx_site_loop_classification_current_classification',
+];
+
+export class SiteLoopStorageCutoverRequiredError extends Error {
+  constructor(public readonly reason = 'legacy_site_loop_storage_detected') {
+    super(`site_loop_storage_cutover_required:${reason}`);
+    this.name = 'SiteLoopStorageCutoverRequiredError';
+  }
+}
 
 export const DEFAULT_SITE_OPERATING_LOOP_ID: any = 'site.operating-loop';
 export const DEFAULT_SITE_OPERATING_LOOP_OWNER_ID: any = 'site-operating-loop';
@@ -117,7 +199,17 @@ interface DirectiveOutcomeResolveOptions {
 }
 
 export function ensureSiteLoopTables(db: any) {
-  const repairs: any[] = [];
+  const managedTablesPresent = Object.keys(SITE_LOOP_STORAGE_TABLES)
+    .filter((table) => tableExists(db, table));
+  if (managedTablesPresent.length > 0) {
+    assertSiteLoopStorageSchema(db);
+    ensureTaskReportDirectiveColumn(db);
+    return {
+      schema: 'narada.site_operating_loop.schema_repair.v1',
+      status: 'ok',
+      repairs: [],
+    };
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS site_loop_runs (
       run_id TEXT PRIMARY KEY,
@@ -127,7 +219,10 @@ export function ensureSiteLoopTables(db: any) {
       started_at TEXT NOT NULL,
       finished_at TEXT,
       summary_json TEXT,
-      error_json TEXT
+      error_json TEXT,
+      evidence_ref TEXT,
+      evidence_sha256 TEXT,
+      evidence_bytes INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS site_loop_step_runs (
@@ -137,15 +232,23 @@ export function ensureSiteLoopTables(db: any) {
       status TEXT NOT NULL,
       started_at TEXT NOT NULL,
       finished_at TEXT,
-      input_refs_json TEXT,
-      output_refs_json TEXT,
-      evidence_json TEXT,
+      input_ref_count INTEGER NOT NULL DEFAULT 0,
+      output_ref_count INTEGER NOT NULL DEFAULT 0,
+      input_refs_digest TEXT,
+      output_refs_digest TEXT,
+      summary_json TEXT,
+      evidence_ref TEXT,
+      evidence_sha256 TEXT,
+      evidence_bytes INTEGER,
       error_json TEXT,
       FOREIGN KEY (run_id) REFERENCES site_loop_runs(run_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_site_loop_runs_loop_started
       ON site_loop_runs(loop_id, started_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_site_loop_runs_retention
+      ON site_loop_runs(status, finished_at, started_at);
 
     CREATE INDEX IF NOT EXISTS idx_site_loop_step_runs_run
       ON site_loop_step_runs(run_id, step_id);
@@ -170,6 +273,9 @@ export function ensureSiteLoopTables(db: any) {
       last_run_at TEXT,
       failing_step TEXT,
       last_error_json TEXT,
+      last_error_evidence_ref TEXT,
+      last_error_evidence_sha256 TEXT,
+      last_error_evidence_bytes INTEGER,
       updated_at TEXT NOT NULL
     );
 
@@ -187,11 +293,16 @@ export function ensureSiteLoopTables(db: any) {
       directive_id TEXT NOT NULL,
       classification TEXT NOT NULL,
       observed_at TEXT NOT NULL,
-      observation_json TEXT NOT NULL
+      run_id TEXT,
+      task_id TEXT,
+      observation_digest TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_site_loop_classification_directive
       ON site_loop_classification_observations(loop_id, directive_id, classification, observed_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_site_loop_classification_retention
+      ON site_loop_classification_observations(observed_at);
 
     CREATE TABLE IF NOT EXISTS site_loop_escalations (
       escalation_id TEXT PRIMARY KEY,
@@ -204,12 +315,18 @@ export function ensureSiteLoopTables(db: any) {
       acknowledged_at TEXT,
       acknowledged_by TEXT,
       ack_reason TEXT,
-      escalation_json TEXT NOT NULL,
+      escalation_summary_json TEXT NOT NULL,
+      escalation_ref TEXT,
+      escalation_sha256 TEXT,
+      escalation_bytes INTEGER,
       UNIQUE(loop_id, directive_id, classification)
     );
 
     CREATE INDEX IF NOT EXISTS idx_site_loop_escalations_loop_status
       ON site_loop_escalations(loop_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_site_loop_escalations_retention
+      ON site_loop_escalations(status, created_at);
 
     CREATE TABLE IF NOT EXISTS directive_outcomes (
       outcome_id TEXT PRIMARY KEY,
@@ -224,7 +341,10 @@ export function ensureSiteLoopTables(db: any) {
       event_at TEXT,
       observed_at TEXT,
       recorded_at TEXT NOT NULL,
-      evidence_json TEXT NOT NULL
+      evidence_summary_json TEXT NOT NULL,
+      evidence_ref TEXT,
+      evidence_sha256 TEXT,
+      evidence_bytes INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS directive_outcome_latest (
@@ -240,38 +360,252 @@ export function ensureSiteLoopTables(db: any) {
       event_at TEXT,
       observed_at TEXT NOT NULL,
       recorded_at TEXT NOT NULL,
-      evidence_json TEXT NOT NULL,
+      evidence_summary_json TEXT NOT NULL,
+      evidence_ref TEXT,
+      evidence_sha256 TEXT,
+      evidence_bytes INTEGER,
       PRIMARY KEY (loop_id, directive_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_directive_outcome_latest_outcome
       ON directive_outcome_latest(loop_id, outcome, observed_at DESC, recorded_at DESC);
-  `);
-  ensureColumn(db, 'site_loop_escalations', 'acknowledged_at', 'TEXT', repairs);
-  ensureColumn(db, 'site_loop_escalations', 'acknowledged_at', 'TEXT', repairs);
-  ensureColumn(db, 'site_loop_escalations', 'acknowledged_by', 'TEXT', repairs);
-  ensureColumn(db, 'site_loop_escalations', 'ack_reason', 'TEXT', repairs);
-  if (tableExists(db, 'task_reports')) {
-    ensureColumn(db, 'task_reports', 'directive_id', 'TEXT', repairs);
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_task_reports_directive_id ON task_reports(directive_id)').run();
-  }
-  ensureColumn(db, 'directive_outcomes', 'event_at', 'TEXT', repairs);
-  ensureColumn(db, 'directive_outcomes', 'observed_at', 'TEXT', repairs);
-  db.prepare('UPDATE directive_outcomes SET event_at = recorded_at WHERE event_at IS NULL').run();
-  db.prepare('UPDATE directive_outcomes SET observed_at = recorded_at WHERE observed_at IS NULL').run();
-  db.exec(`
+
     CREATE INDEX IF NOT EXISTS idx_directive_outcomes_latest
       ON directive_outcomes(loop_id, directive_id, observed_at DESC, recorded_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_directive_outcomes_outcome
       ON directive_outcomes(loop_id, outcome, observed_at DESC, recorded_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_directive_outcomes_retention
+      ON directive_outcomes(recorded_at, outcome_id);
+
+    CREATE TABLE IF NOT EXISTS site_loop_classification_current (
+      loop_id TEXT NOT NULL,
+      directive_id TEXT NOT NULL,
+      classification TEXT NOT NULL,
+      observation_id TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      run_id TEXT,
+      task_id TEXT,
+      observation_digest TEXT NOT NULL,
+      PRIMARY KEY (loop_id, directive_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_site_loop_classification_current_classification
+      ON site_loop_classification_current(loop_id, classification, observed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS site_loop_storage_meta (
+      storage_id INTEGER PRIMARY KEY CHECK (storage_id = 1),
+      schema TEXT NOT NULL,
+      cutover_at TEXT NOT NULL,
+      evidence_root TEXT NOT NULL,
+      persistence_schema TEXT NOT NULL,
+      last_pruned_at TEXT,
+      evidence_prune_cursor TEXT
+    );
   `);
-  backfillDirectiveOutcomeLatest(db);
+  ensureSiteLoopStorageMeta(db);
+  ensureTaskReportDirectiveColumn(db);
   return {
     schema: 'narada.site_operating_loop.schema_repair.v1',
     status: 'ok',
-    repairs,
+    repairs: [],
   };
+}
+
+export function assertSiteLoopStorageSchema(db: any, { allowMissing = false } : { allowMissing?: boolean } = {}) {
+  const targetTables = Object.keys(SITE_LOOP_STORAGE_TABLES);
+  const present = targetTables.filter((table) => tableExists(db, table));
+  if (present.length === 0) {
+    if (allowMissing) return;
+    throw new SiteLoopStorageCutoverRequiredError('site_loop_storage_missing');
+  }
+  if (present.length !== targetTables.length) {
+    throw new SiteLoopStorageCutoverRequiredError('site_loop_storage_partial');
+  }
+
+  const legacyColumns: Record<string, string[]> = {
+    site_loop_step_runs: ['input_refs_json', 'output_refs_json', 'evidence_json'],
+    site_loop_classification_observations: ['observation_json'],
+    site_loop_escalations: ['escalation_json'],
+    directive_outcomes: ['evidence_json'],
+    directive_outcome_latest: ['evidence_json'],
+  };
+  for (const [table, columns] of Object.entries(legacyColumns)) {
+    const presentColumns = tableColumns(db, table);
+    if (columns.some((column) => presentColumns.includes(column))) {
+      throw new SiteLoopStorageCutoverRequiredError(`legacy_columns:${table}`);
+    }
+  }
+  for (const [table, columns] of Object.entries(SITE_LOOP_STORAGE_TABLES)) {
+    const presentColumns = tableColumns(db, table);
+    if (columns.some((column) => !presentColumns.includes(column))) {
+      throw new SiteLoopStorageCutoverRequiredError(`v3_columns_missing:${table}`);
+    }
+  }
+  for (const indexName of SITE_LOOP_STORAGE_INDEXES) {
+    if (!hasIndex(db, indexName)) {
+      throw new SiteLoopStorageCutoverRequiredError(`v3_index_missing:${indexName}`);
+    }
+  }
+  const stepForeignKeys: any[] = db.prepare('PRAGMA foreign_key_list(site_loop_step_runs)').all();
+  if (!stepForeignKeys.some((row: any) => row.table === 'site_loop_runs' && row.from === 'run_id' && row.to === 'run_id')) {
+    throw new SiteLoopStorageCutoverRequiredError('v3_foreign_key_missing:site_loop_step_runs.run_id');
+  }
+  if (!/UNIQUE\s*\(\s*loop_id\s*,\s*directive_id\s*,\s*classification\s*\)/i.test(tableSql(db, 'site_loop_escalations'))) {
+    throw new SiteLoopStorageCutoverRequiredError('v3_unique_constraint_missing:site_loop_escalations');
+  }
+  if (!/CHECK\s*\(\s*storage_id\s*=\s*1\s*\)/i.test(tableSql(db, 'site_loop_storage_meta'))) {
+    throw new SiteLoopStorageCutoverRequiredError('v3_check_constraint_missing:site_loop_storage_meta');
+  }
+  const meta: any = db.prepare(`
+    SELECT schema, evidence_root, persistence_schema
+    FROM site_loop_storage_meta
+    WHERE storage_id = 1
+  `).get();
+  if (!meta || String(meta.schema) !== SITE_LOOP_STORAGE_SCHEMA) {
+    throw new SiteLoopStorageCutoverRequiredError('storage_meta_mismatch');
+  }
+  const expectedEvidence = evidenceMetadataForDb(db);
+  if (comparablePath(meta.evidence_root) !== comparablePath(expectedEvidence.root)) {
+    throw new SiteLoopStorageCutoverRequiredError('evidence_root_mismatch');
+  }
+  if (String(meta.persistence_schema) !== expectedEvidence.persistenceSchema) {
+    throw new SiteLoopStorageCutoverRequiredError('persistence_schema_mismatch');
+  }
+}
+
+export function ensureSiteLoopStorageIndexes(db: any) {
+  const missingTables = Object.keys(SITE_LOOP_STORAGE_TABLES).filter((table) => !tableExists(db, table));
+  if (missingTables.length > 0) {
+    throw new SiteLoopStorageCutoverRequiredError(`site_loop_storage_partial:${missingTables.join(',')}`);
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_site_loop_runs_loop_started
+      ON site_loop_runs(loop_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_runs_retention
+      ON site_loop_runs(status, finished_at, started_at);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_step_runs_run
+      ON site_loop_step_runs(run_id, step_id);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_classification_directive
+      ON site_loop_classification_observations(loop_id, directive_id, classification, observed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_classification_retention
+      ON site_loop_classification_observations(observed_at);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_escalations_loop_status
+      ON site_loop_escalations(loop_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_escalations_retention
+      ON site_loop_escalations(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_directive_outcome_latest_outcome
+      ON directive_outcome_latest(loop_id, outcome, observed_at DESC, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_directive_outcomes_latest
+      ON directive_outcomes(loop_id, directive_id, observed_at DESC, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_directive_outcomes_outcome
+      ON directive_outcomes(loop_id, outcome, observed_at DESC, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_directive_outcomes_retention
+      ON directive_outcomes(recorded_at, outcome_id);
+    CREATE INDEX IF NOT EXISTS idx_site_loop_classification_current_classification
+      ON site_loop_classification_current(loop_id, classification, observed_at DESC);
+  `);
+}
+
+function ensureSiteLoopStorageMeta(db: any) {
+  const evidence = evidenceMetadataForDb(db);
+  const existing: any = tableExists(db, 'site_loop_storage_meta')
+    ? db.prepare('SELECT schema FROM site_loop_storage_meta WHERE storage_id = 1').get()
+    : null;
+  if (existing && String(existing.schema) !== SITE_LOOP_STORAGE_SCHEMA) {
+    throw new SiteLoopStorageCutoverRequiredError('storage_meta_mismatch');
+  }
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO site_loop_storage_meta (
+        storage_id, schema, cutover_at, evidence_root, persistence_schema, last_pruned_at, evidence_prune_cursor
+      ) VALUES (1, ?, ?, ?, ?, NULL, NULL)
+    `).run(SITE_LOOP_STORAGE_SCHEMA, new Date().toISOString(), evidence.root, evidence.persistenceSchema);
+  }
+}
+
+function tableColumns(db: any, table: any) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((row: any) => String(row.name));
+}
+
+function tableSql(db: any, table: string): string {
+  const row: any = db.prepare(`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?
+  `).get(table);
+  return String(row?.sql ?? '');
+}
+
+function hasIndex(db: any, indexName: string): boolean {
+  return Boolean(db.prepare(`
+    SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ? LIMIT 1
+  `).get(indexName));
+}
+
+function evidenceMetadataForDb(db: any) {
+  const store = siteLoopEvidenceStoreFromDb(db);
+  return {
+    root: store?.root ?? SITE_LOOP_MEMORY_EVIDENCE_ROOT,
+    persistenceSchema: store?.persistenceSchema ?? 'narada.site_loop.persistence.v2',
+  };
+}
+
+function comparablePath(value: unknown): string {
+  const text = String(value ?? '');
+  if (text === SITE_LOOP_MEMORY_EVIDENCE_ROOT) return text;
+  const normalized = resolve(text);
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function ensureTaskReportDirectiveColumn(db: any) {
+  if (!tableExists(db, 'task_reports')) return;
+  ensureColumn(db, 'task_reports', 'directive_id', 'TEXT');
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_task_reports_directive_id ON task_reports(directive_id)').run();
+}
+
+function evidenceStoreForStore(store: any): SiteLoopEvidenceStore | null {
+  return store?.evidenceStore ?? siteLoopEvidenceStoreFromDb(store?.db);
+}
+
+function inlineSummaryBytesForStore(store: any): number {
+  return Math.max(1024, Number(evidenceStoreForStore(store)?.inlineSummaryBytes ?? 16_384));
+}
+
+function storedSummary(value: unknown, evidenceRef: string | null, store: any): unknown {
+  return boundedSiteLoopSummary(value, evidenceRef, inlineSummaryBytesForStore(store));
+}
+
+function boundedText(value: unknown, maxBytes = 2048): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let result = text.slice(0, maxBytes);
+  while (Buffer.byteLength(`${result}...`, 'utf8') > maxBytes && result.length > 0) result = result.slice(0, -1);
+  return `${result}...`;
+}
+
+function cleanupStoredEvidence(store: any, storedEvidence: any): void {
+  cleanupEvidenceRef(store, storedEvidence?.evidence?.ref ?? null);
+}
+
+function cleanupEvidenceRef(store: any, ref: unknown): void {
+  if (typeof ref !== 'string' || ref.length === 0) return;
+  try {
+    const references: Array<[string, string]> = [
+      ['site_loop_runs', 'evidence_ref'],
+      ['site_loop_step_runs', 'evidence_ref'],
+      ['site_loop_health', 'last_error_evidence_ref'],
+      ['site_loop_escalations', 'escalation_ref'],
+      ['directive_outcomes', 'evidence_ref'],
+      ['directive_outcome_latest', 'evidence_ref'],
+    ];
+    for (const [table, column] of references) {
+      if (store?.db.prepare(`SELECT 1 FROM ${table} WHERE ${column} = ? LIMIT 1`).get(ref)) return;
+    }
+    removeSiteLoopEvidence(evidenceStoreForStore(store), ref);
+  } catch {
+    // Retention maintenance remains the final orphan cleanup path.
+  }
 }
 
 export function recordDirectiveOutcome(store: any, {
@@ -292,48 +626,77 @@ export function recordDirectiveOutcome(store: any, {
   const finalRecordedAt: any = recordedAt ?? at ?? new Date().toISOString();
   const finalObservedAt: any = observedAt ?? finalRecordedAt;
   const finalEventAt: any = eventAt ?? finalObservedAt;
+  const finalReason: any = boundedText(reason);
   const outcomeId: any = `dirout_${hashStable({ loopId, directiveId, outcome, finalRecordedAt, finalObservedAt, nonce: randomUUID() }).slice(0, 32)}`;
-  store.db.prepare(`
-    INSERT INTO directive_outcomes (
-      outcome_id, loop_id, directive_id, outcome, agent_id, task_id, report_id,
-      receipt_id, reason, event_at, observed_at, recorded_at, evidence_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    outcomeId,
-    loopId,
-    directiveId,
-    outcome,
-    agentId,
-    taskId,
-    reportId,
-    receiptId,
-    reason,
-    finalEventAt,
-    finalObservedAt,
-    finalRecordedAt,
-    stringifyJson(evidence ?? {}),
-  );
-  upsertDirectiveOutcomeLatest(store.db, {
-    outcome_id: outcomeId,
+  const storedEvidence: any = recordSiteLoopPayload(store, 'directive_outcome', evidence ?? {}, {
     loop_id: loopId,
     directive_id: directiveId,
-    outcome,
-    agent_id: agentId,
-    task_id: taskId,
-    report_id: reportId,
-    receipt_id: receiptId,
-    reason,
-    event_at: finalEventAt,
-    observed_at: finalObservedAt,
-    recorded_at: finalRecordedAt,
-    evidence_json: stringifyJson(evidence ?? {}),
+    outcome_id: outcomeId,
   });
+  const evidenceSummary: any = stringifyJson(storedEvidence.summary);
+  const alreadyInTransaction = Boolean(store.db.inTransaction);
+  if (!alreadyInTransaction) store.db.exec('BEGIN IMMEDIATE');
+  try {
+    store.db.prepare(`
+      INSERT INTO directive_outcomes (
+        outcome_id, loop_id, directive_id, outcome, agent_id, task_id, report_id,
+        receipt_id, reason, event_at, observed_at, recorded_at,
+        evidence_summary_json, evidence_ref, evidence_sha256, evidence_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      outcomeId,
+      loopId,
+      directiveId,
+      outcome,
+      agentId,
+      taskId,
+      reportId,
+      receiptId,
+      finalReason,
+      finalEventAt,
+      finalObservedAt,
+      finalRecordedAt,
+      evidenceSummary,
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+    );
+    upsertDirectiveOutcomeLatest(store.db, {
+      outcome_id: outcomeId,
+      loop_id: loopId,
+      directive_id: directiveId,
+      outcome,
+      agent_id: agentId,
+      task_id: taskId,
+      report_id: reportId,
+      receipt_id: receiptId,
+      reason: finalReason,
+      event_at: finalEventAt,
+      observed_at: finalObservedAt,
+      recorded_at: finalRecordedAt,
+      evidence_summary_json: evidenceSummary,
+      evidence_ref: storedEvidence.evidence?.ref ?? null,
+      evidence_sha256: storedEvidence.evidence?.sha256 ?? null,
+      evidence_bytes: storedEvidence.evidence?.compressed_bytes ?? null,
+    });
+    if (!alreadyInTransaction) store.db.exec('COMMIT');
+  } catch (error) {
+    if (!alreadyInTransaction) {
+      try {
+        store.db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original persistence error.
+      }
+    }
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
   return getDirectiveOutcome(store, { outcomeId });
 }
 
 export function getDirectiveOutcome(store: any, { outcomeId }: DirectiveOutcomeLookupOptions = {}) {
   const row: any = store.db.prepare('SELECT * FROM directive_outcomes WHERE outcome_id = ?').get(outcomeId);
-  return row ? parseDirectiveOutcomeRow(row) : null;
+  return row ? parseDirectiveOutcomeRow(row, store) : null;
 }
 
 export function getLatestDirectiveOutcome(store: any, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, directiveId }: DirectiveOutcomeLookupOptions = {}) {
@@ -342,7 +705,7 @@ export function getLatestDirectiveOutcome(store: any, { loopId = DEFAULT_SITE_OP
     WHERE loop_id = ? AND directive_id = ?
     LIMIT 1
   `).get(loopId, directiveId);
-  return row ? parseDirectiveOutcomeRow(row) : null;
+  return row ? parseDirectiveOutcomeRow(row, store) : null;
 }
 
 export function listDirectiveOutcomes(store: any, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID, outcome = null, limit = 50 }: DirectiveOutcomeLookupOptions = {}) {
@@ -360,7 +723,7 @@ export function listDirectiveOutcomes(store: any, { loopId = DEFAULT_SITE_OPERAT
         ORDER BY recorded_at DESC, rowid DESC
         LIMIT ?
       `).all(loopId, max);
-  return rows.map(parseDirectiveOutcomeRow);
+  return rows.map((row: any) => parseDirectiveOutcomeRow(row, store));
 }
 
 export function getDirectiveOutcomeSummary(store: any, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID }: DirectiveOutcomeLookupOptions = {}) {
@@ -471,11 +834,15 @@ export function getLoopLock(store: any, loopId: any) {
 }
 
 export function recordLoopHealthSuccess(store: any, { loopId, runId, at = new Date().toISOString() }: LoopHealthSuccessOptions = {}) {
+  const previous: any = store.db.prepare(
+    'SELECT last_error_evidence_ref FROM site_loop_health WHERE loop_id = ?',
+  ).get(loopId);
   store.db.prepare(`
     INSERT INTO site_loop_health (
       loop_id, status, consecutive_failures, last_successful_run_id, last_success_at,
-      last_run_id, last_run_at, failing_step, last_error_json, updated_at
-    ) VALUES (?, 'healthy', 0, ?, ?, ?, ?, NULL, NULL, ?)
+      last_run_id, last_run_at, failing_step, last_error_json,
+      last_error_evidence_ref, last_error_evidence_sha256, last_error_evidence_bytes, updated_at
+    ) VALUES (?, 'healthy', 0, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)
     ON CONFLICT(loop_id) DO UPDATE SET
       status = 'healthy',
       consecutive_failures = 0,
@@ -485,8 +852,12 @@ export function recordLoopHealthSuccess(store: any, { loopId, runId, at = new Da
       last_run_at = excluded.last_run_at,
       failing_step = NULL,
       last_error_json = NULL,
+      last_error_evidence_ref = NULL,
+      last_error_evidence_sha256 = NULL,
+      last_error_evidence_bytes = NULL,
       updated_at = excluded.updated_at
   `).run(loopId, runId, at, runId, at, at);
+  cleanupEvidenceRef(store, previous?.last_error_evidence_ref ?? null);
   return getLoopHealth(store, loopId);
 }
 
@@ -501,20 +872,48 @@ export function recordLoopHealthFailure(store: any, {
   const previous: any = getLoopHealth(store, loopId);
   const consecutiveFailures: any = Number(previous?.consecutive_failures ?? 0) + 1;
   const status: any = forcedStatus ?? (consecutiveFailures >= 3 ? 'critical' : 'degraded');
-  store.db.prepare(`
-    INSERT INTO site_loop_health (
-      loop_id, status, consecutive_failures, last_successful_run_id, last_success_at,
-      last_run_id, last_run_at, failing_step, last_error_json, updated_at
-    ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
-    ON CONFLICT(loop_id) DO UPDATE SET
-      status = excluded.status,
-      consecutive_failures = excluded.consecutive_failures,
-      last_run_id = excluded.last_run_id,
-      last_run_at = excluded.last_run_at,
-      failing_step = excluded.failing_step,
-      last_error_json = excluded.last_error_json,
-      updated_at = excluded.updated_at
-  `).run(loopId, status, consecutiveFailures, runId, at, failingStep, stringifyJson(error), at);
+  const storedEvidence: any = recordSiteLoopPayload(store, 'loop_health_error', error, {
+    loop_id: loopId,
+    run_id: runId,
+  });
+  try {
+    store.db.prepare(`
+      INSERT INTO site_loop_health (
+        loop_id, status, consecutive_failures, last_successful_run_id, last_success_at,
+        last_run_id, last_run_at, failing_step, last_error_json,
+        last_error_evidence_ref, last_error_evidence_sha256, last_error_evidence_bytes, updated_at
+      ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(loop_id) DO UPDATE SET
+        status = excluded.status,
+        consecutive_failures = excluded.consecutive_failures,
+        last_run_id = excluded.last_run_id,
+        last_run_at = excluded.last_run_at,
+        failing_step = excluded.failing_step,
+        last_error_json = excluded.last_error_json,
+        last_error_evidence_ref = excluded.last_error_evidence_ref,
+        last_error_evidence_sha256 = excluded.last_error_evidence_sha256,
+        last_error_evidence_bytes = excluded.last_error_evidence_bytes,
+        updated_at = excluded.updated_at
+    `).run(
+      loopId,
+      status,
+      consecutiveFailures,
+      runId,
+      at,
+      failingStep,
+      stringifyJson(storedSummary(error, storedEvidence.evidence?.ref ?? null, store)),
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+      at,
+    );
+  } catch (error) {
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
+  if (previous?.last_error_evidence_ref !== storedEvidence.evidence?.ref) {
+    cleanupEvidenceRef(store, previous?.last_error_evidence_ref ?? null);
+  }
   return getLoopHealth(store, loopId);
 }
 
@@ -548,6 +947,9 @@ export function getLoopHealth(store: any, loopId: any) {
     last_run_at: row.last_run_at ? String(row.last_run_at) : null,
     failing_step: row.failing_step ? String(row.failing_step) : null,
     last_error: parseJson(row.last_error_json),
+    last_error_evidence_ref: row.last_error_evidence_ref ? String(row.last_error_evidence_ref) : null,
+    last_error_evidence_sha256: row.last_error_evidence_sha256 ? String(row.last_error_evidence_sha256) : null,
+    last_error_evidence_bytes: row.last_error_evidence_bytes == null ? null : Number(row.last_error_evidence_bytes),
     updated_at: String(row.updated_at),
     attention,
     unresolved_backlog: unresolvedBacklog,
@@ -556,26 +958,214 @@ export function getLoopHealth(store: any, loopId: any) {
 }
 
 export function beginLoopRun(store: any, run: any) {
-  store.db.prepare(`
-    INSERT INTO site_loop_runs (run_id, loop_id, status, dry_run, started_at, summary_json, error_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    run.run_id,
-    run.loop_id,
-    run.status,
-    run.dry_run ? 1 : 0,
-    run.started_at,
-    stringifyJson(run.summary ?? null),
-    stringifyJson(run.error ?? null),
-  );
+  const storedEvidence: any = recordSiteLoopPayload(store, 'loop_run', {
+    summary: run.summary ?? null,
+    error: run.error ?? null,
+  }, {
+    run_id: run.run_id,
+  });
+  try {
+    store.db.prepare(`
+      INSERT INTO site_loop_runs (
+        run_id, loop_id, status, dry_run, started_at, summary_json, error_json,
+        evidence_ref, evidence_sha256, evidence_bytes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.run_id,
+      run.loop_id,
+      run.status,
+      run.dry_run ? 1 : 0,
+      run.started_at,
+      stringifyJson(storedSummary(run.summary ?? null, storedEvidence.evidence?.ref ?? null, store)),
+      stringifyJson(storedSummary(run.error ?? null, storedEvidence.evidence?.ref ?? null, store)),
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+    );
+  } catch (error) {
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
 }
 
 export function finishLoopRun(store: any, runId: any, { status, finished_at, summary = null, error = null }: LoopRunFinishOptions) {
+  const storedEvidence: any = recordSiteLoopPayload(store, 'loop_run', { summary, error }, {
+    run_id: runId,
+  });
+  const previous: any = store.db.prepare(
+    'SELECT evidence_ref FROM site_loop_runs WHERE run_id = ?',
+  ).get(runId);
+  const summaryJson: any = stringifyJson(storedSummary(
+    summary,
+    storedEvidence.evidence?.ref ?? null,
+    store,
+  ));
+  const errorJson: any = stringifyJson(storedSummary(
+    error,
+    storedEvidence.evidence?.ref ?? null,
+    store,
+  ));
+  try {
+    const update: any = store.db.prepare(`
+      UPDATE site_loop_runs
+      SET status = ?, finished_at = ?, summary_json = ?, error_json = ?,
+          evidence_ref = ?, evidence_sha256 = ?, evidence_bytes = ?
+      WHERE run_id = ?
+    `).run(
+      status,
+      finished_at,
+      summaryJson,
+      errorJson,
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+      runId,
+    );
+    if (Number(update.changes ?? 0) === 0) {
+      cleanupStoredEvidence(store, storedEvidence);
+      return;
+    }
+  } catch (error) {
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
+  if (previous?.evidence_ref !== storedEvidence.evidence?.ref) {
+    cleanupEvidenceRef(store, previous?.evidence_ref ?? null);
+  }
+}
+
+export type SiteLoopPersistenceCompactionResult = {
+  schema: 'narada.site_loop.persistence_compaction.v1';
+  status: 'compacted';
+  before_page_count: number;
+  before_freelist_count: number;
+  before_bytes: number;
+  after_page_count: number;
+  after_freelist_count: number;
+  after_bytes: number;
+  freed_bytes: number;
+};
+
+export function compactSiteLoopPersistence(store: any): SiteLoopPersistenceCompactionResult {
+  const db = store?.db;
+  if (!db) throw new Error('site_loop_persistence_compaction_db_required');
+  if (db.inTransaction) throw new Error('site_loop_persistence_compaction_transaction_active');
+  const before = sqlitePageStats(db);
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  db.exec('VACUUM');
+  const after = sqlitePageStats(db);
+  return {
+    schema: 'narada.site_loop.persistence_compaction.v1',
+    status: 'compacted',
+    before_page_count: before.pageCount,
+    before_freelist_count: before.freelistCount,
+    before_bytes: before.bytes,
+    after_page_count: after.pageCount,
+    after_freelist_count: after.freelistCount,
+    after_bytes: after.bytes,
+    freed_bytes: Math.max(0, before.bytes - after.bytes),
+  };
+}
+
+function sqlitePageStats(db: any): { pageCount: number; freelistCount: number; bytes: number } {
+  const pageCount = Number(Object.values(db.prepare('PRAGMA page_count').get() ?? {})[0] ?? 0);
+  const freelistCount = Number(Object.values(db.prepare('PRAGMA freelist_count').get() ?? {})[0] ?? 0);
+  const pageSize = Number(Object.values(db.prepare('PRAGMA page_size').get() ?? {})[0] ?? 0);
+  return {
+    pageCount,
+    freelistCount,
+    bytes: pageCount * pageSize,
+  };
+}
+
+export function pruneSiteLoopPersistence(
+  store: any,
+  now = new Date(),
+  { maxRows = 500, maxEvidenceFiles = 5000 }: { maxRows?: number; maxEvidenceFiles?: number } = {},
+) {
+  const evidenceStore: SiteLoopEvidenceStore | null = evidenceStoreForStore(store);
+  const summaryRetentionDays = Math.max(1, Number(evidenceStore?.summaryRetentionDays ?? 90));
+  const cutoff = new Date(now.getTime() - summaryRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = Math.max(1, Math.min(5000, Math.floor(Number(maxRows) || 500)));
+  const deleted: Record<string, number> = {};
+  const meta: any = store.db.prepare(`
+    SELECT evidence_prune_cursor FROM site_loop_storage_meta WHERE storage_id = 1
+  `).get();
+  if (store.db.inTransaction) {
+    throw new Error('site_loop_persistence_prune_transaction_active');
+  }
+  store.db.exec('BEGIN IMMEDIATE');
+  try {
+    deleted.step_runs = deletePruneBatch(store.db, `
+      SELECT rowid FROM site_loop_step_runs
+      WHERE run_id IN (
+        SELECT run_id FROM site_loop_runs
+        WHERE (finished_at < ? OR (finished_at IS NULL AND started_at < ?)) AND status <> 'running'
+      )
+      LIMIT ?
+    `, [cutoff, cutoff, batchSize], 'site_loop_step_runs');
+    deleted.runs = deletePruneBatch(store.db, `
+      SELECT rowid FROM site_loop_runs
+      WHERE (finished_at < ? OR (finished_at IS NULL AND started_at < ?)) AND status <> 'running'
+        AND NOT EXISTS (
+          SELECT 1 FROM site_loop_step_runs
+          WHERE site_loop_step_runs.run_id = site_loop_runs.run_id
+        )
+      LIMIT ?
+    `, [cutoff, cutoff, batchSize], 'site_loop_runs');
+    deleted.classification_observations = deletePruneBatch(store.db, `
+      SELECT rowid FROM site_loop_classification_observations
+      WHERE observed_at < ?
+      LIMIT ?
+    `, [cutoff, batchSize], 'site_loop_classification_observations');
+    deleted.acknowledged_escalations = deletePruneBatch(store.db, `
+      SELECT rowid FROM site_loop_escalations
+      WHERE created_at < ? AND status = 'acknowledged'
+      LIMIT ?
+    `, [cutoff, batchSize], 'site_loop_escalations');
+    deleted.directive_outcomes = deletePruneBatch(store.db, `
+      SELECT rowid FROM directive_outcomes
+      WHERE recorded_at < ?
+        AND outcome_id NOT IN (SELECT outcome_id FROM directive_outcome_latest)
+      LIMIT ?
+    `, [cutoff, batchSize], 'directive_outcomes');
+    store.db.exec('COMMIT');
+  } catch (error) {
+    try {
+      store.db.exec('ROLLBACK');
+    } catch {
+      // Preserve the original persistence error.
+    }
+    throw error;
+  }
+  const evidence = evidenceStore
+    ? pruneSiteLoopEvidence(evidenceStore, now, {
+        maxFiles: maxEvidenceFiles,
+        cursor: meta?.evidence_prune_cursor ?? null,
+      })
+    : { deleted_count: 0, scanned_count: 0, complete: true, next_cursor: null };
   store.db.prepare(`
-    UPDATE site_loop_runs
-    SET status = ?, finished_at = ?, summary_json = ?, error_json = ?
-    WHERE run_id = ?
-  `).run(status, finished_at, stringifyJson(summary), stringifyJson(error), runId);
+    UPDATE site_loop_storage_meta
+    SET last_pruned_at = ?, evidence_prune_cursor = ?
+    WHERE storage_id = 1
+  `).run(now.toISOString(), evidence.next_cursor);
+  return {
+    schema: 'narada.site_loop.persistence_prune.v1',
+    cutoff,
+    summary_retention_days: summaryRetentionDays,
+    deleted,
+    raw_evidence_deleted_count: evidence.deleted_count,
+    raw_evidence_scanned_count: evidence.scanned_count,
+    raw_evidence_scan_complete: evidence.complete,
+    next_evidence_cursor: evidence.next_cursor,
+  };
+}
+
+function deletePruneBatch(db: any, rowidQuery: string, params: unknown[], table: string): number {
+  const rows: any[] = db.prepare(rowidQuery).all(...params);
+  if (rows.length === 0) return 0;
+  const placeholders = rows.map(() => '?').join(', ');
+  return Number(db.prepare(`DELETE FROM ${table} WHERE rowid IN (${placeholders})`).run(...rows.map((row) => row.rowid)).changes ?? 0);
 }
 
 export function reconcileStaleLoopRuns(store: any, {
@@ -588,7 +1178,7 @@ export function reconcileStaleLoopRuns(store: any, {
   const nowIso: any = now.toISOString();
   const staleBefore: any = new Date(now.getTime() - finalStaleAfterMs).toISOString();
   const rows: any = store.db.prepare(`
-    SELECT run_id, loop_id, started_at
+    SELECT run_id, loop_id, started_at, evidence_ref
     FROM site_loop_runs
     WHERE loop_id = ?
       AND status = 'running'
@@ -602,7 +1192,10 @@ export function reconcileStaleLoopRuns(store: any, {
     SET status = 'abandoned',
         finished_at = ?,
         summary_json = ?,
-        error_json = ?
+        error_json = ?,
+        evidence_ref = ?,
+        evidence_sha256 = ?,
+        evidence_bytes = ?
     WHERE run_id = ? AND status = 'running'
   `);
   for (const row of rows) {
@@ -616,13 +1209,29 @@ export function reconcileStaleLoopRuns(store: any, {
       stale_before: staleBefore,
       active_run_id: activeRunId,
     };
-    const result: any = update.run(
-      nowIso,
-      stringifyJson({ stale_run_recovery: recovery }),
-      stringifyJson(recovery),
-      row.run_id,
-    );
-    if (Number(result.changes ?? 0) === 1) recoveredRuns.push(recovery);
+    const storedEvidence: any = recordSiteLoopPayload(store, 'stale_loop_run_recovery', recovery, {
+      loop_id: row.loop_id,
+      run_id: row.run_id,
+    });
+    let result: any;
+    try {
+      result = update.run(
+        nowIso,
+        stringifyJson(storedSummary({ stale_run_recovery: recovery }, storedEvidence.evidence?.ref ?? null, store)),
+        stringifyJson(storedSummary(recovery, storedEvidence.evidence?.ref ?? null, store)),
+        storedEvidence.evidence?.ref ?? null,
+        storedEvidence.evidence?.sha256 ?? null,
+        storedEvidence.evidence?.compressed_bytes ?? null,
+        row.run_id,
+      );
+    } catch (error) {
+      cleanupStoredEvidence(store, storedEvidence);
+      throw error;
+    }
+    if (Number(result.changes ?? 0) === 1) {
+      cleanupEvidenceRef(store, row.evidence_ref ?? null);
+      recoveredRuns.push(recovery);
+    }
   }
   return {
     schema: 'narada.site_operating_loop.stale_run_reconciliation.v1',
@@ -636,24 +1245,54 @@ export function reconcileStaleLoopRuns(store: any, {
 }
 
 export function recordLoopStep(store: any, step: any) {
-  store.db.prepare(`
-    INSERT INTO site_loop_step_runs (
-      step_run_id, run_id, step_id, status, started_at, finished_at,
-      input_refs_json, output_refs_json, evidence_json, error_json
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    step.step_run_id,
-    step.run_id,
-    step.step_id,
-    step.status,
-    step.started_at,
-    step.finished_at,
-    stringifyJson(step.input_refs ?? []),
-    stringifyJson(step.output_refs ?? []),
-    stringifyJson(step.evidence ?? null),
-    stringifyJson(step.error ?? null),
-  );
+  const inputRefs: any[] = Array.isArray(step.input_refs) ? step.input_refs : [];
+  const outputRefs: any[] = Array.isArray(step.output_refs) ? step.output_refs : [];
+  const payload: any = {
+    input_refs: inputRefs,
+    output_refs: outputRefs,
+    evidence: step.evidence ?? null,
+    error: step.error ?? null,
+  };
+  const storedEvidence: any = recordSiteLoopPayload(store, 'step_run', payload, {
+    run_id: step.run_id,
+    step_run_id: step.step_run_id,
+    step_id: step.step_id,
+  }, {
+    forceEvidence: inputRefs.length > 0 || outputRefs.length > 0,
+  });
+  const summary: any = {
+    evidence: boundedSiteLoopSummary(step.evidence ?? null, storedEvidence.evidence?.ref ?? null),
+    error: boundedSiteLoopSummary(step.error ?? null, storedEvidence.evidence?.ref ?? null),
+  };
+  try {
+    store.db.prepare(`
+      INSERT INTO site_loop_step_runs (
+        step_run_id, run_id, step_id, status, started_at, finished_at,
+        input_ref_count, output_ref_count, input_refs_digest, output_refs_digest,
+        summary_json, evidence_ref, evidence_sha256, evidence_bytes, error_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      step.step_run_id,
+      step.run_id,
+      step.step_id,
+      step.status,
+      step.started_at,
+      step.finished_at,
+      inputRefs.length,
+      outputRefs.length,
+      hashStable(inputRefs),
+      hashStable(outputRefs),
+      stringifyJson(summary),
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+      stringifyJson(summary.error),
+    );
+  } catch (error) {
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
 }
 
 export function listLoopRuns(store: any, { limit = 10, loopId = null } : any= {}) {
@@ -669,18 +1308,18 @@ export function listLoopRuns(store: any, { limit = 10, loopId = null } : any= {}
         ORDER BY started_at DESC
         LIMIT ?
       `).all(limit);
-  return rows.map(parseRunRow);
+  return rows.map((row: any) => parseRunRow(row, store, false));
 }
 
-export function getLoopRun(store: any, runId: any) {
+export function getLoopRun(store: any, runId: any, { hydrate = true }: { hydrate?: boolean } = {}) {
   const run: any = store.db.prepare('SELECT * FROM site_loop_runs WHERE run_id = ?').get(runId);
   if (!run) return null;
   const steps: any = store.db.prepare(`
     SELECT * FROM site_loop_step_runs
     WHERE run_id = ?
     ORDER BY rowid ASC
-  `).all(runId).map(parseStepRow);
-  return { ...parseRunRow(run), steps };
+  `).all(runId).map((row: any) => parseStepRow(row, store, hydrate));
+  return { ...parseRunRow(run, store, hydrate), steps };
 }
 
 export function getLoopStatus(store: any, { loopId = DEFAULT_SITE_OPERATING_LOOP_ID } : any= {}) {
@@ -699,7 +1338,7 @@ export function getLoopStatus(store: any, { loopId = DEFAULT_SITE_OPERATING_LOOP
   return {
     schema: 'narada.site_operating_loop.status.v1',
     loop_id: loopId,
-    latest: latest ? parseRunRow(latest) : null,
+    latest: latest ? parseRunRow(latest, store, false) : null,
     counts: Object.fromEntries(counts.map((row: any) => [row.status, row.count])),
     health: getLoopHealth(store, loopId),
     lock: getLoopLock(store, loopId),
@@ -747,24 +1386,57 @@ export function setLoopControl(store: any, { loopId, paused = false, mode = paus
   store.db.prepare(`
     INSERT INTO site_loop_control (loop_id, paused, mode, reason, updated_at)
     VALUES (?, ?, ?, ?, ?)
-    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(loop_id) DO UPDATE SET
       paused = excluded.paused,
       mode = excluded.mode,
       reason = excluded.reason,
       updated_at = excluded.updated_at
-  `).run(loopId, paused ? 1 : 0, mode, reason, at);
+  `).run(loopId, paused ? 1 : 0, boundedText(mode, 128), boundedText(reason), at);
   return getLoopControl(store, loopId);
 }
 
 export function recordLoopClassificationObservation(store: any, { loopId, directiveId, classification, observation, at = new Date().toISOString() }: LoopClassificationOptions = {}) {
   const observationId: any = `loopobs_${hashStable({ loopId, directiveId, classification, at }).slice(0, 32)}`;
+  const observationRecord: any = observation && typeof observation === 'object' && !Array.isArray(observation)
+    ? observation as Record<string, any>
+    : {};
+  const runId: any = observationRecord.run_id ? String(observationRecord.run_id) : null;
+  const taskId: any = observationRecord.task_id ? String(observationRecord.task_id) : null;
+  const observationDigest: any = hashStable({ loopId, directiveId, classification, at, observation });
   store.db.prepare(`
     INSERT OR IGNORE INTO site_loop_classification_observations (
-      observation_id, loop_id, directive_id, classification, observed_at, observation_json
-    ) VALUES (?, ?, ?, ?, ?, ?)
-  `).run(observationId, loopId, directiveId, classification, at, stringifyJson(observation));
-  return { observation_id: observationId, loop_id: loopId, directive_id: directiveId, classification, observed_at: at };
+      observation_id, loop_id, directive_id, classification, observed_at, run_id, task_id, observation_digest
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(observationId, loopId, directiveId, classification, at, runId, taskId, observationDigest);
+  const current: any = store.db.prepare(`
+    SELECT observed_at
+    FROM site_loop_classification_current
+    WHERE loop_id = ? AND directive_id = ?
+  `).get(loopId, directiveId);
+  if (!current || compareObservationTime(at, current.observed_at) >= 0) {
+    store.db.prepare(`
+      INSERT INTO site_loop_classification_current (
+        loop_id, directive_id, classification, observation_id, observed_at, run_id, task_id, observation_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(loop_id, directive_id) DO UPDATE SET
+        classification = excluded.classification,
+        observation_id = excluded.observation_id,
+        observed_at = excluded.observed_at,
+        run_id = excluded.run_id,
+        task_id = excluded.task_id,
+        observation_digest = excluded.observation_digest
+    `).run(loopId, directiveId, classification, observationId, at, runId, taskId, observationDigest);
+  }
+  return {
+    observation_id: observationId,
+    loop_id: loopId,
+    directive_id: directiveId,
+    classification,
+    observed_at: at,
+    run_id: runId,
+    task_id: taskId,
+    observation_digest: observationDigest,
+  };
 }
 
 export function countRecentLoopClassificationObservations(store: any, { loopId, directiveId, classification, limit = 3 }: LoopClassificationOptions = {}) {
@@ -814,6 +1486,10 @@ export function getLoopEscalation(store: any, { loopId, directiveId, classificat
     WHERE loop_id = ? AND directive_id = ? AND classification = ?
   `).get(loopId, directiveId, classification);
   if (!row) return null;
+  const escalation: any = readSiteLoopEvidenceIfAvailable(
+    store?.evidenceStore ?? siteLoopEvidenceStoreFromDb(store?.db),
+    row.escalation_ref,
+  ) ?? parseJson(row.escalation_summary_json);
   return {
     escalation_id: String(row.escalation_id),
     loop_id: String(row.loop_id),
@@ -825,40 +1501,133 @@ export function getLoopEscalation(store: any, { loopId, directiveId, classificat
     acknowledged_at: row.acknowledged_at ? String(row.acknowledged_at) : null,
     acknowledged_by: row.acknowledged_by ? String(row.acknowledged_by) : null,
     ack_reason: row.ack_reason ? String(row.ack_reason) : null,
-    escalation: parseJson(row.escalation_json),
+    escalation,
+    escalation_ref: row.escalation_ref ? String(row.escalation_ref) : null,
+    escalation_sha256: row.escalation_sha256 ? String(row.escalation_sha256) : null,
+    escalation_bytes: row.escalation_bytes == null ? null : Number(row.escalation_bytes),
   };
 }
 
 export function recordLoopEscalation(store: any, { loopId, directiveId, classification, envelopeId, escalation, at = new Date().toISOString() }: LoopEscalationOptions = {}) {
   const escalationId: any = `loopesc_${hashStable({ loopId, directiveId, classification }).slice(0, 32)}`;
-  const escalationJson: any = stringifyJson(escalation);
-  store.db.prepare(`
-    INSERT OR IGNORE INTO site_loop_escalations (
-      escalation_id, loop_id, directive_id, classification, status, envelope_id, created_at, escalation_json
-    ) VALUES (?, ?, ?, ?, 'opened', ?, ?, ?)
-  `).run(escalationId, loopId, directiveId, classification, envelopeId ?? null, at, escalationJson);
-  store.db.prepare(`
-    UPDATE site_loop_escalations
-    SET envelope_id = COALESCE(envelope_id, ?),
-        escalation_json = ?
-    WHERE escalation_id = ? AND status = 'opened'
-  `).run(envelopeId ?? null, escalationJson, escalationId);
+  const previous: any = store.db.prepare(`
+    SELECT escalation_ref FROM site_loop_escalations WHERE escalation_id = ?
+  `).get(escalationId);
+  const storedEvidence: any = recordSiteLoopPayload(store, 'loop_escalation', escalation ?? {}, {
+    loop_id: loopId,
+    directive_id: directiveId,
+    classification,
+    escalation_id: escalationId,
+  });
+  const escalationSummary: any = stringifyJson(storedEvidence.summary);
+  const alreadyInTransaction = Boolean(store.db.inTransaction);
+  if (!alreadyInTransaction) store.db.exec('BEGIN IMMEDIATE');
+  try {
+    store.db.prepare(`
+      INSERT OR IGNORE INTO site_loop_escalations (
+        escalation_id, loop_id, directive_id, classification, status, envelope_id, created_at,
+        escalation_summary_json, escalation_ref, escalation_sha256, escalation_bytes
+      ) VALUES (?, ?, ?, ?, 'opened', ?, ?, ?, ?, ?, ?)
+    `).run(
+      escalationId,
+      loopId,
+      directiveId,
+      classification,
+      envelopeId ?? null,
+      at,
+      escalationSummary,
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+    );
+    const update: any = store.db.prepare(`
+      UPDATE site_loop_escalations
+      SET envelope_id = COALESCE(envelope_id, ?),
+          escalation_summary_json = ?,
+          escalation_ref = ?,
+          escalation_sha256 = ?,
+          escalation_bytes = ?
+      WHERE escalation_id = ? AND status = 'opened'
+    `).run(
+      envelopeId ?? null,
+      escalationSummary,
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+      escalationId,
+    );
+    if (!alreadyInTransaction) store.db.exec('COMMIT');
+    if (Number(update.changes ?? 0) === 0) {
+      cleanupStoredEvidence(store, storedEvidence);
+    } else if (!alreadyInTransaction && previous?.escalation_ref !== storedEvidence.evidence?.ref) {
+      cleanupEvidenceRef(store, previous?.escalation_ref ?? null);
+    }
+  } catch (error) {
+    if (!alreadyInTransaction) {
+      try {
+        store.db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original persistence error.
+      }
+    }
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
   return getLoopEscalation(store, { loopId, directiveId, classification });
 }
 
 export function reopenLoopEscalation(store: any, { loopId, directiveId, classification, envelopeId, escalation, at = new Date().toISOString() }: LoopEscalationOptions = {}) {
   const escalationId: any = `loopesc_${hashStable({ loopId, directiveId, classification }).slice(0, 32)}`;
-  const escalationJson: any = stringifyJson(escalation);
-  store.db.prepare(`
-    UPDATE site_loop_escalations
-    SET status = 'opened',
-        envelope_id = COALESCE(envelope_id, ?),
-        escalation_json = ?,
-        acknowledged_at = NULL,
-        acknowledged_by = NULL,
-        ack_reason = NULL
-    WHERE escalation_id = ? AND status = 'acknowledged'
-  `).run(envelopeId ?? null, escalationJson, escalationId);
+  const previous: any = store.db.prepare(`
+    SELECT escalation_ref FROM site_loop_escalations WHERE escalation_id = ?
+  `).get(escalationId);
+  const storedEvidence: any = recordSiteLoopPayload(store, 'loop_escalation', escalation ?? {}, {
+    loop_id: loopId,
+    directive_id: directiveId,
+    classification,
+    escalation_id: escalationId,
+  });
+  const escalationSummary: any = stringifyJson(storedEvidence.summary);
+  const alreadyInTransaction = Boolean(store.db.inTransaction);
+  if (!alreadyInTransaction) store.db.exec('BEGIN IMMEDIATE');
+  try {
+    const update: any = store.db.prepare(`
+      UPDATE site_loop_escalations
+      SET status = 'opened',
+          envelope_id = COALESCE(envelope_id, ?),
+          escalation_summary_json = ?,
+          escalation_ref = ?,
+          escalation_sha256 = ?,
+          escalation_bytes = ?,
+          acknowledged_at = NULL,
+          acknowledged_by = NULL,
+          ack_reason = NULL
+      WHERE escalation_id = ? AND status = 'acknowledged'
+    `).run(
+      envelopeId ?? null,
+      escalationSummary,
+      storedEvidence.evidence?.ref ?? null,
+      storedEvidence.evidence?.sha256 ?? null,
+      storedEvidence.evidence?.compressed_bytes ?? null,
+      escalationId,
+    );
+    if (!alreadyInTransaction) store.db.exec('COMMIT');
+    if (Number(update.changes ?? 0) === 0) {
+      cleanupStoredEvidence(store, storedEvidence);
+    } else if (!alreadyInTransaction && previous?.escalation_ref !== storedEvidence.evidence?.ref) {
+      cleanupEvidenceRef(store, previous?.escalation_ref ?? null);
+    }
+  } catch (error) {
+    if (!alreadyInTransaction) {
+      try {
+        store.db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original persistence error.
+      }
+    }
+    cleanupStoredEvidence(store, storedEvidence);
+    throw error;
+  }
   return getLoopEscalation(store, { loopId, directiveId, classification });
 }
 
@@ -878,7 +1647,7 @@ export function listLoopAttention(store: any, { loopId = DEFAULT_SITE_OPERATING_
     ORDER BY created_at DESC, escalation_id DESC
     LIMIT ?
   `).all(...params);
-  return rows.map(parseEscalationRow);
+  return rows.map((row: any) => parseEscalationRow(row, store));
 }
 
 export function getLoopAttention(store: any, { attentionId }: LoopAttentionLookupOptions = {}) {
@@ -887,7 +1656,7 @@ export function getLoopAttention(store: any, { attentionId }: LoopAttentionLooku
     WHERE envelope_id = ? OR escalation_id = ?
     LIMIT 1
   `).get(attentionId, attentionId);
-  return row ? parseEscalationRow(row) : null;
+  return row ? parseEscalationRow(row, store) : null;
 }
 
 export function acknowledgeLoopAttention(store: any, {
@@ -905,7 +1674,7 @@ export function acknowledgeLoopAttention(store: any, {
         acknowledged_by = ?,
         ack_reason = ?
     WHERE escalation_id = ?
-  `).run(at, acknowledgedBy, reason ?? null, existing.escalation_id);
+  `).run(at, boundedText(acknowledgedBy, 256), boundedText(reason), existing.escalation_id);
   return { status: 'acknowledged', attention: getLoopAttention(store, { attentionId }) };
 }
 
@@ -920,7 +1689,11 @@ export function getLoopAttentionSummary(store: any, { loopId = DEFAULT_SITE_OPER
   const severityRows: any = store.db.prepare(`
     SELECT
       CASE
-        WHEN json_valid(escalation_json) THEN COALESCE(json_extract(escalation_json, '$.severity'), 'warning')
+        WHEN json_valid(escalation_summary_json) THEN COALESCE(
+          json_extract(escalation_summary_json, '$.severity'),
+          json_extract(escalation_summary_json, '$.fields.severity'),
+          'warning'
+        )
         ELSE 'warning'
       END AS severity,
       COUNT(*) AS count
@@ -997,7 +1770,6 @@ export function resolveDirectiveOutcome(store: any, {
   const existing: any = getLatestDirectiveOutcome(store, { loopId, directiveId });
   if (!existing) {
     return { schema: 'narada.site_operating_loop.directive_outcome_resolve.v1', status: 'not_found', loop_id: loopId, directive_id: directiveId };
-    return { schema: 'narada.site_operating_loop.directive_outcome_resolve.v1', status: 'not_found', loop_id: loopId, directive_id: directiveId };
   }
   const outcome: any = recordDirectiveOutcome(store, {
     loopId,
@@ -1028,7 +1800,11 @@ export function resolveDirectiveOutcome(store: any, {
   };
 }
 
-function parseDirectiveOutcomeRow(row: any) {
+function parseDirectiveOutcomeRow(row: any, store: any = null) {
+  const evidence = readSiteLoopEvidenceIfAvailable(
+    store?.evidenceStore ?? siteLoopEvidenceStoreFromDb(store?.db),
+    row.evidence_ref,
+  ) ?? parseJson(row.evidence_summary_json);
   return {
     schema: 'narada.site_operating_loop.directive_outcome.v1',
     outcome_id: String(row.outcome_id),
@@ -1043,22 +1819,11 @@ function parseDirectiveOutcomeRow(row: any) {
     event_at: row.event_at ? String(row.event_at) : null,
     observed_at: row.observed_at ? String(row.observed_at) : String(row.recorded_at),
     recorded_at: String(row.recorded_at),
-    evidence: parseJson(row.evidence_json),
+    evidence,
+    evidence_ref: row.evidence_ref ? String(row.evidence_ref) : null,
+    evidence_sha256: row.evidence_sha256 ? String(row.evidence_sha256) : null,
+    evidence_bytes: row.evidence_bytes == null ? null : Number(row.evidence_bytes),
   };
-}
-
-function backfillDirectiveOutcomeLatest(db: any) {
-  const rows: any = db.prepare(`
-    SELECT * FROM directive_outcomes
-    ORDER BY COALESCE(observed_at, recorded_at) ASC, recorded_at ASC, rowid ASC
-  `).all();
-  for (const row of rows) {
-    upsertDirectiveOutcomeLatest(db, {
-      ...row,
-      event_at: row.event_at ?? row.recorded_at,
-      observed_at: row.observed_at ?? row.recorded_at,
-    });
-  }
 }
 
 function upsertDirectiveOutcomeLatest(db: any, row: any) {
@@ -1071,8 +1836,9 @@ function upsertDirectiveOutcomeLatest(db: any, row: any) {
   db.prepare(`
     INSERT INTO directive_outcome_latest (
       loop_id, directive_id, outcome_id, outcome, agent_id, task_id, report_id,
-      receipt_id, reason, event_at, observed_at, recorded_at, evidence_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      receipt_id, reason, event_at, observed_at, recorded_at,
+      evidence_summary_json, evidence_ref, evidence_sha256, evidence_bytes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(loop_id, directive_id) DO UPDATE SET
       outcome_id = excluded.outcome_id,
       outcome = excluded.outcome,
@@ -1084,7 +1850,10 @@ function upsertDirectiveOutcomeLatest(db: any, row: any) {
       event_at = excluded.event_at,
       observed_at = excluded.observed_at,
       recorded_at = excluded.recorded_at,
-      evidence_json = excluded.evidence_json
+      evidence_summary_json = excluded.evidence_summary_json,
+      evidence_ref = excluded.evidence_ref,
+      evidence_sha256 = excluded.evidence_sha256,
+      evidence_bytes = excluded.evidence_bytes
   `).run(
     row.loop_id,
     row.directive_id,
@@ -1098,7 +1867,10 @@ function upsertDirectiveOutcomeLatest(db: any, row: any) {
     row.event_at ?? row.recorded_at,
     row.observed_at ?? row.recorded_at,
     row.recorded_at,
-    row.evidence_json,
+    row.evidence_summary_json ?? stringifyJson({}),
+    row.evidence_ref ?? null,
+    row.evidence_sha256 ?? null,
+    row.evidence_bytes ?? null,
   );
 }
 
@@ -1135,8 +1907,11 @@ function outcomePrecedence(outcome: any) {
   }[String(outcome)] ?? 0;
 }
 
-function parseEscalationRow(row: any) {
-  const escalation: any = parseJson(row.escalation_json);
+function parseEscalationRow(row: any, store: any = null) {
+  const escalation: any = readSiteLoopEvidenceIfAvailable(
+    store?.evidenceStore ?? siteLoopEvidenceStoreFromDb(store?.db),
+    row.escalation_ref,
+  ) ?? parseJson(row.escalation_summary_json);
   return {
     schema: 'narada.site_operating_loop.attention.v1',
     attention_id: row.envelope_id ? String(row.envelope_id) : String(row.escalation_id),
@@ -1152,6 +1927,9 @@ function parseEscalationRow(row: any) {
     ack_reason: row.ack_reason ? String(row.ack_reason) : null,
     severity: escalation?.severity ?? 'warning',
     escalation,
+    escalation_ref: row.escalation_ref ? String(row.escalation_ref) : null,
+    escalation_sha256: row.escalation_sha256 ? String(row.escalation_sha256) : null,
+    escalation_bytes: row.escalation_bytes == null ? null : Number(row.escalation_bytes),
   };
 }
 
@@ -1172,7 +1950,19 @@ function tableExists(db: any, table: any) {
   return Boolean(row);
 }
 
-function parseRunRow(row: any) {
+function readHydratedEvidence(store: any, ref: unknown, kind: string): any {
+  if (!ref) return null;
+  const evidenceStore = evidenceStoreForStore(store);
+  if (!evidenceStore) {
+    throw new SiteLoopEvidenceError(`site_loop_evidence_store_unavailable:${kind}`);
+  }
+  return readSiteLoopEvidence(evidenceStore, String(ref));
+}
+
+function parseRunRow(row: any, store: any = null, hydrate = true) {
+  const payload: any = hydrate
+    ? readHydratedEvidence(store, row.evidence_ref, 'loop_run')
+    : null;
   return {
     run_id: row.run_id,
     loop_id: row.loop_id,
@@ -1180,12 +1970,20 @@ function parseRunRow(row: any) {
     dry_run: Boolean(row.dry_run),
     started_at: row.started_at,
     finished_at: row.finished_at ?? null,
-    summary: parseJson(row.summary_json),
-    error: parseJson(row.error_json),
+    summary: payload?.summary ?? parseJson(row.summary_json),
+    error: payload?.error ?? parseJson(row.error_json),
+    evidence_ref: row.evidence_ref ? String(row.evidence_ref) : null,
+    evidence_sha256: row.evidence_sha256 ? String(row.evidence_sha256) : null,
+    evidence_bytes: row.evidence_bytes == null ? null : Number(row.evidence_bytes),
+    evidence_available: row.evidence_ref ? Boolean(payload) : false,
   };
 }
 
-function parseStepRow(row: any) {
+function parseStepRow(row: any, store: any = null, hydrate = true) {
+  const summary: any = parseJson(row.summary_json) ?? {};
+  const payload: any = hydrate
+    ? readHydratedEvidence(store, row.evidence_ref, 'step_run')
+    : null;
   return {
     step_run_id: row.step_run_id,
     run_id: row.run_id,
@@ -1193,11 +1991,27 @@ function parseStepRow(row: any) {
     status: row.status,
     started_at: row.started_at,
     finished_at: row.finished_at ?? null,
-    input_refs: parseJson(row.input_refs_json) ?? [],
-    output_refs: parseJson(row.output_refs_json) ?? [],
-    evidence: parseJson(row.evidence_json),
-    error: parseJson(row.error_json),
+    input_refs: payload?.input_refs ?? [],
+    output_refs: payload?.output_refs ?? [],
+    input_ref_count: Number(row.input_ref_count ?? 0),
+    output_ref_count: Number(row.output_ref_count ?? 0),
+    input_refs_digest: row.input_refs_digest ? String(row.input_refs_digest) : null,
+    output_refs_digest: row.output_refs_digest ? String(row.output_refs_digest) : null,
+    evidence: payload?.evidence ?? summary.evidence ?? null,
+    evidence_summary: summary.evidence ?? null,
+    error: payload?.error ?? summary.error ?? parseJson(row.error_json),
+    evidence_ref: row.evidence_ref ? String(row.evidence_ref) : null,
+    evidence_sha256: row.evidence_sha256 ? String(row.evidence_sha256) : null,
+    evidence_bytes: row.evidence_bytes == null ? null : Number(row.evidence_bytes),
+    evidence_available: row.evidence_ref ? Boolean(payload) : false,
   };
+}
+
+function compareObservationTime(next: any, existing: any) {
+  const nextTime = Date.parse(String(next ?? ''));
+  const existingTime = Date.parse(String(existing ?? ''));
+  if (Number.isFinite(nextTime) && Number.isFinite(existingTime)) return nextTime - existingTime;
+  return String(next ?? '').localeCompare(String(existing ?? ''));
 }
 
 function stringifyJson(value: any) {

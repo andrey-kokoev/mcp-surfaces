@@ -3024,7 +3024,16 @@ function registrarSiteBind(args: JsonRecord): JsonRecord {
   const { fileName, serverKey, config } = buildSiteBindConfig(site, surface, projectionId, runtimeKind);
   const filePath = join(configDir, fileName);
   writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-  return { status: 'bound', site_id: siteId, surface_id: surfaceId, projection_id: asRecord(asRecord(asRecord(config.mcpServers)[serverKey]).surface_projection).projection_id, file: fileName, server_key: serverKey };
+  const registry = writeSiteSurfaceRegistry(site);
+  return {
+    status: 'bound',
+    site_id: siteId,
+    surface_id: surfaceId,
+    projection_id: asRecord(asRecord(asRecord(config.mcpServers)[serverKey]).surface_projection).projection_id,
+    file: fileName,
+    server_key: serverKey,
+    registry,
+  };
 }
 
 function registrarSiteUnbind(args: JsonRecord): JsonRecord {
@@ -3044,7 +3053,8 @@ function registrarSiteUnbind(args: JsonRecord): JsonRecord {
       if (servers[serverKey]) {
         unlinkSync(join(configDir, file));
         removed++;
-        return { status: 'unbound', site_id: siteId, surface_id: surfaceId, file };
+        const registry = writeSiteSurfaceRegistry(site);
+        return { status: 'unbound', site_id: siteId, surface_id: surfaceId, file, registry };
       }
     } catch { /* skip */ }
   }

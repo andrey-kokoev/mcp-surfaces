@@ -11,7 +11,7 @@ mkdirSync(join(siteRoot, '.narada', 'capabilities'), { recursive: true });
 mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
 
 writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify({
-  schema: 'narada.site_loop.config.v1',
+  schema: 'narada.site_loop.config.v2',
   loop_id: 'outcome.test.loop',
   site_id: 'narada-outcome-test',
   display_name: 'Outcome reconciliation test loop',

@@ -13,7 +13,7 @@ function makeSiteRoot(prefix: string) {
   const root: any = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(root, '.narada', 'capabilities'), { recursive: true });
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify({
-    schema: 'narada.site_loop.config.v1',
+    schema: 'narada.site_loop.config.v2',
     loop_id: 'canonical-host.test.loop',
     site_id: 'canonical-host-test',
     display_name: 'Canonical host test loop',

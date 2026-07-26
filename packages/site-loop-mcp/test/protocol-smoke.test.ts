@@ -106,7 +106,7 @@ try {
   mkdirSync(configDir, { recursive: true });
   mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
   writeFileSync(join(configDir, 'site-loop-config.json'), JSON.stringify({
-    schema: 'narada.site_loop.config.v1',
+    schema: 'narada.site_loop.config.v2',
     loop_id: 'protocol.loop',
     site_id: 'narada-protocol',
     display_name: 'Protocol loop',
@@ -127,7 +127,7 @@ try {
   assert.equal(configValidation.error, undefined);
   const configValidationPayload = await parseToolPayload(configValidation);
   assert.equal(configValidationPayload.status, 'ok');
-  assert.equal(configValidationPayload.schema_id, 'narada:site-loop-config.v1.schema.json');
+  assert.equal(configValidationPayload.schema_id, 'narada:site-loop-config.v2.schema.json');
   assert.equal(configValidationPayload.loop_id, 'protocol.loop');
 
   writeMessage({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'site_loop_operator_affordances', arguments: {} } });

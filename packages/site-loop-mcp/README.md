@@ -24,7 +24,7 @@ Minimal valid config:
 
 ```json
 {
-  "schema": "narada.site_loop.config.v1",
+  "schema": "narada.site_loop.config.v2",
   "loop_id": "example.loop",
   "site_id": "narada-example",
   "display_name": "Example loop",
@@ -37,6 +37,14 @@ Minimal valid config:
       "kind": "ticket_projection",
       "ref": "example"
     }
+  },
+  "persistence": {
+    "schema": "narada.site_loop.persistence.v2",
+    "evidence_root": ".ai/site-loop-evidence",
+    "raw_retention_days": 7,
+    "summary_retention_days": 90,
+    "inline_summary_bytes": 16384,
+    "compression": "gzip"
   }
 }
 ```
@@ -120,6 +128,63 @@ phases, source sync, the compatibility file heartbeat, and effect admission
 remain owned here. The file heartbeat is a probe/compatibility signal, not a
 second authority. The old `site-loop-runner --supervise` path remains available
 for compatibility, but new supervision must use `site-loop-supervisor`.
+
+## Persistence v3 hard cutover
+
+Site Loop operational SQLite storage uses `narada.site_loop.storage.v3`. SQLite
+keeps bounded summaries, counts, digests, and content-addressed evidence refs;
+large historical payloads are gzip-compressed under the configured
+`persistence.evidence_root`. Summary reads never hydrate raw evidence. Use
+`site_loop_run_show` with `detail: "full"` when the raw run/step payload is
+needed.
+
+The runtime deliberately refuses a pre-v3 or partially migrated database with
+`site_loop_storage_cutover_required`. Perform the one-way migration explicitly
+under the Task Lifecycle write lock:
+
+```powershell
+pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-cutover --site-root D:/code/site --ack-cutover
+```
+
+The cutover does not retain a legacy schema or runtime fallback. It preserves
+Task Lifecycle authority and control/health state, rehydrates only the current
+classification projection and latest directive outcomes, resets stale loop
+locks, drops old oversized Site Loop run/step history, and starts the v3
+retention window at cutover.
+
+If a database contains only the bounded current-state Site Loop tables from an
+interrupted or pre-v3 initialization, the same acknowledged cutover completes
+the missing v3 tables, rehydrates those current projections, resets locks, and
+drops the partial tables in the cutover transaction. It does not guess at or
+retain an incomplete legacy schema.
+
+The cutover runs SQLite `VACUUM` after committing the new schema so dropping
+the old tables also releases their pages from the database file. If the
+irreversible cutover commits but compaction cannot complete, retry it through
+explicit maintenance.
+
+An acknowledged idempotent cutover retry also recreates missing v3 indexes
+before validating an already-cut-over database.
+
+Retention is explicit maintenance, not run-finalization work. Run it with an
+explicit site root and acknowledgement; each invocation is bounded and
+advances its evidence cursor:
+
+```powershell
+pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance
+```
+
+Add `--compact` when a full SQLite rewrite is wanted after pruning:
+
+```powershell
+pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-maintenance --site-root D:/code/site --ack-maintenance --compact
+```
+
+Full run reads fail closed when a referenced evidence artifact is missing,
+corrupt, or the configured evidence root no longer matches the root pinned in
+SQLite. Repair the storage/configuration boundary before attempting a full
+read; summary reads remain bounded and do not silently claim raw evidence is
+available.
 
 ## Run
 

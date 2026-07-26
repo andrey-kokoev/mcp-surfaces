@@ -25,6 +25,7 @@ const MCP_WORKSPACE_ROOT = normalizePath(resolve(MCP_SURFACES_ROOT, '..'));
 const LOADER_RUNTIME_ENTRYPOINT = normalizePath(fileURLToPath(import.meta.url));
 const LOADER_SOURCE_ENTRYPOINT = normalizePath(resolve(MCP_SURFACES_ROOT, 'mcp-loader-mcp/src/main.ts'));
 const LOADER_PROCESS_STARTED_AT_MS = Date.now();
+const RUNTIME_PROXY_STATUS_TOOL_NAME = 'mcp_runtime_proxy_status';
 const LOADER_RUNTIME_FILE_PAIRS = [
   {
     name: 'loader_entrypoint',
@@ -199,7 +200,8 @@ async function siteToolInventoryCheck(args: JsonRecord, state: LoaderState): Pro
       const attached = await attachSurface({ site_root: siteRoot, surface_id: surfaceId, runtime_kind: runtimeKind }, state);
       connectionId = requiredString(attached.connection_id, 'attached_connection_id_missing');
       const connection = getConnection({ connection_id: connectionId }, state);
-      const observedDefinitions = connection.toolSnapshot ?? [];
+      const observedDefinitions = (connection.toolSnapshot ?? [])
+        .filter((tool) => String(tool.name ?? '') !== RUNTIME_PROXY_STATUS_TOOL_NAME);
       const rawObservedTools = observedDefinitions.map((tool) => String(tool.name ?? '')).filter(Boolean);
       const observedTools = [...new Set(rawObservedTools)].sort();
       const duplicateObservedTools = duplicateStrings(rawObservedTools);
@@ -1802,8 +1804,10 @@ function loaderRecoveryActions(connection: ChildConnection): JsonRecord[] {
 
 function observedToolContractDigest(tools: JsonRecord[], descriptor: SurfaceDescriptorV2 | null): string | null {
   if (tools.length === 0) return null;
+  const surfaceTools = tools.filter((tool) => String(tool.name ?? '') !== RUNTIME_PROXY_STATUS_TOOL_NAME);
+  if (surfaceTools.length === 0) return null;
   if (descriptor !== null) {
-    const liveTools: McpToolDefinition[] = tools.map((tool) => ({
+    const liveTools: McpToolDefinition[] = surfaceTools.map((tool) => ({
       name: String(tool.name ?? ''),
       description: String(tool.description ?? ''),
       inputSchema: asRecord(tool.inputSchema ?? tool.input_schema),
@@ -1814,7 +1818,7 @@ function observedToolContractDigest(tools: JsonRecord[], descriptor: SurfaceDesc
     }));
     return liveToolsContractDigest(descriptor, liveTools);
   }
-  return stableDigest(tools
+  return stableDigest(surfaceTools
     .map((tool) => ({
       name: String(tool.name ?? ''),
       description: tool.description ?? null,

@@ -785,6 +785,10 @@ function compactLoopRun(run: any, options: SiteLoopPayload = {}) {
 function compactLoopStep(step: any, options: SiteLoopPayload) {
   const inputRefs: any = Array.isArray(step.input_refs) ? step.input_refs : [];
   const outputRefs: any = Array.isArray(step.output_refs) ? step.output_refs : [];
+  const evidenceValue: any = step.evidence_summary ?? step.evidence;
+  const evidenceSummary: any = evidenceValue?.schema === 'narada.site_loop.evidence_summary.v1'
+    ? evidenceValue
+    : summarizeLargeValue(evidenceValue, options.includeEvidencePreview ? Number(options.evidencePreviewChars ?? 0) : 0);
   return {
     step_run_id: step.step_run_id,
     run_id: step.run_id,
@@ -792,11 +796,13 @@ function compactLoopStep(step: any, options: SiteLoopPayload) {
     status: step.status,
     started_at: step.started_at,
     finished_at: step.finished_at,
-    input_ref_count: inputRefs.length,
-    output_ref_count: outputRefs.length,
+    input_ref_count: Number(step.input_ref_count ?? inputRefs.length),
+    output_ref_count: Number(step.output_ref_count ?? outputRefs.length),
+    input_refs_digest: step.input_refs_digest ?? null,
+    output_refs_digest: step.output_refs_digest ?? null,
     input_refs: summarizeRefs(inputRefs),
     output_refs: summarizeRefs(outputRefs),
-    evidence_summary: summarizeLargeValue(step.evidence, options.includeEvidencePreview ? Number(options.evidencePreviewChars ?? 0) : 0),
+    evidence_summary: evidenceSummary,
     error: summarizeLargeValue(step.error, options.includeEvidencePreview ? Number(options.evidencePreviewChars ?? 0) : 0),
   };
 }
@@ -916,8 +922,8 @@ export function showSiteLoopRun(cwd: any, runIdOrOptions: any) {
     const runId: any = typeof runIdOrOptions === 'string'
       ? runIdOrOptions
       : stringValue(options.run_id ?? options.runId);
-    const run: any = getLoopRun(store, runId);
     const detail: any = normalizeRunShowDetail(options.detail);
+    const run: any = getLoopRun(store, runId, { hydrate: detail === 'full' });
     return {
       schema: configuredSchema(siteRoot, 'site_loop_show'),
       status: run ? 'ok' : 'not_found',

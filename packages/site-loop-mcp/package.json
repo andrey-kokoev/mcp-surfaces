@@ -7,7 +7,9 @@
   "bin": {
     "site-loop-mcp": "./dist/src/site-loop-mcp-server.js",
     "site-loop-runner": "./dist/src/site-loop/site-loop-engine.js",
-    "site-loop-supervisor": "./dist/src/site-loop/site-loop-supervisor-runner.js"
+    "site-loop-supervisor": "./dist/src/site-loop/site-loop-supervisor-runner.js",
+    "site-loop-storage-cutover": "./dist/src/task-lifecycle/site-loop-storage-cutover.js",
+    "site-loop-storage-maintenance": "./dist/src/task-lifecycle/site-loop-storage-maintenance.js"
   },
   "exports": {
     "./surface-definition": {
@@ -22,6 +24,8 @@
     "./site-loop/site-loop-engine": { "default": "./dist/src/site-loop/site-loop-engine.js" },
     "./site-loop/site-loop-supervisor-runner": { "default": "./dist/src/site-loop/site-loop-supervisor-runner.js" },
     "./site-loop/site-loop-store": { "default": "./dist/src/site-loop/site-loop-store.js" },
+    "./task-lifecycle/site-loop-storage-cutover": { "default": "./dist/src/task-lifecycle/site-loop-storage-cutover.js" },
+    "./task-lifecycle/site-loop-storage-maintenance": { "default": "./dist/src/task-lifecycle/site-loop-storage-maintenance.js" },
     "./schemas/site-loop-config.schema.json": { "default": "./schemas/site-loop-config.schema.json" },
     "./site-operating-loop/site-loop-store": { "default": "./dist/src/site-operating-loop/site-loop-store.js" },
     "./site-operating-loop/policy": { "default": "./dist/src/site-operating-loop/policy.js" }
@@ -29,7 +33,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-operating-runtime-host-adapter.test.js && node dist/test/site-loop-db-health.test.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-escalation-reconciliation.test.js && node dist/test/site-loop-stale-run-recovery.test.js && node dist/test/site-loop-receipt-reconciliation.test.js && node dist/test/task-executability-reconciliation.test.js && node --import tsx dist/test/task-executability-cross-surface-e2e.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/syntax-check-all.js && node dist/test/site-operating-runtime-host-adapter.test.js && node dist/test/site-loop-db-health.test.js && node dist/test/site-loop-storage-cutover.test.js && node dist/test/scheduled-sop-triggers.test.js && node dist/test/site-loop-config.test.js && node dist/test/site-loop-escalation-reconciliation.test.js && node dist/test/site-loop-stale-run-recovery.test.js && node dist/test/site-loop-receipt-reconciliation.test.js && node dist/test/task-executability-reconciliation.test.js && node --import tsx dist/test/task-executability-cross-surface-e2e.test.js && node dist/test/site-loop-cross-site-contract.test.js && node dist/test/site-loop-outcome-reconciliation.test.js && node dist/test/site-loop-run-show.test.js && node dist/test/protocol-smoke.test.js && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:configured": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-configured-surface-e2e.test.js",
     "test:e2e:task-executability": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm --filter @narada2/task-lifecycle-mcp build && pnpm build && node dist/test/task-executability-cross-surface-e2e.test.js",
     "test:e2e:production": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/site-loop-production-e2e.test.js"

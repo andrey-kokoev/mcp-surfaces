@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "narada:site-loop-config.v1.schema.json",
+  "$id": "narada:site-loop-config.v2.schema.json",
   "title": "Narada Site Loop Config",
   "description": "Schema for .narada/capabilities/site-loop-config.json. This file is a site-owned override merged onto the neutral site-loop defaults; root identity fields are required so active site-loop behavior is explicitly site-bound.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "loop_id", "site_id", "display_name", "resident", "refs"],
   "properties": {
-    "schema": { "const": "narada.site_loop.config.v1" },
+    "schema": { "const": "narada.site_loop.config.v2" },
     "loop_id": { "$ref": "#/$defs/nonEmptyString" },
     "site_id": { "$ref": "#/$defs/nonEmptyString" },
     "display_name": { "$ref": "#/$defs/nonEmptyString" },
@@ -23,6 +23,7 @@
     "commands": { "$ref": "#/$defs/commands" },
     "policy": { "$ref": "#/$defs/policy" },
     "mailbox_proof": { "$ref": "#/$defs/mailboxProof" },
+    "persistence": { "$ref": "#/$defs/persistence" },
     "test_authority": { "$ref": "#/$defs/testAuthority" },
     "docs": { "$ref": "#/$defs/docs" },
     "tests": { "$ref": "#/$defs/tests" },
@@ -226,6 +227,18 @@
         "schema": { "$ref": "#/$defs/nonEmptyString" },
         "status_schema": { "$ref": "#/$defs/nonEmptyString" },
         "freshness_ms": { "$ref": "#/$defs/positiveNumber" }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "const": "narada.site_loop.persistence.v2" },
+        "evidence_root": { "$ref": "#/$defs/nonEmptyString" },
+        "raw_retention_days": { "type": "integer", "minimum": 1 },
+        "summary_retention_days": { "type": "integer", "minimum": 1 },
+        "inline_summary_bytes": { "type": "integer", "minimum": 1024, "maximum": 65536 },
+        "compression": { "const": "gzip" }
       }
     },
     "testAuthority": {

@@ -7,7 +7,7 @@ import { taskLifecycleDbHealth, openTaskLifecycleStoreWithDiscipline } from '../
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-db-health-'));
 mkdirSync(join(siteRoot, '.narada', 'capabilities'), { recursive: true });
 writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify({
-  schema: 'narada.site_loop.config.v1',
+  schema: 'narada.site_loop.config.v2',
   loop_id: 'db-health.test.loop',
   site_id: 'narada-db-health-test',
   display_name: 'DB health test loop',

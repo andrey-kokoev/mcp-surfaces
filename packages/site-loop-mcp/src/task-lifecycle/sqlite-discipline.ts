@@ -24,6 +24,7 @@ export function openTaskLifecycleStoreWithDiscipline(cwd: any, options: TaskLife
   let store: any = null;
   try {
     store = openTaskLifecycleStore(siteRoot);
+    instrumentTransactionState(store.db);
     applyDbPragmas(store.db, options);
     if (lock && !lock.reentrant) refreshWriteLock(lock);
     const originalClose: any = store.db.close.bind(store.db);
@@ -55,6 +56,36 @@ export function openTaskLifecycleStoreWithDiscipline(cwd: any, options: TaskLife
   } catch (error: any) {
     if (lock) releaseWriteLock(lock);
     throw error;
+  }
+}
+
+function instrumentTransactionState(db: any): void {
+  let transactionDepth = db.isTransaction === true || db.inTransaction === true ? 1 : 0;
+  const originalExec = db.exec.bind(db);
+  db.exec = (sql: unknown) => {
+    const result = originalExec(sql);
+    for (const statement of String(sql).split(';').map((part) => part.trim()).filter(Boolean)) {
+      if (/^ROLLBACK\s+TO\b/i.test(statement)) continue;
+      if (/^BEGIN\b/i.test(statement)) {
+        transactionDepth = Math.max(1, transactionDepth);
+      } else if (/^SAVEPOINT\b/i.test(statement)) {
+        transactionDepth += 1;
+      } else if (/^RELEASE\b/i.test(statement)) {
+        transactionDepth = Math.max(0, transactionDepth - 1);
+      } else if (/^(COMMIT|END|ROLLBACK)\b/i.test(statement)) {
+        transactionDepth = 0;
+      }
+    }
+    return result;
+  };
+  try {
+    Object.defineProperty(db, 'inTransaction', {
+      configurable: true,
+      enumerable: false,
+      get: () => transactionDepth > 0,
+    });
+  } catch {
+    // The underlying adapter may expose a non-configurable transaction flag.
   }
 }
 

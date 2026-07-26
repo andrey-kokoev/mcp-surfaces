@@ -22,7 +22,7 @@ mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
 writeFileSync(join(siteRoot, 'AGENTS.md'), '# Configured Site Loop E2E\n', 'utf8');
 writeFileSync(join(siteRoot, 'README.md'), '# Configured Site Loop E2E\n', 'utf8');
 writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify({
-  schema: 'narada.site_loop.config.v1',
+  schema: 'narada.site_loop.config.v2',
   loop_id: 'configured.e2e.loop',
   site_id: 'narada-configured-e2e',
   display_name: 'Configured Site Loop E2E',

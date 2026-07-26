@@ -156,7 +156,7 @@ processing, and proves no production state changed.
 
 ```json
 {
-  "schema": "narada.site_loop.config.v1",
+  "schema": "narada.site_loop.config.v2",
   "loop_id": "example.loop",
   "site_id": "narada-example",
   "display_name": "Example loop",

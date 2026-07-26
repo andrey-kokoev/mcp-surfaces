@@ -110,6 +110,14 @@ export type SiteLoopConfig = {
     status_schema: string;
     freshness_ms: number;
   };
+  persistence: {
+    schema: string;
+    evidence_root: string;
+    raw_retention_days: number;
+    summary_retention_days: number;
+    inline_summary_bytes: number;
+    compression: 'gzip';
+  };
   test_authority: {
     enabled: boolean;
     state_root: string;
@@ -130,7 +138,7 @@ export type SiteLoopConfig = {
   notes: string[];
 };
 
-export const SITE_LOOP_CONFIG_SCHEMA: any = 'narada.site_loop.config.v1';
+export const SITE_LOOP_CONFIG_SCHEMA: any = 'narada.site_loop.config.v2';
 export const SITE_LOOP_CONFIG_PATH: any = '.narada/capabilities/site-loop-config.json';
 
 const ajv: any = new Ajv({ allErrors: true, strict: false });
@@ -138,6 +146,25 @@ const validateSiteLoopConfigSchemaDocument: ValidateFunction = ajv.compile(SITE_
 
 export function siteLoopConfigJsonSchema() {
   return SITE_LOOP_CONFIG_JSON_SCHEMA;
+}
+
+function validatePersistence(errors: string[], persistence: SiteLoopConfig['persistence']) {
+  requireNonEmptyString(errors, persistence?.schema, 'persistence.schema');
+  requireSafeRelativePath(errors, persistence?.evidence_root, 'persistence.evidence_root');
+  if (!Number.isInteger(persistence?.raw_retention_days) || persistence.raw_retention_days <= 0) {
+    errors.push('persistence.raw_retention_days_positive_integer_required');
+  }
+  if (!Number.isInteger(persistence?.summary_retention_days) || persistence.summary_retention_days <= 0) {
+    errors.push('persistence.summary_retention_days_positive_integer_required');
+  }
+  if (Number.isInteger(persistence?.raw_retention_days) && Number.isInteger(persistence?.summary_retention_days)
+    && persistence.raw_retention_days > persistence.summary_retention_days) {
+    errors.push('persistence.raw_retention_days_must_not_exceed_summary_retention_days');
+  }
+  if (!Number.isInteger(persistence?.inline_summary_bytes) || persistence.inline_summary_bytes < 1024 || persistence.inline_summary_bytes > 64 * 1024) {
+    errors.push('persistence.inline_summary_bytes_bounded_integer_required');
+  }
+  if (persistence?.compression !== 'gzip') errors.push('persistence.compression_gzip_required');
 }
 
 function validateScheduledSops(errors: string[], schedules: SiteLoopScheduledSop[]) {
@@ -365,6 +392,14 @@ export const DEFAULT_SITE_LOOP_CONFIG: SiteLoopConfig = {
     status_schema: 'narada.site_loop.resident_mailbox_proof_status.v1',
     freshness_ms: 24 * 60 * 60_000,
   },
+  persistence: {
+    schema: 'narada.site_loop.persistence.v2',
+    evidence_root: '.ai/site-loop-evidence',
+    raw_retention_days: 7,
+    summary_retention_days: 90,
+    inline_summary_bytes: 16 * 1024,
+    compression: 'gzip',
+  },
   test_authority: {
     enabled: false,
     state_root: '.ai/test-authority/site-loop',
@@ -499,6 +534,7 @@ function validateSiteLoopConfig(config: SiteLoopConfig) {
   requireNonEmptyString(errors, config.mailbox_proof?.schema, 'mailbox_proof.schema');
   requireNonEmptyString(errors, config.mailbox_proof?.status_schema, 'mailbox_proof.status_schema');
   if (!Number.isFinite(config.mailbox_proof?.freshness_ms) || config.mailbox_proof.freshness_ms <= 0) errors.push('mailbox_proof.freshness_ms_positive_number_required');
+  validatePersistence(errors, config.persistence);
   validateTestAuthority(errors, config.test_authority);
   validateDocs(errors, config.docs);
   validateTests(errors, config.tests);
