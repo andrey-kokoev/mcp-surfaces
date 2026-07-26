@@ -6,14 +6,14 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   MCP_FABRIC_SCHEMA_VERSION,
-  RuntimeObservationV2Schema,
-  liveToolsContractDigest,
-  parseSurfaceDescriptorV2,
+  RuntimeObservationV3Schema,
+  liveInterfaceDigest,
+  parseSurfaceDescriptorV3,
   stableDigest,
   LifecycleRequirementSchema,
   type LifecycleRequirement,
   type McpToolDefinition,
-  type SurfaceDescriptorV2,
+  type SurfaceDescriptorV3,
 } from '@narada2/mcp-fabric-contracts';
 import { buildBoundedToolResult, outputShow, payloadCreate, prunePayloadWorkspaces } from '@narada2/mcp-transport';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
@@ -102,7 +102,7 @@ function runtimeObservation(args: JsonRecord, state: LoaderState): JsonRecord {
   if (live) touchConnection(connection);
   const observedAt = new Date().toISOString();
   const activeGeneration = live ? runtimeGeneration(connection, observedAt) : null;
-  return RuntimeObservationV2Schema.parse({
+  return RuntimeObservationV3Schema.parse({
     schema_version: MCP_FABRIC_SCHEMA_VERSION,
     observation_id: `observation-${Date.now()}-${connection.logicalConnectionId.slice(0, 12)}`,
     observed_at: observedAt,
@@ -117,10 +117,9 @@ function runtimeObservation(args: JsonRecord, state: LoaderState): JsonRecord {
       logical_connection_id: connection.logicalConnectionId,
       lifecycle: connection.lifecycle,
       active_generation: activeGeneration,
-      draining_generations: [],
       recovery_actions: loaderRecoveryActions(connection),
       detail: live
-        ? 'mcp-loader owns this active generation; use the bounded loader restart action for replacement.'
+        ? 'mcp-loader owns this active generation; restart terminates it before starting a new process.'
         : 'The loader child is no longer live; inspect the status and use the bounded loader restart action if lifecycle permits.',
     }],
   });
@@ -337,7 +336,7 @@ type RuntimeSurfaceMetadata = {
   serverName: string;
   projectionId: string;
   lifecycle: LifecycleRequirement;
-  descriptor: SurfaceDescriptorV2 | null;
+  descriptor: SurfaceDescriptorV3 | null;
   descriptorDigest: string | null;
   declaredToolContractDigest: string | null;
 };
@@ -473,7 +472,7 @@ type ChildConnection = {
   serverName: string;
   projectionId: string;
   lifecycle: LifecycleRequirement;
-  descriptor: SurfaceDescriptorV2 | null;
+  descriptor: SurfaceDescriptorV3 | null;
   descriptorDigest: string | null;
   declaredToolContractDigest: string | null;
   toolContractDigest: string | null;
@@ -584,7 +583,7 @@ export function listTools() {
     tool('mcp_loader_runtime_status', 'Inspect whether this loader process is current relative to its runtime, source, dependency, and build-configuration evidence and whether the loader process itself must be restarted.', {}, [], { readOnly: true }),
     tool('mcp_loader_policy_inspect', 'Inspect the policy governing runtime MCP surface loading.', {}, [], { readOnly: true }),
     tool('mcp_loader_connection_inventory', 'List attached loader connections, including liveness, age, explicit loader-managed restartability, capacity, and bounded recovery actions for stale children.', {}, [], { readOnly: true }),
-    tool('mcp_loader_runtime_observation', 'Return the normalized V2 runtime observation for one attached surface, including stable logical identity, generation state, lifecycle eligibility, contract digests, and bounded actuator guidance.', {
+    tool('mcp_loader_runtime_observation', 'Return the normalized V3 runtime observation for one attached surface, including stable logical identity, process generation state, lifecycle eligibility, interface digests, and bounded actuator guidance.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       carrier_kind: { type: 'string', description: 'Carrier kind producing the observation, such as codex, kimi, or opencode.' },
       manifest_digest: { type: 'string', description: 'Optional current V2 fabric manifest digest.' },
@@ -647,7 +646,7 @@ export function listTools() {
     tool('mcp_loader_detach', 'Detach and terminate an attached MCP surface.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
     }, ['connection_id'], { readOnly: false, destructive: true }),
-    tool('mcp_loader_surface_restart', 'Replace an attached MCP surface child process with a freshly initialized connection using the same site, surface, entrypoint, and args; this does not restart the agent session.', {
+    tool('mcp_loader_surface_restart', 'Terminate an attached MCP surface child, then start and initialize a new connection using the same site, surface, entrypoint, and args; no old-process grace or overlap is permitted.', {
       connection_id: { type: 'string', description: 'Connection id returned by mcp_loader_attach_surface.' },
       reason: { type: 'string', description: 'Optional operator or caller reason for the restart.' },
     }, ['connection_id'], { readOnly: false, destructive: true }),
@@ -1050,7 +1049,7 @@ function attachedResponse(connection: ChildConnection): JsonRecord {
     server_info: connection.serverInfo,
     tools: connection.toolSnapshot,
     descriptor_digest: connection.descriptorDigest,
-    tool_contract_digest: connection.toolContractDigest,
+    interface_digest: connection.toolContractDigest,
     lifecycle: connection.lifecycle,
   };
 }
@@ -1739,12 +1738,11 @@ function connectionStatusFields(connection: ChildConnection): JsonRecord {
     server_info: connection.serverInfo,
     tool_count: connection.toolSnapshot?.length ?? null,
     descriptor_digest: connection.descriptorDigest,
-    declared_tool_contract_digest: connection.declaredToolContractDigest,
-    tool_contract_digest: connection.toolContractDigest,
+    declared_interface_digest: connection.declaredToolContractDigest,
+    interface_digest: connection.toolContractDigest,
     heartbeat_at: connection.heartbeatAt,
     lease_expires_at: connection.leaseExpiresAt,
     active_generation: live ? runtimeGeneration(connection, observedAt) : null,
-    draining_generations: [],
     recovery_actions: loaderRecoveryActions(connection),
   };
 }
@@ -1768,14 +1766,11 @@ function runtimeGeneration(connection: ChildConnection, observedAt: string): Jso
     generation_id: connection.generationId,
     state: 'active',
     started_at: connection.attachedAt,
-    activated_at: connection.attachedAt,
     heartbeat_at: connection.heartbeatAt,
-    lease_expires_at: connection.leaseExpiresAt,
     freshness: fresh ? 'current' : 'stale',
     health: isConnectionLive(connection) ? 'healthy' : 'unreachable',
     descriptor_digest: connection.descriptorDigest,
-    tool_contract_digest: connection.toolContractDigest,
-    inflight: connection.pending.size,
+    interface_digest: connection.toolContractDigest,
   };
 }
 
@@ -1796,11 +1791,11 @@ function loaderRecoveryActions(connection: ChildConnection): JsonRecord[] {
     actuator: 'mcp-loader',
     tool_name: 'mcp_loader_surface_restart',
     arguments: { connection_id: connection.connectionId },
-    guidance: 'Invoke mcp_loader_surface_restart with the connection_id to replace this child generation; this does not restart the agent session or loader process.',
+    guidance: 'Invoke mcp_loader_surface_restart with the connection_id; it terminates the old child before starting a new process and does not restart the agent session or loader process.',
   }];
 }
 
-function observedToolContractDigest(tools: JsonRecord[], descriptor: SurfaceDescriptorV2 | null): string | null {
+function observedToolContractDigest(tools: JsonRecord[], descriptor: SurfaceDescriptorV3 | null): string | null {
   if (tools.length === 0) return null;
   if (descriptor !== null) {
     const liveTools: McpToolDefinition[] = tools.map((tool) => ({
@@ -1812,7 +1807,7 @@ function observedToolContractDigest(tools: JsonRecord[], descriptor: SurfaceDesc
         : { outputSchema: asRecord(tool.outputSchema ?? tool.output_schema) }),
       ...(tool.annotations === undefined ? {} : { annotations: asRecord(tool.annotations) }),
     }));
-    return liveToolsContractDigest(descriptor, liveTools);
+    return liveInterfaceDigest(descriptor, liveTools);
   }
   return stableDigest(tools
     .map((tool) => ({
@@ -1841,9 +1836,9 @@ function surfaceRuntimeMetadata(siteRoot: string, surfaceId: string): RuntimeSur
   const projection = asRecord(server.surface_projection);
   const descriptorCandidate = projection.descriptor ?? projection.surface_descriptor
     ?? server.descriptor ?? server.surface_descriptor;
-  let descriptor: SurfaceDescriptorV2 | null = null;
+  let descriptor: SurfaceDescriptorV3 | null = null;
   try {
-    descriptor = parseSurfaceDescriptorV2(descriptorCandidate);
+    descriptor = parseSurfaceDescriptorV3(descriptorCandidate);
   } catch {
     descriptor = null;
   }
@@ -1865,8 +1860,8 @@ function surfaceRuntimeMetadata(siteRoot: string, surfaceId: string): RuntimeSur
       'descriptor_digest',
     ),
     declaredToolContractDigest: optionalDigest(
-      projection.tool_contract_digest ?? projection.surface_tool_contract_digest ?? server.tool_contract_digest ?? server.surface_tool_contract_digest,
-      'tool_contract_digest',
+      projection.interface_digest ?? projection.surface_interface_digest ?? server.interface_digest ?? server.surface_interface_digest,
+      'interface_digest',
     ),
   };
 }

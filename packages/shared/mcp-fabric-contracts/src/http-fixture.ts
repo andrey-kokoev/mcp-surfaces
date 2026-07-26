@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import {
   assertLiveToolsConform,
   defineSurface,
+  isStandardSurfaceToolName,
+  standardSurfaceToolResult,
   type DefinedSurface,
   type McpToolDefinition,
 } from './index.js';
@@ -132,6 +134,19 @@ export async function startHttpFixture(): Promise<{
     if (message.method === 'tools/call') {
       const params = asRecord(message.params);
       const args = asRecord(params.arguments);
+      if (typeof params.name === 'string' && isStandardSurfaceToolName(params.name)) {
+        send(response, 200, {
+          jsonrpc: '2.0',
+          id,
+          result: standardSurfaceToolResult({
+            descriptor: surface.descriptor,
+            tool_name: params.name,
+            arguments: args,
+            observed_capabilities: { tools: {} },
+          }),
+        });
+        return;
+      }
       if (params.name === 'fabric_fixture_guidance') {
         send(response, 200, rpcToolResult(id, {
           workflow: ['initialize', 'tools/list', 'fabric_fixture_echo'],

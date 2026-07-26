@@ -48,5 +48,14 @@
   "files": ["dist/", "schemas/", "README.md"],
   "devDependencies": {
     "@narada2/mcp-e2e-harness": "workspace:*"
+  },
+  "narada": {
+    "artifact": {
+      "profile": "mcp-surface-v3",
+      "entrypoints": [
+        "dist/src/site-loop-mcp-server.js"
+      ],
+      "build_script": "build"
+    }
   }
 }

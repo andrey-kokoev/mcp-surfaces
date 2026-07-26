@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createTemporaryE2eRoot,
@@ -7,6 +9,16 @@ import {
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
+import {
+  prepareV3CarrierGeneration,
+  writePreparedV3CarrierGeneration,
+} from '@narada2/mcp-runtime-proxy/carrier-materialization';
+import {
+  buildCarrierActivationMarker,
+  sha256Text,
+  writeCarrierActivationMarkerImmutable,
+} from '@narada2/mcp-runtime-proxy/carrier-generation';
+import { surfaceDefinition } from '../src/surface-definition.js';
 
 // Fresh-process e2e for sfb_36762540-087: structured-command behind
 // mcp-runtime-proxy over a real MCP stdio transport. The tool's declared
@@ -22,21 +34,63 @@ import {
 // wide because Windows process spawn plus taskkill teardown regularly adds
 // several hundred milliseconds on a loaded machine.
 const siteRoot = createTemporaryE2eRoot('structured-command-proxy-timeout-e2e');
+const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+const workspaceRoot = fileURLToPath(new URL('../../../..', import.meta.url));
 const serverPath = fileURLToPath(new URL('../src/main.js', import.meta.url));
-const proxyPath = fileURLToPath(new URL('../../../shared/mcp-runtime-proxy/dist/src/main.js', import.meta.url));
-const artifactManifestPath = fileURLToPath(new URL('../../../../.ai/runtime/workspace-artifact-manifest.json', import.meta.url));
-const proxy = spawnJsonlMcpServer(process.execPath, [
-  proxyPath,
-  '--surface-id', 'structured-command',
-  '--artifact-manifest', artifactManifestPath,
-  '--runtime-contract-version', '2',
-  '--entrypoint', serverPath,
-  '--request-timeout-ms', '1000',
-  '--tool-timeout-grace-ms', '3000',
-  '--',
-  '--allowed-root', siteRoot,
-  '--allow-command', 'node',
-], {
+const descriptor = surfaceDefinition().descriptor;
+const projection = descriptor.projections.find((candidate) => candidate.transport.kind === 'stdio');
+assert.ok(projection?.transport.kind === 'stdio');
+const configPath = join(siteRoot, 'carrier.json');
+const activationPath = join(siteRoot, 'activation.json');
+const activationToken = 'proxy-timeout-e2e-activation';
+const prepared = await prepareV3CarrierGeneration({
+  carrier_id: 'structured-command-proxy-timeout-e2e',
+  carrier_kind: 'kimi',
+  config_path: configPath,
+  artifact_store: join(workspaceRoot, '.ai', 'runtime', 'artifact-store-v3'),
+  generation_root: join(siteRoot, 'carrier-generations'),
+  runtime_proxy_package_root: fileURLToPath(new URL('../../../shared/mcp-runtime-proxy', import.meta.url)),
+  runtime_proxy_workspace_root: workspaceRoot,
+  generation_id: 'proxy-timeout-e2e',
+  activation: {
+    cutover_id: 'proxy-timeout-e2e',
+    marker_path: activationPath,
+    token_digest: sha256Text(activationToken),
+  },
+  bindings: [{
+    binding_id: 'structured-command-proxy-timeout-e2e',
+    server_key: 'structured-command',
+    surface_id: descriptor.surface_id,
+    projection_id: projection.id,
+    descriptor,
+    source: { package_root: packageRoot, workspace_root: workspaceRoot },
+    artifact_entrypoint: serverPath,
+    child_args: [
+      '--allowed-root', siteRoot,
+      '--allow-command', 'node',
+    ],
+    child_env_names: projection.transport.env,
+    client_tool_names: descriptor.tools.map((tool) => tool.name),
+    runtime_proxy_options: {
+      request_timeout_ms: 1000,
+      tool_timeout_grace_ms: 3000,
+    },
+  }],
+});
+writePreparedV3CarrierGeneration(prepared);
+const launch = prepared.launches.get('structured-command');
+assert.ok(launch);
+writeFileSync(configPath, JSON.stringify({
+  mcpServers: {
+    'structured-command': launch,
+  },
+}));
+writeCarrierActivationMarkerImmutable(activationPath, buildCarrierActivationMarker({
+  cutover_id: 'proxy-timeout-e2e',
+  activation_token: activationToken,
+  generation_digests: [prepared.generation.generation_digest],
+}));
+const proxy = spawnJsonlMcpServer(launch.command, launch.args, {
   cwd: siteRoot,
   timeoutMs: 20_000,
   label: 'structured-command behind mcp-runtime-proxy',
@@ -58,7 +112,7 @@ try {
   // (1000ms + 3000ms grace) instead of the 1000ms proxy watchdog.
   const timedResponse = await proxy.client.request(3, 'tools/call', {
     name: 'structured_command_execute',
-    _meta: { narada_request_timeout_ms: 1000 },
+    _meta: { 'narada.transport_timeout_ms': 1000 },
     arguments: {
       command: 'node',
       args: ['-e', 'setTimeout(() => {}, 30000)'],

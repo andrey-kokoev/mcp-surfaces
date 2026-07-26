@@ -4,11 +4,23 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateAffordanceDocument } from '@narada2/mcp-affordances';
+import {
+  prepareV3CarrierGeneration,
+  writePreparedV3CarrierGeneration,
+} from '@narada2/mcp-runtime-proxy/carrier-materialization';
+import {
+  buildCarrierActivationMarker,
+  sha256Text,
+  writeCarrierActivationMarkerImmutable,
+} from '@narada2/mcp-runtime-proxy/carrier-generation';
+import { surfaceDefinition } from '../src/surface-definition.js';
 
 const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-protocol-'));
 const SMOKE_WAIT_MS = 15_000;
 const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
-const artifactManifestPath = fileURLToPath(new URL('../../../../.ai/runtime/workspace-artifact-manifest.json', import.meta.url));
+const workspaceRoot = fileURLToPath(new URL('../../../..', import.meta.url));
+const artifactStore = join(workspaceRoot, '.ai', 'runtime', 'artifact-store-v3');
+const proxyPackageRoot = join(packageRoot, '..', 'shared', 'mcp-runtime-proxy');
 const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { bin?: Record<string, string> };
 const serverBin = packageJson.bin?.['worker-delegation-mcp'];
 assert.equal(serverBin, './dist/src/main.js');
@@ -101,19 +113,61 @@ writeFileSync(join(legacyRoot, '.narada', 'worker-cognition-defaults.json'), JSO
     low: { provider: 'codex-subscription', model: 'gpt-5.6-luna', reasoning_effort: 'max' },
   },
 }), 'utf8');
-const proxyPath = join(packageRoot, '..', 'shared', 'mcp-runtime-proxy', 'dist', 'src', 'main.js');
-const proxyChild = spawn(process.execPath, [
-  proxyPath,
-  '--surface-id', 'worker-delegation',
-  '--artifact-manifest', artifactManifestPath,
-  '--runtime-contract-version', '2',
-  '--entrypoint', serverPath,
-  '--',
-  '--site-root', legacyRoot,
-  '--allowed-root', legacyRoot,
-  '--run-root', join(legacyRoot, 'runs'),
-  '--provider-registry-path', legacyRegistryPath,
-], {
+const descriptor = surfaceDefinition().descriptor;
+const projection = descriptor.projections.find((candidate) => candidate.transport.kind === 'stdio');
+assert.ok(projection?.transport.kind === 'stdio');
+const proxyConfigPath = join(root, 'carrier.json');
+const proxyActivationPath = join(root, 'activation.json');
+const proxyActivationToken = 'worker-delegation-protocol-smoke';
+const prepared = await prepareV3CarrierGeneration({
+  carrier_id: 'worker-delegation-protocol-smoke',
+  carrier_kind: 'kimi',
+  config_path: proxyConfigPath,
+  artifact_store: artifactStore,
+  generation_root: join(root, 'carrier-generations'),
+  runtime_proxy_package_root: proxyPackageRoot,
+  runtime_proxy_workspace_root: workspaceRoot,
+  generation_id: 'protocol-smoke',
+  activation: {
+    cutover_id: 'worker-delegation-protocol-smoke',
+    marker_path: proxyActivationPath,
+    token_digest: sha256Text(proxyActivationToken),
+  },
+  bindings: [{
+    binding_id: 'worker-delegation-protocol-smoke',
+    server_key: 'worker-delegation',
+    surface_id: descriptor.surface_id,
+    projection_id: projection.id,
+    descriptor,
+    source: { package_root: packageRoot, workspace_root: workspaceRoot },
+    artifact_entrypoint: serverPath,
+    child_args: [
+      '--site-root', legacyRoot,
+      '--allowed-root', legacyRoot,
+      '--run-root', join(legacyRoot, 'runs'),
+      '--provider-registry-path', legacyRegistryPath,
+    ],
+    child_env_names: projection.transport.env,
+    client_tool_names: descriptor.tools.map((tool) => tool.name),
+  }],
+});
+writePreparedV3CarrierGeneration(prepared);
+const proxyLaunch = prepared.launches.get('worker-delegation');
+assert.ok(proxyLaunch);
+writeFileSync(proxyConfigPath, JSON.stringify({
+  mcpServers: {
+    'worker-delegation': proxyLaunch,
+  },
+}));
+writeCarrierActivationMarkerImmutable(
+  proxyActivationPath,
+  buildCarrierActivationMarker({
+    cutover_id: 'worker-delegation-protocol-smoke',
+    activation_token: proxyActivationToken,
+    generation_digests: [prepared.generation.generation_digest],
+  }),
+);
+const proxyChild = spawn(proxyLaunch.command, proxyLaunch.args, {
   stdio: ['pipe', 'pipe', 'pipe'],
   windowsHide: true,
   env: { ...process.env, NARADA_PROVIDER_SECRET_STORE: 'disabled' },

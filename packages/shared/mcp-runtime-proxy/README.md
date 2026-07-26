@@ -1,108 +1,79 @@
 # @narada2/mcp-runtime-proxy
 
-Small stdio proxy for carrier-launched MCP servers.
+Strict sealed-artifact stdio runtime for carrier-launched MCP servers.
 
-The package also exports `./generation-manager`, a transport-neutral logical
-endpoint manager for V2 replacements. It models `starting`, `warming`,
-`active`, `draining`, `terminated`, and `failed` generations. Warm-up
-performs initialize, initialized notification where applicable, tools/list
-contract verification, and an optional declared read-only health call before
-atomic activation.
+## Runtime contract
 
-Replayable stdio replacements route new calls to the active generation and
-allow old in-flight calls to drain. Streamable HTTP sessions remain pinned to
-their original generation while new sessions select the replacement. Drain
-expiry returns `session_generation_retired` with reconnect guidance and asks
-the adapter to terminate the old process tree. A failed warm-up leaves the old
-generation active. `restart_required` descriptors are refused with the exact
-carrier/session restart owner; the manager never assumes that authority.
+Every admitted launch is pinned by one immutable
+`narada.mcp_carrier_generation.v3` document. A binding contains the exact
+carrier launch, the canonical surface descriptor, a fresh-only artifact
+selector, the child entrypoint and arguments, the admitted child environment
+names, and the source roots used to prove freshness. The generation also pins
+the runtime proxy's own closure and receipt.
 
-## Runtime observation records
+The carrier invokes the sealed proxy entrypoint with:
 
-`AtomicRuntimeObservationStore` persists normalized generation observations as exclusive temp-file plus rename records under the configured runtime root. `observe()` is process-inspection readback and marks expired leases stale/unreachable; `createRuntimeObservationSink()` is optional and does not grant Narada Site authority. A carrier or loader adapter may emit observations, but the proxy remains transport diagnostics only and never applies reconciliation plans.
+```text
+--runtime-contract-version 3
+--carrier-generation <immutable-generation.json>
+--server-key <binding-key>
+--artifact-store <content-addressed-store>
+```
 
-The proxy launches a Node MCP entrypoint, forwards stdin/stdout, captures stderr,
-and turns child startup exits into JSON-RPC errors for pending requests. This is
-for carrier diagnostics only; it does not authorize tools, mutate policy, or
-interpret MCP domain behavior.
+Before starting a child, the proxy verifies:
 
-## Build artifact preflight
+- the generation schema and digest;
+- the exact binding launch still present in the carrier config;
+- the executing proxy entrypoint and arguments against the sealed proxy pin;
+- the proxy closure and receipt;
+- the selected child closure, receipt, compatibility channel, and declared
+  entrypoint;
+- source freshness for the proxy and child package closures.
 
-Every launch must provide `--artifact-manifest <path>`. The workspace build
-creates `.ai/runtime/workspace-artifact-manifest.json`; it records the package
-metadata, TypeScript source fingerprints, local dependency metadata, declared
-runtime export targets, and their emitted artifact fingerprints. Before the
-entrypoint is spawned, the proxy verifies the manifest fingerprint and refuses
-with a structured preflight error if the manifest is missing, stale, or no
-longer matches an export target. Re-run the workspace build before retrying;
-the proxy never starts a server against an unverified workspace.
+Any mismatch is a structured preflight refusal. The runtime does not rebuild,
+retry, consult an alternate artifact, or fall back to an older contract.
 
-Carrier materialization adds a second contract gate. Every generated proxy
-launch declares `--runtime-contract-version 2`, the current
-`--artifact-manifest`, and, for a materialized carrier file, a
-`--materialization-sidecar` path. The registrar validates every generated
-proxy, child entrypoint, and manifest reference before writing the carrier
-file. It records `<carrier-config>.narada-generation.json` with the config,
-manifest, registrar-build, and contract fingerprints. The proxy refuses to
-spawn the child when that sidecar is missing or stale, including after the
-carrier config or registrar build changes.
+The running process remains pinned to the admitted closure. New processes
+select the latest compatible fresh closure. Source changes can make a live
+instance diagnostically stale, but they do not mutate or replace that process.
 
-Materialization requests run in a fresh built registrar subprocess rather than
-using a resident registrar's loaded module graph. A failed validation is a
-structured refusal; the registrar does not rebuild or retry automatically.
+## Process lifecycle
 
-On Windows, the proxy starts the native Rust process supervisor after preflight.
-The supervisor owns the MCP server in a Job Object configured to terminate the
-managed server when the supervisor exits, and monitors the proxy PID. The
-diagnostic instance record identifies `proxy_pid`, `supervisor_pid`, and
-`managed_child_pid`/`server_pid` separately; `child_pid` is the supervisor PID
-on Windows and the server PID on platforms without the Windows supervisor.
-The supervisor preserves the server's inherited stdio and terminates the
-managed server when its proxy parent disappears. The supervisor executable is
-also required before a Windows launch is admitted.
+The proxy forwards MCP stdin/stdout, captures bounded diagnostic tails, and
+uses the native process supervisor on Windows. Carrier stdin closure, parent
+loss, or an unrecoverable child failure terminates the owned process tree
+immediately. There is no generation overlap, drain period, or legacy runtime
+fallback.
 
-Every proxied surface advertises one proxy-owned read-only tool,
-`mcp_runtime_proxy_status`, in its normal `tools/list` response. Call it when
-a carrier-bound surface may be running an old build. Its
-`runtime_freshness.status` distinguishes `current`, `stale`, and `unknown`
-using the runtime files loaded at proxy start plus matching TypeScript source
-mtimes. `runtime_freshness.reload_action` is the machine-readable operation
-for the carrier or runtime supervisor; it never implies an automatic restart.
+Diagnostic instance records live under the configured diagnostics directory
+and distinguish proxy, supervisor, and server PIDs. They are observations only;
+they grant no restart, carrier, Site, or policy authority.
 
-Pending child requests have a proxy-owned deadline. If the child stays alive but
-does not answer, the proxy returns a structured `child_request_timeout` JSON-RPC
-error to the carrier, sends `notifications/cancelled` to the child, terminates
-the child, and exits non-zero so the carrier can restart the surface cleanly.
-Use `--request-timeout-ms <ms>` before `--` to override the default timeout.
+## Surface contract
 
-The watchdog never interprets a surface's tool arguments. A caller that owns a
-surface-level timeout may carry the transport contract in
-`params._meta.narada_request_timeout_ms`; the proxy then waits for that
-transport timeout plus a bounded grace margin
-(`--tool-timeout-grace-ms <ms>`, default 15000) before declaring the child
-unresponsive. The admitted transport timeout is capped at 15 minutes and the
-grace is additive, so the effective watchdog deadline can be at most 15 minutes
-plus the configured grace. Callers that use a surface-owned timeout should
-forward this metadata so the surface can return its own bounded result without
-losing the shared transport.
+The proxy validates the child's live `tools/list` result against the descriptor
+sealed into the carrier generation. It supplies the universal read-only tools
+`surface_describe` and `surface_contract_describe`. The description results
+expose the sealed descriptor, interface shape, contract digests, live process
+liveness, sealed generation identity, artifact closure/receipt identity, and
+runtime freshness. V3 has no separate legacy runtime-status tool.
 
-The proxy also writes a heartbeat lease at
-`<diagnostics-dir>/instance-<proxy-pid>.json`. The lease includes parent,
-proxy, supervisor/server PIDs, artifact freshness evidence, and
-live/stale/reclaiming/closed state. If carrier stdin closes or the captured
-parent PID dies, the proxy first closes the managed server's stdin, waits the
-bounded orphan grace period, then terminates the owned process tree. On
-Windows this is a supervisor-tree termination; on other platforms it is the
-existing signal-based child termination. A live parent and open carrier stream
-are never reclaimed. Defaults are a 5-second liveness check and a 15-second
-grace; tests/supervisors may set `--liveness-check-ms` and
-`--orphan-grace-ms`.
+## Request watchdog
 
-Operators can list all recorded instances without starting a child:
+Pending child requests have a proxy-owned deadline. If a child does not answer,
+the proxy returns `child_request_timeout`, sends cancellation, terminates the
+child, and exits non-zero so the carrier can start a new process.
+
+An owned caller timeout may be declared in
+`params._meta["narada.transport_timeout_ms"]`. The watchdog admits that bounded
+timeout plus the configured tool-timeout safety margin. Optional launch
+settings are `--request-timeout-ms`, `--tool-timeout-grace-ms`,
+`--diagnostics-dir`, and `--liveness-check-ms`; because the complete argv is
+part of the immutable binding, these settings cannot be appended or changed
+after materialization.
+
+Operators can inspect diagnostic records without starting a child:
 
 ```powershell
 node dist/src/main.js --list-runtime-instances --diagnostics-dir <dir>
 ```
-
-The listing classifies each record from PID liveness and lease expiry, so stale
-and live server pairs are explicit rather than inferred from process names.

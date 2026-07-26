@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createTemporaryE2eRoot, removeTemporaryE2eRoot } from '@narada2/mcp-e2e-harness';
 import { materializeKimiCarrierConfig } from './kimi-carrier-test-support.js';
 
@@ -17,6 +18,8 @@ if (!enabled) {
     // stale flag that newer Kimi versions reject.
     const configPath = join(temporaryRoot, '.kimi-code', 'mcp.json');
     const config = await materializeKimiCarrierConfig(configPath);
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
     const serverCount = Object.keys(config.mcpServers).length;
     const command = process.env.NARADA_KIMI_COMMAND ?? 'kimi';
     const timeoutMs = positiveInteger(process.env.NARADA_KIMI_LIVE_TIMEOUT_MS, 120_000);

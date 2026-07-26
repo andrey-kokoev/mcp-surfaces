@@ -5,11 +5,13 @@
   "type": "module",
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",
   "scripts": {
-    "build": "pnpm --filter @narada2/process-launch-posture build && pnpm --filter @narada2/site-operating-loop build && tsc -b && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-workspace-artifact-manifest.ts",
+    "build": "pnpm --filter @narada2/process-launch-posture build && pnpm --filter @narada2/site-operating-loop build && tsc -b && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-v3-artifacts.ts",
+    "build:v3-artifacts": "node --import tsx scripts/build-v3-artifacts.ts",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm -r --workspace-concurrency=1 test",
+    "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm run test:v3-artifact-scheduler && pnpm -r --workspace-concurrency=1 test",
     "test:typescript-boundary": "node --import tsx test/typescript-source-boundary.test.ts",
     "test:ui-boundary": "node --import tsx test/ui-neutral-boundary.test.ts",
+    "test:v3-artifact-scheduler": "node --import tsx scripts/v3-artifact-build-scheduler.test.ts",
     "test:local-filesystem": "pnpm --filter @narada2/local-filesystem-mcp test",
     "test:mcp-transport": "pnpm --filter @narada2/mcp-transport test",
     "test:mcp-telemetry": "pnpm --filter @narada2/mcp-telemetry test",
@@ -60,6 +62,7 @@
     "test:isolated": "pnpm --filter @narada2/mcp-e2e-harness build && pwsh -NoLogo -NoProfile -File ./test-process-audit.ps1 -IsolatedWorktree"
   },
   "devDependencies": {
+    "@narada2/mcp-runtime-proxy": "workspace:*",
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3",
     "tsx": "^4.21.0"

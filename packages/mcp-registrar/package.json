@@ -5,7 +5,8 @@
   "type": "module",
   "description": "MCP surface registrar for binding/unbinding surfaces across Narada sites and carriers (opencode, Kimi, Codex).",
   "bin": {
-    "mcp-registrar": "./dist/src/main.js"
+    "mcp-registrar": "./dist/src/main.js",
+    "mcp-hard-cutover": "./dist/src/cutover-coordinator.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
@@ -21,12 +22,13 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm -w build && pnpm run test:kimi-contract:run && node dist/test/mcp-fabric-v2-native.test.js && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js && node dist/test/materialization-contract-e2e.test.js && node dist/test/site-fabric-loader-e2e.test.js && node dist/test/site-fabric-catalog-e2e.test.js",
+    "test": "pnpm -w build && pnpm run test:kimi-contract:run && node dist/test/mcp-fabric-v3-native.test.js && node dist/test/v2-predecessor.test.js && node dist/test/mcp-registrar.test.js && node dist/test/protocol-smoke.test.js && node --test dist/test/carrier-generation-e2e.test.js && node --test dist/test/hard-cutover.test.js && node dist/test/site-fabric-loader-e2e.test.js && node dist/test/site-fabric-catalog-e2e.test.js",
     "test:kimi-contract:run": "node dist/test/moonshot-schema.test.js && node dist/test/kimi-carrier-contract.test.js",
     "test:kimi-contract": "pnpm -w build && pnpm run test:kimi-contract:run",
     "test:kimi-live": "pnpm -w build && node dist/test/kimi-carrier-live-e2e.test.js"
   },
   "dependencies": {
+    "@narada2/artifact-integrity": "workspace:*",
     "@narada2/local-filesystem-mcp": "workspace:*",
     "@narada2/structured-command-mcp": "workspace:*",
     "@narada2/git-mcp": "workspace:*",
@@ -54,6 +56,7 @@
     "@narada2/operator-console-overlay-mcp": "workspace:*",
     "@narada2/cloudflare-carrier-mcp": "workspace:*",
     "@narada2/site-coherence-mcp": "workspace:*",
+    "@narada2/runtime-introspection-mcp": "workspace:*",
     "@narada2/mcp-fabric-compiler": "workspace:*",
     "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-transport": "workspace:*",
@@ -65,5 +68,15 @@
   ],
   "devDependencies": {
     "@narada2/mcp-e2e-harness": "workspace:*"
+  },
+  "narada": {
+    "artifact": {
+      "profile": "mcp-surface-v3",
+      "entrypoints": [
+        "dist/src/main.js",
+        "dist/src/cutover-coordinator.js"
+      ],
+      "build_script": "build"
+    }
   }
 }
