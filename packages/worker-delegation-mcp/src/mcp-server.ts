@@ -6,6 +6,7 @@ import { callWorkerTool, type WorkerRequestContext } from './worker-tools.js';
 import { listTools } from './tool-list.js';
 import { readCanonicalProviderRegistry, type ProviderRegistrySource } from './canonical-provider-registry.js';
 import { providerRuntimeMetadataFromRegistry, type WorkerProviderRuntimeMetadata } from './provider-runtime-binding.js';
+import { loadIntelligenceLaunchContext } from './intelligence-launch-context.js';
 import type { WorkerMcpState } from './state.js';
 import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
 import { spawnSync } from 'node:child_process';
@@ -492,18 +493,18 @@ function loadProviderPolicyDefaults(siteRoot: string, env: NodeJS.ProcessEnv, op
   } };
 }
 
-type ProviderRegistryResolution = {
+export type ProviderRegistryResolution = {
   candidates: string[];
   path: string | null;
   selection: 'explicit' | 'candidate' | null;
   source: ProviderRegistrySource;
 };
 
-function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {
+export function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): string | null {
   return providerRegistryResolution(siteRoot, env, options).path;
 }
 
-function providerRegistryResolution(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): ProviderRegistryResolution {
+export function providerRegistryResolution(siteRoot: string, env: NodeJS.ProcessEnv, options: Record<string, unknown>): ProviderRegistryResolution {
   const explicit = firstString(
     options.providerRegistryPath,
     env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH,
@@ -514,9 +515,14 @@ function providerRegistryResolution(siteRoot: string, env: NodeJS.ProcessEnv, op
     const path = existsSync(candidate) ? candidate : null;
     return { candidates: [candidate], path, selection: path ? 'explicit' : null, source: providerRegistrySource(candidate) };
   }
+  const configuredRegistryDb = firstString(env.NARADA_INTELLIGENCE_REGISTRY_DB);
+  const configuredRegistryDbPath = configuredRegistryDb ? resolve(siteRoot, configuredRegistryDb) : null;
+  const contextRegistryDbPath = intelligenceLaunchContextRegistryPath(siteRoot, env);
   const properRoot = firstString(env.NARADA_PROPER_ROOT);
   const candidates = [
+    ...(configuredRegistryDbPath ? [configuredRegistryDbPath] : []),
     ...(properRoot ? [join(properRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json')] : []),
+    ...(contextRegistryDbPath ? [contextRegistryDbPath] : []),
     join(siteRoot, '.ai', 'intelligence-registry.db'),
     join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
     join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
@@ -525,6 +531,15 @@ function providerRegistryResolution(siteRoot: string, env: NodeJS.ProcessEnv, op
   ].map((candidate) => resolve(candidate)).filter((candidate, index, all) => all.indexOf(candidate) === index);
   const path = candidates.find((candidate) => existsSync(candidate)) ?? null;
   return { candidates, path, selection: path ? 'candidate' : null, source: path ? providerRegistrySource(path) : providerRegistrySource(candidates[0] ?? '') };
+}
+
+function intelligenceLaunchContextRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv): string | null {
+  try {
+    const context = loadIntelligenceLaunchContext({ sessionSiteRoot: siteRoot, userSiteRoot: siteRoot, processEnv: env });
+    return context.registry_db_exists ? context.registry_db_path : null;
+  } catch {
+    return null;
+  }
 }
 
 function providerRegistryFailure(resolution: ProviderRegistryResolution, errorCode: ProviderRegistryDiagnostics['errorCode']): ProviderRegistryDiagnostics {
@@ -543,7 +558,7 @@ function providerRegistrySource(path: string): ProviderRegistrySource {
   return /\.(?:db|sqlite|sqlite3)$/i.test(path) ? 'canonical_sqlite' : 'legacy_json';
 }
 
-function readProviderRegistryDocument(resolution: ProviderRegistryResolution): Record<string, unknown> {
+export function readProviderRegistryDocument(resolution: ProviderRegistryResolution): Record<string, unknown> {
   if (!resolution.path) throw new Error('provider registry path is missing');
   if (resolution.source === 'canonical_sqlite') return readCanonicalProviderRegistry(resolution.path);
   return JSON.parse(readFileSync(resolution.path, 'utf8')) as Record<string, unknown>;

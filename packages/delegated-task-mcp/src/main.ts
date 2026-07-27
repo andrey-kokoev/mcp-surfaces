@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statS
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { callWorkerTool, createWorkerPolicy, providerRuntimeMetadataFromRegistry, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
+import { callWorkerTool, createWorkerPolicy, providerRegistryResolution, providerRuntimeMetadataFromRegistry, readProviderRegistryDocument, publicWorkerPolicy, type WorkerMcpState } from '@narada2/worker-delegation-mcp';
 import { executionBindingSchema, executionRequestFingerprint, normalizeExecutionBinding, type ExecutionBinding } from '@narada2/execution-contract';
 import { TASK_EXECUTABILITY_ASSESSMENT_PROFILE_VERSION, TASK_EXECUTABILITY_ASSESSMENT_SCHEMA, TASK_EXECUTABILITY_ASSESSMENT_TEMPLATE_ID, taskExecutabilityAssessmentIdempotencyKey, taskExecutabilityAssessmentOutputSchema, taskExecutabilityAssessmentTemplate, validateTaskExecutabilityAssessment } from './task-executability-assessment.js';
 import { checkCanonicalTaskLifecycleDispatch, type TaskLifecycleDispatchGateState } from './task-lifecycle-executability-gate.js';
@@ -2967,10 +2967,10 @@ function taskRootScope(state: State): string {
 }
 function loadSiteSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv): void { try { const configPath = join(siteControlRoot(siteRoot), 'secrets.json'); if (!existsSync(configPath)) return; const data = JSON.parse(readFileSync(configPath, 'utf8')); const env = data.env; if (env && typeof env === 'object' && !Array.isArray(env)) { for (const [key, value] of Object.entries(env)) { if (typeof value === 'string' && value.trim() && !targetEnv[key]) { targetEnv[key] = value; } } } } catch { } }
 function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): void {
-  const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
-  if (!registryPath || !existsSync(registryPath)) return;
+  const resolution = providerRegistryResolution(siteRoot, targetEnv, options);
+  if (!resolution.path) return;
   let registry: JsonRecord;
-  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return; }
+  try { registry = readProviderRegistryDocument(resolution); } catch { return; }
   for (const metadata of Object.values(rec(registry.providers)).map(rec)) {
     const requirement = rec(metadata.credential_requirement);
     if (requirement.kind !== 'api_key_secret') continue;
@@ -2988,10 +2988,10 @@ function loadProviderCredentialSecrets(siteRoot: string, targetEnv: NodeJS.Proce
   }
 }
 function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessEnv, options: JsonRecord): JsonRecord & { providerRuntimeMetadata: ReturnType<typeof providerRuntimeMetadataFromRegistry> } {
-  const registryPath = providerRegistryPath(siteRoot, targetEnv, options);
-  if (!registryPath || !existsSync(registryPath)) return { providerRuntimeMetadata: {} };
+  const resolution = providerRegistryResolution(siteRoot, targetEnv, options);
+  if (!resolution.path) return { providerRuntimeMetadata: {} };
   let registry: JsonRecord;
-  try { registry = JSON.parse(readFileSync(registryPath, 'utf8')) as JsonRecord; } catch { return { providerRuntimeMetadata: {} }; }
+  try { registry = readProviderRegistryDocument(resolution); } catch { return { providerRuntimeMetadata: {} }; }
   const providers = rec(registry.providers);
   const allowedNaradaAgentRuntimeProviders = Object.keys(providers).filter((provider) => provider.trim().length > 0);
   const providerCognitionDefaults: JsonRecord = {};
@@ -3005,18 +3005,6 @@ function loadProviderPolicyDefaults(siteRoot: string, targetEnv: NodeJS.ProcessE
     ...(Object.keys(providerCognitionDefaults).length > 0 ? { providerCognitionDefaults } : {}),
     providerRuntimeMetadata: providerRuntimeMetadataFromRegistry(registry),
   };
-}
-function providerRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
-  const explicit = firstString(options.providerRegistryPath, env.NARADA_INTELLIGENCE_PROVIDER_METADATA_PATH, env.NARADA_PROVIDER_REGISTRY_PATH);
-  if (explicit) return resolve(explicit);
-  const properRoot = firstString(env.NARADA_PROPER_ROOT);
-  const candidates = [
-    ...(properRoot ? [join(properRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json')] : []),
-    join(siteRoot, 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
-    join(siteRoot, '..', 'narada', 'packages', 'carrier-provider-contract', 'contracts', 'provider-registry.json'),
-    'D:\\code\\narada\\packages\\carrier-provider-contract\\contracts\\provider-registry.json',
-  ];
-  return candidates.map((candidate) => resolve(candidate)).find((candidate) => existsSync(candidate)) ?? null;
 }
 function lookupPowerShellSecret(secretRef: string, env: NodeJS.ProcessEnv, options: JsonRecord): string | null {
   const mode = String(env.NARADA_PROVIDER_SECRET_STORE ?? options.providerSecretStore ?? '').trim().toLowerCase();

@@ -9,6 +9,7 @@ const testFiles = [
   'protocol-smoke.test.js',
   'task-executability-assessment.test.js',
   'task-executability-dispatch.test.js',
+  'provider-registry-resolution.test.js',
 ];
 
 for (const testFile of testFiles) {

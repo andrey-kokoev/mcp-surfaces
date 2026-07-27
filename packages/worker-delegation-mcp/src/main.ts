@@ -8,6 +8,7 @@ export { callWorkerTool } from './worker-tools.js';
 export { buildCodexArgv } from './codex-adapter.js';
 export { buildAgentRuntimeServerArgv, runtimeName as agentRuntimeServerRuntimeName } from './agent-runtime-server-adapter.js';
 export { createWorkerPolicy, publicWorkerPolicy } from './policy.js';
+export { providerRegistryPath, providerRegistryResolution, readProviderRegistryDocument } from './mcp-server.js';
 export {
   providerRuntimeMetadataFromRegistry,
   resolveWorkerProviderRuntimeBindingFromRegistry,
