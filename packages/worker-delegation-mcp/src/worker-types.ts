@@ -53,6 +53,8 @@ export type WorkerProgressPreview = {
 export type WorkerConstraintRequest = {
   cwd: string;
   site_root?: string;
+  /** Immutable Narada invocation-plan reference for canonical NARS launches. */
+  invocation_plan_ref?: string;
   provider?: string;
   authority?: string;
   cognition?: string;
@@ -85,6 +87,7 @@ export type WorkerRunToolInput = {
 export type WorkerEditToolInput = {
   cwd: string;
   site_root?: string;
+  invocation_plan_ref?: string;
   provider?: string;
   instruction: string;
   required_mcp_tools?: string[];
@@ -100,7 +103,7 @@ export type SupportedRuntime = 'codex' | 'narada-agent-runtime-server';
 export type WorkerResolvedExecutionPolicy = {
   runtime: SupportedRuntime;
   authority: WorkerAuthority;
-  cognition: WorkerCognition;
+  cognition: WorkerCognition | null;
   command: string;
   command_args: string[];
   argv: string[];
@@ -116,6 +119,7 @@ export type WorkerResolvedExecutionPolicy = {
   provider_env_key?: string;
   provider_runtime_binding?: Record<string, unknown>;
   required_mcp_tools?: string[];
+  mcp_scope?: string | null;
   worker_mcp_projection?: Record<string, unknown>;
   intelligence_context?: Record<string, unknown>;
   sandbox: SandboxMode;

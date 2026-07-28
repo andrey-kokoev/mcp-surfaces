@@ -27,6 +27,8 @@ export type IntelligenceLaunchContext = {
   host_site: string | null;
   principal_id: string | null;
   principal_binding_present: boolean;
+  /** Optional for compatibility with the context doctor; required for canonical NARS launch. */
+  invocation_plan_ref?: string | null;
   missing: string[];
   required_fields: readonly string[];
   environment: Record<string, string>;
@@ -59,6 +61,19 @@ function normalizeSiteId(value: unknown, field: string): string | null {
     throw new IntelligenceLaunchContextError('worker_intelligence_context_invalid', `${field} must be a canonical Site locus.`, { field, value: raw });
   }
   return canonical;
+}
+
+function normalizeInvocationPlanRef(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  if (!/^plan:[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(raw)) {
+    throw new IntelligenceLaunchContextError(
+      'worker_intelligence_context_invalid',
+      'invocation_plan_ref must be an immutable canonical plan reference.',
+      { field: 'invocation_plan_ref' },
+    );
+  }
+  return raw;
 }
 
 function normalizePrincipalId(value: unknown): string | null {
@@ -210,6 +225,7 @@ export function loadIntelligenceLaunchContext({
   const hostSite = normalizeSiteId(document.host_site_id ?? processEnv.NARADA_INTELLIGENCE_HOST_SITE ?? processEnv.NARADA_HOST_SITE_ID ?? processEnv.NARADA_PC_SITE_ID, 'host_site_id');
   const principal = normalizePrincipalId(document.principal_id ?? processEnv.NARADA_INTELLIGENCE_PRINCIPAL_ID);
   const principalBinding = normalizePrincipalBinding(document.principal_binding ?? processEnv.NARADA_INTELLIGENCE_PRINCIPAL_BINDING, principal);
+  const invocationPlanRef = normalizeInvocationPlanRef(document.invocation_plan_ref ?? processEnv.NARADA_INTELLIGENCE_PLAN_REF);
   const registryPath = resolveConfiguredPath(document.registry_db_path, userSiteRoot)
     ?? (processEnv.NARADA_INTELLIGENCE_REGISTRY_DB?.trim() || null)
     ?? resolve(userSiteRoot, '.ai', 'intelligence-registry.db');
@@ -230,6 +246,7 @@ export function loadIntelligenceLaunchContext({
   if (hostSite) environment.NARADA_INTELLIGENCE_HOST_SITE = hostSite;
   if (principal) environment.NARADA_INTELLIGENCE_PRINCIPAL_ID = principal;
   if (principalBinding) environment.NARADA_INTELLIGENCE_PRINCIPAL_BINDING = JSON.stringify(principalBinding);
+  if (invocationPlanRef) environment.NARADA_INTELLIGENCE_PLAN_REF = invocationPlanRef;
   return {
     schema: INTELLIGENCE_LAUNCH_CONTEXT_SCHEMA,
     status: ready ? 'ready' : 'blocked',
@@ -243,6 +260,7 @@ export function loadIntelligenceLaunchContext({
     host_site: hostSite,
     principal_id: principal,
     principal_binding_present: Boolean(principalBinding),
+    invocation_plan_ref: invocationPlanRef,
     missing,
     required_fields: REQUIRED_CONTEXT_FIELDS,
     environment,

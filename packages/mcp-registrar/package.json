@@ -54,6 +54,7 @@
     "@narada2/operator-console-overlay-mcp": "workspace:*",
     "@narada2/cloudflare-carrier-mcp": "workspace:*",
     "@narada2/site-coherence-mcp": "workspace:*",
+    "@narada2/catalog-observation-mcp": "workspace:*",
     "@narada2/mcp-fabric-compiler": "workspace:*",
     "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/mcp-transport": "workspace:*",

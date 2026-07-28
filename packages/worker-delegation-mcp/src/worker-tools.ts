@@ -5,10 +5,9 @@ import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partial
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, runCodexInvocation, type Invocation, type ResolvedWorkerConfig } from './codex-adapter.js';
 import { outputContractForMode, outputContractForRequest, parseLastMessage, resultStatus, workerOutputState, type WorkerOutput } from './output-contract.js';
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
-import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, assertWorkerImplementationFresh, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationGate, workerImplementationIdentity } from './policy.js';
+import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, WORKER_REQUIRED_MCP_SCOPE, assertWorkerImplementationFresh, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationGate, workerImplementationIdentity } from './policy.js';
 import { IntelligenceLaunchContextError, loadIntelligenceLaunchContext, projectIntelligenceLaunchContext, publicIntelligenceLaunchContext, type IntelligenceLaunchContext } from './intelligence-launch-context.js';
 import { publicCognitionDefaults, publicProviderRegistryDiagnostics, updateCognitionDefault } from './cognition-defaults.js';
-import { projectWorkerProviderRuntimeEnvironment, redactWorkerProviderRuntimeBinding, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
@@ -61,7 +60,7 @@ function optionalBoolean(value: unknown, field: string): boolean {
   throw diagnosticError('worker_invalid_tool_input', 'worker_boolean_required', { field, value_type: Array.isArray(value) ? 'array' : typeof value });
 }
 
-function resolveCognitionProvider(runtime: WorkerRuntimeId, request: WorkerRunToolInput, cognition: ResolvedWorkerConfig['cognition'], state: WorkerMcpState) {
+function resolveCognitionProvider(runtime: WorkerRuntimeId, request: WorkerRunToolInput, cognition: Exclude<ResolvedWorkerConfig['cognition'], null>, state: WorkerMcpState) {
   const effectiveCognitionDefault = runtime === 'narada-agent-runtime-server' && !request.constraints.provider
     ? state.cognitionDefaults?.effectiveDefaults[cognition] ?? null
     : null;
@@ -90,8 +89,6 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const requestedOverrides = request.constraints.overrides ? { ...request.constraints.overrides, config: { ...(request.constraints.overrides.config ?? {}) } } : {};
   const authority = resolveAuthority(request.constraints.authority, state.policy);
   const cognition = resolveCognition(request.constraints.cognition, state.policy);
-  request.constraints.authority = authority;
-  request.constraints.cognition = cognition;
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
@@ -102,10 +99,21 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       workspaceRoot: state.env.NARADA_WORKSPACE_ROOT,
     })
     : null;
-  const { effectiveCognitionDefault, providerResolution } = resolveCognitionProvider(runtime, request, cognition, state);
+  const canonicalPlanLaunch = runtime === 'narada-agent-runtime-server'
+    ? requireCanonicalInvocationPlan(state, preResolvedSiteBinding!.siteRoot, request)
+    : null;
+  if (!canonicalPlanLaunch) {
+    request.constraints.authority = authority;
+    request.constraints.cognition = cognition;
+  }
+  const { effectiveCognitionDefault, providerResolution } = canonicalPlanLaunch
+    ? { effectiveCognitionDefault: null, providerResolution: { provider: null, source: 'canonical_invocation_plan' } }
+    : resolveCognitionProvider(runtime, request, cognition, state);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
-  applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
-  applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
+  if (runtime !== 'narada-agent-runtime-server') {
+    applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
+    applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
+  }
   overrides = request.constraints.overrides ?? {};
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const maxRunMs = boundedInteger(request.constraints.max_run_ms, state.policy.maxRunMs, 1, state.policy.maxRunMs, 'worker_max_run_ms_invalid');
@@ -115,6 +123,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
   const outputContract = outputContractForRequest(request, requestedMode);
   const environment = environmentForWorker(state.env);
   delete environment.NARADA_WORKER_MCP_CONFIG;
+  delete environment.NARADA_MCP_SCOPE;
   const runtimeAvailability = checkRuntimeAvailability(runtime, state.policy, environment);
   const implementationGate = workerImplementationGate();
   const launchability = mcpToolLaunchability(request.constraints.required_mcp_tools ?? [], runtime);
@@ -131,36 +140,29 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
-  let intelligenceContext: IntelligenceLaunchContext | null = null;
+  let intelligenceContext: IntelligenceLaunchContext | null = canonicalPlanLaunch?.context ?? null;
   if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
     const resolvedSiteBinding = preResolvedSiteBinding!;
     const siteRoot = resolvedSiteBinding.siteRoot;
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
-    intelligenceContext = readWorkerIntelligenceContext(state, siteRoot);
+    intelligenceContext = canonicalPlanLaunch?.context ?? readWorkerIntelligenceContext(state, siteRoot);
     if (intelligenceContext.status === 'ready') Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = resumeSessionId ?? '<dry-run-session>';
     environment.NARADA_MAX_TOOL_ROUNDS = String(state.policy.maxToolRounds);
-    if (!providerResolution.provider) throw diagnosticError('worker_provider_required', 'worker_provider_required');
-    state.ensureProviderCredential?.(providerResolution.provider);
-    const providerRuntimeBinding = resolveWorkerProviderRuntimeBinding({
-      provider: providerResolution.provider,
-      metadataByProvider: state.providerRuntimeMetadata,
-      env: state.env,
-      model: resolvedConfigInput.model,
-      reasoningEffort: resolvedConfigInput.reasoning_effort,
-    });
-    projectWorkerProviderRuntimeEnvironment(environment, providerRuntimeBinding, state.providerRuntimeMetadata);
     const workerMcpProjection = buildWorkerMcpProjection(request.constraints.required_mcp_tools ?? []);
-    if (workerMcpProjection) environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
+    if (workerMcpProjection) {
+      environment.NARADA_MCP_SCOPE = WORKER_REQUIRED_MCP_SCOPE;
+      environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
+    }
     const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId: resumeSessionId ?? undefined });
     resolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,
-      cognition,
+      cognition: null,
       command: runtimeAvailability.command ?? agentRuntime.command,
       command_args: agentRuntime.commandArgs,
       argv,
@@ -171,16 +173,16 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
       site_binding: siteBinding,
-      provider: providerResolution.provider,
-      provider_source: providerResolution.source,
-      provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
-      provider_runtime_binding: redactWorkerProviderRuntimeBinding(providerRuntimeBinding),
+      provider: null,
+      provider_source: 'canonical_invocation_plan',
+      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext),
       intelligence_context: publicIntelligenceLaunchContext(intelligenceContext),
       required_mcp_tools: request.constraints.required_mcp_tools ?? [],
+      mcp_scope: workerMcpProjection ? WORKER_REQUIRED_MCP_SCOPE : null,
       ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
-      model: providerRuntimeBinding.model,
-      reasoning_effort: providerRuntimeBinding.reasoning_effort,
+      model: null,
+      reasoning_effort: null,
       config: resolvedConfigInput.config,
       skip_git_repo_check: skipGitRepoCheck,
       resumable,
@@ -311,6 +313,64 @@ function readWorkerIntelligenceContext(state: WorkerMcpState, sessionSiteRoot: s
   }
 }
 
+function requireCanonicalInvocationPlan(
+  state: WorkerMcpState,
+  sessionSiteRoot: string,
+  request: WorkerRunToolInput,
+): { context: IntelligenceLaunchContext; planRef: string } {
+  const legacyFields = [
+    request.constraints.provider !== undefined ? 'constraints.provider' : null,
+    request.constraints.cognition !== undefined ? 'constraints.cognition' : null,
+    request.constraints.overrides?.model !== undefined ? 'constraints.overrides.model' : null,
+    request.constraints.overrides?.reasoning_effort !== undefined ? 'constraints.overrides.reasoning_effort' : null,
+    request.constraints.overrides?.config && Object.prototype.hasOwnProperty.call(request.constraints.overrides.config, 'model')
+      ? 'constraints.overrides.config.model'
+      : null,
+    request.constraints.overrides?.config && Object.prototype.hasOwnProperty.call(request.constraints.overrides.config, 'model_reasoning_effort')
+      ? 'constraints.overrides.config.model_reasoning_effort'
+      : null,
+  ].filter((field): field is string => field !== null);
+  if (legacyFields.length > 0) {
+    throw diagnosticError(
+      'worker_canonical_invocation_plan_override_rejected',
+      'narada-agent-runtime-server accepts an immutable canonical invocation plan, not provider/model/cognition overrides.',
+      {
+        runtime: 'narada-agent-runtime-server',
+        legacy_fields: legacyFields,
+        migration: 'Resolve the invocation plan in Narada and pass only invocation_plan_ref.',
+      },
+    );
+  }
+  const context = readWorkerIntelligenceContext(state, sessionSiteRoot);
+  const explicitPlanRef = request.constraints.invocation_plan_ref?.trim() || null;
+  const contextPlanRef = context.invocation_plan_ref;
+  if (explicitPlanRef && !/^plan:[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(explicitPlanRef)) {
+    throw diagnosticError('worker_canonical_invocation_plan_invalid', 'invocation_plan_ref must be an immutable canonical plan reference.');
+  }
+  if (explicitPlanRef && contextPlanRef && explicitPlanRef !== contextPlanRef) {
+    throw diagnosticError('worker_canonical_invocation_plan_mismatch', 'The request plan reference differs from the Site launch context plan reference.', {
+      request_plan_ref: explicitPlanRef,
+      context_plan_ref: contextPlanRef,
+    });
+  }
+  const planRef = explicitPlanRef ?? contextPlanRef;
+  if (!planRef) {
+    throw diagnosticError(
+      'worker_canonical_invocation_plan_required',
+      'narada-agent-runtime-server requires an immutable canonical invocation plan reference.',
+      { remediation: 'Resolve a plan in Narada and set invocation_plan_ref or NARADA_INTELLIGENCE_PLAN_REF.' },
+    );
+  }
+  return {
+    planRef,
+    context: {
+      ...context,
+      invocation_plan_ref: planRef,
+      environment: { ...context.environment, NARADA_INTELLIGENCE_PLAN_REF: planRef },
+    },
+  };
+}
+
 function requireWorkerIntelligenceContext(state: WorkerMcpState, sessionSiteRoot: string, environment: Record<string, string>): IntelligenceLaunchContext {
   const context = readWorkerIntelligenceContext(state, sessionSiteRoot);
   Object.assign(environment, projectIntelligenceLaunchContext(context));
@@ -330,6 +390,16 @@ function intelligenceContextStatus(context: IntelligenceLaunchContext): Record<s
     target_site: context.target_site,
     user_site: context.user_site,
     missing: context.missing,
+  };
+}
+
+function canonicalPlanRuntimeBinding(context: IntelligenceLaunchContext): Record<string, unknown> {
+  return {
+    schema: 'narada.worker.canonical-plan-binding.v1',
+    source: 'narada-canonical-invocation-plan',
+    plan_ref: context.invocation_plan_ref,
+    provider_model_resolution: 'narada-runtime',
+    credential_materialization: 'final-adapter-boundary',
   };
 }
 
@@ -390,8 +460,6 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
   if (inheritedSession) inheritSessionConstraints(request, inheritedSession.resolved_worker_config);
   const authority = resolveAuthority(request.constraints.authority, state.policy);
   const cognition = resolveCognition(request.constraints.cognition, state.policy);
-  request.constraints.authority = authority;
-  request.constraints.cognition = cognition;
   let overrides = request.constraints.overrides ?? {};
   const runtime = validateRuntime(overrides.runtime, state.policy);
   rejectNaradaAgentRuntimeProviderForRuntime(request.constraints.provider, runtime);
@@ -402,10 +470,17 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       workspaceRoot: state.env.NARADA_WORKSPACE_ROOT,
     })
     : null;
-  const { effectiveCognitionDefault, providerResolution } = resolveCognitionProvider(runtime, request, cognition, state);
+  const canonicalPlanLaunch = runtime === 'narada-agent-runtime-server'
+    ? requireCanonicalInvocationPlan(state, preResolvedSiteBinding!.siteRoot, request)
+    : null;
+  const { effectiveCognitionDefault, providerResolution } = canonicalPlanLaunch
+    ? { effectiveCognitionDefault: null, providerResolution: { provider: null, source: 'canonical_invocation_plan' } }
+    : resolveCognitionProvider(runtime, request, cognition, state);
   const sandbox = resolveSandbox(overrides.sandbox ?? defaultSandboxForAuthority(authority), state.policy, runtime);
-  applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
-  applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
+  if (runtime !== 'narada-agent-runtime-server') {
+    applyCognitionDefaults(request, cognition, state, runtime, providerResolution.provider);
+    applyEffectiveCognitionTuple(request, effectiveCognitionDefault);
+  }
   overrides = request.constraints.overrides ?? {};
   const resolvedConfigInput = resolveConfig(overrides, state.policy);
   const maxRunMs = boundedInteger(request.constraints.max_run_ms, state.policy.maxRunMs, 1, state.policy.maxRunMs, 'worker_max_run_ms_invalid');
@@ -441,36 +516,31 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
 
   let resolvedWorkerConfig: ResolvedWorkerConfig;
   let invocation: Invocation;
-  let intelligenceContext: IntelligenceLaunchContext | null = null;
+  let intelligenceContext: IntelligenceLaunchContext | null = canonicalPlanLaunch?.context ?? null;
 
   if (runtime === 'narada-agent-runtime-server') {
     const agentRuntime = state.policy.runtimes.naradaAgentRuntimeServer;
     const resolvedSiteBinding = preResolvedSiteBinding!;
     const siteRoot = resolvedSiteBinding.siteRoot;
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
-    intelligenceContext = requireWorkerIntelligenceContext(state, siteRoot, environment);
+    intelligenceContext = canonicalPlanLaunch?.context ?? requireWorkerIntelligenceContext(state, siteRoot, environment);
+    Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
     const workerSessionId = resumeSessionId ?? runRecord.runId;
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
     environment.NARADA_CARRIER_SESSION_ID = workerSessionId;
     environment.NARADA_MAX_TOOL_ROUNDS = String(state.policy.maxToolRounds);
-    if (!providerResolution.provider) throw diagnosticError('worker_provider_required', 'worker_provider_required');
-    const providerRuntimeBinding = resolveWorkerProviderRuntimeBinding({
-      provider: providerResolution.provider,
-      metadataByProvider: state.providerRuntimeMetadata,
-      env: state.env,
-      model: resolvedConfigInput.model,
-      reasoningEffort: resolvedConfigInput.reasoning_effort,
-    });
-    projectWorkerProviderRuntimeEnvironment(environment, providerRuntimeBinding, state.providerRuntimeMetadata);
     const workerMcpProjection = buildWorkerMcpProjection(request.constraints.required_mcp_tools ?? []);
-    if (workerMcpProjection) environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
+    if (workerMcpProjection) {
+      environment.NARADA_MCP_SCOPE = WORKER_REQUIRED_MCP_SCOPE;
+      environment.NARADA_WORKER_MCP_CONFIG = JSON.stringify(workerMcpProjection);
+    }
     const argv = buildAgentRuntimeServerArgv({ authority, workerSessionId });
     const baseConfig: ResolvedWorkerConfig = {
       runtime: 'narada-agent-runtime-server',
       authority,
-      cognition,
+      cognition: null,
       command: runtimeAvailability.command ?? agentRuntime.command,
       command_args: agentRuntime.commandArgs,
       argv,
@@ -481,16 +551,16 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       site_marker: resolvedSiteBinding.marker,
       site_root_source: resolvedSiteBinding.source,
       site_binding: siteBinding,
-      provider: providerResolution.provider,
-      provider_source: providerResolution.source,
-      provider_env_key: 'NARADA_INTELLIGENCE_PROVIDER',
-      provider_runtime_binding: redactWorkerProviderRuntimeBinding(providerRuntimeBinding),
+      provider: null,
+      provider_source: 'canonical_invocation_plan',
+      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext),
       intelligence_context: publicIntelligenceLaunchContext(intelligenceContext),
       required_mcp_tools: request.constraints.required_mcp_tools ?? [],
+      mcp_scope: workerMcpProjection ? WORKER_REQUIRED_MCP_SCOPE : null,
       ...(workerMcpProjection ? { worker_mcp_projection: workerMcpProjection } : {}),
       sandbox,
-      model: providerRuntimeBinding.model,
-      reasoning_effort: providerRuntimeBinding.reasoning_effort,
+      model: null,
+      reasoning_effort: null,
       config: resolvedConfigInput.config,
       skip_git_repo_check: skipGitRepoCheck,
       resumable,
@@ -1228,6 +1298,7 @@ function releaseWorkerRunSlot(state: WorkerMcpState): void {
 }
 
 function cognitionDefaultsForLaunch(cognition: ResolvedWorkerConfig['cognition'], policy: WorkerPolicy, runtime: WorkerRuntimeId, provider: string | null): WorkerCognitionDefaults {
+  if (cognition === null) return { model: null, reasoningEffort: null };
   if (runtime === 'codex') {
     return provider
       ? policy.providerCognitionDefaults[provider]?.[cognition] ?? { model: null, reasoningEffort: null }
@@ -1237,6 +1308,13 @@ function cognitionDefaultsForLaunch(cognition: ResolvedWorkerConfig['cognition']
 }
 
 function assertExplicitCognitionTuple(config: ResolvedWorkerConfig, state?: WorkerMcpState): void {
+  if (config.runtime === 'narada-agent-runtime-server') {
+    const planRef = asRecord(config.intelligence_context).invocation_plan_ref;
+    if (typeof planRef !== 'string' || !planRef.startsWith('plan:')) {
+      throw diagnosticError('worker_canonical_invocation_plan_required', 'narada-agent-runtime-server requires an immutable canonical invocation plan reference.');
+    }
+    return;
+  }
   const missingFields = [
     config.provider ? null : 'provider',
     config.model ? null : 'model',
@@ -1290,6 +1368,17 @@ function configResolutionMetadata(options: {
   policy: WorkerPolicy;
   cognitionDefaultSource: string;
 }): Record<string, unknown> {
+  if (options.runtime === 'narada-agent-runtime-server') {
+    return {
+      model_source: 'canonical_invocation_plan',
+      model_resolution: 'narada_runtime_admitted_plan',
+      reasoning_effort_source: 'canonical_invocation_plan',
+      cognition_default_source: 'canonical_invocation_plan',
+      precedence: 'canonical_invocation_plan_only',
+      allowed_config_keys: options.policy.allowedConfigKeys,
+      explicit_config_keys: Object.keys(options.resolvedConfigInput.config).sort(),
+    };
+  }
   const config = options.requestedOverrides.config ?? {};
   const cognitionDefaults = cognitionDefaultsForLaunch(options.cognition, options.policy, options.runtime, options.provider);
   return {
@@ -1322,8 +1411,12 @@ function configValueSource(options: { explicit: boolean; hasResolvedValue: boole
 
 function inheritSessionConstraints(request: WorkerRunToolInput, inherited: ResolvedWorkerConfig): void {
   if (request.constraints.authority === undefined) request.constraints.authority = inherited.authority;
-  if (request.constraints.cognition === undefined) request.constraints.cognition = inherited.cognition;
-  if (request.constraints.provider === undefined && inherited.provider && inherited.runtime === 'narada-agent-runtime-server') request.constraints.provider = inherited.provider;
+  if (request.constraints.cognition === undefined && inherited.runtime !== 'narada-agent-runtime-server' && inherited.cognition !== null) request.constraints.cognition = inherited.cognition;
+  if (request.constraints.provider === undefined && inherited.provider && inherited.runtime !== 'narada-agent-runtime-server' && inherited.runtime !== 'codex') request.constraints.provider = inherited.provider;
+  if (request.constraints.invocation_plan_ref === undefined && inherited.runtime === 'narada-agent-runtime-server') {
+    const inheritedPlanRef = asRecord(inherited.intelligence_context).invocation_plan_ref;
+    if (typeof inheritedPlanRef === 'string') request.constraints.invocation_plan_ref = inheritedPlanRef;
+  }
   if (request.constraints.required_mcp_tools === undefined) {
     const projection = asRecord(inherited.worker_mcp_projection);
     const inheritedTools = inherited.required_mcp_tools ?? projection.mcp_tool_allowlist;
@@ -1335,8 +1428,8 @@ function inheritSessionConstraints(request: WorkerRunToolInput, inherited: Resol
   const config = { ...(overrides.config ?? {}) };
   if (overrides.runtime === undefined) overrides.runtime = inherited.runtime;
   if (overrides.sandbox === undefined) overrides.sandbox = inherited.sandbox;
-  if (overrides.model === undefined && config.model === undefined && inherited.model) overrides.model = inherited.model;
-  if (overrides.reasoning_effort === undefined && config.model_reasoning_effort === undefined && inherited.reasoning_effort) {
+  if (inherited.runtime !== 'narada-agent-runtime-server' && overrides.model === undefined && config.model === undefined && inherited.model) overrides.model = inherited.model;
+  if (inherited.runtime !== 'narada-agent-runtime-server' && overrides.reasoning_effort === undefined && config.model_reasoning_effort === undefined && inherited.reasoning_effort) {
     overrides.reasoning_effort = inherited.reasoning_effort;
   }
   for (const [key, value] of Object.entries(inherited.config)) {
@@ -1579,6 +1672,7 @@ function normalizeWorkerConstraintRequest(args: Record<string, unknown>, constra
     cwd: requiredNonEmptyString(constraintsInput.cwd ?? args.cwd, 'worker_cwd_required'),
   };
   copyString(constraints, 'site_root', constraintsInput.site_root ?? args.site_root);
+  copyString(constraints, 'invocation_plan_ref', constraintsInput.invocation_plan_ref ?? args.invocation_plan_ref);
   copyString(constraints, 'provider', constraintsInput.provider ?? args.provider);
   copyString(constraints, 'authority', constraintsInput.authority ?? args.authority);
   copyString(constraints, 'cognition', constraintsInput.cognition ?? args.cognition);

@@ -1,0 +1,36 @@
+{
+  "name": "@narada2/catalog-observation-mcp",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "Read-only MCP boundary for provider catalog observations delegated to Narada management.",
+  "bin": {
+    "catalog-observation-mcp": "./dist/src/main.js"
+  },
+  "types": "./dist/src/main.d.ts",
+  "exports": {
+    "./surface-definition": {
+      "types": "./dist/src/surface-definition.d.ts",
+      "default": "./dist/src/surface-definition.js"
+    },
+    "./port": {
+      "types": "./dist/src/port.d.ts",
+      "default": "./dist/src/port.js"
+    },
+    ".": {
+      "types": "./dist/src/main.d.ts",
+      "default": "./dist/src/main.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm build && node dist/test/protocol-smoke.test.js && node dist/test/catalog-observation-mcp.test.js"
+  },
+  "dependencies": {
+    "@narada2/mcp-fabric-contracts": "workspace:*"
+  },
+  "files": [
+    "dist/"
+  ]
+}

@@ -23,6 +23,7 @@ writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.st
   user_site_id: 'site:projection-user',
   host_site_id: 'site:projection-host',
   principal_id: 'principal:projection',
+  invocation_plan_ref: 'plan:projection-test',
   registry_db_path: '.ai\\intelligence-registry.db',
   principal_binding: {
     schema: 'narada.intelligence.principal_binding.v1',
@@ -128,7 +129,7 @@ const narsProjection = await rpc({
     name: 'worker_config_resolve',
     arguments: {
       intent: { instruction: 'preview projected MCP tools' },
-      constraints: { cwd: root, authority: 'read', cognition: 'low', provider: 'kimi-code-api', required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
+      constraints: { cwd: root, authority: 'read', required_mcp_tools: ['mailbox_messages_list'], overrides: { runtime: 'narada-agent-runtime-server' } },
     },
   },
 }, narsState);
@@ -136,7 +137,9 @@ assert.equal(narsProjection.error, undefined, JSON.stringify(narsProjection));
 assert.equal(narsProjection.result?.structuredContent.launchable, true, JSON.stringify(Object.keys(narsProjection.result?.structuredContent ?? {})));
 assert.deepEqual(narsProjection.result?.structuredContent.resolved_worker_config.required_mcp_tools, ['mailbox_messages_list']);
 assert.deepEqual(narsProjection.result?.structuredContent.resolved_worker_config.worker_mcp_projection.mcp_tool_allowlist, ['mailbox_messages_list']);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.mcp_scope, 'local-site');
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_WORKER_MCP_CONFIG'), true);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_MCP_SCOPE'), true);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.status, 'ready');
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.principal_binding_present, true);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_REGISTRY_DB'), true);
@@ -157,7 +160,7 @@ const staleConfig = await rpc({
     name: 'worker_config_resolve',
     arguments: {
       intent: { instruction: 'clear stale MCP projection' },
-      constraints: { cwd: root, authority: 'read', cognition: 'low', provider: 'kimi-code-api', overrides: { runtime: 'narada-agent-runtime-server' } },
+      constraints: { cwd: root, authority: 'read', overrides: { runtime: 'narada-agent-runtime-server' } },
     },
   },
 }, staleConfigState);
@@ -183,12 +186,13 @@ writeWorkerSessionRecord(narsState.policy, {
     runtime: 'narada-agent-runtime-server',
     authority: 'read',
     cognition: 'low',
-    provider: 'kimi-code-api',
+    invocation_plan_ref: 'plan:projection-test',
+    provider: null,
     required_mcp_tools: ['mailbox_messages_list'],
     worker_mcp_projection: projection,
     sandbox: 'read-only',
-    model: 'kimi-k2.7',
-    reasoning_effort: 'low',
+    model: null,
+    reasoning_effort: null,
     config: {},
   } as any,
   updated_at: new Date().toISOString(),

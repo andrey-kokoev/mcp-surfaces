@@ -18,8 +18,8 @@ export function listTools(): WorkerToolDefinition[] {
     }) },
     { name: 'worker_operator_affordances', description: 'Return UI-neutral operator affordances for rendering worker run dashboards, launch controls, artifact refs, and recovery actions.', inputSchema: objectSchema({}) },
     { name: 'worker_policy_inspect', description: 'Inspect the active worker delegation policy, including narada-agent-runtime-server Site binding markers and environment projection.', inputSchema: objectSchema({}) },
-    { name: 'worker_cognition_defaults_inspect', description: 'Inspect provider-scoped low, medium, and high cognition defaults, their sources, precedence, version, and audit location.', inputSchema: objectSchema({}) },
-    { name: 'worker_cognition_defaults_update', description: 'Atomically set the effective provider, model, and reasoning effort for one cognition tier used by future provider-unspecified runs. The model must be listed in that provider registry catalog; resumed sessions retain their resolved settings unless explicitly overridden.', inputSchema: objectSchema({
+    { name: 'worker_cognition_defaults_inspect', description: 'Inspect legacy provider-scoped low, medium, and high cognition defaults. Canonical narada-agent-runtime-server runs use capabilities from their immutable Narada invocation plan instead.', inputSchema: objectSchema({}) },
+    { name: 'worker_cognition_defaults_update', description: 'Atomically set a legacy provider-scoped cognition default for compatibility runtimes. Canonical narada-agent-runtime-server runs do not consume this registry.', inputSchema: objectSchema({
       provider: { type: 'string' },
       cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
       model: { type: 'string' },
@@ -35,10 +35,11 @@ export function listTools(): WorkerToolDefinition[] {
       intent: intentSchema(),
       constraints: constraintRequestSchema(),
     }, ['intent', 'constraints']) },
-    { name: 'worker_edit', description: 'Start one edit-capable worker run shortcut using write authority and low cognition.', inputSchema: objectSchema({
+    { name: 'worker_edit', description: 'Start one edit-capable worker run shortcut using write authority. Canonical narada-agent-runtime-server runs require invocation_plan_ref and do not receive a synthetic cognition tier.', inputSchema: objectSchema({
       cwd: { type: 'string' },
       site_root: { type: 'string', description: 'Explicit Narada Site root for narada-agent-runtime-server workers. Defaults to nearest Site marker above cwd.' },
-      provider: { type: 'string', description: 'Explicit NARS intelligence provider projected as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' },
+      invocation_plan_ref: { type: 'string', description: 'Immutable canonical Narada invocation-plan reference. Required for narada-agent-runtime-server; provider/model/cognition overrides are rejected there.' },
+      provider: { type: 'string', description: 'Legacy compatibility provider selector. Rejected for runtime narada-agent-runtime-server; that runtime uses the canonical invocation plan.' },
       instruction: { type: 'string' },
       required_mcp_tools: { type: 'array', items: { type: 'string' }, description: 'Exact MCP tool names to project for narada-agent-runtime-server workers. Other runtimes report the request as unprojectable.' },
       resumable: { type: 'boolean' },
@@ -180,9 +181,10 @@ function constraintRequestSchema(): Record<string, unknown> {
   return objectSchema({
     cwd: { type: 'string' },
     site_root: { type: 'string', description: 'Explicit Narada Site root for narada-agent-runtime-server workers. Defaults to nearest Site marker above cwd.' },
-    provider: { type: 'string', description: 'Explicit NARS intelligence provider projected as NARADA_INTELLIGENCE_PROVIDER. Only valid with runtime narada-agent-runtime-server.' },
+    invocation_plan_ref: { type: 'string', description: 'Immutable canonical Narada invocation-plan reference. Required for narada-agent-runtime-server; provider/model/cognition overrides are rejected there.' },
+    provider: { type: 'string', description: 'Legacy compatibility provider selector. Rejected for runtime narada-agent-runtime-server; that runtime uses the canonical invocation plan.' },
     authority: { type: 'string', enum: ['read', 'write', 'command'] },
-    cognition: { type: 'string', enum: ['low', 'medium', 'high'] },
+    cognition: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Legacy compatibility cognition tier; canonical offerings declare their own plan-scoped capability vocabulary.' },
     resumable: { type: 'boolean' },
     wait_for_completion: { type: 'boolean', description: 'When true, wait boundedly for completion. Defaults to false so delegation returns promptly with run_id.' },
     wait_timeout_ms: { type: 'integer', minimum: 1, maximum: 180000, description: 'Maximum synchronous wait before returning the recoverable running run_id. Defaults to 180000.' },

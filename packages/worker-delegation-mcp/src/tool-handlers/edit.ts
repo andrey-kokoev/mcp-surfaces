@@ -4,14 +4,16 @@ import type { WorkerEditToolInput } from '../worker-types.js';
 
 export function workerEditRunArgs(args: Record<string, unknown>): Record<string, unknown> {
   const editInput = normalizeWorkerEditToolInput(args);
+  const canonicalRuntime = editInput.overrides?.runtime === 'narada-agent-runtime-server';
   return {
     intent: { instruction: editInput.instruction, mode: 'implement' },
     constraints: {
       cwd: editInput.cwd,
       ...(editInput.site_root !== undefined ? { site_root: editInput.site_root } : {}),
+      ...(editInput.invocation_plan_ref !== undefined ? { invocation_plan_ref: editInput.invocation_plan_ref } : {}),
       ...(editInput.provider !== undefined ? { provider: editInput.provider } : {}),
       authority: 'write',
-      cognition: 'low',
+      ...(canonicalRuntime ? {} : { cognition: 'low' }),
       ...(editInput.required_mcp_tools !== undefined ? { required_mcp_tools: editInput.required_mcp_tools } : {}),
       ...(editInput.resumable !== undefined ? { resumable: editInput.resumable } : {}),
       ...(editInput.wait_for_completion !== undefined ? { wait_for_completion: editInput.wait_for_completion } : {}),
@@ -29,6 +31,7 @@ function normalizeWorkerEditToolInput(args: Record<string, unknown>): WorkerEdit
     instruction: requiredNonEmptyString(args.instruction, 'worker_prompt_too_large'),
   };
   if (args.site_root !== undefined && args.site_root !== null && String(args.site_root).trim()) editInput.site_root = String(args.site_root).trim();
+  if (args.invocation_plan_ref !== undefined && args.invocation_plan_ref !== null && String(args.invocation_plan_ref).trim()) editInput.invocation_plan_ref = String(args.invocation_plan_ref).trim();
   if (args.provider !== undefined && args.provider !== null && String(args.provider).trim()) editInput.provider = String(args.provider).trim();
   if (args.required_mcp_tools !== undefined) editInput.required_mcp_tools = normalizeStringList(args.required_mcp_tools);
   if (args.resumable !== undefined) editInput.resumable = Boolean(args.resumable);

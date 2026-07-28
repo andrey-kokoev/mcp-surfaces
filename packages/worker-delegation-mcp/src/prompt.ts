@@ -61,7 +61,7 @@ export function buildWorkerPrompt(options: WorkerPromptOptions): string {
       '',
       'NARS worker completion guard',
       'You are running under narada-agent-runtime-server as an automated worker. Complete this turn by returning the required JSON object; do not wait for operator input.',
-      'Do not call lifecycle, pause, sleep, wait, delegation, or worker_* tools from inside this worker turn.',
+      'Do not call pause, sleep, wait, delegation, or worker_* tools from inside this worker turn. Lifecycle MCP tools are permitted only when their exact names appear in the explicit MCP projection above; otherwise do not call them.',
       'Only call MCP tools whose exact server/tool names are visible and admitted in this runtime. Do not invent or guess tool names such as andrey-user-filesystem when they are not explicitly available.',
       'If a tool call returns admission_required, surface_registry_tool_not_declared, mcp_runtime_fault, or any unavailable-tool error, stop using that tool family and return the required JSON with the issue in residual_risks or observed_incoherencies.',
       'For tasks answerable from the delegated intent, preflight evidence, or current prompt, do not probe filesystem tools just to gather extra context.',

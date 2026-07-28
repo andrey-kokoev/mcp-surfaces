@@ -99,6 +99,12 @@ importers:
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
 
+  packages/catalog-observation-mcp:
+    dependencies:
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
+
   packages/cloudflare-carrier-mcp:
     dependencies:
       '@narada2/mcp-e2e-harness':
@@ -222,6 +228,9 @@ importers:
       '@narada2/calendar-mcp':
         specifier: workspace:*
         version: link:../calendar-mcp
+      '@narada2/catalog-observation-mcp':
+        specifier: workspace:*
+        version: link:../catalog-observation-mcp
       '@narada2/cloudflare-carrier-mcp':
         specifier: workspace:*
         version: link:../cloudflare-carrier-mcp
