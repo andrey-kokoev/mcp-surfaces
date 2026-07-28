@@ -46,6 +46,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For missing live observations, rerun mcp_loader_site_tool_inventory_check and pass its new observation_ref.',
       'For live_tool_semantics_partition_incomplete, add an explicit boolean readOnlyHint at the owning surface; do not default it.',
       'For registry drift, repair the named layer and then rematerialize and rerun the full proof.',
+      'If the registrar surface cannot start because carrier materialization is stale, run pnpm materialize:carrier -- --materialize-carrier <carrier-id> --output-path <carrier-config> from the mcp-surfaces workspace, then restart the carrier session.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
     ],
     feedback: {

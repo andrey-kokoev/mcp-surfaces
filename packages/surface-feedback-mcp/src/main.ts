@@ -3,7 +3,7 @@ import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { createTaskLifecycleProcessClient, type TaskLifecycleProcessClient } from './task-lifecycle-client.js';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,6 +24,27 @@ type FeedbackReadScope = typeof FEEDBACK_READ_SCOPES[number];
 type TaskLifecycleRequest = (request: JsonRecord) => Promise<JsonRecord>;
 type AuthoritySource = 'server_config' | 'unconfigured';
 type TaskLifecycleRootSource = 'option' | 'task_lifecycle_env' | 'site_root_env' | 'feedback_root_fallback';
+type FeedbackDiscoveryKind = 'configured_root' | 'registrar_allowed_root';
+type FeedbackSourceSyncStatus = 'synced' | 'missing' | 'invalid' | 'conflict';
+
+type FeedbackDiscoveryRoot = {
+  root: string;
+  kind: FeedbackDiscoveryKind;
+};
+
+type FeedbackSourceSync = {
+  sourceDbPath: string;
+  discoveryRoot: string;
+  discoveryKind: FeedbackDiscoveryKind;
+  status: FeedbackSourceSyncStatus;
+  rowsSeen: number;
+  importedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  conflictCount: number;
+  error: string | null;
+  lastScannedAt: string;
+};
 
 type FeedbackState = {
   feedbackRoot: string;
@@ -35,6 +56,9 @@ type FeedbackState = {
   authorityPrincipal: string | null;
   authorityOwnedSurfaceIds: string[];
   authoritySource: AuthoritySource;
+  feedbackDiscoveryRoots: FeedbackDiscoveryRoot[];
+  feedbackDiscoveryDiagnostics: string[];
+  feedbackSourceSync: FeedbackSourceSync[];
   taskLifecycleRequest: TaskLifecycleRequest;
   taskLifecycleClient: TaskLifecycleProcessClient | null;
   taskLifecycleHealth: 'unverified' | 'healthy' | 'unhealthy';
@@ -56,6 +80,11 @@ const CREATE_TABLES = [
     status TEXT NOT NULL DEFAULT 'submitted',
     resolution_note TEXT,
     resolved_by TEXT,
+    task_ref TEXT,
+    task_status TEXT,
+    source_db_path TEXT,
+    source_updated_at TEXT,
+    source_sync_mode TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   ) STRICT`,
@@ -90,6 +119,19 @@ const CREATE_TABLES = [
     last_error_details TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  ) STRICT`,
+  `CREATE TABLE IF NOT EXISTS feedback_source_sync (
+    source_db_path TEXT PRIMARY KEY,
+    discovery_root TEXT NOT NULL,
+    discovery_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    rows_seen INTEGER NOT NULL DEFAULT 0,
+    imported_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    conflict_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    last_scanned_at TEXT NOT NULL
   ) STRICT`,
 ];
 
@@ -129,6 +171,9 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
   ensureColumn(db, 'feedback_entries', 'resolved_by', 'TEXT');
   ensureColumn(db, 'feedback_entries', 'task_ref', 'TEXT');
   ensureColumn(db, 'feedback_entries', 'task_status', 'TEXT');
+  ensureColumn(db, 'feedback_entries', 'source_db_path', 'TEXT');
+  ensureColumn(db, 'feedback_entries', 'source_updated_at', 'TEXT');
+  ensureColumn(db, 'feedback_entries', 'source_sync_mode', 'TEXT');
   const authority = resolveAuthority(options);
   const taskLifecycleClient = typeof options.taskLifecycleRequest === 'function'
     ? null
@@ -136,7 +181,7 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
   const taskLifecycleRequest = typeof options.taskLifecycleRequest === 'function'
     ? options.taskLifecycleRequest as TaskLifecycleRequest
     : taskLifecycleClient!.request.bind(taskLifecycleClient!);
-  return {
+  const state: FeedbackState = {
     feedbackRoot,
     dbPath,
     canonicalFeedbackRoot,
@@ -146,6 +191,9 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
     authorityPrincipal: authority.principal,
     authorityOwnedSurfaceIds: authority.ownedSurfaceIds,
     authoritySource: authority.source,
+    feedbackDiscoveryRoots: [],
+    feedbackDiscoveryDiagnostics: [],
+    feedbackSourceSync: [],
     taskLifecycleRequest,
     taskLifecycleClient,
     taskLifecycleHealth: 'unverified',
@@ -154,6 +202,362 @@ export function createServerState(options: JsonRecord = {}): FeedbackState {
     handoffLeaseRenewMs: integer(options.handoffLeaseRenewMs, HANDOFF_LEASE_RENEW_MS, 10, 300_000),
     db,
   };
+  const discovery = samePath(feedbackRoot, canonicalFeedbackRoot)
+    ? resolveFeedbackDiscoveryRoots(options, taskLifecycleRoot)
+    : { roots: [], diagnostics: [] };
+  state.feedbackDiscoveryRoots = discovery.roots;
+  state.feedbackDiscoveryDiagnostics = discovery.diagnostics;
+  syncDiscoveredFeedbackStores(state);
+  return state;
+}
+
+function resolveFeedbackDiscoveryRoots(options: JsonRecord, taskLifecycleRoot: string): { roots: FeedbackDiscoveryRoot[]; diagnostics: string[] } {
+  const roots: FeedbackDiscoveryRoot[] = [];
+  const diagnostics: string[] = [];
+  const addRoot = (value: unknown, kind: FeedbackDiscoveryKind): void => {
+    const root = optionalString(value);
+    if (!root) return;
+    const resolvedRoot = resolve(root);
+    const existing = roots.find((entry) => samePath(entry.root, resolvedRoot));
+    if (existing) {
+      if (kind === 'configured_root') existing.kind = kind;
+      return;
+    }
+    roots.push({ root: resolvedRoot, kind });
+  };
+
+  for (const root of stringList(options.feedbackDiscoveryRoots ?? process.env.NARADA_FEEDBACK_DISCOVERY_ROOTS)) {
+    addRoot(root, 'configured_root');
+  }
+
+  const allowedRootsPath = resolve(taskLifecycleRoot, '.narada', 'allowed-roots.json');
+  if (!existsSync(allowedRootsPath)) return { roots, diagnostics };
+  try {
+    const document = asRecord(JSON.parse(readFileSync(allowedRootsPath, 'utf8')));
+    if (document.schema !== 'narada.site.allowed_roots.v1' || document.generated_by !== 'mcp-registrar') {
+      diagnostics.push(`registrar_allowed_roots_untrusted:${allowedRootsPath}`);
+      return { roots, diagnostics };
+    }
+    addRoot(taskLifecycleRoot, 'registrar_allowed_root');
+    for (const root of stringList(document.extra_allowed_roots)) addRoot(root, 'registrar_allowed_root');
+  } catch (error) {
+    diagnostics.push(`registrar_allowed_roots_unreadable:${allowedRootsPath}:${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { roots, diagnostics };
+}
+
+function discoverFeedbackStoreCandidates(state: FeedbackState): { candidates: Array<FeedbackDiscoveryRoot & { sourceDbPath: string }>; diagnostics: string[] } {
+  const candidates = new Map<string, FeedbackDiscoveryRoot & { sourceDbPath: string }>();
+  const diagnostics = [...state.feedbackDiscoveryDiagnostics];
+  const relativeStorePaths = [
+    ['.feedback', 'surface-feedback.db'],
+    ['.narada', 'feedback', '.feedback', 'surface-feedback.db'],
+  ];
+  const candidateRoots = (root: string): string[] => {
+    const result = [root];
+    if (!existsSync(root)) {
+      diagnostics.push(`feedback_discovery_root_missing:${root}`);
+      return result;
+    }
+    try {
+      for (const entry of readdirSync(root, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+        if (entry.isDirectory()) result.push(resolve(root, entry.name));
+      }
+    } catch (error) {
+      diagnostics.push(`feedback_discovery_root_unreadable:${root}:${error instanceof Error ? error.message : String(error)}`);
+    }
+    return result;
+  };
+  for (const discoveryRoot of state.feedbackDiscoveryRoots) {
+    for (const candidateRoot of candidateRoots(discoveryRoot.root)) {
+      for (const relativePath of relativeStorePaths) {
+        const sourceDbPath = resolve(candidateRoot, ...relativePath);
+        if (samePath(sourceDbPath, state.dbPath) || !existsSync(sourceDbPath)) continue;
+        const key = process.platform === 'win32' ? sourceDbPath.toLowerCase() : sourceDbPath;
+        if (!candidates.has(key)) candidates.set(key, { ...discoveryRoot, sourceDbPath });
+      }
+    }
+  }
+  return { candidates: [...candidates.values()], diagnostics };
+}
+
+function sourceFeedbackRows(sourceDb: DatabaseSync): JsonRecord[] {
+  const columns = new Set((sourceDb.prepare('PRAGMA table_info(feedback_entries)').all() as JsonRecord[]).map((row) => String(row.name)));
+  const requiredColumns = ['feedback_id', 'surface_id', 'submitter_site_id', 'submitter_principal', 'kind', 'summary', 'created_at', 'updated_at'];
+  if (requiredColumns.some((column) => !columns.has(column))) {
+    throw new Error('feedback_entries_schema_missing_required_columns');
+  }
+  const supportedColumns = [
+    'feedback_id', 'surface_id', 'submitter_site_id', 'submitter_principal', 'kind', 'summary', 'details',
+    'status', 'resolution_note', 'resolved_by', 'task_ref', 'task_status', 'created_at', 'updated_at',
+  ].filter((column) => columns.has(column));
+  const rows = sourceDb.prepare(`SELECT ${supportedColumns.join(', ')} FROM feedback_entries`).all() as JsonRecord[];
+  for (const row of rows) {
+    for (const column of requiredColumns) {
+      if (!optionalString(row[column])) throw new Error(`feedback_entries_row_missing_${column}`);
+    }
+  }
+  return rows;
+}
+
+function sourceUpdatedAt(row: JsonRecord): string {
+  return optionalString(row.updated_at) ?? optionalString(row.created_at) ?? nowIso();
+}
+
+function sourceSyncRecord(row: JsonRecord): FeedbackSourceSync {
+  return {
+    sourceDbPath: String(row.source_db_path),
+    discoveryRoot: String(row.discovery_root),
+    discoveryKind: String(row.discovery_kind) as FeedbackDiscoveryKind,
+    status: String(row.status) as FeedbackSourceSyncStatus,
+    rowsSeen: Number(row.rows_seen ?? 0),
+    importedCount: Number(row.imported_count ?? 0),
+    updatedCount: Number(row.updated_count ?? 0),
+    skippedCount: Number(row.skipped_count ?? 0),
+    conflictCount: Number(row.conflict_count ?? 0),
+    error: optionalString(row.error),
+    lastScannedAt: String(row.last_scanned_at),
+  };
+}
+
+function sourceSyncView(source: FeedbackSourceSync): JsonRecord {
+  return {
+    source_db_path: source.sourceDbPath,
+    discovery_root: source.discoveryRoot,
+    discovery_kind: source.discoveryKind,
+    status: source.status,
+    rows_seen: source.rowsSeen,
+    imported_count: source.importedCount,
+    updated_count: source.updatedCount,
+    skipped_count: source.skippedCount,
+    conflict_count: source.conflictCount,
+    error: source.error,
+    last_scanned_at: source.lastScannedAt,
+  };
+}
+
+function persistFeedbackSourceSync(state: FeedbackState, sync: FeedbackSourceSync): void {
+  state.db.prepare(
+    `INSERT INTO feedback_source_sync
+      (source_db_path, discovery_root, discovery_kind, status, rows_seen, imported_count, updated_count, skipped_count, conflict_count, error, last_scanned_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_db_path) DO UPDATE SET
+       discovery_root = excluded.discovery_root,
+       discovery_kind = excluded.discovery_kind,
+       status = excluded.status,
+       rows_seen = excluded.rows_seen,
+       imported_count = excluded.imported_count,
+       updated_count = excluded.updated_count,
+       skipped_count = excluded.skipped_count,
+       conflict_count = excluded.conflict_count,
+       error = excluded.error,
+       last_scanned_at = excluded.last_scanned_at`
+  ).run(
+    sync.sourceDbPath,
+    sync.discoveryRoot,
+    sync.discoveryKind,
+    sync.status,
+    sync.rowsSeen,
+    sync.importedCount,
+    sync.updatedCount,
+    sync.skippedCount,
+    sync.conflictCount,
+    sync.error,
+    sync.lastScannedAt,
+  );
+}
+
+function syncOneFeedbackStore(state: FeedbackState, candidate: FeedbackDiscoveryRoot & { sourceDbPath: string }): FeedbackSourceSync {
+  const result: FeedbackSourceSync = {
+    sourceDbPath: candidate.sourceDbPath,
+    discoveryRoot: candidate.root,
+    discoveryKind: candidate.kind,
+    status: 'synced',
+    rowsSeen: 0,
+    importedCount: 0,
+    updatedCount: 0,
+    skippedCount: 0,
+    conflictCount: 0,
+    error: null,
+    lastScannedAt: nowIso(),
+  };
+  let sourceDb: DatabaseSync | null = null;
+  try {
+    sourceDb = new DatabaseSync(candidate.sourceDbPath, { readOnly: true });
+    const rows = sourceFeedbackRows(sourceDb);
+    result.rowsSeen = rows.length;
+    const actor = state.authorityPrincipal ?? 'surface-feedback@federation';
+    withImmediateTransaction(state.db, () => {
+      const targetSelect = state.db.prepare('SELECT * FROM feedback_entries WHERE feedback_id = ?');
+      const insert = state.db.prepare(
+        `INSERT INTO feedback_entries
+          (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, task_ref, task_status, source_db_path, source_updated_at, source_sync_mode, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+      const update = state.db.prepare(
+        `UPDATE feedback_entries SET
+          surface_id = ?, submitter_site_id = ?, submitter_principal = ?, kind = ?, summary = ?, details = ?, status = ?,
+          resolution_note = ?, resolved_by = ?, task_ref = ?, task_status = ?, source_updated_at = ?, source_sync_mode = ?,
+          created_at = ?, updated_at = ?
+         WHERE feedback_id = ?`
+      );
+      for (const row of rows) {
+        const feedbackId = String(row.feedback_id);
+        const updatedAt = sourceUpdatedAt(row);
+        const existing = targetSelect.get(feedbackId) as JsonRecord | undefined;
+        if (!existing) {
+          insert.run(
+            feedbackId,
+            String(row.surface_id),
+            String(row.submitter_site_id),
+            String(row.submitter_principal),
+            String(row.kind),
+            String(row.summary),
+            String(row.details ?? ''),
+            String(row.status ?? 'submitted'),
+            optionalString(row.resolution_note),
+            optionalString(row.resolved_by),
+            optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+            optionalString(row.task_status),
+            candidate.sourceDbPath,
+            updatedAt,
+            'startup_materialized',
+            String(row.created_at),
+            updatedAt,
+          );
+          recordFeedbackEvent(state, {
+            feedback_id: feedbackId,
+            event_type: 'federated_imported',
+            actor_principal: actor,
+            status: String(row.status ?? 'submitted'),
+            task_ref: optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+            task_status: optionalString(row.task_status),
+            details: {
+              source_db_path: candidate.sourceDbPath,
+              discovery_root: candidate.root,
+              discovery_kind: candidate.kind,
+              source_updated_at: updatedAt,
+            },
+          });
+          result.importedCount += 1;
+          continue;
+        }
+
+        const existingSourcePath = optionalString(existing.source_db_path);
+        const existingSourceUpdatedAt = optionalString(existing.source_updated_at);
+        if (!existingSourcePath || !samePath(existingSourcePath, candidate.sourceDbPath)) {
+          result.conflictCount += 1;
+          recordFeedbackEvent(state, {
+            feedback_id: feedbackId,
+            event_type: 'federated_conflict',
+            actor_principal: actor,
+            status: optionalString(existing.status),
+            details: {
+              source_db_path: candidate.sourceDbPath,
+              existing_source_db_path: existingSourcePath,
+              discovery_root: candidate.root,
+              reason: 'feedback_id_already_owned_by_another_store',
+            },
+          });
+          continue;
+        }
+        if (existingSourceUpdatedAt === updatedAt) {
+          result.skippedCount += 1;
+          continue;
+        }
+        const existingUpdatedAt = optionalString(existing.updated_at);
+        if (existingSourceUpdatedAt && existingUpdatedAt === existingSourceUpdatedAt && updatedAt > existingSourceUpdatedAt) {
+          update.run(
+            String(row.surface_id),
+            String(row.submitter_site_id),
+            String(row.submitter_principal),
+            String(row.kind),
+            String(row.summary),
+            String(row.details ?? ''),
+            String(row.status ?? 'submitted'),
+            optionalString(row.resolution_note),
+            optionalString(row.resolved_by),
+            optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+            optionalString(row.task_status),
+            updatedAt,
+            'startup_materialized',
+            String(row.created_at),
+            updatedAt,
+            feedbackId,
+          );
+          recordFeedbackEvent(state, {
+            feedback_id: feedbackId,
+            event_type: 'federated_refreshed',
+            actor_principal: actor,
+            status: String(row.status ?? 'submitted'),
+            task_ref: optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
+            task_status: optionalString(row.task_status),
+            details: {
+              source_db_path: candidate.sourceDbPath,
+              discovery_root: candidate.root,
+              discovery_kind: candidate.kind,
+              source_updated_at: updatedAt,
+              previous_source_updated_at: existingSourceUpdatedAt,
+            },
+          });
+          result.updatedCount += 1;
+          continue;
+        }
+        if (existingSourceUpdatedAt && updatedAt > existingSourceUpdatedAt) {
+          result.conflictCount += 1;
+          recordFeedbackEvent(state, {
+            feedback_id: feedbackId,
+            event_type: 'federated_conflict',
+            actor_principal: actor,
+            status: optionalString(existing.status),
+            details: {
+              source_db_path: candidate.sourceDbPath,
+              discovery_root: candidate.root,
+              reason: 'canonical_entry_changed_after_source_materialization',
+              source_updated_at: updatedAt,
+              canonical_updated_at: existingUpdatedAt,
+              previous_source_updated_at: existingSourceUpdatedAt,
+            },
+          });
+          continue;
+        }
+        result.skippedCount += 1;
+      }
+    });
+  } catch (error) {
+    result.status = 'invalid';
+    result.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    sourceDb?.close();
+  }
+  if (result.conflictCount > 0 && result.status === 'synced') result.status = 'conflict';
+  return result;
+}
+
+function syncDiscoveredFeedbackStores(state: FeedbackState): void {
+  const discovered = discoverFeedbackStoreCandidates(state);
+  state.feedbackDiscoveryDiagnostics = discovered.diagnostics;
+  const previous = new Map(
+    (state.db.prepare('SELECT * FROM feedback_source_sync').all() as JsonRecord[]).map((row) => [String(row.source_db_path), sourceSyncRecord(row)])
+  );
+  const seen = new Set<string>();
+  for (const candidate of discovered.candidates) {
+    const key = process.platform === 'win32' ? candidate.sourceDbPath.toLowerCase() : candidate.sourceDbPath;
+    seen.add(key);
+    persistFeedbackSourceSync(state, syncOneFeedbackStore(state, candidate));
+  }
+  const scanTime = nowIso();
+  for (const prior of previous.values()) {
+    const key = process.platform === 'win32' ? prior.sourceDbPath.toLowerCase() : prior.sourceDbPath;
+    if (seen.has(key)) continue;
+    persistFeedbackSourceSync(state, {
+      ...prior,
+      status: 'missing',
+      error: 'source_store_not_found_under_discovery_roots',
+      lastScannedAt: scanTime,
+    });
+  }
+  state.feedbackSourceSync = (state.db.prepare('SELECT * FROM feedback_source_sync ORDER BY source_db_path').all() as JsonRecord[]).map(sourceSyncRecord);
 }
 
 function legacyTaskRef(value: unknown): string | null {
@@ -499,10 +903,15 @@ function feedbackLiveProofTemplate(args: JsonRecord): JsonRecord {
 
 function feedbackDoctor(state: FeedbackState): JsonRecord {
   const row = state.db.prepare('SELECT COUNT(*) AS count FROM feedback_entries').get() as JsonRecord;
+  const materializedRow = state.db.prepare('SELECT COUNT(*) AS count FROM feedback_entries WHERE source_db_path IS NOT NULL').get() as JsonRecord;
   const usesCanonicalStore = samePath(state.feedbackRoot, state.canonicalFeedbackRoot);
   const taskRoot = taskLifecycleRootPosture(state);
   const authorityConfigured = Boolean(state.authoritySiteId && state.authorityPrincipal);
-  const status = usesCanonicalStore && taskRoot.configuration_valid && authorityConfigured && state.taskLifecycleHealth !== 'unhealthy' ? 'ok' : 'warning';
+  const federationProblems = [
+    ...state.feedbackDiscoveryDiagnostics,
+    ...state.feedbackSourceSync.filter((source) => source.status !== 'synced').map((source) => `${source.status}:${source.sourceDbPath}${source.error ? `:${source.error}` : ''}`),
+  ];
+  const status = usesCanonicalStore && taskRoot.configuration_valid && authorityConfigured && state.taskLifecycleHealth !== 'unhealthy' && federationProblems.length === 0 ? 'ok' : 'warning';
   return {
     schema: 'narada.surface_feedback.doctor.v1',
     status,
@@ -531,17 +940,31 @@ function feedbackDoctor(state: FeedbackState): JsonRecord {
     task_handoff_capability: taskHandoffCapability(state),
     capabilities: feedbackCapabilities(state),
     total_feedback_entries: Number(row.count ?? 0),
+    federation: {
+      enabled: state.feedbackDiscoveryRoots.length > 0,
+      discovery_roots: state.feedbackDiscoveryRoots,
+      discovery_diagnostics: state.feedbackDiscoveryDiagnostics,
+      source_db_count: state.feedbackSourceSync.length,
+      active_source_db_count: state.feedbackSourceSync.filter((source) => source.status !== 'missing').length,
+      materialized_entry_count: Number(materializedRow.count ?? 0),
+      conflict_count: state.feedbackSourceSync.reduce((total, source) => total + source.conflictCount, 0),
+      sources: state.feedbackSourceSync.map(sourceSyncView),
+    },
     diagnostics: [
       usesCanonicalStore ? null : 'The feedback store is noncanonical; cross-site feedback may be invisible.',
       taskRoot.configuration_valid ? null : 'The task-lifecycle root configuration is invalid because the root or .ai directory is missing.',
       state.taskLifecycleHealth === 'unhealthy' ? `The task-lifecycle child is unhealthy: ${state.taskLifecycleHealthError ?? 'unknown error'}` : null,
       authorityConfigured ? null : 'Server-bound mutation authority is not configured.',
+      ...state.feedbackDiscoveryDiagnostics,
+      ...state.feedbackSourceSync.filter((source) => source.status !== 'synced').map((source) => `Federated source ${source.sourceDbPath} is ${source.status}${source.error ? `: ${source.error}` : '.'}`),
     ].filter(Boolean),
     remediation: [
       usesCanonicalStore ? null : `Configure --canonical-feedback-root ${state.canonicalFeedbackRoot}.`,
       taskRoot.configuration_valid ? null : 'Configure --task-lifecycle-root or NARADA_TASK_LIFECYCLE_ROOT to a Site root containing .ai.',
       state.taskLifecycleHealth === 'unhealthy' ? 'Repair task-lifecycle startup/runtime configuration, then retry a lifecycle operation to refresh observed health.' : null,
       authorityConfigured ? null : 'Configure --site-id/NARADA_SITE_ID and optional --owned-surface-id values.',
+      ...state.feedbackDiscoveryDiagnostics.map(() => 'Repair the registrar-generated allowed-roots.json or configure an explicit --feedback-discovery-root.'),
+      ...state.feedbackSourceSync.filter((source) => source.status !== 'synced').map((source) => `Inspect or repair the federated source store ${source.sourceDbPath}; canonical entries were not overwritten.`),
     ].filter(Boolean),
   };
 }
@@ -630,6 +1053,10 @@ function feedbackCapabilities(state: FeedbackState): JsonRecord {
       uses_canonical_store: usesCanonicalStore,
       feedback_root: state.feedbackRoot,
       canonical_feedback_root: state.canonicalFeedbackRoot,
+      federation_enabled: state.feedbackDiscoveryRoots.length > 0,
+      discovery_roots: state.feedbackDiscoveryRoots,
+      source_db_count: state.feedbackSourceSync.length,
+      source_sync_statuses: state.feedbackSourceSync.map((source) => ({ source_db_path: source.sourceDbPath, status: source.status })),
     },
   };
 }
@@ -1596,7 +2023,7 @@ function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
     }
     const targetSelect = state.db.prepare('SELECT feedback_id FROM feedback_entries WHERE feedback_id = ?');
     const insert = state.db.prepare(
-      'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, task_ref, task_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO feedback_entries (feedback_id, surface_id, submitter_site_id, submitter_principal, kind, summary, details, status, resolution_note, resolved_by, task_ref, task_status, source_db_path, source_updated_at, source_sync_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     state.db.exec('BEGIN');
     try {
@@ -1619,10 +2046,13 @@ function feedbackImport(args: JsonRecord, state: FeedbackState): JsonRecord {
           optionalString(row.resolved_by),
           optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
           optionalString(row.task_status),
+          sourceDbPath,
+          String(row.updated_at),
+          'explicit_import',
           String(row.created_at),
           String(row.updated_at)
         );
-        imported.push(hydrateFeedback(row));
+        imported.push(hydrateFeedback({ ...row, source_db_path: sourceDbPath, source_updated_at: String(row.updated_at), source_sync_mode: 'explicit_import' }));
       }
       state.db.exec('COMMIT');
     } catch (error) {
@@ -1717,6 +2147,8 @@ function feedbackReadScopeQuery(args: JsonRecord, state: FeedbackState): { sql: 
         authority_site_id: state.authoritySiteId,
         reconciliation_read: scope === 'store_reconciliation',
         submitter_site_id_semantics: 'declared_metadata_not_authenticated_provenance',
+        federated_entries_included: true,
+        federation_materialization: 'bounded_startup_sync',
         mutation_authority_unchanged: true,
       },
     };
@@ -1938,6 +2370,8 @@ function storeIdentity(state: FeedbackState): JsonRecord {
     uses_canonical_store: usesCanonicalStore,
     storage_posture: usesCanonicalStore ? 'canonical_feedback_root' : 'noncanonical_feedback_root',
     db_path: state.dbPath,
+    federation_enabled: state.feedbackDiscoveryRoots.length > 0,
+    federated_source_db_count: state.feedbackSourceSync.filter((source) => source.status !== 'missing').length,
   };
 }
 
@@ -1981,6 +2415,12 @@ function hydrateFeedback(row: JsonRecord): JsonRecord {
     resolved_by: optionalString(row.resolved_by),
     task_ref: optionalString(row.task_ref) ?? legacyTaskRef(row.resolution_note),
     task_status: optionalString(row.task_status),
+    source: {
+      kind: optionalString(row.source_db_path) ? 'federated_site_store' : 'canonical_store',
+      db_path: optionalString(row.source_db_path),
+      source_updated_at: optionalString(row.source_updated_at),
+      sync_mode: optionalString(row.source_sync_mode) ?? (optionalString(row.source_db_path) ? 'startup_materialized' : 'canonical'),
+    },
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
   };
@@ -2015,6 +2455,9 @@ function renderResult(result: JsonRecord): string {
     `task_handoff_available: ${asRecord(result.task_handoff_capability).available ?? false}`,
     ...(asRecord(result.task_handoff_capability).reason_code ? [`task_handoff_reason: ${asRecord(result.task_handoff_capability).reason_code}`] : []),
     `total_feedback_entries: ${result.total_feedback_entries}`,
+    `federation_enabled: ${asRecord(result.federation).enabled ?? false}`,
+    `federated_source_db_count: ${asRecord(result.federation).source_db_count ?? 0}`,
+    `federated_conflict_count: ${asRecord(result.federation).conflict_count ?? 0}`,
     ...(Array.isArray(result.diagnostics) ? result.diagnostics.map((item) => `diagnostic: ${item}`) : []),
     ...(Array.isArray(result.remediation) ? result.remediation.map((item) => `remediation: ${item}`) : []),
   ]);
@@ -2157,6 +2600,10 @@ function parseArgs(argv: string[]) {
     else if (arg === '--output-root') options.outputRoot = argv[++i];
     else if (arg === '--canonical-feedback-root') options.canonicalFeedbackRoot = argv[++i];
     else if (arg === '--task-lifecycle-root') options.taskLifecycleRoot = argv[++i];
+    else if (arg === '--feedback-discovery-root') {
+      const roots = Array.isArray(options.feedbackDiscoveryRoots) ? options.feedbackDiscoveryRoots as unknown[] : [];
+      options.feedbackDiscoveryRoots = [...roots, argv[++i]];
+    }
     else if (arg === '--site-id') options.authoritySiteId = argv[++i];
     else if (arg === '--owned-surface-id') {
       const owned = Array.isArray(options.authorityOwnedSurfaceIds) ? options.authorityOwnedSurfaceIds as unknown[] : [];

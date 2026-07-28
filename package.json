@@ -6,6 +6,7 @@
   "description": "Standalone MCP surface packages shared by Narada sites and carriers.",
   "scripts": {
     "build": "pnpm --filter @narada2/process-launch-posture build && pnpm --filter @narada2/site-operating-loop build && tsc -b && pnpm -r --filter \"./packages/**\" --if-present run build:postcompile && node --import tsx scripts/build-workspace-artifact-manifest.ts",
+    "materialize:carrier": "pnpm --filter @narada2/mcp-registrar exec mcp-registrar --",
     "typecheck": "tsc -b --pretty false",
     "test": "pnpm run test:typescript-boundary && pnpm run test:ui-boundary && pnpm -r --workspace-concurrency=1 test",
     "test:typescript-boundary": "node --import tsx test/typescript-source-boundary.test.ts",

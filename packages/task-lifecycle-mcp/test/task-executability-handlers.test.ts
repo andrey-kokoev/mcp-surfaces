@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { createTaskLifecycleExecutabilityHandlers } from '../src/task-lifecycle/task-lifecycle-executability-handlers.js';
 
 function stringField(args: Record<string, unknown>, field: string): string | undefined {
@@ -19,7 +19,7 @@ function jsonToolResult(value: unknown, isError = false) {
 
 function makeStore(siteRoot: string) {
   mkdirSync(join(siteRoot, '.ai'), { recursive: true });
-  return openTaskLifecycleStore(siteRoot);
+  return prepareTaskLifecycleStore(siteRoot);
 }
 
 function seedTask(store: ReturnType<typeof makeStore>, taskNumber: number, title: string) {

@@ -23,7 +23,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   display_name: 'Stale run recovery test loop',
 }, null, 2), 'utf8');
 
-const store = openSiteLoopStore(siteRoot);
+const store = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
 const loopId = 'stale-run-recovery.loop';
 const staleStartedAt = '2026-07-22T01:00:00.000Z';
 const recoveryAt = new Date('2026-07-22T01:10:00.000Z');

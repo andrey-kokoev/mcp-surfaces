@@ -390,7 +390,7 @@ export async function materializeEnvelopeAsTask(cwd: any, envelope: any) {
     };
   }
 
-  const store: any = openTaskLifecycleStore(cwd);
+  const store: any = openTaskLifecycleStore(cwd, { mode: 'runtime' });
   const routing: any = deriveRoutingFromEnvelopePayload(envelope, severityResult, store);
   const spec: any = buildTaskSpecFromEnvelope(envelope, severityResult, { routing });
   const specRecord: any = asPayload(spec);
@@ -791,7 +791,7 @@ export async function targetInboxEnvelope(cwd: any, options: TaskLifecyclePayloa
   const severityResult: any = evaluateEnvelopeSeverity(envelope);
   let store: any = null;
   try {
-    store = openTaskLifecycleStore(cwd);
+    store = openTaskLifecycleStore(cwd, { mode: 'runtime' });
     const outcome: any = decideEnvelopeBridgeOutcome({ store, envelope, severityResult, dryRun });
     const base: any = {
       schema: 'narada.bridge.target_envelope.v0',
@@ -928,7 +928,7 @@ export async function pollInboxBridge(cwd: any, options: TaskLifecyclePayload = 
 
   let store: any = null;
   try {
-    store = openTaskLifecycleStore(cwd);
+    store = openTaskLifecycleStore(cwd, { mode: 'runtime' });
   } catch (e: any) {
     return {
       status: 'error',

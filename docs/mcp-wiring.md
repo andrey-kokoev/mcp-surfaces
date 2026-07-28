@@ -16,9 +16,24 @@ node <installed-package>/dist/src/main.js --mode read --allowed-root <your-works
 
 ## Carrier Wiring Examples
 
-Carrier-native config files are host/user-site bootstrap profiles. A naked carrier launch receives host-level MCP surfaces, User Site MCP surfaces, and any Local Site MCP surfaces the operator has explicitly selected for that carrier profile. Local Site surfaces are never inferred from the current directory or from an unchosen Site; Narada launch/session materialization is the authority that binds them.
+Carrier-native config files are host/user-site bootstrap profiles. Each Site binding declares `loading_mode: "static"` or `"progressive"`. Static bindings materialize their selected surfaces directly. Progressive bindings materialize only an explicit bootstrap allowlist; the built-in Codex, opencode, and Kimi profiles start with `agent-context`, `mcp-registrar`, `mcp-loader`, and `local-filesystem`, while all other admitted surfaces remain available through the loader. Local Site surfaces are never inferred from the current directory or from an unchosen Site; Narada launch/session materialization and the Site fabric remain the authority that binds them.
 
 The registrar emits carrier-specific config, not one universal file.
+
+### Progressive loading
+
+Progressive carriers do not need to start every surface process. Use
+`mcp_loader_list_site_surfaces` to discover admissible surfaces, then
+`mcp_loader_open_surface` with the exact `surface_id` and `site_root`.
+Use `mcp_loader_list_tools` or `mcp_loader_tool_discovery_manifest` for the
+attached interface schemas, and invoke the selected surface through the loader
+proxy. This does not promote the child tools into native top-level carrier
+servers; use an explicit static binding when first-class carrier tools are
+required.
+
+Progressive bindings reject `surfaces: "all"`, require the four bootstrap
+surfaces above, and reject bulk carrier binding. These guards prevent a
+registrar operation from silently rebuilding the full startup inventory.
 
 ### Codex
 

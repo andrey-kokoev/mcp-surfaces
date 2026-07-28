@@ -13,6 +13,20 @@ Every registered surface resolves from a package-owned `SurfaceDescriptorV2`.
 `registrar_surface_list` reports the native descriptor, descriptor/tool-contract digests, lifecycle class, and explicit projections.
 Materialized Site fabric stores the selected descriptor under `surface_projection` so mcp-loader can compare it with fresh `tools/list` output.
 The registrar is native-only; projection selection requires `projection_id` or unambiguous runtime context.
+
+## Carrier loading modes
+
+Each carrier Site binding has a `loading_mode`:
+
+- `static` materializes the selected and automatically admitted surfaces as native carrier servers;
+- `progressive` materializes only its explicit bootstrap allowlist and requires `mcp-loader` for all other runtime attachments.
+
+The built-in carrier profiles use progressive loading with `agent-context`,
+`mcp-registrar`, `mcp-loader`, and `local-filesystem` as bootstrap surfaces.
+Progressive bindings reject `surfaces: "all"`, bulk carrier binding, and
+single-surface direct carrier binding for non-bootstrap surfaces. Attach those
+surfaces through `mcp_loader_open_surface` and inspect their schemas with
+`mcp_loader_list_tools` or `mcp_loader_tool_discovery_manifest`.
 ## Tools
 
 | Tool | Description |
@@ -96,6 +110,23 @@ The contract probe is intentionally serial and places each launched server in th
 `pnpm test:registrar:kimi-live` adds one real non-interactive Kimi provider turn with the complete materialized MCP config. It is skipped unless `NARADA_KIMI_CARRIER_LIVE_E2E=1`; running it requires operator approval and an authenticated Kimi installation. Set `NARADA_KIMI_COMMAND` to override the executable and `NARADA_KIMI_LIVE_TIMEOUT_MS` to override the 120-second timeout.
 
 The successful live turn is provider-level evidence that Moonshot accepted the complete advertised tool set. The deterministic layer remains responsible for proving that every configured server starts and every returned schema was inspected.
+
+## Recovery when MCP is unavailable
+
+The registrar also exposes an out-of-band carrier materialization CLI. Use it
+after a workspace build changes the artifact manifest, or when the registrar
+MCP surface is one of the surfaces that failed to start:
+
+```powershell
+pnpm materialize:carrier -- --materialize-carrier codex-andrey --output-path C:\Users\Andrey\.codex\config.toml
+```
+
+It atomically writes the carrier config and its
+`<config>.narada-generation.json` sidecar. Then restart the carrier or start a
+new carrier session so it reloads the generated config. The same command works
+for Kimi and OpenCode by changing the carrier id and output path. `mcp-registrar
+--help` describes the direct mode; without CLI arguments the package remains a
+normal MCP stdio server.
 
 ## Quick Start
 

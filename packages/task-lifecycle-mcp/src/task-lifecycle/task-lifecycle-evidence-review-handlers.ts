@@ -2226,7 +2226,7 @@ export function createTaskLifecycleEvidenceReviewHandlers(context: any) {
       // Same-operator and self-review detection
       let structuralReviewInfo = null;
       try {
-        const reviewStore = openTaskLifecycleStore(siteRoot);
+        const reviewStore = openTaskLifecycleStore(siteRoot, { mode: 'runtime' });
         try {
           structuralReviewInfo = detectSameOperatorReview(reviewStore, agentId, taskNumber);
           if (!structuralReviewInfo?.sameOperator) {

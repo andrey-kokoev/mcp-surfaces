@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { assertLiveToolsConform } from '@narada2/mcp-fabric-contracts';
-import { handleTaskLifecycleMcpRequest, taskLifecycleSurfaceDefinition } from '../src/task-lifecycle/task-mcp-server.js';
+import {
+  handleTaskLifecycleMcpRequest,
+  runTaskLifecycleMcpStdioServer,
+  taskLifecycleSurfaceDefinition,
+} from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-mcp-protocol-'));
 mkdirSync(join(siteRoot, '.ai'), { recursive: true });
@@ -15,6 +20,23 @@ const runtimeOptions = {
   stdout: { write: () => true },
   stderr: { write: () => true },
 };
+
+const cliPreparationRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-mcp-cli-prepare-'));
+let cliPreparationOutput = '';
+await runTaskLifecycleMcpStdioServer({
+  stdin: Readable.from([]),
+  stdout: { write: (chunk: unknown) => { cliPreparationOutput += String(chunk); return true; } },
+  stderr: { write: () => true },
+  argv: ['--prepare', '--site-root', cliPreparationRoot],
+  cwd: cliPreparationRoot,
+  env: { ...process.env, NARADA_AGENT_ID: 'sonar.resident' },
+});
+const cliPreparationLines = cliPreparationOutput.trim().split(/\r?\n/).filter(Boolean);
+assert.equal(cliPreparationLines.length, 1, cliPreparationOutput);
+const cliPreparationResult = JSON.parse(cliPreparationLines[0]);
+assert.equal(cliPreparationResult.status, 'prepared');
+assert.equal(cliPreparationResult.site_root, cliPreparationRoot);
+assert.equal(cliPreparationResult.preparation.status, 'prepared');
 
 const init = await (handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',
@@ -57,6 +79,15 @@ const payloadCreateTool = tools.result.tools.find((tool: any) => tool.name === '
 assert.equal(Boolean(payloadCreateTool?.inputSchema?.properties?.payload_json), true);
 assert.equal(tools.result.tools.find((tool: any) => tool.name === 'mcp_payload_validate')?.annotations?.readOnlyHint, true);
 
+const prompts = await (handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 9,
+  method: 'prompts/list',
+  params: {},
+})) as any;
+assert.equal(prompts.error, undefined);
+assert.equal(prompts.result.prompts[0]?.name, 'task_lifecycle_workflow');
+
 const doctor = await (handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',
   id: 5,
@@ -65,6 +96,37 @@ const doctor = await (handleTaskLifecycleMcpRequest({
 }, runtimeOptions)) as any;
 assert.equal(doctor.error, undefined);
 assert.equal(doctor.result.structuredContent.fabric_lifecycle.restart_owner, 'mcp-loader');
+assert.equal(doctor.result.structuredContent.preparation.status, 'missing');
+
+const notReady = await (handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 10,
+  method: 'tools/call',
+  params: { name: 'task_lifecycle_list', arguments: {} },
+}, runtimeOptions)) as any;
+assert.equal(notReady.error?.code, -32000);
+assert.match(String(notReady.error?.message), /^task_lifecycle_store_not_prepared:/);
+assert.deepEqual(notReady.error?.data, {
+  schema: 'narada.task_lifecycle.not_ready.v1',
+  code: 'task_lifecycle_store_not_prepared',
+  reason: 'database_missing',
+  site_root: siteRoot,
+  remediation: {
+    inspect_tool: 'task_lifecycle_doctor',
+    prepare_command: 'task-lifecycle-mcp --prepare --site-root <site-root>',
+    after_prepare: 'restart_or_reattach_runtime',
+  },
+});
+
+const chapterShowBeforePreparation = await (handleTaskLifecycleMcpRequest({
+  jsonrpc: '2.0',
+  id: 11,
+  method: 'tools/call',
+  params: { name: 'task_lifecycle_chapter_show', arguments: { chapter_id: 'startup' } },
+}, runtimeOptions)) as any;
+assert.equal(chapterShowBeforePreparation.error, undefined);
+assert.equal(chapterShowBeforePreparation.result?.structuredContent?.chapter_id, 'startup');
+assert.equal(chapterShowBeforePreparation.result?.structuredContent?.membership_count, 0);
 
 const guidance = await (handleTaskLifecycleMcpRequest({
   jsonrpc: '2.0',

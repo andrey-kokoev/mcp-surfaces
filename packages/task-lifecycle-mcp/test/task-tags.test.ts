@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
-import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { handleTaskLifecycleMcpRequest, prepareTaskLifecycleMcpSite } from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-tags-'));
 const runtime = {
@@ -62,7 +62,7 @@ writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-4-unrelate
 writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-5-yaml-tags.md'), `---\nnumber: 5\nstatus: opened\ntags: [yaml-tag, mcp-surface]\n---\n\n# YAML tags\n\n## Goal\n\nYAML array parsing.\n`, 'utf8');
 writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-6-legacy-file.md'), `---\nnumber: 6\nstatus: opened\ntags: [legacy-label, old-surface]\n---\n\n# Task 6 - Legacy file\n\n## Goal\n\nRecover a legacy task specification.\n\n## Acceptance Criteria\n\n- [ ] The legacy task is taggable.\n`, 'utf8');
 
-const store = openTaskLifecycleStore(siteRoot);
+const store = prepareTaskLifecycleStore(siteRoot);
 try {
   for (const [taskId, taskNumber, title, goal, tags] of [
     ['20260718-1-task-one', 1, 'Task one', 'Improve MCP surface discovery.', JSON.stringify([])],
@@ -119,6 +119,9 @@ try {
   store.db.close();
 }
 
+const preparation = prepareTaskLifecycleMcpSite(siteRoot);
+assert.equal(preparation.status, 'prepared');
+
 try {
   const toolList = payload(await (handleTaskLifecycleMcpRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, runtime)) as any);
   const tagsTool = toolList.tools.find((tool: any) => tool.name === 'task_lifecycle_tags_update');
@@ -172,7 +175,7 @@ try {
   writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-7-live-backfill.md'), `---\ntask_number: 7\nstatus: opened\ntags:\n  - live-label\n---\n\n# Live backfill\n\n## Goal\n\nVerify refresh discovers task files created after startup.\n`, 'utf8');
   writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-8-duplicate-a.md'), `---\ntask_number: 8\nstatus: opened\ntags: duplicate-a\n---\n\n# Duplicate A\n`, 'utf8');
   writeFileSync(join(siteRoot, '.ai', 'do-not-open', 'tasks', '20260718-8-duplicate-b.md'), `---\ntask_number: 8\nstatus: opened\ntags: duplicate-b\n---\n\n# Duplicate B\n`, 'utf8');
-  const refreshFixtureStore = openTaskLifecycleStore(siteRoot);
+  const refreshFixtureStore = prepareTaskLifecycleStore(siteRoot);
   try {
     for (const [taskId, taskNumber] of [['live-backfill', 7], ['duplicate-backfill', 8]] as const) {
       refreshFixtureStore.upsertLifecycle({
@@ -191,6 +194,8 @@ try {
   } finally {
     refreshFixtureStore.db.close();
   }
+  const refreshPreparation = prepareTaskLifecycleMcpSite(siteRoot);
+  assert.equal(refreshPreparation.status, 'prepared');
   await call(27, 'task_lifecycle_chapter_add_task', { chapter_id: 'refresh-backfill', task_number: 7 });
   const liveBackfill = await call(28, 'task_lifecycle_show', { task_number: 7 });
   assert.deepEqual(liveBackfill.spec.tags, ['live-label']);

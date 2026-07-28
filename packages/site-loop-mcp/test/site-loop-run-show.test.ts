@@ -23,7 +23,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   },
 }, null, 2), 'utf8');
 
-const store = openSiteLoopStore(siteRoot, { write: true });
+const store = openSiteLoopStore(siteRoot, { write: true, storeMode: 'prepare' });
 const runId = 'site_loop_run_show_test_001';
 const oversizedEvidence = {
   status: 'ok',

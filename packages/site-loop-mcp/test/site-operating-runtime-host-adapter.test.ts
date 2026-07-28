@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 import {
   openSiteOperatingRuntimeHost,
@@ -20,6 +21,8 @@ function makeSiteRoot(prefix: string) {
     resident: { agent_id: 'resident', role: 'resident' },
     refs: { ticket_projection: { kind: 'ticket_projection', ref: 'test' } },
   }, null, 2), 'utf8');
+  const prepared = prepareTaskLifecycleStore(root);
+  prepared.db.close();
   return root;
 }
 

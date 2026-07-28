@@ -24,8 +24,23 @@ It is launched against a site root and uses site-local task governance state and
 
 ```powershell
 pnpm --filter @narada2/task-lifecycle-mcp build
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
 node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --site-root D:/code/site
 ```
+
+Preparation is an explicit preflight. It creates/upgrades the site-local
+`.ai/task-lifecycle.db`, prepares Task Lifecycle auxiliary tables, reconciles
+legacy Markdown task specifications into the SQLite projection, prints one
+JSON result, and exits. The normal runtime never performs SQLite preparation
+or migration during startup or a tool call. See
+`docs/task-lifecycle-preparation.md` for the readiness contract and recovery
+steps.
+
+Before preparation, protocol discovery plus `task_lifecycle_doctor`,
+`task_lifecycle_restart`, `task_lifecycle_chapter_show`, guidance, and
+payload/output transport helpers remain available. Stateful calls return a
+structured `task_lifecycle_store_not_prepared:<reason>` error with the doctor,
+explicit `--prepare`, and restart/reattach remediation sequence.
 
 When `--site-root` is omitted, the runtime resolves its Site root in this
 order: `NARADA_TASK_LIFECYCLE_ROOT`, `NARADA_SITE_ROOT`, then the process

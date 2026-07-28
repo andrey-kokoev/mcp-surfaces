@@ -142,6 +142,19 @@ The runtime deliberately refuses a pre-v3 or partially migrated database with
 `site_loop_storage_cutover_required`. Perform the one-way migration explicitly
 under the Task Lifecycle write lock:
 
+The cutover also requires the Task Lifecycle database to have completed its
+explicit preparation contract; it does not silently prepare or migrate that
+database. For an existing site, prepare it first, then run the acknowledged
+cutover:
+
+```powershell
+node packages/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js --prepare --site-root D:/code/site
+```
+
+If preparation has not happened, the cutover fails fast with
+`task_lifecycle_store_not_prepared` and the remediation is the same explicit
+prepare-then-retry sequence.
+
 ```powershell
 pnpm --filter @narada2/site-loop-mcp exec site-loop-storage-cutover --site-root D:/code/site --ack-cutover
 ```

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
 
 process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE = '1';
@@ -65,7 +65,7 @@ try {
   writeTask(9101, reviewTaskId, 'in_review');
   writeTask(9102, remediationTaskId, 'opened');
 
-  const store = openTaskLifecycleStore(siteRoot);
+  const store = prepareTaskLifecycleStore(siteRoot);
   try {
     store.upsertRosterEntry({
       agent_id: 'smart-scheduling.architect',

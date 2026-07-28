@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
 
 process.env.NARADA_TASK_LIFECYCLE_FAST_SQLITE = '1';
@@ -69,7 +69,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
 `,
   );
 
-  const store = openTaskLifecycleStore(siteRoot);
+  const store = prepareTaskLifecycleStore(siteRoot);
   try {
     store.upsertRosterEntry({
       agent_id: 'smart-scheduling.builder',
@@ -290,7 +290,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
     },
   }, architectRuntimeOptions)) as any;
   assert.equal(reviewClaimResponse.error, undefined);
-  const operatorIdentityStore = openTaskLifecycleStore(siteRoot);
+  const operatorIdentityStore = prepareTaskLifecycleStore(siteRoot);
   try {
     operatorIdentityStore.db.prepare(
       'update agent_roster set operator_identity = ? where agent_id in (?, ?)',
@@ -330,7 +330,7 @@ Exercise disposition closeout with criteria proof and no distinct reviewer.
   assert.equal(reviewPayload.conflict_policy_evidence[0].policy_mode, 'single_operator_review');
   assert.equal(reviewPayload.conflict_policy_evidence[0].authorization_required, false);
 
-  const verifyStore = openTaskLifecycleStore(siteRoot);
+  const verifyStore = prepareTaskLifecycleStore(siteRoot);
   try {
     assert.notEqual(verifyStore.getLifecycle(taskId)?.status, 'closed');
     const dependencies = verifyStore.listTaskDependenciesForParent(taskId);
@@ -372,7 +372,7 @@ Submit report with an old agent_roster schema.
 - [x] Report submission does not fail on missing operator_identity column.
 `,
   );
-  const legacyStore = openTaskLifecycleStore(siteRoot);
+  const legacyStore = prepareTaskLifecycleStore(siteRoot);
   try {
     let legacyLifecycle = legacyStore.getLifecycleByNumber(9003);
     if (!legacyLifecycle) {

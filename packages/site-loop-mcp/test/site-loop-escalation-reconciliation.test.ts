@@ -25,7 +25,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   },
 }, null, 2), 'utf8');
 
-const store = openSiteLoopStore(siteRoot);
+const store = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
 const directiveId = 'directive-ack-suppression';
 const baseClassification = {
   directive_id: directiveId,

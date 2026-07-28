@@ -39,6 +39,14 @@ Scope names remain in `tools/list` for protocol stability, but availability is r
 
 The canonical User Site projection should pass `--feedback-root`, `--site-id`, and repeated `--owned-surface-id` arguments explicitly, and must configure the canonical store with `--canonical-feedback-root` or `NARADA_SURFACE_FEEDBACK_ROOT`. There is no machine-specific default canonical root. Do not rely on the current directory or an ambient caller-supplied site filter. A scoped show of an entry outside the scope returns `feedback_not_found` so existence is not disclosed.
 
+## Repository/Site-local federation
+
+At startup, a canonical server automatically materializes feedback from bounded local source stores. Registrar-generated `.narada/allowed-roots.json` is trusted only when it has the `narada.site.allowed_roots.v1` schema and `generated_by: mcp-registrar`; its Site root and `extra_allowed_roots` are discovery roots. Additional roots may be supplied with repeated `--feedback-discovery-root` arguments or `NARADA_FEEDBACK_DISCOVERY_ROOTS` (comma-separated or JSON array).
+
+Each discovery root is checked only at the root itself and its immediate child directories, using the fixed store locations `.feedback/surface-feedback.db` and `.narada/feedback/.feedback/surface-feedback.db`. Source SQLite databases are opened read-only. The canonical database is the sole read/mutation authority; filesystem reachability does not grant cross-Site authority and no arbitrary recursive scan is performed.
+
+Materialized entries expose `source.kind`, `source.db_path`, `source.source_updated_at`, and `source.sync_mode`. `surface_feedback_doctor` reports discovery roots, source sync state, invalid or missing sources, and conflicts. A canonical mutation prevents a later source refresh from overwriting the canonical row; inspect the conflict diagnostic and reconcile deliberately. The existing `surface_feedback_import` tool remains available for explicit, ID-scoped repair.
+
 `surface_feedback_convert_to_task` is idempotent per feedback entry. It uses an isolated task-lifecycle stdio process and a durable handoff ledger. The ledger preserves payload and task references across failures, excludes concurrent conversion with a lease, and links feedback only after successful task creation. Retry the same conversion after a retryable failure; it resumes from the last durable stage.
 
 Mutation authority and audit identity are server-bound. Configure the serving Site with `--site-id` or `NARADA_SITE_ID`, optionally set `NARADA_AGENT_ID` for the audit principal, and optionally repeat `--owned-surface-id` or set `NARADA_OWNED_SURFACE_IDS` for surfaces maintained by that Site. Without an explicit agent identity, the service principal is `surface-feedback@<site-id>`. Caller-supplied authority fields are rejected; legacy `resolved_by` fields are ignored. Canonical task handoff requires the canonical feedback root and a valid task-lifecycle Site root.

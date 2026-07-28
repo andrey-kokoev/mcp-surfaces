@@ -57,6 +57,9 @@ type PendingRequest = {
 type ProxyOptions = {
   entrypoint: string;
   childArgs: string[];
+  carrierId: string | null;
+  carrierKind: string | null;
+  registrarEntrypoint: string | null;
   artifactManifestPath: string | null;
   artifactManifestFingerprint: string | null;
   runtimeContractVersion: number | null;
@@ -92,6 +95,9 @@ const STARTUP_TRACE_SCHEMA = 'narada.mcp_runtime_proxy.startup_trace.v1';
 
 function parseArgs(argv: string[]): ProxyOptions {
   let entrypoint = '';
+  let carrierId: string | null = null;
+  let carrierKind: string | null = null;
+  let registrarEntrypoint: string | null = null;
   let artifactManifestPath: string | null = null;
   let runtimeContractVersion: number | null = null;
   let materializationSidecarPath: string | null = null;
@@ -107,6 +113,9 @@ function parseArgs(argv: string[]): ProxyOptions {
   for (let index = 0; index < prelude.length; index += 1) {
     const arg = prelude[index];
     if (arg === '--entrypoint' && prelude[index + 1]) entrypoint = prelude[++index];
+    else if (arg === '--carrier-id' && prelude[index + 1]) carrierId = prelude[++index];
+    else if (arg === '--carrier-kind' && prelude[index + 1]) carrierKind = prelude[++index];
+    else if (arg === '--registrar-entrypoint' && prelude[index + 1]) registrarEntrypoint = prelude[++index];
     else if (arg === '--artifact-manifest' && prelude[index + 1]) artifactManifestPath = prelude[++index];
     else if (arg === '--runtime-contract-version' && prelude[index + 1]) runtimeContractVersion = parsePositiveInteger(prelude[++index], 'runtime_contract_version');
     else if (arg === '--materialization-sidecar' && prelude[index + 1]) materializationSidecarPath = prelude[++index];
@@ -121,6 +130,9 @@ function parseArgs(argv: string[]): ProxyOptions {
   return {
     entrypoint: resolve(entrypoint),
     childArgs: argv.slice(Math.min(passthroughIndex + 1, argv.length)),
+    carrierId,
+    carrierKind,
+    registrarEntrypoint: registrarEntrypoint ? resolve(registrarEntrypoint) : null,
     artifactManifestPath: artifactManifestPath ? resolve(artifactManifestPath) : null,
     artifactManifestFingerprint: null,
     runtimeContractVersion,
@@ -132,6 +144,157 @@ function parseArgs(argv: string[]): ProxyOptions {
     diagnosticsDir: diagnosticsDir ? resolve(diagnosticsDir) : defaultDiagnosticsDir(),
     livenessCheckMs,
     orphanGraceMs,
+  };
+}
+
+function stringDetail(details: JsonRecord, key: string): string | null {
+  return typeof details[key] === 'string' && details[key] ? details[key] as string : null;
+}
+
+function pairedConfigPath(sidecarPath: string | null): string | null {
+  const suffix = '.narada-generation.json';
+  if (!sidecarPath || !sidecarPath.endsWith(suffix)) return null;
+  return sidecarPath.slice(0, -suffix.length);
+}
+
+function commandLineArg(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function carrierRestartInstruction(carrierKind: string | null): string {
+  switch (carrierKind?.toLowerCase()) {
+    case 'codex': return 'Restart Codex or start a new Codex session after materialization.';
+    case 'kimi': return 'Restart Kimi or start a new Kimi session after materialization.';
+    case 'opencode': return 'Restart OpenCode or start a new OpenCode session after materialization.';
+    default: return 'Restart the carrier or start a new carrier session after materialization.';
+  }
+}
+
+function buildMaterializationRecovery(options: ProxyOptions, preflight: MaterializationPreflight): JsonRecord {
+  const details = preflight.details ?? {};
+  const carrierId = stringDetail(details, 'carrier_id') ?? options.carrierId;
+  const carrierKind = stringDetail(details, 'carrier_kind') ?? options.carrierKind;
+  const configPath = stringDetail(details, 'config_path') ?? pairedConfigPath(options.materializationSidecarPath);
+  const registrarEntrypoint = stringDetail(details, 'registrar_entrypoint') ?? options.registrarEntrypoint;
+  const groupKey = JSON.stringify({
+    carrier_id: carrierId,
+    carrier_kind: carrierKind,
+    config_path: configPath,
+    code: preflight.code ?? 'materialization_generation_stale',
+    generation_fingerprint: preflight.generation_fingerprint,
+    expected_manifest_fingerprint: stringDetail(details, 'expected_manifest_fingerprint'),
+    actual_manifest_fingerprint: stringDetail(details, 'actual_manifest_fingerprint'),
+  });
+  const recoveryGroupId = `materialization-${createHash('sha256').update(groupKey, 'utf8').digest('hex').slice(0, 20)}`;
+  const commandArgs = registrarEntrypoint && carrierId && configPath
+    ? [registrarEntrypoint, '--materialize-carrier', carrierId, '--output-path', configPath]
+    : null;
+  const command = commandArgs
+    ? {
+      executable: process.execPath,
+      args: commandArgs,
+      display: [process.execPath, ...commandArgs].map(commandLineArg).join(' '),
+    }
+    : null;
+  return {
+    schema: 'narada.mcp_runtime_proxy.materialization_recovery.v1',
+    recovery_group_id: recoveryGroupId,
+    deduplication: {
+      scope: 'carrier_materialization',
+      key: recoveryGroupId,
+      guidance: 'Report one recovery action for this group; bootstrap surfaces sharing this id describe the same carrier failure.',
+    },
+    carrier: {
+      carrier_id: carrierId,
+      carrier_kind: carrierKind,
+      config_path: configPath,
+    },
+    regeneration: {
+      required: true,
+      available: command !== null,
+      owner: 'mcp-registrar',
+      command,
+      unavailable_reason: command ? null : 'The materialization record does not identify the carrier, registrar entrypoint, or paired config path.',
+    },
+    restart_required: true,
+    restart: {
+      owner: carrierKind ?? 'carrier',
+      automatic: false,
+      instruction: carrierRestartInstruction(carrierKind),
+    },
+  };
+}
+
+function workspaceRootFromManifest(manifestPath: string | null): string | null {
+  if (!manifestPath) return null;
+  return resolve(manifestPath, '..', '..', '..');
+}
+
+function buildWorkspaceArtifactRecovery(options: ProxyOptions, preflight: WorkspaceArtifactPreflight): JsonRecord {
+  const details = preflight.details ?? {};
+  const carrierId = options.carrierId;
+  const carrierKind = options.carrierKind;
+  const configPath = pairedConfigPath(options.materializationSidecarPath);
+  const registrarEntrypoint = options.registrarEntrypoint;
+  const manifestPath = options.artifactManifestPath;
+  const workspaceRoot = workspaceRootFromManifest(manifestPath);
+  const groupKey = JSON.stringify({
+    carrier_id: carrierId,
+    carrier_kind: carrierKind,
+    config_path: configPath,
+    manifest_path: manifestPath,
+    code: preflight.code ?? 'workspace_manifest_stale',
+  });
+  const recoveryGroupId = `workspace-materialization-${createHash('sha256').update(groupKey, 'utf8').digest('hex').slice(0, 20)}`;
+  const materializeArgs = registrarEntrypoint && carrierId && configPath
+    ? [registrarEntrypoint, '--materialize-carrier', carrierId, '--output-path', configPath]
+    : null;
+  const materializeCommand = materializeArgs
+    ? {
+      executable: process.execPath,
+      args: materializeArgs,
+      display: [process.execPath, ...materializeArgs].map(commandLineArg).join(' '),
+    }
+    : null;
+  const buildCommand = {
+    executable: 'pnpm',
+    args: ['build'],
+    ...(workspaceRoot ? { cwd: workspaceRoot } : {}),
+    display: 'pnpm build',
+  };
+  return {
+    schema: 'narada.mcp_runtime_proxy.workspace_recovery.v1',
+    recovery_group_id: recoveryGroupId,
+    deduplication: {
+      scope: 'carrier_materialization',
+      key: recoveryGroupId,
+      guidance: 'Report one build/materialization action for this group; bootstrap surfaces sharing this id describe the same carrier failure.',
+    },
+    cause: {
+      code: preflight.code,
+      reason: preflight.reason,
+      details,
+    },
+    steps: [
+      { order: 1, action: 'build_workspace', command: buildCommand },
+      {
+        order: 2,
+        action: 'materialize_carrier',
+        required: true,
+        owner: 'mcp-registrar',
+        available: materializeCommand !== null,
+        command: materializeCommand,
+        unavailable_reason: materializeCommand ? null : 'The carrier launch does not identify the carrier, registrar entrypoint, or paired config path.',
+      },
+      {
+        order: 3,
+        action: 'restart_carrier',
+        required: true,
+        automatic: false,
+        instruction: carrierRestartInstruction(carrierKind),
+      },
+    ],
+    restart_required: true,
   };
 }
 
@@ -224,7 +387,14 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     artifactManifestPath: options.artifactManifestPath,
   });
   if (!artifactPreflight.ok) {
-    await writePreflightRefusal(artifactPreflight);
+    await writePreflightRefusal({
+      ...artifactPreflight,
+      details: {
+        ...(artifactPreflight.details ?? {}),
+        remediation: 'Run pnpm build, then materialize the carrier with the supplied registrar recovery command, and restart the carrier session.',
+        recovery: buildWorkspaceArtifactRecovery(options, artifactPreflight),
+      },
+    });
     process.exitCode = 1;
     return;
   }
@@ -276,6 +446,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
     })
     : { ok: true, generation_fingerprint: null };
   if (!materializationPreflight.ok) {
+    const recovery = buildMaterializationRecovery(options, materializationPreflight);
     await writePreflightRefusal({
       schema: 'narada.workspace_artifact_preflight.v1',
       status: 'refused',
@@ -291,6 +462,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
         materialization_sidecar_path: options.materializationSidecarPath,
         materialization_generation_fingerprint: materializationPreflight.generation_fingerprint,
         remediation: 'Regenerate the carrier configuration with the current registrar; the proxy will not rebuild or retry it.',
+        recovery,
       },
     });
     process.exitCode = 1;

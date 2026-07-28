@@ -30,11 +30,13 @@ export function buildGuidanceResult(args: GuidanceRecord = {}, context: Guidance
       'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
       'Inspect policy/doctor/status tools before mutation or open-world operations.',
       'Use bounded list/search/query tools for discovery, then show/read/detail tools before acting on a specific object.',
+      'The canonical server automatically materializes feedback from registrar-authorized repository/Site roots at startup; inspect surface_feedback_doctor.federation for source status and provenance.',
       'Preserve structuredContent as authoritative evidence; text content is for assistant readability.'
     ],
     tool_preference: [
       { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
       { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
+      { step: 'federation', guidance: 'Use the canonical store for reads and mutations. Federated repository/Site stores are read-only sources discovered from registrar-generated allowed-roots.json or explicit startup roots; do not mutate or scan them directly.' },
       { step: 'read_scope', guidance: 'Every read call must provide an explicit scope. Check capabilities.read_scopes[scope].available before calling; unavailable scopes include a reason and remediation. The schema lists all scopes for protocol stability. store_reconciliation reads every row physically present in the canonical store for existence/linkage checks without broadening mutation authority; all_authorized is the canonical feedback view and maintainer task-handoff discovery scope; authority_visible is the server-bound union of declared submitter-site and owned-surface entries, owned_surfaces is the owned-surface view, and authority_site_submissions is the declared submitter-site metadata view. submitter_site_id is declared metadata, not authenticated provenance.' },
       { step: 'actionable_queue', guidance: 'Use surface_feedback_actionable_queue for the bounded unprocessed queue: submitted and acknowledged feedback only, filtered before pagination. Inspect queue_selection and excluded_status_counts; use list/stats for routed, converted, or closed history.' },
       { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
@@ -55,6 +57,7 @@ export function buildGuidanceResult(args: GuidanceRecord = {}, context: Guidance
       'Do not confuse submitter_site_id_filter with authorization: it filters declared metadata only and never establishes provenance or access.',
       'Use canonical Site IDs in submitter_site_id. Do not record generated server keys, carrier names, or session aliases as submitter identities.',
       'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
+      'Do not treat a federated source store as mutation authority; source entries are materialized into the canonical store with provenance and conflicts are preserved rather than overwritten.',
       'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
     ],
     recovery: [
@@ -80,6 +83,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}, context: Guidance
       'surface_feedback_convert_to_task delegates task creation to task-lifecycle and never executes or closes the created task.',
       'Capability gating is live server state: only call a read scope or task handoff when its capabilities entry reports available: true. The tools/list schema retains all scope names for protocol stability, and unavailable calls return an actionable refusal.',
       'Read scope is explicit and server-bound: all_authorized requires the canonical feedback store plus server authority and enables the explicit User Site task handoff; authority_visible, owned_surfaces, and authority_site_submissions require configured server authority.',
+      'Federation is bounded and read-only: startup scans only registrar-authorized or explicitly configured roots, their immediate child directories, and the two known feedback DB locations. It does not infer authority from filesystem reachability or perform arbitrary recursive scans.',
+      'Federated entries include source DB provenance. A canonical mutation prevents an automatic source refresh from overwriting it; inspect surface_feedback_doctor for conflicts.',
       'Canonical task handoff authority is distinct from owner-scoped feedback status authority.',
       'The submitter site recorded in feedback is declarative metadata supplied at submission time; authority_site_submissions is a metadata filter, not authenticated provenance.',
       'Mutation authority is bound when the server starts; callers must not supply caller_site_id or owned_surface_ids to mutation tools.',

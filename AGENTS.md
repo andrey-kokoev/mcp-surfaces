@@ -62,10 +62,11 @@ workspace is the canonical Site root, `.narada` is the control root, and
 - Layout: runnable MCP surfaces live in `packages/*`, shared libraries in `packages/shared/*`, design and doctrine docs in `docs/`, and the root UI-neutrality boundary test in `test/`.
 - The root `README.md` gives repo-level framing; each package has its own `README.md` with setup details.
 - Key docs: `docs/mcp-taxonomy.md` (generic versus Narada-specific split), `docs/mcp-wiring.md` and `docs/mcp-injection-scopes.md` (how surfaces reach carriers and sites), `docs/mcp-surfaces-target-shape.md` (target architecture), `docs/site-loop-doctrine.md` (Site Loop doctrine), `docs/mcp-output-refusal-conventions.md` (output-ref and refusal patterns).
+- Task Lifecycle MCP runtime startup is prepared-only: run `task-lifecycle-mcp --prepare --site-root <site-root>` explicitly before attaching a stateful runtime; see `docs/task-lifecycle-preparation.md` for the readiness contract and remediation path.
 
 ## Carrier and Site MCP Fabric
 
-Carrier-native config files are host/user-site bootstrap profiles. A naked carrier launch receives host-level MCP surfaces, User Site MCP surfaces, and any Local Site MCP surfaces the operator has explicitly selected for that carrier profile, wired through carrier-specific mechanics such as Codex TOML, OpenCode JSONC, or Kimi MCP JSON. The launch must not infer Local Site surfaces from the current directory or from an unchosen Site.
+Carrier-native config files are host/user-site bootstrap profiles. Each Site binding declares `loading_mode: "static"` or `"progressive"`. Static bindings materialize their selected surfaces directly; progressive bindings materialize only their explicit bootstrap allowlist and use `mcp-loader` for runtime discovery and attachment. The launch must not infer Local Site surfaces from the current directory or from an unchosen Site. The built-in carrier profiles use progressive loading with `agent-context`, `mcp-registrar`, `mcp-loader`, and `local-filesystem` as the bootstrap set.
 
 Local Site MCP fabric is injected by Narada launch/session materialization, not by creating carrier profiles named for individual sites. Do not add site-specific carrier profiles such as `opencode-sonar`; bind the Site through the launcher/site fabric instead. If a carrier needs a different local Site, launch it through Narada so the Site-owned MCP aggregate is selected at session start.
 
@@ -92,6 +93,8 @@ Agents can submit feedback about any MCP surface via `@narada2/surface-feedback-
 - `surface_feedback_stats` — aggregated counts by surface, kind, and status within an explicit read scope.
 
 Read calls must pass `scope` explicitly. `all_authorized` requires the canonical feedback store and server-bound User Site authority; `authority_visible`, `owned_surfaces`, and `authority_site_submissions` are narrower server-bound views. Submitter-site visibility compares server-bound authority to declared metadata and is not authenticated provenance; `submitter_site_id_filter` is declarative metadata filtering only and never establishes provenance or authorization.
+
+The canonical feedback server automatically materializes repository/Site-local stores discovered from registrar-generated `.narada/allowed-roots.json` or repeated `--feedback-discovery-root`/`NARADA_FEEDBACK_DISCOVERY_ROOTS` configuration. Discovery is read-only and bounded to each root, its immediate child directories, and the fixed feedback DB locations; it does not infer cross-Site authority from filesystem reachability. Inspect `surface_feedback_doctor.federation` for source provenance and conflicts.
 
 Kinds:
 
@@ -128,6 +131,7 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 
 ```powershell
 pnpm build
+pnpm materialize:carrier -- --materialize-carrier <carrier-id> [--output-path <carrier-config>]
 pnpm typecheck
 pnpm test
 pnpm test:ui-boundary

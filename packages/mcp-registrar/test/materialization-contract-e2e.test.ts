@@ -28,6 +28,42 @@ function testEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
+function runCli(args: string[]): Promise<RpcRun> {
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(process.execPath, args, {
+      cwd: workspaceRoot,
+      env: testEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      rejectRun(new Error(`materialization_cli_e2e_timeout:${args.join(' ')}`));
+    }, 45_000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      rejectRun(error);
+    });
+    child.once('close', (exitCode) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveRun({ exitCode, responses: [], stdout, stderr });
+    });
+  });
+}
+
 function runRpc(command: string, args: string[], request: JsonRecord): Promise<RpcRun> {
   return new Promise((resolveRun, rejectRun) => {
     const child = spawn(command, args, {
@@ -92,6 +128,20 @@ test('fresh registrar materializes, validates, and launches a carrier generation
   const configPath = join(root, 'codex.config.toml');
   const sidecarPath = `${resolve(configPath)}.narada-generation.json`;
   try {
+    const directMaterialize = await runCli([
+      registrarEntrypoint,
+      '--materialize-carrier',
+      'codex-andrey',
+      '--output-path',
+      configPath,
+    ]);
+    assert.equal(directMaterialize.exitCode, 0, directMaterialize.stderr);
+    const directResult = JSON.parse(directMaterialize.stdout) as JsonRecord;
+    assert.equal(directResult.status, 'materialized');
+    assert.equal(directResult.materialization_validation.ok, true, JSON.stringify(directResult));
+    assert.equal(existsSync(configPath), true);
+    assert.equal(existsSync(sidecarPath), true);
+
     const materialize = await runRpc(process.execPath, [registrarEntrypoint], {
       jsonrpc: '2.0',
       id: 1,
@@ -122,6 +172,9 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     );
 
     const launch = codexLaunch(config, 'narada-site-andrey-user-mcp-registrar');
+    assert.equal(launch.args[launch.args.indexOf('--carrier-id') + 1], 'codex-andrey');
+    assert.equal(launch.args[launch.args.indexOf('--carrier-kind') + 1], 'codex');
+    assert.equal(launch.args.includes('--registrar-entrypoint'), true);
     const proxyRun = await runRpc(launch.command === 'node' ? process.execPath : launch.command, launch.args, {
       jsonrpc: '2.0',
       id: 2,
@@ -149,6 +202,36 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     });
     assert.notEqual(staleRun.exitCode, 0);
     assert.equal(staleRun.responses[0]?.error?.data?.code, 'materialization_generation_stale');
+    const staleRecovery = staleRun.responses[0]?.error?.data?.details?.recovery;
+    assert.match(staleRecovery?.recovery_group_id, /^materialization-[0-9a-f]{20}$/);
+    assert.equal(staleRecovery?.regeneration?.available, true);
+    assert.deepEqual(staleRecovery?.regeneration?.command?.args.slice(1), [
+      '--materialize-carrier',
+      'codex-andrey',
+      '--output-path',
+      resolve(configPath),
+    ]);
+    assert.equal(staleRecovery?.restart_required, true);
+    assert.match(staleRecovery?.restart?.instruction, /Restart Codex/);
+
+    const staleBootstrapRuns = await Promise.all([
+      'narada-site-andrey-user-agent-context',
+      'narada-site-andrey-user-local-filesystem',
+      'narada-site-andrey-user-mcp-loader',
+    ].map(async (serverKey) => {
+      const bootstrapLaunch = codexLaunch(config, serverKey);
+      return runRpc(bootstrapLaunch.command === 'node' ? process.execPath : bootstrapLaunch.command, bootstrapLaunch.args, {
+        jsonrpc: '2.0',
+        id: 40,
+        method: 'initialize',
+        params: { protocolVersion: '2024-11-05' },
+      });
+    }));
+    const recoveryGroupIds = [
+      staleRecovery?.recovery_group_id,
+      ...staleBootstrapRuns.map((run) => run.responses[0]?.error?.data?.details?.recovery?.recovery_group_id),
+    ];
+    assert.equal(new Set(recoveryGroupIds).size, 1, JSON.stringify(recoveryGroupIds));
 
     const missingVersionArgs = [...launch.args];
     const versionIndex = missingVersionArgs.indexOf('--runtime-contract-version');
@@ -173,6 +256,11 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     });
     assert.notEqual(missingManifestRun.exitCode, 0);
     assert.equal(missingManifestRun.responses[0]?.error?.data?.code, 'workspace_manifest_missing');
+    const workspaceRecovery = missingManifestRun.responses[0]?.error?.data?.details?.recovery;
+    assert.match(workspaceRecovery?.recovery_group_id, /^workspace-materialization-[0-9a-f]{20}$/);
+    assert.equal(workspaceRecovery?.steps?.[0]?.command?.display, 'pnpm build');
+    assert.equal(workspaceRecovery?.steps?.[1]?.available, true);
+    assert.equal(workspaceRecovery?.restart_required, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

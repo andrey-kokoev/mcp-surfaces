@@ -10,6 +10,7 @@ export function createTaskLifecycleAdminHandlers({
   getSiteRootSource,
   getToolAliases,
   getSitePolicy,
+  getTaskLifecyclePreparation,
   buildTaskLifecycleFreshness,
   buildLifecycleTargetLocusStatus,
   taskLifecycleRestart,
@@ -22,6 +23,7 @@ export function createTaskLifecycleAdminHandlers({
       const sitePolicy = getSitePolicy();
       const mcpFreshness = buildTaskLifecycleFreshness({ registeredTools });
       const targetLocusGuard = buildLifecycleTargetLocusStatus();
+      const preparation = getTaskLifecyclePreparation?.() ?? null;
       const full = args?.verbose === true || args?.detail === 'full';
       if (!full) {
         return jsonToolResult({
@@ -43,6 +45,7 @@ export function createTaskLifecycleAdminHandlers({
               roles_are_obligation_targets: sitePolicy?.roster?.roles_are_obligation_targets === true,
             },
           },
+          preparation,
           mcp_freshness: {
             schema: mcpFreshness?.schema,
             pending_restart: mcpFreshness?.pending_restart === true,
@@ -76,6 +79,7 @@ export function createTaskLifecycleAdminHandlers({
         deprecated_aliases: deprecatedAliases,
         allowed_tools: registeredTools,
         site_policy: sitePolicy,
+        preparation,
         mcp_freshness: mcpFreshness,
         target_locus_guard: targetLocusGuard,
         conceptual_role: {

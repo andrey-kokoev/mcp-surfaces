@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { DEFAULT_SITE_LOOP_CONFIG, loadSiteLoopConfig, requireSiteLoopConfig, SITE_LOOP_CONFIG_SCHEMA, siteLoopConfigJsonSchema, validateSiteLoopConfigDocument } from '../src/site-loop/site-loop-config.js';
 import { loadSiteLoopOperatingPolicy, validateSiteLoopOperatingPolicy } from '../src/site-loop/operating-loop-policy.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
@@ -52,6 +53,8 @@ writeSiteLoopConfig(phasePlanDisabledRoot, {
     ticket_task_reconciliation: { enabled: false, execution: 'direct_spawn', command: 'disabled-ticket-reconcile', args: [] },
   },
 });
+const phasePlanDisabledStore = prepareTaskLifecycleStore(phasePlanDisabledRoot);
+phasePlanDisabledStore.db.close();
 const phasePlanDisabledRun = await runSiteLoop(phasePlanDisabledRoot, {
   dryRun: true,
   sourceSync: true,
@@ -268,6 +271,8 @@ writeSiteLoopConfig(phasePlanRoot, {
   resident: { agent_id: 'phase.plan.resident', role: 'resident' },
   refs: { ticket_projection: { kind: 'ticket_projection', ref: 'phase-plan' } },
 });
+const phasePlanStore = prepareTaskLifecycleStore(phasePlanRoot);
+phasePlanStore.db.close();
 const phasePlanRun = await runSiteLoop(phasePlanRoot, {
   dryRun: true,
   sourceSync: true,
@@ -315,6 +320,8 @@ writeSiteLoopConfig(testAuthorityRoot, {
     operator_attention_root: '.ai/test-authority/site-loop/.ai/operator-attention',
   },
 });
+const testAuthorityPreparation = prepareTaskLifecycleStore(join(testAuthorityRoot, '.ai', 'test-authority', 'site-loop'));
+testAuthorityPreparation.db.close();
 const testAuthorityRun = await runSiteLoop(testAuthorityRoot, {
   test_authority: true,
   dry_run: false,
@@ -475,7 +482,7 @@ assert.equal(configuredPolicyValidation.status, 'ok');
 const defaultPolicyValidation = validateSiteLoopOperatingPolicy(operatingPolicyLoad.policy);
 assert.equal(defaultPolicyValidation.status, 'invalid');
 assert.equal(defaultPolicyValidation.errors.includes('unsupported_loop_id'), true);
-const initializedLoopStore = openSiteLoopStore(siteRoot);
+const initializedLoopStore = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
 initializedLoopStore.close();
 const configuredRuns = listSiteLoopRuns(siteRoot, { limit: 1 });
 assert.equal(configuredRuns.schema, 'narada.example.loop.runs.v1');

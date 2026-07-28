@@ -15,6 +15,7 @@ import {
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
 import { createServerState, handleRequest } from '@narada2/delegated-task-mcp';
+import { prepareTaskLifecycleMcpSite } from '@narada2/task-lifecycle-mcp/task-lifecycle-mcp-server';
 import {
   admitTaskExecutabilityAssessment,
   assembleDeclaredEnvironment,
@@ -74,6 +75,8 @@ writeFileSync(join(siteRoot, '.ai', 'agents', 'roster.json'), JSON.stringify({
   schema: 'narada.agent_roster.v1',
   agents: [{ agent_id: 'fixture.builder', role: 'builder', status: 'active', capabilities: [] }],
 }, null, 2), 'utf8');
+const preparation = prepareTaskLifecycleMcpSite(siteRoot);
+assert.equal(preparation.preparation.status, 'prepared', JSON.stringify(preparation));
 
 const lifecycleServerPath = resolve(process.cwd(), '../task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js');
 let lifecycleServer: ReturnType<typeof spawnJsonlMcpServer> | null = null;

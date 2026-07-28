@@ -33,8 +33,8 @@ function stringValue(value: unknown, fallback : any= ''): string {
 }
 
 function requireResidentCarrierSiteLoopConfig(value: unknown): SiteLoopConfig {
-  const record: any = asRecord(value);
-  const resident: any = asRecord(record.resident);
+  const record = asRecord(value);
+  const resident = asRecord(record.resident);
   if (typeof record.loop_id === 'string' && typeof resident.agent_id === 'string' && typeof resident.role === 'string') {
     return record as SiteLoopConfig;
   }
@@ -42,7 +42,7 @@ function requireResidentCarrierSiteLoopConfig(value: unknown): SiteLoopConfig {
 }
 
 function configuredSessionRoot(cwd: string, siteLoopConfig: SiteLoopConfig = requireSiteLoopConfig(cwd)) {
-  const sessionRoot: any = siteLoopConfig.resident_runtime.session_root;
+  const sessionRoot = siteLoopConfig.resident_runtime.session_root;
   return isAbsolute(sessionRoot) ? sessionRoot : join(cwd, sessionRoot);
 }
 
@@ -59,21 +59,21 @@ export async function dispatchPendingDirectives({
   requireLiveCarrier = true,
   blockBusyCarrier = true,
 }: any) {
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
-  const effectiveAgentId: any = stringValue(agentId, siteLoopConfig.resident.agent_id);
-  const effectiveRole: any = stringValue(role, siteLoopConfig.resident.role);
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const effectiveAgentId = stringValue(agentId, siteLoopConfig.resident.agent_id);
+  const effectiveRole = stringValue(role, siteLoopConfig.resident.role);
   const loopId: any = siteLoopConfig.loop_id;
-  const dispatchSchema: any = schemaName(siteLoopConfig, 'directive_dispatch');
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
-  const store: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const dispatchSchema = schemaName(siteLoopConfig, 'directive_dispatch');
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: true });
+  const store = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   store.initSchema();
   const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, effectiveAgentId, { requireLiveCarrier }) as ResidentControlTarget | null;
   const receiptReconciliation: any = reconcileCarrierReceipts(cwd, store, {
     carrierSessionIds: carrier?.carrierSessionId ? [carrier.carrierSessionId] : [],
   });
   const leaseRecovery: any = recoverExpiredLeases(store);
-  const controlPath: any = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
-  const eventEndpoint: any = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
+  const controlPath = carrier && typeof carrier.controlPath === 'string' ? carrier.controlPath : null;
+  const eventEndpoint = carrier && typeof carrier.eventEndpoint === 'string' ? carrier.eventEndpoint : null;
   const inputTransport: any = selectResidentInputTransport({ controlPath, eventEndpoint });
   const deliveryTarget: any = inputTransport.target;
   const pending: any = dedupeDirectives([
@@ -102,7 +102,7 @@ export async function dispatchPendingDirectives({
     };
   }
 
-  const carrierSessionId: any = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
+  const carrierSessionId = carrier && typeof carrier.carrierSessionId === 'string' ? carrier.carrierSessionId : null;
   const sessionState: any = carrierSessionId ? inferAgentCliSessionState(cwd, carrierSessionId) : { active_turn_state: 'unknown' };
   const host: any = carrierSessionId ? readResidentHostEvidence(cwd, carrierSessionId) : null;
   const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
@@ -129,7 +129,7 @@ export async function dispatchPendingDirectives({
   }
 
   for (const directive of pending) {
-    const terminalOutcome: any = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id, loopId);
+    const terminalOutcome = latestTerminalDirectiveOutcome(lifecycleStore.db, directive.directive_id, loopId);
     if (terminalOutcome) {
       failDirectiveDelivery(store, directive.directive_id, `terminal_outcome_${terminalOutcome.outcome}`);
       skipped.push({
@@ -139,7 +139,7 @@ export async function dispatchPendingDirectives({
       });
       continue;
     }
-    const activeCarrierSessionId: any = stringValue(
+    const activeCarrierSessionId = stringValue(
       carrier?.carrierSessionId ?? carrierSessionIdFromControlPath(controlPath),
       `${siteLoopConfig.resident_runtime.preferred_runtime}-control-jsonl`,
     );
@@ -220,7 +220,7 @@ export async function dispatchPendingDirectives({
  * sideband whenever it exists; use WebSocket input only as a fallback.
  */
 export function selectResidentInputTransport({ controlPath = null, eventEndpoint = null } : any= {}) {
-  const normalizedControlPath: any = typeof controlPath === 'string' && controlPath.trim() ? controlPath : null;
+  const normalizedControlPath = typeof controlPath === 'string' && controlPath.trim() ? controlPath : null;
   if (normalizedControlPath) {
     return {
       kind: 'control_jsonl',
@@ -228,7 +228,7 @@ export function selectResidentInputTransport({ controlPath = null, eventEndpoint
       transport: 'agent_cli_control_jsonl',
     };
   }
-  const normalizedEventEndpoint: any = typeof eventEndpoint === 'string' && eventEndpoint.trim() ? eventEndpoint : null;
+  const normalizedEventEndpoint = typeof eventEndpoint === 'string' && eventEndpoint.trim() ? eventEndpoint : null;
   if (normalizedEventEndpoint) {
     return {
       kind: 'event_websocket',
@@ -244,10 +244,10 @@ export function selectResidentInputTransport({ controlPath = null, eventEndpoint
 }
 
 function directiveDeliveryMessage(directive: any, options: DirectiveDispatchPayload = {}) {
-  const text: any = String(directive?.content?.text ?? '').trim();
-  const directiveId: any = String(directive?.directive_id ?? '').trim();
+  const text = String(directive?.content?.text ?? '').trim();
+  const directiveId = String(directive?.directive_id ?? '').trim();
   if (!directiveId) return text;
-  const mailboxTicketGuidance: any = directiveLooksLikeMailboxTicketDraftWork(directive)
+  const mailboxTicketGuidance = directiveLooksLikeMailboxTicketDraftWork(directive)
     ? [
         'Mailbox ticket rule: do not create or send a mere confirmation or acknowledgement for stale customer mail.',
         'If the inbound message is from a prior local day or otherwise old, inspect the ticket evidence first and create only a substantive follow-up draft, or record why no customer draft is appropriate.',
@@ -270,7 +270,7 @@ function directiveDeliveryMessage(directive: any, options: DirectiveDispatchPayl
 }
 
 function directiveLooksLikeMailboxTicketDraftWork(directive: any) {
-  const haystack: any = [
+  const haystack = [
     directive?.title,
     directive?.source_id,
     directive?.sourceId,
@@ -324,11 +324,11 @@ function escapePowerShellSingleQuotedString(value: string) {
 }
 
 export function getResidentStatus(cwd: any, { agentId, requireLiveCarrier = true }: ResidentStatusOptions = {}) {
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(cwd, { write: false });
   try {
-    const agentIdString: any = stringValue(agentId, siteLoopConfig.resident.agent_id);
-    const requireLiveCarrierBool: any = requireLiveCarrier !== false;
+    const agentIdString = stringValue(agentId, siteLoopConfig.resident.agent_id);
+    const requireLiveCarrierBool = requireLiveCarrier !== false;
     const carrier: ResidentControlTarget | null = findLatestResidentControlTarget(cwd, agentIdString, { requireLiveCarrier: requireLiveCarrierBool }) as ResidentControlTarget | null;
     const latestReceipt: any = latestResidentReceipt(lifecycleStore.db, agentIdString);
     const latestReport: any = lifecycleStore.db.prepare(`
@@ -342,11 +342,11 @@ export function getResidentStatus(cwd: any, { agentId, requireLiveCarrier = true
     const host: any = carrier?.carrierSessionId ? readResidentHostEvidence(cwd, carrier.carrierSessionId) : null;
     const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
     const carrierState: any = classifyResidentCarrierState({ carrier, sessionState, host, policy, siteLoopConfig });
-    const status: any = residentAvailabilityStatus(carrier, sessionState, carrierState);
-    const proofDriver: any = host?.started_event?.resident_proof_driver === true;
-    const activeRuntime: any = carrier?.status === 'available' ? carrier.runtime ?? null : null;
+    const status = residentAvailabilityStatus(carrier, sessionState, carrierState);
+    const proofDriver = host?.started_event?.resident_proof_driver === true;
+    const activeRuntime = carrier?.status === 'available' ? carrier.runtime ?? null : null;
     const terminalWorkInflight: any = detectTerminalWorkInflight(lifecycleStore.db, { sessionState, host, siteLoopConfig });
-    const runtimeCoherent: any = ['available_idle', 'busy'].includes(carrierState?.state)
+    const runtimeCoherent = ['available_idle', 'busy'].includes(carrierState?.state)
       && terminalWorkInflight.status !== 'terminal_inflight';
     return {
       schema: schemaName(siteLoopConfig, 'resident_status'),
@@ -433,9 +433,9 @@ function residentAvailabilityStatus(carrier: any, sessionState: ResidentSessionS
 }
 
 function detectTerminalWorkInflight(db: any, { sessionState = {}, host = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
-  const loopConfig: any = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
-  const sessionStateRecord: any = asRecord(sessionState);
-  const hostRecord: any = asRecord(host);
+  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
+  const sessionStateRecord = asRecord(sessionState);
+  const hostRecord = asRecord(host);
   if (sessionStateRecord.active_turn_state !== 'running') {
     return { status: 'none', directive_id: null, outcome: null };
   }
@@ -444,7 +444,7 @@ function detectTerminalWorkInflight(db: any, { sessionState = {}, host = null, s
     ?? sameTurnDirectiveId(hostRecord.last_host_event, sessionStateRecord)
     ?? null;
   if (!directiveId) return { status: 'unknown_running_directive', directive_id: null, outcome: null };
-  const terminal: any = latestTerminalDirectiveOutcome(db, directiveId, loopConfig.loop_id);
+  const terminal = latestTerminalDirectiveOutcome(db, directiveId, loopConfig.loop_id);
   return terminal
     ? { status: 'terminal_inflight', directive_id: directiveId, outcome: terminal.outcome }
     : { status: 'nonterminal_inflight', directive_id: directiveId, outcome: null };
@@ -455,7 +455,7 @@ function runningTurnDirectiveId(host: any, sessionState: any) {
   const paths: any = [host?.paths?.protocol_stdout, host?.paths?.host_log].filter(Boolean);
   for (const path of paths) {
     if (!existsSync(path)) continue;
-    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-300).reverse();
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-300).reverse();
     for (const line of lines) {
       let event: any;
       try {
@@ -483,7 +483,7 @@ function sameTurnDirectiveId(event: any, sessionState: any) {
 }
 
 function directiveIdFromRequestId(requestId: any) {
-  const match: any = String(requestId ?? '').match(/directive-(dir_[A-Za-z0-9]+)/);
+  const match = String(requestId ?? '').match(/directive-(dir_[A-Za-z0-9]+)/);
   return match?.[1] ?? null;
 }
 
@@ -495,11 +495,11 @@ function residentStaleCarrierCount(carrier: any) {
 }
 
 export function classifyResidentCarrierState({ carrier, sessionState = {}, host = null, policy = null, siteLoopConfig }: ResidentCarrierStateInput = {}) {
-  const loopConfig: any = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
-  const carrierStateSchema: any = schemaName(loopConfig, 'resident_carrier_state');
-  const carrierRecord: any = asRecord(carrier);
-  const sessionStateRecord: any = asRecord(sessionState);
-  const hostRecord: any = asRecord(host);
+  const loopConfig = requireResidentCarrierSiteLoopConfig(siteLoopConfig);
+  const carrierStateSchema = schemaName(loopConfig, 'resident_carrier_state');
+  const carrierRecord = asRecord(carrier);
+  const sessionStateRecord = asRecord(sessionState);
+  const hostRecord = asRecord(host);
   if (!carrier || carrierRecord.status !== 'available') {
     return {
       schema: carrierStateSchema,
@@ -508,8 +508,8 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
       dispatch_skip_reason: carrierRecord.reason ?? 'no_live_resident_control_target',
     };
   }
-  const policyLoaded: any = asRecord(policy ?? loadSiteLoopOperatingPolicy(process.cwd()).policy);
-  const carrierPolicy: any = asRecord(policyLoaded.carrier);
+  const policyLoaded = asRecord(policy ?? loadSiteLoopOperatingPolicy(process.cwd()).policy);
+  const carrierPolicy = asRecord(policyLoaded.carrier);
   if (carrierPolicy.require_policy_current !== false && carrierPolicyStale(carrierRecord, hostRecord)) {
     return {
       schema: carrierStateSchema,
@@ -521,10 +521,10 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
     };
   }
   if (sessionStateRecord.active_turn_state === 'running') {
-    const startedAt: any = Date.parse(stringValue(sessionStateRecord.turn_started_at));
-    const ageMs: any = Number.isFinite(startedAt) ? Date.now() - startedAt : null;
-    const timeoutMs: any = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
-    const stale: any = ageMs != null && ageMs > timeoutMs;
+    const startedAt = Date.parse(stringValue(sessionStateRecord.turn_started_at));
+    const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : null;
+    const timeoutMs = Number(asRecord(policyLoaded.cadence).busy_turn_timeout_ms ?? 10 * 60_000);
+    const stale = ageMs != null && ageMs > timeoutMs;
     return {
       schema: carrierStateSchema,
       state: stale ? 'stale_busy' : 'busy',
@@ -547,21 +547,21 @@ export function classifyResidentCarrierState({ carrier, sessionState = {}, host 
 }
 
 function carrierPolicyStale(carrier: any, host: any) {
-  const siteRoot: any = host?.session_dir ? resolve(host.session_dir, '..', '..', '..', '..') : null;
-  const policyPath: any = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
+  const siteRoot = host?.session_dir ? resolve(host.session_dir, '..', '..', '..', '..') : null;
+  const policyPath = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
   if (!policyPath || !existsSync(policyPath)) return false;
-  const policyMtime: any = statSync(policyPath).mtimeMs;
-  const startedAt: any = Date.parse(host?.started_event?.timestamp ?? carrier?.startedAt ?? '');
+  const policyMtime = statSync(policyPath).mtimeMs;
+  const startedAt = Date.parse(host?.started_event?.timestamp ?? carrier?.startedAt ?? '');
   return Number.isFinite(startedAt) && startedAt < policyMtime;
 }
 
 function siteControlRoot(siteRoot: string): string {
-  const root: any = resolve(siteRoot);
+  const root = resolve(siteRoot);
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
 export function reconcileCarrierReceipts(cwd: any, store: any, options: DirectiveDispatchPayload = {}) {
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
   const carrierSessionIds: any = new Set([
     ...activeLeaseCarrierSessionIds(store.db),
     ...(Array.isArray(options.carrierSessionIds) ? options.carrierSessionIds.map(String) : []),
@@ -587,7 +587,7 @@ export function reconcileCarrierReceipts(cwd: any, store: any, options: Directiv
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation: any = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
+      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -610,7 +610,7 @@ export function reconcileCarrierReceipts(cwd: any, store: any, options: Directiv
         skipped.push({ directive_id: event.directive_id, reason: 'directive_not_found' });
         continue;
       }
-      const validation: any = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
+      const validation = validateCarrierEventForDirective(directive, event, sessionPath, siteLoopConfig);
       if (validation.status !== 'ok') {
         skipped.push({ directive_id: event.directive_id, reason: validation.reason, session_path: sessionPath });
         continue;
@@ -643,15 +643,15 @@ export function reconcileCarrierReceipts(cwd: any, store: any, options: Directiv
 
 function validateCarrierEventForDirective(directive: any, event: any, sessionPath: any, siteLoopConfig: SiteLoopConfig) {
   const sessionCarrierId: any = carrierSessionIdFromSessionPath(sessionPath);
-  const eventCarrierId: any = event.carrier_session_id ? String(event.carrier_session_id) : null;
-  const leasedCarrierId: any = directive.delivery?.carrier_session_id ? String(directive.delivery.carrier_session_id) : null;
+  const eventCarrierId = event.carrier_session_id ? String(event.carrier_session_id) : null;
+  const leasedCarrierId = directive.delivery?.carrier_session_id ? String(directive.delivery.carrier_session_id) : null;
   if (eventCarrierId && sessionCarrierId && eventCarrierId !== sessionCarrierId) {
     return { status: 'skipped', reason: 'carrier_session_mismatch_session_path' };
   }
   if (eventCarrierId && leasedCarrierId && eventCarrierId !== leasedCarrierId) {
     return { status: 'skipped', reason: 'carrier_session_mismatch_delivery_lease' };
   }
-  const agentId: any = event.agent_id ? String(event.agent_id) : siteLoopConfig.resident.agent_id;
+  const agentId = event.agent_id ? String(event.agent_id) : siteLoopConfig.resident.agent_id;
   const target: any = directive.target ?? {};
   if (target.kind === 'agent' && target.id && String(target.id) !== agentId) {
     return { status: 'skipped', reason: 'agent_mismatch_directive_target' };
@@ -659,7 +659,7 @@ function validateCarrierEventForDirective(directive: any, event: any, sessionPat
   if (target.kind === 'role' && target.id === siteLoopConfig.resident.role && agentId !== siteLoopConfig.resident.agent_id) {
     return { status: 'skipped', reason: 'agent_mismatch_resident_role' };
   }
-  const transport: any = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
+  const transport = event.transport ? String(event.transport) : 'agent_cli_control_jsonl';
   if (!['agent_cli_control_jsonl', 'agent_runtime_event_websocket', 'control_jsonl', 'jsonl_stdio'].includes(transport)) {
     return { status: 'skipped', reason: 'unsupported_carrier_event_transport' };
   }
@@ -700,7 +700,7 @@ export function recoverExpiredLeases(store: any, now : any= new Date().toISOStri
 }
 
 export function findLatestResidentControlTarget(cwd: any, agentId: any, { requireLiveCarrier = true } : any= {}) {
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
   const runtimeConfig: any = siteLoopConfig.resident_runtime;
   const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
   const interactive: any = findLatestControlTargetByRuntime(cwd, agentId, runtimeConfig.preferred_runtime, { requireLiveCarrier });
@@ -727,7 +727,7 @@ export function findLatestResidentControlTarget(cwd: any, agentId: any, { requir
   }));
   const availableLegacy: any = legacyFallbacks.find((item: any) => item.carrier.status === 'available');
   if (availableLegacy) return { ...availableLegacy.carrier, preference: runtimeConfig.fallback_preference, preferred_interactive: interactive, legacy_runtime: availableLegacy.runtime };
-  const allFallbacksMissing: any = [interactive, agentRuntimeServer, ...legacyFallbacks.map((item: any) => item.carrier)]
+  const allFallbacksMissing = [interactive, agentRuntimeServer, ...legacyFallbacks.map((item: any) => item.carrier)]
     .every((carrier: any) => carrier.reason === noLaunchResultReason(String(carrier.runtime ?? '')));
   return {
     status: 'unavailable',
@@ -765,14 +765,14 @@ export function findLatestAgentCliControlTarget(cwd: any, agentId: any, { requir
 }
 
 function findLatestControlTargetByRuntime(cwd: any, agentId: any, runtime: any, { requireLiveCarrier = true, maxLivenessCandidates = 5, max_liveness_candidates }: RuntimeControlTargetOptions = {}) {
-  const resultsDir: any = join(cwd, '.ai', 'runtime', 'agent-start-results');
+  const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return { status: 'unavailable', controlPath: null, reason: 'agent_start_results_missing', runtime };
-  const maxCandidates: any = Math.max(1, Number(max_liveness_candidates ?? maxLivenessCandidates ?? 5));
+  const maxCandidates = Math.max(1, Number(max_liveness_candidates ?? maxLivenessCandidates ?? 5));
   const allCandidates: any[] = readdirSync(resultsDir)
     .filter((name: any) => name.endsWith('.result.json'))
     .map((name: any) => {
       try {
-        const path: any = join(resultsDir, name);
+        const path = join(resultsDir, name);
         const packet: any = JSON.parse(readFileSync(path, 'utf8'));
         const controlFlagIndex: any = Array.isArray(packet.runtime_args) ? packet.runtime_args.indexOf('--control-jsonl') : -1;
         const controlPath: any = (controlFlagIndex >= 0 ? packet.runtime_args[controlFlagIndex + 1] : null)
@@ -800,7 +800,7 @@ function findLatestControlTargetByRuntime(cwd: any, agentId: any, runtime: any, 
     .filter(Boolean)
     .sort((a: any, b: any) => String(b.startedAt).localeCompare(String(a.startedAt)));
   const candidates: any = allCandidates.slice(0, maxCandidates);
-  const uninspectedCandidateCount: any = Math.max(0, allCandidates.length - candidates.length);
+  const uninspectedCandidateCount = Math.max(0, allCandidates.length - candidates.length);
   for (const candidate of candidates) {
     const retirement: any = readCarrierRetirement(cwd, candidate.carrierSessionId);
     if (retirement) {
@@ -838,12 +838,12 @@ function readResidentSessionIndex(cwd: any, carrierSessionId: any) {
 }
 
 async function sendWebSocketJsonFrame(endpoint: any, frame: any, timeoutMs : any= 5000) {
-  const url: any = new URL(String(endpoint));
+  const url = new URL(String(endpoint));
   if (url.protocol !== 'ws:') throw new Error(`unsupported_websocket_protocol:${url.protocol}`);
-  const port: any = Number(url.port || 80);
-  const path: any = `${url.pathname || '/'}${url.search || ''}`;
-  const key: any = randomBytes(16).toString('base64');
-  const request: any = [
+  const port = Number(url.port || 80);
+  const path = `${url.pathname || '/'}${url.search || ''}`;
+  const key = randomBytes(16).toString('base64');
+  const request = [
     `GET ${path} HTTP/1.1`,
     `Host: ${url.hostname}:${port}`,
     'Upgrade: websocket',
@@ -852,14 +852,14 @@ async function sendWebSocketJsonFrame(endpoint: any, frame: any, timeoutMs : any
     'Sec-WebSocket-Version: 13',
     '',
   ].join('\r\n');
-  const expectedAccept: any = createHash('sha1')
+  const expectedAccept = createHash('sha1')
     .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
     .digest('base64');
-  const payload: any = JSON.stringify(frame);
+  const payload = JSON.stringify(frame);
   const encoded: any = encodeClientWebSocketTextFrame(payload);
   return await new Promise((resolvePromise: any, reject: any) => {
-    const socket: any = new Socket();
-    let settled: any = false;
+    const socket = new Socket();
+    let settled = false;
     let buffer: any = Buffer.alloc(0);
     const settle: any = (error : any= null) => {
       if (settled) return;
@@ -869,7 +869,7 @@ async function sendWebSocketJsonFrame(endpoint: any, frame: any, timeoutMs : any
       if (error) reject(error);
       else resolvePromise({ status: 'sent', endpoint, bytes: Buffer.byteLength(payload) });
     };
-    const timer: any = setTimeout(() => settle(new Error('websocket_send_timeout')), timeoutMs);
+    const timer = setTimeout(() => settle(new Error('websocket_send_timeout')), timeoutMs);
     socket.once('error', settle);
     socket.connect(port, url.hostname, () => socket.write(request));
     socket.on('data', (chunk: any) => {
@@ -893,7 +893,7 @@ async function sendWebSocketJsonFrame(endpoint: any, frame: any, timeoutMs : any
 
 function encodeClientWebSocketTextFrame(text: any) {
   const body: any = Buffer.from(text, 'utf8');
-  const mask: any = randomBytes(4);
+  const mask = randomBytes(4);
   let header: any;
   if (body.length < 126) {
     header = Buffer.from([0x81, 0x80 | body.length]);
@@ -909,12 +909,12 @@ function encodeClientWebSocketTextFrame(text: any) {
     header.writeBigUInt64BE(BigInt(body.length), 2);
   }
   const masked: any = Buffer.alloc(body.length);
-  for (let index: any = 0; index < body.length; index += 1) masked[index] = body[index] ^ mask[index % 4];
+  for (let index = 0; index < body.length; index += 1) masked[index] = body[index] ^ mask[index % 4];
   return Buffer.concat([header, mask, masked]);
 }
 function readCarrierRetirement(cwd: any, carrierSessionId: any) {
   if (!carrierSessionId) return null;
-  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'retired.json');
   if (!existsSync(path)) return null;
   try {
     return { path, ...JSON.parse(readFileSync(path, 'utf8')) };
@@ -929,14 +929,14 @@ function appendControlFrame(controlPath: any, frame: any) {
 }
 
 function carrierSessionIdFromControlPath(controlPath: any) {
-  const match: any = String(controlPath).match(/[\\/]([^\\/]+)[\\/]control\.jsonl$/);
+  const match = String(controlPath).match(/[\\/]([^\\/]+)[\\/]control\.jsonl$/);
   return match?.[1] ?? null;
 }
 
 function carrierSessionIdFromSessionPath(sessionPath: any) {
-  const siteLocal: any = String(sessionPath).match(/[\\/]([^\\/]+)[\\/](?:session|events)\.jsonl$/);
+  const siteLocal = String(sessionPath).match(/[\\/]([^\\/]+)[\\/](?:session|events)\.jsonl$/);
   if (siteLocal) return siteLocal[1];
-  const pcRuntime: any = String(sessionPath).match(/[\\/]([^\\/]+)\.jsonl$/);
+  const pcRuntime = String(sessionPath).match(/[\\/]([^\\/]+)\.jsonl$/);
   return pcRuntime?.[1] ?? null;
 }
 
@@ -985,23 +985,23 @@ function ensureReceiptScanCursorTable(db: any) {
 }
 
 function readReceiptEventsIncrementally(db: any, path: any) {
-  const size: any = statSync(path).size;
+  const size = statSync(path).size;
   const cursor: any = db.prepare(`
     SELECT byte_offset
     FROM site_loop_receipt_scan_cursors
     WHERE session_path = ?
   `).get(path);
-  const startOffset: any = Math.min(Math.max(0, Number(cursor?.byte_offset ?? 0)), size);
-  const fd: any = openSync(path, 'r');
+  const startOffset = Math.min(Math.max(0, Number(cursor?.byte_offset ?? 0)), size);
+  const fd = openSync(path, 'r');
   const events: any[] = [];
-  const chunkSize: any = 64 * 1024;
+  const chunkSize = 64 * 1024;
   let readPosition: any = startOffset;
   let pending: any = Buffer.alloc(0);
   let pendingStartOffset: any = startOffset;
   try {
     while (readPosition < size) {
       const buffer: any = Buffer.alloc(Math.min(chunkSize, size - readPosition));
-      const bytesRead: any = readSync(fd, buffer, 0, buffer.length, readPosition);
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, readPosition);
       if (bytesRead <= 0) break;
       readPosition += bytesRead;
       pending = pending.length === 0
@@ -1046,8 +1046,8 @@ function persistReceiptScanCursor(db: any, path: any, byteOffset: any) {
 }
 
 function agentCliCarrierSessionIds(cwd: any) {
-  const preferredRuntime: any = requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime;
-  const resultsDir: any = join(cwd, '.ai', 'runtime', 'agent-start-results');
+  const preferredRuntime = requireSiteLoopConfig(cwd).resident_runtime.preferred_runtime;
+  const resultsDir = join(cwd, '.ai', 'runtime', 'agent-start-results');
   if (!existsSync(resultsDir)) return [];
   const ids: any = new Set();
   for (const name of readdirSync(resultsDir).filter((entry: any) => entry.endsWith('.result.json'))) {
@@ -1085,8 +1085,8 @@ function failDirectiveDelivery(store: any, directiveId: any, reason: any) {
 export function isResidentCarrierLive(carrierSessionId: any, cwd: any) {
   if (!carrierSessionId) return { status: 'unavailable', live: false, reason: 'carrier_session_id_missing' };
   if (!cwd) return { status: 'unavailable', live: false, reason: 'site_root_required_for_carrier_liveness' };
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
-  const processPatternExpression: any = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
   const heartbeat: any = readCarrierHeartbeat(cwd, carrierSessionId);
   if (heartbeat.status === 'stopped') {
     return {
@@ -1101,7 +1101,7 @@ export function isResidentCarrierLive(carrierSessionId: any, cwd: any) {
     carrierSessionId,
   );
   try {
-    const output: any = execFileSync('powershell.exe', [
+    const output = execFileSync('powershell.exe', [
       '-NoProfile',
       '-Command',
       `$needle=$env:NARADA_RESIDENT_CARRIER_PROBE_ID; $p = @(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and (${processPatternExpression}) -and $_.CommandLine.Contains($needle) } | Select-Object -ExpandProperty ProcessId); if ($p) { $p -join ',' }`,
@@ -1161,14 +1161,14 @@ export function isResidentCarrierLive(carrierSessionId: any, cwd: any) {
 }
 
 function readResidentCarrierOperationalEvidence(cwd: any, carrierSessionId: any) {
-  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl');
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'events.jsonl');
   if (!existsSync(path)) {
     return { status: 'missing', usable: true, reason: 'carrier_operational_evidence_missing', path };
   }
   try {
     const requests: any = new Map();
     const inputs: any = new Map();
-    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
       let event: any;
       try {
@@ -1197,8 +1197,8 @@ function readResidentCarrierOperationalEvidence(cwd: any, carrierSessionId: any)
     const requestRows: any = [...requests.values()];
     const failureCount: any = requestRows.filter((request: any) => request.state === 'failed' || request.terminal_state === 'failed').length;
     const successfulRequestCount: any = requestRows.filter((request: any) => ['completed', 'succeeded', 'reported'].includes(String(request.state))).length;
-    const pendingInputCount: any = [...inputs.values()].filter((state: any) => !['completed', 'failed'].includes(state)).length;
-    const unusable: any = failureCount >= 3 && successfulRequestCount === 0;
+    const pendingInputCount = [...inputs.values()].filter((state: any) => !['completed', 'failed'].includes(state)).length;
+    const unusable = failureCount >= 3 && successfulRequestCount === 0;
     return {
       status: unusable ? 'runtime_failures' : 'usable',
       usable: !unusable,
@@ -1221,14 +1221,14 @@ function readResidentCarrierOperationalEvidence(cwd: any, carrierSessionId: any)
 }
 
 function readCarrierHeartbeat(cwd: any, carrierSessionId: any, maxAgeMs : any= 30000) {
-  const path: any = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
+  const path = join(configuredSessionRoot(cwd), carrierSessionId, 'heartbeat.json');
   const heartbeat: any = readCarrierHeartbeatRecord(path, carrierSessionId, maxAgeMs);
   return { ...heartbeat, max_age_ms: maxAgeMs };
 }
 
 function inferAgentCliSessionState(cwd: any, carrierSessionId: any) {
-  const sessionDir: any = join(configuredSessionRoot(cwd), carrierSessionId);
-  const paths: any = [
+  const sessionDir = join(configuredSessionRoot(cwd), carrierSessionId);
+  const paths = [
     join(sessionDir, 'session.jsonl'),
     join(sessionDir, 'events.jsonl'),
     join(sessionDir, 'protocol.stdout.jsonl'),
@@ -1240,10 +1240,10 @@ function inferAgentCliSessionState(cwd: any, carrierSessionId: any) {
     const lines: any = readablePaths.flatMap((path: any) =>
       readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).slice(-200).map((line: any) => ({ line, path })),
     );
-    let lastTurnStarted: any = null;
-    let lastTurnStartedAt: any = null;
-    let lastTerminal: any = null;
-    let lastPath: any = null;
+    let lastTurnStarted = null;
+    let lastTurnStartedAt = null;
+    let lastTerminal = null;
+    let lastPath = null;
     for (const { line, path } of lines) {
       let event: any;
       try {
@@ -1270,12 +1270,12 @@ function inferAgentCliSessionState(cwd: any, carrierSessionId: any) {
 }
 
 function readResidentHostEvidence(cwd: any, carrierSessionId: any) {
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
-  const sessionDir: any = join(configuredSessionRoot(cwd, siteLoopConfig), carrierSessionId);
-  const hostLogPath: any = join(sessionDir, 'host.jsonl');
-  const protocolPath: any = join(sessionDir, 'protocol.stdout.jsonl');
-  const cursorPath: any = join(sessionDir, 'control.cursor.json');
-  const controlPath: any = join(sessionDir, 'control.jsonl');
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const sessionDir = join(configuredSessionRoot(cwd, siteLoopConfig), carrierSessionId);
+  const hostLogPath = join(sessionDir, 'host.jsonl');
+  const protocolPath = join(sessionDir, 'protocol.stdout.jsonl');
+  const cursorPath = join(sessionDir, 'control.cursor.json');
+  const controlPath = join(sessionDir, 'control.jsonl');
   return {
     schema: schemaName(siteLoopConfig, 'resident_host_evidence'),
     carrier_session_id: carrierSessionId,
@@ -1305,7 +1305,7 @@ function readJsonIfExists(path: any) {
 function readLastJsonl(path: any) {
   if (!existsSync(path)) return null;
   try {
-    const line: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).at(-1);
+    const line = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).at(-1);
     return line ? JSON.parse(line) : null;
   } catch (error: any) {
     return { status: 'unreadable', error: error instanceof Error ? error.message : String(error), path };
@@ -1315,7 +1315,7 @@ function readLastJsonl(path: any) {
 function readLastJsonlEvent(path: any, eventName: any) {
   if (!existsSync(path)) return null;
   try {
-    const lines: any = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).reverse();
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).reverse();
     for (const line of lines) {
       const event: any = JSON.parse(line);
       if (event?.event === eventName) return event;
@@ -1328,7 +1328,7 @@ function readLastJsonlEvent(path: any, eventName: any) {
 
 function parseArgs(argv: any) {
   const parsed: DispatchCliArgs = {};
-  for (let i: any = 0; i < argv.length; i++) {
+  for (let i = 0; i < argv.length; i++) {
     const arg: any = argv[i];
     if (arg === '--agent') parsed.agent = argv[++i];
     else if (arg === '--role') parsed.role = argv[++i];
@@ -1339,21 +1339,21 @@ function parseArgs(argv: any) {
   return parsed;
 }
 
-const isEntrypoint: any = process.argv[1]
+const isEntrypoint = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
 
 if (isEntrypoint) {
-  const cwd: any = resolve(process.argv[2] || process.cwd());
-  const args: any = parseArgs(process.argv.slice(3));
-  const siteLoopConfig: any = requireSiteLoopConfig(cwd);
-  const agentId: any = stringValue(args.agent, siteLoopConfig.resident.agent_id);
-  const role: any = stringValue(args.role, siteLoopConfig.resident.role);
-  const limit: any = Number(args.limit ?? 25);
-  const dryRun: any = args.dry_run === true;
-  const requireLiveCarrier: any = args.require_live_carrier !== false;
+  const cwd = resolve(process.argv[2] || process.cwd());
+  const args = parseArgs(process.argv.slice(3));
+  const siteLoopConfig = requireSiteLoopConfig(cwd);
+  const agentId = stringValue(args.agent, siteLoopConfig.resident.agent_id);
+  const role = stringValue(args.role, siteLoopConfig.resident.role);
+  const limit = Number(args.limit ?? 25);
+  const dryRun = args.dry_run === true;
+  const requireLiveCarrier = args.require_live_carrier !== false;
 
-  let exitCode: any = 0;
+  let exitCode = 0;
   try {
     const result: any = await dispatchPendingDirectives({ cwd, agentId, role, limit, dryRun, requireLiveCarrier });
     console.log(JSON.stringify(result, null, 2));

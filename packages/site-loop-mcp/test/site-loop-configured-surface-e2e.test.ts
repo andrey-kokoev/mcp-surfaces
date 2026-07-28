@@ -45,7 +45,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   },
 }, null, 2), 'utf8');
 
-const initializedLoopStore = openSiteLoopStore(siteRoot);
+const initializedLoopStore = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
 initializedLoopStore.close();
 
 const server = spawnContentLengthMcpServer(process.execPath, ['--no-warnings', serverPath, '--site-root', siteRoot], {

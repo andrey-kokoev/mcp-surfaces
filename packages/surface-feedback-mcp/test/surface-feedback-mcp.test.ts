@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeServerState, createServerState, handleRequest } from '../src/main.js';
+import { DatabaseSync } from 'node:sqlite';
+import { closeServerState, createServerState, handleRequest, parseArgs } from '../src/main.js';
 
 const root = mkdtempSync(join(tmpdir(), 'surface-feedback-mcp-behavior-'));
 let state: any;
 
 try {
   mkdirSync(join(root, '.ai'), { recursive: true });
+  assert.deepEqual(parseArgs(['--feedback-discovery-root', 'D:\\code\\one', '--feedback-discovery-root', 'D:\\code\\two']), {
+    feedbackDiscoveryRoots: ['D:\\code\\one', 'D:\\code\\two'],
+  });
   const previousCanonicalRoot = process.env.NARADA_SURFACE_FEEDBACK_ROOT;
   delete process.env.NARADA_SURFACE_FEEDBACK_ROOT;
   try {
@@ -25,6 +29,7 @@ try {
     canonicalFeedbackRoot: root,
     taskLifecycleRoot: root,
     authoritySiteId: 'andrey-user',
+    feedbackDiscoveryRoots: [root],
     authorityOwnedSurfaceIds: ['sop', 'delegated-task', 'surface-feedback', 'task-lifecycle'],
   });
 
@@ -101,6 +106,7 @@ try {
   assert.equal(view(noncanonicalDoctor).status, 'warning');
   assert.equal(view(noncanonicalDoctor).storage_posture, 'noncanonical_feedback_root');
   assert.equal(view(noncanonicalDoctor).uses_canonical_store, false);
+  assert.equal(view(noncanonicalDoctor).federation.enabled, false);
   assert.ok(view(noncanonicalDoctor).diagnostics.some((item: string) => /noncanonical/.test(item)));
   assert.ok(view(noncanonicalDoctor).remediation.some((item: string) => /--canonical-feedback-root/.test(item)));
   const noncanonicalRead = await callWith(noncanonicalState, 'surface_feedback_list', { scope: 'all_authorized' });
@@ -909,6 +915,134 @@ try {
     assert.equal(view(duplicateImport).skipped[0].reason, 'already_exists');
   } finally {
     await closeServerState(siteLocalState);
+  }
+
+  // --- automatic federation: bounded repository/Site-local discovery, provenance, refresh, and conflict protection ---
+  const federationWorkspace = mkdtempSync(join(tmpdir(), 'surface-feedback-federation-'));
+  const federationRepoRoot = join(federationWorkspace, 'repository');
+  const federationCanonicalRoot = join(federationWorkspace, 'canonical');
+  mkdirSync(join(federationWorkspace, '.ai'), { recursive: true });
+  mkdirSync(join(federationWorkspace, '.narada'), { recursive: true });
+  writeFileSync(join(federationWorkspace, '.narada', 'allowed-roots.json'), JSON.stringify({
+    schema: 'narada.site.allowed_roots.v1',
+    generated_by: 'mcp-registrar',
+    extra_allowed_roots: [],
+  }));
+  const invalidFederationDbPath = join(federationWorkspace, 'invalid', '.feedback', 'surface-feedback.db');
+  mkdirSync(join(federationWorkspace, 'invalid', '.feedback'), { recursive: true });
+  const invalidFederationDb = new DatabaseSync(invalidFederationDbPath);
+  invalidFederationDb.exec('CREATE TABLE unrelated (id INTEGER)');
+  invalidFederationDb.close();
+  mkdirSync(join(federationCanonicalRoot, '.ai'), { recursive: true });
+  let federationSourceState: any;
+  let federationCanonicalState: any;
+  try {
+    federationSourceState = createServerState({
+      feedbackRoot: federationRepoRoot,
+      canonicalFeedbackRoot: federationRepoRoot,
+      taskLifecycleRoot: federationRepoRoot,
+      authoritySiteId: 'narada-sonar',
+      authorityOwnedSurfaceIds: ['scheduler'],
+      taskLifecycleRequest: async () => ({}),
+    });
+    const federationSubmission = await callWith(federationSourceState, 'surface_feedback_submit', {
+      surface_id: 'scheduler',
+      submitter_site_id: 'narada-sonar',
+      submitter_principal: 'narada-sonar.agent',
+      kind: 'bug',
+      summary: 'Federated source feedback is materialized automatically',
+    });
+    const federationFeedbackId = view(federationSubmission).feedback_id;
+
+    federationCanonicalState = createServerState({
+      feedbackRoot: federationCanonicalRoot,
+      canonicalFeedbackRoot: federationCanonicalRoot,
+      taskLifecycleRoot: federationWorkspace,
+      authoritySiteId: 'andrey-user',
+      authorityOwnedSurfaceIds: ['scheduler', 'surface-feedback'],
+      taskLifecycleRequest: async () => ({}),
+    });
+    const federationShow = await callWith(federationCanonicalState, 'surface_feedback_show', {
+      feedback_id: federationFeedbackId,
+      scope: 'all_authorized',
+    });
+    assert.equal(view(federationShow).summary, 'Federated source feedback is materialized automatically');
+    assert.equal(view(federationShow).source.kind, 'federated_site_store');
+    assert.equal(view(federationShow).source.db_path, federationSourceState.dbPath);
+    assert.equal(view(federationShow).source.sync_mode, 'startup_materialized');
+    assert.ok(view(federationShow).audit_events.some((event: any) => event.event_type === 'federated_imported'));
+    const federationDoctor = await callWith(federationCanonicalState, 'surface_feedback_doctor', {});
+    assert.equal(view(federationDoctor).federation.enabled, true);
+    assert.equal(view(federationDoctor).federation.source_db_count, 2);
+    assert.equal(view(federationDoctor).status, 'warning');
+    assert.equal(view(federationDoctor).federation.sources.find((source: any) => source.source_db_path === federationSourceState.dbPath).status, 'synced');
+    assert.equal(view(federationDoctor).federation.sources.find((source: any) => source.source_db_path === invalidFederationDbPath).status, 'invalid');
+
+    await closeServerState(federationCanonicalState);
+    federationCanonicalState = createServerState({
+      feedbackRoot: federationCanonicalRoot,
+      canonicalFeedbackRoot: federationCanonicalRoot,
+      taskLifecycleRoot: federationWorkspace,
+      authoritySiteId: 'andrey-user',
+      authorityOwnedSurfaceIds: ['scheduler', 'surface-feedback'],
+      taskLifecycleRequest: async () => ({}),
+    });
+    const refreshedSource = await callWith(federationSourceState, 'surface_feedback_update_status', {
+      feedback_id: federationFeedbackId,
+      status: 'routed',
+      resolution_note: 'Source update should refresh an unchanged canonical projection.',
+    });
+    assert.equal(view(refreshedSource).feedback.status, 'routed');
+    await closeServerState(federationCanonicalState);
+    federationCanonicalState = createServerState({
+      feedbackRoot: federationCanonicalRoot,
+      canonicalFeedbackRoot: federationCanonicalRoot,
+      taskLifecycleRoot: federationWorkspace,
+      authoritySiteId: 'andrey-user',
+      authorityOwnedSurfaceIds: ['scheduler', 'surface-feedback'],
+      taskLifecycleRequest: async () => ({}),
+    });
+    const refreshedShow = await callWith(federationCanonicalState, 'surface_feedback_show', {
+      feedback_id: federationFeedbackId,
+      scope: 'all_authorized',
+    });
+    assert.equal(view(refreshedShow).status, 'routed');
+    assert.equal(view(refreshedShow).source.sync_mode, 'startup_materialized');
+
+    const canonicalMutation = await callWith(federationCanonicalState, 'surface_feedback_update_status', {
+      feedback_id: federationFeedbackId,
+      status: 'closed',
+      resolution_note: 'Canonical mutation must not be overwritten by a later source refresh.',
+    });
+    assert.equal(view(canonicalMutation).feedback.status, 'closed');
+    const laterSourceMutation = await callWith(federationSourceState, 'surface_feedback_update_status', {
+      feedback_id: federationFeedbackId,
+      status: 'acknowledged',
+      resolution_note: 'Later source update intentionally creates a federation conflict.',
+    });
+    assert.equal(view(laterSourceMutation).feedback.status, 'acknowledged');
+    await closeServerState(federationCanonicalState);
+    federationCanonicalState = createServerState({
+      feedbackRoot: federationCanonicalRoot,
+      canonicalFeedbackRoot: federationCanonicalRoot,
+      taskLifecycleRoot: federationWorkspace,
+      authoritySiteId: 'andrey-user',
+      authorityOwnedSurfaceIds: ['scheduler', 'surface-feedback'],
+      taskLifecycleRequest: async () => ({}),
+    });
+    const conflictShow = await callWith(federationCanonicalState, 'surface_feedback_show', {
+      feedback_id: federationFeedbackId,
+      scope: 'all_authorized',
+    });
+    assert.equal(view(conflictShow).status, 'closed');
+    const conflictDoctor = await callWith(federationCanonicalState, 'surface_feedback_doctor', {});
+    assert.equal(view(conflictDoctor).status, 'warning');
+    assert.equal(view(conflictDoctor).federation.conflict_count, 1);
+    assert.equal(view(conflictDoctor).federation.sources.find((source: any) => source.source_db_path === federationSourceState.dbPath).status, 'conflict');
+  } finally {
+    if (federationCanonicalState) await closeServerState(federationCanonicalState);
+    if (federationSourceState) await closeServerState(federationSourceState);
+    rmSync(federationWorkspace, { recursive: true, force: true });
   }
 
   // --- stats: explicit canonical cross-site scope ---

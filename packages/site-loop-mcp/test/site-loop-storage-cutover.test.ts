@@ -17,6 +17,11 @@ import {
 import { openTaskLifecycleStoreWithDiscipline } from '../src/task-lifecycle/sqlite-discipline.js';
 import { openSiteLoopStore } from '../src/site-loop/site-loop-store.js';
 
+function sqliteRow(value: unknown): Record<string, unknown> {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+  return value as Record<string, unknown>;
+}
+
 const siteRoot = mkdtempSync(join(tmpdir(), 'site-loop-storage-cutover-'));
 mkdirSync(join(siteRoot, '.narada', 'capabilities'), { recursive: true });
 mkdirSync(join(siteRoot, '.ai', 'state'), { recursive: true });
@@ -29,7 +34,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   refs: { ticket_projection: { kind: 'ticket_projection', ref: 'cutover-test' } },
 }, null, 2), 'utf8');
 
-const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
+const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true, storeMode: 'prepare' });
 store.db.exec(`
   CREATE TABLE site_loop_runs (
     run_id TEXT PRIMARY KEY, loop_id TEXT NOT NULL, status TEXT NOT NULL,
@@ -126,18 +131,18 @@ assert.equal(result.compaction?.status, 'compacted');
 assert.ok(Number(result.compaction?.after_bytes) <= Number(result.compaction?.before_bytes));
 
 const after = openSiteLoopStore(siteRoot, { write: false });
-assert.equal(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_runs`).get().count, 0);
-assert.equal(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_step_runs`).get().count, 0);
-assert.equal(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_classification_observations`).get().count, 0);
-assert.equal(after.db.prepare(`SELECT classification FROM site_loop_classification_current`).get().classification, 'recovered');
-assert.equal(after.db.prepare(`SELECT status FROM site_loop_health`).get().status, 'degraded');
-assert.equal(after.db.prepare(`SELECT consecutive_failures FROM site_loop_health`).get().consecutive_failures, 2);
-assert.equal(after.db.prepare(`SELECT paused FROM site_loop_control`).get().paused, 1);
-assert.equal(after.db.prepare(`SELECT mode FROM site_loop_control`).get().mode, 'paused');
-assert.equal(after.db.prepare(`SELECT reason FROM site_loop_control`).get().reason, 'operator hold');
-assert.equal(after.db.prepare(`SELECT outcome FROM directive_outcome_latest`).get().outcome, 'accepted');
-assert.equal(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_locks`).get().count, 0);
-assert.equal(after.db.prepare(`SELECT state FROM cutover_task_state`).get().state, 'preserved');
+assert.equal(sqliteRow(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_runs`).get()).count, 0);
+assert.equal(sqliteRow(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_step_runs`).get()).count, 0);
+assert.equal(sqliteRow(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_classification_observations`).get()).count, 0);
+assert.equal(sqliteRow(after.db.prepare(`SELECT classification FROM site_loop_classification_current`).get()).classification, 'recovered');
+assert.equal(sqliteRow(after.db.prepare(`SELECT status FROM site_loop_health`).get()).status, 'degraded');
+assert.equal(sqliteRow(after.db.prepare(`SELECT consecutive_failures FROM site_loop_health`).get()).consecutive_failures, 2);
+assert.equal(sqliteRow(after.db.prepare(`SELECT paused FROM site_loop_control`).get()).paused, 1);
+assert.equal(sqliteRow(after.db.prepare(`SELECT mode FROM site_loop_control`).get()).mode, 'paused');
+assert.equal(sqliteRow(after.db.prepare(`SELECT reason FROM site_loop_control`).get()).reason, 'operator hold');
+assert.equal(sqliteRow(after.db.prepare(`SELECT outcome FROM directive_outcome_latest`).get()).outcome, 'accepted');
+assert.equal(sqliteRow(after.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_locks`).get()).count, 0);
+assert.equal(sqliteRow(after.db.prepare(`SELECT state FROM cutover_task_state`).get()).state, 'preserved');
 assert.equal(after.db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'site_loop_step_runs_pre_cutover'`).get(), undefined);
 after.close();
 
@@ -166,17 +171,18 @@ assert.deepEqual(
 );
 assert.equal(runSiteLoopStorageMaintenance(siteRoot).status, 'refused');
 assert.equal(runSiteLoopStorageMaintenance(siteRoot, { ackMaintenance: true }).status, 'pruned');
-const maintenanceCompaction: any = runSiteLoopStorageMaintenance(siteRoot, {
+const maintenanceCompaction = runSiteLoopStorageMaintenance(siteRoot, {
   ackMaintenance: true,
   compact: true,
 });
 assert.equal(maintenanceCompaction.status, 'pruned');
+assert.ok('compaction' in maintenanceCompaction);
 assert.equal(maintenanceCompaction.compaction?.status, 'compacted');
 
 const noBackfillBefore = openSiteLoopStore(siteRoot, { write: true });
-const latestBefore = Number(noBackfillBefore.db.prepare(
+const latestBefore = Number(sqliteRow(noBackfillBefore.db.prepare(
   `SELECT COUNT(*) AS count FROM directive_outcome_latest`,
-).get().count);
+).get()).count);
 noBackfillBefore.db.prepare(`
   INSERT INTO directive_outcomes (
     outcome_id, loop_id, directive_id, outcome, agent_id, task_id, report_id, receipt_id,
@@ -195,7 +201,7 @@ noBackfillBefore.db.prepare(`
 noBackfillBefore.close();
 const noBackfillAfter = openSiteLoopStore(siteRoot, { write: false });
 assert.equal(
-  Number(noBackfillAfter.db.prepare(`SELECT COUNT(*) AS count FROM directive_outcome_latest`).get().count),
+  Number(sqliteRow(noBackfillAfter.db.prepare(`SELECT COUNT(*) AS count FROM directive_outcome_latest`).get()).count),
   latestBefore,
 );
 assert.equal(
@@ -235,7 +241,7 @@ const secondPrune = pruneSiteLoopPersistence(
 );
 assert.equal(secondPrune.deleted.step_runs, 1);
 assert.equal(secondPrune.deleted.runs, 1);
-assert.equal(pruneStore.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_runs WHERE run_id LIKE 'old_prune_run_%'`).get().count, 0);
+assert.equal(sqliteRow(pruneStore.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_runs WHERE run_id LIKE 'old_prune_run_%'`).get()).count, 0);
 pruneStore.db.exec(`CREATE TABLE compaction_fixture (payload TEXT)`);
 pruneStore.db.prepare(`INSERT INTO compaction_fixture VALUES (?)`).run('x'.repeat(1_000_000));
 pruneStore.db.prepare(`DELETE FROM compaction_fixture`).run();
@@ -260,7 +266,7 @@ writeFileSync(join(partialRoot, '.narada', 'capabilities', 'site-loop-config.jso
   resident: { agent_id: 'resident', role: 'resident' },
   refs: { ticket_projection: { kind: 'ticket_projection', ref: 'partial-test' } },
 }, null, 2), 'utf8');
-const partialStore = openTaskLifecycleStoreWithDiscipline(partialRoot, { write: true });
+const partialStore = openTaskLifecycleStoreWithDiscipline(partialRoot, { write: true, storeMode: 'prepare' });
 partialStore.db.exec(`
   CREATE TABLE site_loop_classification_current (
     loop_id TEXT NOT NULL, directive_id TEXT NOT NULL, classification TEXT NOT NULL,
@@ -310,13 +316,13 @@ assert.equal(partialResult.locks_reset, 1);
 assert.equal(partialResult.partial_tables_dropped, 4);
 assert.equal(partialResult.partial_rows_dropped, 4);
 const partialAfter = openTaskLifecycleStoreWithDiscipline(partialRoot, { write: false });
-assert.equal(partialAfter.db.prepare(`SELECT state FROM partial_task_state`).get().state, 'preserved');
-assert.equal(partialAfter.db.prepare(`SELECT classification FROM site_loop_classification_current`).get().classification, 'recovered');
-assert.equal(partialAfter.db.prepare(`SELECT status FROM site_loop_health`).get().status, 'degraded');
-assert.equal(partialAfter.db.prepare(`SELECT paused FROM site_loop_control`).get().paused, 1);
-assert.equal(Number(partialAfter.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_locks`).get().count), 0);
+assert.equal(sqliteRow(partialAfter.db.prepare(`SELECT state FROM partial_task_state`).get()).state, 'preserved');
+assert.equal(sqliteRow(partialAfter.db.prepare(`SELECT classification FROM site_loop_classification_current`).get()).classification, 'recovered');
+assert.equal(sqliteRow(partialAfter.db.prepare(`SELECT status FROM site_loop_health`).get()).status, 'degraded');
+assert.equal(sqliteRow(partialAfter.db.prepare(`SELECT paused FROM site_loop_control`).get()).paused, 1);
+assert.equal(Number(sqliteRow(partialAfter.db.prepare(`SELECT COUNT(*) AS count FROM site_loop_locks`).get()).count), 0);
 assert.equal(partialAfter.db.prepare(`SELECT 1 FROM sqlite_master WHERE name = 'site_loop_health_pre_cutover'`).get(), undefined);
-assert.equal(partialAfter.db.prepare(`SELECT schema FROM site_loop_storage_meta`).get().schema, 'narada.site_loop.storage.v3');
+assert.equal(sqliteRow(partialAfter.db.prepare(`SELECT schema FROM site_loop_storage_meta`).get()).schema, 'narada.site_loop.storage.v3');
 partialAfter.db.close();
 
 const malformed = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });

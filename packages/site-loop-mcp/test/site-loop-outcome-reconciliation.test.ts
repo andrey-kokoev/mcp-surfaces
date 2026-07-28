@@ -24,7 +24,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
   },
 }, null, 2), 'utf8');
 
-const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
+const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true, storeMode: 'prepare' });
 const directiveStore = new SqliteDirectiveRuntimeStore({ db: store.db });
 directiveStore.initSchema();
 

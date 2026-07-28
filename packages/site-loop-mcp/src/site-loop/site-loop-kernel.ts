@@ -1,4 +1,5 @@
 import { recordLoopStep } from './site-loop-store.js';
+import type { SiteLoopStore } from './site-loop-store.js';
 import type { SiteLoopConfig } from './site-loop-config.js';
 
 export type SiteLoopPayload = Record<string, unknown>;
@@ -17,7 +18,7 @@ export type SiteLoopStep = {
   error?: SiteLoopPayload;
 };
 
-export type SiteLoopStepRecorder = (store: unknown, step: SiteLoopStep) => void;
+export type SiteLoopStepRecorder = (store: SiteLoopStore, step: SiteLoopStep) => void;
 
 export type SiteLoopSyntheticStepInput = {
   stepId: string;
@@ -28,14 +29,14 @@ export type SiteLoopSyntheticStepInput = {
 };
 
 export type SiteLoopSyntheticStepRecordInput = SiteLoopSyntheticStepInput & {
-  store?: unknown;
+  store?: SiteLoopStore | null;
   runId: string;
 };
 
 export type SiteLoopPhaseContext<TState extends SiteLoopPayload = SiteLoopPayload> = {
   siteRoot: string;
   siteLoopConfig: SiteLoopConfig;
-  store?: unknown;
+  store?: SiteLoopStore | null;
   runId: string;
   options: SiteLoopPayload;
   dryRun: boolean;
@@ -58,6 +59,33 @@ export type SiteLoopPhaseAdapter<TState extends SiteLoopPayload = SiteLoopPayloa
   status?: (result: unknown, context: SiteLoopPhaseContext<TState>) => string;
 };
 
+type SiteLoopStepExecutionInput = {
+  store?: SiteLoopStore | null;
+  runId: string;
+  stepId: string;
+  inputRefs?: unknown[];
+  execute: () => Promise<unknown> | unknown;
+  outputRefs: (result: unknown) => unknown[];
+  evidence: (result: unknown) => unknown;
+  onFailedStep?: ((step: SiteLoopStep) => void) | null;
+};
+
+type SiteLoopPhaseAdapterInput<TState extends SiteLoopPayload> = {
+  adapter: SiteLoopPhaseAdapter<TState>;
+  context: SiteLoopPhaseContext<TState>;
+  store?: SiteLoopStore | null;
+  runId: string;
+  onFailedStep?: ((step: SiteLoopStep) => void) | null;
+};
+
+type SiteLoopPhasePlanInput<TState extends SiteLoopPayload> = {
+  adapters: SiteLoopPhaseAdapter<TState>[];
+  context: SiteLoopPhaseContext<TState>;
+  store?: SiteLoopStore | null;
+  runId: string;
+  onFailedStep?: ((step: SiteLoopStep) => void) | null;
+};
+
 export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
   'source_sync',
   'scheduled_sop_triggers',
@@ -77,16 +105,19 @@ export const DEFAULT_SITE_LOOP_PHASE_PLAN = [
   'operating_alert_reconciliation',
 ] as const;
 
-export async function runSiteLoopStep({ store, runId, stepId, inputRefs = [], execute, outputRefs, evidence, onFailedStep = null }: any) {
+export async function runSiteLoopStep({ store, runId, stepId, inputRefs = [], execute, outputRefs, evidence, onFailedStep = null }: SiteLoopStepExecutionInput): Promise<SiteLoopStep> {
   const startedAt = new Date().toISOString();
   try {
     const result = await execute();
+    const resultRecord: SiteLoopPayload = result && typeof result === 'object' && !Array.isArray(result)
+      ? result as SiteLoopPayload
+      : {};
     const finishedAt = new Date().toISOString();
     const step = {
       step_run_id: `${runId}:${stepId}`,
       run_id: runId,
       step_id: stepId,
-      status: result?.status === 'error' ? 'failed' : 'ok',
+      status: resultRecord.status === 'error' ? 'failed' : 'ok',
       started_at: startedAt,
       finished_at: finishedAt,
       input_refs: inputRefs,
@@ -95,7 +126,7 @@ export async function runSiteLoopStep({ store, runId, stepId, inputRefs = [], ex
       result,
     };
     if (store) recordLoopStep(store, step);
-    if (step.status === 'failed') throw new Error(result.error ?? `${stepId}_failed`);
+    if (step.status === 'failed') throw new Error(String(resultRecord.error ?? `${stepId}_failed`));
     return step;
   } catch (error) {
     const finishedAt = new Date().toISOString();
@@ -124,13 +155,13 @@ function errorToPayload(error: unknown): SiteLoopPayload {
       name: error.name,
       message: error.message,
       stack: error.stack,
-      ...Object.fromEntries(Object.entries(error).filter(([, value]: any) => value !== undefined)),
+      ...Object.fromEntries(Object.entries(error).filter(([, value]: [string, unknown]) => value !== undefined)),
     };
   }
   return { message: String(error) };
 }
 
-export async function runSiteLoopPhaseAdapter({ adapter, context, store, runId, onFailedStep = null }: any) {
+export async function runSiteLoopPhaseAdapter<TState extends SiteLoopPayload>({ adapter, context, store, runId, onFailedStep = null }: SiteLoopPhaseAdapterInput<TState>): Promise<SiteLoopStep | null> {
   if (adapter.shouldRun && !adapter.shouldRun(context)) {
     const skipped = adapter.skipStep?.(context);
     return skipped ? recordSiteLoopSyntheticStep({ store, runId, ...skipped }) : null;
@@ -154,12 +185,12 @@ export async function runSiteLoopPhaseAdapter({ adapter, context, store, runId, 
     stepId: adapter.id,
     inputRefs: adapter.inputRefs(context),
     execute: () => adapter.execute(context),
-    outputRefs: (result: any) => adapter.outputRefs(result, context),
-    evidence: (result: any) => adapter.evidence(result, context),
+    outputRefs: (result: unknown) => adapter.outputRefs(result, context),
+    evidence: (result: unknown) => adapter.evidence(result, context),
   });
 }
 
-export async function runSiteLoopPhasePlan({ adapters, context, store, runId, onFailedStep = null }: any) {
+export async function runSiteLoopPhasePlan<TState extends SiteLoopPayload>({ adapters, context, store, runId, onFailedStep = null }: SiteLoopPhasePlanInput<TState>): Promise<{ steps: SiteLoopStep[]; byId: Record<string, SiteLoopStep> }> {
   const steps: SiteLoopStep[] = [];
   const byId: Record<string, SiteLoopStep> = {};
   for (const adapter of adapters) {

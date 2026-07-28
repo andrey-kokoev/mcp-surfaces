@@ -21,7 +21,7 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
 }, null, 2), 'utf8');
 
 try {
-  const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
+  const store = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true, storeMode: 'prepare' });
   store.db.close();
 
   const staleLockDir = join(siteRoot, '.ai', 'task-lifecycle.write.lock');

@@ -9,6 +9,7 @@ import {
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada2/mcp-e2e-harness';
+import { prepareTaskLifecycleMcpSite } from '../src/task-lifecycle/task-mcp-server.js';
 
 const siteRoot = createTemporaryE2eRoot('task-lifecycle-site-fabric-e2e');
 const serverPath = fileURLToPath(new URL('../src/task-lifecycle/task-mcp-server.js', import.meta.url));
@@ -23,6 +24,8 @@ writeFileSync(`${siteRoot}/.ai/agents/roster.json`, JSON.stringify({
     { agent_id: 'fixture.architect', role: 'architect', status: 'active', capabilities: ['architect_as_reviewer'] },
   ],
 }, null, 2), 'utf8');
+const preparation = prepareTaskLifecycleMcpSite(siteRoot);
+assert.equal(preparation.status, 'prepared');
 
 const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--site-root', siteRoot], {
   cwd: siteRoot,

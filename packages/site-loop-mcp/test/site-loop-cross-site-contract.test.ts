@@ -44,7 +44,7 @@ function writeFixtureSite(prefix: any, configPatch : any= {}) {
     ...configPatch,
   };
   writeFileSync(join(root, '.narada', 'capabilities', 'site-loop-config.json'), JSON.stringify(config, null, 2), 'utf8');
-  openSiteLoopStore(root).close();
+  openSiteLoopStore(root, { storeMode: 'prepare' }).close();
   return { root, config };
 }
 

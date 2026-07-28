@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import {
+  inspectPreparedTaskLifecycleStore,
+  openTaskLifecycleStore,
+  prepareTaskLifecycleStore as prepareCoreTaskLifecycleStore,
+} from '@narada2/task-governance-core/task-lifecycle-store';
 import { finishTaskService } from '@narada2/task-governance-core/task-finish-service';
 import { classifyPostCloseoutContinuation, evaluatePostTransitionFollowups } from './follow-up-policy-service.js';
 import { closeTaskService } from '@narada2/task-governance-core/task-close-service';
@@ -118,10 +122,10 @@ import {
   normalizeCapabilitiesJson as normalizeCapabilitiesJsonCore,
 } from './task-lifecycle-routing-roster.js';
 
-const PROTOCOL_VERSION: any = '2026-04-18';
-const SERVER_NAME: any = 'narada-task-lifecycle-mcp';
-const SERVER_BOOTED_AT: any = new Date().toISOString();
-const NO_FILES_CHANGED_MARKER: any = '__narada_no_files_changed_declared__';
+const PROTOCOL_VERSION = '2026-04-18';
+const SERVER_NAME = 'narada-task-lifecycle-mcp';
+const SERVER_BOOTED_AT = new Date().toISOString();
+const NO_FILES_CHANGED_MARKER = '__narada_no_files_changed_declared__';
 const LOCUS_GUARDED_MUTATION_TOOLS: any = new Set([
   'task_lifecycle_claim',
   'task_lifecycle_continue',
@@ -183,6 +187,10 @@ const TASK_LIFECYCLE_DESTRUCTIVE_TOOLS: any = new Set([
   'task_lifecycle_defer',
   'task_lifecycle_recurring_retire',
 ]);
+
+type TaskLifecycleStore = ReturnType<typeof openTaskLifecycleStore>;
+type TaskLifecycleToolCaller = ReturnType<typeof createTaskLifecycleToolCaller>;
+type TaskLifecycleHandlerRegistry = ReturnType<typeof createTaskLifecycleHandlerRegistry>;
 
 // Session identity binding for mechanical identity verification.
 // If NARADA_AGENT_ID is set, mutating operations warn/block on mismatched agent_id params.
@@ -409,7 +417,7 @@ function taskLifecycleToolEffect(name: string): ToolEffect {
   };
 }
 
-function ensureDownstreamDependencyOutcomeContracts(taskStore : any= store) {
+function ensureDownstreamDependencyOutcomeContracts(taskStore: any = store) {
   if (!taskStore) return;
   const dependencies: any = taskStore.db.prepare(`
     SELECT dependency_id, required_task_id, satisfying_outcomes_json, created_by, created_at
@@ -417,13 +425,13 @@ function ensureDownstreamDependencyOutcomeContracts(taskStore : any= store) {
     WHERE kind = 'downstream_work'
   `).all() as Array<Record<string, unknown>>;
   for (const dependency of dependencies) {
-    const requiredTaskId: any = String(dependency.required_task_id);
-    const contractId: any = `contract-downstream_work-${requiredTaskId}`;
+    const requiredTaskId = String(dependency.required_task_id);
+    const contractId = `contract-downstream_work-${requiredTaskId}`;
     const latestContract: any = taskStore.getLatestTaskOutcomeContract?.(requiredTaskId);
     const existingDownstreamContract: any = taskStore.listTaskOutcomeContracts?.(requiredTaskId)
       .some((contract: any) => contract.contract_id === contractId) ?? false;
     if (existingDownstreamContract || latestContract?.outcome_type === 'completion') continue;
-    const satisfyingOutcomes: any = parseJsonStringArray(dependency.satisfying_outcomes_json);
+    const satisfyingOutcomes = parseJsonStringArray(dependency.satisfying_outcomes_json);
     const allowedOutcomes: any = [...new Set([...satisfyingOutcomes, 'completed', 'blocked', 'failed'])];
     taskStore.upsertTaskOutcomeContract({
       contract_id: contractId,
@@ -440,10 +448,27 @@ function ensureDownstreamDependencyOutcomeContracts(taskStore : any= store) {
   }
 }
 
+function schedulePostHandshakeBootSideEffects() {
+  if (deferredBootSideEffectsScheduled) return;
+  deferredBootSideEffectsScheduled = true;
+  setImmediate(() => {
+    try {
+      recordTaskLifecycleRuntimeObservation();
+    } catch {
+      // Observation is best effort and must never affect protocol readiness.
+    }
+    try {
+      reconcileTaskLifecycleRestartAfterBoot();
+    } catch (error: any) {
+      runtimeStderr.write(`Failed to reconcile task-lifecycle restart state: ${error.message}\n`);
+    }
+  });
+}
+
 function reconcileTaskLifecycleRestartAfterBoot() {
-  const requestPath: any = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  const requestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
   if (!existsSync(requestPath)) return;
-  const evidenceSource: any = process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
+  const evidenceSource = process.env.NARADA_MCP_ONE_SHOT_VERIFIER === '1'
     ? 'one_shot_verifier'
     : 'live_mcp_process_self_observation';
   const result: any = acknowledgeMcpRestartRequest({
@@ -609,8 +634,8 @@ function listDueRecurringDefinitions(taskStore: any, now : any= new Date()) {
 }
 
 function recordBlockedTaskReport({ store, report }: any) {
-  const reportJson: any = JSON.stringify(report);
-  const agentIdentityRefJson: any = taskAgentIdentityRefJson(report.agent_id, { siteId: process.env.NARADA_SITE_ID ?? null });
+  const reportJson = JSON.stringify(report);
+  const agentIdentityRefJson = taskAgentIdentityRefJson(report.agent_id, { siteId: process.env.NARADA_SITE_ID ?? null });
   if (store.upsertReportRecord) {
     store.upsertReportRecord({
       report_id: report.report_id,
@@ -666,7 +691,7 @@ function gitVisiblePathSubset(cwd: any, files: any) {
 }
 
 function extractEnvelopeId(body: any) {
-  const match: any = String(body ?? '').match(/\benv_[A-Za-z0-9_-]+\b/);
+  const match = String(body ?? '').match(/\benv_[A-Za-z0-9_-]+\b/);
   return match ? match[0] : null;
 }
 
@@ -730,9 +755,9 @@ function buildPostCloseoutContinuation({ agentId, result }: any) {
 }
 
 function patchLocalToolDefinition(toolDef: any) {
-  const name: any = String(toolDef?.name ?? '');
+  const name = String(toolDef?.name ?? '');
   const readOnly: any = TASK_LIFECYCLE_READ_ONLY_TOOLS.has(name);
-  const actionHint: any = name.startsWith('task_lifecycle_')
+  const actionHint = name.startsWith('task_lifecycle_')
     ? `Canonical action: ${name.replace(/^task_lifecycle_/, '').replaceAll('_', ' ')} (${name}).`
     : null;
   const annotatedToolDef: any = {
@@ -773,9 +798,22 @@ function patchLocalToolDefinition(toolDef: any) {
 let siteRoot: any = null;
 let siteRootSource: any = 'unknown';
 let store: any = null;
-let runtimeConfigured: any = false;
-let runtimeStderr: any = process.stderr;
+let runtimeConfigured = false;
+let runtimeStderr = process.stderr;
+let deferredBootSideEffectsScheduled = false;
 const runtimeStoreOwnership: any = new RuntimeStoreOwnership<{ db: { close: () => void } }>((taskStore: any) => taskStore.db.close());
+const STORE_FREE_TOOL_NAMES = new Set([
+  'task_lifecycle_doctor',
+  'task_lifecycle_guidance',
+  'task_lifecycle_payload_schema',
+  'task_lifecycle_restart',
+  'task_lifecycle_chapter_show',
+  'mcp_payload_create',
+  'mcp_payload_show',
+  'mcp_payload_derive',
+  'mcp_payload_validate',
+  'mcp_output_show',
+]);
 
 function closeTaskLifecycleStore(): void {
   if (!runtimeStoreOwnership.currentStore() && !store) return;
@@ -791,6 +829,24 @@ function publishTaskLifecycleRuntime(nextRoot: any, nextStore: any): void {
   setTaskLifecycleReadModelContext({ siteRoot, store });
 }
 
+function ensureTaskLifecycleStoreReady(): any {
+  ensureRuntimeConfigured();
+  if (store) return store;
+  const nextStore = openTaskLifecycleStore(siteRoot, { mode: 'runtime' });
+  try {
+    runtimeStoreOwnership.initialize(nextStore);
+    publishTaskLifecycleRuntime(siteRoot, nextStore);
+    return nextStore;
+  } catch (error: any) {
+    try {
+      nextStore.db.close();
+    } catch {
+      // Preserve the publication failure.
+    }
+    throw error;
+  }
+}
+
 /**
  * Reconcile legacy Markdown task specifications into the SQLite projection
  * before handlers begin serving reads or mutations. SQLite remains
@@ -800,13 +856,13 @@ function publishTaskLifecycleRuntime(nextRoot: any, nextStore: any): void {
  */
 function backfillTaskSpecsFromTaskFiles(root : any= siteRoot, taskStore : any= store) {
   if (!root || !taskStore) return;
-  const tasksDir: any = join(root, '.ai', 'do-not-open', 'tasks');
+  const tasksDir = join(root, '.ai', 'do-not-open', 'tasks');
   if (!existsSync(tasksDir)) return;
 
   const filesByNumber: any = new Map();
   for (const file of readdirSync(tasksDir)) {
     if (!isExecutableTaskFile(file)) continue;
-    const taskNumber: any = extractTaskNumberFromFileName(file);
+    const taskNumber = extractTaskNumberFromFileName(file);
     if (taskNumber === null) continue;
     if (filesByNumber.has(taskNumber)) {
       filesByNumber.set(taskNumber, null);
@@ -821,7 +877,7 @@ function backfillTaskSpecsFromTaskFiles(root : any= siteRoot, taskStore : any= s
     if (!lifecycle) continue;
     try {
       const { frontMatter, body } = parseFrontMatter(readFileSync(join(tasksDir, file), 'utf8'));
-      const parsed: any = parseTaskSpecFromMarkdown({
+      const parsed = parseTaskSpecFromMarkdown({
         taskId: lifecycle.task_id,
         taskNumber,
         frontMatter,
@@ -846,7 +902,7 @@ function backfillTaskSpecsFromTaskFiles(root : any= siteRoot, taskStore : any= s
         continue;
       }
 
-      const hasTagHistory: any = taskStore.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
+      const hasTagHistory = taskStore.listTaskTagUpdates(lifecycle.task_id, 1).length > 0;
       if (parseStoredTaskTags(existing.tags_json).length === 0 && parsed.tags.length > 0 && !hasTagHistory) {
         // Import only the legacy projection's labels. Preserve all other
         // SQLite-backed authored fields and its existing timestamp.
@@ -861,21 +917,26 @@ function backfillTaskSpecsFromTaskFiles(root : any= siteRoot, taskStore : any= s
   }
 }
 
-function prepareTaskLifecycleStore(root : any= siteRoot) {
+export function prepareTaskLifecycleMcpSite(root : any= siteRoot) {
   if (!root) throw new Error('task_lifecycle_site_root_required');
-  const next: any = openTaskLifecycleStore(root);
+  const next = prepareCoreTaskLifecycleStore(root);
   try {
     ensureTaskExecutionTables(next);
     ensureDownstreamDependencyOutcomeContracts(next);
     backfillTaskSpecsFromTaskFiles(root, next);
-    return next;
+    return {
+      status: 'prepared',
+      site_root: root,
+      preparation: inspectPreparedTaskLifecycleStore(root),
+    };
   } catch (error: any) {
+    throw error;
+  } finally {
     try {
       next.db.close();
     } catch {
-      // Preserve the initialization failure; the candidate is never published.
+      // Preserve the preparation result or failure.
     }
-    throw error;
   }
 }
 
@@ -888,7 +949,7 @@ export function configureTaskLifecycleMcpRuntime({
 } : any= {}) {
   const options: any = parseArgs(argv);
   if (options.help) {
-    stdout.write('Usage: task-lifecycle-mcp --site-root <path>\n');
+    stdout.write('Usage: task-lifecycle-mcp [--prepare] --site-root <path>\n');
     return { status: 'help' };
   }
 
@@ -897,48 +958,29 @@ export function configureTaskLifecycleMcpRuntime({
     ?? env.NARADA_TASK_LIFECYCLE_ROOT
     ?? env.NARADA_SITE_ROOT
     ?? cwd;
-  const selectedRootSource: any = options.siteRoot
+  const selectedRootSource = options.siteRoot
     ? 'cli:--site-root'
     : env.NARADA_TASK_LIFECYCLE_ROOT
       ? 'env:NARADA_TASK_LIFECYCLE_ROOT'
       : env.NARADA_SITE_ROOT
         ? 'env:NARADA_SITE_ROOT'
         : 'process_cwd';
-  const nextRoot: any = resolve(String(selectedRoot));
+  const nextRoot = resolve(String(selectedRoot));
   const hadPublishedRuntime: any = runtimeConfigured;
   if (hadPublishedRuntime && (runtimeStoreOwnership.activeRequestCount > 0 || runtimeStoreOwnership.isTransitioning)) {
     throw new Error('task_lifecycle_runtime_reconfigure_active_requests');
   }
-
-  let nextStore: any;
-  try {
-    nextStore = prepareTaskLifecycleStore(nextRoot);
-  } catch (error: any) {
-    throw new Error(`Failed to open task lifecycle store: ${error.message}`);
-  }
-
-  try {
-    if (hadPublishedRuntime) {
-      runtimeStoreOwnership.replaceSync(nextStore);
-    } else {
-      runtimeStoreOwnership.initialize(nextStore);
-    }
-  } catch (error: any) {
-    try {
-      nextStore.db.close();
-    } catch {
-      // The ownership coordinator may already have closed a failed candidate.
-    }
-    throw new Error(`Failed to publish task lifecycle store: ${error.message}`);
-  }
-
+  if (hadPublishedRuntime) closeTaskLifecycleStore();
   SESSION_IDENTITY = env.NARADA_AGENT_ID || null;
-  publishTaskLifecycleRuntime(nextRoot, nextStore);
+  deferredBootSideEffectsScheduled = false;
+  publishTaskLifecycleRuntime(nextRoot, null);
   siteRootSource = selectedRootSource;
-  runtimeConfigured = true;
-  recordTaskLifecycleRuntimeObservation();
-  reconcileTaskLifecycleRestartAfterBoot();
-  return { status: 'configured', siteRoot: nextRoot, siteRootSource: selectedRootSource };
+  runtimeConfigured = !options.prepare;
+  return {
+    status: options.prepare ? 'prepare' : 'configured',
+    siteRoot: nextRoot,
+    siteRootSource: selectedRootSource,
+  };
 }
 
 function ensureRuntimeConfigured() {
@@ -947,7 +989,7 @@ function ensureRuntimeConfigured() {
 
 async function refreshStore(requestContext: { requestId?: unknown } = {}) {
   ensureRuntimeConfigured();
-  const requestId: any = String(requestContext?.requestId ?? '').trim() || undefined;
+  const requestId = String(requestContext?.requestId ?? '').trim() || undefined;
   try {
     if (runtimeStoreOwnership.activeRequestCount > 0 && !requestId) {
       throw new Error('task_lifecycle_store_refresh_request_id_required');
@@ -955,7 +997,7 @@ async function refreshStore(requestContext: { requestId?: unknown } = {}) {
     const nextRoot: any = siteRoot;
     const nextStore: any = await runtimeStoreOwnership.replace({
       requestId,
-      open: () => prepareTaskLifecycleStore(nextRoot),
+      open: () => openTaskLifecycleStore(nextRoot, { mode: 'runtime' }),
     });
     publishTaskLifecycleRuntime(nextRoot, nextStore);
     return true;
@@ -966,7 +1008,7 @@ async function refreshStore(requestContext: { requestId?: unknown } = {}) {
 }
 
 function readReviewerCapabilityPolicy(root: string) {
-  const allowedModes: any = ['strict', 'advisory', 'disabled'];
+  const allowedModes = ['strict', 'advisory', 'disabled'];
   const defaultPolicy: any = { mode: 'advisory', source: 'default', config_path: null, allowed_modes: allowedModes };
   for (const configPath of [
     join(root, '.ai', 'task-lifecycle-policy.json'),
@@ -1028,6 +1070,11 @@ export async function runTaskLifecycleMcpStdioServer({
 } : any= {}) {
   const configured: any = configureTaskLifecycleMcpRuntime({ argv, cwd, env, stdout, stderr });
   if (configured.status === 'help') return;
+  if (configured.status === 'prepare') {
+    const result = prepareTaskLifecycleMcpSite(configured.siteRoot);
+    stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
   try {
     await runJsonRpcStdioServer({
       stdin,
@@ -1059,20 +1106,41 @@ async function handleRequest(request: any, requestContext: { requestId?: unknown
   if (request?.error) {
     return { jsonrpc: '2.0', id: request.id ?? null, error: request.error };
   }
-  const requestId: any = String(requestContext.requestId ?? request.id ?? `direct-${randomUUID()}`);
+  const requestId = String(requestContext.requestId ?? request.id ?? `direct-${randomUUID()}`);
   let requestLease: { release: () => void } | null = null;
   try {
-    requestLease = runtimeStoreOwnership.acquire(requestId);
+    const requestedToolName = request.method === 'tools/call' ? String(request.params?.name ?? '') : '';
+    const storeRequired = request.method === 'tools/call' && !STORE_FREE_TOOL_NAMES.has(requestedToolName);
+    if (storeRequired) {
+      ensureTaskLifecycleStoreReady();
+      requestLease = runtimeStoreOwnership.acquire(requestId);
+    }
     const dispatchContext: any = { ...requestContext, requestId };
     const result: any = await dispatchMethod(request.method, request.params ?? {}, dispatchContext);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error: any) {
+    const message = error instanceof Error ? error.message : String(error);
+    const notReadyPrefix = 'task_lifecycle_store_not_prepared:';
+    const notReadyData = message.startsWith(notReadyPrefix)
+      ? {
+        schema: 'narada.task_lifecycle.not_ready.v1',
+        code: 'task_lifecycle_store_not_prepared',
+        reason: message.slice(notReadyPrefix.length) || 'unknown',
+        site_root: siteRoot,
+        remediation: {
+          inspect_tool: 'task_lifecycle_doctor',
+          prepare_command: 'task-lifecycle-mcp --prepare --site-root <site-root>',
+          after_prepare: 'restart_or_reattach_runtime',
+        },
+      }
+      : undefined;
     return {
       jsonrpc: '2.0',
       id: request?.id ?? null,
       error: {
         code: -32000,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+        ...(notReadyData ? { data: notReadyData } : {}),
       },
     };
   } finally {
@@ -1083,6 +1151,7 @@ async function handleRequest(request: any, requestContext: { requestId?: unknown
 async function dispatchMethod(method: any, params: any, requestContext : any= {}) {
   switch (method) {
     case 'initialize':
+      schedulePostHandshakeBootSideEffects();
       return {
         protocolVersion: params.protocolVersion ?? PROTOCOL_VERSION,
         capabilities: {
@@ -1125,7 +1194,7 @@ function listPrompts() {
 }
 
 function promptGet(params: any) {
-  const name: any = String(params.name ?? '');
+  const name = String(params.name ?? '');
   if (name !== 'task_lifecycle_workflow') throw new Error(`unknown_prompt: ${name}`);
   return {
     description: 'Guidance for governed task lifecycle operations.',
@@ -1134,7 +1203,7 @@ function promptGet(params: any) {
 }
 
 function completeArgument(params: any) {
-  const argumentName: any = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
+  const argumentName = String((params.argument && typeof params.argument === 'object' ? params.argument.name : '') ?? '');
   const values: any = argumentName === 'name' ? taskLifecycleTools().map((tool: any) => tool.name).filter(Boolean).slice(0, 100) : [];
   return { completion: { values, total: values.length, hasMore: false } };
 }
@@ -1197,6 +1266,8 @@ function getTaskLifecycleToolCaller() {
 }
 
 async function callTool(params: any, requestContext : any= {}) {
+  const toolName = String(params?.name ?? '');
+  if (!STORE_FREE_TOOL_NAMES.has(toolName)) ensureTaskLifecycleStoreReady();
   return getTaskLifecycleToolCaller()(params, requestContext);
 }
 
@@ -1232,6 +1303,7 @@ function getTaskLifecycleHandlerRegistry() {
           getSiteRootSource: () => siteRootSource,
           getToolAliases: () => TOOL_ALIASES,
           getSitePolicy: getTaskLifecycleSitePolicySummary,
+          getTaskLifecyclePreparation: () => inspectPreparedTaskLifecycleStore(siteRoot),
           buildTaskLifecycleFreshness,
           buildLifecycleTargetLocusStatus,
           taskLifecycleRestart,
@@ -1468,8 +1540,8 @@ async function dispatchTool(canonicalName: any, args: any, dispatchContext: Reco
 function unwrapInternalToolResult(result: any) {
   const structured: any = result?.structuredContent;
   if (structured?.schema !== 'narada.producer_output_page.v1' || typeof structured.output_ref !== 'string') return result;
-  let offset: any = 0;
-  let outputText: any = '';
+  let offset = 0;
+  let outputText = '';
   while (true) {
     const page: any = outputShow({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
     if (!page?.output_text) throw new Error('internal_output_ref_page_missing_output_text');
@@ -1501,13 +1573,13 @@ function buildTaskLifecycleFreshness({ registeredTools }: any) {
 }
 
 function taskLifecycleRestart(args: any) {
-  const mode: any = stringField(args, 'mode') ?? 'request';
+  const mode = stringField(args, 'mode') ?? 'request';
   if (!['request', 'status', 'acknowledge', 'clear'].includes(mode)) {
     throw new Error(`invalid_restart_mode: ${mode}`);
   }
-  const requestPath: any = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
-  const baselinePath: any = join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json');
-  const watchedPaths: any = ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'];
+  const requestPath = join(siteRoot, '.ai', 'tmp', 'task-lifecycle-restart-request.json');
+  const baselinePath = join(siteRoot, '.ai', 'tmp', 'mcp-baseline.json');
+  const watchedPaths = ['tools/task-lifecycle', 'tools/mcp-freshness-service.js'];
   const existingRequest: any = readMcpFreshnessJsonFile(requestPath);
 
   if (mode === 'acknowledge' || mode === 'clear') {
@@ -1570,7 +1642,7 @@ function chapterStorePath() {
 }
 
 function readChapterStore() {
-  const path: any = chapterStorePath();
+  const path = chapterStorePath();
   if (!existsSync(path)) {
     return { schema: 'narada.task.chapters.v1', chapters: {} };
   }
@@ -1606,7 +1678,7 @@ function taskLifecyclePayloadCreate(args: any) {
 }
 
 async function taskLifecycleChapterAddTask(args: any, requestContext : any= {}) {
-  const refreshed: any = await refreshStore(requestContext);
+  const refreshed = await refreshStore(requestContext);
   if (!refreshed) throw new Error('task_lifecycle_store_refresh_failed');
   const chapterId: any = normalizeChapterId(args.chapter_id);
   const taskNumber: any = normalizeChapterTaskNumber(args.task_number);
@@ -1623,8 +1695,8 @@ async function taskLifecycleChapterAddTask(args: any, requestContext : any= {}) 
     return buildChapterMembershipResult({ status: 'already_present', chapterId, taskNumber, memberships });
   }
 
-  const appendMode: any = args.append !== false || args.order_index === undefined || args.order_index === null;
-  const now: any = new Date().toISOString();
+  const appendMode = args.append !== false || args.order_index === undefined || args.order_index === null;
+  const now = new Date().toISOString();
   let orderIndex: any = appendMode
     ? memberships.reduce((max: any, item: any) => Math.max(max, Number(item.order_index ?? 0)), 0) + 1
     : normalizeOrderIndex(args.order_index);
@@ -1662,15 +1734,15 @@ function taskLifecycleChapterShow(args: any) {
 
 async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string, unknown> = {}) {
   const taskNumber: any = numberField(args, 'task_number');
-  const agentId: any = stringField(args, 'agent_id');
-  const summary: any = stringField(args, 'summary');
-  const executionNotes: any = stringField(args, 'execution_notes');
-  const verification: any = stringField(args, 'verification');
-  const reviewer: any = stringField(args, 'reviewer');
-  const changedFiles: any = stringArrayField(args, 'changed_files');
-  const noFilesChanged: any = booleanField(args, 'no_files_changed') === true;
-  const autoMaterializePayload: any = booleanField(args, 'auto_materialize_payload') === true;
-  const resumeExistingWork: any = booleanField(args, 'resume_existing_work') === true;
+  const agentId = stringField(args, 'agent_id');
+  const summary = stringField(args, 'summary');
+  const executionNotes = stringField(args, 'execution_notes');
+  const verification = stringField(args, 'verification');
+  const reviewer = stringField(args, 'reviewer');
+  const changedFiles = stringArrayField(args, 'changed_files');
+  const noFilesChanged = booleanField(args, 'no_files_changed') === true;
+  const autoMaterializePayload = booleanField(args, 'auto_materialize_payload') === true;
+  const resumeExistingWork = booleanField(args, 'resume_existing_work') === true;
   let payloadSource: any = dispatchContext.payloadSource;
   if (!taskNumber) throw new Error('task_number_required');
   if (!agentId) throw new Error('agent_id_required');
@@ -1692,14 +1764,14 @@ async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string
   let effectiveSummary: any = summary;
   let effectiveChangedFiles: any = changedFiles;
   let effectiveNoFilesChanged: any = noFilesChanged;
-  let effectiveOutcome: any = null;
-  let resumeTaskFile: any = null;
+  let effectiveOutcome = null;
+  let resumeTaskFile = null;
   if (resumeExistingWork) {
     const previousReport: any = latestSubmitWorkReport(lifecycle.task_id, agentId);
     if (!previousReport) throw new Error('task_lifecycle_submit_work_resume_existing_work_report_not_found');
     resumeTaskFile = await findTaskFile(siteRoot, String(taskNumber));
     if (!resumeTaskFile) return jsonToolResult(buildTaskFileResolutionFailureCore({ siteRoot, store, taskNumber, lifecycle, surface: 'task_lifecycle_submit_work' }), true);
-    const existingBody: any = readFileSync(resumeTaskFile.path, 'utf8');
+    const existingBody = readFileSync(resumeTaskFile.path, 'utf8');
     assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Execution Notes'), 'existing_execution_notes');
     assertSubstantiveSubmitWorkText(extractTaskSection(existingBody, 'Verification'), 'existing_verification');
     effectiveSummary ||= previousReport.summary;
@@ -1713,7 +1785,7 @@ async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string
     }
     const previousOutcome: any = store.getLatestTaskOutcome?.(lifecycle.task_id) ?? null;
     const outcomeContract: any = store.getLatestTaskOutcomeContract?.(lifecycle.task_id) ?? null;
-    const satisfyingOutcomes: any = parseStringArrayJson(outcomeContract?.satisfying_outcomes_json);
+    const satisfyingOutcomes = parseStringArrayJson(outcomeContract?.satisfying_outcomes_json);
     if (previousOutcome?.outcome && satisfyingOutcomes.includes(previousOutcome.outcome)) effectiveOutcome = previousOutcome.outcome;
     if (outcomeContract && !effectiveOutcome) throw new Error('task_lifecycle_submit_work_resume_existing_work_satisfying_outcome_not_found');
   }
@@ -1731,7 +1803,7 @@ async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string
     primitiveResults.push({ tool: 'task_lifecycle_submit_work.roster_preflight', result: rosterResult, is_error: true });
     return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_submit_work.roster_preflight', payloadSource }, true);
   }
-  const claim: any = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
+  const claim = args.claim === undefined ? lifecycle.status === 'opened' : booleanField(args, 'claim') === true;
   if (claim) {
     const claimArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
     const authorityBasis: any = objectField(args, 'authority_basis');
@@ -1750,9 +1822,9 @@ async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string
       is_error: false,
     });
   } else {
-    const original: any = readFileSync(taskFile.path, 'utf8');
-    const withExecution: any = replaceTaskSection(original, 'Execution Notes', executionNotes);
-    const withVerification: any = replaceTaskSection(withExecution, 'Verification', verification);
+    const original = readFileSync(taskFile.path, 'utf8');
+    const withExecution = replaceTaskSection(original, 'Execution Notes', executionNotes);
+    const withVerification = replaceTaskSection(withExecution, 'Verification', verification);
     writeFileSync(taskFile.path, withVerification, 'utf8');
     primitiveResults.push({
       tool: 'task_lifecycle_submit_work.write_task_notes',
@@ -1761,14 +1833,14 @@ async function taskLifecycleSubmitWork(args: any, dispatchContext: Record<string
     });
   }
 
-  const shouldProveCriteria: any = args.prove_criteria === undefined ? !resumeExistingWork : args.prove_criteria !== false;
+  const shouldProveCriteria = args.prove_criteria === undefined ? !resumeExistingWork : args.prove_criteria !== false;
   if (shouldProveCriteria) {
     const proveResult: any = await dispatchTool('task_lifecycle_prove_criteria', { task_number: taskNumber, agent_id: agentId }, { compound_tool: 'task_lifecycle_submit_work' });
     primitiveResults.push({ tool: 'task_lifecycle_prove_criteria', result: proveResult.structuredContent ?? null, is_error: proveResult.isError === true });
     if (proveResult.isError) return submitWorkResult({ status: 'blocked', taskNumber, agentId, primitiveResults, blockedAt: 'task_lifecycle_prove_criteria', payloadSource }, true);
   }
 
-  const shouldAdmitEvidence: any = args.admit_evidence === undefined ? !resumeExistingWork : args.admit_evidence !== false;
+  const shouldAdmitEvidence = args.admit_evidence === undefined ? !resumeExistingWork : args.admit_evidence !== false;
   if (shouldAdmitEvidence) {
     const admitArgs: Record<string, unknown> = { task_number: taskNumber, agent_id: agentId };
     const selfCertification: any = objectField(args, 'self_certification');
@@ -1886,20 +1958,20 @@ async function ensureReviewContractDependencyForSubmitWork({ parentLifecycle, pa
   store.ensureTaskNumberFloor?.(maxTaskNumber);
   const [reviewTaskNumber] = await allocateTaskNumbers(siteRoot, 1);
   if (!reviewTaskNumber) throw new Error('review_dependency_task_number_allocation_failed');
-  const now: any = new Date().toISOString();
+  const now = new Date().toISOString();
   const safeParentId: any = parentLifecycle.task_id.replace(/[^A-Za-z0-9._-]+/g, '-');
-  const reviewTaskId: any = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${reviewTaskNumber}-review-${safeParentId}`;
-  const dependencyId: any = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
-  const contractId: any = `contract-review-${reviewTaskId}`;
+  const reviewTaskId = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${reviewTaskNumber}-review-${safeParentId}`;
+  const dependencyId = `dep-review-${parentLifecycle.task_id}-${reviewTaskId}`;
+  const contractId = `contract-review-${reviewTaskId}`;
   const reviewerRosterEntry: any = store.getRosterEntry(reviewer);
-  const rolesAreObligationTargets: any = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
+  const rolesAreObligationTargets = readTaskLifecycleSitePolicy(siteRoot).policy.roster.roles_are_obligation_targets;
   const observedTargetRole: any = reviewerRosterEntry?.role ?? reviewer;
   const targetRole: any = rolesAreObligationTargets ? observedTargetRole : null;
   const preferredAgentId: any = reviewerRosterEntry ? reviewer : null;
-  const taskFilePath: any = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${reviewTaskId}.md`);
+  const taskFilePath = join(siteRoot, '.ai', 'do-not-open', 'tasks', `${reviewTaskId}.md`);
   mkdirSync(join(siteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
 
-  const body: any = renderTaskBodyFromSpec({
+  const body = renderTaskBodyFromSpec({
     spec: {
       title: `Review task #${parentTaskNumber}`,
       chapter: null,
@@ -2016,9 +2088,9 @@ async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumbe
     governed_by: 'dependencies',
     updated_at: updatedAt,
   });
-  let projection_updated: any = false;
+  let projection_updated = false;
   try {
-    const taskFile: any = await findTaskFile(siteRoot, String(parentTaskNumber));
+    const taskFile = await findTaskFile(siteRoot, String(parentTaskNumber));
     if (taskFile) {
       const fileData: any = await readTaskFile(taskFile.path);
       await writeTaskProjection(taskFile.path, {
@@ -2044,8 +2116,8 @@ async function markParentAwaitingDependencies({ parentLifecycle, parentTaskNumbe
 async function taskLifecycleDependencyDeclare(args: any) {
   const parentTaskNumber: any = numberField(args, 'parent_task_number');
   const requiredTaskNumber: any = numberField(args, 'required_task_number');
-  const agentId: any = stringField(args, 'agent_id');
-  const kind: any = stringField(args, 'kind');
+  const agentId = stringField(args, 'agent_id');
+  const kind = stringField(args, 'kind');
   const satisfyingOutcomes: any = Array.isArray(args.satisfying_outcomes)
     ? args.satisfying_outcomes.filter((item: any) => typeof item === 'string' && item.trim().length > 0).map((item: any) => item.trim())
     : [];
@@ -2064,8 +2136,8 @@ async function taskLifecycleDependencyDeclare(args: any) {
   if (!requiredLifecycle) throw new Error(`required_task_not_found: ${requiredTaskNumber}`);
   if (parentLifecycle.task_id === requiredLifecycle.task_id) throw new Error('dependency_self_cycle_not_allowed');
 
-  const now: any = new Date().toISOString();
-  const dependencyId: any = stringField(args, 'dependency_id')
+  const now = new Date().toISOString();
+  const dependencyId = stringField(args, 'dependency_id')
     ?? `dep-${kind}-${parentLifecycle.task_id}-${requiredLifecycle.task_id}`.replace(/[^A-Za-z0-9._-]+/g, '-');
   const dependency: any = {
     dependency_id: dependencyId,
@@ -2077,7 +2149,7 @@ async function taskLifecycleDependencyDeclare(args: any) {
     created_by: agentId,
     created_at: now,
   };
-  let outcomeContract: any = null;
+  let outcomeContract = null;
   let outcomeContractInput: any = objectField(args, 'outcome_contract');
   if (!outcomeContractInput && kind === 'downstream_work') {
     outcomeContractInput = {
@@ -2142,7 +2214,7 @@ async function taskLifecycleDependencyDeclare(args: any) {
 }
 
 async function withStoreSavepoint<T>(taskStore: any, action: () => Promise<T>): Promise<T> {
-  const name: any = `narada_task_mutation_${randomUUID().replaceAll('-', '')}`;
+  const name = `narada_task_mutation_${randomUUID().replaceAll('-', '')}`;
   taskStore.db.exec(`SAVEPOINT ${name}`);
   try {
     const result: any = await action();
@@ -2156,10 +2228,10 @@ async function withStoreSavepoint<T>(taskStore: any, action: () => Promise<T>): 
 }
 
 function taskLifecycleDependencyDispositionRecord(args: any) {
-  const dependencyId: any = stringField(args, 'dependency_id');
-  const agentId: any = stringField(args, 'agent_id');
-  const kind: any = stringField(args, 'kind');
-  const summary: any = stringField(args, 'summary');
+  const dependencyId = stringField(args, 'dependency_id');
+  const agentId = stringField(args, 'agent_id');
+  const kind = stringField(args, 'kind');
+  const summary = stringField(args, 'summary');
   if (!dependencyId) throw new Error('dependency_id_required');
   if (!agentId) throw new Error('agent_id_required');
   if (!kind) throw new Error('kind_required');
@@ -2179,7 +2251,7 @@ function taskLifecycleDependencyDispositionRecord(args: any) {
   const dependency: any = store.getTaskDependency(dependencyId);
   if (!dependency) throw new Error(`dependency_not_found: ${dependencyId}`);
   const latestOutcome: any = store.getLatestTaskOutcome(dependency.required_task_id);
-  const explicitOutcomeId: any = stringField(args, 'required_outcome_id');
+  const explicitOutcomeId = stringField(args, 'required_outcome_id');
   const requiredOutcomeId: any = explicitOutcomeId ?? latestOutcome?.outcome_id ?? null;
   if (!requiredOutcomeId) throw new Error(`dependency_outcome_missing: ${dependencyId}`);
   if (explicitOutcomeId && latestOutcome?.outcome_id !== explicitOutcomeId) {
@@ -2187,17 +2259,17 @@ function taskLifecycleDependencyDispositionRecord(args: any) {
     if (!matchingOutcome) throw new Error(`required_outcome_not_found_for_dependency: ${explicitOutcomeId}`);
   }
 
-  const targetTaskId: any = stringField(args, 'target_task_id');
-  const routedObligationId: any = stringField(args, 'routed_obligation_id');
+  const targetTaskId = stringField(args, 'target_task_id');
+  const routedObligationId = stringField(args, 'routed_obligation_id');
   const authorityBasis: any = objectField(args, 'authority_basis');
   if ((kind === 'remediation_task' || kind === 'covered_by_existing_task') && !targetTaskId) throw new Error(`${kind}_target_task_id_required`);
   if (kind === 'routed_obligation' && !routedObligationId) throw new Error('routed_obligation_id_required');
   if ((kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected') && !authorityBasis) throw new Error(`${kind}_authority_basis_required`);
 
-  const status: any = stringField(args, 'status') ?? (kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected' ? 'deferred' : 'open');
+  const status = stringField(args, 'status') ?? (kind === 'operator_deferred' || kind === 'out_of_scope_or_rejected' ? 'deferred' : 'open');
   const allowedStatuses: any = new Set(['open', 'deferred', 'resolved', 'superseded']);
   if (!allowedStatuses.has(status)) throw new Error(`unsupported_dependency_disposition_status: ${status}`);
-  const now: any = new Date().toISOString();
+  const now = new Date().toISOString();
   const disposition: any = {
     disposition_id: `depdisp_${randomUUID()}`,
     dependency_id: dependencyId,
@@ -2226,7 +2298,7 @@ function taskLifecycleDependencyDispositionRecord(args: any) {
 function submitWorkResult({ status, taskNumber, agentId, primitiveResults, blockedAt, payloadSource }: any, isError: any) {
   const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   const finalLifecycleStatus: any = lifecycle?.status ?? null;
-  const closureStatus: any = status === 'blocked'
+  const closureStatus = status === 'blocked'
     ? 'blocked'
     : finalLifecycleStatus === 'closed' || finalLifecycleStatus === 'confirmed'
     ? 'closed'
@@ -2252,7 +2324,7 @@ function submitWorkResult({ status, taskNumber, agentId, primitiveResults, block
 }
 
 function assertSubstantiveSubmitWorkText(value: any, field: any) {
-  const text: any = typeof value === 'string' ? value.trim() : '';
+  const text = typeof value === 'string' ? value.trim() : '';
   if (text.length < 20 || /Record what was done|Record commands run|<!--|TODO|TBD/i.test(text)) {
     throw new Error(`task_lifecycle_submit_work_${field}_not_substantive`);
   }
@@ -2279,19 +2351,19 @@ function compareChapterMemberships(a: any, b: any) {
 }
 
 function normalizeChapterId(value: any) {
-  const text: any = String(value ?? '').trim();
+  const text = String(value ?? '').trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(text)) throw new Error('invalid_chapter_id');
   return text;
 }
 
 function normalizeChapterTaskNumber(value: any) {
-  const number: any = Number(value);
+  const number = Number(value);
   if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_task_number: ${value}`);
   return number;
 }
 
 function normalizeOrderIndex(value: any) {
-  const number: any = Number(value);
+  const number = Number(value);
   if (!Number.isInteger(number) || number < 1) throw new Error(`invalid_order_index: ${value}`);
   return number;
 }
@@ -2299,9 +2371,9 @@ function normalizeOrderIndex(value: any) {
 async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }: any) {
   const lifecycle: any = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) throw new Error(`task_not_found: ${taskNumber}`);
-  const evidence: any = await inspectTaskEvidence(siteRoot, String(taskNumber), store);
-  const taskFile: any = await findTaskFile(siteRoot, taskNumber);
-  let body: any = '';
+  const evidence = await inspectTaskEvidence(siteRoot, String(taskNumber), store);
+  const taskFile = await findTaskFile(siteRoot, taskNumber);
+  let body = '';
   if (taskFile) {
     const taskData: any = await readTaskFile(taskFile.path);
     body = taskData.body;
@@ -2313,7 +2385,7 @@ async function buildTaskEvidencePreflight({ siteRoot, store, taskNumber }: any) 
   const changedFileEvidence: any = collectChangedFileEvidenceFromReports(reports, sqliteReports);
   const blockedWorkPosture: any = buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence });
   const dependencySatisfaction: any = evaluateTaskDependencySatisfaction(store, lifecycle.task_id);
-  const closedComplete: any = lifecycle.status === 'closed' && evidence.verdict === 'complete';
+  const closedComplete = lifecycle.status === 'closed' && evidence.verdict === 'complete';
   const followUpValidation: any = validateFollowUpLedger(body);
   const recoveryTruthfulnessValidation: any = validateRecoveryTruthfulnessBody({ body, summary: '', context: `task:${taskNumber}` });
   const requirements: any[] = [];
@@ -2441,7 +2513,7 @@ function buildBlockedTaskReportPosture({ store, lifecycle, changedFileEvidence =
       next_action: null,
     };
   }
-  const hasSupersedingChangeEvidence: any = Boolean(changedFileEvidence)
+  const hasSupersedingChangeEvidence = Boolean(changedFileEvidence)
     && (changedFileEvidence.changedFiles?.length > 0 || changedFileEvidence.noFilesChangedDeclarations?.length > 0);
   if (hasSupersedingChangeEvidence) {
     return { state: 'stale_blocked_report_superseded', report_id: latest.report_id, superseded_by: { evidence: changedFileEvidence } };
@@ -2522,7 +2594,7 @@ function hasMaterialTaskSection(body: any, heading: any) {
 }
 
 function extractTaskSection(body: any, heading: any) {
-  const pattern: any = '^##\\s+' + escapeRegex(heading) + '\\s*$';
+  const pattern = '^##\\s+' + escapeRegex(heading) + '\\s*$';
   const match: any = body.match(new RegExp(pattern, 'mi'));
   if (!match) return null;
   const start: any = match.index + match[0].length;
@@ -2590,7 +2662,7 @@ function collectChangedFileEvidenceFromReports(reportRecords: any, sqliteReports
 }
 
 function countReportVerificationEntries(reportRecords: any, sqliteReports: any) {
-  let count: any = 0;
+  let count = 0;
   for (const report of reportRecords) {
     try {
       const parsed: any = JSON.parse(report.report_json);
@@ -2686,12 +2758,14 @@ function testTargetsForSelector(selector: any) {
 
 function parseArgs(argv: any) {
   const parsed: Record<string, unknown> = { help: false };
-  for (let i: any = 0; i < argv.length; i += 1) {
+  for (let i = 0; i < argv.length; i += 1) {
     const arg: any = argv[i];
     const next: any = argv[i + 1];
     if (arg === '--site-root' && next) {
       parsed.siteRoot = next;
       i += 1;
+    } else if (arg === '--prepare') {
+      parsed.prepare = true;
     } else if (arg === '--help' || arg === '-h') {
       parsed.help = true;
     }
@@ -2744,11 +2818,11 @@ function numberSchema(description: any) {
 }
 
 function computeStateFreshness(lastWorkboardCheckAt: any, generatedAt: any) {
-  const now: any = new Date();
+  const now = new Date();
   const generated: any = generatedAt ? new Date(generatedAt) : now;
-  const lastCheck: any = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
+  const lastCheck = lastWorkboardCheckAt ? new Date(lastWorkboardCheckAt) : null;
 
-  const staleThresholdMs: any = 10 * 60 * 1000; // 10 minutes
+  const staleThresholdMs = 10 * 60 * 1000; // 10 minutes
 
   if (!lastCheck) {
     return {
@@ -2761,8 +2835,8 @@ function computeStateFreshness(lastWorkboardCheckAt: any, generatedAt: any) {
     };
   }
 
-  const secondsSinceCheck: any = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
-  const stale: any = secondsSinceCheck > staleThresholdMs / 1000;
+  const secondsSinceCheck = Math.floor((generated.getTime() - lastCheck.getTime()) / 1000);
+  const stale = secondsSinceCheck > staleThresholdMs / 1000;
 
   return {
     status: stale ? 'stale' : 'fresh',
@@ -2908,8 +2982,8 @@ function summarizeWorkboardTask(task: any) {
 
 function jsonToolResult(value: any, isError : any= false, toolName : any= null) {
   void toolName;
-  const text: any = JSON.stringify(value);
-  const inlineLimit: any = 4000;
+  const text = JSON.stringify(value);
+  const inlineLimit = 4000;
   if (text.length > inlineLimit) {
     return buildBoundedToolResult({
       siteRoot,
@@ -2920,7 +2994,7 @@ function jsonToolResult(value: any, isError : any= false, toolName : any= null) 
       readerTool: 'mcp_output_show',
     });
   }
-  const truncated: any = text.length > inlineLimit;
+  const truncated = text.length > inlineLimit;
   const renderedText: any = truncated
     ? `Output truncated; use structuredContent for the complete payload. ${text.slice(0, inlineLimit)}`
     : text;

@@ -56,10 +56,10 @@ Expected properties:
 - session alias may include the local site name, but ownership remains host.
 
 Some host-injected surfaces may be catalog-declared as default injections.
-`speech` is the canonical example: it remains host-owned, but registrar
-materialization should inject it into every carrier session, including
-site-bound sessions and pure carrier starts, unless a future explicit policy
-disables it.
+That metadata selects a surface for static bindings; progressive carrier
+bindings still materialize only their explicit bootstrap allowlist and expose
+the remaining admitted surfaces through `mcp-loader`. Ownership and authority
+are unchanged by the loading mode.
 
 ### User-Site Injection
 

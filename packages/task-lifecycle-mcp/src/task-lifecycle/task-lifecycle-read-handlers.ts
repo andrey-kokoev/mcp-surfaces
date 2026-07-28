@@ -227,6 +227,7 @@ function taskLifecycleGuidance({ workflow, tool, sitePolicy }: any) {
       'Inspect the task before mutation; claim only when authorized; submit execution notes, verification, changed-file evidence, and closeout through lifecycle tools.',
       'Use payload_ref for long companion fields and preserve structuredContent as authoritative lifecycle evidence.',
       'Use task_lifecycle_tags_update for audited site-local labels; tags are descriptive and never replace routing, authorization, priority, dependency, review, or closure state.',
+      'The carrier-facing runtime never prepares SQLite: run task-lifecycle-mcp --prepare --site-root <site-root> once before stateful calls. If a stateful call returns task_lifecycle_store_not_prepared, inspect task_lifecycle_doctor.preparation and perform explicit preparation instead of retrying.',
       'Call mcp_runtime_proxy_status when this carrier-bound surface may be running an old build; inspect runtime_freshness.status and execute only the machine-readable carrier/supervisor reload_action.',
     ],
     sections: selectedSections,

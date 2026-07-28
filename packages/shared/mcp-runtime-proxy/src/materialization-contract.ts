@@ -272,6 +272,21 @@ export function preflightMaterializationGeneration(input: {
   ) {
     return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar is structurally incomplete.', generation_fingerprint: generation.generation_fingerprint };
   }
+  const generationContext: JsonRecord = {
+    carrier_id: generation.carrier_id,
+    carrier_kind: generation.carrier_kind,
+    config_path: resolve(generation.config_path),
+    registrar_entrypoint: resolve(generation.registrar_entrypoint),
+    registrar_fingerprint: generation.registrar_fingerprint,
+    materialization_generated_at: generation.generated_at,
+  };
+  const stale = (reason: string, details: JsonRecord = {}): MaterializationPreflight => ({
+    ok: false,
+    code: 'materialization_generation_stale',
+    reason,
+    generation_fingerprint: generation.generation_fingerprint,
+    details: { ...generationContext, ...details },
+  });
   const unsigned = {
     schema: generation.schema,
     contract_version: generation.contract_version,
@@ -288,29 +303,29 @@ export function preflightMaterializationGeneration(input: {
     generated_at: generation.generated_at,
   };
   if (sha256(JSON.stringify(unsigned)) !== generation.generation_fingerprint) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation fingerprint does not match its contents.', generation_fingerprint: generation.generation_fingerprint };
+    return stale('The materialization generation fingerprint does not match its contents.');
   }
   const sidecarSuffix = '.narada-generation.json';
   const expectedConfigPath = input.sidecarPath.endsWith(sidecarSuffix)
     ? input.sidecarPath.slice(0, -sidecarSuffix.length)
     : null;
   if (!expectedConfigPath || !pathEquals(generation.config_path, expectedConfigPath)) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar is not paired with its carrier configuration.', generation_fingerprint: generation.generation_fingerprint, details: { expected_config_path: expectedConfigPath, actual_config_path: generation.config_path } };
+    return stale('The materialization generation sidecar is not paired with its carrier configuration.', { expected_config_path: expectedConfigPath, actual_config_path: generation.config_path });
   }
   const configPath = resolve(generation.config_path);
   const configFingerprint = materializationConfigFileFingerprint(configPath, generation.carrier_kind);
   if (!configFingerprint || configFingerprint !== generation.config_sha256) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialized configuration changed after generation.', generation_fingerprint: generation.generation_fingerprint, details: { config_path: configPath } };
+    return stale('The materialized configuration changed after generation.', { config_path: configPath });
   }
   if (!pathEquals(generation.artifact_manifest_path, input.manifestPath) || generation.artifact_manifest_fingerprint !== input.manifestFingerprint) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation references a different workspace artifact manifest.', generation_fingerprint: generation.generation_fingerprint, details: { expected_manifest_path: input.manifestPath, actual_manifest_path: generation.artifact_manifest_path, expected_manifest_fingerprint: input.manifestFingerprint, actual_manifest_fingerprint: generation.artifact_manifest_fingerprint } };
+    return stale('The materialization generation references a different workspace artifact manifest.', { expected_manifest_path: input.manifestPath, actual_manifest_path: generation.artifact_manifest_path, expected_manifest_fingerprint: input.manifestFingerprint, actual_manifest_fingerprint: generation.artifact_manifest_fingerprint });
   }
   const currentRegistrarFingerprint = sha256File(generation.registrar_entrypoint);
   if (!currentRegistrarFingerprint || currentRegistrarFingerprint !== generation.registrar_fingerprint) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The registrar build changed after configuration generation.', generation_fingerprint: generation.generation_fingerprint, details: { registrar_entrypoint: generation.registrar_entrypoint } };
+    return stale('The registrar build changed after configuration generation.', { registrar_entrypoint: generation.registrar_entrypoint });
   }
   if (generation.contract_version !== MCP_RUNTIME_CONTRACT_VERSION) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization contract version is obsolete.', generation_fingerprint: generation.generation_fingerprint, details: { actual: generation.contract_version, expected: MCP_RUNTIME_CONTRACT_VERSION } };
+    return stale('The materialization contract version is obsolete.', { actual: generation.contract_version, expected: MCP_RUNTIME_CONTRACT_VERSION });
   }
   return { ok: true, generation_fingerprint: generation.generation_fingerprint };
 }

@@ -73,7 +73,16 @@ export function checkCanonicalTaskLifecycleDispatch(
     };
   }
 
-  const store = state.taskLifecycleStore ?? openTaskLifecycleStore(state.siteRoot);
+  let store = state.taskLifecycleStore;
+  if (!store) {
+    try {
+      store = openTaskLifecycleStore(state.siteRoot, { mode: 'runtime' });
+    } catch (error) {
+      return unavailable(policyProjection, 'task_lifecycle_store_not_prepared', policy.enforcement, {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   state.taskLifecycleStore = store;
   const lifecycle = store.getLifecycleByNumber(taskNumber);
   if (!lifecycle) return unavailable(policyProjection, 'task_lifecycle_task_not_found', policy.enforcement);

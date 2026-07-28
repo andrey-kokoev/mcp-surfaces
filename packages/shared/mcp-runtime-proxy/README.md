@@ -51,6 +51,29 @@ Materialization requests run in a fresh built registrar subprocess rather than
 using a resident registrar's loaded module graph. A failed validation is a
 structured refusal; the registrar does not rebuild or retry automatically.
 
+Workspace build and carrier materialization are intentionally separate
+lifecycles: `pnpm build` refreshes the workspace artifact manifest but does not
+silently rewrite a user's Codex, Kimi, or OpenCode configuration. After a
+successful build, refresh a carrier explicitly with:
+
+```powershell
+pnpm materialize:carrier -- --materialize-carrier <carrier-id> --output-path <carrier-config>
+```
+
+The command is owned by the built registrar and remains usable when the MCP
+registrar surface itself cannot start. Omit `--output-path` to use the
+registrar's configured path for the carrier. The generated sidecar is the
+proof that the carrier config and current workspace generation were produced
+together.
+
+When a proxy refuses a stale generation, its structured error includes a
+`narada.mcp_runtime_proxy.materialization_recovery.v1` record. Use its
+`recovery_group_id` to report one recovery action for all bootstrap surfaces
+with the same carrier failure, run the supplied registrar command once, then
+follow the `restart` instruction. Regeneration never restarts the carrier
+implicitly; Codex, Kimi, and OpenCode must reload their carrier configuration
+in a new or restarted session.
+
 On Windows, the proxy starts the native Rust process supervisor after preflight.
 The supervisor owns the MCP server in a Job Object configured to terminate the
 managed server when the supervisor exits, and monitors the proxy PID. The

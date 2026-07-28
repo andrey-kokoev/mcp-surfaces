@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { openTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { handleTaskLifecycleMcpRequest } from '../src/task-lifecycle/task-mcp-server.js';
 import { withSqliteBusyRetry, withStoreSavepoint } from '../src/task-lifecycle/sqlite-contention.js';
 import { evaluateRecoveryTruthfulnessTrigger, recoveryTruthfulnessTriggerContract, validateRecoveryTruthfulnessBody } from '../src/task-lifecycle/recovery-truthfulness-guard.js';
@@ -253,7 +253,7 @@ compatibility_record: true
   const declaredDependencyRequiredTaskId = '20260604-9218-declared-verification-required';
   writeTask(9218, declaredDependencyRequiredTaskId, 'claimed', 'outcome_type: verification\ntarget_role: builder');
 
-  const store = openTaskLifecycleStore(siteRoot);
+  const store = prepareTaskLifecycleStore(siteRoot);
   try {
     store.upsertRosterEntry({
       agent_id: 'smart-scheduling.builder',
@@ -872,6 +872,8 @@ compatibility_record: true
       { agent_id: 'policy.architect', role: 'architect', capabilities: ['review'] },
     ],
   }), 'utf8');
+  const defaultPolicyPreparation = prepareTaskLifecycleStore(defaultPolicyRoot);
+  defaultPolicyPreparation.db.close();
   const defaultPolicyRuntime = {
     argv: ['--site-root', defaultPolicyRoot],
     cwd: defaultPolicyRoot,
@@ -945,7 +947,7 @@ compatibility_record: true
   const driftSiteRoot = mkdtempSync(join(tmpdir(), 'task-lifecycle-roster-drift-'));
   mkdirSync(join(driftSiteRoot, '.ai', 'agents'), { recursive: true });
   mkdirSync(join(driftSiteRoot, '.ai', 'do-not-open', 'tasks'), { recursive: true });
-  const driftStore = openTaskLifecycleStore(driftSiteRoot);
+  const driftStore = prepareTaskLifecycleStore(driftSiteRoot);
   try {
     driftStore.db.prepare('ALTER TABLE agent_roster DROP COLUMN operator_identity').run();
   } finally {
@@ -977,7 +979,7 @@ compatibility_record: true
   const driftRosterAdmitPayload = await responsePayload(driftRosterAdmitResponse, driftRuntime, 651);
   assert.equal(driftRosterAdmitPayload.status, 'admitted');
   assert.equal(driftRosterAdmitPayload.agent_id, 'legacy-site.builder');
-  const driftVerifyStore = openTaskLifecycleStore(driftSiteRoot);
+  const driftVerifyStore = prepareTaskLifecycleStore(driftSiteRoot);
   try {
     const driftColumns = driftVerifyStore.db.prepare('PRAGMA table_info(agent_roster)').all().map((column: any) => column.name);
     const driftRow = driftVerifyStore.db.prepare('SELECT agent_id, role, capabilities_json FROM agent_roster WHERE agent_id = ?').get('legacy-site.builder') as any;
@@ -1110,7 +1112,7 @@ compatibility_record: true
   assert.ok(unauthorizedReviewPayload.eligible_alternative_agents.some((r: any) => r.agent_id === 'smart-scheduling.architect'));
 
   // Invalid compatibility outcomes must not allocate or materialize a dependency node.
-  const reviewInvariantStore = openTaskLifecycleStore(siteRoot);
+  const reviewInvariantStore = prepareTaskLifecycleStore(siteRoot);
   const invalidCompatibilityMaxTaskNumber = (reviewInvariantStore.db.prepare('select max(task_number) as max_task_number from task_lifecycle').get() as { max_task_number: number }).max_task_number;
   const invalidCompatibilityResponse = await (handleTaskLifecycleMcpRequest({
     jsonrpc: '2.0',
@@ -1216,7 +1218,7 @@ compatibility_record: true
   assert.equal(compatibilityReviewInspect.lifecycle.closed_by, 'smart-scheduling.architect');
   assert.equal(compatibilityReviewInspect.lifecycle.closure_mode, 'operator_direct');
 
-  const reconciliationStore = openTaskLifecycleStore(siteRoot);
+  const reconciliationStore = prepareTaskLifecycleStore(siteRoot);
   try {
     reconciliationStore.db.prepare('DELETE FROM task_specs WHERE task_id = ?').run(compatibilityReviewInspect.task_id);
   } finally {
@@ -1690,7 +1692,7 @@ compatibility_record: true
   assert.equal(outcomeContractFinishPayload.outcome_capability_policy.agent_has_capability, true);
   assert.equal(outcomeContractFinishPayload.outcome_capability_policy.enforcement_result, 'allowed');
 
-  const outcomeStore = openTaskLifecycleStore(siteRoot);
+  const outcomeStore = prepareTaskLifecycleStore(siteRoot);
   try {
     const admittedOutcome = outcomeStore.getLatestTaskOutcome(outcomeContractTaskId);
     assert.equal(admittedOutcome?.outcome, 'accepted_with_notes');
@@ -1773,7 +1775,7 @@ compatibility_record: true
     ready_for_review: true,
     report_status: 'accepted',
   };
-  const supersessionStore = openTaskLifecycleStore(siteRoot);
+  const supersessionStore = prepareTaskLifecycleStore(siteRoot);
   try {
     supersessionStore.upsertReportRecord({
       report_id: supersedingReport.report_id,
@@ -1800,7 +1802,7 @@ compatibility_record: true
   assert.equal(supersededBlockedInspectPayload.evidence_preflight.requirements.find((item: any) => item.id === 'changed_files').observed.blocked_report_present, false);
   assert.doesNotMatch(supersededBlockedInspectPayload.evidence_preflight.next_action, /Blocked report is recorded/);
 
-  const closedHistoricalStore = openTaskLifecycleStore(siteRoot);
+  const closedHistoricalStore = prepareTaskLifecycleStore(siteRoot);
   try {
     closedHistoricalStore.updateStatus(blockedTaskId, 'closed', 'smart-scheduling.builder', { closed_at: '2026-06-04T05:00:00Z', closed_by: 'smart-scheduling.builder', closure_mode: 'agent_finish' });
     closedHistoricalStore.upsertDirectedObligation({
@@ -1919,7 +1921,7 @@ compatibility_record: true
   const genericEngineerWithAuthorityPayload = await responsePayload(genericEngineerWithAuthorityResponse, surfaceEngineerRuntime, 1056);
   assert.equal(genericEngineerWithAuthorityPayload.status, 'claimed');
   assert.equal(genericEngineerWithAuthorityPayload.role_claim_warning.kind, 'generic_engineer_role_claim');
-  const claimIdentityStore = openTaskLifecycleStore(siteRoot);
+  const claimIdentityStore = prepareTaskLifecycleStore(siteRoot);
   try {
     const lifecycle = claimIdentityStore.getLifecycleByNumber(9207);
     assert.ok(lifecycle);
@@ -2157,7 +2159,7 @@ compatibility_record: true
   assert.equal(nonRosterSubmitWork.status, 'blocked', JSON.stringify(nonRosterSubmitWork));
   assert.equal(nonRosterSubmitWork.blocked_at, 'task_lifecycle_submit_work.roster_preflight');
   assert.equal(nonRosterSubmitWork.primitive_results[0].result.error, 'submit_work_agent_not_in_roster');
-  const nonRosterStore = openTaskLifecycleStore(siteRoot);
+  const nonRosterStore = prepareTaskLifecycleStore(siteRoot);
   try {
     const nonRosterLifecycle = nonRosterStore.getLifecycle(nonRosterSubmitWorkTaskId);
     assert.equal(nonRosterLifecycle?.status, 'opened');
@@ -2216,7 +2218,7 @@ compatibility_record: true
   const recoveryTruthfulnessFinish = await responsePayload(recoveryTruthfulnessFinishResponse, builderRuntime, 10596);
   assert.equal(recoveryTruthfulnessFinish.status, 'success', JSON.stringify(recoveryTruthfulnessFinish));
   assert.equal(recoveryTruthfulnessFinish.new_status, 'in_review');
-  const submitWorkReviewStore = openTaskLifecycleStore(siteRoot);
+  const submitWorkReviewStore = prepareTaskLifecycleStore(siteRoot);
   try {
     const dependencies = submitWorkReviewStore.listTaskDependenciesForParent(submitWorkTaskId);
     assert.equal(dependencies.length, 1);
@@ -2489,7 +2491,7 @@ compatibility_record: true
   assert.equal(declaredParentShow.dependencies_blocking_this_task[0].dependency_kind, 'verification');
   assert.equal(declaredParentShow.dependency_satisfaction.unsatisfied_count, 1);
 
-  const genericDependencyObligationStore = openTaskLifecycleStore(siteRoot);
+  const genericDependencyObligationStore = prepareTaskLifecycleStore(siteRoot);
   try {
     genericDependencyObligationStore.upsertDirectedObligation({
       obligation_id: 'generic-verification-dependency-obligation-9217',
@@ -2676,7 +2678,7 @@ compatibility_record: true
   const dispositionSatisfiedParentClose = await responsePayload(dispositionSatisfiedParentCloseResponse, builderRuntime, 105742);
   assert.notEqual(dispositionSatisfiedParentClose.error, 'task_close_dependencies_unsatisfied', JSON.stringify(dispositionSatisfiedParentClose));
 
-  const conflictRosterStore = openTaskLifecycleStore(siteRoot);
+  const conflictRosterStore = prepareTaskLifecycleStore(siteRoot);
   try {
     conflictRosterStore.upsertRosterEntry({
       agent_id: 'smart-scheduling.same-builder',
@@ -3015,7 +3017,7 @@ try {
     join(scopedSiteRoot, '.ai', 'do-not-open', 'tasks', `${followUpTaskId}.md`),
     `---\ntask_id: ${followUpTaskId}\ntask_number: 9304\nstatus: claimed\ngoverned_by: builder\n---\n\n# Task 9304\n\n## Goal\n\nTest follow-up ledger remediation.\n\n## Execution Notes\n\nDisposition preserves a remaining follow-up item for later triage.\n\n## Verification\n\nChecked.\n\n## Acceptance Criteria\n\n- [x] Criterion.\n`,
   );
-  const scopedStore = openTaskLifecycleStore(scopedSiteRoot);
+  const scopedStore = prepareTaskLifecycleStore(scopedSiteRoot);
   try {
     scopedStore.upsertRosterEntry({
       agent_id: '_site',
@@ -3093,7 +3095,7 @@ try {
   const scopedRuntime = {
     argv: ['--site-root', scopedSiteRoot],
     cwd: scopedSiteRoot,
-    env: { ...process.env, NARADA_AGENT_ID: 'scoped.builder' },
+    env: { ...process.env, NARADA_AGENT_ID: 'scoped.builder', NARADA_TASK_LIFECYCLE_FAST_SQLITE: '0' },
     stdout: { write: () => true },
     stderr: { write: () => true },
   };
