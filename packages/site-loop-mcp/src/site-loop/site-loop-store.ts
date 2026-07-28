@@ -6,6 +6,7 @@ import {
 import {
   assertSiteLoopStorageSchema,
   ensureSiteLoopTables,
+  type SiteLoopDatabase,
 } from '../site-operating-loop/site-loop-store.js';
 import { createSiteLoopEvidenceStore } from '../site-operating-loop/site-loop-evidence.js';
 
@@ -13,6 +14,7 @@ export * from '../site-operating-loop/site-loop-store.js';
 
 interface OpenSiteLoopStoreOptions {
   write?: boolean;
+  storeMode?: 'prepare' | 'runtime';
 }
 
 function ensureRuntimeHostTables(db: any): void {
@@ -54,16 +56,17 @@ function ensureRuntimeHostTables(db: any): void {
 export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
   const write = options.write !== false;
   const siteRoot = resolve(cwd);
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write, storeMode: options.storeMode });
   try {
+    const db = lifecycleStore.db as unknown as SiteLoopDatabase;
     const evidenceStore = createSiteLoopEvidenceStore(siteRoot);
     if (write) {
-      ensureSiteLoopTables(lifecycleStore.db);
-      ensureRuntimeHostTables(lifecycleStore.db);
+      ensureSiteLoopTables(db);
+      ensureRuntimeHostTables(db);
     }
-    assertSiteLoopStorageSchema(lifecycleStore.db);
+    assertSiteLoopStorageSchema(db);
     return {
-      db: lifecycleStore.db,
+      db,
       siteRoot,
       evidenceStore,
       close() {

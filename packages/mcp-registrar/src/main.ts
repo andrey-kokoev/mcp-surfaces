@@ -104,11 +104,20 @@ type SiteDef = {
 };
 
 type SiteMcpFabricMode = 'empty' | 'aggregate' | 'sidecar';
+type McpCarrierLoadingMode = 'static' | 'progressive';
+
+const PROGRESSIVE_BOOTSTRAP_SURFACES = [
+  'agent-context',
+  'mcp-registrar',
+  'mcp-loader',
+  'local-filesystem',
+] as const;
 
 type SiteBinding = {
   site_id: string;
   surfaces: 'all' | string[];
   prefix: string;
+  loading_mode?: McpCarrierLoadingMode;
   runtime_kind?: McpRuntimeKind;
   extra_allowed_roots?: string[];
 };
@@ -412,31 +421,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -447,31 +437,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -482,31 +453,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -799,7 +751,7 @@ export function listTools() {
     },
     {
       name: 'registrar_carrier_apply',
-      description: 'Generate and write a carrier-native MCP config to the carrier config_path, backing up the existing file first.',
+      description: 'Generate and atomically replace a carrier-native MCP config at the carrier config_path; hard cutover does not retain the previous config.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1461,7 +1413,37 @@ function automaticProjectionForBinding(surface: RegistrarSurfaceRecord, binding:
   return defaults.length === 1 ? defaults[0] : null;
 }
 
+function assertCarrierBindingLoadingMode(binding: SiteBinding): void {
+  if (binding.loading_mode !== 'progressive') return;
+  if (binding.surfaces === 'all') {
+    throw diagnosticError(
+      'registrar_progressive_binding_requires_explicit_bootstrap',
+      `registrar_progressive_binding_requires_explicit_bootstrap:${binding.site_id}`,
+      {
+        site_id: binding.site_id,
+        loading_mode: binding.loading_mode,
+        remediation: 'Replace surfaces=all with an explicit progressive bootstrap allowlist; use mcp-loader for all other surfaces.',
+      },
+    );
+  }
+  const missing = PROGRESSIVE_BOOTSTRAP_SURFACES.filter((surfaceId) => !binding.surfaces.includes(surfaceId));
+  if (missing.length > 0) {
+    throw diagnosticError(
+      'registrar_progressive_binding_missing_bootstrap_surface',
+      `registrar_progressive_binding_missing_bootstrap_surface:${binding.site_id}`,
+      {
+        site_id: binding.site_id,
+        loading_mode: binding.loading_mode,
+        required_bootstrap_surfaces: PROGRESSIVE_BOOTSTRAP_SURFACES,
+        missing_surfaces: missing,
+        remediation: 'Add every required bootstrap surface or switch the binding to static loading.',
+      },
+    );
+  }
+}
+
 export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
+  assertCarrierBindingLoadingMode(binding);
   const explicit = binding.surfaces === 'all'
     ? SURFACES.filter((surface) => {
       try {
@@ -1472,6 +1454,7 @@ export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
       }
     }).map((surface) => surface.id)
     : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
+  if (binding.loading_mode === 'progressive') return Array.from(new Set(explicit));
   const ids = new Set(explicit);
   for (const surface of SURFACES) {
     if (automaticProjectionForBinding(surface, binding)) ids.add(surface.id);
@@ -1518,6 +1501,13 @@ function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): st
 
 function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
   const counts: Record<McpInjectionScope, number> = { host: 0, user_site: 0, local_site: 0 };
+  const bindings = carrier.site_bindings.map((binding) => ({
+    site_id: binding.site_id,
+    loading_mode: binding.loading_mode ?? 'static',
+    bootstrap_surface_ids: binding.surfaces === 'all'
+      ? 'all'
+      : [...binding.surfaces],
+  }));
   const servers = Object.entries(collectCarrierServers(carrier)).map(([serverKey, server]) => {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     counts[server.injection_scope]++;
@@ -1532,7 +1522,7 @@ function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
       narada_scope: server.narada_scope,
     };
   });
-  return { counts, servers };
+  return { counts, servers, bindings };
 }
 
 function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, surfaceId: string): MaterializedServer {
@@ -1559,7 +1549,12 @@ type CarrierLaunchCommand = {
   child_args: string[];
 };
 
-function carrierLaunchCommand(server: MaterializedServer, surfaceId: string, configPath?: string): CarrierLaunchCommand {
+function carrierLaunchCommand(
+  server: MaterializedServer,
+  surfaceId: string,
+  configPath?: string,
+  carrier?: Pick<CarrierDef, 'carrier_id' | 'kind'>,
+): CarrierLaunchCommand {
   const childEntrypoint = server.entrypoint;
   const childArgs = server.args;
   const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
@@ -1578,6 +1573,14 @@ function carrierLaunchCommand(server: MaterializedServer, surfaceId: string, con
       MCP_RUNTIME_PROXY_ENTRYPOINT,
       '--surface-id',
       surfaceId,
+      ...(configPath && carrier ? [
+        '--carrier-id',
+        carrier.carrier_id,
+        '--carrier-kind',
+        carrier.kind,
+        '--registrar-entrypoint',
+        MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+      ] : []),
       '--artifact-manifest',
       MCP_WORKSPACE_ARTIFACT_MANIFEST,
       '--runtime-contract-version',
@@ -1736,7 +1739,7 @@ function emitOpencodeConfig(carrier: CarrierDef, configPath?: string): { content
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     mcp[key] = {
       type: 'local',
       command: [launch.command, ...launch.args],
@@ -1755,7 +1758,7 @@ function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: st
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const base: JsonRecord = {
       transport: 'stdio',
       command: launch.command,
@@ -1785,7 +1788,7 @@ function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: s
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(overridden, surfaceId, configPath);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const carrierAvailableTools = codexCarrierAvailableTools(server);
     lines.push(`[mcp_servers.${key}]`);
     lines.push(`command = "${launch.command}"`);
@@ -2020,7 +2023,6 @@ async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
   const configPath = carrier.config_path;
-  const existingContent = existsSync(configPath) ? readFileSync(configPath, 'utf8') : null;
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
     case 'opencode': result = emitOpencodeConfig(carrier, configPath); break;
@@ -2029,10 +2031,6 @@ async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
   const { validation, generation } = validateCarrierMaterialization(carrier, result, configPath);
-  if (existingContent !== null) {
-    const backupPath = `${configPath}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-    writeFileSync(backupPath, existingContent, 'utf8');
-  }
   writeFileAtomic(configPath, result.content);
   writeMaterializationGeneration(materializationSidecarPath(configPath), generation!);
   writeSiteAllowedRootsConfig(carrier);
@@ -3671,6 +3669,19 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
 
   const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);
+  if (binding?.loading_mode === 'progressive' && aggregateServerKeys.length === 0) {
+    throw diagnosticError(
+      'registrar_progressive_surface_bind_refused',
+      `registrar_progressive_surface_bind_refused:${carrierId}:${surfaceId}`,
+      {
+        carrier_id: carrierId,
+        site_id: defaultSiteId,
+        surface_id: surfaceId,
+        loading_mode: binding.loading_mode,
+        remediation: 'Use mcp-loader to attach this surface at runtime, or explicitly add it to the progressive bootstrap allowlist before materializing the carrier.',
+      },
+    );
+  }
   if (aggregateServerKeys.length > 0) {
     const applied = await registrarCarrierApply({ carrier_id: carrierId });
     writeSiteAllowedRootsConfig(carrier);
@@ -3834,7 +3845,17 @@ async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
 
   if (target === 'all_surfaces_to_carriers') {
     const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id_for_target');
-    lookupCarrier(carrierId);
+    const carrier = lookupCarrier(carrierId);
+    if (carrier.site_bindings.some((binding) => binding.loading_mode === 'progressive')) {
+      throw diagnosticError(
+        'registrar_progressive_bulk_bind_refused',
+        `registrar_progressive_bulk_bind_refused:${carrierId}`,
+        {
+          carrier_id: carrierId,
+          remediation: 'Progressive carriers expose only their explicit bootstrap allowlist; use mcp-loader for runtime attachment or switch the binding to static loading.',
+        },
+      );
+    }
     for (const surface of SURFACES) {
       try { results.push(await registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrierId, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
@@ -3843,6 +3864,15 @@ async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
   }
 
   if (target === 'all_surfaces_to_all_carriers') {
+    if (CARRIERS.some((carrier) => carrier.site_bindings.some((binding) => binding.loading_mode === 'progressive'))) {
+      throw diagnosticError(
+        'registrar_progressive_bulk_bind_refused',
+        'registrar_progressive_bulk_bind_refused:all_carriers',
+        {
+          remediation: 'Progressive carriers expose only their explicit bootstrap allowlists; use mcp-loader for runtime attachment or switch the bindings to static loading.',
+        },
+      );
+    }
     for (const carrier of CARRIERS) {
       for (const surface of SURFACES) {
         try { results.push(await registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id, projection_id: args.projection_id })); }
@@ -3943,14 +3973,74 @@ function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolea
   else process.stdout.write(`${body}\n`);
 }
 
-function parseArgs(_argv: string[]) {
-  return {};
+export type RegistrarCliOptions =
+  | { mode: 'stdio' }
+  | { mode: 'help' }
+  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null };
+
+export function parseArgs(argv: string[]): RegistrarCliOptions {
+  let carrierId: string | null = null;
+  let outputPath: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') return { mode: 'help' };
+    if (arg === '--materialize-carrier') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_carrier_id');
+      carrierId = value;
+      continue;
+    }
+    if (arg === '--output-path') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_output_path');
+      outputPath = value;
+      continue;
+    }
+    // Keep the historical launch hint accepted by Site Fabric clients. The
+    // registrar's authoritative roots are resolved from its environment and
+    // generated fabric, so this compatibility argument does not alter
+    // materialization mode.
+    if (arg === '--narada-root') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_narada_root');
+      continue;
+    }
+    throw new Error(`registrar_unknown_cli_argument:${arg}`);
+  }
+  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath };
+  if (outputPath) throw new Error('registrar_output_path_requires_materialize_carrier');
+  return { mode: 'stdio' };
 }
 
-export { parseArgs };
+async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-carrier' }>): Promise<void> {
+  process.env[FRESH_REGISTRAR_ENV] = '1';
+  const carrier = lookupCarrier(options.carrierId);
+  const outputPath = options.outputPath ? resolve(options.outputPath) : carrier.config_path;
+  const result = await registrarCarrierMaterialize({ carrier_id: options.carrierId, output_path: outputPath });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+function printCliHelp(): void {
+  process.stdout.write([
+    'mcp-registrar MCP server',
+    '',
+    'Out-of-band carrier recovery (works when the MCP registrar surface cannot start):',
+    '  mcp-registrar --materialize-carrier <carrier-id> [--output-path <carrier-config>]',
+    '',
+    'Without arguments, mcp-registrar serves its MCP stdio protocol.',
+    'Materialization writes the carrier config and its .narada-generation.json sidecar atomically.',
+    '',
+  ].join('\n'));
+}
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
+  const options = parseArgs(process.argv.slice(2));
+  const run = options.mode === 'materialize-carrier'
+    ? runDirectMaterialization(options)
+    : options.mode === 'help'
+      ? Promise.resolve(printCliHelp())
+      : runStdioServer(options);
+  run.catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });

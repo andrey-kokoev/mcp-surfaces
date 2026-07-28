@@ -10,6 +10,7 @@ import {
   compactSiteLoopPersistence,
   ensureSiteLoopStorageIndexes,
   ensureSiteLoopTables,
+  asSiteLoopDatabase,
   SITE_LOOP_STORAGE_SCHEMA,
   type SiteLoopPersistenceCompactionResult,
   SiteLoopStorageCutoverRequiredError,
@@ -44,6 +45,8 @@ const PARTIAL_SOURCE_COLUMNS: Record<string, string[]> = {
 };
 
 const RENAMED_SUFFIX = '_pre_cutover';
+type SqliteDatabase = ReturnType<typeof openTaskLifecycleStoreWithDiscipline>['db'];
+type SqliteRow = Record<string, unknown>;
 
 export type SiteLoopStorageCutoverResult = {
   schema: 'narada.site_loop.storage_cutover.v1';
@@ -84,7 +87,7 @@ export function cutoverSiteLoopStorage(
   try {
     const db = lifecycleStore.db;
     const meta = tableExists(db, 'site_loop_storage_meta')
-      ? db.prepare('SELECT schema, cutover_at FROM site_loop_storage_meta WHERE storage_id = 1').get()
+      ? sqliteRow(db.prepare('SELECT schema, cutover_at FROM site_loop_storage_meta WHERE storage_id = 1').get())
       : null;
     if (meta?.schema === SITE_LOOP_STORAGE_SCHEMA) {
       ensureSiteLoopStorageIndexes(db);
@@ -125,7 +128,7 @@ export function cutoverSiteLoopStorage(
     const renamedTables = [...LEGACY_TABLES, ...OPTIONAL_PARTIAL_TABLES]
       .filter((table) => tableExists(db, table));
     const oldNames = Object.fromEntries(renamedTables.map((table) => [table, `${table}${RENAMED_SUFFIX}`]));
-    const previousForeignKeys = Number(Object.values(db.pragma('foreign_keys')?.[0] ?? {})[0] ?? 0);
+    const previousForeignKeys = Number(firstSqliteValue(db.pragma('foreign_keys')) ?? 0);
     db.pragma('foreign_keys = OFF');
     db.exec('BEGIN IMMEDIATE');
     let committed = false;
@@ -154,7 +157,7 @@ export function cutoverSiteLoopStorage(
       db.exec('COMMIT');
       committed = true;
       if (previousForeignKeys !== 0) db.pragma('foreign_keys = ON');
-      const compaction = compactSiteLoopPersistence({ db });
+      const compaction = compactSiteLoopPersistence({ db: asSiteLoopDatabase(db) });
       return {
         schema: 'narada.site_loop.storage_cutover.v1',
         status: 'cut_over',
@@ -187,7 +190,7 @@ export function cutoverSiteLoopStorage(
   }
 }
 
-function cutoverPartialSiteLoopStorage(db: any, presentPartialTables: string[]): SiteLoopStorageCutoverResult {
+function cutoverPartialSiteLoopStorage(db: SqliteDatabase, presentPartialTables: string[]): SiteLoopStorageCutoverResult {
   assertPartialSourceShape(db, presentPartialTables);
   const partialRowCounts = Object.fromEntries(
     presentPartialTables.map((table) => [table, countRows(db, table)]),
@@ -195,7 +198,7 @@ function cutoverPartialSiteLoopStorage(db: any, presentPartialTables: string[]):
   const oldNames = Object.fromEntries(
     presentPartialTables.map((table) => [table, `${table}${RENAMED_SUFFIX}`]),
   );
-  const previousForeignKeys = Number(Object.values(db.pragma('foreign_keys')?.[0] ?? {})[0] ?? 0);
+  const previousForeignKeys = Number(firstSqliteValue(db.pragma('foreign_keys')) ?? 0);
   db.pragma('foreign_keys = OFF');
   db.exec('BEGIN IMMEDIATE');
   let committed = false;
@@ -218,7 +221,7 @@ function cutoverPartialSiteLoopStorage(db: any, presentPartialTables: string[]):
     db.exec('COMMIT');
     committed = true;
     if (previousForeignKeys !== 0) db.pragma('foreign_keys = ON');
-    const compaction = compactSiteLoopPersistence({ db });
+    const compaction = compactSiteLoopPersistence({ db: asSiteLoopDatabase(db) });
     return {
       schema: 'narada.site_loop.storage_cutover.v1',
       status: 'cut_over',
@@ -250,7 +253,7 @@ function cutoverPartialSiteLoopStorage(db: any, presentPartialTables: string[]):
   }
 }
 
-function assertPartialSourceShape(db: any, presentPartialTables: string[]) {
+function assertPartialSourceShape(db: SqliteDatabase, presentPartialTables: string[]): void {
   for (const table of presentPartialTables) {
     const requiredColumns = PARTIAL_SOURCE_COLUMNS[table] ?? [];
     const actualColumns = tableColumns(db, table);
@@ -260,7 +263,7 @@ function assertPartialSourceShape(db: any, presentPartialTables: string[]) {
   }
 }
 
-function rehydrateCurrentClassificationsFromPartial(db: any, legacyTable?: string): number {
+function rehydrateCurrentClassificationsFromPartial(db: SqliteDatabase, legacyTable?: string): number {
   if (!legacyTable) return 0;
   const insert = db.prepare(`
     INSERT INTO site_loop_classification_current (
@@ -268,11 +271,12 @@ function rehydrateCurrentClassificationsFromPartial(db: any, legacyTable?: strin
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let count = 0;
-  for (const row of db.prepare(`
+  for (const rawRow of db.prepare(`
     SELECT loop_id, directive_id, classification, observation_id, observed_at, run_id, task_id, observation_digest
     FROM ${legacyTable}
     ORDER BY rowid ASC
   `).all()) {
+    const row = sqliteRow(rawRow);
     insert.run(
       boundedText(row.loop_id),
       boundedText(row.directive_id),
@@ -288,7 +292,7 @@ function rehydrateCurrentClassificationsFromPartial(db: any, legacyTable?: strin
   return count;
 }
 
-function assertLegacyShape(db: any) {
+function assertLegacyShape(db: SqliteDatabase): void {
   const expected: Record<string, string[]> = {
     site_loop_step_runs: ['input_refs_json', 'output_refs_json', 'evidence_json'],
     site_loop_classification_observations: ['observation_json'],
@@ -304,9 +308,9 @@ function assertLegacyShape(db: any) {
   }
 }
 
-function rehydrateCurrentClassifications(db: any, legacyTable: string): number {
-  const latest = new Map<string, any>();
-  for (const row of db.prepare(`
+function rehydrateCurrentClassifications(db: SqliteDatabase, legacyTable: string): number {
+  const latest = new Map<string, SqliteRow>();
+  for (const rawRow of db.prepare(`
     SELECT * FROM (
       SELECT *, ROW_NUMBER() OVER (
         PARTITION BY loop_id, directive_id
@@ -316,9 +320,10 @@ function rehydrateCurrentClassifications(db: any, legacyTable: string): number {
     )
     WHERE cutover_rank = 1
   `).all()) {
+    const row = sqliteRow(rawRow);
     const observation = parseJson(row.observation_json);
     const record = observation && typeof observation === 'object' && !Array.isArray(observation)
-      ? observation as Record<string, any>
+      ? observation as SqliteRow
       : {};
     const candidate = {
       loop_id: String(row.loop_id),
@@ -361,17 +366,18 @@ function rehydrateCurrentClassifications(db: any, legacyTable: string): number {
 }
 
 function rehydrateLatestOutcomes(
-  db: any,
+  db: SqliteDatabase,
   legacyOutcomesTable: string,
   legacyLatestTable: string,
   cutoverAt: string,
 ): number {
-  const latest = new Map<string, any>();
-  for (const row of db.prepare(`SELECT * FROM ${legacyLatestTable} ORDER BY rowid ASC`).all()) {
+  const latest = new Map<string, SqliteRow>();
+  for (const rawRow of db.prepare(`SELECT * FROM ${legacyLatestTable} ORDER BY rowid ASC`).all()) {
+    const row = sqliteRow(rawRow);
     latest.set(`${row.loop_id}\u0000${row.directive_id}`, row);
   }
   if (latest.size === 0) {
-    for (const row of db.prepare(`
+    for (const rawRow of db.prepare(`
       SELECT * FROM (
         SELECT *, ROW_NUMBER() OVER (
           PARTITION BY loop_id, directive_id
@@ -381,6 +387,7 @@ function rehydrateLatestOutcomes(
       )
       WHERE cutover_rank = 1
     `).all()) {
+      const row = sqliteRow(rawRow);
       const key = `${row.loop_id}\u0000${row.directive_id}`;
       const current = latest.get(key);
       if (!current || compareOutcomeRows(row, current) >= 0) latest.set(key, row);
@@ -421,7 +428,7 @@ function rehydrateLatestOutcomes(
   return latest.size;
 }
 
-function rehydrateEscalations(db: any, legacyTable: string, cutoverAt: string): number {
+function rehydrateEscalations(db: SqliteDatabase, legacyTable: string, cutoverAt: string): number {
   const insert = db.prepare(`
     INSERT INTO site_loop_escalations (
       escalation_id, loop_id, directive_id, classification, status, envelope_id, created_at,
@@ -430,7 +437,8 @@ function rehydrateEscalations(db: any, legacyTable: string, cutoverAt: string): 
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
   `);
   let count = 0;
-  for (const row of db.prepare(`SELECT * FROM ${legacyTable} ORDER BY rowid ASC`).all()) {
+  for (const rawRow of db.prepare(`SELECT * FROM ${legacyTable} ORDER BY rowid ASC`).all()) {
+    const row = sqliteRow(rawRow);
     const escalation = parseJson(row.escalation_json);
     insert.run(
       String(row.escalation_id),
@@ -451,7 +459,7 @@ function rehydrateEscalations(db: any, legacyTable: string, cutoverAt: string): 
 }
 
 function rehydratePreservedSiteLoopState(
-  db: any,
+  db: SqliteDatabase,
   oldNames: Record<string, string>,
   cutoverAt: string,
 ): { health: number; control: number } {
@@ -465,7 +473,8 @@ function rehydratePreservedSiteLoopState(
         last_error_evidence_ref, last_error_evidence_sha256, last_error_evidence_bytes, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
     `);
-    for (const row of db.prepare(`SELECT * FROM ${oldNames.site_loop_health} ORDER BY rowid ASC`).all()) {
+    for (const rawRow of db.prepare(`SELECT * FROM ${oldNames.site_loop_health} ORDER BY rowid ASC`).all()) {
+      const row = sqliteRow(rawRow);
       insert.run(
         boundedText(row.loop_id),
         boundedText(row.status),
@@ -486,7 +495,8 @@ function rehydratePreservedSiteLoopState(
       INSERT INTO site_loop_control (loop_id, paused, mode, reason, updated_at)
       VALUES (?, ?, ?, ?, ?)
     `);
-    for (const row of db.prepare(`SELECT * FROM ${oldNames.site_loop_control} ORDER BY rowid ASC`).all()) {
+    for (const rawRow of db.prepare(`SELECT * FROM ${oldNames.site_loop_control} ORDER BY rowid ASC`).all()) {
+      const row = sqliteRow(rawRow);
       insert.run(
         boundedText(row.loop_id),
         Number(row.paused) ? 1 : 0,
@@ -500,27 +510,40 @@ function rehydratePreservedSiteLoopState(
   return { health, control };
 }
 
-function storageCutoverAt(db: any): string {
-  const row = db.prepare('SELECT cutover_at FROM site_loop_storage_meta WHERE storage_id = 1').get();
+function storageCutoverAt(db: SqliteDatabase): string {
+  const row = sqliteRow(db.prepare('SELECT cutover_at FROM site_loop_storage_meta WHERE storage_id = 1').get());
   return String(row.cutover_at);
 }
 
-function countRows(db: any, table: string): number {
-  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get();
+function countRows(db: SqliteDatabase, table: string): number {
+  const row = sqliteRow(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get());
   return Number(row?.count ?? 0);
 }
 
-function tableExists(db: any, table: string): boolean {
+function tableExists(db: SqliteDatabase, table: string): boolean {
   return Boolean(db.prepare(`
     SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1
   `).get(table));
 }
 
-function tableColumns(db: any, table: string): string[] {
-  return db.prepare(`PRAGMA table_info(${table})`).all().map((row: any) => String(row.name));
+function tableColumns(db: SqliteDatabase, table: string): string[] {
+  return db.prepare(`PRAGMA table_info(${table})`).all().map((row) => String(sqliteRow(row).name));
 }
 
-function parseJson(value: unknown): any {
+function sqliteRow(value: unknown): SqliteRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('sqlite_row_expected');
+  }
+  return value as SqliteRow;
+}
+
+function firstSqliteValue(value: unknown): unknown {
+  if (Array.isArray(value)) return firstSqliteValue(value[0]);
+  if (value && typeof value === 'object') return Object.values(value as SqliteRow)[0] ?? null;
+  return value;
+}
+
+function parseJson(value: unknown): unknown {
   if (value == null) return null;
   try {
     return JSON.parse(String(value));
@@ -565,7 +588,7 @@ function compareTimes(next: unknown, existing: unknown): number {
   return String(next ?? '').localeCompare(String(existing ?? ''));
 }
 
-function compareOutcomeRows(next: any, existing: any): number {
+function compareOutcomeRows(next: SqliteRow, existing: SqliteRow): number {
   const observed = compareTimes(next.observed_at ?? next.recorded_at, existing.observed_at ?? existing.recorded_at);
   if (observed !== 0) return observed;
   return compareTimes(next.recorded_at, existing.recorded_at);
@@ -609,7 +632,7 @@ if (resolve(process.argv[1] ?? '') === resolve(fileURLToPath(import.meta.url))) 
       console.log(JSON.stringify(result));
       if (result.status === 'refused') process.exitCode = 2;
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(JSON.stringify({
       schema: 'narada.site_loop.storage_cutover.v1',
       status: 'error',

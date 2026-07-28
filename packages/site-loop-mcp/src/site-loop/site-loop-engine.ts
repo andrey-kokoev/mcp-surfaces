@@ -17,6 +17,7 @@ import { requireSiteLoopConfig, schemaName, type SiteLoopCommandConfig, type Sit
 import {
   acknowledgeLoopAttention,
   acquireLoopLock,
+  asSiteLoopDatabase,
   beginLoopRun,
   countRecentConsecutiveLoopClassificationObservations,
   finishLoopRun,
@@ -68,9 +69,9 @@ type OperatorAttentionResult = SiteLoopPayload;
 type EnrichedProcessError = Error & SiteLoopPayload;
 type RecoveredDirectiveDelivery = SiteLoopPayload;
 
-const DEFAULT_CONFIGURED_COMMAND_TIMEOUT_MS: any = 120_000;
-const DEFAULT_READINESS_COMMAND_TIMEOUT_MS: any = 5_000;
-const SUPERVISOR_HEARTBEAT_INTERVAL_MS: any = 5_000;
+const DEFAULT_CONFIGURED_COMMAND_TIMEOUT_MS: number = 120_000;
+const DEFAULT_READINESS_COMMAND_TIMEOUT_MS: number = 5_000;
+const SUPERVISOR_HEARTBEAT_INTERVAL_MS: number = 5_000;
 type ConfiguredCommandResult = {
   status: number | null;
   signal: NodeJS.Signals | null;
@@ -80,7 +81,7 @@ type ConfiguredCommandResult = {
 };
 
 function configuredCommandTimeoutMs(options: SiteLoopPayload = {}) {
-  const requestedTimeoutMs: any = Number(options.timeoutMs ?? options.timeout_ms ?? DEFAULT_CONFIGURED_COMMAND_TIMEOUT_MS);
+  const requestedTimeoutMs: number = Number(options.timeoutMs ?? options.timeout_ms ?? DEFAULT_CONFIGURED_COMMAND_TIMEOUT_MS);
   return Number.isFinite(requestedTimeoutMs)
     ? Math.min(300_000, Math.max(1_000, requestedTimeoutMs))
     : DEFAULT_CONFIGURED_COMMAND_TIMEOUT_MS;
@@ -89,7 +90,7 @@ function configuredCommandTimeoutMs(options: SiteLoopPayload = {}) {
 function terminateConfiguredChild(child: ChildProcess | null | undefined) {
   if (!child?.pid) return;
   if (process.platform === 'win32') {
-    const killer: any = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
+    const killer: ChildProcess = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], {
       windowsHide: true,
       stdio: 'ignore',
     });
@@ -100,20 +101,20 @@ function terminateConfiguredChild(child: ChildProcess | null | undefined) {
 }
 
 function spawnConfiguredCommand(command: string, args: string[], options: SiteLoopPayload = {}): Promise<ConfiguredCommandResult> {
-  const timeoutMs: any = configuredCommandTimeoutMs(options);
+  const timeoutMs: number = configuredCommandTimeoutMs(options);
   return new Promise<ConfiguredCommandResult>((resolveResult) => {
-    const child: any = spawn(command, args, {
+    const child: ChildProcess = spawn(command, args, {
       cwd: typeof options.cwd === 'string' ? options.cwd : undefined,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: Object.keys(asRecord(options.env)).length > 0 ? asRecord(options.env) as NodeJS.ProcessEnv : process.env,
     });
-    let stdout: any = '';
-    let stderr: any = '';
-    let timedOut: any = false;
-    let settled: any = false;
+    let stdout: string = '';
+    let stderr: string = '';
+    let timedOut: boolean = false;
+    let settled: boolean = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const settle: any = (result: ConfiguredCommandResult) => {
+    const settle: (result: ConfiguredCommandResult) => void = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -123,20 +124,20 @@ function spawnConfiguredCommand(command: string, args: string[], options: SiteLo
       timedOut = true;
       terminateConfiguredChild(child);
     }, timeoutMs);
-    const stdoutStream: any = child.stdout;
-    const stderrStream: any = child.stderr;
+    const stdoutStream = child.stdout;
+    const stderrStream = child.stderr;
     stdoutStream?.setEncoding('utf8');
     stderrStream?.setEncoding('utf8');
-    stdoutStream?.on('data', (chunk: any) => { stdout += chunk; });
-    stderrStream?.on('data', (chunk: any) => { stderr += chunk; });
-    child.on('error', (error: any) => settle({
+    stdoutStream?.on('data', (chunk: Buffer | string) => { stdout += chunk.toString(); });
+    stderrStream?.on('data', (chunk: Buffer | string) => { stderr += chunk.toString(); });
+    child.on('error', (error: Error) => settle({
       status: null,
       signal: null,
       timedOut,
       stdout,
       stderr: stderr ? `${stderr}\n${error.message}` : error.message,
     }));
-    child.on('close', (status: any, signal: any) => settle({
+    child.on('close', (status: number | null, signal: NodeJS.Signals | null) => settle({
       status,
       signal,
       timedOut,
@@ -158,7 +159,7 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function positiveDurationMs(value: unknown, fallback: number): number {
-  const parsed: any = Number(value);
+  const parsed: number = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -175,12 +176,12 @@ export function renderResidentAgentCliCommand(siteRoot: string): string {
 }
 
 function siteLoopConfigFromContext(candidate: unknown, siteRoot: unknown): SiteLoopConfig {
-  const record: any = asRecord(candidate);
-  const resident: any = asRecord(record.resident);
+  const record: SiteLoopPayload = asRecord(candidate);
+  const resident: SiteLoopPayload = asRecord(record.resident);
   if (typeof record.loop_id === 'string' && typeof resident.agent_id === 'string' && typeof resident.role === 'string') {
     return record as SiteLoopConfig;
   }
-  const root: any = stringValue(siteRoot);
+  const root: string = stringValue(siteRoot);
   if (root) return configForSite(root);
   throw new Error('site_loop_config_context_missing');
 }
@@ -232,14 +233,14 @@ function configuredSupervisorRuntimeNames(siteLoopConfig: SiteLoopConfig): strin
 }
 
 function configuredSessionRoot(siteRoot: string, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)): string {
-  const sessionRoot: any = siteLoopConfig.resident_runtime.session_root;
+  const sessionRoot = siteLoopConfig.resident_runtime.session_root;
   return isAbsolute(sessionRoot) ? sessionRoot : join(siteRoot, sessionRoot);
 }
 function configuredRuntimeMode(siteLoopConfig: SiteLoopConfig, carrier: SiteLoopPayload, proofDriver = false): string {
   if (proofDriver) return 'proof_driver';
-  const runtime: any = String(carrier.runtime ?? '');
-  const legacyRuntime: any = String(carrier.legacy_runtime ?? '');
-  const fallbackRuntimes: any = configuredFallbackRuntimeNames(siteLoopConfig);
+  const runtime = String(carrier.runtime ?? '');
+  const legacyRuntime = String(carrier.legacy_runtime ?? '');
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
   if (runtime === siteLoopConfig.resident_runtime.preferred_runtime) return 'preferred_runtime_reasoning';
   if (fallbackRuntimes.includes(runtime) || fallbackRuntimes.includes(legacyRuntime)) return 'fallback_runtime_reasoning';
   return 'no_live_carrier';
@@ -302,7 +303,7 @@ function testAuthorityRequested(options: SiteLoopPayload = {}) {
 }
 
 function siteControlRoot(siteRoot: any) {
-  const root: any = resolve(siteRoot);
+  const root = resolve(siteRoot);
   return basename(root).toLowerCase() === '.narada' ? root : resolve(root, '.narada');
 }
 
@@ -330,8 +331,8 @@ function prepareTestAuthorityBinding(productionSiteRoot: string, siteLoopConfig:
       },
     };
   }
-  const executionSiteRoot: any = resolve(productionSiteRoot, config.state_root);
-  const configDir: any = join(siteControlRoot(executionSiteRoot), 'capabilities');
+  const executionSiteRoot = resolve(productionSiteRoot, config.state_root);
+  const configDir = join(siteControlRoot(executionSiteRoot), 'capabilities');
   mkdirSync(configDir, { recursive: true });
   mkdirSync(join(executionSiteRoot, '.ai'), { recursive: true });
   writeFileSync(join(configDir, 'site-loop-config.json'), JSON.stringify(siteLoopConfig, null, 2), 'utf8');
@@ -358,12 +359,12 @@ function prepareTestAuthorityBinding(productionSiteRoot: string, siteLoopConfig:
 }
 
 export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
-  const productionSiteRoot: any = resolve(cwd);
-  const productionSiteLoopConfig: any = configForSite(productionSiteRoot);
+  const productionSiteRoot = resolve(cwd);
+  const productionSiteLoopConfig = configForSite(productionSiteRoot);
   const testAuthorityDecision: any = prepareTestAuthorityBinding(productionSiteRoot, productionSiteLoopConfig, options);
-  const dryRun: any = options.dryRun === true || options.dry_run === true;
-  const runId: any = typeof options.runId === 'string' ? options.runId : makeRunId();
-  const startedAt: any = new Date().toISOString();
+  const dryRun = options.dryRun === true || options.dry_run === true;
+  const runId = typeof options.runId === 'string' ? options.runId : makeRunId();
+  const startedAt = new Date().toISOString();
   if (testAuthorityDecision.refusal) {
     return {
       schema: schemaName(productionSiteLoopConfig, 'site_loop_run'),
@@ -385,22 +386,22 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
   const residentAgentId: any = siteLoopConfig.resident.agent_id;
   const residentRole: any = siteLoopConfig.resident.role;
   const ticketProjectionRef: any = siteLoopConfig.refs.ticket_projection;
-  const limit: any = Number(options.limit ?? 25);
-  const threshold: any = options.threshold == null ? undefined : Number(options.threshold);
-  const sourceSyncRequested: any = options.sourceSync === true || options.source_sync === true;
-  const drain: any = options.drain === true;
+  const limit = Number(options.limit ?? 25);
+  const threshold = options.threshold == null ? undefined : Number(options.threshold);
+  const sourceSyncRequested = options.sourceSync === true || options.source_sync === true;
+  const drain = options.drain === true;
   const operatingPolicy: any = loadSiteLoopOperatingPolicy(siteRoot).policy;
   const steps: ResidentLoopStep[] = [];
   let failedStep: ResidentLoopStep | null = null;
   mkdirSync(resolve(siteRoot, '.ai', 'state'), { recursive: true });
-  let store: any = null;
-  let lock: any = null;
-  let staleRunRecovery: any = null;
+  let store = null;
+  let lock = null;
+  let staleRunRecovery = null;
 
   try {
     store = dryRun ? null : openSiteLoopStore(siteRoot);
     if (store) {
-      const lockTtlMs: any = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
+      const lockTtlMs = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
       lock = acquireLoopLock(store, {
         loopId,
         runId,
@@ -441,9 +442,9 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
       });
     }
     const control: any = store ? getLoopControl(store, loopId) : null;
-    if (control?.paused && !drain) {
-      const finishedAt: any = new Date().toISOString();
-      const summary: any = { paused: true, step_count: 0 };
+    if (store && control?.paused && !drain) {
+      const finishedAt = new Date().toISOString();
+      const summary = { paused: true, step_count: 0 };
       finishLoopRun(store, runId, {
         status: 'paused',
         finished_at: finishedAt,
@@ -498,12 +499,12 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
       },
     });
 
-    const finishedAt: any = new Date().toISOString();
+    const finishedAt = new Date().toISOString();
     const bridge: any = phaseRun.byId.inbox_bridge ?? null;
-    const dispatch: any = phaseContext.state.dispatch ?? null;
-    const outcome: any = phaseContext.state.outcome ?? null;
+    const dispatch = phaseContext.state.dispatch ?? null;
+    const outcome = phaseContext.state.outcome ?? null;
     const summary: any = summarizeRun({ bridge: bridge?.result ?? null, dispatch, steps, outcome });
-    let health: any = null;
+    let health = null;
     if (store) {
       finishLoopRun(store, runId, {
         status: 'ok',
@@ -533,8 +534,8 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
       steps: steps.map(publicStep),
     };
   } catch (error: any) {
-    const finishedAt: any = new Date().toISOString();
-    const errorPayload: any = errorToPayload(error);
+    const finishedAt = new Date().toISOString();
+    const errorPayload = errorToPayload(error);
     if (store) {
       finishLoopRun(store, runId, {
         status: 'failed',
@@ -579,7 +580,7 @@ function supervisorHeartbeatPath(siteRoot: any, options: SiteLoopPayload = {}) {
 }
 
 function writeSupervisorHeartbeat(siteRoot: any, options: SiteLoopPayload = {}, fields: SiteLoopPayload = {}) {
-  const path: any = supervisorHeartbeatPath(siteRoot, options);
+  const path = supervisorHeartbeatPath(siteRoot, options);
   mkdirSync(dirname(path), { recursive: true });
   writeJsonAtomically(path, {
     schema: 'narada.site_loop.supervisor_heartbeat.v1',
@@ -593,13 +594,13 @@ function writeSupervisorHeartbeat(siteRoot: any, options: SiteLoopPayload = {}, 
 }
 
 function readSupervisorHeartbeat(siteRoot: any, options: SiteLoopPayload = {}) {
-  const path: any = supervisorHeartbeatPath(siteRoot, options);
-  const packet: any = asRecord(readJson(path));
-  const nowMs: any = Number(options.nowMs ?? options.now_ms ?? Date.now());
-  const freshnessWindowMs: any = Math.max(1_000, Number(options.supervisorHeartbeatFreshnessMs ?? options.supervisor_heartbeat_freshness_ms ?? 180_000));
-  const heartbeatMs: any = Date.parse(stringValue(packet.updated_at));
-  const ageMs: any = Number.isFinite(heartbeatMs) ? nowMs - heartbeatMs : null;
-  const fresh: any = packet.status === 'alive'
+  const path = supervisorHeartbeatPath(siteRoot, options);
+  const packet = asRecord(readJson(path));
+  const nowMs = Number(options.nowMs ?? options.now_ms ?? Date.now());
+  const freshnessWindowMs = Math.max(1_000, Number(options.supervisorHeartbeatFreshnessMs ?? options.supervisor_heartbeat_freshness_ms ?? 180_000));
+  const heartbeatMs = Date.parse(stringValue(packet.updated_at));
+  const ageMs = Number.isFinite(heartbeatMs) ? nowMs - heartbeatMs : null;
+  const fresh = packet.status === 'alive'
     && ageMs !== null
     && ageMs >= -5_000
     && ageMs <= freshnessWindowMs;
@@ -618,7 +619,7 @@ function readSupervisorHeartbeat(siteRoot: any, options: SiteLoopPayload = {}) {
 
 async function runSourceSync(siteRoot: any, options: SiteLoopPayload = {}) {
   const { dryRun, runner } = options;
-  const configuredCommand: any = configForSite(siteRoot).commands.source_sync;
+  const configuredCommand = configForSite(siteRoot).commands.source_sync;
   if (configuredCommand.enabled === false) {
     return {
       schema: stringValue(options.schema, configuredSchema(siteRoot, 'source_sync')),
@@ -630,17 +631,17 @@ async function runSourceSync(siteRoot: any, options: SiteLoopPayload = {}) {
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun });
   }
-  const commandConfig: any = asCommandConfig(options.commandConfig, configuredCommand);
+  const commandConfig = asCommandConfig(options.commandConfig, configuredCommand);
   assertDirectSpawnCommand(commandConfig);
   const args: any = [...commandConfig.args];
   if (dryRun && commandConfig.dry_run_arg) args.push(commandConfig.dry_run_arg);
-  const result: any = await spawnConfiguredCommand(commandConfig.command, args, {
+  const result = await spawnConfiguredCommand(commandConfig.command, args, {
     cwd: commandConfig.working_directory ?? siteRoot,
     timeoutMs: options.timeoutMs ?? options.timeout_ms,
   });
   if (result.timedOut) {
-    const timeoutMs: any = configuredCommandTimeoutMs(options);
-    const error: any = new Error(`source sync timed out after ${timeoutMs}ms`) as EnrichedProcessError;
+    const timeoutMs = configuredCommandTimeoutMs(options);
+    const error = new Error(`source sync timed out after ${timeoutMs}ms`) as EnrichedProcessError;
     error.timed_out = true;
     error.timeout_ms = timeoutMs;
     error.stdout = result.stdout;
@@ -648,7 +649,7 @@ async function runSourceSync(siteRoot: any, options: SiteLoopPayload = {}) {
     throw error;
   }
   if ((result.status ?? 1) !== 0) {
-    const error: any = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
+    const error = new Error(`source sync failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     error.exit_code = result.status;
@@ -663,7 +664,7 @@ async function runSourceSync(siteRoot: any, options: SiteLoopPayload = {}) {
 
 async function runTicketTaskReconcile(siteRoot: any, options: SiteLoopPayload = {}) {
   const { dryRun, limit, preferredRole, runner } = options;
-  const configuredCommand: any = configForSite(siteRoot).commands.ticket_task_reconciliation;
+  const configuredCommand = configForSite(siteRoot).commands.ticket_task_reconciliation;
   if (configuredCommand.enabled === false) {
     return {
       schema: stringValue(options.schema, configuredSchema(siteRoot, 'ticket_task_reconciliation')),
@@ -679,20 +680,20 @@ async function runTicketTaskReconcile(siteRoot: any, options: SiteLoopPayload = 
   if (typeof runner === 'function') {
     return runner({ cwd: siteRoot, dryRun, limit, preferredRole });
   }
-  const commandConfig: any = asCommandConfig(options.commandConfig, configuredCommand);
+  const commandConfig = asCommandConfig(options.commandConfig, configuredCommand);
   assertDirectSpawnCommand(commandConfig);
-  const role: any = typeof preferredRole === 'string' ? preferredRole : configuredResidentRole(siteRoot);
+  const role = typeof preferredRole === 'string' ? preferredRole : configuredResidentRole(siteRoot);
   const args: string[] = [...commandConfig.args];
   if (commandConfig.preferred_role_arg) args.push(commandConfig.preferred_role_arg, role);
   if (Number.isFinite(Number(limit)) && commandConfig.limit_arg) args.push(commandConfig.limit_arg, String(Number(limit)));
   if (dryRun && commandConfig.dry_run_arg) args.push(commandConfig.dry_run_arg);
-  const result: any = await spawnConfiguredCommand(commandConfig.command, args, {
+  const result = await spawnConfiguredCommand(commandConfig.command, args, {
     cwd: commandConfig.working_directory ?? siteRoot,
     timeoutMs: options.timeoutMs ?? options.timeout_ms,
   });
   if (result.timedOut) {
-    const timeoutMs: any = configuredCommandTimeoutMs(options);
-    const error: any = new Error(`ticket task reconcile timed out after ${timeoutMs}ms`) as EnrichedProcessError;
+    const timeoutMs = configuredCommandTimeoutMs(options);
+    const error = new Error(`ticket task reconcile timed out after ${timeoutMs}ms`) as EnrichedProcessError;
     error.timed_out = true;
     error.timeout_ms = timeoutMs;
     error.stdout = result.stdout;
@@ -700,7 +701,7 @@ async function runTicketTaskReconcile(siteRoot: any, options: SiteLoopPayload = 
     throw error;
   }
   if ((result.status ?? 1) !== 0) {
-    const error: any = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
+    const error = new Error(`ticket task reconcile failed: ${result.stderr || result.stdout || result.status}`) as EnrichedProcessError;
     error.stdout = result.stdout;
     error.stderr = result.stderr;
     error.exit_code = result.status;
@@ -722,7 +723,7 @@ function assertDirectSpawnCommand(commandConfig: SiteLoopCommandConfig) {
 }
 
 function asCommandConfig(value: unknown, fallback: SiteLoopCommandConfig): SiteLoopCommandConfig {
-  const record: any = asRecord(value);
+  const record = asRecord(value);
   const args: any = Array.isArray(record.args) ? record.args.map(String) : fallback.args;
   return {
     execution: record.execution === 'direct_spawn' ? 'direct_spawn' : fallback.execution,
@@ -737,9 +738,9 @@ function asCommandConfig(value: unknown, fallback: SiteLoopCommandConfig): SiteL
 }
 
 export function listSiteLoopRuns(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
-  const loopId: any = typeof options.loopId === 'string' ? options.loopId : configuredLoopId(siteRoot);
+  const loopId = typeof options.loopId === 'string' ? options.loopId : configuredLoopId(siteRoot);
   try {
     return {
       schema: configuredSchema(siteRoot, 'site_loop_runs'),
@@ -762,8 +763,8 @@ function normalizeRunShowDetail(value: unknown): SiteLoopRunShowDetail {
 
 function compactLoopRun(run: any, options: SiteLoopPayload = {}) {
   if (!run) return null;
-  const evidencePreviewChars: any = boundedPreviewChars(options.evidence_preview_chars ?? options.evidencePreviewChars);
-  const includeEvidencePreview: any = options.include_evidence_preview === true || options.includeEvidencePreview === true;
+  const evidencePreviewChars = boundedPreviewChars(options.evidence_preview_chars ?? options.evidencePreviewChars);
+  const includeEvidencePreview = options.include_evidence_preview === true || options.includeEvidencePreview === true;
   const steps: any = Array.isArray(run.steps) ? run.steps : [];
   return {
     run_id: run.run_id,
@@ -808,7 +809,7 @@ function compactLoopStep(step: any, options: SiteLoopPayload) {
 }
 
 function boundedPreviewChars(value: unknown): number {
-  const parsed: any = Number(value);
+  const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return 0;
   return Math.min(Math.floor(parsed), 1000);
 }
@@ -816,7 +817,7 @@ function boundedPreviewChars(value: unknown): number {
 function summarizeRefs(value: unknown[]) {
   return value.slice(0, 10).map((item: any) => {
     if (typeof item === 'string') return item;
-    const record: any = asRecord(item);
+    const record = asRecord(item);
     return {
       kind: stringOrNull(record.kind),
       ref: stringOrNull(record.ref) ?? stringOrNull(record.id) ?? stringOrNull(record.path),
@@ -826,7 +827,7 @@ function summarizeRefs(value: unknown[]) {
 
 function summarizeLargeValue(value: unknown, previewChars : any= 0): SiteLoopPayload | null {
   if (value === null || value === undefined) return null;
-  const text: any = stableJsonForSummary(value);
+  const text = stableJsonForSummary(value);
   if (Array.isArray(value)) {
     return {
       type: 'array',
@@ -837,8 +838,8 @@ function summarizeLargeValue(value: unknown, previewChars : any= 0): SiteLoopPay
     };
   }
   if (typeof value === 'object') {
-    const record: any = asRecord(value);
-    const keys: any = Object.keys(record);
+    const record = asRecord(value);
+    const keys = Object.keys(record);
     return {
       type: 'object',
       keys,
@@ -856,15 +857,15 @@ function summarizeLargeValue(value: unknown, previewChars : any= 0): SiteLoopPay
 }
 
 function summarizeSmallValue(value: unknown): unknown {
-  const text: any = stableJsonForSummary(value);
+  const text = stableJsonForSummary(value);
   if (text.length <= 240) return value;
-  const record: any = asRecord(value);
+  const record = asRecord(value);
   if (Object.keys(record).length > 0) return summarizeImportantFields(record);
   return { type: Array.isArray(value) ? 'array' : typeof value, char_length: text.length };
 }
 
 function summarizeImportantFields(record: SiteLoopPayload): SiteLoopPayload {
-  const fieldNames: any = [
+  const fieldNames = [
     'status',
     'state',
     'decision',
@@ -915,14 +916,14 @@ function stableJsonForSummary(value: unknown): string {
 }
 
 export function showSiteLoopRun(cwd: any, runIdOrOptions: any) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
-    const options: any = asRecord(runIdOrOptions);
-    const runId: any = typeof runIdOrOptions === 'string'
+    const options = asRecord(runIdOrOptions);
+    const runId = typeof runIdOrOptions === 'string'
       ? runIdOrOptions
       : stringValue(options.run_id ?? options.runId);
-    const detail: any = normalizeRunShowDetail(options.detail);
+    const detail = normalizeRunShowDetail(options.detail);
     const run: any = getLoopRun(store, runId, { hydrate: detail === 'full' });
     return {
       schema: configuredSchema(siteRoot, 'site_loop_show'),
@@ -936,7 +937,7 @@ export function showSiteLoopRun(cwd: any, runIdOrOptions: any) {
 }
 
 export function siteLoopStatus(cwd: any) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
     return getLoopStatus(store, { loopId: configuredLoopId(siteRoot) });
@@ -946,17 +947,17 @@ export function siteLoopStatus(cwd: any) {
 }
 
 export function siteLoopHealth(cwd: any) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
     const health: any = getLoopHealth(store, configuredLoopId(siteRoot));
     const operating: any = siteLoopOperatingLayerStatus(siteRoot);
-    const carrierUsable: any = ['available', 'busy'].includes(String(operating.resident?.status ?? ''));
-    const productionProofFresh: any = operating.latest_activity?.production_proof_fresh === true;
-    const mailboxProofFresh: any = operating.mailbox_proof?.status === 'fresh';
-    const supervisorHeartbeatFresh: any = operating.supervisor_heartbeat?.fresh === true;
-    const stalePending: any = Number(operating.backlog?.stale_pending_directives ?? 0);
-    const openAttention: any = Number(operating.backlog?.open_attention ?? 0);
+    const carrierUsable = ['available', 'busy'].includes(String(operating.resident?.status ?? ''));
+    const productionProofFresh = operating.latest_activity?.production_proof_fresh === true;
+    const mailboxProofFresh = operating.mailbox_proof?.status === 'fresh';
+    const supervisorHeartbeatFresh = operating.supervisor_heartbeat?.fresh === true;
+    const stalePending = Number(operating.backlog?.stale_pending_directives ?? 0);
+    const openAttention = Number(operating.backlog?.open_attention ?? 0);
     const errorAttention: any = Array.isArray(operating.alerts)
       && operating.alerts.some((item: any) => item && (item.severity === 'critical' || item.severity === 'error'));
     const healthGate: any = {
@@ -989,20 +990,20 @@ export function siteLoopHealth(cwd: any) {
 }
 
 export function siteLoopOperatingLayerStatus(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const nowIso: any = stringValue(options.now ?? options.nowIso ?? options.now_iso, new Date().toISOString());
-  const nowMs: any = Date.parse(nowIso);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const nowIso = stringValue(options.now ?? options.nowIso ?? options.now_iso, new Date().toISOString());
+  const nowMs = Date.parse(nowIso);
   const loop: any = siteLoopStatus(siteRoot);
   const resident: any = siteResidentStatus(siteRoot);
   const pending: any = siteResidentPending(siteRoot, { limit: options.limit ?? 25 });
   const receipts: any = siteResidentReceipts(siteRoot, { limit: 1 });
   const outcomes: any = siteResidentOutcomes(siteRoot, { limit: options.outcomeLimit ?? options.outcome_limit ?? 500 });
-  const proofFreshnessWindowMs: any = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
-  const mailboxProofFreshnessWindowMs: any = Number(options.mailboxProofFreshnessMs ?? options.mailbox_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const proofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const mailboxProofFreshnessWindowMs = Number(options.mailboxProofFreshnessMs ?? options.mailbox_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
   const policy: any = loadSiteLoopOperatingPolicy(siteRoot);
   const dbHealth: any = taskLifecycleDbHealth(siteRoot);
-  const surfacePolicyNoise: any = recentSurfacePolicyNoise(siteRoot, {
+  const surfacePolicyNoise = recentSurfacePolicyNoise(siteRoot, {
     carrierStartedAt: resident?.host?.started_event?.timestamp ?? null,
     includeEvidence: options.includeSurfacePolicyEvidence === true || options.include_surface_policy_evidence === true,
   });
@@ -1011,40 +1012,41 @@ export function siteLoopOperatingLayerStatus(cwd: any, options: SiteLoopPayload 
     freshnessMs: mailboxProofFreshnessWindowMs,
   });
   const supervisorHeartbeat: any = readSupervisorHeartbeat(siteRoot, { ...options, nowMs });
-  const latestSummary: any = asRecord(loop.latest?.summary);
+  const latestSummary = asRecord(loop.latest?.summary);
   const health: any = loop.health ?? null;
   const openAttention: any = loop.attention?.open_count ?? health?.attention?.open_count ?? 0;
   const unresolved: any = health?.unresolved_backlog?.unresolved_count ?? 0;
-  const pendingCount: any = Number(pending.pending_count ?? 0);
-  const stalePendingThresholdMs: any = Number(options.stalePendingThresholdMs ?? options.stale_pending_threshold_ms ?? 10 * 60_000);
+  const pendingCount = Number(pending.pending_count ?? 0);
+  const stalePendingThresholdMs = Number(options.stalePendingThresholdMs ?? options.stale_pending_threshold_ms ?? 10 * 60_000);
   const stalePending: any = stalePendingDirectives(pending.directives ?? [], {
     now: options.now ?? options.nowIso ?? options.now_iso,
     thresholdMs: stalePendingThresholdMs,
   });
-  const healthOk: any = ['healthy', 'unknown'].includes(health?.status ?? 'unknown');
-  const carrierUsable: any = ['available', 'busy'].includes(resident.status);
-  const proofDriver: any = resident.host?.started_event?.resident_proof_driver === true;
+  const healthOk = ['healthy', 'unknown'].includes(health?.status ?? 'unknown');
+  const carrierUsable = ['available', 'busy'].includes(resident.status);
+  const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
   const carrier: ResidentCarrier = asRecord(resident.carrier);
   const runtimeConfig: any = siteLoopConfig.resident_runtime;
-  const preferredInteractive: any = asRecord(carrier.preferred_interactive);
-  const agentCliControlPath: any = stringOrNull(preferredInteractive.controlPath)
+  const preferredInteractive = asRecord(carrier.preferred_interactive);
+  const agentCliControlPath = stringOrNull(preferredInteractive.controlPath)
     ?? (carrier.runtime === runtimeConfig.preferred_runtime ? stringOrNull(carrier.controlPath) : null);
-  const agentCliReady: any = Boolean(agentCliControlPath !== null && existsSync(agentCliControlPath))
+  const agentCliReady = Boolean(agentCliControlPath !== null && existsSync(agentCliControlPath))
     && (preferredInteractive.status === 'available' || carrier.runtime === runtimeConfig.preferred_runtime);
-  const primaryRuntimeReady: any = carrier.runtime === runtimeConfig.preferred_runtime
+  const primaryRuntimeReady = carrier.runtime === runtimeConfig.preferred_runtime
     && carrier.preference === runtimeConfig.preferred_preference
     && proofDriver !== true;
   const latestProductionOutcome: any = latestProductionReportedOutcome(outcomes.outcomes ?? []);
-  const latestProductionProof: any = Boolean(latestProductionOutcome);
-  const productionProofAgeMs: any = latestProductionOutcome?.event_at
+  const latestProductionProof = Boolean(latestProductionOutcome);
+  const productionProofAgeMs = latestProductionOutcome?.event_at
     ? nowMs - Date.parse(latestProductionOutcome.event_at)
     : null;
   const productionProofFresh: any = latestProductionProof
+    && typeof productionProofAgeMs === 'number'
     && Number.isFinite(productionProofAgeMs)
     && productionProofAgeMs <= proofFreshnessWindowMs;
-  const surfacePolicyOk: any = surfacePolicyNoise.status === 'ok';
-  const dbOk: any = dbHealth.status === 'ok';
-  const policyOk: any = policy.status === 'ok';
+  const surfacePolicyOk = surfacePolicyNoise.status === 'ok';
+  const dbOk = dbHealth.status === 'ok';
+  const policyOk = policy.status === 'ok';
   const alertSignals: any = operatingLayerAlertSignals({
     resident,
     dbHealth,
@@ -1054,13 +1056,13 @@ export function siteLoopOperatingLayerStatus(cwd: any, options: SiteLoopPayload 
     requireFreshProductionProof: options.requireFreshProductionProof === true || options.require_fresh_production_proof === true,
     productionProofFresh,
   });
-  const requireSupervisor: any = options.requireSupervisor !== false && options.require_supervisor !== false;
-  const transportStatus: any = !healthOk || !surfacePolicyOk || !dbOk || !policyOk || openAttention > 0 || !carrierUsable || (requireSupervisor && !supervisorHeartbeat.fresh) || alertSignals.some((item: any) => item.severity === 'critical' || item.severity === 'error')
+  const requireSupervisor = options.requireSupervisor !== false && options.require_supervisor !== false;
+  const transportStatus = !healthOk || !surfacePolicyOk || !dbOk || !policyOk || openAttention > 0 || !carrierUsable || (requireSupervisor && !supervisorHeartbeat.fresh) || alertSignals.some((item: any) => item.severity === 'critical' || item.severity === 'error')
     ? 'attention_needed'
     : pendingCount > 0 && resident.status === 'busy'
       ? 'backpressure'
       : 'transport_ready';
-  const productionStatus: any = primaryRuntimeReady && productionProofFresh
+  const productionStatus = primaryRuntimeReady && productionProofFresh
     ? 'production_ready'
     : primaryRuntimeReady
       ? 'production_unproven'
@@ -1144,12 +1146,12 @@ export function siteLoopOperatingLayerStatus(cwd: any, options: SiteLoopPayload 
 }
 
 export function siteLoopProofStatus(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const operating: any = siteLoopOperatingLayerStatus(siteRoot, options);
   const mailboxRequest: any = latestResidentMailboxProofRequest(siteRoot);
   const productionRequest: any = latestResidentProductionProofRequest(siteRoot);
-  const productionFresh: any = operating.latest_activity?.production_proof_fresh === true;
-  const mailboxFresh: any = operating.mailbox_proof?.status === 'fresh';
+  const productionFresh = operating.latest_activity?.production_proof_fresh === true;
+  const mailboxFresh = operating.mailbox_proof?.status === 'fresh';
   return {
     schema: schemaName(configForSite(siteRoot), 'proof_status'),
     status: productionFresh && mailboxFresh ? 'fresh' : 'missing_or_stale',
@@ -1214,21 +1216,21 @@ export function siteLoopProofStatus(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 export function siteLoopReadiness(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const operating: any = siteLoopOperatingLayerStatus(siteRoot, options);
-  const requireProduction: any = options.requireProduction === true || options.require_production === true;
-  const requireMailboxProof: any = options.requireMailboxProof === true || options.require_mailbox_proof === true;
-  const projection: any = asRecord(options.projectionDriftResult ?? runProjectionDriftCheck(siteRoot, siteLoopConfig));
-  const projectionPacket: any = asRecord(projection.packet);
-  const projectionGateOk: any = projection.status === 'ok'
+  const requireProduction = options.requireProduction === true || options.require_production === true;
+  const requireMailboxProof = options.requireMailboxProof === true || options.require_mailbox_proof === true;
+  const projection = asRecord(options.projectionDriftResult ?? runProjectionDriftCheck(siteRoot, siteLoopConfig));
+  const projectionPacket = asRecord(projection.packet);
+  const projectionGateOk = projection.status === 'ok'
     ? projectionPacket.status === 'ok'
     : projection.status === 'not_configured';
-  const packageBoundary: any = asRecord(options.packageBoundaryResult ?? checkTaskGovernancePackageBoundary(siteRoot));
-  const pending: any = Number(operating.backlog?.pending_directives ?? 0);
-  const stalePending: any = Number(operating.backlog?.stale_pending_directives ?? 0);
-  const openAttention: any = Number(operating.backlog?.open_attention ?? 0);
-  const residentUsable: any = ['available', 'busy'].includes(operating.resident?.status);
+  const packageBoundary = asRecord(options.packageBoundaryResult ?? checkTaskGovernancePackageBoundary(siteRoot));
+  const pending = Number(operating.backlog?.pending_directives ?? 0);
+  const stalePending = Number(operating.backlog?.stale_pending_directives ?? 0);
+  const openAttention = Number(operating.backlog?.open_attention ?? 0);
+  const residentUsable = ['available', 'busy'].includes(operating.resident?.status);
   const gates: any = [
     readinessGate('db_health', operating.db_health?.status === 'ok', {
       status: operating.db_health?.status ?? 'unknown',
@@ -1293,7 +1295,7 @@ export function siteLoopReadiness(cwd: any, options: SiteLoopPayload = {}) {
     }),
   ];
   const failed: any = gates.filter((gate: any) => gate.status !== 'ok');
-  const ready: any = failed.length === 0;
+  const ready = failed.length === 0;
   return {
     schema: schemaName(siteLoopConfig, 'operating_layer_readiness'),
     status: ready ? 'ready' : 'not_ready',
@@ -1347,10 +1349,10 @@ export function siteLoopReadiness(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 export function siteLoopCoherence(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const requireProduction: any = options.requireProduction !== false && options.require_production !== false;
-  const requireMailboxProof: any = options.requireMailboxProof !== false
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const requireProduction = options.requireProduction !== false && options.require_production !== false;
+  const requireMailboxProof = options.requireMailboxProof !== false
     && options.require_mailbox_proof !== false
     && options.requireMailboxChain !== false
     && options.require_mailbox_chain !== false;
@@ -1461,13 +1463,13 @@ function productionRuntimeRemediation(operating: any) {
 
 function commandRemediation(prefix: any, command: any, fallback: any) {
   if (typeof command !== 'string' || command.trim() === '') return fallback;
-  const trimmed: any = command.trim();
+  const trimmed = command.trim();
   if (trimmed.startsWith('not_available:')) return trimmed;
   return `${prefix}: ${trimmed}`;
 }
 
 export function runProjectionDriftCheck(siteRoot: any, siteLoopConfig: SiteLoopConfig) {
-  const configured: any = parseConfiguredCommand(siteLoopConfig.commands?.projection_drift);
+  const configured = parseConfiguredCommand(siteLoopConfig.commands?.projection_drift);
   if (configured && isLegacyProjectionDriftCommand(configured)) return projectionDriftNotConfigured('legacy_projection_drift_cli_handler_not_migrated');
   if (configured) return runReadinessJsonCommand(siteRoot, configured);
   return projectionDriftNotConfigured('projection_drift_check_not_configured_or_not_migrated');
@@ -1488,13 +1490,13 @@ function projectionDriftNotConfigured(note: any) {
 function isLegacyProjectionDriftCommand(configured: [string, string[]]) {
   if (configured.length < 2 || !Array.isArray(configured[1])) return false;
   const [commandName, args] = configured;
-  const command: any = [String(commandName), ...args.map(String)].join(' ');
+  const command = [String(commandName), ...args.map(String)].join(' ');
   return /\bpnpm\s+cli\b/.test(command) && /\btask\s+projection\s+drift\b/.test(command);
 }
 
 function parseConfiguredCommand(command: any): [string, string[]] | null {
   if (typeof command !== 'string') return null;
-  const trimmed: any = command.trim();
+  const trimmed = command.trim();
   if (!trimmed || trimmed.startsWith('not_available:')) return null;
   const parts: any = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((part: any) => {
     if ((part.startsWith('"') && part.endsWith('"')) || (part.startsWith("'") && part.endsWith("'"))) return part.slice(1, -1);
@@ -1515,14 +1517,14 @@ function resolveSharedTaskLifecyclePackageRoot(siteRoot: any) {
 }
 
 function taskLifecycleEntrypointFromArgs(rawArgs: any) {
-  const args: any = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
+  const args = Array.isArray(rawArgs) ? rawArgs.map(String) : [];
   const entrypointMarker: any = args.indexOf('--entrypoint');
   if (entrypointMarker >= 0 && args[entrypointMarker + 1]) return args[entrypointMarker + 1];
   return args[0] ?? null;
 }
 
 function taskLifecycleEntrypointsFromRegistration(siteRoot: any) {
-  const registrationPath: any = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-registration.json');
+  const registrationPath = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-registration.json');
   if (!existsSync(registrationPath)) return [];
   try {
     const registration: any = JSON.parse(readFileSync(registrationPath, 'utf8'));
@@ -1542,7 +1544,7 @@ function taskLifecycleEntrypointsFromRegistration(siteRoot: any) {
 }
 
 function taskLifecycleEntrypointsFromMcpFabric(siteRoot: any) {
-  const configDir: any = join(siteRoot, '.ai', 'mcp');
+  const configDir = join(siteRoot, '.ai', 'mcp');
   if (!existsSync(configDir)) return [];
   const entrypoints: any[] = [];
   for (const file of readdirSync(configDir).filter((name: any) => name.endsWith('.json'))) {
@@ -1568,14 +1570,14 @@ function taskLifecycleEntrypointsFromMcpFabric(siteRoot: any) {
 
 function resolveTaskLifecyclePackageRootFromEntrypoint(siteRoot: any, entrypoint: any) {
   if (!entrypoint || !String(entrypoint).includes('task-lifecycle-mcp')) return null;
-  let current: any = dirname(isAbsolute(entrypoint) ? entrypoint : join(siteRoot, entrypoint));
-  for (let depth: any = 0; depth < 8; depth += 1) {
-    const packageJsonPath: any = join(current, 'package.json');
+  let current = dirname(isAbsolute(entrypoint) ? entrypoint : join(siteRoot, entrypoint));
+  for (let depth = 0; depth < 8; depth += 1) {
+    const packageJsonPath = join(current, 'package.json');
     if (existsSync(packageJsonPath)) {
       const packageJson: any = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
       return packageJson.name === '@narada2/task-lifecycle-mcp' ? current : null;
     }
-    const next: any = dirname(current);
+    const next = dirname(current);
     if (next === current) break;
     current = next;
   }
@@ -1585,9 +1587,9 @@ function resolveTaskLifecyclePackageRootFromEntrypoint(siteRoot: any, entrypoint
 export function checkTaskGovernancePackageBoundary(siteRoot: any) {
   const sharedTaskLifecycleRoot: any = resolveSharedTaskLifecyclePackageRoot(siteRoot);
   const taskLifecycleRoot: any = sharedTaskLifecycleRoot ?? join(siteRoot, 'tools', 'task-lifecycle');
-  const naradaProperRoot: any = resolve(siteRoot, '..', 'narada');
-  const naradaCoreRoot: any = resolve(siteRoot, '..', 'narada-core');
-  const packages: any = [
+  const naradaProperRoot = resolve(siteRoot, '..', 'narada');
+  const naradaCoreRoot = resolve(siteRoot, '..', 'narada-core');
+  const packages = [
     {
       name: '@narada2/charters',
       vendor: 'charters',
@@ -1654,8 +1656,8 @@ export function checkTaskGovernancePackageBoundary(siteRoot: any) {
     }
     result.block_codes = [];
     for (const pkg of packages) {
-      const installedPackage: any = join(taskLifecycleRoot, 'node_modules', ...pkg.name.split('/'));
-      const localVendor: any = join(taskLifecycleRoot, 'vendor', pkg.vendor);
+      const installedPackage = join(taskLifecycleRoot, 'node_modules', ...pkg.name.split('/'));
+      const localVendor = join(taskLifecycleRoot, 'vendor', pkg.vendor);
       const row: any = {
         package: pkg.name,
         expected_dependency: pkg.expectedDependency,
@@ -1696,7 +1698,7 @@ function gateStatus(gates: any, gate: any) {
 }
 
 function runReadinessJsonCommand(cwd: any, [command, args]: any) {
-  const timeoutMs: any = DEFAULT_READINESS_COMMAND_TIMEOUT_MS;
+  const timeoutMs = DEFAULT_READINESS_COMMAND_TIMEOUT_MS;
   const result: any = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
@@ -1720,8 +1722,8 @@ function runReadinessJsonCommand(cwd: any, [command, args]: any) {
       error: result.error ? result.error.message : null,
     };
   }
-  const stdout: any = String(result.stdout ?? '').trim();
-  let packet: any = null;
+  const stdout = String(result.stdout ?? '').trim();
+  let packet = null;
   try {
     packet = stdout ? JSON.parse(stdout) : null;
   } catch (error: any) {
@@ -1744,20 +1746,20 @@ function runReadinessJsonCommand(cwd: any, [command, args]: any) {
 }
 
 function appendNodeOption(existing: any, option: any) {
-  const current: any = String(existing ?? '').trim();
+  const current = String(existing ?? '').trim();
   if (current.split(/\s+/).includes(option)) return current;
   return [current, option].filter(Boolean).join(' ');
 }
 
 function recentSurfacePolicyNoise(siteRoot: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const policyPath: any = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
-  const actionDir: any = join(siteControlRoot(siteRoot), 'crew', 'action-admission');
+  const siteLoopConfig = configForSite(siteRoot);
+  const policyPath = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
+  const actionDir = join(siteControlRoot(siteRoot), 'crew', 'action-admission');
   const declaredTools: any = loadSurfaceDeclaredTools(policyPath);
-  const includeEvidence: any = options.includeEvidence === true || options.include_evidence === true;
-  const repairedAtMs: any = existsSync(policyPath) ? statSync(policyPath).mtimeMs : 0;
-  const carrierStartedAtMs: any = Date.parse(stringValue(options.carrierStartedAt));
-  const currentBaselineMs: any = Math.max(
+  const includeEvidence = options.includeEvidence === true || options.include_evidence === true;
+  const repairedAtMs = existsSync(policyPath) ? statSync(policyPath).mtimeMs : 0;
+  const carrierStartedAtMs = Date.parse(stringValue(options.carrierStartedAt));
+  const currentBaselineMs = Math.max(
     repairedAtMs,
     Number.isFinite(carrierStartedAtMs) ? carrierStartedAtMs : 0,
   );
@@ -1778,7 +1780,7 @@ function recentSurfacePolicyNoise(siteRoot: any, options: SiteLoopPayload = {}) 
     return result;
   }
   for (const name of readdirSafe(actionDir).filter((entry: any) => entry.endsWith('.json'))) {
-    const path: any = join(actionDir, name);
+    const path = join(actionDir, name);
     const packet: any = readJson(path);
     if (packet?.reason !== 'surface_registry_tool_not_declared') continue;
     const serverName: any = packet?.request?.requested_action?.classifier_metadata?.server_name ?? null;
@@ -1834,16 +1836,16 @@ function residentProductionProofRequestPath(siteRoot: any, requestId: any) {
 }
 
 function recordResidentMailboxProofRequest(siteRoot: any, request: SiteLoopPayload = {}) {
-  const requestedAt: any = new Date().toISOString();
-  const requestedSourceRef: any = String(request.source_ref ?? '');
-  const requestedProofId: any = request.proof_id == null ? null : String(request.proof_id);
+  const requestedAt = new Date().toISOString();
+  const requestedSourceRef = String(request.source_ref ?? '');
+  const requestedProofId = request.proof_id == null ? null : String(request.proof_id);
   const existing: any = listResidentMailboxProofRequests(siteRoot).find((candidate: any) => (
     ['queued', 'running'].includes(String(candidate.status))
     && candidate.source_ref === requestedSourceRef
     && (requestedProofId == null || candidate.proof_id === requestedProofId)
   ));
   if (existing) return existing;
-  const requestId: any = String(request.request_id ?? `mailbox_proof_request_${requestedAt.replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`);
+  const requestId = String(request.request_id ?? `mailbox_proof_request_${requestedAt.replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`);
   const proofId: any = requestedProofId ?? `mailbox_proof_${requestedAt.replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`;
   const packet: any = {
     schema: 'narada.site_loop.mailbox_proof_request.v1',
@@ -1860,18 +1862,18 @@ function recordResidentMailboxProofRequest(siteRoot: any, request: SiteLoopPaylo
     finished_at: null,
     result: null,
   };
-  const path: any = residentMailboxProofRequestPath(siteRoot, requestId);
+  const path = residentMailboxProofRequestPath(siteRoot, requestId);
   mkdirSync(dirname(path), { recursive: true });
   writeJsonAtomically(path, packet);
   return { ...packet, path };
 }
 
 function listResidentMailboxProofRequests(siteRoot: any) {
-  const dir: any = residentMailboxProofRequestDir(siteRoot);
+  const dir = residentMailboxProofRequestDir(siteRoot);
   return readdirSafe(dir)
     .filter((name: any) => name.endsWith('.json'))
     .map((name: any) => {
-      const path: any = join(dir, name);
+      const path = join(dir, name);
       const packet: any = readJson(path);
       return packet ? { ...packet, path } : null;
     })
@@ -1894,10 +1896,10 @@ function updateResidentMailboxProofRequest(siteRoot: any, request: any, fields: 
 function residentProofRequestIsStale(request: any, nowMs : any= Date.now()) {
   if (String(request?.status) !== 'running') return false;
   // A supervisor cycle is not a restart boundary: never reset an active proof until its budget expires.
-  const startedAtMs: any = Date.parse(String(request.started_at ?? request.updated_at ?? ''));
+  const startedAtMs = Date.parse(String(request.started_at ?? request.updated_at ?? ''));
   if (!Number.isFinite(startedAtMs)) return true;
-  const timeoutMs: any = Math.max(30_000, Number(request.timeout_ms ?? 120_000));
-  const recoveryGraceMs: any = Math.max(30_000, Math.min(120_000, Math.floor(timeoutMs * 0.25)));
+  const timeoutMs = Math.max(30_000, Number(request.timeout_ms ?? 120_000));
+  const recoveryGraceMs = Math.max(30_000, Math.min(120_000, Math.floor(timeoutMs * 0.25)));
   return nowMs - startedAtMs > timeoutMs + recoveryGraceMs;
 }
 
@@ -1908,7 +1910,7 @@ function residentExecutionLockPath(siteRoot: any, name: any) {
 }
 
 function residentProcessIsAlive(pid: any) {
-  const normalizedPid: any = Number(pid);
+  const normalizedPid = Number(pid);
   if (!Number.isInteger(normalizedPid) || normalizedPid <= 0) return false;
   try {
     process.kill(normalizedPid, 0);
@@ -1919,7 +1921,7 @@ function residentProcessIsAlive(pid: any) {
 }
 
 function acquireResidentExecutionLock(siteRoot: any, name: any, options: SiteLoopPayload = {}) {
-  const path: any = residentExecutionLockPath(siteRoot, name);
+  const path = residentExecutionLockPath(siteRoot, name);
   const local: any = residentExecutionLockDepth.get(path);
   if (local) {
     local.depth += 1;
@@ -1940,7 +1942,7 @@ function acquireResidentExecutionLock(siteRoot: any, name: any, options: SiteLoo
       residentExecutionLockDepth.set(path, { lock, depth: 1 });
       return { ...lock, status: 'acquired', path, depth: 1 };
     } catch (error: any) {
-      const code: any = error && typeof error === 'object' ? String(error.code ?? '') : '';
+      const code = error && typeof error === 'object' ? String(error.code ?? '') : '';
       if (code !== 'EEXIST') throw error;
       return null;
     }
@@ -1948,11 +1950,11 @@ function acquireResidentExecutionLock(siteRoot: any, name: any, options: SiteLoo
   const acquired: any = writeLock();
   if (acquired) return acquired;
   const existing: any = readJson(path);
-  const ownerPid: any = Number(existing?.pid ?? 0);
-  const ownerAlive: any = residentProcessIsAlive(ownerPid);
-  const acquiredAtMs: any = Date.parse(String(existing?.acquired_at ?? ''));
-  const requestedTimeoutMs: any = Number(options.timeoutMs ?? options.timeout_ms ?? 120_000);
-  const staleAfterMs: any = Math.max(30_000, Number(options.lockStaleAfterMs ?? options.lock_stale_after_ms ?? requestedTimeoutMs + 30_000));
+  const ownerPid = Number(existing?.pid ?? 0);
+  const ownerAlive = residentProcessIsAlive(ownerPid);
+  const acquiredAtMs = Date.parse(String(existing?.acquired_at ?? ''));
+  const requestedTimeoutMs = Number(options.timeoutMs ?? options.timeout_ms ?? 120_000);
+  const staleAfterMs = Math.max(30_000, Number(options.lockStaleAfterMs ?? options.lock_stale_after_ms ?? requestedTimeoutMs + 30_000));
   // A dead owner cannot continue the protected operation. Reclaim immediately
   // rather than holding a dead lock for the whole proof budget; the atomic
   // create below still arbitrates races between recovering processes.
@@ -2072,13 +2074,13 @@ async function processNextResidentMailboxProof(siteRoot: any) {
 }
 
 function recordResidentProductionProofRequest(siteRoot: any, request: SiteLoopPayload = {}) {
-  const requestedAt: any = new Date().toISOString();
+  const requestedAt = new Date().toISOString();
   const existing: any = listResidentProductionProofRequests(siteRoot).find((candidate: any) => (
     ['queued', 'running'].includes(String(candidate.status))
   ));
   if (existing) return existing;
-  const requestId: any = String(request.request_id ?? `resident_proof_request_${requestedAt.replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`);
-  const fixtureId: any = String(request.fixture_id ?? `resident-e2e-${Date.now()}`);
+  const requestId = String(request.request_id ?? `resident_proof_request_${requestedAt.replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`);
+  const fixtureId = String(request.fixture_id ?? `resident-e2e-${Date.now()}`);
   const packet: any = {
     schema: 'narada.site_loop.resident_proof_request.v1',
     site_id: configForSite(siteRoot).site_id,
@@ -2094,18 +2096,18 @@ function recordResidentProductionProofRequest(siteRoot: any, request: SiteLoopPa
     finished_at: null,
     result: null,
   };
-  const path: any = residentProductionProofRequestPath(siteRoot, requestId);
+  const path = residentProductionProofRequestPath(siteRoot, requestId);
   mkdirSync(dirname(path), { recursive: true });
   writeJsonAtomically(path, packet);
   return { ...packet, path };
 }
 
 function listResidentProductionProofRequests(siteRoot: any) {
-  const dir: any = residentProductionProofRequestDir(siteRoot);
+  const dir = residentProductionProofRequestDir(siteRoot);
   return readdirSafe(dir)
     .filter((name: any) => name.endsWith('.json'))
     .map((name: any) => {
-      const path: any = join(dir, name);
+      const path = join(dir, name);
       const packet: any = readJson(path);
       return packet ? { ...packet, path } : null;
     })
@@ -2187,8 +2189,8 @@ async function processNextResidentProductionProof(siteRoot: any) {
 }
 
 function recordResidentMailboxProof(siteRoot: any, proof: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const dir: any = residentMailboxProofDir(siteRoot);
+  const siteLoopConfig = configForSite(siteRoot);
+  const dir = residentMailboxProofDir(siteRoot);
   mkdirSync(dir, { recursive: true });
   const proofId: any = proof.proof_id ?? `mailbox_proof_${new Date().toISOString().replace(/[-:.TZ]/g, '')}_${randomUUID().slice(0, 8)}`;
   const packet: any = {
@@ -2199,16 +2201,16 @@ function recordResidentMailboxProof(siteRoot: any, proof: any) {
     ...proof,
     proof_id: proofId,
   };
-  const path: any = join(dir, `${safeFileToken(proofId)}.json`);
+  const path = join(dir, `${safeFileToken(proofId)}.json`);
   writeJsonAtomically(path, packet);
   return { ...packet, path };
 }
 
 function latestResidentMailboxProof(siteRoot: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const dir: any = residentMailboxProofDir(siteRoot);
-  const nowMs: any = Number(options.nowMs ?? Date.now());
-  const freshnessWindowMs: any = Number(options.freshnessMs ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const siteLoopConfig = configForSite(siteRoot);
+  const dir = residentMailboxProofDir(siteRoot);
+  const nowMs = Number(options.nowMs ?? Date.now());
+  const freshnessWindowMs = Number(options.freshnessMs ?? siteLoopConfig.mailbox_proof.freshness_ms);
   if (!existsSync(dir)) {
     return {
       schema: siteLoopConfig.mailbox_proof.status_schema,
@@ -2221,7 +2223,7 @@ function latestResidentMailboxProof(siteRoot: any, options: SiteLoopPayload = {}
   const proofs: any = readdirSafe(dir)
     .filter((name: any) => name.endsWith('.json'))
     .map((name: any) => {
-      const path: any = join(dir, name);
+      const path = join(dir, name);
       const packet: any = readJson(path);
       if (!packet) return null;
       return { ...packet, path };
@@ -2238,8 +2240,8 @@ function latestResidentMailboxProof(siteRoot: any, options: SiteLoopPayload = {}
       proof: null,
     };
   }
-  const ageMs: any = nowMs - Date.parse(latest.proved_at ?? '');
-  const fresh: any = Number.isFinite(ageMs) && ageMs <= freshnessWindowMs;
+  const ageMs = nowMs - Date.parse(latest.proved_at ?? '');
+  const fresh = Number.isFinite(ageMs) && ageMs <= freshnessWindowMs;
   return {
     schema: siteLoopConfig.mailbox_proof.status_schema,
     status: fresh ? 'fresh' : 'stale',
@@ -2268,7 +2270,7 @@ function loadSurfaceDeclaredTools(policyPath: any) {
 }
 
 export function setSiteLoopControl(cwd: any, control: any) {
-  const siteRoot: any = resolve(cwd);
+  const siteRoot = resolve(cwd);
   const store: any = openSiteLoopStore(siteRoot);
   try {
     return setLoopControl(store, { loopId: configuredLoopId(siteRoot), ...control });
@@ -2278,22 +2280,23 @@ export function setSiteLoopControl(cwd: any, control: any) {
 }
 
 export function siteResidentStatus(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const status: any = getResidentStatus(siteRoot, options);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   ensureSiteLoopTables(lifecycleStore.db);
   try {
-    const productionProofFreshnessWindowMs: any = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
-    const latestProductionOutcome: any = latestProductionReportedOutcome(listDirectiveOutcomes({ db: lifecycleStore.db }, {
+    const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+    const latestProductionOutcome: any = latestProductionReportedOutcome(listDirectiveOutcomes({ db: asSiteLoopDatabase(lifecycleStore.db) }, {
       loopId: siteLoopConfig.loop_id,
       outcome: 'reported',
       limit: 500,
     }));
-    const productionProofAgeMs: any = latestProductionOutcome?.event_at
+    const productionProofAgeMs = latestProductionOutcome?.event_at
       ? Date.now() - Date.parse(latestProductionOutcome.event_at)
       : null;
     const productionProofFresh: any = latestProductionOutcome
+      && productionProofAgeMs !== null
       && Number.isFinite(productionProofAgeMs)
       && productionProofAgeMs <= productionProofFreshnessWindowMs;
     const productionReady: any = status.active_runtime === siteLoopConfig.resident_runtime.preferred_runtime
@@ -2309,7 +2312,7 @@ export function siteResidentStatus(cwd: any, options: SiteLoopPayload = {}) {
         production_proof_freshness_window_ms: productionProofFreshnessWindowMs,
       },
       runtime_coherent: status.runtime_coherent === true && status.terminal_work_inflight?.status !== 'terminal_inflight',
-      outcome_summary: getDirectiveOutcomeSummary({ db: lifecycleStore.db }, { loopId: siteLoopConfig.loop_id }),
+      outcome_summary: getDirectiveOutcomeSummary({ db: asSiteLoopDatabase(lifecycleStore.db) }, { loopId: siteLoopConfig.loop_id }),
       pending_summary: siteResidentPendingFromDb(lifecycleStore.db, {
         agentId: options.agentId ?? siteLoopConfig.resident.agent_id,
         role: options.role ?? siteLoopConfig.resident.role,
@@ -2328,8 +2331,8 @@ export function siteResidentStatus(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 export function siteResidentPending(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const siteRoot = resolve(cwd);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
     return siteResidentPendingFromDb(lifecycleStore.db, { ...options, siteRoot });
   } finally {
@@ -2338,12 +2341,12 @@ export function siteResidentPending(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 function siteResidentPendingFromDb(db: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions(options);
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db });
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db });
   directiveStore.initSchema();
-  const limit: any = Number(options.limit ?? 25);
-  const agentId: any = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
-  const role: any = stringValue(options.role, siteLoopConfig.resident.role);
+  const limit = Number(options.limit ?? 25);
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const role = stringValue(options.role, siteLoopConfig.resident.role);
   const pending: any = dedupeByDirectiveId([
     ...directiveStore.listPending({ target: { kind: 'agent', id: agentId }, limit }),
     ...directiveStore.listPending({ target: { kind: 'role', id: role }, limit }),
@@ -2359,12 +2362,12 @@ function siteResidentPendingFromDb(db: any, options: SiteLoopPayload = {}) {
 }
 
 export function siteResidentReceipts(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const agentId: any = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
   try {
-    const limit: any = Number(options.limit ?? 25);
+    const limit = Number(options.limit ?? 25);
     const table: any = lifecycleStore.db.prepare(`
       SELECT name
       FROM sqlite_master
@@ -2406,8 +2409,8 @@ export function siteResidentReceipts(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 export function siteResidentOutcomes(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
     const outcomes: any = listDirectiveOutcomes(store, {
@@ -2447,14 +2450,14 @@ function directiveOutcomeProofSplit(outcomes: any, siteLoopConfig: SiteLoopConfi
 }
 
 function residentBacklogSummaryFromDb(db: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions(options);
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
   const nowIso: any = options.nowIso ?? new Date().toISOString();
-  const actionStaleMinutes: any = Number(options.actionStaleMinutes ?? 30);
+  const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
   const candidates: any = residentBacklogCandidates(db, { limit: 500, siteRoot: options.siteRoot });
-  const includeFixtureHistory: any = options.includeFixtureHistory === true;
+  const includeFixtureHistory = options.includeFixtureHistory === true;
   const counts: any = {};
   const tasks: any[] = [];
-  let historicalFixtureCount: any = 0;
+  let historicalFixtureCount = 0;
   for (const candidate of candidates) {
     if (!includeFixtureHistory && isStaleResidentFixtureHistoryTask(candidate, { nowIso, actionStaleMinutes })) {
       historicalFixtureCount += 1;
@@ -2493,7 +2496,7 @@ function residentBacklogSummaryFromDb(db: any, options: SiteLoopPayload = {}) {
 }
 
 function isResidentFixtureHistoryTask(candidate: any) {
-  const taskId: any = String(candidate?.task_id ?? '');
+  const taskId = String(candidate?.task_id ?? '');
   return /\bfrom-inbox-resident-(e2e-fixture|recovery-drill)\b/.test(taskId)
     || /\bresident-e2e-fixture\b/.test(taskId)
     || /\bresident-recovery-drill\b/.test(taskId);
@@ -2501,18 +2504,18 @@ function isResidentFixtureHistoryTask(candidate: any) {
 
 function isStaleResidentFixtureHistoryTask(candidate: any, { nowIso, actionStaleMinutes }: any) {
   if (!isResidentFixtureHistoryTask(candidate)) return false;
-  const updatedAt: any = Date.parse(String(candidate?.updated_at ?? ''));
-  const nowMs: any = Date.parse(String(nowIso));
+  const updatedAt = Date.parse(String(candidate?.updated_at ?? ''));
+  const nowMs = Date.parse(String(nowIso));
   if (!Number.isFinite(updatedAt) || !Number.isFinite(nowMs)) return true;
   return minutesBetween(new Date(updatedAt).toISOString(), new Date(nowMs).toISOString()) >= actionStaleMinutes;
 }
 
 async function reconcileReportedResidentTaskLifecycleState(siteRoot: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const loopActor: any = configuredLoopActor(siteRoot);
-  const limit: any = Number(options.limit ?? 100);
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
+  const limit = Number(options.limit ?? 100);
   const nowIso: any = options.nowIso ?? new Date().toISOString();
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
   try {
     const rows: any = lifecycleStore.db.prepare(`
       SELECT tl.task_id, tl.task_number, tl.status,
@@ -2545,7 +2548,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot: any, option
         });
         continue;
       }
-      const taskFile: any = await findTaskFile(siteRoot, String(row.task_number));
+      const taskFile = await findTaskFile(siteRoot, String(row.task_number));
       if (!taskFile) {
         skipped.push({
           task_id: String(row.task_id),
@@ -2557,7 +2560,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot: any, option
         continue;
       }
       const { frontMatter, body } = await readTaskFile(taskFile.path);
-      const targetStatus: any = 'needs_continuation';
+      const targetStatus = 'needs_continuation';
       const update: any = lifecycleStore.db.transaction(() => {
         if (row.assignment_id) {
           lifecycleStore.releaseAssignment(String(row.assignment_id), 'reported_resident_autowork_reconciled_to_needs_continuation');
@@ -2591,7 +2594,7 @@ async function reconcileReportedResidentTaskLifecycleState(siteRoot: any, option
 }
 
 function isResidentAutoworkReport(row: any) {
-  const summary: any = String(row.summary ?? '');
+  const summary = String(row.summary ?? '');
   if (summary.includes('Resident autowork completed directive_id:')) return true;
   try {
     const verification: any = JSON.parse(String(row.verification_json ?? '[]'));
@@ -2603,13 +2606,13 @@ function isResidentAutoworkReport(row: any) {
 }
 
 export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const loopActor: any = configuredLoopActor(siteRoot);
-  const dryRun: any = options.dryRun === true || options.dry_run === true;
-  const limit: any = Number(options.limit ?? 100);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
+  const dryRun = options.dryRun === true || options.dry_run === true;
+  const limit = Number(options.limit ?? 100);
   const nowIso: any = options.nowIso ?? new Date().toISOString();
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: !dryRun });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: !dryRun });
   try {
     const rows: any = lifecycleStore.db.prepare(`
       SELECT tl.task_id, tl.task_number, tl.status,
@@ -2634,7 +2637,7 @@ export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopP
     const archived: any[] = [];
     const refused: any[] = [];
     for (const row of byTask.values()) {
-      const taskId: any = String(row.task_id);
+      const taskId = String(row.task_id);
       if (!isResidentFixtureTaskId(taskId)) {
         refused.push({ task_id: taskId, task_number: Number(row.task_number), reason: 'not_resident_fixture_task' });
         continue;
@@ -2648,12 +2651,12 @@ export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopP
         });
         continue;
       }
-      const taskFile: any = await findTaskFile(siteRoot, String(row.task_number));
+      const taskFile = await findTaskFile(siteRoot, String(row.task_number));
       if (!taskFile) {
         refused.push({ task_id: taskId, task_number: Number(row.task_number), reason: 'task_projection_missing' });
         continue;
       }
-      const targetStatus: any = 'closed';
+      const targetStatus = 'closed';
       if (!dryRun) {
         const { frontMatter, body } = await readTaskFile(taskFile.path);
         const update: any = lifecycleStore.db.transaction(() => {
@@ -2661,7 +2664,7 @@ export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopP
           lifecycleStore.updateStatus(taskId, targetStatus, loopActor, {
             closed_at: nowIso,
             closed_by: loopActor,
-            closure_mode: 'test_fixture_archive',
+            closure_mode: 'operator_direct',
           });
         });
         update();
@@ -2670,7 +2673,7 @@ export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopP
           status: targetStatus,
           closed_at: nowIso,
           closed_by: loopActor,
-          closure_mode: 'test_fixture_archive',
+          closure_mode: 'operator_direct',
         }, body);
       }
       archived.push({
@@ -2678,7 +2681,7 @@ export async function cleanupResidentFixtureResidue(cwd: any, options: SiteLoopP
         task_number: Number(row.task_number),
         from_status: String(row.status),
         to_status: targetStatus,
-        closure_mode: 'test_fixture_archive',
+        closure_mode: 'operator_direct',
         report_id: String(row.report_id),
         envelope_id: row.envelope_id ? String(row.envelope_id) : null,
         released_assignment_id: row.assignment_id ? String(row.assignment_id) : null,
@@ -2715,11 +2718,11 @@ function isResidentFixtureEnvelopeId(envelopeId: any) {
 }
 
 function writeResidentFixtureResidueCleanupEvidence(siteRoot: any, evidence: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const loopActor: any = configuredLoopActor(siteRoot);
-  const dir: any = join(siteRoot, '.ai', 'mutation-evidence', 'resident-fixture-cleanup');
+  const siteLoopConfig = configForSite(siteRoot);
+  const loopActor = configuredLoopActor(siteRoot);
+  const dir = join(siteRoot, '.ai', 'mutation-evidence', 'resident-fixture-cleanup');
   mkdirSync(dir, { recursive: true });
-  const path: any = join(dir, `resident_fixture_cleanup_${new Date().toISOString().replace(/[:.]/g, '')}_${randomUUID().slice(0, 8)}.json`);
+  const path = join(dir, `resident_fixture_cleanup_${new Date().toISOString().replace(/[:.]/g, '')}_${randomUUID().slice(0, 8)}.json`);
   writeFileSync(path, JSON.stringify({
     schema: schemaName(siteLoopConfig, 'resident_fixture_residue_cleanup_evidence'),
     mutation_kind: 'resident_fixture_residue_archive',
@@ -2738,18 +2741,18 @@ function latestProductionReportedOutcome(outcomes: any) {
 }
 
 function stalePendingDirectives(directives: any, options: SiteLoopPayload = {}) {
-  const nowMs: any = Date.parse(stringValue(options.now, new Date().toISOString()));
-  const thresholdMs: any = Number(options.thresholdMs ?? options.threshold_ms ?? 10 * 60_000);
+  const nowMs = Date.parse(stringValue(options.now, new Date().toISOString()));
+  const thresholdMs = Number(options.thresholdMs ?? options.threshold_ms ?? 10 * 60_000);
   return directives.filter((directive: any) => {
-    const directiveRecord: any = asRecord(directive);
-    const createdMs: any = Date.parse(stringValue(directiveRecord.created_at ?? directiveRecord.createdAt ?? directiveRecord.admitted_at));
+    const directiveRecord = asRecord(directive);
+    const createdMs = Date.parse(stringValue(directiveRecord.created_at ?? directiveRecord.createdAt ?? directiveRecord.admitted_at));
     return Number.isFinite(nowMs) && Number.isFinite(createdMs) && nowMs - createdMs > thresholdMs;
   });
 }
 
 export function operatingLayerAlertSignals({ resident, dbHealth, health, pending, stalePending, requireFreshProductionProof = false, productionProofFresh = null }: any) {
   const alerts: any[] = [];
-  const pendingCount: any = Number(pending?.pending_count ?? 0);
+  const pendingCount = Number(pending?.pending_count ?? 0);
   if (pendingCount > 0 && !['available', 'busy'].includes(resident.status)) {
     alerts.push({
       kind: resident.carrier_state?.state === 'policy_stale' ? 'policy_stale_resident' : 'no_available_resident',
@@ -2779,10 +2782,10 @@ export function operatingLayerAlertSignals({ resident, dbHealth, health, pending
 }
 
 function persistOperatingLayerAlerts(siteRoot: any, store: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const runId: any = stringValue(options.runId);
-  const nowIso: any = stringValue(options.nowIso, new Date().toISOString());
-  const requireFreshProductionProof: any = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
+  const siteLoopConfig = configForSite(siteRoot);
+  const runId = stringValue(options.runId);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
+  const requireFreshProductionProof = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
   const resident: any = siteResidentStatus(siteRoot);
   const pending: any = siteResidentPending(siteRoot, { limit: 500 });
   const dbHealth: any = taskLifecycleDbHealth(siteRoot);
@@ -2790,20 +2793,21 @@ function persistOperatingLayerAlerts(siteRoot: any, store: any, options: SiteLoo
   const stalePending: any = stalePendingDirectives(pending.directives ?? [], { now: nowIso });
   const outcomes: any = requireFreshProductionProof ? siteResidentOutcomes(siteRoot, { limit: 500 }) : null;
   const latestProductionOutcome: any = latestProductionReportedOutcome(outcomes?.outcomes ?? []);
-  const productionProofFreshnessWindowMs: any = Number(
+  const productionProofFreshnessWindowMs = Number(
     options.productionProofFreshnessMs
       ?? options.production_proof_freshness_ms
       ?? siteLoopConfig.mailbox_proof.freshness_ms,
   );
-  const productionProofAgeMs: any = latestProductionOutcome?.event_at
+  const productionProofAgeMs = latestProductionOutcome?.event_at
     ? Date.parse(nowIso) - Date.parse(latestProductionOutcome.event_at)
     : null;
-  const productionProofFresh: any = Boolean(
+  const productionProofFresh = Boolean(
     latestProductionOutcome
+      && productionProofAgeMs !== null
       && Number.isFinite(productionProofAgeMs)
       && productionProofAgeMs <= productionProofFreshnessWindowMs,
   );
-  const alerts: any = operatingLayerAlertSignals({
+  const alerts = operatingLayerAlertSignals({
     resident,
     dbHealth,
     health,
@@ -2829,9 +2833,9 @@ function persistOperatingLayerAlerts(siteRoot: any, store: any, options: SiteLoo
   }
   const created: any[] = [];
   for (const alert of alerts) {
-    const alertKind: any = stringValue(alert.kind);
-    const alertSeverity: any = stringValue(alert.severity);
-    const directiveId: any = `operating-layer:${alertKind}`;
+    const alertKind = stringValue(alert.kind);
+    const alertSeverity = stringValue(alert.severity);
+    const directiveId = `operating-layer:${alertKind}`;
     const envelope: any = writeOperatorAttentionEnvelope(siteRoot, {
       directive_id: directiveId,
       status: alertKind,
@@ -2869,21 +2873,21 @@ function persistOperatingLayerAlerts(siteRoot: any, store: any, options: SiteLoo
 }
 
 export function refuseResidentDirective(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const refusalSchema: any = schemaName(siteLoopConfig, 'resident_refusal');
-  const directiveId: any = stringValue(options.directiveId ?? options.directive_id);
-  const reason: any = stringValue(options.reason);
-  const agentId: any = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const refusalSchema = schemaName(siteLoopConfig, 'resident_refusal');
+  const directiveId = stringValue(options.directiveId ?? options.directive_id);
+  const reason = stringValue(options.reason);
+  const agentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
   if (!directiveId) return { schema: refusalSchema, status: 'refused', reason: 'directive_required' };
   if (!reason || !String(reason).trim()) return { schema: refusalSchema, status: 'refused', reason: 'reason_required' };
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, {
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, {
     timeoutMs: Number(options.writeLockTimeoutMs ?? options.write_lock_timeout_ms ?? options.timeoutMs ?? options.timeout_ms ?? 30_000),
     pollMs: Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? options.pollMs ?? options.poll_ms ?? 50),
   });
   ensureSiteLoopTables(lifecycleStore.db);
   try {
-    const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+    const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
     directiveStore.initSchema();
     const directive: any = directiveStore.getDirective(directiveId);
     if (!directive) {
@@ -2903,10 +2907,9 @@ export function refuseResidentDirective(cwd: any, options: SiteLoopPayload = {})
       agent_id: agentId,
       status: 'refused',
       reason: String(reason),
-      selected_work_ref: null,
     });
     const taskId: any = directiveTaskRef(directive);
-    const outcome: any = recordDirectiveOutcome({ db: lifecycleStore.db }, {
+    const outcome: any = recordDirectiveOutcome({ db: asSiteLoopDatabase(lifecycleStore.db) }, {
       loopId: siteLoopConfig.loop_id,
       directiveId,
       outcome: 'refused',
@@ -2929,7 +2932,7 @@ export function refuseResidentDirective(cwd: any, options: SiteLoopPayload = {})
       directive: publicDirectiveSummary(directive),
       triage,
       outcome,
-      health: getLoopHealth({ db: lifecycleStore.db }, siteLoopConfig.loop_id),
+      health: getLoopHealth({ db: asSiteLoopDatabase(lifecycleStore.db) }, siteLoopConfig.loop_id),
     };
   } finally {
     lifecycleStore.db.close();
@@ -2937,8 +2940,8 @@ export function refuseResidentDirective(cwd: any, options: SiteLoopPayload = {})
 }
 
 export function siteResidentCapabilities(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const runtimeConfig: any = siteLoopConfig.resident_runtime;
   const agentId: any = options.agentId ?? siteLoopConfig.resident.agent_id;
   const identities: any = readJson(join(siteRoot, 'operator-surfaces', 'identities.json'));
@@ -2952,7 +2955,7 @@ export function siteResidentCapabilities(cwd: any, options: SiteLoopPayload = {}
   const missingTools: any = siteLoopConfig.resident.required_task_tools.filter((tool: any) => !availableTaskTools.has(tool));
   const surfacePolicy: any = readResidentTaskLifecycleSurfacePolicy(siteRoot);
   const missingMutatingAuthority: any = siteLoopConfig.resident.required_mutating_task_tools.filter((tool: any) => !surfacePolicy.mutating_tools.includes(tool));
-  const status: any = identity
+  const status = identity
     && declaredRuntime === runtimeConfig.preferred_runtime
     && mcpProbe.status === 'ok'
     && missingTools.length === 0
@@ -2985,8 +2988,8 @@ export function siteResidentCapabilities(cwd: any, options: SiteLoopPayload = {}
 }
 
 function readResidentTaskLifecycleSurfacePolicy(siteRoot: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const path: any = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
+  const siteLoopConfig = configForSite(siteRoot);
+  const path = join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json');
   const registry: any = readJson(path);
   const surface: any = (registry?.surfaces ?? []).find((item: any) => item.surface_id === 'task-lifecycle-mcp.local') ?? null;
   const contract: any = surface?.tool_contract ?? {};
@@ -3002,8 +3005,8 @@ function readResidentTaskLifecycleSurfacePolicy(siteRoot: any) {
 }
 
 export async function ensureResidentCarrier(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const launchLock: any = acquireResidentExecutionLock(siteRoot, 'resident-launch', {
     request_id: options.requestId ?? options.request_id,
     timeout_ms: options.launchLockTimeoutMs ?? options.launch_lock_timeout_ms ?? 30_000,
@@ -3031,11 +3034,11 @@ export async function ensureResidentCarrier(cwd: any, options: SiteLoopPayload =
 }
 
 async function ensureResidentCarrierUnlocked(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const residentAgentId: any = siteLoopConfig.resident.agent_id;
-  const supervisorSchema: any = schemaName(siteLoopConfig, 'resident_supervisor');
-  const control: any = asRecord(options.control ?? readLoopControlForSupervisor(siteRoot));
+  const supervisorSchema = schemaName(siteLoopConfig, 'resident_supervisor');
+  const control = asRecord(options.control ?? readLoopControlForSupervisor(siteRoot));
   if (control.paused === true) {
     return {
       schema: supervisorSchema,
@@ -3083,7 +3086,7 @@ async function ensureResidentCarrierUnlocked(cwd: any, options: SiteLoopPayload 
     windowMs: policy.rate_limits?.restart_window_ms,
     ...asRecord(options.restartPolicy),
   });
-  const recoveryAuthorized: any = options.recoveryAuthorized === true || options.recovery_authorized === true;
+  const recoveryAuthorized = options.recoveryAuthorized === true || options.recovery_authorized === true;
   if (restartPolicy.status === 'blocked' && !recoveryAuthorized) {
     return {
       schema: supervisorSchema,
@@ -3115,7 +3118,7 @@ async function ensureResidentCarrierUnlocked(cwd: any, options: SiteLoopPayload 
       launch: null,
     };
   }
-  const runner: any = typeof options.runner === 'function' ? options.runner : defaultResidentLaunchRunner;
+  const runner = typeof options.runner === 'function' ? options.runner : defaultResidentLaunchRunner;
   const launch: any = await runner(siteRoot, siteLoopConfig);
   const after: any = getResidentStatus(siteRoot, { agentId: residentAgentId, requireLiveCarrier: options.requireLiveCarrier !== false });
   return {
@@ -3134,26 +3137,26 @@ async function ensureResidentCarrierUnlocked(cwd: any, options: SiteLoopPayload 
 }
  
 function residentCarrierAcceptableForSupervisor(status: any, siteLoopConfig: SiteLoopConfig) {
-  const fallbackRuntimes: any = configuredFallbackRuntimeNames(siteLoopConfig);
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
   const runtime: any = status?.carrier?.runtime ?? status?.carrier?.legacy_runtime;
   const preference: any = status?.carrier?.preference ?? null;
   if (preference === siteLoopConfig.resident_runtime.preferred_preference) return true;
   if (!fallbackRuntimes.includes(String(runtime ?? ''))) return true;
   if (!residentCarrierPolicyGenerationCurrent(status)) return false;
-  const proofDriver: any = status?.host?.started_event?.resident_proof_driver === true
+  const proofDriver = status?.host?.started_event?.resident_proof_driver === true
     || status?.host?.started_event?.resident_autowork === true;
   if (!proofDriver) return false;
   return true;
 }
 
 function cleanupRedundantNarsFallbacks(siteRoot: any, primaryStatus: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const fallbackRuntimes: any = configuredFallbackRuntimeNames(siteLoopConfig);
+  const siteLoopConfig = configForSite(siteRoot);
+  const fallbackRuntimes = configuredFallbackRuntimeNames(siteLoopConfig);
   const primaryCarrierId: any = primaryStatus?.carrier?.carrierSessionId ?? null;
   if (primaryStatus?.carrier?.runtime !== siteLoopConfig.resident_runtime.preferred_runtime || !primaryCarrierId) {
     return { status: 'skipped', reason: 'preferred_runtime_not_selected' };
   }
-  const resultsDir: any = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
+  const resultsDir = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
   const retired: any[] = [];
   const stopped: any[] = [];
   const skipped: any[] = [];
@@ -3161,7 +3164,7 @@ function cleanupRedundantNarsFallbacks(siteRoot: any, primaryStatus: any) {
     return { schema: schemaName(siteLoopConfig, 'redundant_fallback_cleanup'), status: 'ok', retired, stopped, skipped };
   }
   for (const name of readdirSafe(resultsDir).filter((entry: any) => entry.endsWith('.result.json'))) {
-    const path: any = join(resultsDir, name);
+    const path = join(resultsDir, name);
     const packet: any = readJson(path);
     if (packet?.identity !== siteLoopConfig.resident.agent_id || !fallbackRuntimes.includes(String(packet?.runtime ?? ''))) continue;
     const carrierSessionId: any = packet.carrier_session?.carrier_session_id
@@ -3209,12 +3212,12 @@ function cleanupRedundantNarsFallbacks(siteRoot: any, primaryStatus: any) {
 
 function stopResidentCarrierProcesses(carrierSessionId: any, siteLoopConfig: SiteLoopConfig, options: SiteLoopPayload = {}) {
   const configuredPatterns: any = options.processProbePatterns ?? options.process_probe_patterns;
-  const processProbePatterns: any = Array.isArray(configuredPatterns)
+  const processProbePatterns = Array.isArray(configuredPatterns)
     ? configuredPatterns.map(String)
     : siteLoopConfig.resident_runtime.process_probe_patterns;
-  const processPatternExpression: any = commandLinePatternExpression(processProbePatterns);
-  const preservePid: any = Number(options.preservePid ?? options.preserve_pid ?? 0);
-  const preservePredicate: any = Number.isInteger(preservePid) && preservePid > 0
+  const processPatternExpression = commandLinePatternExpression(processProbePatterns);
+  const preservePid = Number(options.preservePid ?? options.preserve_pid ?? 0);
+  const preservePredicate = Number.isInteger(preservePid) && preservePid > 0
     ? ` -and $_.ProcessId -ne ${preservePid}`
     : '';
   const result: any = spawnSync('powershell.exe', [
@@ -3241,10 +3244,10 @@ function stopResidentCarrierProcesses(carrierSessionId: any, siteLoopConfig: Sit
 }
 
 function cleanupDuplicateResidentCarrierProcesses(siteRoot: any, status: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const carrier: any = asRecord(status?.carrier);
-  const live: any = asRecord(carrier.live);
-  const processCount: any = Number(live.process_count ?? 0);
+  const siteLoopConfig = configForSite(siteRoot);
+  const carrier = asRecord(status?.carrier);
+  const live = asRecord(carrier.live);
+  const processCount = Number(live.process_count ?? 0);
   if (!Number.isInteger(processCount) || processCount <= 1) {
     return {
       status: 'skipped',
@@ -3252,7 +3255,7 @@ function cleanupDuplicateResidentCarrierProcesses(siteRoot: any, status: any) {
       process_count: Number.isFinite(processCount) ? processCount : null,
     };
   }
-  const canonicalPid: any = Number(asRecord(asRecord(live.heartbeat).record).pid ?? live.pid ?? 0);
+  const canonicalPid = Number(asRecord(asRecord(live.heartbeat).record).pid ?? live.pid ?? 0);
   if (!Number.isInteger(canonicalPid) || canonicalPid <= 0) {
     return {
       status: 'blocked',
@@ -3261,7 +3264,7 @@ function cleanupDuplicateResidentCarrierProcesses(siteRoot: any, status: any) {
     };
   }
   const stopped: any = stopResidentCarrierProcesses(carrier.carrierSessionId, siteLoopConfig, { preservePid: canonicalPid });
-  const after: any = asRecord(isResidentCarrierLive(siteRoot, carrier.carrierSessionId, { staleAfterMs: 120000 }));
+  const after = asRecord(isResidentCarrierLive(siteRoot, carrier.carrierSessionId, { staleAfterMs: 120000 }));
   return {
     status: after.live === true && Number(after.process_count ?? 1) <= 1 ? 'ok' : 'blocked',
     reason: after.live === true && Number(after.process_count ?? 1) <= 1 ? 'duplicate_processes_removed' : 'duplicate_processes_remain',
@@ -3273,13 +3276,13 @@ function cleanupDuplicateResidentCarrierProcesses(siteRoot: any, status: any) {
 }
 
 function residentCarrierPolicyGenerationCurrent(status: any) {
-  const siteRoot: any = status?.host?.session_dir
+  const siteRoot = status?.host?.session_dir
     ? resolve(status.host.session_dir, '..', '..', '..', '..')
     : null;
-  const policyPath: any = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
+  const policyPath = siteRoot ? join(siteControlRoot(siteRoot), 'capabilities', 'mcp-surfaces.json') : null;
   if (!policyPath || !existsSync(policyPath)) return true;
-  const policyMtime: any = statSync(policyPath).mtimeMs;
-  const startedAt: any = Date.parse(status?.host?.started_event?.timestamp ?? status?.carrier?.startedAt ?? '');
+  const policyMtime = statSync(policyPath).mtimeMs;
+  const startedAt = Date.parse(status?.host?.started_event?.timestamp ?? status?.carrier?.startedAt ?? '');
   if (!Number.isFinite(startedAt)) return false;
   return startedAt >= policyMtime;
 }
@@ -3293,21 +3296,21 @@ function readLoopControlForSupervisor(siteRoot: any) {
   }
 }
 function evaluateResidentRestartPolicy(siteRoot: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const maxRestarts: any = Number(options.maxRestarts ?? options.max_restarts ?? 3);
-  const windowMs: any = Number(options.windowMs ?? options.window_ms ?? 10 * 60 * 1000);
-  const sinceMs: any = Date.now() - windowMs;
-  const resultsDir: any = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
-  const supervisedRuntimes: any = configuredSupervisorRuntimeNames(siteLoopConfig);
+  const siteLoopConfig = configForSite(siteRoot);
+  const maxRestarts = Number(options.maxRestarts ?? options.max_restarts ?? 3);
+  const windowMs = Number(options.windowMs ?? options.window_ms ?? 10 * 60 * 1000);
+  const sinceMs = Date.now() - windowMs;
+  const resultsDir = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
+  const supervisedRuntimes = configuredSupervisorRuntimeNames(siteLoopConfig);
   const recent: any[] = [];
   if (existsSync(resultsDir)) {
     for (const name of readdirSafe(resultsDir).filter((entry: any) => entry.endsWith('.result.json'))) {
       const packet: any = readJson(join(resultsDir, name));
-      const runtime: any = String(packet?.runtime ?? packet?.runtime_substrate_kind ?? '');
+      const runtime = String(packet?.runtime ?? packet?.runtime_substrate_kind ?? '');
       if (packet?.identity !== siteLoopConfig.resident.agent_id || !supervisedRuntimes.includes(runtime)) continue;
       const launchSource: any = packet.launch_source ?? packet.carrier_session?.record?.launch_source ?? null;
       if (launchSource !== `${siteLoopConfig.loop_id}.loop.supervisor`) continue;
-      const ts: any = Date.parse(packet.started_at ?? packet.carrier_session?.record?.started_at ?? packet.agent_start_event ?? '');
+      const ts = Date.parse(packet.started_at ?? packet.carrier_session?.record?.started_at ?? packet.agent_start_event ?? '');
       if (Number.isFinite(ts) && ts >= sinceMs) {
         recent.push({ path: join(resultsDir, name), runtime, started_at: packet.started_at ?? null, carrier_session_id: packet.carrier_session_id ?? packet.carrier_session?.carrier_session_id ?? null });
       }
@@ -3333,12 +3336,12 @@ function readdirSafe(path: any) {
   }
 }
 export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const e2eSchema: any = schemaName(siteLoopConfig, 'resident_e2e');
-  const mailboxProof: any = options.mailboxProof === true || options.mailbox_proof === true;
-  const controlledMailboxProof: any = options.controlledMailboxProof === true || options.controlled_mailbox_proof === true;
-  const controlledMailboxSource: any = options.controlledMailboxSource ?? options.controlled_mailbox_source ?? options.controlledSource ?? options.controlled_source ?? null;
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const e2eSchema = schemaName(siteLoopConfig, 'resident_e2e');
+  const mailboxProof = options.mailboxProof === true || options.mailbox_proof === true;
+  const controlledMailboxProof = options.controlledMailboxProof === true || options.controlled_mailbox_proof === true;
+  const controlledMailboxSource = options.controlledMailboxSource ?? options.controlled_mailbox_source ?? options.controlledSource ?? options.controlled_source ?? null;
   if (mailboxProof && controlledMailboxProof !== true) {
     return {
       schema: e2eSchema,
@@ -3369,8 +3372,8 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
       required_flag: '--ack-fixture',
     };
   }
-  const live: any = options.live === true;
-  const simulate: any = options.simulateResident === true || options.simulate_resident === true;
+  const live = options.live === true;
+  const simulate = options.simulateResident === true || options.simulate_resident === true;
   if (live && simulate) {
     return {
       schema: e2eSchema,
@@ -3381,15 +3384,15 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
     };
   }
   const fixtureId: any = options.id ?? `resident-e2e-${Date.now()}`;
-  const expectedCarrierPreference: any = options.expectCarrierPreference ?? options.expect_carrier_preference ?? null;
-  const requireProductionProof: any = options.requireProductionProof === true || options.require_production_proof === true;
-  const proofTimeoutMs: any = Math.max(1, Number(options.timeoutMs ?? options.timeout_ms ?? 120_000));
+  const expectedCarrierPreference = options.expectCarrierPreference ?? options.expect_carrier_preference ?? null;
+  const requireProductionProof = options.requireProductionProof === true || options.require_production_proof === true;
+  const proofTimeoutMs = Math.max(1, Number(options.timeoutMs ?? options.timeout_ms ?? 120_000));
   const configuredWriteLockTimeoutMs: any = options.writeLockTimeoutMs ?? options.write_lock_timeout_ms;
   const writeLockTimeoutMs: any = configuredWriteLockTimeoutMs == null
     ? proofTimeoutMs
     : Math.max(0, Number(configuredWriteLockTimeoutMs));
-  const writeLockPollMs: any = Math.max(25, Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? 50));
-  const startOnly: any = options.startOnly === true || options.start_only === true;
+  const writeLockPollMs = Math.max(25, Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? 50));
+  const startOnly = options.startOnly === true || options.start_only === true;
   let productionEnsure: SiteLoopPayload | null = null;
   if (requireProductionProof && !startOnly) {
     if (options.ensureResident === true) {
@@ -3414,8 +3417,8 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
     cleanupResidentRuntime(siteRoot, { runtime: siteLoopConfig.resident_runtime.preferred_runtime });
     const currentResident: any = siteResidentStatus(siteRoot);
     const currentCarrier: SiteLoopPayload = currentResident?.carrier ?? {};
-    const observedPreference: any = currentCarrier.preference ?? null;
-    const observedPrimary: any = currentCarrier.runtime === siteLoopConfig.resident_runtime.preferred_runtime
+    const observedPreference = currentCarrier.preference ?? null;
+    const observedPrimary = currentCarrier.runtime === siteLoopConfig.resident_runtime.preferred_runtime
       && observedPreference === siteLoopConfig.resident_runtime.preferred_preference
       && currentResident?.host?.started_event?.resident_proof_driver !== true;
     if ((expectedCarrierPreference && observedPreference !== expectedCarrierPreference) || !observedPrimary) {
@@ -3528,7 +3531,7 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
       : allResidentDirectiveIds(siteRoot)
     : [];
   const deadline: any = Date.now() + proofTimeoutMs;
-  const pollMs: any = Number(options.pollMs ?? options.poll_ms ?? 5_000);
+  const pollMs = Number(options.pollMs ?? options.poll_ms ?? 5_000);
   let firstRun: SiteLoopPayload = await runSiteLoop(siteRoot, {
     limit: options.limit ?? 25,
     sourceSync: options.sourceSync === true || mailboxProof,
@@ -3597,7 +3600,7 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
     });
     polls.push({ run_id: cycle.run_id, status: cycle.status, counts: finalOutcome.counts });
   }
-  const finalRun: any = latestRun;
+  const finalRun = latestRun;
   if (mailboxProof) {
     directiveIds = [...new Set([
       ...directiveIds,
@@ -3612,7 +3615,7 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
       writeLockPollMs,
     });
   }
-  const finalRunSummary: any = asRecord(finalRun.summary);
+  const finalRunSummary = asRecord(finalRun.summary);
   const controlledSourceStatus: any = mailboxProof
     ? controlledMailboxSourceStatus(siteRoot, controlledMailboxSource, {
         directiveIds: effectiveDirectiveIds,
@@ -3621,17 +3624,17 @@ export async function runSiteResidentE2E(cwd: any, options: SiteLoopPayload = {}
     : null;
   const finalResident: any = siteResidentStatus(siteRoot);
   const finalCarrier: SiteLoopPayload = finalResident?.carrier ?? {};
-  const carrierPreferenceObserved: any = finalCarrier.preference ?? null;
-  const carrierPreferenceMatch: any = expectedCarrierPreference
+  const carrierPreferenceObserved = finalCarrier.preference ?? null;
+  const carrierPreferenceMatch = expectedCarrierPreference
     ? carrierPreferenceObserved === expectedCarrierPreference
     : true;
-  const reported: any = hasReportedOutcome(finalOutcome) || storeSimulation?.status === 'ok';
+  const reported = hasReportedOutcome(finalOutcome) || storeSimulation?.status === 'ok';
   const productionProof: any = hasProductionReportedOutcome(finalOutcome);
   const productionProofMatch: any = !requireProductionProof || productionProof;
-  const loopRunSucceeded: any = finalRun.status === 'ok';
-  const bridgeHealthy: any = Number(finalRunSummary.bridge_errors ?? 0) === 0;
-  const controlledSourceMatched: any = !mailboxProof || controlledSourceStatus?.status === 'matched_new_directive';
-  const status: any = reported
+  const loopRunSucceeded = finalRun.status === 'ok';
+  const bridgeHealthy = Number(finalRunSummary.bridge_errors ?? 0) === 0;
+  const controlledSourceMatched = !mailboxProof || controlledSourceStatus?.status === 'matched_new_directive';
+  const status = reported
     && carrierPreferenceMatch
     && productionProofMatch
     && loopRunSucceeded
@@ -3739,11 +3742,11 @@ function residentE2EProof({ storeSimulation, finalOutcome, directiveIds, residen
 }
 
 function simulateResidentFixtureCompletion(siteRoot: any, directiveIds: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const at: any = stringValue(options.at, new Date().toISOString());
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot);
+  const siteLoopConfig = configForSite(siteRoot);
+  const at = stringValue(options.at, new Date().toISOString());
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   const completed: any[] = [];
   try {
@@ -3766,8 +3769,8 @@ function simulateResidentFixtureCompletion(siteRoot: any, directiveIds: any, opt
             agent_id: siteLoopConfig.resident.agent_id,
             transport: 'fixture_simulation',
           });
-      const reportAt: any = new Date(Date.parse(at) + 1).toISOString();
-      const reportId: any = `report_fixture_${directiveId}`;
+      const reportAt = new Date(Date.parse(at) + 1).toISOString();
+      const reportId = `report_fixture_${directiveId}`;
       lifecycleStore.insertReport({
         report_id: reportId,
         task_id: taskId,
@@ -3793,10 +3796,10 @@ function simulateResidentFixtureCompletion(siteRoot: any, directiveIds: any, opt
 }
 
 export function listSiteLoopAttention(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
-  const loopId: any = stringValue(options.loopId, siteLoopConfig.loop_id);
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
   try {
     return {
       schema: schemaName(siteLoopConfig, 'loop_attention_list'),
@@ -3814,8 +3817,8 @@ export function listSiteLoopAttention(cwd: any, options: SiteLoopPayload = {}) {
 }
 
 export function showSiteLoopAttention(cwd: any, attentionId: any) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
     const attention: any = getLoopAttention(store, { attentionId });
@@ -3830,10 +3833,10 @@ export function showSiteLoopAttention(cwd: any, attentionId: any) {
 }
 
 export function ackSiteLoopAttention(cwd: any, attentionId: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const store: any = openSiteLoopStore(siteRoot);
-  const loopId: any = stringValue(options.loopId, siteLoopConfig.loop_id);
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
   try {
     return {
       schema: schemaName(siteLoopConfig, 'loop_attention_ack'),
@@ -3850,10 +3853,10 @@ export function ackSiteLoopAttention(cwd: any, attentionId: any, options: SiteLo
 }
 
 export function recoverStaleResidentCarrier(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const recoverySchema: any = schemaName(siteLoopConfig, 'resident_recover_stale');
-  const reason: any = String(options.reason ?? '').trim();
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const recoverySchema = schemaName(siteLoopConfig, 'resident_recover_stale');
+  const reason = String(options.reason ?? '').trim();
   if (!reason) return { schema: recoverySchema, status: 'refused', reason: 'reason_required' };
   const resident: any = siteResidentStatus(siteRoot);
   const recoverableCarrierStates: any = new Set(['stale_busy', 'policy_stale']);
@@ -3867,10 +3870,10 @@ export function recoverStaleResidentCarrier(cwd: any, options: SiteLoopPayload =
   }
   const store: any = openSiteLoopStore(siteRoot);
   try {
-    const at: any = new Date().toISOString();
+    const at = new Date().toISOString();
     const pending: any = siteResidentPendingFromDb(store.db, { limit: 500, siteRoot });
     const recovered: any[] = [];
-    const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: store.db });
+    const directiveStore = new SqliteDirectiveRuntimeStore({ db: store.db });
     directiveStore.initSchema();
     for (const directive of pending.directives ?? []) {
       const full: any = directiveStore.getDirective(directive.directive_id);
@@ -3890,10 +3893,10 @@ export function recoverStaleResidentCarrier(cwd: any, options: SiteLoopPayload =
       });
       recovered.push({ directive_id: directive.directive_id, retryable: true, previous_status: previousDelivery.status ?? 'leased' });
     }
-    const carrierState: any = asRecord(resident.carrier_state);
-    const carrierDirectiveId: any = stringValue(carrierState.carrier_session_id, 'resident_carrier');
+    const carrierState = asRecord(resident.carrier_state);
+    const carrierDirectiveId = stringValue(carrierState.carrier_session_id, 'resident_carrier');
     const retired: any = retireResidentCarrier(siteRoot, carrierDirectiveId, { reason, at });
-    const attentionKind: any = carrierState.state === 'policy_stale'
+    const attentionKind = carrierState.state === 'policy_stale'
       ? 'policy_drift'
       : 'stale_busy_carrier';
     const severity: any = loopAttentionSeverity(siteRoot, attentionKind);
@@ -3935,15 +3938,15 @@ export function recoverStaleResidentCarrier(cwd: any, options: SiteLoopPayload =
 }
 
 export function cleanupResidentRuntime(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const cleanupSchema: any = schemaName(siteLoopConfig, 'resident_runtime_cleanup');
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const cleanupSchema = schemaName(siteLoopConfig, 'resident_runtime_cleanup');
   const runtime: any = options.runtime ?? 'all';
-  const dryRun: any = options.dryRun === true || options.dry_run === true;
-  const stopLive: any = options.stopLive === true || options.stop_live === true;
+  const dryRun = options.dryRun === true || options.dry_run === true;
+  const stopLive = options.stopLive === true || options.stop_live === true;
   const nowIso: any = options.nowIso ?? options.now_iso ?? new Date().toISOString();
-  const maxInspections: any = Math.max(0, Number(options.maxInspections ?? options.max_inspections ?? 25));
-  const resultsDir: any = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
+  const maxInspections = Math.max(0, Number(options.maxInspections ?? options.max_inspections ?? 25));
+  const resultsDir = join(siteRoot, '.ai', 'runtime', 'agent-start-results');
   const inspected: any[] = [];
   const retired: any[] = [];
   const skipped: any[] = [];
@@ -3966,7 +3969,7 @@ export function cleanupResidentRuntime(cwd: any, options: SiteLoopPayload = {}) 
   const candidateRows: any = readdirSync(resultsDir)
     .filter((name: any) => name.endsWith('.result.json'))
     .map((name: any) => {
-      const path: any = join(resultsDir, name);
+      const path = join(resultsDir, name);
       const packet: any = readJson(path);
       if (!packet || packet.identity !== siteLoopConfig.resident.agent_id) return null;
       const carrierSessionId: any = packet.carrier_session?.carrier_session_id
@@ -3984,7 +3987,7 @@ export function cleanupResidentRuntime(cwd: any, options: SiteLoopPayload = {}) 
     .filter((row: any) => runtime === 'all' || row.runtime === runtime)
     .sort((a: any, b: any) => Date.parse(String(b.started_at ?? '')) - Date.parse(String(a.started_at ?? '')));
   const rows: any = candidateRows.slice(0, maxInspections);
-  const uninspectedCount: any = Math.max(0, candidateRows.length - rows.length);
+  const uninspectedCount = Math.max(0, candidateRows.length - rows.length);
   for (const row of rows) {
     const retirement: any = readCarrierRetirement(siteRoot, row.carrier_session_id);
     const live: any = isResidentCarrierLive(siteRoot, row.carrier_session_id, { staleAfterMs: 120000 });
@@ -4040,13 +4043,13 @@ export function cleanupResidentRuntime(cwd: any, options: SiteLoopPayload = {}) 
 }
 
 export function siteResidentProofPacket(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const resident: any = siteResidentStatus(siteRoot);
   const receipts: any = siteResidentReceipts(siteRoot, { limit: Number(options.limit ?? 5) });
   const outcomes: any = siteResidentOutcomes(siteRoot, { limit: Number(options.limit ?? 5) });
   const pending: any = siteResidentPending(siteRoot, { limit: Number(options.limit ?? 25) });
-  const proofDriver: any = resident.host?.started_event?.resident_proof_driver === true;
+  const proofDriver = resident.host?.started_event?.resident_proof_driver === true;
   const reportedOutcomes: any = (outcomes.outcomes ?? []).filter((item: any) => item.outcome === 'reported');
   const proofDriverReports: any = reportedOutcomes.filter((item: any) => item.evidence?.proof_mode === 'proof_driver'
     || (proofDriver && item.evidence?.production_proof !== true)).length;
@@ -4054,16 +4057,17 @@ export function siteResidentProofPacket(cwd: any, options: SiteLoopPayload = {})
     || item.evidence?.proof_mode === 'agent_reasoning').length;
   const proofCarrier: SiteLoopPayload = asRecord(resident.carrier);
   const runtimeConfig: any = siteLoopConfig.resident_runtime;
-  const proofPreferredInteractive: any = asRecord(proofCarrier.preferred_interactive);
-  const primaryRuntimeReady: any = proofCarrier.runtime === runtimeConfig.preferred_runtime
+  const proofPreferredInteractive = asRecord(proofCarrier.preferred_interactive);
+  const primaryRuntimeReady = proofCarrier.runtime === runtimeConfig.preferred_runtime
     && proofCarrier.preference === runtimeConfig.preferred_preference
     && proofDriver !== true;
   const latestProductionOutcome: any = latestProductionReportedOutcome(reportedOutcomes);
-  const productionProofAgeMs: any = latestProductionOutcome?.event_at
+  const productionProofAgeMs = latestProductionOutcome?.event_at
     ? Date.now() - Date.parse(latestProductionOutcome.event_at)
     : null;
-  const productionProofFreshnessWindowMs: any = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
-  const productionProofFresh: any = Boolean(latestProductionOutcome)
+  const productionProofFreshnessWindowMs = Number(options.productionProofFreshnessMs ?? options.production_proof_freshness_ms ?? siteLoopConfig.mailbox_proof.freshness_ms);
+  const productionProofFresh = Boolean(latestProductionOutcome)
+    && productionProofAgeMs !== null
     && Number.isFinite(productionProofAgeMs)
     && productionProofAgeMs <= productionProofFreshnessWindowMs;
   return {
@@ -4099,8 +4103,8 @@ function hasProductionReportedOutcome(outcome: any) {
 }
 
 export async function runSiteResidentRecoveryDrill(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const fixtureId: any = options.id ?? `resident-recovery-drill-${Date.now()}`;
   const before: any = siteResidentStatus(siteRoot);
   const beforeCarrier: SiteLoopPayload = before.carrier ?? {};
@@ -4126,8 +4130,8 @@ export async function runSiteResidentRecoveryDrill(cwd: any, options: SiteLoopPa
   });
   const cleanup: any = cleanupResidentWorkFixture(siteRoot, { id: fixtureId });
   const after: any = siteResidentStatus(siteRoot);
-  const accepted: any = proof.proof?.carrier_receipt_observed === true;
-  const productionProof: any = proof.production_proof === true;
+  const accepted = proof.proof?.carrier_receipt_observed === true;
+  const productionProof = proof.production_proof === true;
   return {
     schema: schemaName(siteLoopConfig, 'resident_recovery_drill'),
     status: retired.status === 'retired' && ['launch_requested', 'already_available'].includes(replacement.status) && accepted
@@ -4145,8 +4149,8 @@ export async function runSiteResidentRecoveryDrill(cwd: any, options: SiteLoopPa
 }
 
 export function inspectSiteLoopSchema(cwd: any) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const store: any = openSiteLoopStore(siteRoot, { write: false });
   try {
     const columns: any = store.db.prepare('PRAGMA table_info(task_reports)').all().map((row: any) => String(row.name));
@@ -4167,10 +4171,10 @@ export function inspectSiteLoopSchema(cwd: any) {
 }
 
 export function resolveSiteResidentOutcome(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const directiveId: any = stringValue(options.directiveId ?? options.directive_id);
-  const loopId: any = stringValue(options.loopId, siteLoopConfig.loop_id);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const directiveId = stringValue(options.directiveId ?? options.directive_id);
+  const loopId = stringValue(options.loopId, siteLoopConfig.loop_id);
   const store: any = openSiteLoopStore(siteRoot);
   try {
     return {
@@ -4188,9 +4192,9 @@ export function resolveSiteResidentOutcome(cwd: any, options: SiteLoopPayload = 
 }
 
 export function seedResidentWorkFixture(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const fixtureSeedSchema: any = schemaName(siteLoopConfig, 'loop_fixture_seed');
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const fixtureSeedSchema = schemaName(siteLoopConfig, 'loop_fixture_seed');
   if (options.ackFixture !== true) {
     return {
       schema: fixtureSeedSchema,
@@ -4202,11 +4206,11 @@ export function seedResidentWorkFixture(cwd: any, options: SiteLoopPayload = {})
   }
   const id: any = options.id ?? 'resident_work_fixture';
   const nowIso: any = options.receivedAt ?? new Date().toISOString();
-  const envelopeId: any = `env_${sanitizeId(id)}`;
-  const dir: any = join(siteRoot, '.ai', 'inbox-envelopes');
+  const envelopeId = `env_${sanitizeId(id)}`;
+  const dir = join(siteRoot, '.ai', 'inbox-envelopes');
   mkdirSync(dir, { recursive: true });
-  const path: any = join(dir, `fixture-${envelopeId}.json`);
-  const existed: any = existsSync(path);
+  const path = join(dir, `fixture-${envelopeId}.json`);
+  const existed = existsSync(path);
   const envelope: any = {
     schema: 'narada.inbox_envelope.v1',
     envelope_id: envelopeId,
@@ -4235,11 +4239,11 @@ export function seedResidentWorkFixture(cwd: any, options: SiteLoopPayload = {})
 }
 
 export function cleanupResidentWorkFixture(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const fixtureCleanupSchema: any = schemaName(configForSite(siteRoot), 'loop_fixture_cleanup');
+  const siteRoot = resolve(cwd);
+  const fixtureCleanupSchema = schemaName(configForSite(siteRoot), 'loop_fixture_cleanup');
   const id: any = options.id ?? 'resident_work_fixture';
-  const envelopeId: any = `env_${sanitizeId(id)}`;
-  const path: any = join(siteRoot, '.ai', 'inbox-envelopes', `fixture-${envelopeId}.json`);
+  const envelopeId = `env_${sanitizeId(id)}`;
+  const path = join(siteRoot, '.ai', 'inbox-envelopes', `fixture-${envelopeId}.json`);
   if (!existsSync(path)) {
     return { schema: fixtureCleanupSchema, status: 'not_found', envelope_id: envelopeId, path };
   }
@@ -4253,18 +4257,18 @@ export function cleanupResidentWorkFixture(cwd: any, options: SiteLoopPayload = 
 }
 
 export async function superviseSiteLoop(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
   const policy: any = loadSiteLoopOperatingPolicy(cwd).policy;
-  const cycleLimit: any = options.cycles == null ? null : Math.max(0, Number(options.cycles));
-  const intervalMs: any = Number(options.intervalMs ?? options.interval_ms ?? policy.cadence.supervise_interval_ms);
-  const jitterMs: any = Number(options.jitterMs ?? options.jitter_ms ?? 10_000);
-  const heartbeatIntervalMs: any = Math.max(1_000, Number(options.supervisorHeartbeatIntervalMs ?? options.supervisor_heartbeat_interval_ms ?? SUPERVISOR_HEARTBEAT_INTERVAL_MS));
-  const heartbeatPath: any = supervisorHeartbeatPath(siteRoot, options);
+  const cycleLimit = options.cycles == null ? null : Math.max(0, Number(options.cycles));
+  const intervalMs = Number(options.intervalMs ?? options.interval_ms ?? policy.cadence.supervise_interval_ms);
+  const jitterMs = Number(options.jitterMs ?? options.jitter_ms ?? 10_000);
+  const heartbeatIntervalMs = Math.max(1_000, Number(options.supervisorHeartbeatIntervalMs ?? options.supervisor_heartbeat_interval_ms ?? SUPERVISOR_HEARTBEAT_INTERVAL_MS));
+  const heartbeatPath = supervisorHeartbeatPath(siteRoot, options);
   const runs: any[] = [];
-  let stopped: any = false;
-  let cycleInProgress: any = false;
-  let lastCycle: any = null;
+  let stopped = false;
+  let cycleInProgress = false;
+  let lastCycle: SiteLoopPayload | null = null;
   const stop: any = () => {
     stopped = true;
   };
@@ -4278,11 +4282,11 @@ export async function superviseSiteLoop(cwd: any, options: SiteLoopPayload = {})
     } catch {}
   };
   heartbeatTick();
-  const heartbeatTimer: any = setInterval(heartbeatTick, heartbeatIntervalMs);
+  const heartbeatTimer = setInterval(heartbeatTick, heartbeatIntervalMs);
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
-    for (let index: any = 0; (cycleLimit == null || index < cycleLimit) && !stopped; index += 1) {
+    for (let index = 0; (cycleLimit == null || index < cycleLimit) && !stopped; index += 1) {
       cycleInProgress = true;
       let result: SiteLoopPayload | null = null;
       let mailboxProofRequest: SiteLoopPayload | null = null;
@@ -4316,12 +4320,12 @@ export async function superviseSiteLoop(cwd: any, options: SiteLoopPayload = {})
         cycleError = cycleError ?? errorToPayload(error);
         statusAfterRun = { status: 'error', error: errorToPayload(error) };
       }
-      const dbHealth: any = asRecord(statusAfterRun.db_health);
-      const backlog: any = asRecord(statusAfterRun.backlog);
-      const latestActivity: any = asRecord(statusAfterRun.latest_activity);
-      const mailboxProof: any = asRecord(statusAfterRun.mailbox_proof);
-      const supervisorHeartbeat: any = asRecord(statusAfterRun.supervisor_heartbeat);
-      const alerts: any = Array.isArray(statusAfterRun.alerts) ? statusAfterRun.alerts.map(asRecord) : [];
+      const dbHealth = asRecord(statusAfterRun.db_health);
+      const backlog = asRecord(statusAfterRun.backlog);
+      const latestActivity = asRecord(statusAfterRun.latest_activity);
+      const mailboxProof = asRecord(statusAfterRun.mailbox_proof);
+      const supervisorHeartbeat = asRecord(statusAfterRun.supervisor_heartbeat);
+      const alerts = Array.isArray(statusAfterRun.alerts) ? statusAfterRun.alerts.map(asRecord) : [];
       const runRecord: any = {
         run_id: result?.run_id ?? null,
         status: cycleError ? 'error' : result?.status ?? 'error',
@@ -4386,9 +4390,9 @@ export async function superviseSiteLoop(cwd: any, options: SiteLoopPayload = {})
 }
 
 export async function runSiteLoopSoak(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const cycles: any = Math.max(1, Number(options.cycles ?? 3));
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const cycles = Math.max(1, Number(options.cycles ?? 3));
   const result: any = await superviseSiteLoop(cwd, {
     ...options,
     cycles,
@@ -4400,7 +4404,7 @@ export async function runSiteLoopSoak(cwd: any, options: SiteLoopPayload = {}) {
     requireSupervisor: false,
   });
   const failedRuns: any = result.runs.filter((run: any) => run.status !== 'ok');
-  const requireFreshProductionProof: any = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
+  const requireFreshProductionProof = options.requireFreshProductionProof === true || options.require_fresh_production_proof === true;
   const perCycleFailures: any = result.runs.filter((run: any) => run.checks
     && (run.checks.db_ok !== true
       || Number(run.checks.stale_pending_directives ?? 0) > 0
@@ -4408,7 +4412,7 @@ export async function runSiteLoopSoak(cwd: any, options: SiteLoopPayload = {}) {
       || run.checks.supervisor_heartbeat_fresh !== true
       || (requireFreshProductionProof && run.checks.production_proof_fresh !== true)));
   const blockingAlerts: any = (status.alerts ?? []).filter((alert: any) => ['error', 'critical'].includes(alert.severity));
-  const productionFreshOk: any = !requireFreshProductionProof || status.latest_activity?.production_proof_fresh === true;
+  const productionFreshOk = !requireFreshProductionProof || status.latest_activity?.production_proof_fresh === true;
   const passed: any = failedRuns.length === 0
     && perCycleFailures.length === 0
     && status.db_health?.status === 'ok'
@@ -4527,21 +4531,21 @@ function summarizeResidentBacklogRecovery(result: any, siteLoopConfig: SiteLoopC
 }
 
 function emitResidentBacklogRecoveryDirectives(siteRoot: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const nowIso: any = stringValue(options.nowIso, new Date().toISOString());
-  const actionStaleMinutes: any = Number(options.actionStaleMinutes ?? 30);
-  const limit: any = Math.max(0, Number(options.limit ?? 25));
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const siteLoopConfig = configForSite(siteRoot);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
+  const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
+  const limit = Math.max(0, Number(options.limit ?? 25));
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: true });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     const candidates: any = residentBacklogCandidates(lifecycleStore.db, { limit: Math.max(limit * 4, limit), siteRoot });
     const emitted: any[] = [];
     const skipped: any[] = [];
     for (const candidate of candidates) {
-      const taskId: any = stringValue(candidate.task_id);
-      const taskNumber: any = Number(candidate.task_number);
-      const mailboxTicketId: any = stringOrNull(candidate.mailbox_ticket_id);
+      const taskId = stringValue(candidate.task_id);
+      const taskNumber = Number(candidate.task_number);
+      const mailboxTicketId = stringOrNull(candidate.mailbox_ticket_id);
       if (isStaleResidentFixtureHistoryTask(candidate, { nowIso, actionStaleMinutes })) {
         skipped.push({ task_id: candidate.task_id, task_number: candidate.task_number, reason: 'historical_fixture_not_recovered' });
         continue;
@@ -4561,7 +4565,7 @@ function emitResidentBacklogRecoveryDirectives(siteRoot: any, options: SiteLoopP
         });
         continue;
       }
-      const staleBucket: any = Math.floor(Date.parse(nowIso) / Math.max(1, actionStaleMinutes) / 60000);
+      const staleBucket = Math.floor(Date.parse(nowIso) / Math.max(1, actionStaleMinutes) / 60000);
       const result: any = directiveStore.emitResidentDirectiveForAdmittedWork({
         siteId: siteLoopConfig.site_id,
         authorityLocus: 'client_service',
@@ -4613,8 +4617,8 @@ function emitResidentBacklogRecoveryDirectives(siteRoot: any, options: SiteLoopP
 }
 
 function emitResidentDirectiveForMaterializedFixture(siteRoot: any, materialization: any, envelopeId: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const result: any = asRecord(materialization?.result);
+  const siteLoopConfig = configForSite(siteRoot);
+  const result = asRecord(materialization?.result);
   if (materialization?.status !== 'materialized' || !result.taskId || !result.taskNumber) {
     return {
       status: 'skipped',
@@ -4623,12 +4627,12 @@ function emitResidentDirectiveForMaterializedFixture(siteRoot: any, materializat
       directive_id: null,
     };
   }
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, {
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, {
     write: true,
     timeoutMs: Number(options.writeLockTimeoutMs ?? options.write_lock_timeout_ms ?? options.timeoutMs ?? options.timeout_ms ?? 1000),
     pollMs: Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? options.pollMs ?? options.poll_ms ?? 50),
   });
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     const emitted: any = directiveStore.emitResidentDirectiveForAdmittedWork({
@@ -4657,7 +4661,7 @@ function emitResidentDirectiveForMaterializedFixture(siteRoot: any, materializat
 }
 
 function residentBacklogCandidates(db: any, { limit, siteRoot = null }: any) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions({ siteRoot });
+  const siteLoopConfig = siteLoopConfigFromOptions({ siteRoot });
   db.exec(`
     CREATE TABLE IF NOT EXISTS narada_andrey_task_role_preferences (
       task_id TEXT PRIMARY KEY,
@@ -4711,7 +4715,7 @@ function isNeedsContinuationTicketDraftRecoveryCandidate(row: any, { siteRoot }:
 }
 
 function mailboxTicketIdFromTaskRow(row: any) {
-  const text: any = [
+  const text = [
     row.title,
     row.goal_markdown,
     row.context_markdown,
@@ -4724,8 +4728,8 @@ function mailboxTicketIdFromTaskRow(row: any) {
 }
 
 function ticketHasLocalTerminalOrDraftReceipt(siteRoot: any, ticketId: any) {
-  const evidenceRoot: any = resolve(siteRoot, 'evidence', 'live', safeEvidenceName(ticketId));
-  const closePath: any = resolve(siteRoot, '.ai', 'tickets', 'closed', `${safeEvidenceName(ticketId)}.json`);
+  const evidenceRoot = resolve(siteRoot, 'evidence', 'live', safeEvidenceName(ticketId));
+  const closePath = resolve(siteRoot, '.ai', 'tickets', 'closed', `${safeEvidenceName(ticketId)}.json`);
   const latestDraft: any = latestJsonReceiptPath(resolve(evidenceRoot, 'outlook-draft-receipts'));
   const latestDelete: any = latestJsonReceiptPath(resolve(evidenceRoot, 'outlook-delete-receipts'));
   return existsSync(closePath)
@@ -4735,8 +4739,9 @@ function ticketHasLocalTerminalOrDraftReceipt(siteRoot: any, ticketId: any) {
 
 function latestJsonReceiptPath(directory: any) {
   if (!existsSync(directory)) return null;
-  const names: any = readdirSync(directory).filter((name: any) => name.endsWith('.json')).sort();
-  return names.length > 0 ? { name: names.at(-1), path: resolve(directory, names.at(-1)) } : null;
+  const names = readdirSync(directory).filter((name: any) => name.endsWith('.json')).sort();
+  const name = names.at(-1);
+  return name ? { name, path: resolve(directory, name) } : null;
 }
 
 function safeEvidenceName(value: any) {
@@ -4744,7 +4749,7 @@ function safeEvidenceName(value: any) {
 }
 
 function residentBacklogRecoveryDecision(db: any, candidate: any, { siteRoot = null, siteLoopConfig = null, nowIso, actionStaleMinutes, recordAttention = true }: any) {
-  const resolvedSiteLoopConfig: any = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
+  const resolvedSiteLoopConfig = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
   if (candidate.status === 'claimed') {
     if (!candidate.assignment_id) {
       if (recordAttention) {
@@ -4852,9 +4857,9 @@ function supersedeRecoveredDirective(db: any, { priorDirectiveId, replacementDir
 }
 
 function recordTaskBacklogAttention(db: any, candidate: any, { siteRoot, siteLoopConfig = null, classification, reason, nowIso }: any) {
-  const resolvedSiteLoopConfig: any = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
-  const directiveId: any = `task:${candidate.task_id}`;
-  const envelopeId: any = `operator_attention_${safeFileToken(candidate.task_id)}_${safeFileToken(classification)}`;
+  const resolvedSiteLoopConfig = siteLoopConfigFromContext(siteLoopConfig, siteRoot);
+  const directiveId = `task:${candidate.task_id}`;
+  const envelopeId = `operator_attention_${safeFileToken(candidate.task_id)}_${safeFileToken(classification)}`;
   const existing: any = getLoopEscalation({ db }, {
     loopId: resolvedSiteLoopConfig.loop_id,
     directiveId,
@@ -4891,10 +4896,10 @@ function recordTaskBacklogAttention(db: any, candidate: any, { siteRoot, siteLoo
 }
 
 function writeTaskBacklogAttentionEnvelope(candidate: any, { siteRoot, envelopeId, classification, reason, nowIso }: any) {
-  const siteLoopConfig: any = configForSite(resolve(siteRoot));
-  const dir: any = join(resolve(siteRoot), '.ai', 'operator-attention');
+  const siteLoopConfig = configForSite(resolve(siteRoot));
+  const dir = join(resolve(siteRoot), '.ai', 'operator-attention');
   mkdirSync(dir, { recursive: true });
-  const path: any = join(dir, `${envelopeId}.json`);
+  const path = join(dir, `${envelopeId}.json`);
   if (!existsSync(path)) {
     writeFileSync(path, JSON.stringify({
       schema: 'narada.inbox_envelope.v1',
@@ -4950,19 +4955,19 @@ function summarizeReceiptReconciliation(result: any) {
 }
 
 function summarizeRun({ bridge, dispatch, steps }: SiteLoopPayload) {
-  const bridgeRecord: any = asRecord(bridge);
-  const dispatchRecord: any = asRecord(dispatch);
-  const stepRecords: any = Array.isArray(steps) ? steps.map((step: any) => asRecord(step)) : [];
+  const bridgeRecord = asRecord(bridge);
+  const dispatchRecord = asRecord(dispatch);
+  const stepRecords = Array.isArray(steps) ? steps.map((step: any) => asRecord(step)) : [];
   const stepEvidence: any = (stepId: string) => asRecord(stepRecords.find((step: any) => step.step_id === stepId)?.evidence);
   const directEmissionEvidence: any = stepEvidence('resident_directive_emission');
   const backlogEmissionEvidence: any = stepEvidence('resident_backlog_recovery_emission');
   const ticketTaskReconciliation: any = stepEvidence('ticket_task_reconciliation');
-  const directEmissionCount: any = Number(directEmissionEvidence.emitted_count ?? residentDirectiveRefs(bridgeRecord).length);
-  const backlogEmissionCount: any = Number(backlogEmissionEvidence.emitted_count ?? 0);
-  const receiptReconciliation: any = asRecord(dispatchRecord.receipt_reconciliation);
+  const directEmissionCount = Number(directEmissionEvidence.emitted_count ?? residentDirectiveRefs(bridgeRecord).length);
+  const backlogEmissionCount = Number(backlogEmissionEvidence.emitted_count ?? 0);
+  const receiptReconciliation = asRecord(dispatchRecord.receipt_reconciliation);
   const receiptsRecorded: any = Array.isArray(receiptReconciliation.recorded) ? receiptReconciliation.recorded.length : 0;
   const staleEscalationCreated: any = stepEvidence('stale_escalation_reconciliation').created;
-  const escalationCount: any = Array.isArray(staleEscalationCreated) ? staleEscalationCreated.length : 0;
+  const escalationCount = Array.isArray(staleEscalationCreated) ? staleEscalationCreated.length : 0;
   return {
     source_sync: stepEvidence('source_sync'),
     ticket_task_reconciliation: ticketTaskReconciliation,
@@ -4984,7 +4989,7 @@ function summarizeRun({ bridge, dispatch, steps }: SiteLoopPayload) {
 }
 
 function sourceSyncRefs(result: any) {
-  const resultRecord: any = asRecord(result);
+  const resultRecord = asRecord(result);
   return [
     ...(resultRecord.cursor_path ? [{ kind: 'sync_cursor', ref: resultRecord.cursor_path }] : []),
     ...(resultRecord.health_path ? [{ kind: 'sync_health', ref: resultRecord.health_path }] : []),
@@ -4997,20 +5002,20 @@ function outputRefsForStep(steps: SiteLoopPayload[], stepId: string): unknown[] 
 }
 
 export function runAgentOutcomeReconciliation(cwd: any, options: SiteLoopPayload = {}) {
-  const siteRoot: any = resolve(cwd);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const nowIso: any = stringValue(options.nowIso, new Date().toISOString());
-  const nowMs: any = Date.parse(nowIso);
-  const deliveryStaleMinutes: any = Number(options.deliveryStaleMinutes ?? 5);
-  const actionStaleMinutes: any = Number(options.actionStaleMinutes ?? 30);
-  const directiveIds: any = Array.isArray(options.directiveIds)
+  const siteRoot = resolve(cwd);
+  const siteLoopConfig = configForSite(siteRoot);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
+  const nowMs = Date.parse(nowIso);
+  const deliveryStaleMinutes = Number(options.deliveryStaleMinutes ?? 5);
+  const actionStaleMinutes = Number(options.actionStaleMinutes ?? 30);
+  const directiveIds = Array.isArray(options.directiveIds)
     ? options.directiveIds.map(String).filter(Boolean)
     : [];
-  const includeBacklog: any = options.includeBacklog !== false;
-  const resident: any = asRecord(options.resident);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot);
+  const includeBacklog = options.includeBacklog !== false;
+  const resident = asRecord(options.resident);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot);
   ensureSiteLoopTables(lifecycleStore.db);
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     const baseWhere: any = `
@@ -5092,7 +5097,7 @@ export function runAgentOutcomeReconciliation(cwd: any, options: SiteLoopPayload
 }
 
 function classifyDirectiveOutcome(db: any, row: any, options: any) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions(options);
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
   const directive: any = row.directive;
   const taskRef: any = (directive.content?.refs ?? []).find((ref: any) => ref.kind === 'task')?.id
     ?? directive.content?.data?.task_id
@@ -5103,8 +5108,8 @@ function classifyDirectiveOutcome(db: any, row: any, options: any) {
     : null;
   const receiptAt: any = directive.delivery?.received_at ?? receipt?.received_at ?? null;
   const leaseUntil: any = directive.delivery?.leased_until ?? null;
-  const deliveryAgeMinutes: any = minutesBetween(createdAt, options.nowIso);
-  const classificationSiteRoot: any = stringValue(options.siteRoot);
+  const deliveryAgeMinutes = minutesBetween(createdAt, options.nowIso);
+  const classificationSiteRoot = stringValue(options.siteRoot);
 
   if (!taskRef) {
     return baseOutcome(row, 'unknown', {
@@ -5135,9 +5140,9 @@ function classifyDirectiveOutcome(db: any, row: any, options: any) {
         lease_until: leaseUntil,
       });
     }
-    const leaseExpired: any = leaseUntil ? Date.parse(leaseUntil) <= options.nowMs : false;
-    const oldEnough: any = deliveryAgeMinutes >= options.deliveryStaleMinutes;
-    const waitingStatus: any = row.delivery_status === 'leased' ? 'leased' : 'pending';
+    const leaseExpired = leaseUntil ? Date.parse(leaseUntil) <= options.nowMs : false;
+    const oldEnough = deliveryAgeMinutes >= options.deliveryStaleMinutes;
+    const waitingStatus = row.delivery_status === 'leased' ? 'leased' : 'pending';
     return baseOutcome(row, leaseExpired || oldEnough ? 'delivery_stale' : waitingStatus, {
       reason: leaseExpired ? 'lease_expired_without_receipt' : oldEnough ? 'delivery_without_receipt_past_threshold' : 'awaiting_receipt',
       task_id: taskRef,
@@ -5176,8 +5181,8 @@ function classifyDirectiveOutcome(db: any, row: any, options: any) {
   }
 
   const acceptedAt: any = ['carrier_accepted', 'accepted'].includes(triage?.status) ? triage.triaged_at : null;
-  const actionAgeMinutes: any = minutesBetween(acceptedAt ?? receiptAt ?? createdAt, options.nowIso);
-  const waitingStatus: any = acceptedAt && actionAgeMinutes < options.actionStaleMinutes ? 'carrier_accepted' : 'received';
+  const actionAgeMinutes = minutesBetween(acceptedAt ?? receiptAt ?? createdAt, options.nowIso);
+  const waitingStatus = acceptedAt && actionAgeMinutes < options.actionStaleMinutes ? 'carrier_accepted' : 'received';
   const staleReason: any = acceptedAt
     ? 'carrier_accepted_without_directive_linked_task_outcome_past_threshold'
     : 'receipt_without_directive_linked_task_outcome_past_threshold';
@@ -5208,14 +5213,14 @@ function latestDirectiveOutcome(db: any, directiveId: any, loopId: any) {
 }
 
 function recordOutcomeForClassification(store: any, classification: any, { nowIso = new Date().toISOString() }: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions(asRecord(arguments[2]));
+  const siteLoopConfig = siteLoopConfigFromOptions(asRecord(arguments[2]));
   if (!classification?.directive_id || classification.status === 'unknown') return null;
   if (classification.status === 'superseded') {
     const existing: any = latestDirectiveOutcome(store.db, classification.directive_id, siteLoopConfig.loop_id);
     if (existing?.outcome === 'superseded') return null;
   }
-  const observedAt: any = stringValue(nowIso, new Date().toISOString());
-  const eventAt: any = stringValue(
+  const observedAt = stringValue(nowIso, new Date().toISOString());
+  const eventAt = stringValue(
     classification.reported_at ?? classification.triaged_at ?? classification.receipt_at ?? classification.created_at,
     observedAt,
   );
@@ -5236,16 +5241,16 @@ function recordOutcomeForClassification(store: any, classification: any, { nowIs
 }
 
 export function reconcileLoopEscalations(siteRoot: any, store: any, outcome: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const runId: any = stringValue(options.runId);
-  const nowIso: any = stringValue(options.nowIso, new Date().toISOString());
+  const siteLoopConfig = configForSite(siteRoot);
+  const runId = stringValue(options.runId);
+  const nowIso = stringValue(options.nowIso, new Date().toISOString());
   const created: any[] = [];
   const cleared: any[] = [];
   const observed: any[] = [];
   const classifications: any = Array.isArray(outcome.classifications) ? outcome.classifications.map((item: any) => asRecord(item)) : [];
   for (const item of classifications) {
-    const directiveId: any = stringValue(item.directive_id);
-    const classificationStatus: any = stringValue(item.status);
+    const directiveId = stringValue(item.directive_id);
+    const classificationStatus = stringValue(item.status);
     const observation: any = recordLoopClassificationObservation(store, {
       loopId: siteLoopConfig.loop_id,
       directiveId,
@@ -5254,7 +5259,7 @@ export function reconcileLoopEscalations(siteRoot: any, store: any, outcome: any
       at: nowIso,
     });
     observed.push(observation);
-    const ineligible: any = directiveTaskNoLongerEligibleForResidentRecovery(store.db, item, {
+    const ineligible = directiveTaskNoLongerEligibleForResidentRecovery(store.db, item, {
       nowIso,
       actionStaleMinutes: Number(options.actionStaleMinutes ?? options.action_stale_minutes ?? 30),
     });
@@ -5262,7 +5267,7 @@ export function reconcileLoopEscalations(siteRoot: any, store: any, outcome: any
       for (const classification of ['delivery_stale', 'action_stale', 'blocked_no_carrier', 'stale_busy_carrier']) {
         const existing: any = getLoopEscalation(store, { loopId: siteLoopConfig.loop_id, directiveId, classification });
         if (existing?.status !== 'opened') continue;
-        const attentionId: any = stringValue(existing.envelope_id ?? existing.escalation_id);
+        const attentionId = stringValue(existing.envelope_id ?? existing.escalation_id);
         const ack: any = acknowledgeLoopAttention(store, {
           attentionId,
           reason: `cleared_by_ineligible_task:${ineligible.reason}`,
@@ -5277,7 +5282,7 @@ export function reconcileLoopEscalations(siteRoot: any, store: any, outcome: any
       for (const classification of ['delivery_stale', 'action_stale', 'blocked_no_carrier', 'stale_busy_carrier']) {
         const existing: any = getLoopEscalation(store, { loopId: siteLoopConfig.loop_id, directiveId, classification });
         if (existing?.status === 'opened') {
-          const attentionId: any = stringValue(existing.envelope_id ?? existing.escalation_id);
+          const attentionId = stringValue(existing.envelope_id ?? existing.escalation_id);
           const ack: any = acknowledgeLoopAttention(store, {
             attentionId,
             reason: `cleared_by_directive_outcome:${classificationStatus}`,
@@ -5330,7 +5335,7 @@ export function reconcileLoopEscalations(siteRoot: any, store: any, outcome: any
 }
 
 function directiveTaskNoLongerEligibleForResidentRecovery(db: any, item: any, { nowIso, actionStaleMinutes }: any) {
-  const taskId: any = stringValue(item?.task_id);
+  const taskId = stringValue(item?.task_id);
   if (!taskId) return null;
   const row: any = db.prepare(`
     SELECT status, updated_at
@@ -5338,7 +5343,7 @@ function directiveTaskNoLongerEligibleForResidentRecovery(db: any, item: any, { 
     WHERE task_id = ?
   `).get(taskId);
   if (!row) return null;
-  const status: any = stringValue(row.status);
+  const status = stringValue(row.status);
   if (['closed', 'confirmed', 'deferred', 'cancelled', 'abandoned', 'rejected'].includes(status)) {
     return { reason: `task_status_${status}` };
   }
@@ -5354,7 +5359,7 @@ function loopAttentionSeverity(siteRoot: any, classification: any) {
 }
 
 function probeTaskLifecycleMcpTools(siteRoot: any, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)) {
-  const configPath: any = join(siteRoot, siteLoopConfig.mcp.task_lifecycle_config_path);
+  const configPath = join(siteRoot, siteLoopConfig.mcp.task_lifecycle_config_path);
   const config: any = readJson(configPath);
   const server: any = config?.mcpServers?.[siteLoopConfig.mcp.task_lifecycle_server_key] ?? null;
   const entrypoint: any = Array.isArray(server?.args)
@@ -5363,8 +5368,8 @@ function probeTaskLifecycleMcpTools(siteRoot: any, siteLoopConfig: SiteLoopConfi
   if (!server || !entrypoint) {
     return { status: 'missing_config', config_path: configPath, tools: [] };
   }
-  const resolvedEntrypoint: any = String(entrypoint).replace('{site_root}', siteRoot);
-  const input: any = [
+  const resolvedEntrypoint = String(entrypoint).replace('{site_root}', siteRoot);
+  const input = [
     JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2026-04-18', capabilities: {}, clientInfo: { name: 'resident-capability-probe', version: '1.0' } } }),
     JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
     '',
@@ -5393,7 +5398,7 @@ function probeTaskLifecycleMcpTools(siteRoot: any, siteLoopConfig: SiteLoopConfi
   }
 }
 function parseResidentLaunchResultOutput(stdout: unknown) {
-  const raw: any = String(stdout ?? '').trim();
+  const raw = String(stdout ?? '').trim();
   const marker: any = raw.indexOf('\nagent_start_result_end:');
   const jsonText: any = marker >= 0 ? raw.slice(0, marker).trimEnd() : raw;
   const trailing: any = marker >= 0 ? raw.slice(marker + 1).trim() : '';
@@ -5411,7 +5416,7 @@ export function residentAuthorityRecoveryFromLaunchOutput(stdout: unknown) {
     return null;
   }
   if (launchResult?.reason_code !== 'session_authority_already_active') return null;
-  const sessionId: any = String(launchResult.session_id ?? '').trim();
+  const sessionId = String(launchResult.session_id ?? '').trim();
   if (!sessionId) return null;
   return {
     reason_code: launchResult.reason_code,
@@ -5421,25 +5426,25 @@ export function residentAuthorityRecoveryFromLaunchOutput(stdout: unknown) {
 }
 
 export function appendResidentResumeSessionArgs(args: string[], materializeCommand: string, sessionId: string): string[] {
-  const normalized: any = args.map(String);
+  const normalized = args.map(String);
   if (normalized.includes('-ResumeSession') || normalized.includes('--resume-session')) return normalized;
-  const invocation: any = `${materializeCommand} ${normalized.join(' ')}`.toLowerCase();
+  const invocation = `${materializeCommand} ${normalized.join(' ')}`.toLowerCase();
   const powershell: any = invocation.includes('.ps1') || /(^|[\\/])pwsh(?:\.exe)?(?:\s|$)/.test(String(materializeCommand).toLowerCase());
   return [...normalized, powershell ? '-ResumeSession' : '--resume-session', sessionId];
 }
 
 async function defaultResidentLaunchRunner(siteRoot: any, siteLoopConfig: SiteLoopConfig = configForSite(siteRoot)) {
   const launchConfig: any = siteLoopConfig.resident_launch;
-  const launchOptions: any = asRecord(launchConfig);
-  const materializationCommandConfig: any = asRecord(launchOptions.materialization_command);
-  const hasMaterializationCommand: any = typeof materializationCommandConfig.command === 'string'
+  const launchOptions = asRecord(launchConfig);
+  const materializationCommandConfig = asRecord(launchOptions.materialization_command);
+  const hasMaterializationCommand = typeof materializationCommandConfig.command === 'string'
     && Array.isArray(materializationCommandConfig.args);
-  const launcher: any = hasMaterializationCommand ? null : join(siteRoot, launchConfig.launcher_path);
-  const host: any = typeof launchConfig.host_path === 'string' ? join(siteRoot, launchConfig.host_path) : null;
-  const materializationTimeoutMs: any = positiveDurationMs(launchOptions.materialization_timeout_ms, 30000);
-  const hostReadyTimeoutMs: any = positiveDurationMs(launchOptions.host_ready_timeout_ms, 15000);
-  const hostReadyPollMs: any = positiveDurationMs(launchOptions.host_ready_poll_ms, 500);
-  const operatorSurface: any = stringValue(launchOptions.operator_surface, 'agent-web-ui');
+  const launcher = hasMaterializationCommand ? null : join(siteRoot, launchConfig.launcher_path);
+  const host = typeof launchConfig.host_path === 'string' ? join(siteRoot, launchConfig.host_path) : null;
+  const materializationTimeoutMs = positiveDurationMs(launchOptions.materialization_timeout_ms, 30000);
+  const hostReadyTimeoutMs = positiveDurationMs(launchOptions.host_ready_timeout_ms, 15000);
+  const hostReadyPollMs = positiveDurationMs(launchOptions.host_ready_poll_ms, 500);
+  const operatorSurface = stringValue(launchOptions.operator_surface, 'agent-web-ui');
   if (!hasMaterializationCommand && launcher && !existsSync(launcher)) {
     return { status: 'failed', reason: 'agent_start_launcher_missing', launcher };
   }
@@ -5448,7 +5453,7 @@ async function defaultResidentLaunchRunner(siteRoot: any, siteLoopConfig: SiteLo
   }
 
   const isPowerShellLauncher: any = launcher ? launcher.toLowerCase().endsWith('.ps1') : false;
-  const materializeCommand: any = hasMaterializationCommand
+  const materializeCommand = hasMaterializationCommand
     ? normalizeMaterializationCommand(String(materializationCommandConfig.command))
     : isPowerShellLauncher ? 'pwsh' : process.execPath;
   let materializeArgs: any = hasMaterializationCommand
@@ -5497,11 +5502,11 @@ async function defaultResidentLaunchRunner(siteRoot: any, siteLoopConfig: SiteLo
     env: materializeEnvironment,
   });
   let materialized: any = await spawnMaterialization(materializeArgs);
-  let authorityRecovery: any = null;
+  let authorityRecovery = null;
   if ((materialized.status ?? 1) !== 0) {
     const refusedAuthority: any = residentAuthorityRecoveryFromLaunchOutput(materialized.stdout);
     if (refusedAuthority) {
-      const recoveryArgs: any = appendResidentResumeSessionArgs(materializeArgs, materializeCommand, refusedAuthority.session_id);
+      const recoveryArgs = appendResidentResumeSessionArgs(materializeArgs, materializeCommand, refusedAuthority.session_id);
       const initialAttempt: any = {
         args: materializeArgs,
         exit_code: materialized.status ?? null,
@@ -5539,7 +5544,7 @@ async function defaultResidentLaunchRunner(siteRoot: any, siteLoopConfig: SiteLo
   if (!carrierSessionId) {
     return { status: 'failed', reason: 'agent_start_materialization_missing_carrier_session', launcher, materialize_command: materializeCommand, launch_result: launchResult, authority_recovery: authorityRecovery };
   }
-  const sessionDir: any = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
+  const sessionDir = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
   const runtimeArgs: any = Array.isArray(launchResult.runtime_args) ? launchResult.runtime_args.map(String) : null;
   const controlFlagIndex: any = runtimeArgs ? runtimeArgs.indexOf('--control-jsonl') : -1;
   const controlPath: any = (controlFlagIndex >= 0 && runtimeArgs ? runtimeArgs[controlFlagIndex + 1] : null)
@@ -5547,10 +5552,10 @@ async function defaultResidentLaunchRunner(siteRoot: any, siteLoopConfig: SiteLo
     ?? join(sessionDir, 'control.jsonl');
   mkdirSync(sessionDir, { recursive: true });
   writeFileSync(controlPath, '', { flag: 'a' });
-  const stdoutPath: any = join(sessionDir, 'resident-launch.stdout.log');
-  const stderrPath: any = join(sessionDir, 'resident-launch.stderr.log');
-  const stdoutFd: any = openSync(stdoutPath, 'a');
-  const stderrFd: any = openSync(stderrPath, 'a');
+  const stdoutPath = join(sessionDir, 'resident-launch.stdout.log');
+  const stderrPath = join(sessionDir, 'resident-launch.stderr.log');
+  const stdoutFd = openSync(stdoutPath, 'a');
+  const stderrFd = openSync(stderrPath, 'a');
   const childArgs: any = runtimeArgs ?? [
     host ?? '',
     '--site-root',
@@ -5698,16 +5703,16 @@ export function processLaunchRequiredEnvironment(requiredEnvironment: unknown): 
 }
 
 function isRedactedEnvironmentValue(value: string): boolean {
-  const trimmed: any = value.trim();
+  const trimmed = value.trim();
   return trimmed === '<set>' || /^<set:\d+>$/.test(trimmed) || trimmed === '<redacted>';
 }
 
 async function waitForResidentCarrierLive(siteRoot: any, carrierSessionId: any, options: SiteLoopPayload = {}) {
-  const timeoutMs: any = Math.max(0, Number(options.timeoutMs ?? options.timeout_ms ?? 15000));
-  const pollMs: any = Math.max(100, Number(options.pollMs ?? options.poll_ms ?? 500));
+  const timeoutMs = Math.max(0, Number(options.timeoutMs ?? options.timeout_ms ?? 15000));
+  const pollMs = Math.max(100, Number(options.pollMs ?? options.poll_ms ?? 500));
   const deadline: any = Date.now() + timeoutMs;
-  let attempts: any = 0;
-  let last: any = null;
+  let attempts = 0;
+  let last = null;
   do {
     attempts += 1;
     last = isResidentCarrierLive(siteRoot, carrierSessionId, { staleAfterMs: 120000 });
@@ -5721,11 +5726,11 @@ async function waitForResidentCarrierLive(siteRoot: any, carrierSessionId: any, 
 }
 
 function writeOperatorAttentionEnvelope(siteRoot: any, classification: any, { runId, nowIso }: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const envelopeId: any = `operator_attention_${safeFileToken(classification.directive_id)}_${safeFileToken(classification.status)}`;
-  const dir: any = join(siteRoot, '.ai', 'operator-attention');
+  const siteLoopConfig = configForSite(siteRoot);
+  const envelopeId = `operator_attention_${safeFileToken(classification.directive_id)}_${safeFileToken(classification.status)}`;
+  const dir = join(siteRoot, '.ai', 'operator-attention');
   mkdirSync(dir, { recursive: true });
-  const path: any = join(dir, `${envelopeId}.json`);
+  const path = join(dir, `${envelopeId}.json`);
   if (!existsSync(path)) {
     writeFileSync(path, JSON.stringify({
       schema: 'narada.inbox_envelope.v1',
@@ -5750,11 +5755,11 @@ function writeOperatorAttentionEnvelope(siteRoot: any, classification: any, { ru
 }
 
 function retireResidentCarrier(siteRoot: any, carrierSessionId: any, { reason, at }: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteLoopConfig = configForSite(siteRoot);
   if (!carrierSessionId) return { status: 'skipped', reason: 'carrier_session_id_missing' };
-  const dir: any = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
+  const dir = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId);
   mkdirSync(dir, { recursive: true });
-  const path: any = join(dir, 'retired.json');
+  const path = join(dir, 'retired.json');
   const record: any = {
     schema: schemaName(siteLoopConfig, 'resident_carrier_retirement'),
     status: 'retired',
@@ -5767,23 +5772,23 @@ function retireResidentCarrier(siteRoot: any, carrierSessionId: any, { reason, a
 }
 
 function residentAgentCliStartCommand(siteRoot: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
+  const siteLoopConfig = configForSite(siteRoot);
   return `pwsh -NoExit -Command "Set-Location -LiteralPath '${siteRoot}'; ${residentAgentCliCommand(siteRoot, siteLoopConfig)}"`;
 }
 
 function readCarrierRetirement(siteRoot: any, carrierSessionId: any) {
   if (!carrierSessionId) return null;
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const path: any = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'retired.json');
+  const siteLoopConfig = configForSite(siteRoot);
+  const path = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'retired.json');
   return readJson(path);
 }
 
 function isResidentCarrierLive(siteRoot: any, carrierSessionId: any, options: SiteLoopPayload = {}) {
   if (!carrierSessionId) return { live: false, reason: 'carrier_session_id_missing' };
-  const staleAfterMs: any = Number(options.staleAfterMs ?? options.stale_after_ms ?? 30000);
-  const processProbeTimeoutMs: any = positiveDurationMs(options.processProbeTimeoutMs ?? options.process_probe_timeout_ms, 3000);
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const processPatternExpression: any = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
+  const staleAfterMs = Number(options.staleAfterMs ?? options.stale_after_ms ?? 30000);
+  const processProbeTimeoutMs = positiveDurationMs(options.processProbeTimeoutMs ?? options.process_probe_timeout_ms, 3000);
+  const siteLoopConfig = configForSite(siteRoot);
+  const processPatternExpression = commandLinePatternExpression(siteLoopConfig.resident_runtime.process_probe_patterns);
   const heartbeat: any = readCarrierHeartbeat(siteRoot, carrierSessionId, staleAfterMs);
   if (heartbeat.status === 'stopped') {
     return {
@@ -5821,7 +5826,7 @@ function isResidentCarrierLive(siteRoot: any, carrierSessionId: any, options: Si
       session_readiness: sessionReadiness,
     };
   }
-  const processIds: any = String(result.stdout ?? '').trim().split(',').map((value: any) => Number(value.trim())).filter((value: any) => Number.isInteger(value) && value > 0);
+  const processIds = String(result.stdout ?? '').trim().split(',').map((value: any) => Number(value.trim())).filter((value: any) => Number.isInteger(value) && value > 0);
   const count: any = processIds.length;
   if (heartbeat.fresh) {
     return {
@@ -5841,8 +5846,8 @@ function isResidentCarrierLive(siteRoot: any, carrierSessionId: any, options: Si
 }
 
 function readCarrierHeartbeat(siteRoot: any, carrierSessionId: any, staleAfterMs: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const path: any = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'heartbeat.json');
+  const siteLoopConfig = configForSite(siteRoot);
+  const path = join(configuredSessionRoot(siteRoot, siteLoopConfig), carrierSessionId, 'heartbeat.json');
   return readCarrierHeartbeatRecord(path, carrierSessionId, staleAfterMs);
 }
 
@@ -5856,7 +5861,7 @@ function readJson(path: any) {
 }
 
 function writeJsonAtomically(path: any, value: any) {
-  const tempPath: any = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
     renameSync(tempPath, path);
@@ -5940,7 +5945,7 @@ function latestDirectiveLinkedTaskReportAfter(db: any, taskId: any, afterIso: an
 }
 
 function classifyTaskReportProofMode(report: any) {
-  const haystack: any = [
+  const haystack = [
     report?.summary,
     report?.changed_files_json,
     report?.verification_json,
@@ -5953,8 +5958,8 @@ function classifyTaskReportProofMode(report: any) {
 
 function reportMentionsDirective(report: any, directiveId: any) {
   if (report?.directive_id && String(report.directive_id) === String(directiveId)) return true;
-  const token: any = `directive_id:${directiveId}`;
-  const haystack: any = [
+  const token = `directive_id:${directiveId}`;
+  const haystack = [
     report?.summary,
     report?.changed_files_json,
     report?.verification_json,
@@ -5963,9 +5968,9 @@ function reportMentionsDirective(report: any, directiveId: any) {
 }
 
 function isResidentDirectiveTarget(directive: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = siteLoopConfigFromOptions(options);
-  const residentAgentId: any = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
-  const residentRole: any = stringValue(options.role, siteLoopConfig.resident.role);
+  const siteLoopConfig = siteLoopConfigFromOptions(options);
+  const residentAgentId = stringValue(options.agentId, siteLoopConfig.resident.agent_id);
+  const residentRole = stringValue(options.role, siteLoopConfig.resident.role);
   const target: any = directive?.target;
   if (!target) return false;
   if (target.kind === 'agent' && target.id === residentAgentId) return true;
@@ -5984,8 +5989,8 @@ function escapeRegExp(value: any) {
 }
 
 function minutesBetween(fromIso: any, toIso: any) {
-  const from: any = Date.parse(fromIso ?? '');
-  const to: any = Date.parse(toIso ?? '');
+  const from = Date.parse(fromIso ?? '');
+  const to = Date.parse(toIso ?? '');
   if (!Number.isFinite(from) || !Number.isFinite(to)) return 0;
   return Math.max(0, (to - from) / 60000);
 }
@@ -6058,8 +6063,8 @@ function directiveIdsFromRun(run: any) {
 
 function fixtureDirectiveIds(siteRoot: any, envelopeId: any) {
   if (!envelopeId) return [];
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     const rows: any = lifecycleStore.db.prepare(`
@@ -6078,9 +6083,9 @@ function mailboxProofDirectiveIds(siteRoot: any, run: any, beforeDirectiveIds: u
   const before: any = new Set(beforeDirectiveIds.map(String));
   const ids: any = directiveIdsFromRun(run).filter((id: any) => !before.has(id));
   if (ids.length === 0) return [];
-  const controlledSource: any = options.controlledSource == null ? null : String(options.controlledSource);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const controlledSource = options.controlledSource == null ? null : String(options.controlledSource);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     return ids.filter((id: any) => {
@@ -6113,8 +6118,8 @@ function directiveMatchesControlledSource(db: any, directive: any, controlledSou
 }
 
 function controlledMailboxSourceStatus(siteRoot: any, controlledSource: any, options: SiteLoopPayload = {}) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const sourceRef: any = controlledSource == null ? null : String(controlledSource);
+  const siteLoopConfig = configForSite(siteRoot);
+  const sourceRef = controlledSource == null ? null : String(controlledSource);
   if (!sourceRef) {
     return {
       schema: schemaName(siteLoopConfig, 'controlled_mailbox_source_status'),
@@ -6125,12 +6130,12 @@ function controlledMailboxSourceStatus(siteRoot: any, controlledSource: any, opt
     };
   }
   const matchingEnvelopes: any[] = [];
-  const inboxDir: any = join(siteRoot, '.ai', 'inbox-envelopes');
+  const inboxDir = join(siteRoot, '.ai', 'inbox-envelopes');
   if (existsSync(inboxDir)) {
     for (const name of readdirSafe(inboxDir).filter((entry: any) => entry.endsWith('.json'))) {
-      const path: any = join(inboxDir, name);
+      const path = join(inboxDir, name);
       const envelope: any = readJson(path);
-      const refs: any = [
+      const refs = [
         envelope?.envelope_id,
         envelope?.id,
         envelope?.source?.ref,
@@ -6149,8 +6154,8 @@ function controlledMailboxSourceStatus(siteRoot: any, controlledSource: any, opt
       }
     }
   }
-  const matchedDirectiveIds: any = Array.isArray(options.directiveIds) ? options.directiveIds.map(String) : [];
-  const runSummary: any = asRecord(asRecord(options.run).summary);
+  const matchedDirectiveIds = Array.isArray(options.directiveIds) ? options.directiveIds.map(String) : [];
+  const runSummary = asRecord(asRecord(options.run).summary);
   return {
     schema: schemaName(siteLoopConfig, 'controlled_mailbox_source_status'),
     status: matchedDirectiveIds.length > 0
@@ -6174,7 +6179,7 @@ function directiveLooksSyntheticFixture(siteRoot: any, directive: any) {
     ?? null;
   if (!sourceId) return false;
   if (String(sourceId).startsWith('env_codex-') || String(sourceId).startsWith('env_resident-e2e')) return true;
-  const inboxDir: any = join(siteRoot, '.ai', 'inbox-envelopes');
+  const inboxDir = join(siteRoot, '.ai', 'inbox-envelopes');
   if (!existsSync(inboxDir)) return false;
   for (const name of readdirSafe(inboxDir).filter((entry: any) => entry.endsWith('.json') && entry.includes(String(sourceId)))) {
     const envelope: any = readJson(join(inboxDir, name));
@@ -6184,9 +6189,9 @@ function directiveLooksSyntheticFixture(siteRoot: any, directive: any) {
 }
 
 function allResidentDirectiveIds(siteRoot: any) {
-  const siteLoopConfig: any = configForSite(siteRoot);
-  const lifecycleStore: any = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
-  const directiveStore: any = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
+  const siteLoopConfig = configForSite(siteRoot);
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write: false });
+  const directiveStore = new SqliteDirectiveRuntimeStore({ db: lifecycleStore.db });
   directiveStore.initSchema();
   try {
     const rows: any = lifecycleStore.db.prepare(`
@@ -6275,7 +6280,7 @@ function publicStep(step: any) {
 }
 
 function makeRunId() {
-  const stamp: any = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   return `site_loop_run_${stamp}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
 }
 
@@ -6287,7 +6292,7 @@ function errorToPayload(error: any) {
 }
 
 function parseJsonOutput(text: any, fallback: any) {
-  const trimmed: any = String(text ?? '').trim();
+  const trimmed = String(text ?? '').trim();
   if (!trimmed) return fallback;
   try {
     return JSON.parse(trimmed);
@@ -6297,7 +6302,7 @@ function parseJsonOutput(text: any, fallback: any) {
 }
 function parseArgs(argv: any) {
   const parsed: SiteLoopPayload = { cwd: process.cwd() };
-  for (let i: any = 0; i < argv.length; i++) {
+  for (let i = 0; i < argv.length; i++) {
     const arg: any = argv[i];
     if (arg === '--dry-run') parsed.dryRun = true;
     else if (arg === '--supervise') parsed.supervise = true;
@@ -6327,11 +6332,11 @@ function sameEntrypointPath(left: any, right: any) {
   }
 }
 
-const isEntrypoint: any = process.argv[1]
+const isEntrypoint = process.argv[1]
   ? sameEntrypointPath(fileURLToPath(import.meta.url), process.argv[1]) || import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
 if (isEntrypoint) {
-  const args: any = parseArgs(process.argv.slice(2));
+  const args = parseArgs(process.argv.slice(2));
   const command: any = args.supervise === true ? superviseSiteLoop : runSiteLoop;
   command(args.cwd, args)
     .then((result: any) => {

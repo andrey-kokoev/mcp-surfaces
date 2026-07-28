@@ -9,9 +9,22 @@ test('speaks the MCP initialize and tools/list contract', async () => {
   assert.equal((initialized?.result as { serverInfo: { name: string } }).serverInfo.name, 'catalog-observation-mcp');
 
   const listed = await handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, state);
-  const tools = (listed?.result as { tools: Array<{ name: string }> }).tools;
+  const tools = (listed?.result as {
+    tools: Array<{
+      name: string;
+      annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean };
+    }>;
+  }).tools;
   assert.deepEqual(tools.map(({ name }) => name), [
     'catalog_observation_guidance',
     'catalog_observation_observe',
   ]);
+  for (const tool of tools) {
+    assert.deepEqual(tool.annotations, {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    });
+  }
 });

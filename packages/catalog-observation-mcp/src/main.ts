@@ -29,6 +29,14 @@ type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+};
+
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
 };
 
 const TOOLS: ToolDefinition[] = [
@@ -36,6 +44,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'catalog_observation_guidance',
     description: 'Explain the read-only catalog observation boundary and its credential-separation rules.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: READ_ONLY_ANNOTATIONS,
   },
   {
     name: 'catalog_observation_observe',
@@ -54,11 +63,16 @@ const TOOLS: ToolDefinition[] = [
       required: ['provider_id', 'observed_at'],
       additionalProperties: false,
     },
+    annotations: READ_ONLY_ANNOTATIONS,
   },
 ];
 
 export function listTools(): ToolDefinition[] {
-  return TOOLS.map((tool) => ({ ...tool, inputSchema: { ...tool.inputSchema } }));
+  return TOOLS.map((tool) => ({
+    ...tool,
+    inputSchema: { ...tool.inputSchema },
+    annotations: tool.annotations ? { ...tool.annotations } : undefined,
+  }));
 }
 
 const GUIDANCE = {
@@ -146,7 +160,7 @@ export async function handleRequest(
       serverInfo: { name: 'catalog-observation-mcp', version: '0.1.0' },
     });
   }
-  if (request.method === 'tools/list') return response(request.id, { tools: TOOLS });
+  if (request.method === 'tools/list') return response(request.id, { tools: listTools() });
   if (request.method !== 'tools/call') return errorResponse(request.id, -32601, `Method not found: ${request.method}`);
 
   const toolName = request.params?.name;
@@ -165,9 +179,9 @@ export async function handleRequest(
   return response(request.id, textResult(observation, observation.status === 'unavailable'));
 }
 
-type FramedInput = { body: string; consumed: number };
+type StdioInput = { body: string; consumed: number; framed: boolean };
 
-function readFrame(buffer: string): FramedInput | null {
+function readFrame(buffer: string): StdioInput | null {
   const separator = buffer.indexOf('\r\n\r\n');
   if (separator < 0) return null;
   const header = buffer.slice(0, separator);
@@ -177,21 +191,46 @@ function readFrame(buffer: string): FramedInput | null {
   const bodyStart = separator + 4;
   if (Buffer.byteLength(buffer.slice(bodyStart), 'utf8') < length) return null;
   const bodyBuffer = Buffer.from(buffer.slice(bodyStart), 'utf8');
-  return { body: bodyBuffer.subarray(0, length).toString('utf8'), consumed: bodyStart + bodyBuffer.subarray(0, length).toString('utf8').length };
+  const body = bodyBuffer.subarray(0, length).toString('utf8');
+  return { body, consumed: bodyStart + Buffer.byteLength(body, 'utf8'), framed: true };
+}
+
+function readJsonLine(buffer: string): StdioInput | null {
+  const newline = buffer.indexOf('\n');
+  if (newline < 0) return null;
+  return {
+    body: buffer.slice(0, newline).replace(/\r$/, '').trim(),
+    consumed: newline + 1,
+    framed: false,
+  };
+}
+
+function readNextInput(buffer: string): StdioInput | null {
+  const leadingWhitespace = buffer.match(/^\s*/)?.[0].length ?? 0;
+  const input = buffer.slice(leadingWhitespace);
+  if (input.length === 0) return null;
+  const parsed = /^Content-Length:/i.test(input)
+    ? readFrame(input)
+    : readJsonLine(input);
+  if (!parsed) return null;
+  return { ...parsed, consumed: parsed.consumed + leadingWhitespace };
 }
 
 export async function runStdioServer(state: CatalogObservationServerState): Promise<void> {
   let buffer = '';
   for await (const chunk of process.stdin) {
     buffer += chunk.toString();
-    let frame: FramedInput | null;
-    while ((frame = readFrame(buffer))) {
-      buffer = buffer.slice(frame.consumed);
-      const request = JSON.parse(frame.body) as JsonRpcRequest;
+    let input: StdioInput | null;
+    while ((input = readNextInput(buffer))) {
+      buffer = buffer.slice(input.consumed);
+      if (!input.body) continue;
+      const request = JSON.parse(input.body) as JsonRpcRequest;
       const result = await handleRequest(request, state);
       if (result === null) continue;
       const body = JSON.stringify(result);
-      process.stdout.write(`Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`);
+      process.stdout.write(input.framed
+        ? `Content-Length: ${Buffer.byteLength(body, 'utf8')}\r\n\r\n${body}`
+        : `${body}\n`);
     }
   }
 }

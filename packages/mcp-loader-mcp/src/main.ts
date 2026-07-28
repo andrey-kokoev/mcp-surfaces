@@ -1441,6 +1441,7 @@ const SHARED_SURFACE_REGISTRY: Record<string, { entrypoint: string; args: string
   'task-lifecycle': { entrypoint: `${MCP_SURFACES_ROOT}/task-lifecycle-mcp/dist/src/task-lifecycle/task-mcp-server.js`, args: ['--site-root', '{site_root}'] },
   'site-loop': { entrypoint: `${MCP_SURFACES_ROOT}/site-loop-mcp/dist/src/site-loop-mcp-server.js`, args: ['--site-root', '{site_root}'] },
   'agent-context': { entrypoint: `${MCP_SURFACES_ROOT}/agent-context-mcp/dist/src/main.js`, args: ['--site-root', '{site_root}'] },
+  'catalog-observation': { entrypoint: `${MCP_SURFACES_ROOT}/catalog-observation-mcp/dist/src/main.js`, args: [] },
   'worker-delegation': { entrypoint: `${MCP_SURFACES_ROOT}/worker-delegation-mcp/dist/src/main.js`, args: ['--allowed-root', '{site_root}', '--run-root', '{site_runtime_root}/worker-delegation'] },
   'delegated-task': { entrypoint: `${MCP_SURFACES_ROOT}/delegated-task-mcp/dist/src/main.js`, args: ['--task-root', '{site_root}', '--allowed-root', '{site_root}'] },
   'sop': { entrypoint: `${MCP_SURFACES_ROOT}/sop-mcp/dist/src/main.js`, args: ['--sop-root', '{site_root}', '--server-name', '{site_id}-sop'] },
