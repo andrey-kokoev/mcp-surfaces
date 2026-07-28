@@ -51,7 +51,7 @@ import {
   type HardCutoverTarget,
 } from './hard-cutover.js';
 import {
-  validateV2PredecessorRecords,
+  validateV2PredecessorForHardCutover,
   type V2PredecessorLaunch,
 } from './v2-predecessor.js';
 
@@ -1910,7 +1910,7 @@ function validateV2PredecessorCarrierRuntime(
   const manifestPath = resolve(MCP_LEGACY_RUNTIME_ROOT, 'workspace-artifact-manifest.json');
   const runtimeProxyEntrypoint = resolve(MCP_RUNTIME_PROXY_PACKAGE_ROOT, 'dist', 'src', 'main.js');
   const registrarEntrypoint = resolve(MCP_SURFACES_ROOT, 'mcp-registrar', 'dist', 'src', 'main.js');
-  if (!existsSync(configPath) || !existsSync(sidecarPath) || !existsSync(manifestPath)) {
+  if (!existsSync(configPath) || !existsSync(sidecarPath)) {
     throw diagnosticError(
       'registrar_v2_predecessor_unverifiable',
       'Runtime V2 predecessor records are incomplete.',
@@ -1918,7 +1918,6 @@ function validateV2PredecessorCarrierRuntime(
         carrier_id: carrier.carrier_id,
         config_path: configPath,
         sidecar_path: sidecarPath,
-        artifact_manifest_path: manifestPath,
       },
     );
   }
@@ -1939,10 +1938,9 @@ function validateV2PredecessorCarrierRuntime(
     }
   }
 
-  const manifest = readLegacyJson(manifestPath, 'workspace artifact manifest');
   const sidecar = readLegacyJson(sidecarPath, 'materialization generation sidecar');
   const root = carrierServerRoot(carrier.kind, currentStructured);
-  validateV2PredecessorRecords({
+  validateV2PredecessorForHardCutover({
     carrier_id: carrier.carrier_id,
     carrier_kind: carrier.kind,
     config_path: configPath,
@@ -1952,7 +1950,7 @@ function validateV2PredecessorCarrierRuntime(
     sidecar_path: sidecarPath,
     sidecar,
     manifest_path: manifestPath,
-    manifest,
+    manifest: {},
     runtime_proxy_entrypoint: runtimeProxyEntrypoint,
     registrar_entrypoint: registrarEntrypoint,
     workspace_root: MCP_WORKSPACE_ROOT,

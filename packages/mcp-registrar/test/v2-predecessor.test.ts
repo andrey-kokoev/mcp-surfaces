@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import {
   legacyMaterializationConfigFingerprint,
+  validateV2PredecessorForHardCutover,
   validateV2PredecessorRecords,
   type V2PredecessorRecords,
 } from '../src/v2-predecessor.js';
@@ -160,6 +161,19 @@ function assertRefused(
 }
 
 validateV2PredecessorRecords(fixture());
+
+const staleArtifactReferences = fixture();
+const { generation_fingerprint: _staleGenerationFingerprint, ...staleSidecarFields } = staleArtifactReferences.sidecar;
+const staleSidecarUnsigned = {
+  ...staleSidecarFields,
+  artifact_manifest_fingerprint: sha256('prior-workspace-manifest'),
+  registrar_fingerprint: sha256('prior-registrar-artifact'),
+};
+staleArtifactReferences.sidecar = {
+  ...staleSidecarUnsigned,
+  generation_fingerprint: sha256(JSON.stringify(staleSidecarUnsigned)),
+};
+validateV2PredecessorForHardCutover(staleArtifactReferences);
 
 const original = fixture();
 const unrelatedSettingChanged = original.config_content

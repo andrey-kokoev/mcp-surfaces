@@ -63,6 +63,29 @@ type PackageArtifactDeclaration = {
   build_script: string;
 };
 
+const ARTIFACT_RESOLUTION_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) return;
+      results[index] = await mapper(values[index]!, index);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, () => worker()),
+  );
+  return results;
+}
+
 function packageArtifactDeclaration(packageRoot: string): PackageArtifactDeclaration {
   const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
     narada?: { artifact?: Partial<PackageArtifactDeclaration> };
@@ -220,7 +243,10 @@ export async function prepareV3CarrierGeneration(input: {
   const launches = new Map<string, NormalizedCarrierLaunch>();
   const generationBindings = [];
 
-  for (const binding of input.bindings) {
+  const resolvedBindings = await mapWithConcurrency(
+    input.bindings,
+    ARTIFACT_RESOLUTION_CONCURRENCY,
+    async (binding) => {
     if (binding.descriptor.surface_id !== binding.surface_id) {
       throw new Error(`mcp_carrier_binding_descriptor_mismatch:${binding.server_key}`);
     }
@@ -245,6 +271,11 @@ export async function prepareV3CarrierGeneration(input: {
     if (!artifact.closure.entrypoints.includes(artifactEntrypoint)) {
       throw new Error(`mcp_carrier_artifact_entrypoint_missing:${binding.server_key}`);
     }
+      return { binding, artifactSelector, artifact, artifactEntrypoint };
+    },
+  );
+
+  for (const { binding, artifactSelector, artifact, artifactEntrypoint } of resolvedBindings) {
     const launch: NormalizedCarrierLaunch = {
       command: process.execPath,
       args: [

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -207,7 +207,14 @@ function assertLaunches(
   input: V2PredecessorRecords,
   artifacts: Map<string, ArtifactRecord>,
 ): void {
-  requireArtifact(artifacts, input.runtime_proxy_entrypoint, 'runtime_proxy');
+  assertLaunchShape(input);
+  for (const { server_key: serverKey, launch } of input.launches) {
+    const childEntrypoint = launchArgument(launch.args, '--entrypoint');
+    requireArtifact(artifacts, childEntrypoint!, `child:${serverKey}`);
+  }
+}
+
+function assertLaunchShape(input: V2PredecessorRecords): void {
   for (const { server_key: serverKey, launch } of input.launches) {
     const surfaceId = launchArgument(launch.args, '--surface-id');
     const childEntrypoint = launchArgument(launch.args, '--entrypoint');
@@ -241,15 +248,10 @@ function assertLaunches(
         },
       );
     }
-    requireArtifact(artifacts, childEntrypoint, `child:${serverKey}`);
   }
 }
 
-function assertSidecar(
-  input: V2PredecessorRecords,
-  manifestFingerprint: string,
-  registrarArtifact: ArtifactRecord,
-): void {
+function assertSidecarShape(input: V2PredecessorRecords): void {
   const { sidecar } = input;
   const unsigned = {
     schema: sidecar.schema,
@@ -283,10 +285,12 @@ function assertSidecar(
     })
     && typeof sidecar.artifact_manifest_path === 'string'
     && samePath(sidecar.artifact_manifest_path, input.manifest_path)
-    && sidecar.artifact_manifest_fingerprint === manifestFingerprint
+    && typeof sidecar.artifact_manifest_fingerprint === 'string'
+    && SHA256_PATTERN.test(sidecar.artifact_manifest_fingerprint)
     && typeof sidecar.registrar_entrypoint === 'string'
     && samePath(sidecar.registrar_entrypoint, input.registrar_entrypoint)
-    && sidecar.registrar_fingerprint === registrarArtifact.sha256
+    && typeof sidecar.registrar_fingerprint === 'string'
+    && SHA256_PATTERN.test(sidecar.registrar_fingerprint)
     && Number.isSafeInteger(sidecar.server_count)
     && sidecar.server_count === input.server_count
     && Number.isSafeInteger(sidecar.proxy_count)
@@ -309,6 +313,62 @@ function assertSidecar(
   }
 }
 
+function assertSidecar(
+  input: V2PredecessorRecords,
+  manifestFingerprint: string,
+  registrarArtifact: ArtifactRecord,
+): void {
+  assertSidecarShape(input);
+  if (
+    input.sidecar.artifact_manifest_fingerprint !== manifestFingerprint
+    || input.sidecar.registrar_fingerprint !== registrarArtifact.sha256
+  ) {
+    refuse(
+      'sidecar_not_self_consistent',
+      'The runtime V2 materialization generation is not self-consistent with the installed carrier config.',
+      {
+        carrier_id: input.carrier_id,
+        sidecar_path: resolve(input.sidecar_path),
+      },
+    );
+  }
+}
+
+export function validateV2PredecessorForHardCutover(
+  input: V2PredecessorRecords,
+): void {
+  if (
+    !Number.isSafeInteger(input.server_count)
+    || input.server_count < 0
+    || !Array.isArray(input.launches)
+  ) {
+    refuse(
+      'validation_input_invalid',
+      'Runtime V2 predecessor validation input is malformed.',
+    );
+  }
+  assertSidecarShape(input);
+  assertLaunchShape(input);
+  const workspaceRoot = resolve(input.workspace_root);
+  if (!pathInside(workspaceRoot, input.runtime_proxy_entrypoint)) {
+    refuse(
+      'runtime_proxy_outside_workspace',
+      'The runtime V2 predecessor proxy is outside the workspace authority.',
+      { runtime_proxy_entrypoint: resolve(input.runtime_proxy_entrypoint) },
+    );
+  }
+  for (const { server_key: serverKey, launch } of input.launches) {
+    const childEntrypoint = launchArgument(launch.args, '--entrypoint');
+    if (childEntrypoint === null || !pathInside(workspaceRoot, childEntrypoint)) {
+      refuse(
+        'child_entrypoint_outside_workspace',
+        'A runtime V2 predecessor child is outside the workspace authority.',
+        { server_key: serverKey, child_entrypoint: childEntrypoint },
+      );
+    }
+  }
+}
+
 export function validateV2PredecessorRecords(input: V2PredecessorRecords): void {
   if (
     !Number.isSafeInteger(input.server_count)
@@ -328,4 +388,10 @@ export function validateV2PredecessorRecords(input: V2PredecessorRecords): void 
   );
   assertLaunches(input, artifacts);
   assertSidecar(input, fingerprint, registrarArtifact);
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath === ''
+    || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
 }
