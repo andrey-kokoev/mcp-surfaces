@@ -36,6 +36,7 @@ export function buildGuidanceResult(
       'Call operator_console_overlay_refresh after an external console URL or document change.',
       'Call operator_console_overlay_close to stop only the Operator Console overlay owned by this surface.',
       'Opening a local overlay establishes or verifies the Operator Console runtime before creating the window; use the returned diagnostics if readiness fails.',
+      'For a bounded startup through mcp-loader, pass timeout_ms inside the nested tool arguments; the loader adds its bounded grace window.',
       'Use Narada console status/stop/restart commands when an explicit runtime lifecycle operation is needed; this MCP surface delegates rather than owning that authority.',
     ],
     tool_preference: [
@@ -60,6 +61,7 @@ export function buildGuidanceResult(
       'If operator_console_overlay_entrypoint_not_found is returned, verify NARADA_ROOT points to the Narada checkout and restart the MCP surface.',
       'If the overlay is stale, call operator_console_overlay_close and then operator_console_overlay_open.',
       'If local readiness fails, inspect the returned runtime log_path and state_path before retrying; do not create a second console process by hand.',
+      'If the diagnostic reports corrupt router state, the canonical runtime quarantines the dead-owner state and retries once; preserve the recovery directory when submitting feedback.',
       'If the lifecycle result is unclear, inspect the returned state_directory and document_path rather than guessing.',
     ],
     boundaries: [

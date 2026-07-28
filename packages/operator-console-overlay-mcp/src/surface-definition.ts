@@ -9,7 +9,7 @@ const READ_ONLY_TOOLS = [
 export function surfaceDefinition(): DefinedSurface {
   return defineNativeSurface({
     surface_id: 'operator-console-overlay',
-    surface_version: '0.1.0',
+    surface_version: '0.2.0',
     package: '@narada2/operator-console-overlay-mcp',
     entrypoint: '{mcp_surfaces_root}/operator-console-overlay-mcp/dist/src/main.js',
     tools: listTools() as McpToolDefinition[],
@@ -26,6 +26,7 @@ export function surfaceDefinition(): DefinedSurface {
           'NARADA_WINDOW_SURFACE_OVERLAY_STATE_ROOT',
           'NARADA_OPERATOR_CONSOLE_URL',
           'NARADA_OPERATOR_ROUTER_URL',
+          'NARADA_OPERATOR_ROUTER_STATE_ROOT',
           'NARADA_OPERATOR_CONSOLE_HOST',
           'NARADA_OPERATOR_CONSOLE_PORT',
           'NARADA_OPERATOR_CONSOLE_RUNTIME_STATE_ROOT',

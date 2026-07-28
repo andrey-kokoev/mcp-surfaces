@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServerState, handleRequest, listTools } from '../src/main.js';
+import { createServerState, handleRequest, listTools, runOverlayCommand } from '../src/main.js';
 import { surfaceDefinition } from '../src/surface-definition.js';
 
 const root = mkdtempSync(join(tmpdir(), 'operator-console-overlay-mcp-'));
@@ -39,6 +39,20 @@ try {
   );
   assert.equal(surfaceDefinition().descriptor.projections[0]?.injection_scope, 'host');
   assert.equal(surfaceDefinition().descriptor.projections[0]?.default_injection, 'enabled');
+  const openTool = listTools().find((tool) => tool.name === 'operator_console_overlay_open') as any;
+  assert.equal(openTool.inputSchema.properties.timeout_ms.maximum, 120000);
+  if (process.platform === 'win32') {
+    const carrierState = createServerState({
+      naradaRoot: root,
+      overlayEntrypoint: entrypoint,
+    }, {
+      USERPROFILE: 'C:\\Users\\Carrier',
+      PATHEXT: '.CPL',
+    });
+    assert.equal(carrierState.env.LOCALAPPDATA, 'C:\\Users\\Carrier\\AppData\\Local');
+    assert.equal(carrierState.env.PATHEXT?.includes('.EXE'), true);
+    assert.equal(carrierState.env.NARADA_OPERATOR_ROUTER_STATE_ROOT, 'C:\\Users\\Carrier\\AppData\\Local\\Narada\\operator-router');
+  }
 
   const guidance = await ((handleRequest({
     jsonrpc: '2.0',
@@ -91,6 +105,22 @@ try {
     params: { name: 'operator_console_overlay_open', arguments: { url: 'file:///secret' } },
   }, state)) as any) as any;
   assert.equal((invalidUrl as any).error.data.code, 'operator_console_overlay_url_scheme_invalid');
+
+  const hangingEntrypoint = join(root, 'hanging-overlay.mjs');
+  writeFileSync(hangingEntrypoint, 'setTimeout(() => {}, 60000);\n');
+  const timeoutState = createServerState({
+    naradaRoot: root,
+    overlayEntrypoint: hangingEntrypoint,
+    stateRoot,
+    nodePath: process.execPath,
+  });
+  await assert.rejects(
+    runOverlayCommand('start', timeoutState, [], 100),
+    (error: any) => error.codeName === 'operator_console_overlay_command_timeout'
+      && error.details.timeout_ms === 100
+      && typeof error.details.process_cleanup === 'object'
+      && 'stderr' in error.details,
+  );
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

@@ -16,7 +16,11 @@ For a local URL, the canonical overlay package first asks `@narada2/operator-con
 - operator_console_overlay_refresh
 - operator_console_overlay_close
 
-Set NARADA_ROOT when the Narada checkout is not at the host default. The surface validates that the canonical overlay entrypoint remains inside that root. The overlay state root follows NARADA_WINDOW_SURFACE_OVERLAY_STATE_ROOT and the shared window-overlay-core default when unset.
+Set NARADA_ROOT when the Narada checkout is not at the host default. The surface validates that the canonical overlay entrypoint remains inside that root. The surface normalizes carrier environments that omit LOCALAPPDATA or have an incomplete PATHEXT; state defaults are under `%LOCALAPPDATA%\\Narada` (or the derived user-local AppData path) for the overlay, runtime, and router. Explicit NARADA_*_STATE_ROOT values still win.
+
+Lifecycle commands accept an optional `timeout_ms` from 100 through 120000. The same bound covers lazy entrypoint materialization and the canonical command. When called through mcp-loader, place it inside the nested arguments so the loader can add its bounded grace period. Timeout diagnostics include bounded stdout/stderr, state roots, environment discovery, and process-tree cleanup results.
+
+If the router state is malformed and its lock owner is not alive, Narada moves the corrupt `routes.json` and stale lock into a timestamped `recovery/corrupt-*` directory before retrying. A live or unreadable lock owner is never quarantined automatically.
 
 ## Verify
 

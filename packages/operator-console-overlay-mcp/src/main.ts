@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildGuidanceResult, guidanceToolDefinition } from './guidance.js';
@@ -9,7 +10,8 @@ const SERVER_NAME = 'operator-console-overlay-mcp';
 const SERVER_VERSION = '0.1.0';
 const PROTOCOL_VERSION = '2024-11-05';
 const DEFAULT_NARADA_ROOT = 'D:/code/narada';
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT_CHARS = 16_000;
 const COMMANDS = ['inspect', 'start', 'refresh', 'stop'] as const;
 const VISIBILITY_POLICIES = ['windows-terminal', 'always'] as const;
@@ -44,11 +46,13 @@ if (isMainModule()) {
   });
 }
 
-async function materializeOverlayEntrypoint(state: OperatorConsoleOverlayState): Promise<void> {
+async function materializeOverlayEntrypoint(state: OperatorConsoleOverlayState, timeoutMs: number): Promise<void> {
   const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   let stdout = '';
   let stderr = '';
   const exitCode = await new Promise<number>((resolveResult, rejectResult) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
     const child = spawn(pnpm, ['--filter', '@narada2/operator-console-overlay', 'build'], {
       cwd: state.naradaRoot,
       env: state.env,
@@ -59,9 +63,47 @@ async function materializeOverlayEntrypoint(state: OperatorConsoleOverlayState):
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
     child.stderr?.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
-    child.once('error', rejectResult);
-    child.once('close', (code) => resolveResult(code ?? 1));
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback();
+    };
+    child.once('error', (error) => finish(() => rejectResult(error)));
+    child.once('close', (code) => finish(() => resolveResult(code ?? 1)));
+    timer = setTimeout(() => {
+      finish(() => {
+        void terminateProcessTree(child, state.env).then((cleanup) => {
+          rejectResult(diagnosticError(
+            'operator_console_overlay_build_timeout',
+            'operator_console_overlay_build_timeout:' + timeoutMs,
+            {
+              command: 'build',
+              timeout_ms: timeoutMs,
+              stdout,
+              stderr,
+              process_cleanup: cleanup,
+              ...stateDiagnostics(state),
+            },
+          ));
+        }).catch((error) => {
+          rejectResult(diagnosticError(
+            'operator_console_overlay_build_timeout',
+            'operator_console_overlay_build_timeout:' + timeoutMs,
+            {
+              command: 'build',
+              timeout_ms: timeoutMs,
+              stdout,
+              stderr,
+              process_cleanup_error: error instanceof Error ? error.message : String(error),
+              ...stateDiagnostics(state),
+            },
+          ));
+        });
+      });
+    }, timeoutMs);
   }).catch((error) => {
+    if (error instanceof OperatorConsoleOverlayError) throw error;
     throw diagnosticError(
       'operator_console_overlay_build_failed',
       'operator_console_overlay_build_failed:' + (error instanceof Error ? error.message : String(error)),
@@ -93,8 +135,8 @@ export function createServerState(
     ?? join(naradaRoot, 'packages', 'operator-console-overlay', 'dist', 'cli.js'),
   ));
   assertUnderRoot(overlayEntrypoint, naradaRoot, 'operator_console_overlay_entrypoint_outside_narada_root');
-  const stateEnv = { ...env, NARADA_ROOT: env.NARADA_ROOT ?? naradaRoot };
-  const configuredStateRoot = options.stateRoot ?? options.state_root ?? env.NARADA_WINDOW_SURFACE_OVERLAY_STATE_ROOT;
+  const stateEnv = normalizeWindowsEnvironment({ ...env, NARADA_ROOT: env.NARADA_ROOT ?? naradaRoot });
+  const configuredStateRoot = options.stateRoot ?? options.state_root ?? stateEnv.NARADA_WINDOW_SURFACE_OVERLAY_STATE_ROOT;
   return {
     naradaRoot,
     overlayEntrypoint,
@@ -117,17 +159,22 @@ export function listTools(): JsonRecord[] {
       title: { type: 'string', description: 'Optional overlay title.' },
       visibility: { type: 'string', enum: [...VISIBILITY_POLICIES], default: 'windows-terminal', description: 'Overlay visibility policy.' },
       refresh_seconds: { type: 'integer', minimum: 1, maximum: 3600, default: 2, description: 'Document refresh interval in seconds.' },
+      timeout_ms: { type: 'integer', minimum: 100, maximum: MAX_TIMEOUT_MS, default: DEFAULT_TIMEOUT_MS, description: 'Bounded wait for the canonical runtime and overlay command.' },
     }, [], {
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
     }),
-    tool('operator_console_overlay_refresh', 'Request a document refresh for the existing Operator Console overlay.', {}, [], {
+    tool('operator_console_overlay_refresh', 'Request a document refresh for the existing Operator Console overlay.', {
+      timeout_ms: { type: 'integer', minimum: 100, maximum: MAX_TIMEOUT_MS, default: DEFAULT_TIMEOUT_MS, description: 'Bounded wait for the canonical overlay command.' },
+    }, [], {
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
     }),
-    tool('operator_console_overlay_close', 'Close the Narada Operator Console overlay owned by this surface.', {}, [], {
+    tool('operator_console_overlay_close', 'Close the Narada Operator Console overlay owned by this surface.', {
+      timeout_ms: { type: 'integer', minimum: 100, maximum: MAX_TIMEOUT_MS, default: DEFAULT_TIMEOUT_MS, description: 'Bounded wait for the canonical overlay command.' },
+    }, [], {
       readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
@@ -184,12 +231,14 @@ export async function runOverlayCommand(
   command: typeof COMMANDS[number],
   state: OperatorConsoleOverlayState,
   args: string[] = [],
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<JsonRecord> {
   if (!COMMANDS.includes(command)) {
     throw diagnosticError('operator_console_overlay_command_invalid', 'operator_console_overlay_command_invalid', { command });
   }
+  const effectiveTimeoutMs = normalizeCommandTimeout(timeoutMs);
   if (!existsSync(state.overlayEntrypoint) && command === 'start') {
-    await materializeOverlayEntrypoint(state);
+    await materializeOverlayEntrypoint(state, effectiveTimeoutMs);
   }
   if (!existsSync(state.overlayEntrypoint)) {
     throw diagnosticError(
@@ -217,13 +266,37 @@ export async function runOverlayCommand(
     };
     const fail = (error: unknown) => finish(() => rejectResult(error));
     timer = setTimeout(() => {
-      try { child.kill(); } catch {}
-      fail(diagnosticError(
-        'operator_console_overlay_command_timeout',
-        'operator_console_overlay_command_timeout:' + DEFAULT_TIMEOUT_MS,
-        { command, timeout_ms: DEFAULT_TIMEOUT_MS },
-      ));
-    }, DEFAULT_TIMEOUT_MS);
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      void terminateProcessTree(child, state.env).then((cleanup) => {
+        rejectResult(diagnosticError(
+          'operator_console_overlay_command_timeout',
+          'operator_console_overlay_command_timeout:' + effectiveTimeoutMs,
+          {
+            command,
+            timeout_ms: effectiveTimeoutMs,
+            stdout,
+            stderr,
+            process_cleanup: cleanup,
+            ...stateDiagnostics(state),
+          },
+        ));
+      }).catch((error) => {
+        rejectResult(diagnosticError(
+          'operator_console_overlay_command_timeout',
+          'operator_console_overlay_command_timeout:' + effectiveTimeoutMs,
+          {
+            command,
+            timeout_ms: effectiveTimeoutMs,
+            stdout,
+            stderr,
+            process_cleanup_error: error instanceof Error ? error.message : String(error),
+            ...stateDiagnostics(state),
+          },
+        ));
+      });
+    }, effectiveTimeoutMs);
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
@@ -232,7 +305,7 @@ export async function runOverlayCommand(
       fail(diagnosticError(
         'operator_console_overlay_process_error',
         'operator_console_overlay_process_error:' + error.message,
-        { command, stderr },
+        { command, stdout, stderr, ...stateDiagnostics(state) },
       ));
     });
     child.once('close', (exitCode) => {
@@ -241,7 +314,7 @@ export async function runOverlayCommand(
           rejectResult(diagnosticError(
             'operator_console_overlay_command_failed',
             'operator_console_overlay_command_failed:' + command,
-            { command, exit_code: exitCode, stdout, stderr },
+            { command, exit_code: exitCode, stdout, stderr, ...stateDiagnostics(state) },
           ));
           return;
         }
@@ -253,7 +326,7 @@ export async function runOverlayCommand(
           rejectResult(diagnosticError(
             'operator_console_overlay_result_invalid_json',
             'operator_console_overlay_result_invalid_json:' + (error instanceof Error ? error.message : String(error)),
-            { command, stdout, stderr },
+            { command, stdout, stderr, ...stateDiagnostics(state) },
           ));
         }
       });
@@ -300,10 +373,10 @@ async function callTool(
       result = await openOverlay(args, state);
       break;
     case 'operator_console_overlay_refresh':
-      result = wrapResult('refresh', 'refresh', await runOverlayCommand('refresh', state, stateRootArgs(state)), state);
+      result = wrapResult('refresh', 'refresh', await runOverlayCommand('refresh', state, stateRootArgs(state), normalizeCommandTimeout(args.timeout_ms)), state);
       break;
     case 'operator_console_overlay_close':
-      result = wrapResult('close', 'stop', await runOverlayCommand('stop', state, stateRootArgs(state)), state);
+      result = wrapResult('close', 'stop', await runOverlayCommand('stop', state, stateRootArgs(state), normalizeCommandTimeout(args.timeout_ms)), state);
       break;
     default:
       throw diagnosticError('unknown_tool', 'unknown_tool:' + name, { tool_name: name });
@@ -323,11 +396,12 @@ async function openOverlay(
   const title = normalizeText(args.title, 'title', 200);
   const visibility = normalizeVisibility(args.visibility);
   const refreshSeconds = normalizeRefreshSeconds(args.refresh_seconds);
+  const timeoutMs = normalizeCommandTimeout(args.timeout_ms);
   if (url) commandArgs.push('--url', url);
   if (title) commandArgs.push('--title', title);
   commandArgs.push('--visibility', visibility, '--refresh-seconds', String(refreshSeconds));
   if (state.stateRoot) commandArgs.push('--state-root', state.stateRoot);
-  return wrapResult('open', 'start', await runOverlayCommand('start', state, commandArgs), state);
+  return wrapResult('open', 'start', await runOverlayCommand('start', state, commandArgs, timeoutMs), state);
 }
 
 function wrapResult(
@@ -399,6 +473,97 @@ function normalizeRefreshSeconds(value: unknown): number {
     });
   }
   return refreshSeconds;
+}
+
+function normalizeCommandTimeout(value: unknown): number {
+  const timeoutMs = value === undefined || value === null ? DEFAULT_TIMEOUT_MS : Number(value);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > MAX_TIMEOUT_MS) {
+    throw diagnosticError('operator_console_overlay_timeout_invalid', 'operator_console_overlay_timeout_invalid', {
+      minimum: 100,
+      maximum: MAX_TIMEOUT_MS,
+      received: value,
+    });
+  }
+  return timeoutMs;
+}
+
+function defaultLocalAppDataRoot(env: NodeJS.ProcessEnv): string {
+  return env.LOCALAPPDATA?.trim()
+    || join(env.USERPROFILE?.trim() || env.HOME?.trim() || homedir(), 'AppData', 'Local');
+}
+
+function normalizeWindowsEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const normalized = { ...env };
+  if (process.platform !== 'win32') return normalized;
+  normalized.LOCALAPPDATA ||= defaultLocalAppDataRoot(normalized);
+  const extensions = (normalized.PATHEXT ?? '').split(';').map((value) => value.trim().toUpperCase()).filter(Boolean);
+  for (const extension of ['.EXE', '.CMD']) {
+    if (!extensions.includes(extension)) extensions.push(extension);
+  }
+  normalized.PATHEXT = extensions.join(';');
+  if (!normalized.windir) normalized.windir = normalized.SystemRoot ?? normalized.WINDIR;
+  normalized.NARADA_OPERATOR_CONSOLE_RUNTIME_STATE_ROOT ||= join(normalized.LOCALAPPDATA, 'Narada', 'operator-console-runtime');
+  normalized.NARADA_OPERATOR_ROUTER_STATE_ROOT ||= join(normalized.LOCALAPPDATA, 'Narada', 'operator-router');
+  normalized.NARADA_WINDOW_SURFACE_OVERLAY_STATE_ROOT ||= join(normalized.LOCALAPPDATA, 'Narada', 'window-surface-overlays');
+  return normalized;
+}
+
+function stateDiagnostics(state: OperatorConsoleOverlayState): JsonRecord {
+  return {
+    narada_root: state.naradaRoot,
+    overlay_entrypoint: state.overlayEntrypoint,
+    overlay_state_root: state.stateRoot,
+    runtime_state_root: state.env.NARADA_OPERATOR_CONSOLE_RUNTIME_STATE_ROOT ?? null,
+    router_state_root: state.env.NARADA_OPERATOR_ROUTER_STATE_ROOT ?? null,
+    environment: {
+      localappdata_present: Boolean(state.env.LOCALAPPDATA),
+      pathext: state.env.PATHEXT ?? null,
+      powershell: state.env.NARADA_POWERSHELL ?? 'pwsh',
+    },
+  };
+}
+
+function terminateProcessTree(child: ChildProcess, env: NodeJS.ProcessEnv): Promise<JsonRecord> {
+  const pid = child.pid;
+  if (!pid || pid <= 0) return Promise.resolve({ status: 'no_pid' });
+  if (process.platform !== 'win32') {
+    let killed = false;
+    try { killed = child.kill('SIGTERM'); } catch {}
+    return Promise.resolve({ status: killed ? 'terminated' : 'already_exited', pid });
+  }
+  return new Promise((resolveResult) => {
+    let settled = false;
+    const finish = (result: JsonRecord) => {
+      if (settled) return;
+      settled = true;
+      resolveResult(result);
+    };
+    const killer = spawn('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    killer.stdout?.setEncoding('utf8');
+    killer.stderr?.setEncoding('utf8');
+    killer.stdout?.on('data', (chunk) => { stdout = appendBounded(stdout, chunk); });
+    killer.stderr?.on('data', (chunk) => { stderr = appendBounded(stderr, chunk); });
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish({ status: 'fallback_terminated', pid, stdout, stderr });
+    }, 5_000);
+    timer.unref?.();
+    killer.once('error', (error) => {
+      clearTimeout(timer);
+      try { child.kill(); } catch {}
+      finish({ status: 'fallback_terminated', pid, error: error.message, stdout, stderr });
+    });
+    killer.once('close', (code) => {
+      clearTimeout(timer);
+      finish({ status: code === 0 ? 'terminated_tree' : 'termination_failed', pid, exit_code: code, stdout, stderr });
+    });
+  });
 }
 
 function tool(
