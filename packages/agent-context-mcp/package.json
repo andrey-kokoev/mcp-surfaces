@@ -42,7 +42,8 @@
     "README.md"
   ],
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*"
+    "@narada2/mcp-e2e-harness": "workspace:*",
+    "@types/node": "^22.0.0"
   },
   "narada": {
     "artifact": {
