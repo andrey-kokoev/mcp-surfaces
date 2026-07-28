@@ -19,5 +19,8 @@
   "files": [
     "dist/",
     "README.md"
-  ]
+  ],
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
 }
