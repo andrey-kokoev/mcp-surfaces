@@ -4,8 +4,11 @@ description: |
   Read-only, end-to-end health check for tenant 895 Zenoti synchronization.
   Correlates scheduler intent, synchronizer runs, PostgreSQL materialization,
   broadcast delivery, validator/R2 publication, and smart-scheduling D1
-  projections. The SOP records evidence and a verdict; it never repairs,
-  retries a sync job, clears a queue, or mutates production state.
+  projections. PostgreSQL materialization freshness is established from the
+  newest successful scheduler-owned pgAgent refresh or validator-owned durable
+  refresh ledger entry; a validator refresh must never fabricate pgAgent
+  history. The SOP records evidence and a verdict; it never repairs, retries a
+  sync job, clears a queue, or mutates production state.
 status: active
 trigger_kind: manual
 steps:
@@ -48,16 +51,25 @@ steps:
     title: Check PostgreSQL materialization
     depends_on: [establish_context]
     instructions: |
-      Using MCP only, resolve the `sonar.cloud` repository root from the
-      active repository inventory and allowed filesystem roots. Run the
-      read-only materialization health probe at
-      `sonar.cloud/scripts/ops/sql/tenant_895_class_sessions_materialized_health.sql`,
-      resolved against that repository root, through the approved
-      structured-command surface. Capture source and
-      materialized row counts, date bounds, source last-updated timestamp,
-      last successful and failed refreshes, job/step identity, and whether
-      the materialized result is fresh for the established context.
-      Preserve execution/output references and do not apply SQL changes.
+      Using MCP only, invoke the read-only
+      `zenoti-cpy-sync-probe` materialization health surface
+      (`zenoti_sync_get_stage_health` for `materialization`, or
+      `zenoti_sync_get_full_health` when the full probe is the available
+      surface). Capture source and materialized row counts, date bounds,
+      source last-updated timestamp, the effective `last_success_at`, and the
+      selected `materialization_evidence_source`. Capture both
+      `pgagent_last_success_at` and validator-ledger evidence:
+      `validator_last_success_at`, `validator_run_id`, and
+      `validator_event_type` when present, plus job/step identity and the
+      freshness result for the established context.
+
+      Treat `validator_run` as authoritative evidence when its successful
+      `materialized_refreshed_at` is the newest valid refresh of the canonical
+      materialized view. An old pgAgent timestamp alone is not a failure in
+      that case. Require the effective successful refresh timestamp to be at
+      or after the newest source update and require a non-empty materialized
+      result. Do not apply SQL, run a refresh, or invent a pgAgent history
+      entry. Preserve the MCP execution/output reference.
 
   - id: check_delivery
     executor: agent
@@ -91,6 +103,9 @@ steps:
       probe. Capture validator deployment ID, refresh/run IDs, status,
       attempts, source snapshot, expected and produced row counts, R2 object
       identity, publication timestamp, and any error or retry history.
+      Include the durable `materialized_refreshed_at` and event type used as
+      validator-owned materialization evidence, and correlate its run ID with
+      the effective materialization evidence from the probe.
       Treat historical terminal records separately from the current chain.
       Do not restart or refresh the validator.
 
@@ -127,7 +142,11 @@ steps:
       counts. Confirm scheduler intent through D1 is current, source and
       materialization agree, delivery has no unresolved loss, validator/R2
       and D1 share the committed projection, and current-week counts are
-      reconciled with documented exclusions. If and only if a read-only
+      reconciled with documented exclusions. Materialization freshness is
+      the newest successful timestamp from pgAgent step 350 or the validator
+      refresh ledger; when validator evidence wins, require its run ID and
+      event type and do not fail the chain solely because pgAgent is older.
+      If and only if a read-only
       observation has a transient DNS/transport/propagation failure, perform
       one bounded recheck after approximately 60 seconds through MCP and
       preserve both observations. Never retry a sync job or perform repair.
@@ -152,7 +171,7 @@ steps:
 acceptance_criteria:
   - Observation context includes tenant 895, current calendar week, UTC/local timestamps, and freshness boundary
   - Scheduler intents, watermarks, synchronizer runs, task leases, and gaps have fresh evidence
-  - PostgreSQL source and materialized class-session outputs have been checked and reconciled
+  - PostgreSQL source and materialized class-session outputs have been checked and reconciled using effective freshness evidence from pgAgent or the validator refresh ledger
   - Broadcast delivery and Cloudflare relay/DLQ have fresh evidence with no unexplained terminal loss
   - Validator refresh, projection commit, and R2 publication are correlated to the current sync chain
   - D1 studio/region latest projections are committed, current, and reconciled to authoritative upstream counts
@@ -166,6 +185,7 @@ evidence_requirements:
   - Tenant, calendar-week boundaries, UTC/local observation timestamps, and freshness boundary
   - Schedule intent, watermark, sync run, task, materialization, validator, projection, and deployment IDs
   - Source/materialized/D1 row counts and date bounds with documented exclusions
+  - "Effective materialization freshness evidence: selected evidence source, pgAgent timestamp, validator timestamp, validator run ID/event type, and source-update comparison"
   - Broadcast receipt, relay HTTP, DLQ depth, and alert state observations
   - R2 object identity and publication timestamp
   - Recheck evidence for transient failures, including the original observation
