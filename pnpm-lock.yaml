@@ -140,7 +140,7 @@ importers:
         version: link:../shared/mcp-fabric-contracts
       '@narada2/task-governance-core':
         specifier: workspace:*
-        version: link:../../../narada-core/packages/task-governance-core
+        version: file:../narada-core/packages/task-governance-core
       '@narada2/worker-delegation-mcp':
         specifier: workspace:*
         version: link:../worker-delegation-mcp
@@ -240,16 +240,13 @@ importers:
         version: link:../agent-context-mcp
       '@narada2/artifact-integrity':
         specifier: workspace:*
-        version: link:../../../narada-core/packages/artifact-integrity
+        version: file:../narada-core/packages/artifact-integrity
       '@narada2/artifacts-mcp':
         specifier: workspace:*
         version: link:../artifacts-mcp
       '@narada2/calendar-mcp':
         specifier: workspace:*
         version: link:../calendar-mcp
-      '@narada2/catalog-observation-mcp':
-        specifier: workspace:*
-        version: link:../catalog-observation-mcp
       '@narada2/cloudflare-carrier-mcp':
         specifier: workspace:*
         version: link:../cloudflare-carrier-mcp
@@ -355,7 +352,7 @@ importers:
         version: link:../shared/mcp-transport
       '@narada2/site-paths':
         specifier: workspace:*
-        version: link:../../../narada/packages/site-paths
+        version: file:../narada/packages/site-paths
 
   packages/operator-console-overlay-mcp:
     dependencies:
@@ -445,13 +442,13 @@ importers:
     dependencies:
       '@narada2/artifact-integrity':
         specifier: workspace:*
-        version: link:../../../../narada-core/packages/artifact-integrity
+        version: file:../narada-core/packages/artifact-integrity
       '@narada2/mcp-fabric-contracts':
         specifier: workspace:*
         version: link:../mcp-fabric-contracts
       '@narada2/process-launch-posture':
         specifier: workspace:*
-        version: link:../../../../narada/packages/process-launch-posture
+        version: file:../narada/packages/process-launch-posture
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -464,6 +461,10 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^20.10.0
+        version: 20.19.43
 
   packages/shared/provider-registry:
     dependencies:
@@ -521,13 +522,13 @@ importers:
         version: link:../shared/mcp-transport
       '@narada2/site-operating-loop':
         specifier: workspace:*
-        version: link:../../../narada/packages/site-operating-loop
+        version: file:../narada/packages/site-operating-loop
       '@narada2/task-executability-orchestrator':
         specifier: workspace:*
-        version: link:../../../narada-core/packages/task-executability-orchestrator
+        version: file:../narada-core/packages/task-executability-orchestrator
       '@narada2/task-governance-core':
         specifier: workspace:*
-        version: link:../../../narada-core/packages/task-governance-core
+        version: file:../narada-core/packages/task-governance-core
       '@narada2/task-lifecycle-mcp':
         specifier: workspace:*
         version: link:../task-lifecycle-mcp
@@ -625,7 +626,7 @@ importers:
         version: link:../shared/mcp-transport
       '@narada2/task-governance-core':
         specifier: workspace:*
-        version: link:../../../narada-core/packages/task-governance-core
+        version: file:../narada-core/packages/task-governance-core
     devDependencies:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
@@ -974,6 +975,32 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@narada2/artifact-integrity@file:../narada-core/packages/artifact-integrity':
+    resolution: {directory: ../narada-core/packages/artifact-integrity, type: directory}
+    engines: {node: '>=22.0.0'}
+    hasBin: true
+
+  '@narada2/process-launch-posture@file:../narada/packages/process-launch-posture':
+    resolution: {directory: ../narada/packages/process-launch-posture, type: directory}
+    engines: {node: '>=22.0.0'}
+
+  '@narada2/site-operating-loop@file:../narada/packages/site-operating-loop':
+    resolution: {directory: ../narada/packages/site-operating-loop, type: directory}
+    engines: {node: '>=22.0.0'}
+    hasBin: true
+
+  '@narada2/site-paths@file:../narada/packages/site-paths':
+    resolution: {directory: ../narada/packages/site-paths, type: directory}
+    engines: {node: '>=22.0.0'}
+
+  '@narada2/task-executability-orchestrator@file:../narada-core/packages/task-executability-orchestrator':
+    resolution: {directory: ../narada-core/packages/task-executability-orchestrator, type: directory}
+    engines: {node: '>=22.0.0'}
+
+  '@narada2/task-governance-core@file:../narada-core/packages/task-governance-core':
+    resolution: {directory: ../narada-core/packages/task-governance-core, type: directory}
+    engines: {node: '>=22.0.0'}
+
   '@rollup/rollup-android-arm-eabi@4.61.0':
     resolution: {integrity: sha512-dnxczajOqt0gesZlN5pGQ1s1imQVrsmCw5G2Ci4oM+0WvNz3pyRnlWrT7McoZIb8VlFwCawdmbWRmxRn7HI+VQ==}
     cpu: [arm]
@@ -1110,6 +1137,9 @@ packages:
 
   '@types/js-yaml@4.0.9':
     resolution: {integrity: sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg==}
+
+  '@types/node@20.19.43':
+    resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
 
   '@types/node@22.19.19':
     resolution: {integrity: sha512-dyh/xO2Fh5bYrfWaaqGrRQQGkNdmYw6AmaAUvYeUMNTWQtvb796ikLdmTchRmOlOiIJ1TDXfWgVx1QkUlQ6Hew==}
@@ -1803,6 +1833,22 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@narada2/artifact-integrity@file:../narada-core/packages/artifact-integrity': {}
+
+  '@narada2/process-launch-posture@file:../narada/packages/process-launch-posture': {}
+
+  '@narada2/site-operating-loop@file:../narada/packages/site-operating-loop':
+    dependencies:
+      '@narada2/process-launch-posture': file:../narada/packages/process-launch-posture
+
+  '@narada2/site-paths@file:../narada/packages/site-paths': {}
+
+  '@narada2/task-executability-orchestrator@file:../narada-core/packages/task-executability-orchestrator':
+    dependencies:
+      '@narada2/task-governance-core': file:../narada-core/packages/task-governance-core
+
+  '@narada2/task-governance-core@file:../narada-core/packages/task-governance-core': {}
+
   '@rollup/rollup-android-arm-eabi@4.61.0':
     optional: true
 
@@ -1885,6 +1931,10 @@ snapshots:
   '@types/istanbul-lib-coverage@2.0.6': {}
 
   '@types/js-yaml@4.0.9': {}
+
+  '@types/node@20.19.43':
+    dependencies:
+      undici-types: 6.21.0
 
   '@types/node@22.19.19':
     dependencies:

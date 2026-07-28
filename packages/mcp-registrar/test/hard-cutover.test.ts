@@ -118,7 +118,7 @@ test('external coordinator performs one forward-only activation and reclaims old
     const result = await runHardCutoverCoordinator(input.journalPath);
     assert.equal(result.status, 'complete');
     assert.equal(readFileSync(input.configPath, 'utf8'), input.content);
-    assert.equal(existsSync(input.legacyPath), true);
+    assert.equal(existsSync(input.legacyPath), false);
     assert.equal(existsSync(input.oldGeneration), false);
     assert.equal(existsSync(input.activeGeneration), true);
     assert.equal(existsSync(input.activationPath), true);
@@ -142,7 +142,7 @@ test('failed preflight retains the predecessor and a resumable journal', async (
     assert.equal(failed.state, 'prepared');
     assert.equal(failed.last_error?.code, 'hard_cutover_staged_config_corrupt');
     assert.equal(readFileSync(input.configPath, 'utf8'), '{"mcpServers":{"legacy":true}}\n');
-    assert.equal(existsSync(input.legacyPath), false);
+    assert.equal(existsSync(input.legacyPath), true);
 
     writeFileSync(input.stagedConfig, input.content);
     const resumed = await runHardCutoverCoordinator(input.journalPath);
