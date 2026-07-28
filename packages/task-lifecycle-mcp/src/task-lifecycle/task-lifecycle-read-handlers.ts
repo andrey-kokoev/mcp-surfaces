@@ -104,17 +104,18 @@ export function createTaskLifecycleReadHandlers({
       singleton_reviewer: 'When the site has exactly one reviewer-capable agent, same-operator review is admitted and annotated automatically. No boolean flag is required; multi-reviewer conflict policy still requires explicit authorization.',
     },
     runtime_freshness_discovery: {
-      tool: 'mcp_runtime_proxy_status',
-      statuses: ['current', 'stale', 'unknown'],
-      restart_action_path: 'runtime_freshness.reload_action',
-      note: 'This proxy-owned tool is advertised alongside task-lifecycle tools on carrier-bound sessions. It is distinct from task_lifecycle_restart request markers and does not restart automatically.',
+      tool: 'surface_describe',
+      statuses: ['pinned', 'corrupt'],
+      status_path: 'runtime.runtime_freshness.status',
+      restart_action_path: 'runtime.restart_action',
+      note: 'The sealed V3 proxy supplies this universal read-only tool on carrier-bound sessions. It is distinct from task_lifecycle_restart request markers and does not restart automatically.',
     },
     fresh_server_recovery: {
       tool: 'task_lifecycle_test_mcp_tool',
       use_when: 'The session-bound task-lifecycle server is wedged or demonstrably stale and a one-shot fresh-process verification is needed without restarting the session.',
       path_policy: 'server_path may be site-root-relative, or absolute only under the site root, the running task-lifecycle package root, or NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS.',
       payload_route: 'Pass payload_ref on task_lifecycle_test_mcp_tool and put required child identity/routing fields in arguments. The parent resolves the immutable payload and passes merged arguments to the fresh child; arguments wins for fields such as task_number and agent_id.',
-      warning: 'A fresh one-shot result is recovery evidence, not proof that the carrier-bound server has reloaded. Use mcp_runtime_proxy_status for that process.',
+      warning: 'A fresh one-shot result is recovery evidence, not proof that the carrier-bound server has reloaded. Use surface_describe and inspect its runtime evidence for that process.',
     },
     restart_lifecycle: {
       request_tool: 'task_lifecycle_restart',
@@ -227,8 +228,7 @@ function taskLifecycleGuidance({ workflow, tool, sitePolicy }: any) {
       'Inspect the task before mutation; claim only when authorized; submit execution notes, verification, changed-file evidence, and closeout through lifecycle tools.',
       'Use payload_ref for long companion fields and preserve structuredContent as authoritative lifecycle evidence.',
       'Use task_lifecycle_tags_update for audited site-local labels; tags are descriptive and never replace routing, authorization, priority, dependency, review, or closure state.',
-      'The carrier-facing runtime never prepares SQLite: run task-lifecycle-mcp --prepare --site-root <site-root> once before stateful calls. If a stateful call returns task_lifecycle_store_not_prepared, inspect task_lifecycle_doctor.preparation and perform explicit preparation instead of retrying.',
-      'Call mcp_runtime_proxy_status when this carrier-bound surface may be running an old build; inspect runtime_freshness.status and execute only the machine-readable carrier/supervisor reload_action.',
+      'Call surface_describe when this carrier-bound surface may be stale or corrupt; inspect runtime.runtime_freshness.status and execute only the machine-readable runtime.restart_action.',
     ],
     sections: selectedSections,
     first_use_decision_tree: taskLifecycleFirstUseDecisionTree(),
@@ -286,7 +286,7 @@ function taskLifecycleFirstUseDecisionTree() {
     },
     {
       condition: 'The carrier-bound server is stale or wedged.',
-      sequence: ['mcp_runtime_proxy_status', 'task_lifecycle_test_mcp_tool with an admitted server_path for one-shot recovery evidence', 'route runtime_freshness.reload_action to the carrier/runtime supervisor'],
+      sequence: ['surface_describe', 'task_lifecycle_test_mcp_tool with an admitted server_path for one-shot recovery evidence', 'route runtime.restart_action to the carrier/runtime supervisor'],
     },
     {
       condition: 'Your summary, verification, findings, or blocker details are too long for inline fields.',

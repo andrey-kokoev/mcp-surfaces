@@ -151,8 +151,9 @@ paths are admitted only under the Site root, the running
 `NARADA_TASK_LIFECYCLE_FRESH_SERVER_ALLOWED_ROOTS`. Only existing
 `.js`, `.mjs`, and `.cjs` scripts are accepted. A one-shot result proves
 the fresh child call, not that the carrier-bound process reloaded. Carrier-bound
-sessions should discover `mcp_runtime_proxy_status` through `tools/list` and
-inspect `runtime_freshness.reload_action` for the supervisor-owned restart.
+sessions should call the universal `surface_describe` tool and inspect
+`runtime.runtime_freshness` plus `runtime.restart_action` for the
+supervisor-owned restart.
 
 A session-bound task-lifecycle child pins the build it loaded at process start.
 Source or build fixes therefore require a real child restart by the carrier/runtime

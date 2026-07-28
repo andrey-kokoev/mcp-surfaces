@@ -3,11 +3,15 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
+  injectWorkspacePackages: true
 
 importers:
 
   .:
     devDependencies:
+      '@narada2/mcp-runtime-proxy':
+        specifier: workspace:*
+        version: link:packages/shared/mcp-runtime-proxy
       '@types/node':
         specifier: ^22.15.0
         version: 22.19.19
@@ -17,6 +21,18 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.9.3
+
+  ../narada-core/packages/artifact-integrity:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^1.0.0
+        version: 1.6.1(@types/node@22.19.19)
 
   ../narada-core/packages/task-executability-orchestrator:
     dependencies:
@@ -222,6 +238,9 @@ importers:
       '@narada2/agent-context-mcp':
         specifier: workspace:*
         version: link:../agent-context-mcp
+      '@narada2/artifact-integrity':
+        specifier: workspace:*
+        version: link:../../../narada-core/packages/artifact-integrity
       '@narada2/artifacts-mcp':
         specifier: workspace:*
         version: link:../artifacts-mcp
@@ -279,6 +298,9 @@ importers:
       '@narada2/quota-meter-mcp':
         specifier: workspace:*
         version: link:../quota-meter-mcp
+      '@narada2/runtime-introspection-mcp':
+        specifier: workspace:*
+        version: link:../runtime-introspection-mcp
       '@narada2/scheduler-mcp':
         specifier: workspace:*
         version: link:../scheduler-mcp
@@ -370,6 +392,9 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-fabric-contracts':
+        specifier: workspace:*
+        version: link:../shared/mcp-fabric-contracts
       '@narada2/mcp-telemetry':
         specifier: workspace:*
         version: link:../shared/mcp-telemetry
@@ -418,6 +443,9 @@ importers:
 
   packages/shared/mcp-runtime-proxy:
     dependencies:
+      '@narada2/artifact-integrity':
+        specifier: workspace:*
+        version: link:../../../../narada-core/packages/artifact-integrity
       '@narada2/mcp-fabric-contracts':
         specifier: workspace:*
         version: link:../mcp-fabric-contracts
@@ -567,6 +595,9 @@ importers:
       '@narada2/mcp-e2e-harness':
         specifier: workspace:*
         version: link:../shared/mcp-e2e-harness
+      '@narada2/mcp-runtime-proxy':
+        specifier: workspace:*
+        version: link:../shared/mcp-runtime-proxy
 
   packages/surface-feedback-mcp:
     dependencies:

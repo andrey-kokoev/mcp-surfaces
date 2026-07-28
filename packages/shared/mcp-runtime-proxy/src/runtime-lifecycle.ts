@@ -1,14 +1,27 @@
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 
 type JsonRecord = Record<string, unknown>;
 
-export const RUNTIME_STATUS_TOOL_NAME = 'mcp_runtime_proxy_status';
-export const RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v2';
-export const LEGACY_RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v1';
-export const RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v2';
-export const LEGACY_RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v1';
+export const RUNTIME_INSTANCE_SCHEMA = 'narada.mcp_runtime_proxy.instance.v3' as const;
+export const RUNTIME_FRESHNESS_SCHEMA = 'narada.mcp_runtime_proxy.runtime_freshness.v3' as const;
+const TERMINABLE_RUNTIME_INSTANCE_SCHEMAS = new Set([
+  'narada.mcp_runtime_proxy.instance.v2',
+  RUNTIME_INSTANCE_SCHEMA,
+]);
 
 type FileSnapshot = {
   path: string;
@@ -22,163 +35,144 @@ export type RuntimeFreshnessTracker = {
   started_at: string;
   proxy_runtime: FileSnapshot;
   child_runtime: FileSnapshot;
-  artifact_manifest: FileSnapshot | null;
-  artifact_manifest_fingerprint: string | null;
-  source_files: FileSnapshot[];
+  carrier_generation: FileSnapshot;
+  carrier_generation_digest: string;
 };
 
 export type RuntimeInstanceRecord = {
-  schema: string;
-  surface_id: string | null;
+  schema: typeof RUNTIME_INSTANCE_SCHEMA;
+  surface_id: string;
+  server_key: string;
   proxy_pid: number;
   parent_pid: number;
   child_pid: number | null;
-  supervisor_pid?: number | null;
-  managed_child_pid?: number | null;
-  server_pid?: number | null;
+  supervisor_pid: number | null;
+  managed_child_pid: number | null;
+  server_pid: number | null;
   entrypoint: string;
   started_at: string;
   heartbeat_at: string;
   lease_expires_at: string;
   state: 'live' | 'stale' | 'reclaiming' | 'reclaimed' | 'closed';
   liveness_evidence: JsonRecord;
-  runtime_freshness?: JsonRecord;
-  artifact_manifest_path?: string | null;
-  artifact_manifest_fingerprint?: string | null;
-  generation_id?: string | null;
-  closed_at?: string | null;
+  runtime_freshness: JsonRecord;
+  carrier_generation_path: string;
+  carrier_generation_digest: string;
+  closure_digest: string;
+  receipt_digest: string;
+  generation_id: string;
+  closed_at: string | null;
 };
+
+type RecordedRuntimeInstance = {
+  path: string;
+  schema: string;
+  proxy_pid: number;
+  child_pid: number | null;
+  supervisor_pid: number | null;
+  managed_child_pid: number | null;
+  server_pid: number | null;
+  heartbeat_at: string;
+  lease_expires_at: string;
+};
+
+export class RuntimeLifecycleError extends Error {
+  readonly code: string;
+  readonly details: JsonRecord;
+
+  constructor(code: string, message: string, details: JsonRecord = {}, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'RuntimeLifecycleError';
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export function defaultRuntimeDiagnosticsDir(): string {
+  return resolve(
+    process.env.LOCALAPPDATA
+      ?? process.env.XDG_STATE_HOME
+      ?? process.env.HOME
+      ?? process.cwd(),
+    'Narada',
+    'mcp-runtime-proxy',
+  );
+}
+
+function fileSnapshot(path: string): FileSnapshot {
+  const absolute = resolve(path);
+  try {
+    const stat = statSync(absolute);
+    return {
+      path: absolute,
+      exists: true,
+      mtime_ms: stat.mtimeMs,
+      size: stat.size,
+      sha256: createHash('sha256').update(readFileSync(absolute)).digest('hex'),
+    };
+  } catch {
+    return { path: absolute, exists: false, mtime_ms: null, size: null, sha256: null };
+  }
+}
 
 export function captureRuntimeFreshness(input: {
   proxyRuntimePath: string;
   childEntrypoint: string;
-  artifactManifestPath?: string | null;
+  carrierGenerationPath: string;
+  carrierGenerationDigest: string;
   startedAt?: string;
 }): RuntimeFreshnessTracker {
-  const proxyRuntime = fileSnapshot(input.proxyRuntimePath);
-  const childRuntime = fileSnapshot(input.childEntrypoint);
-  const sourceFiles = [deriveSourcePath(input.proxyRuntimePath), deriveSourcePath(input.childEntrypoint)]
-    .filter((value): value is string => Boolean(value))
-    .map(fileSnapshot);
   return {
     started_at: input.startedAt ?? new Date().toISOString(),
-    proxy_runtime: proxyRuntime,
-    child_runtime: childRuntime,
-    artifact_manifest: input.artifactManifestPath ? fileSnapshot(input.artifactManifestPath) : null,
-    artifact_manifest_fingerprint: input.artifactManifestPath ? readManifestFingerprint(input.artifactManifestPath) : null,
-    source_files: sourceFiles,
+    proxy_runtime: fileSnapshot(input.proxyRuntimePath),
+    child_runtime: fileSnapshot(input.childEntrypoint),
+    carrier_generation: fileSnapshot(input.carrierGenerationPath),
+    carrier_generation_digest: input.carrierGenerationDigest,
   };
-}
-
-function readManifestFingerprint(path: string): string | null {
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as JsonRecord;
-    return typeof parsed.manifest_fingerprint === 'string' ? parsed.manifest_fingerprint : null;
-  } catch {
-    return null;
-  }
 }
 
 export function evaluateRuntimeFreshness(input: {
   tracker: RuntimeFreshnessTracker;
-  surfaceId: string | null;
+  surfaceId: string;
   proxyPid?: number;
   childPid?: number | null;
 }): JsonRecord {
-  const runtimePairs = [
-    { name: 'proxy_runtime', started: input.tracker.proxy_runtime, current: fileSnapshot(input.tracker.proxy_runtime.path) },
-    { name: 'child_runtime', started: input.tracker.child_runtime, current: fileSnapshot(input.tracker.child_runtime.path) },
-  ];
+  const files = [
+    { name: 'proxy_runtime', started: input.tracker.proxy_runtime },
+    { name: 'child_runtime', started: input.tracker.child_runtime },
+    { name: 'carrier_generation', started: input.tracker.carrier_generation },
+  ].map((entry) => ({ ...entry, current: fileSnapshot(entry.started.path) }));
   const reasons: JsonRecord[] = [];
-  let evidenceUnknown = false;
-  for (const pair of runtimePairs) {
-    if (!pair.current.exists) {
-      evidenceUnknown = true;
-      reasons.push({ code: 'runtime_file_missing', evidence: 'unknown', name: pair.name, path: pair.current.path });
-      continue;
-    }
-    if (pair.started.mtime_ms !== pair.current.mtime_ms || pair.started.size !== pair.current.size) {
+  for (const file of files) {
+    if (!file.current.exists) {
+      reasons.push({ code: 'sealed_runtime_file_missing', name: file.name, path: file.current.path });
+    } else if (file.started.sha256 !== file.current.sha256) {
       reasons.push({
-        code: 'runtime_changed_since_process_start',
-        name: pair.name,
-        path: pair.current.path,
-        started_mtime_ms: pair.started.mtime_ms,
-        current_mtime_ms: pair.current.mtime_ms,
+        code: 'sealed_runtime_file_changed',
+        name: file.name,
+        path: file.current.path,
+        started_sha256: file.started.sha256,
+        current_sha256: file.current.sha256,
       });
     }
   }
-  let artifactManifestCurrent: FileSnapshot | null = null;
-  if (input.tracker.artifact_manifest) {
-    artifactManifestCurrent = fileSnapshot(input.tracker.artifact_manifest.path);
-    if (!artifactManifestCurrent.exists) {
-      evidenceUnknown = true;
-      reasons.push({ code: 'artifact_manifest_missing', evidence: 'unknown', path: artifactManifestCurrent.path });
-    } else if (
-      input.tracker.artifact_manifest_fingerprint !== readManifestFingerprint(artifactManifestCurrent.path)
-      || input.tracker.artifact_manifest.size !== artifactManifestCurrent.size
-    ) {
-      reasons.push({
-        code: 'artifact_manifest_changed_since_process_start',
-        path: artifactManifestCurrent.path,
-        started_fingerprint: input.tracker.artifact_manifest_fingerprint,
-        current_fingerprint: readManifestFingerprint(artifactManifestCurrent.path),
-      });
-    }
-  }
-  const sourceFiles = input.tracker.source_files.map((source) => fileSnapshot(source.path));
-  for (const source of sourceFiles) {
-    const runtime = runtimePairs.find((pair) => sameCompiledSource(pair.current.path, source.path))?.current;
-    if (source.exists && runtime?.exists && Number(source.mtime_ms) > Number(runtime.mtime_ms)) {
-      reasons.push({
-        code: 'source_newer_than_runtime_build',
-        source_path: source.path,
-        source_mtime_ms: source.mtime_ms,
-        runtime_path: runtime.path,
-        runtime_mtime_ms: runtime.mtime_ms,
-      });
-    }
-  }
-  const staleEvidence = reasons.some((reason) => reason.evidence !== 'unknown');
-  const status = staleEvidence ? 'stale' : evidenceUnknown ? 'unknown' : 'current';
   return {
     schema: RUNTIME_FRESHNESS_SCHEMA,
-    status,
+    status: reasons.length === 0 ? 'pinned' : 'corrupt',
     observed_at: new Date().toISOString(),
     process_started_at: input.tracker.started_at,
     proxy_pid: input.proxyPid ?? process.pid,
     child_pid: input.childPid ?? null,
     surface_id: input.surfaceId,
-    runtime_files: runtimePairs.map((pair) => ({ name: pair.name, started: pair.started, current: pair.current })),
-    source_files: sourceFiles,
+    carrier_generation_digest: input.tracker.carrier_generation_digest,
+    runtime_files: files,
     reasons,
-    reload_action: {
-      schema: 'narada.mcp_runtime_proxy.supervisor_restart_action.v1',
+    source_policy: 'validated_at_process_start',
+    update_policy: 'restart_to_select_latest_compatible',
+    restart_action: {
       kind: 'restart_carrier_bound_surface',
-      operation: 'restart',
       owner: 'carrier_or_runtime_supervisor',
-      target: {
-        scope: 'carrier_bound_surface',
-        surface_id: input.surfaceId,
-        proxy_pid: input.proxyPid ?? process.pid,
-        child_pid: input.childPid ?? null,
-      },
       automatic: false,
-      guidance: 'Restart this carrier-bound proxy/server pair through the carrier or runtime supervisor. Restarting an mcp-loader child does not replace this process.',
-    },
-  };
-}
-
-export function runtimeStatusToolDefinition(): JsonRecord {
-  return {
-    name: RUNTIME_STATUS_TOOL_NAME,
-    description: 'Inspect carrier-bound proxy/server liveness and build/runtime freshness, including the machine-readable supervisor restart action.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    annotations: {
-      title: RUNTIME_STATUS_TOOL_NAME,
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
     },
   };
 }
@@ -187,15 +181,44 @@ export function runtimeInstancePath(diagnosticsDir: string, proxyPid = process.p
   return join(resolve(diagnosticsDir), `instance-${proxyPid}.json`);
 }
 
+function syncDirectory(path: string): void {
+  try {
+    const descriptor = openSync(path, 'r');
+    try {
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  } catch (error) {
+    const code = error !== null && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code)
+      : '';
+    // Windows does not support fsync on directory handles; EPERM is that
+    // platform capability refusal, while all other errors remain fatal.
+    if (!['EINVAL', 'EISDIR', 'EBADF', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM'].includes(code)) {
+      throw error;
+    }
+  }
+}
+
 export function writeRuntimeInstance(path: string, record: RuntimeInstanceRecord): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const descriptor = openSync(temporary, 'wx');
+  try {
+    writeFileSync(descriptor, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
   try {
     renameSync(temporary, path);
-  } catch {
-    rmSync(path, { force: true });
-    renameSync(temporary, path);
+    syncDirectory(dirname(path));
+  } catch (error) {
+    if (!existsSync(path)) throw error;
+    // Keep the previous complete lease rather than creating a visibility gap.
+  } finally {
+    rmSync(temporary, { force: true });
   }
 }
 
@@ -206,13 +229,14 @@ export function classifyRuntimeInstance(
   const now = options.now ?? new Date();
   const isPidAlive = options.isPidAlive ?? processIsAlive;
   const staleReasons: string[] = [];
-  if (['reclaimed', 'closed'].includes(record.state)) {
+  if (record.state === 'reclaimed' || record.state === 'closed') {
     return { ...record, observed_state: record.state, stale_reasons: staleReasons };
   }
   if (!isPidAlive(record.proxy_pid)) staleReasons.push('proxy_pid_not_alive');
   if (!isPidAlive(record.parent_pid)) staleReasons.push('parent_carrier_pid_not_alive');
   if (record.child_pid !== null && !isPidAlive(record.child_pid)) staleReasons.push('child_pid_not_alive');
   if (Date.parse(record.lease_expires_at) < now.getTime()) staleReasons.push('heartbeat_lease_expired');
+  if (record.runtime_freshness.status === 'corrupt') staleReasons.push('sealed_runtime_corrupt');
   return {
     ...record,
     observed_state: staleReasons.length > 0 || record.state !== 'live' ? 'stale' : 'live',
@@ -227,10 +251,11 @@ export function listRuntimeInstances(
   const root = resolve(diagnosticsDir);
   const instances = existsSync(root)
     ? readdirSync(root)
-        .filter((name) => /^instance-\d+\.json$/.test(name))
+        .filter((name) => /^instance-\d+\.json$/u.test(name))
         .flatMap((name) => {
           try {
             const value = JSON.parse(readFileSync(join(root, name), 'utf8')) as RuntimeInstanceRecord;
+            if (value.schema !== RUNTIME_INSTANCE_SCHEMA) return [];
             return [classifyRuntimeInstance(value, options)];
           } catch {
             return [];
@@ -238,7 +263,7 @@ export function listRuntimeInstances(
         })
     : [];
   return {
-    schema: 'narada.mcp_runtime_proxy.instance_list.v1',
+    schema: 'narada.mcp_runtime_proxy.instance_list.v3',
     status: 'ok',
     diagnostics_dir: root,
     observed_at: (options.now ?? new Date()).toISOString(),
@@ -263,30 +288,166 @@ export function processIsAlive(pid: number): boolean {
   }
 }
 
-function fileSnapshot(path: string): FileSnapshot {
-  const absolute = resolve(path);
-  try {
-    const stat = statSync(absolute);
-    return { path: absolute, exists: true, mtime_ms: stat.mtimeMs, size: stat.size, sha256: createHash('sha256').update(readFileSync(absolute)).digest('hex') };
-  } catch {
-    return { path: absolute, exists: false, mtime_ms: null, size: null, sha256: null };
-  }
+function optionalPid(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
 }
 
-function deriveSourcePath(runtimePath: string): string | null {
-  const absolute = resolve(runtimePath);
-  const segments = absolute.split(sep);
-  const distIndex = segments.lastIndexOf('dist');
-  if (distIndex < 0) return null;
-  segments.splice(distIndex, 1);
-  const extension = extname(segments[segments.length - 1]);
-  if (['.js', '.mjs', '.cjs'].includes(extension)) {
-    segments[segments.length - 1] = `${segments[segments.length - 1].slice(0, -extension.length)}.ts`;
-  }
-  return segments.join(sep);
+function readRecordedRuntimeInstances(diagnosticsDir: string): RecordedRuntimeInstance[] {
+  const root = resolve(diagnosticsDir);
+  if (!existsSync(root)) return [];
+  return readdirSync(root)
+    .filter((name) => /^instance-\d+\.json$/u.test(name))
+    .map((name) => {
+      const path = join(root, name);
+      let value: JsonRecord;
+      try {
+        value = JSON.parse(readFileSync(path, 'utf8')) as JsonRecord;
+      } catch (error) {
+        throw new RuntimeLifecycleError(
+          'runtime_instance_corrupt',
+          'Runtime instance record is unreadable during hard cutover.',
+          { instance_path: path },
+          { cause: error },
+        );
+      }
+      const proxyPid = optionalPid(value.proxy_pid);
+      if (
+        typeof value.schema !== 'string'
+        || !TERMINABLE_RUNTIME_INSTANCE_SCHEMAS.has(value.schema)
+        || proxyPid === null
+        || name !== `instance-${proxyPid}.json`
+        || typeof value.heartbeat_at !== 'string'
+        || typeof value.lease_expires_at !== 'string'
+      ) {
+        throw new RuntimeLifecycleError(
+          'runtime_instance_corrupt',
+          'Runtime instance record cannot safely identify its proxy process.',
+          { instance_path: path },
+        );
+      }
+      return {
+        path,
+        schema: value.schema,
+        proxy_pid: proxyPid,
+        child_pid: optionalPid(value.child_pid),
+        supervisor_pid: optionalPid(value.supervisor_pid),
+        managed_child_pid: optionalPid(value.managed_child_pid),
+        server_pid: optionalPid(value.server_pid),
+        heartbeat_at: value.heartbeat_at,
+        lease_expires_at: value.lease_expires_at,
+      };
+    });
 }
 
-function sameCompiledSource(runtimePath: string, sourcePath: string): boolean {
-  const derived = deriveSourcePath(runtimePath);
-  return Boolean(derived && resolve(derived).toLowerCase() === resolve(sourcePath).toLowerCase());
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+}
+
+export async function terminateRecordedRuntimeInstances(input: {
+  diagnostics_dir?: string;
+  now?: Date;
+  identity_grace_ms?: number;
+  graceful_timeout_ms?: number;
+  force_timeout_ms?: number;
+  poll_interval_ms?: number;
+  is_pid_alive?: (pid: number) => boolean;
+  terminate_pid?: (pid: number, force: boolean) => void;
+  wait?: (milliseconds: number) => Promise<void>;
+} = {}): Promise<JsonRecord> {
+  const diagnosticsDir = resolve(input.diagnostics_dir ?? defaultRuntimeDiagnosticsDir());
+  const now = input.now ?? new Date();
+  const identityGraceMs = input.identity_grace_ms ?? 30_000;
+  const gracefulTimeoutMs = input.graceful_timeout_ms ?? 5_000;
+  const forceTimeoutMs = input.force_timeout_ms ?? 5_000;
+  const pollIntervalMs = input.poll_interval_ms ?? 100;
+  const isPidAlive = input.is_pid_alive ?? processIsAlive;
+  const terminatePid = input.terminate_pid ?? ((pid: number, force: boolean) => {
+    try {
+      process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+  });
+  const wait = input.wait ?? delay;
+  const records = readRecordedRuntimeInstances(diagnosticsDir);
+  const recordPids = (record: RecordedRuntimeInstance) => [
+    record.proxy_pid,
+    record.child_pid,
+    record.supervisor_pid,
+    record.managed_child_pid,
+    record.server_pid,
+  ].filter((pid): pid is number => pid !== null);
+  const actionableRecords = records.filter((record) => recordPids(record).some(isPidAlive));
+  for (const record of actionableRecords) {
+    const leaseExpiry = Date.parse(record.lease_expires_at);
+    const heartbeat = Date.parse(record.heartbeat_at);
+    if (
+      !Number.isFinite(leaseExpiry)
+      || !Number.isFinite(heartbeat)
+      || now.getTime() > leaseExpiry + identityGraceMs
+    ) {
+      throw new RuntimeLifecycleError(
+        'runtime_instance_identity_stale',
+        'Refusing to signal a live PID from an expired runtime identity record.',
+        {
+          instance_path: record.path,
+          proxy_pid: record.proxy_pid,
+          live_recorded_pids: recordPids(record).filter(isPidAlive),
+          heartbeat_at: record.heartbeat_at,
+          lease_expires_at: record.lease_expires_at,
+        },
+      );
+    }
+  }
+
+  const signalled: number[] = [];
+  for (const record of actionableRecords) {
+    if (!isPidAlive(record.proxy_pid)) continue;
+    terminatePid(record.proxy_pid, false);
+    signalled.push(record.proxy_pid);
+  }
+
+  async function waitUntilDead(pids: number[], timeoutMs: number): Promise<number[]> {
+    const deadline = Date.now() + timeoutMs;
+    let remaining = pids.filter(isPidAlive);
+    while (remaining.length > 0 && Date.now() < deadline) {
+      await wait(pollIntervalMs);
+      remaining = remaining.filter(isPidAlive);
+    }
+    return remaining;
+  }
+
+  let remaining = await waitUntilDead(signalled, gracefulTimeoutMs);
+  const forceCandidates = new Set<number>(remaining);
+  for (const record of actionableRecords) {
+    for (const pid of [
+      record.child_pid,
+      record.supervisor_pid,
+      record.managed_child_pid,
+      record.server_pid,
+    ]) {
+      if (pid !== null && isPidAlive(pid)) forceCandidates.add(pid);
+    }
+  }
+  for (const pid of forceCandidates) terminatePid(pid, true);
+  remaining = await waitUntilDead([...forceCandidates], forceTimeoutMs);
+  if (remaining.length > 0) {
+    throw new RuntimeLifecycleError(
+      'runtime_cutover_termination_failed',
+      'One or more MCP runtime processes survived hard-cutover termination.',
+      { remaining_pids: remaining, diagnostics_dir: diagnosticsDir },
+    );
+  }
+
+  for (const record of records) rmSync(record.path, { force: true });
+  if (records.length > 0) syncDirectory(diagnosticsDir);
+  return {
+    schema: 'narada.mcp_runtime_proxy.hard_cutover_termination.v3',
+    status: 'terminated',
+    diagnostics_dir: diagnosticsDir,
+    instance_count: records.length,
+    live_instance_count: actionableRecords.length,
+    terminated_proxy_pids: signalled.sort((left, right) => left - right),
+    forced_pids: [...forceCandidates].sort((left, right) => left - right),
+  };
 }

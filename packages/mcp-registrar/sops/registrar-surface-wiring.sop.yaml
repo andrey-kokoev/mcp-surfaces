@@ -16,19 +16,25 @@ steps:
     instructions: |
       Confirm the surface package builds (`pnpm build`), typechecks
       (`pnpm typecheck`), and passes its tests (`pnpm test:<surface>`).
-      Verify the package-owned native SurfaceDescriptorV2 in the
+      Verify the package-owned native SurfaceDescriptorV3 in the
       registrar's native catalog is complete. Confirm its id, package,
       stdio projection entrypoint/args, tool registry, projection authority,
       lifecycle requirement, env vars (if needed), and sops_dir (if the
-      surface owns SOPs). The registrar must not use a parallel legacy
+      surface owns SOPs). Confirm package.json declares the mcp-surface-v3
+      artifact profile, build script, and exact entrypoint. Verify the
+      descriptor includes the universal surface_describe and
+      surface_contract_describe tools. The registrar must not use a parallel
       catalog or hand-maintained tool inventory.
 
   - id: list_current_bindings
     executor: engine
     blocking: false
-    title: Snapshot current bindings
+    title: Review desired binding authority
     depends_on: [verify_surface_ready]
-    instructions: Record current site and carrier bindings as pre-change evidence.
+    instructions: |
+      Review the complete desired Site and carrier authority model. Do not
+      copy, back up, or retain the pre-cutover carrier config or generation
+      records as rollback state.
     command: node
     args:
       - -e
@@ -53,7 +59,7 @@ steps:
   - id: bind_carriers
     executor: agent
     blocking: true
-    title: Bind surface to carriers
+    title: Materialize complete sealed carrier generations
     depends_on: [bind_sites]
     instructions: |
       Bind only host/user-site carrier profiles. Naked carrier launches
@@ -61,19 +67,26 @@ steps:
       Narada launcher/session materialization. Do not create site-specific
       carrier profiles such as opencode-sonar.
 
-      For each target carrier, call registrar_carrier_bind with:
-      - carrier_id (e.g., opencode-andrey, kimi-andrey, codex-andrey)
-      - surface_id
-      - site_id for the User Site interpolation context unless the operator
-        has explicitly requested a compatibility sidecar
-      Report success/failure per carrier.
+      Add the surface to the owning carrier authority model; direct config
+      patching is not an authority surface. Canonical-build the runtime proxy
+      and every selected surface into the V3 artifact store.
+
+      For each target carrier, call registrar_carrier_materialize with the
+      carrier_id and verify all bindings resolve to source-fresh compatible
+      closures. Then call registrar_carrier_apply. Apply stages the immutable
+      generation and writes the complete carrier config last, without a
+      backup, sidecar, fallback, or retained prior generation.
+      Report closure/generation/config validation per carrier.
 
   - id: sync_all
     executor: engine
     blocking: false
     title: Sync all registrar bindings
     depends_on: [bind_carriers]
-    instructions: Run registrar_sync to propagate all bindings.
+    instructions: |
+      Run registrar_sync only where it produces complete sealed V3
+      generations. A sync path that attempts per-entry carrier patching must
+      be refused.
     command: node
     args:
       - -e
@@ -89,7 +102,12 @@ steps:
       - opencode: the configured carrier path (NARADA_OPENCODE_CONFIG_PATH or the carrier-native default)
       - codex: the configured carrier path (NARADA_CODEX_CONFIG_PATH or the carrier-native default)
       - kimi: the configured carrier path (NARADA_KIMI_CONFIG_PATH or the carrier-native default)
-      Verify the command, args, and env_vars are correct.
+      Verify every stdio command is the sealed runtime proxy and every argv
+      declares runtime contract 3, the immutable carrier generation, exact
+      server key, and V3 artifact store. Verify the carrier config contains no
+      raw surface entrypoint, V1/V2 manifest/sidecar argument, or backup path.
+      Verify registrar_carrier_validate reports exact config/generation/
+      closure agreement.
       Verify no local Site carrier config was created and no generated
       carrier config contains stale Site-local entrypoints or obsolete tool
       metadata for migrated shared surfaces.
@@ -114,7 +132,8 @@ steps:
     title: Restart affected carriers
     depends_on: [verify_sops_discovery]
     instructions: |
-      Carriers must be restarted to pick up new MCP server configs:
+      Terminate every affected old MCP process before starting the carrier
+      against the new config. There is no overlap, drain, or fallback:
       - opencode: full quit and reopen
       - codex: codex restart or new session
       - kimi: kimi restart or new session
@@ -133,22 +152,24 @@ steps:
 
 acceptance_criteria:
   - Surface builds, typechecks, and tests pass
-  - Native SurfaceDescriptorV2 is complete in the registrar catalog
+  - Native SurfaceDescriptorV3 is complete in the registrar catalog
   - Surface is bound to all target sites
   - Surface is bound to all target carriers
   - No site-specific carrier profile is created for ordinary Site launches
-  - Carrier config files contain correct entries
-  - Carrier config files do not contain stale local entrypoints or obsolete tool metadata
+  - Every selected package has a source-fresh sealed artifact closure
+  - Carrier config files contain only exact runtime V3 launches
+  - No pre-cutover config, generation, backup, or fallback state is retained
+  - Carrier config files do not contain raw or stale local entrypoints
   - SOPs are discoverable if surface owns any
   - Carriers are restarted with new surface visible
   - Read-only tool call succeeds in each carrier
 
 evidence_requirements:
   - Surface build/test output
-  - Pre-change binding snapshot
+  - Desired authority-model review
   - Per-site binding results
-  - Per-carrier binding results
-  - Carrier config file diffs
+  - Per-carrier sealed generation and validation results
+  - Post-cutover carrier config inspection
   - Evidence that site-specific carrier profiles were not created
   - SOP import results (if applicable)
   - Carrier restart confirmation

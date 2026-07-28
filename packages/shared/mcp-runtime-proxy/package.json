@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node dist/test/generation-manager.test.js && node --test dist/test/runtime-observation.test.js && node --test dist/test/workspace-artifact-manifest.test.js && node --test dist/test/materialization-contract.test.js"
+    "test": "pnpm --filter @narada2/mcp-e2e-harness build && pnpm build && node dist/test/mcp-runtime-proxy.test.js && node --test dist/test/carrier-generation.test.js && node --test dist/test/runtime-lifecycle.test.js"
   },
   "types": "./dist/src/main.d.ts",
   "exports": {
@@ -14,24 +14,21 @@
       "types": "./dist/src/main.d.ts",
       "default": "./dist/src/main.js"
     },
-    "./generation-manager": {
-      "types": "./dist/src/generation-manager.d.ts",
-      "default": "./dist/src/generation-manager.js"
+    "./carrier-generation": {
+      "types": "./dist/src/carrier-generation.d.ts",
+      "default": "./dist/src/carrier-generation.js"
     },
-    "./runtime-observation": {
-      "types": "./dist/src/runtime-observation.d.ts",
-      "default": "./dist/src/runtime-observation.js"
+    "./carrier-materialization": {
+      "types": "./dist/src/carrier-materialization.d.ts",
+      "default": "./dist/src/carrier-materialization.js"
     },
-    "./workspace-artifact-manifest": {
-      "types": "./dist/src/workspace-artifact-manifest.d.ts",
-      "default": "./dist/src/workspace-artifact-manifest.js"
-    },
-    "./materialization-contract": {
-      "types": "./dist/src/materialization-contract.d.ts",
-      "default": "./dist/src/materialization-contract.js"
+    "./runtime-lifecycle": {
+      "types": "./dist/src/runtime-lifecycle.d.ts",
+      "default": "./dist/src/runtime-lifecycle.js"
     }
   },
   "dependencies": {
+    "@narada2/artifact-integrity": "workspace:*",
     "@narada2/mcp-fabric-contracts": "workspace:*",
     "@narada2/process-launch-posture": "workspace:*"
   },
@@ -41,5 +38,14 @@
   ],
   "devDependencies": {
     "@narada2/mcp-e2e-harness": "workspace:*"
+  },
+  "narada": {
+    "artifact": {
+      "profile": "mcp-runtime-proxy-v3",
+      "entrypoints": [
+        "dist/src/main.js"
+      ],
+      "build_script": "build"
+    }
   }
 }

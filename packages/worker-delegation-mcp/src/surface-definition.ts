@@ -14,7 +14,7 @@ export function surfaceDefinition(): DefinedSurface {
     default_effect: 'runtime_admin',
     projections: [{
       id: 'default',
-      transport: { kind: 'stdio', command: 'node', args: ["--site-root","{site_root}","--allowed-root","{workspace_root}","--run-root","{site_runtime_root}/worker-delegation"], env: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG'] },
+      transport: { kind: 'stdio', command: 'node', args: ["--site-root","{site_root}","--allowed-root","{workspace_root}","--run-root","{site_runtime_root}/worker-delegation"], env: ['DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE_URL', 'NARADA_WORKER_MCP_CONFIG', 'NARADA_PROVIDER_SECRET_STORE'] },
       injection_scope: 'local_site',
       default_injection: 'disabled',
       runtime_requirements: [],

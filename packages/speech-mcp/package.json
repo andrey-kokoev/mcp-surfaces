@@ -34,5 +34,14 @@
   "files": [
     "dist/",
     "config/"
-  ]
+  ],
+  "narada": {
+    "artifact": {
+      "profile": "mcp-surface-v3",
+      "entrypoints": [
+        "dist/src/main.js"
+      ],
+      "build_script": "build"
+    }
+  }
 }
