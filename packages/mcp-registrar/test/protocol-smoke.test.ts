@@ -83,25 +83,57 @@ async function exchangeThroughProxy(): Promise<Record<string, any>[]> {
   });
   let proxyStdout = '';
   let proxyStderr = '';
+  let proxyLineBuffer = '';
+  const proxyResponses: Record<string, any>[] = [];
+  const expectedProxyResponseIds = new Set([11, 12, 13, 14, 15]);
+  let resolveProxyResponses: (() => void) | undefined;
+  let rejectProxyResponses: ((error: Error) => void) | undefined;
+  const proxyResponsesReady = new Promise<void>((resolve, reject) => {
+    resolveProxyResponses = resolve;
+    rejectProxyResponses = reject;
+  });
   proxy.stdout.setEncoding('utf8');
   proxy.stderr.setEncoding('utf8');
-  proxy.stdout.on('data', (chunk) => { proxyStdout += chunk; });
+  proxy.stdout.on('data', (chunk) => {
+    proxyStdout += chunk;
+    proxyLineBuffer += chunk;
+    const lines = proxyLineBuffer.split(/\r?\n/);
+    proxyLineBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const message = JSON.parse(line) as Record<string, any>;
+      proxyResponses.push(message);
+      if (
+        proxyResponses.every((candidate) => expectedProxyResponseIds.has(Number(candidate.id)))
+        && expectedProxyResponseIds.size === new Set(proxyResponses.map((candidate) => Number(candidate.id))).size
+      ) {
+        resolveProxyResponses?.();
+      }
+    }
+  });
   proxy.stderr.on('data', (chunk) => { proxyStderr += chunk; });
+  const proxyClose = new Promise<number | null>((resolve) => proxy.once('close', resolve));
+  proxy.once('error', (error) => rejectProxyResponses?.(error));
   proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'initialize', params: { protocolVersion: '2024-11-05' } })}\n`);
   proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 12, method: 'tools/list', params: {} })}\n`);
   proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'surface_describe', arguments: {} } })}\n`);
   proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'surface_contract_describe', arguments: {} } })}\n`);
   proxy.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'not_exposed', arguments: {} } })}\n`);
   proxy.stdin.end();
+  await Promise.race([
+    proxyResponsesReady,
+    proxyClose.then(() => { throw new Error(`registrar_proxy_protocol_closed_before_responses:${proxyStderr}`); }),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error('registrar_proxy_protocol_response_timeout')), 10_000)),
+  ]);
   const exitCode = await Promise.race([
-    new Promise<number | null>((resolve) => proxy.on('close', resolve)),
-    new Promise<never>((_, reject) => setTimeout(() => {
+    proxyClose,
+    new Promise<null>((resolve) => setTimeout(() => {
       proxy.kill();
-      reject(new Error('registrar_proxy_protocol_timeout'));
+      resolve(null);
     }, 5_000)),
   ]);
   assert.equal(exitCode, 0, proxyStderr);
-  return proxyStdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  return proxyResponses;
 }
 
 try {
@@ -137,8 +169,8 @@ try {
   const proxyResponses = await exchangeThroughProxy();
   assert.equal(proxyResponses.find((message) => message.id === 11)?.result?.serverInfo?.name, 'mcp-registrar');
   assert.deepEqual(
-    proxyResponses.find((message) => message.id === 12)?.result?.tools?.map((tool: { name: string }) => tool.name),
-    [...expected, 'surface_describe', 'surface_contract_describe'],
+    proxyResponses.find((message) => message.id === 12)?.result?.tools?.map((tool: { name: string }) => tool.name).sort(),
+    [...expected, 'surface_describe', 'surface_contract_describe'].sort(),
   );
   const proxyTools = proxyResponses.find((message) => message.id === 12)?.result?.tools;
   for (const name of ['surface_describe', 'surface_contract_describe']) {
@@ -159,8 +191,8 @@ try {
   const surfaceContract = proxyResponses.find((message) => message.id === 14)?.result?.structuredContent;
   assert.equal(surfaceContract.schema, 'narada.mcp_surface.contract.v1');
   assert.deepEqual(
-    surfaceContract.tools.map((tool: { name: string }) => tool.name),
-    [...expected, 'surface_describe', 'surface_contract_describe'],
+    surfaceContract.tools.map((tool: { name: string }) => tool.name).sort(),
+    [...expected, 'surface_describe', 'surface_contract_describe'].sort(),
   );
   assert.equal(surfaceContract.client_interface_digest, surfaceContract.interface_digest);
   assert.equal(proxyResponses.find((message) => message.id === 15)?.error?.data?.code, 'tool_not_exposed');

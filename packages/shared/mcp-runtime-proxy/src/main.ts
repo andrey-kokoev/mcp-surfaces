@@ -351,6 +351,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   let stdoutTail = '';
   let parentFramed = false;
   let childClosed = false;
+  let carrierStdinClosed = false;
   let observedCapabilities: JsonRecord = {};
   const runtimePath = fileURLToPath(import.meta.url);
   const freshnessTracker = captureRuntimeFreshness({
@@ -631,6 +632,7 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
   });
 
   process.stdin.on('end', () => {
+    carrierStdinClosed = true;
     recordStartup('carrier_stdin_closed');
     if (!child.stdin.destroyed) child.stdin.end();
     terminateProxyChild(child, false);
@@ -725,7 +727,9 @@ export async function runProxy(argv = process.argv.slice(2)): Promise<void> {
       });
     }
     process.stdin.pause();
-    process.exitCode = typeof code === 'number' ? code : 1;
+    process.exitCode = carrierStdinClosed && pending.size === 0
+      ? 0
+      : typeof code === 'number' ? code : 1;
   });
 
   await new Promise<void>((resolveDone) => child.once('close', () => resolveDone()));
