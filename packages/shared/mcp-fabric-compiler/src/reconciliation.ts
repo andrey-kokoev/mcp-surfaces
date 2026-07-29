@@ -1,50 +1,50 @@
 import {
   MCP_FABRIC_SCHEMA_VERSION,
   fabricManifestDigest,
-  parseCarrierProjectionV3,
-  parseFabricManifestV3,
-  parseRuntimeObservationV3,
+  parseCarrierProjectionV2,
+  parseFabricManifestV2,
+  parseRuntimeObservationV2,
   stableDigest,
   surfaceDescriptorDigest,
-  surfaceInterfaceDigest,
-  type CarrierProjectionV3,
-  type FabricManifestV3,
-  type ReconciliationActionV3,
-  type ReconciliationPlanV3,
-  type RuntimeObservationV3,
-  type RuntimeServerObservationV3,
+  surfaceToolContractDigest,
+  type CarrierProjectionV2,
+  type FabricManifestV2,
+  type ReconciliationActionV2,
+  type ReconciliationPlanV2,
+  type RuntimeObservationV2,
+  type RuntimeServerObservationV2,
 } from '@narada2/mcp-fabric-contracts';
 
 export type ReconciliationInput = {
-  manifest: FabricManifestV3;
-  carrier_projection: CarrierProjectionV3;
-  observation: RuntimeObservationV3;
+  manifest: FabricManifestV2;
+  carrier_projection: CarrierProjectionV2;
+  observation: RuntimeObservationV2;
   generated_at?: string;
 };
 
 export type ReconciliationApplyGuard = {
-  action: ReconciliationActionV3;
-  current_observation: RuntimeObservationV3;
+  action: ReconciliationActionV2;
+  current_observation: RuntimeObservationV2;
   granted_authorities: string[];
   operation_id: string;
 };
 
 type ActionSeed = Omit<
-  ReconciliationActionV3,
+  ReconciliationActionV2,
   'operation_id' | 'expected_state'
 > & {
   expected_descriptor_digest: string | null;
 };
 
-export function reconcileFabricState(input: ReconciliationInput): ReconciliationPlanV3 {
-  const manifest = parseFabricManifestV3(input.manifest);
-  const carrier = parseCarrierProjectionV3(input.carrier_projection);
-  const observation = parseRuntimeObservationV3(input.observation);
+export function reconcileFabricState(input: ReconciliationInput): ReconciliationPlanV2 {
+  const manifest = parseFabricManifestV2(input.manifest);
+  const carrier = parseCarrierProjectionV2(input.carrier_projection);
+  const observation = parseRuntimeObservationV2(input.observation);
   const manifestDigest = fabricManifestDigest(manifest);
   const observationDigest = stableDigest(observation);
   const seed = selectAction(manifest, carrier, observation, manifestDigest);
   const operationId = operationIdFor(seed, manifestDigest, observationDigest);
-  const action: ReconciliationActionV3 = {
+  const action: ReconciliationActionV2 = {
     action: seed.action,
     server_name: seed.server_name,
     reason: seed.reason,
@@ -73,8 +73,8 @@ export function reconcileFabricState(input: ReconciliationInput): Reconciliation
   };
 }
 
-export function assertReconciliationApplyAllowed(input: ReconciliationApplyGuard): ReconciliationActionV3 {
-  const current = parseRuntimeObservationV3(input.current_observation);
+export function assertReconciliationApplyAllowed(input: ReconciliationApplyGuard): ReconciliationActionV2 {
+  const current = parseRuntimeObservationV2(input.current_observation);
   const currentDigest = stableDigest(current);
   if (input.operation_id !== input.action.operation_id) {
     throw new Error(
@@ -95,9 +95,9 @@ export function assertReconciliationApplyAllowed(input: ReconciliationApplyGuard
 }
 
 function selectAction(
-  manifest: FabricManifestV3,
-  carrier: CarrierProjectionV3,
-  observation: RuntimeObservationV3,
+  manifest: FabricManifestV2,
+  carrier: CarrierProjectionV2,
+  observation: RuntimeObservationV2,
   manifestDigest: string,
 ): ActionSeed {
   if (carrier.site_id !== manifest.site_id || observation.site_id !== manifest.site_id) {
@@ -142,7 +142,7 @@ function selectAction(
       return unsupported(desired.server_name, 'Desired carrier server references a missing surface projection.');
     }
     const expectedDescriptor = surfaceDescriptorDigest(descriptor);
-    const expectedTools = surfaceInterfaceDigest(descriptor);
+    const expectedTools = surfaceToolContractDigest(descriptor);
     const observed = observation.servers.find((server) => server.server_name === desired.server_name);
     if (!observed) {
       return actionForLifecycle(
@@ -154,6 +154,7 @@ function selectAction(
     }
     const drift = generationDrift(
       observed,
+      observation.observed_at,
       expectedDescriptor,
       expectedTools,
     );
@@ -181,7 +182,8 @@ function selectAction(
 }
 
 function generationDrift(
-  observed: RuntimeServerObservationV3,
+  observed: RuntimeServerObservationV2,
+  observedAt: string,
   expectedDescriptor: string,
   expectedTools: string,
 ): string | null {
@@ -189,9 +191,10 @@ function generationDrift(
   if (!active) return 'Runtime server has no active generation.';
   if (active.state !== 'active') return `Runtime generation is ${active.state}, not active.`;
   if (active.descriptor_digest !== expectedDescriptor) return 'Runtime descriptor digest differs from desired state.';
-  if (active.interface_digest !== expectedTools) return 'Runtime tools/list contract digest differs from desired state.';
+  if (active.tool_contract_digest !== expectedTools) return 'Runtime tools/list contract digest differs from desired state.';
   if (active.freshness !== 'current') return `Runtime freshness is ${active.freshness}.`;
   if (active.health !== 'healthy') return `Runtime health is ${active.health}.`;
+  if (Date.parse(active.lease_expires_at) <= Date.parse(observedAt)) return 'Runtime generation lease has expired.';
   return null;
 }
 
@@ -211,11 +214,11 @@ function actionForLifecycle(
       expected_descriptor_digest: descriptorDigest,
       outcome_tool: 'carrier_restart_outcome_show',
       recovery_tool: null,
-      recovery_guidance: 'Restart or reconnect the carrier through its supervisor, then obtain a fresh RuntimeObservationV3 before retrying.',
+      recovery_guidance: 'Restart or reconnect the carrier through its supervisor, then obtain a fresh RuntimeObservationV2 before retrying.',
     });
   }
   return actionSeed({
-    action: 'restart_process',
+    action: 'replace_generation',
     server_name: serverName,
     reason,
     actuator: 'mcp-loader',
@@ -223,7 +226,7 @@ function actionForLifecycle(
     expected_descriptor_digest: descriptorDigest,
     outcome_tool: 'mcp_loader_reconciliation_outcome_show',
     recovery_tool: 'mcp_loader_surface_restart',
-    recovery_guidance: 'Call mcp_loader_surface_restart for the stable logical connection. The loader must terminate the old child before starting the new process.',
+    recovery_guidance: 'Call mcp_loader_surface_restart for the stable logical connection with the operation_id and expected-state preconditions.',
   });
 }
 
@@ -242,7 +245,7 @@ function unsupported(serverName: string | null, reason: string): ActionSeed {
 }
 
 function actionSeed(input: {
-  action: ReconciliationActionV3['action'];
+  action: ReconciliationActionV2['action'];
   server_name: string | null;
   reason: string;
   actuator: string;

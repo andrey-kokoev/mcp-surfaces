@@ -26,7 +26,7 @@ import { surfaceDefinition as quotaMeter } from '@narada2/quota-meter-mcp/surfac
 import { surfaceDefinition as operatorConsoleOverlay } from '@narada2/operator-console-overlay-mcp/surface-definition';
 import { surfaceDefinition as cloudflareCarrier } from '@narada2/cloudflare-carrier-mcp/surface-definition';
 import { surfaceDefinition as siteCoherence } from '@narada2/site-coherence-mcp/surface-definition';
-import { surfaceDefinition as runtimeIntrospection } from '@narada2/runtime-introspection-mcp/surface-definition';
+import { surfaceDefinition as catalogObservation } from '@narada2/catalog-observation-mcp/surface-definition';
 
 export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>> = Object.freeze({
   'local-filesystem': localFilesystem(),
@@ -56,5 +56,5 @@ export const NATIVE_SURFACE_DEFINITIONS: Readonly<Record<string, DefinedSurface>
   'operator-console-overlay': operatorConsoleOverlay(),
   'cloudflare-carrier': cloudflareCarrier(),
   'site-coherence': siteCoherence(),
-  'runtime-introspection': runtimeIntrospection(),
+  'catalog-observation': catalogObservation(),
 });

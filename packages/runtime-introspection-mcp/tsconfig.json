@@ -8,7 +8,6 @@
   },
   "include": ["src/**/*.ts", "test/**/*.ts"],
   "references": [
-    { "path": "../shared/mcp-fabric-contracts" },
     { "path": "../shared/mcp-telemetry" },
     { "path": "../shared/mcp-e2e-harness" }
   ]

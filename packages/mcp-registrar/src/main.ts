@@ -1,59 +1,22 @@
 #!/usr/bin/env node
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
 import { payloadShow } from '@narada2/mcp-transport';
-import {
-  discoverPackageSourceRoots,
-  resolveArtifactSelector,
-  type ArtifactSelector,
-} from '@narada2/artifact-integrity';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { defineNativeSurface, surfaceDescriptorDigest, surfaceToolContractDigest, type DefinedSurface, type McpToolDefinition, type SurfaceDescriptorV2 } from '@narada2/mcp-fabric-contracts';
 import {
   MCP_RUNTIME_CONTRACT_VERSION,
-  assertCarrierGenerationActivated,
-  buildCarrierActivationMarker,
-  readCarrierGeneration,
-  resolveCarrierBinding,
-  resolvePinnedRuntimeProxy,
-  writeCarrierActivationMarkerImmutable,
-  type CarrierGenerationActivation,
-} from '@narada2/mcp-runtime-proxy/carrier-generation';
-import { defaultRuntimeDiagnosticsDir } from '@narada2/mcp-runtime-proxy/runtime-lifecycle';
-import {
-  defineNativeSurface,
-  standardSurfaceToolDefinitions,
-  surfaceDescriptorDigest,
-  surfaceInterfaceDigest,
-  type DefinedSurface,
-  type McpToolDefinition,
-  type SurfaceDescriptorV3,
-} from '@narada2/mcp-fabric-contracts';
+  buildMaterializationGeneration,
+  materializationSidecarPath,
+  validateMaterializedConfiguration,
+  writeMaterializationGeneration,
+} from '@narada2/mcp-runtime-proxy/materialization-contract';
 import { NATIVE_SURFACE_DEFINITIONS } from './native-catalog.js';
-import {
-  prepareV3CarrierGeneration,
-  writePreparedV3CarrierGeneration,
-  type PreparedV3CarrierGeneration,
-  type V3CarrierBindingSpec,
-} from '@narada2/mcp-runtime-proxy/carrier-materialization';
-import {
-  buildHardCutoverJournal,
-  discardPreparedHardCutover,
-  digestText,
-  readHardCutoverJournal,
-  writeHardCutoverJournal,
-  writeStagedCutoverFile,
-  type HardCutoverCoordinator,
-  type HardCutoverTarget,
-} from './hard-cutover.js';
-import {
-  validateV2PredecessorForHardCutover,
-  type V2PredecessorLaunch,
-} from './v2-predecessor.js';
 
 const SERVER_NAME = 'mcp-registrar';
 const SERVER_VERSION = '0.1.0';
@@ -69,7 +32,7 @@ type ValidationFinding = {
   detail?: JsonRecord;
 };
 
-export type JsonRecord = Record<string, unknown>;
+type JsonRecord = Record<string, unknown>;
 
 export type McpInjectionScope = 'host' | 'user_site' | 'local_site';
 type McpRestartOwner = McpInjectionScope;
@@ -140,12 +103,21 @@ type SiteDef = {
   surface_overrides?: Record<string, SurfaceOverride>;
 };
 
-type SiteMcpFabricMode = 'empty' | 'aggregate' | 'fragmented';
+type SiteMcpFabricMode = 'empty' | 'aggregate' | 'sidecar';
+type McpCarrierLoadingMode = 'static' | 'progressive';
+
+const PROGRESSIVE_BOOTSTRAP_SURFACES = [
+  'agent-context',
+  'mcp-registrar',
+  'mcp-loader',
+  'local-filesystem',
+] as const;
 
 type SiteBinding = {
   site_id: string;
   surfaces: 'all' | string[];
   prefix: string;
+  loading_mode?: McpCarrierLoadingMode;
   runtime_kind?: McpRuntimeKind;
   extra_allowed_roots?: string[];
 };
@@ -201,28 +173,12 @@ const MCP_REGISTRAR_PACKAGE_ROOT = findPackageRoot(dirname(fileURLToPath(import.
 const MCP_WORKSPACE_ROOT = resolve(process.env.NARADA_MCP_WORKSPACE_ROOT ?? join(MCP_REGISTRAR_PACKAGE_ROOT, '..', '..'));
 const MCP_WORKSPACE_PARENT = resolve(MCP_WORKSPACE_ROOT, '..');
 const MCP_SURFACES_ROOT = portablePathLiteral(process.env.NARADA_MCP_SURFACES_ROOT ?? join(MCP_WORKSPACE_ROOT, 'packages'));
-const MCP_RUNTIME_PROXY_PACKAGE_ROOT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy`;
-const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = portablePathLiteral(fileURLToPath(import.meta.url));
+const MCP_RUNTIME_PROXY_ENTRYPOINT = `${MCP_SURFACES_ROOT}/shared/mcp-runtime-proxy/dist/src/main.js`;
+const MCP_REGISTRAR_RUNTIME_ENTRYPOINT = `${MCP_SURFACES_ROOT}/mcp-registrar/dist/src/main.js`;
 const PROCESS_REGISTRAR_ENTRYPOINT_FINGERPRINT = existsSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)
   ? createHash('sha256').update(readFileSync(MCP_REGISTRAR_RUNTIME_ENTRYPOINT)).digest('hex')
   : null;
-const MCP_ARTIFACT_STORE = portablePathLiteral(
-  process.env.NARADA_MCP_ARTIFACT_STORE ?? join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'artifact-store-v3'),
-);
-const MCP_CARRIER_GENERATIONS_ROOT = portablePathLiteral(
-  process.env.NARADA_MCP_CARRIER_GENERATIONS_ROOT
-    ?? join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'carrier-generations-v3'),
-);
-const MCP_CARRIER_ACTIVATIONS_ROOT = portablePathLiteral(
-  process.env.NARADA_MCP_CARRIER_ACTIVATIONS_ROOT
-    ?? join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'carrier-activations-v3'),
-);
-const MCP_HARD_CUTOVER_ROOT = portablePathLiteral(
-  process.env.NARADA_MCP_HARD_CUTOVER_ROOT
-    ?? join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'hard-cutover-v3'),
-);
-const MCP_HARD_CUTOVER_JOURNAL = join(MCP_HARD_CUTOVER_ROOT, 'active.json');
-const MCP_LEGACY_RUNTIME_ROOT = join(MCP_WORKSPACE_ROOT, '.ai', 'runtime');
+const MCP_WORKSPACE_ARTIFACT_MANIFEST = portablePathLiteral(join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json'));
 const MCP_REGISTRAR_ENTRYPOINT = '{mcp_surfaces_root}/mcp-registrar/dist/src/main.js';
 const SPEECH_PROVIDER_REGISTRY_PATH = `${MCP_SURFACES_ROOT}/speech-mcp/config/provider-registry.v2.json`;
 
@@ -231,7 +187,7 @@ function nativeEntrypoint(value: string): string {
 }
 
 function nativeProjectionToRegistrarProjection(
-  projection: SurfaceDescriptorV3['projections'][number],
+  projection: SurfaceDescriptorV2['projections'][number],
 ): McpSurfaceProjection {
   if (projection.transport.kind !== 'stdio') {
     throw new Error(`mcp_fabric_transport_unsupported: ${projection.id}`);
@@ -465,31 +421,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -500,31 +437,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -535,31 +453,12 @@ const CARRIERS: CarrierDef[] = [
       site_id: 'andrey-user',
       surfaces: [
         'agent-context',
-        'task-lifecycle',
-        'site-inbox',
-        'mailbox',
-        'graph-mail',
-        'calendar',
-        'git',
         'local-filesystem',
-        'structured-command',
-        'worker-delegation',
-        'delegated-task',
-        'nars-session',
-        'sop',
-        'scheduler',
-        'site-loop',
         'mcp-registrar',
-        'site-registry',
-        'surface-feedback',
-        'launcher',
-        'speech',
-        'cloudflare-carrier',
-        'site-coherence',
         'mcp-loader',
-        'artifacts',
       ],
       prefix: 'narada-site-andrey-user',
+      loading_mode: 'progressive',
       extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
     }],
     extra_allowed_roots: defaultCarrierExtraAllowedRoots(),
@@ -610,31 +509,31 @@ function siteMcpFabricMode(site: SiteDef): SiteMcpFabricMode {
   const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
   if (files.length === 0) return 'empty';
   if (files.includes(siteAggregateMcpFileName(site.site_id))) return 'aggregate';
-  return 'fragmented';
+  return 'sidecar';
 }
 
-export function siteBindFragmentRefusal(site: SiteDef, surfaceId: string, _options: JsonRecord = {}): JsonRecord | null {
-  if (site.surface_overrides?.[surfaceId]?.enabled === false) {
+export function siteBindSidecarRefusal(site: SiteDef, surfaceId: string, options: JsonRecord = {}): JsonRecord | null {
+  if (site.surface_overrides?.[surfaceId]?.enabled === false && options.allow_disabled_sidecar !== true) {
     return {
       status: 'refused',
       reason_code: 'registrar_site_bind_refused_surface_disabled',
       site_id: site.site_id,
       surface_id: surfaceId,
-      fragment_state: 'disabled_by_site_override',
-      reason: 'This Site explicitly disables the requested surface, so registrar_site_bind will not materialize it.',
-      required_next_step: 'Enable the surface in the Site authority before materialization.',
+      sidecar_state: 'disabled_by_site_override',
+      reason: 'This Site explicitly disables the requested surface, so registrar_site_bind will not materialize a sidecar for it.',
+      required_next_step: 'Enable the surface in the Site override or pass allow_disabled_sidecar=true only for an intentional compatibility sidecar.',
     };
   }
   const fabricMode = siteMcpFabricMode(site);
-  if (fabricMode !== 'aggregate') return null;
+  if (fabricMode !== 'aggregate' || options.allow_sidecar === true) return null;
   return {
     status: 'refused',
     reason_code: 'registrar_site_bind_refused_aggregate_fabric_exists',
     site_id: site.site_id,
     surface_id: surfaceId,
     aggregate_file: siteAggregateMcpFileName(site.site_id),
-    reason: 'This Site has an authoritative aggregate MCP fabric; parallel fragment materialization is forbidden by runtime V3.',
-    required_next_step: 'Update the aggregate MCP fabric through the Site materialization path.',
+    reason: 'This Site has an authoritative aggregate MCP fabric. registrar_site_bind would create a sidecar snippet, so it is refused unless allow_sidecar is explicitly true.',
+    required_next_step: 'Update the aggregate MCP fabric through the Site materialization path, or pass allow_sidecar=true only for an intentional compatibility sidecar.',
   };
 }
 
@@ -750,7 +649,7 @@ export function listTools() {
     },
     {
       name: 'registrar_site_bind',
-      description: 'Create a new sealed V3 Site binding and activate it only after its immutable generation and config exist. Refuses replacement of an existing fragment.',
+      description: 'Bind a surface to a Narada site MCP config. Creates or updates the site config file.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -758,6 +657,8 @@ export function listTools() {
           surface_id: { type: 'string', description: 'Surface identifier, e.g. scheduler.' },
           projection_id: { type: 'string', description: 'Explicit surface projection identifier when the surface has more than one authority/runtime projection.' },
           runtime_kind: { type: 'string', enum: ['nars'], description: 'Explicit selected runtime kind. Required when selecting a runtime-affined projection without naming projection_id.' },
+          allow_sidecar: { type: 'boolean', description: 'Allow creating a compatibility sidecar even when an authoritative aggregate MCP fabric exists.' },
+          allow_disabled_sidecar: { type: 'boolean', description: 'Allow binding a surface explicitly disabled by site override; intended only for compatibility repair.' },
         },
         required: ['site_id', 'surface_id'],
         additionalProperties: false,
@@ -767,14 +668,14 @@ export function listTools() {
     },
     {
       name: 'registrar_site_unbind',
-      description: 'Refuse patch-in-place Site unbinding; removal requires a complete external Site-fabric cutover.',
+      description: 'Remove a surface from a Narada site MCP config.',
       inputSchema: {
         type: 'object',
         properties: { site_id: { type: 'string' }, surface_id: { type: 'string' } },
         required: ['site_id', 'surface_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_site_unbind', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { title: 'registrar_site_unbind', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -786,7 +687,7 @@ export function listTools() {
     },
     {
       name: 'registrar_carrier_bind',
-      description: 'Report an existing authority-model binding or refuse patch-in-place additions. Executable carrier changes require the coordinated all-carrier hard cutover.',
+      description: 'Bind a surface to a carrier config (opencode, Kimi, or Codex).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -798,19 +699,19 @@ export function listTools() {
         required: ['carrier_id', 'surface_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_carrier_bind', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { title: 'registrar_carrier_bind', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
       name: 'registrar_carrier_unbind',
-      description: 'Refuse patch-in-place removal; update the carrier authority model and apply a new complete sealed V3 generation.',
+      description: 'Remove a surface from a carrier config.',
       inputSchema: {
         type: 'object',
         properties: { carrier_id: { type: 'string' }, surface_id: { type: 'string' } },
         required: ['carrier_id', 'surface_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_carrier_unbind', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { title: 'registrar_carrier_unbind', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -825,6 +726,7 @@ export function listTools() {
           target: { type: 'string', enum: ['all_sites', 'all_carriers', 'all', 'all_surfaces_to_carriers', 'all_surfaces_to_all_carriers'], description: 'all_sites/all_carriers/all: bind one surface. all_surfaces_to_carriers: bind all surfaces to a specific carrier. all_surfaces_to_all_carriers: bind all surfaces to all carriers.' },
           carrier_id: { type: 'string', description: 'Required when target is all_surfaces_to_carriers.' },
           site_filter: { type: 'string', description: 'Optional prefix filter for site IDs, e.g. narada-.' },
+          allow_sidecar: { type: 'boolean', description: 'Allow explicit compatibility sidecar creation for sites with authoritative aggregate MCP fabric.' },
         },
         required: ['target'],
         additionalProperties: false,
@@ -834,21 +736,22 @@ export function listTools() {
     },
     {
       name: 'registrar_carrier_materialize',
-      description: 'Preview one ownership-scoped carrier-native V3 config and generation without writing either. Narada-owned entries are replaced while unrelated carrier settings and MCP servers are preserved.',
+      description: 'Generate a carrier-native MCP config from the carrier manifest and site configs. Preview-only unless output_path is provided.',
       inputSchema: {
         type: 'object',
         properties: {
           carrier_id: { type: 'string', description: 'Carrier identifier, e.g. kimi-andrey.' },
+          output_path: { type: 'string', description: 'Optional path to write the generated config for inspection.' },
         },
         required: ['carrier_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_carrier_materialize', readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      annotations: { title: 'registrar_carrier_materialize', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
       name: 'registrar_carrier_apply',
-      description: 'Refuse unsafe single-carrier activation; runtime V3 activation must use the complete all-carrier hard-cutover coordinator.',
+      description: 'Generate and atomically replace a carrier-native MCP config at the carrier config_path; hard cutover does not retain the previous config.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -857,45 +760,12 @@ export function listTools() {
         required: ['carrier_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_carrier_apply', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      outputSchema: { type: 'object', additionalProperties: true },
-    },
-    {
-      name: 'registrar_runtime_v3_cutover_prepare',
-      description: 'Prepare one durable forward-only runtime V3 cutover for every registered carrier. It preserves non-Narada config data, pins a sealed coordinator, rejects unmanaged or mixed runtime references, and does not mutate live configs or terminate processes. Execution has no backup or rollback path.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      },
-      annotations: { title: 'registrar_runtime_v3_cutover_prepare', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      outputSchema: { type: 'object', additionalProperties: true },
-    },
-    {
-      name: 'registrar_runtime_v3_cutover_status',
-      description: 'Inspect the active forward-only runtime V3 cutover journal and exact sealed coordinator command, if one exists.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      },
-      annotations: { title: 'registrar_runtime_v3_cutover_status', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-      outputSchema: { type: 'object', additionalProperties: true },
-    },
-    {
-      name: 'registrar_runtime_v3_cutover_discard_prepared',
-      description: 'Discard only an inert prepared cutover before execution starts. This removes staged configs and unactivated generations; it is not a rollback and is refused after predecessor disablement.',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false,
-      },
-      annotations: { title: 'registrar_runtime_v3_cutover_discard_prepared', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      annotations: { title: 'registrar_carrier_apply', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
       name: 'registrar_carrier_validate',
-      description: 'Validate exact agreement among the carrier config, immutable V3 generation, sealed proxy/child closures, and source-fresh native descriptors without writing.',
+      description: 'Validate a carrier configuration without writing it: report missing entrypoints, duplicate server keys, missing required flags, and local/shared collisions.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -910,7 +780,7 @@ export function listTools() {
     },
     {
       name: 'registrar_carrier_diff',
-      description: 'Compare the ownership-scoped generated carrier config against the current file. Unrelated carrier settings and MCP servers remain preserved.',
+      description: 'Compare the generated carrier config against the current carrier config file and report additions, removals, and changes.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -968,11 +838,11 @@ export function listTools() {
     },
     {
       name: 'registrar_surface_tool_inventory_check',
-      description: 'Compare registrar surface tool metadata with observed MCP tools/list names and report per-surface drift. Source-child observations may omit only the universal tools supplied by the sealed V3 runtime.',
+      description: 'Compare registrar surface tool metadata with observed MCP tools/list names and report per-surface drift.',
       inputSchema: {
         type: 'object',
         properties: {
-          observed_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Map of surface id to source-child or client-visible tools/list names. The check adds the sealed runtime’s universal surface tools when a source child omits them.' },
+          observed_tools: { type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } }, description: 'Map of surface id to observed tools/list names.' },
           include_ok: { type: 'boolean', description: 'Include passing surfaces in the output.' },
         },
         additionalProperties: false,
@@ -1058,7 +928,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_surface_list': result = registrarSurfaceList(args); break;
     case 'registrar_site_list': result = registrarSiteList(args); break;
     case 'registrar_site_surfaces': result = registrarSiteSurfaces(args); break;
-    case 'registrar_site_bind': result = await registrarSiteBind(args); break;
+    case 'registrar_site_bind': result = registrarSiteBind(args); break;
     case 'registrar_site_unbind': result = registrarSiteUnbind(args); break;
     case 'registrar_carrier_list': result = registrarCarrierList(args); break;
     case 'registrar_carrier_bind': result = await registrarCarrierBind(args); break;
@@ -1066,11 +936,8 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_sync': result = await registrarSync(args); break;
     case 'registrar_carrier_materialize': result = await registrarCarrierMaterialize(args); break;
     case 'registrar_carrier_apply': result = await registrarCarrierApply(args); break;
-    case 'registrar_runtime_v3_cutover_prepare': result = await registrarRuntimeV3CutoverPrepare(args); break;
-    case 'registrar_runtime_v3_cutover_status': result = registrarRuntimeV3CutoverStatus(args); break;
-    case 'registrar_runtime_v3_cutover_discard_prepared': result = await registrarRuntimeV3CutoverDiscardPrepared(args); break;
-    case 'registrar_carrier_validate': result = await registrarCarrierValidate(args); break;
-    case 'registrar_carrier_diff': result = await registrarCarrierDiff(args); break;
+    case 'registrar_carrier_validate': result = registrarCarrierValidate(args); break;
+    case 'registrar_carrier_diff': result = registrarCarrierDiff(args); break;
     case 'registrar_surface_usage': result = registrarSurfaceUsage(args); break;
     case 'registrar_site_mcp_fabric_validate': result = registrarSiteMcpFabricValidate(args); break;
     case 'registrar_site_surface_registry_sync': result = registrarSiteSurfaceRegistrySync(args); break;
@@ -1154,88 +1021,10 @@ function appendSopsDirs(args: string[]): string[] {
 }
 
 function stripJsoncComments(text: string): string {
-  let stripped = '';
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    const next = text[index + 1];
-    if (inString) {
-      stripped += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      stripped += char;
-      continue;
-    }
-    if (char === '/' && next === '/') {
-      stripped += '  ';
-      index++;
-      while (index + 1 < text.length && text[index + 1] !== '\n' && text[index + 1] !== '\r') {
-        stripped += ' ';
-        index++;
-      }
-      continue;
-    }
-    if (char === '/' && next === '*') {
-      stripped += '  ';
-      index++;
-      while (index + 1 < text.length) {
-        const commentChar = text[index + 1];
-        const commentNext = text[index + 2];
-        if (commentChar === '*' && commentNext === '/') {
-          stripped += '  ';
-          index += 2;
-          break;
-        }
-        stripped += commentChar === '\n' || commentChar === '\r' ? commentChar : ' ';
-        index++;
-      }
-      continue;
-    }
-    stripped += char;
-  }
-
-  let normalized = '';
-  inString = false;
-  escaped = false;
-  for (let index = 0; index < stripped.length; index++) {
-    const char = stripped[index];
-    if (inString) {
-      normalized += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      normalized += char;
-      continue;
-    }
-    if (char === ',') {
-      let lookahead = index + 1;
-      while (lookahead < stripped.length && /\s/u.test(stripped[lookahead])) lookahead++;
-      if (stripped[lookahead] === '}' || stripped[lookahead] === ']') {
-        normalized += ' ';
-        continue;
-      }
-    }
-    normalized += char;
-  }
-  return normalized;
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^\\:])\/\/.*$/gm, '$1')
+    .replace(/^\s*\/\/.*$/gm, '');
 }
 
 function readJsonFile(path: string): JsonRecord | null {
@@ -1294,7 +1083,7 @@ function catalogSurface(surfaceId: string): RegistrarSurfaceRecord | undefined {
   return SURFACES.find((surface) => surface.id === surfaceId);
 }
 
-export function nativeSurfaceDescriptor(surfaceId: string): SurfaceDescriptorV3 {
+export function nativeSurfaceDescriptor(surfaceId: string): SurfaceDescriptorV2 {
   if (surfaceId === 'mcp-registrar') return registrarSurfaceDefinition().descriptor;
   const native = NATIVE_SURFACE_DEFINITIONS[surfaceId];
   if (!native) {
@@ -1412,7 +1201,7 @@ function projectionMetadata(surfaceId: string, projectionId?: string, runtimeKin
     runtime_requirements: projection.runtime_requirements ?? [],
     ...(runtimeKind ? { runtime_kind: runtimeKind } : {}),
     descriptor_digest: surfaceDescriptorDigest(descriptor),
-    interface_digest: surfaceInterfaceDigest(descriptor),
+    tool_contract_digest: surfaceToolContractDigest(descriptor),
     surface_descriptor: descriptor,
     lifecycle: descriptor.projections.find((candidate) => candidate.id === projection.id)?.lifecycle,
   };
@@ -1511,6 +1300,42 @@ function dedupeRoots(roots: string[]): string[] {
   return result;
 }
 
+function writeSiteAllowedRootsConfig(carrier: CarrierDef): void {
+  for (const binding of carrier.site_bindings) {
+    const site = lookupSite(binding.site_id);
+    const siteRoot = canonicalWorkspaceRoot(site.root).replace(/\\/g, '/');
+    const siteControlRoot = sitePathInterpolation(siteRoot).siteControlRoot;
+    const extraRoots = dedupeRoots([
+      ...(carrier.extra_allowed_roots ?? []),
+      ...(binding.extra_allowed_roots ?? []),
+    ]).filter((r) => r !== siteRoot);
+
+    if (extraRoots.length === 0) continue;
+
+    const naradaDir = siteControlRoot;
+    try { mkdirSync(naradaDir, { recursive: true }); } catch { /* existing */ }
+    const config = {
+      schema: 'narada.site.allowed_roots.v1',
+      generated_by: 'mcp-registrar',
+      generated_at: new Date().toISOString(),
+      site_id: binding.site_id,
+      extra_allowed_roots: extraRoots,
+    };
+    writeFileSync(join(naradaDir, 'allowed-roots.json'), JSON.stringify(config, null, 2) + '\n', 'utf8');
+  }
+}
+
+function writeSiteSurfaceRegistriesForCarrier(carrier: CarrierDef): JsonRecord[] {
+  const seen = new Set<string>();
+  const results: JsonRecord[] = [];
+  for (const binding of carrier.site_bindings) {
+    if (seen.has(binding.site_id)) continue;
+    seen.add(binding.site_id);
+    results.push(writeSiteSurfaceRegistry(lookupSite(binding.site_id)));
+  }
+  return results;
+}
+
 function materializeSharedSurface(binding: SiteBinding, site: SiteDef, surfaceId: string, extraRoots: string[]): { key: string; server: MaterializedServer } {
   const surface = lookupSurface(surfaceId);
   const selected = selectSurfaceProjection(surfaceId, undefined, binding.runtime_kind);
@@ -1588,7 +1413,37 @@ function automaticProjectionForBinding(surface: RegistrarSurfaceRecord, binding:
   return defaults.length === 1 ? defaults[0] : null;
 }
 
+function assertCarrierBindingLoadingMode(binding: SiteBinding): void {
+  if (binding.loading_mode !== 'progressive') return;
+  if (binding.surfaces === 'all') {
+    throw diagnosticError(
+      'registrar_progressive_binding_requires_explicit_bootstrap',
+      `registrar_progressive_binding_requires_explicit_bootstrap:${binding.site_id}`,
+      {
+        site_id: binding.site_id,
+        loading_mode: binding.loading_mode,
+        remediation: 'Replace surfaces=all with an explicit progressive bootstrap allowlist; use mcp-loader for all other surfaces.',
+      },
+    );
+  }
+  const missing = PROGRESSIVE_BOOTSTRAP_SURFACES.filter((surfaceId) => !binding.surfaces.includes(surfaceId));
+  if (missing.length > 0) {
+    throw diagnosticError(
+      'registrar_progressive_binding_missing_bootstrap_surface',
+      `registrar_progressive_binding_missing_bootstrap_surface:${binding.site_id}`,
+      {
+        site_id: binding.site_id,
+        loading_mode: binding.loading_mode,
+        required_bootstrap_surfaces: PROGRESSIVE_BOOTSTRAP_SURFACES,
+        missing_surfaces: missing,
+        remediation: 'Add every required bootstrap surface or switch the binding to static loading.',
+      },
+    );
+  }
+}
+
 export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
+  assertCarrierBindingLoadingMode(binding);
   const explicit = binding.surfaces === 'all'
     ? SURFACES.filter((surface) => {
       try {
@@ -1599,6 +1454,7 @@ export function sharedSurfaceIdsForBinding(binding: SiteBinding): string[] {
       }
     }).map((surface) => surface.id)
     : binding.surfaces.filter((surfaceId) => !surfaceId.endsWith('.local'));
+  if (binding.loading_mode === 'progressive') return Array.from(new Set(explicit));
   const ids = new Set(explicit);
   for (const surface of SURFACES) {
     if (automaticProjectionForBinding(surface, binding)) ids.add(surface.id);
@@ -1645,6 +1501,13 @@ function carrierServerKeysForSurface(carrier: CarrierDef, surfaceId: string): st
 
 function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
   const counts: Record<McpInjectionScope, number> = { host: 0, user_site: 0, local_site: 0 };
+  const bindings = carrier.site_bindings.map((binding) => ({
+    site_id: binding.site_id,
+    loading_mode: binding.loading_mode ?? 'static',
+    bootstrap_surface_ids: binding.surfaces === 'all'
+      ? 'all'
+      : [...binding.surfaces],
+  }));
   const servers = Object.entries(collectCarrierServers(carrier)).map(([serverKey, server]) => {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     counts[server.injection_scope]++;
@@ -1659,7 +1522,7 @@ function carrierInjectionSummary(carrier: CarrierDef): JsonRecord {
       narada_scope: server.narada_scope,
     };
   });
-  return { counts, servers };
+  return { counts, servers, bindings };
 }
 
 function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, surfaceId: string): MaterializedServer {
@@ -1677,825 +1540,225 @@ function applySurfaceOverrides(carrier: CarrierDef, server: MaterializedServer, 
 type CarrierLaunchCommand = {
   command: string;
   args: string[];
-  uses_runtime_proxy: true;
-  runtime_proxy_entrypoint: string;
-  runtime_contract_version: typeof MCP_RUNTIME_CONTRACT_VERSION;
-  carrier_generation_path: string;
-  artifact_store: string;
+  uses_runtime_proxy: boolean;
+  runtime_proxy_entrypoint?: string;
+  artifact_manifest_path?: string;
+  runtime_contract_version?: number;
+  materialization_sidecar_path?: string;
   child_entrypoint: string;
   child_args: string[];
 };
 
-type PreparedCarrierRuntime = {
-  prepared: PreparedV3CarrierGeneration;
-  servers: Record<string, MaterializedServer>;
-};
-
-type PreparedActivation = {
-  activation: CarrierGenerationActivation;
-  activation_token: string;
-};
-
-function prepareActivation(cutoverId = randomUUID()): PreparedActivation {
-  const activationToken = randomBytes(32).toString('hex');
-  return {
-    activation: {
-      cutover_id: cutoverId,
-      marker_path: join(MCP_CARRIER_ACTIVATIONS_ROOT, `${cutoverId}.json`),
-      token_digest: digestText(activationToken),
-    },
-    activation_token: activationToken,
-  };
-}
-
 function carrierLaunchCommand(
-  runtime: PreparedCarrierRuntime,
-  serverKey: string,
   server: MaterializedServer,
+  surfaceId: string,
+  configPath?: string,
+  carrier?: Pick<CarrierDef, 'carrier_id' | 'kind'>,
 ): CarrierLaunchCommand {
-  const launch = runtime.prepared.launches.get(serverKey);
-  if (!launch) {
-    throw diagnosticError(
-      'registrar_v3_binding_missing',
-      `No sealed V3 launch exists for ${serverKey}.`,
-      { server_key: serverKey },
-    );
-  }
-  return {
-    command: launch.command,
-    args: launch.args,
-    uses_runtime_proxy: true,
-    runtime_proxy_entrypoint: runtime.prepared.runtime_proxy_entrypoint,
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
-    carrier_generation_path: runtime.prepared.generation_path,
-    artifact_store: runtime.prepared.artifact_store,
-    child_entrypoint: server.entrypoint,
-    child_args: server.args,
-  };
-}
-
-function packageRootForDescriptor(descriptor: SurfaceDescriptorV3): string {
-  const packageDirectory = descriptor.package.replace(/^@narada2\//u, '');
-  const direct = `${MCP_SURFACES_ROOT}/${packageDirectory}`;
-  if (existsSync(`${direct}/package.json`)) return direct;
-  const shared = `${MCP_SURFACES_ROOT}/shared/${packageDirectory}`;
-  if (existsSync(`${shared}/package.json`)) return shared;
-  throw diagnosticError(
-    'registrar_v3_package_root_missing',
-    `Package root is missing for ${descriptor.package}.`,
-    { package: descriptor.package, direct, shared },
-  );
-}
-
-async function prepareCarrierRuntime(
-  carrier: CarrierDef,
-  configPath: string,
-  activation: CarrierGenerationActivation,
-): Promise<PreparedCarrierRuntime> {
-  const servers = collectCarrierServers(carrier);
-  const bindings: V3CarrierBindingSpec[] = [];
-  for (const [serverKey, server] of Object.entries(servers)) {
-    if (server.kind !== 'shared') {
-      throw diagnosticError(
-        'registrar_v3_local_surface_unsupported',
-        `V3 hard cutover refuses unsealed local surface ${serverKey}.`,
-        {
-          server_key: serverKey,
-          surface_id: server.local?.surface_id ?? null,
-          remediation: 'Promote the surface into a package-owned native descriptor and sealed artifact before binding it.',
-        },
-      );
-    }
-    const surface = server.surface as RegistrarSurfaceRecord;
-    const descriptor = nativeSurfaceDescriptor(surface.id);
-    const selectedProjection = server.projection ?? selectSurfaceProjection(surface.id).projection;
-    const overridden = applySurfaceOverrides(carrier, server, surface.id);
-    if (portablePath(overridden.entrypoint) !== portablePath(server.entrypoint)) {
-      throw diagnosticError(
-        'registrar_v3_entrypoint_override_refused',
-        `V3 hard cutover refuses entrypoint override for ${serverKey}.`,
-        {
-          server_key: serverKey,
-          surface_id: surface.id,
-          declared_entrypoint: server.entrypoint,
-          overridden_entrypoint: overridden.entrypoint,
-        },
-      );
-    }
-    bindings.push({
-      binding_id: `${carrier.carrier_id}.${serverKey}`,
-      server_key: serverKey,
-      surface_id: surface.id,
-      projection_id: selectedProjection.id,
-      descriptor,
-      source: {
-        package_root: packageRootForDescriptor(descriptor),
-        workspace_root: MCP_WORKSPACE_ROOT,
-      },
-      artifact_entrypoint: server.entrypoint,
-      child_args: overridden.args,
-      child_env_names: projectionEnvVars(surface, selectedProjection),
-      client_tool_names: nativeToolNames(surface.id),
-    });
-  }
-  const prepared = await prepareV3CarrierGeneration({
-    carrier_id: carrier.carrier_id,
-    carrier_kind: carrier.kind,
-    config_path: configPath,
-    artifact_store: MCP_ARTIFACT_STORE,
-    generation_root: MCP_CARRIER_GENERATIONS_ROOT,
-    runtime_proxy_package_root: MCP_RUNTIME_PROXY_PACKAGE_ROOT,
-    runtime_proxy_workspace_root: MCP_WORKSPACE_ROOT,
-    bindings,
-    activation,
-  });
-  return { prepared, servers };
-}
-
-function carrierOwnedServerPrefixes(carrier: CarrierDef): string[] {
-  return uniqueStrings(carrier.site_bindings.map((binding) => binding.prefix));
-}
-
-function serverKeyOwnedByPrefixes(serverKey: string, ownedPrefixes: string[]): boolean {
-  return ownedPrefixes.some((prefix) => (
-    serverKey === prefix || serverKey.startsWith(`${prefix}-`)
-  ));
-}
-
-function carrierOwnsServerKey(carrier: CarrierDef, serverKey: string): boolean {
-  return serverKeyOwnedByPrefixes(serverKey, carrierOwnedServerPrefixes(carrier));
-}
-
-function currentCarrierConfig(
-  carrier: CarrierDef,
-  currentContent: string | null,
-): JsonRecord {
-  if (currentContent === null) return {};
-  const parsed = parseCarrierConfig(carrier.kind, currentContent);
-  if (parsed) return parsed;
-  throw diagnosticError(
-    'registrar_carrier_config_invalid',
-    'Current carrier configuration is invalid; refusing to replace or normalize it.',
-    {
-      carrier_id: carrier.carrier_id,
-      carrier_kind: carrier.kind,
-      config_path: carrier.config_path,
-    },
-  );
-}
-
-function carrierServerRoot(kind: CarrierDef['kind'], structured: JsonRecord): JsonRecord {
-  return asRecord(kind === 'opencode' ? structured.mcp : structured.mcpServers);
-}
-
-function carrierRecordLaunch(kind: CarrierDef['kind'], record: JsonRecord): {
-  command: string;
-  args: string[];
-} {
-  if (kind === 'opencode' && Array.isArray(record.command)) {
+  const childEntrypoint = server.entrypoint;
+  const childArgs = server.args;
+  const sidecarPath = configPath ? materializationSidecarPath(configPath) : null;
+  if (server.kind === 'local') {
     return {
-      command: String(record.command[0] ?? ''),
-      args: record.command.slice(1).map(String),
+      command: server.command ?? 'node',
+      args: [childEntrypoint, ...childArgs],
+      uses_runtime_proxy: false,
+      child_entrypoint: childEntrypoint,
+      child_args: childArgs,
     };
   }
   return {
-    command: String(record.command ?? ''),
-    args: Array.isArray(record.args) ? record.args.map(String) : [],
+    command: 'node',
+    args: [
+      MCP_RUNTIME_PROXY_ENTRYPOINT,
+      '--surface-id',
+      surfaceId,
+      ...(configPath && carrier ? [
+        '--carrier-id',
+        carrier.carrier_id,
+        '--carrier-kind',
+        carrier.kind,
+        '--registrar-entrypoint',
+        MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+      ] : []),
+      '--artifact-manifest',
+      MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      '--runtime-contract-version',
+      String(MCP_RUNTIME_CONTRACT_VERSION),
+      ...(sidecarPath ? ['--materialization-sidecar', sidecarPath] : []),
+      '--entrypoint',
+      childEntrypoint,
+      '--',
+      ...childArgs,
+    ],
+    uses_runtime_proxy: true,
+    runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    ...(sidecarPath ? { materialization_sidecar_path: sidecarPath } : {}),
+    child_entrypoint: childEntrypoint,
+    child_args: childArgs,
   };
 }
 
-function launchArgument(args: string[], name: string): string | null {
-  const index = args.indexOf(name);
-  return index >= 0 && index + 1 < args.length ? args[index + 1] : null;
-}
+type RuntimeDependencyCheck = {
+  dependency: string;
+  package_root: string;
+  export_path: string;
+  exists: boolean;
+};
 
-function isNaradaProxyLaunch(launch: { command: string; args: string[] }): boolean {
-  const proxyEntrypoint = (launch.args[0] ?? '').replace(/\\/g, '/').toLowerCase();
-  return (
-    proxyEntrypoint.includes('/mcp-runtime-proxy/')
-    || launch.args.includes('--artifact-manifest')
-    || launch.args.includes('--carrier-generation')
-  );
-}
+function runtimeExportTargetExists(exportPath: string): boolean {
+  const wildcardIndex = exportPath.search(/[*?]/);
+  if (wildcardIndex < 0) return existsSync(exportPath);
 
-function sameRuntimePath(left: string, right: string): boolean {
-  const leftPath = resolve(left);
-  const rightPath = resolve(right);
-  return process.platform === 'win32'
-    ? leftPath.toLowerCase() === rightPath.toLowerCase()
-    : leftPath === rightPath;
-}
-
-function readLegacyJson(path: string, label: string): JsonRecord {
+  // Package export patterns such as ./dist/schema/* name a family of
+  // runtime artifacts, not a literal filesystem entry containing '*'.
+  const staticPrefix = exportPath.slice(0, wildcardIndex);
+  const directory = staticPrefix.endsWith('/') || staticPrefix.endsWith('\\')
+    ? staticPrefix.slice(0, -1)
+    : dirname(staticPrefix);
+  if (!existsSync(directory)) return false;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not_an_object');
-    return parsed as JsonRecord;
-  } catch (error) {
-    throw diagnosticError(
-      'registrar_v2_predecessor_unverifiable',
-      `The runtime V2 ${label} is unreadable.`,
-      { path: resolve(path), error: error instanceof Error ? error.message : String(error) },
-    );
+    return readdirSync(directory, { withFileTypes: true }).some((entry) => entry.isFile() || entry.isDirectory());
+  } catch {
+    return false;
   }
 }
 
-function validateV2PredecessorCarrierRuntime(
-  carrier: CarrierDef,
-  currentStructured: JsonRecord,
-  launches: V2PredecessorLaunch[],
+function dependencyPackageRoot(dependency: string): string {
+  const packageName = dependency.replace('@narada2/', '');
+  const sharedRoot = `${MCP_SURFACES_ROOT}/shared/${packageName}`;
+  if (existsSync(`${sharedRoot}/package.json`)) return sharedRoot;
+  return `${MCP_SURFACES_ROOT}/${packageName}`;
+}
+
+function sharedRuntimeDependencyChecks(surface: RegistrarSurfaceRecord): RuntimeDependencyCheck[] {
+  const packageRoot = `${MCP_SURFACES_ROOT}/${surface.package}`;
+  const packagePath = `${packageRoot}/package.json`;
+  if (!existsSync(packagePath)) return [];
+  let packageJson: JsonRecord;
+  try {
+    packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as JsonRecord;
+  } catch {
+    return [];
+  }
+  const dependencies = asRecord(packageJson.dependencies);
+  const checks: RuntimeDependencyCheck[] = [];
+  for (const dependency of Object.keys(dependencies).filter((name) => name.startsWith('@narada2/mcp-'))) {
+    const dependencyRoot = dependencyPackageRoot(dependency);
+    const dependencyPackagePath = `${dependencyRoot}/package.json`;
+    if (!existsSync(dependencyPackagePath)) {
+      checks.push({ dependency, package_root: dependencyRoot, export_path: dependencyPackagePath, exists: false });
+      continue;
+    }
+    let dependencyPackageJson: JsonRecord;
+    try {
+      dependencyPackageJson = JSON.parse(readFileSync(dependencyPackagePath, 'utf8')) as JsonRecord;
+    } catch {
+      checks.push({ dependency, package_root: dependencyRoot, export_path: dependencyPackagePath, exists: false });
+      continue;
+    }
+    for (const exportTarget of packageExportRuntimeTargets(dependencyPackageJson)) {
+      const exportPath = `${dependencyRoot}/${exportTarget.replace(/^\.\//, '')}`;
+      checks.push({ dependency, package_root: dependencyRoot, export_path: exportPath, exists: runtimeExportTargetExists(exportPath) });
+    }
+  }
+  return checks;
+}
+
+function packageExportRuntimeTargets(packageJson: JsonRecord): string[] {
+  const exportsValue = packageJson.exports;
+  if (typeof exportsValue === 'string') return [exportsValue];
+  const exportsRecord = asRecord(exportsValue);
+  const targets: string[] = [];
+  for (const value of Object.values(exportsRecord)) {
+    if (typeof value === 'string') targets.push(value);
+    else {
+      const record = asRecord(value);
+      if (typeof record.default === 'string') targets.push(record.default);
+    }
+  }
+  return Array.from(new Set(targets));
+}
+
+function addRuntimePreflightFindings(
+  add: (severity: ValidationFinding['severity'], code: string, message: string, detail?: JsonRecord) => void,
+  includeOk: boolean,
+  detail: JsonRecord,
+  surface: RegistrarSurfaceRecord | null,
+  usesRuntimeProxy: boolean,
 ): void {
-  const configPath = resolve(carrier.config_path);
-  const sidecarPath = `${configPath}.narada-generation.json`;
-  const manifestPath = resolve(MCP_LEGACY_RUNTIME_ROOT, 'workspace-artifact-manifest.json');
-  const runtimeProxyEntrypoint = resolve(MCP_RUNTIME_PROXY_PACKAGE_ROOT, 'dist', 'src', 'main.js');
-  const registrarEntrypoint = resolve(MCP_SURFACES_ROOT, 'mcp-registrar', 'dist', 'src', 'main.js');
-  if (!existsSync(configPath) || !existsSync(sidecarPath)) {
-    throw diagnosticError(
-      'registrar_v2_predecessor_unverifiable',
-      'Runtime V2 predecessor records are incomplete.',
-      {
-        carrier_id: carrier.carrier_id,
-        config_path: configPath,
-        sidecar_path: sidecarPath,
-      },
-    );
-  }
-
-  for (const { server_key: serverKey, launch } of launches) {
-    const childEntrypoint = launchArgument(launch.args, '--entrypoint');
-    if (!childEntrypoint || !isAbsolute(childEntrypoint) || !existsSync(childEntrypoint)) {
-      throw diagnosticError(
-        'registrar_v2_predecessor_unverifiable',
-        'A runtime V2 predecessor child entrypoint is missing.',
-        {
-          reason: 'child_entrypoint_missing',
-          carrier_id: carrier.carrier_id,
-          server_key: serverKey,
-          child_entrypoint: childEntrypoint,
-        },
-      );
+  if (usesRuntimeProxy) {
+    if (!existsSync(MCP_WORKSPACE_ARTIFACT_MANIFEST)) {
+      add('error', 'registrar_workspace_artifact_manifest_missing', `Workspace artifact manifest does not exist: ${MCP_WORKSPACE_ARTIFACT_MANIFEST}`, {
+        ...detail,
+        artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+        remediation: 'Run pnpm build from mcp-surfaces before launching carrier MCPs.',
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_workspace_artifact_manifest_exists', `Workspace artifact manifest exists: ${MCP_WORKSPACE_ARTIFACT_MANIFEST}`, {
+        ...detail,
+        artifact_manifest_path: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      });
+    }
+    if (!existsSync(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
+      add('error', 'registrar_runtime_proxy_missing', `Runtime proxy does not exist: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, {
+        ...detail,
+        runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+        remediation: 'Run pnpm --filter @narada2/mcp-runtime-proxy build before launching carrier MCPs.',
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_runtime_proxy_exists', `Runtime proxy exists: ${MCP_RUNTIME_PROXY_ENTRYPOINT}`, { ...detail, runtime_proxy_entrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT });
     }
   }
-
-  const sidecar = readLegacyJson(sidecarPath, 'materialization generation sidecar');
-  const root = carrierServerRoot(carrier.kind, currentStructured);
-  validateV2PredecessorForHardCutover({
-    carrier_id: carrier.carrier_id,
-    carrier_kind: carrier.kind,
-    config_path: configPath,
-    config_content: readFileSync(configPath, 'utf8'),
-    server_count: Object.keys(root).length,
-    launches,
-    sidecar_path: sidecarPath,
-    sidecar,
-    manifest_path: manifestPath,
-    manifest: {},
-    runtime_proxy_entrypoint: runtimeProxyEntrypoint,
-    registrar_entrypoint: registrarEntrypoint,
-    workspace_root: MCP_WORKSPACE_ROOT,
-  });
+  if (!surface) return;
+  for (const check of sharedRuntimeDependencyChecks(surface)) {
+    if (!check.exists) {
+      add('error', 'registrar_runtime_dependency_missing', `Runtime dependency export for '${check.dependency}' does not exist: ${check.export_path}`, {
+        ...detail,
+        dependency: check.dependency,
+        package_root: check.package_root,
+        export_path: check.export_path,
+        remediation: `Run pnpm --filter ${check.dependency} build before launching carrier MCPs.`,
+      });
+    } else if (includeOk) {
+      add('info', 'registrar_runtime_dependency_exists', `Runtime dependency export for '${check.dependency}' exists: ${check.export_path}`, {
+        ...detail,
+        dependency: check.dependency,
+        package_root: check.package_root,
+        export_path: check.export_path,
+      });
+    }
+  }
 }
 
-async function assertCurrentCarrierRuntimeManaged(
-  carrier: CarrierDef,
-  currentStructured: JsonRecord,
-): Promise<string[]> {
-  const root = carrierServerRoot(carrier.kind, currentStructured);
-  const predecessorActivationMarkers = new Set<string>();
-  const v2Launches: Array<{
-    server_key: string;
-    launch: { command: string; args: string[] };
-  }> = [];
-  const v3Generations = new Map<string, ReturnType<typeof readCarrierGeneration>>();
-  for (const [serverKey, value] of Object.entries(root)) {
-    const record = asRecord(value);
-    const launch = carrierRecordLaunch(carrier.kind, record);
-    const owned = carrierOwnsServerKey(carrier, serverKey);
-    if (!owned) {
-      if (isNaradaProxyLaunch(launch)) {
-        throw diagnosticError(
-          'registrar_unowned_narada_launch_refused',
-          'A Narada runtime launch exists outside the carrier-owned key namespace.',
-          {
-            carrier_id: carrier.carrier_id,
-            server_key: serverKey,
-            remediation: 'Register the entry under the carrier Site binding or remove it before preparing the hard cutover.',
-          },
-        );
-      }
-      continue;
-    }
-
-    const contractVersion = launchArgument(launch.args, '--runtime-contract-version');
-    if (
-      contractVersion === '2'
-      && launch.args.includes('--artifact-manifest')
-      && launch.args.includes('--materialization-sidecar')
-      && launch.args.includes('--entrypoint')
-      && isNaradaProxyLaunch(launch)
-    ) {
-      v2Launches.push({ server_key: serverKey, launch });
-      continue;
-    }
-    if (contractVersion === String(MCP_RUNTIME_CONTRACT_VERSION)) {
-      const generationPath = launchArgument(launch.args, '--carrier-generation');
-      const generationServerKey = launchArgument(launch.args, '--server-key');
-      if (generationPath && generationServerKey === serverKey) {
-        try {
-          const resolvedGenerationPath = resolve(generationPath);
-          if (
-            !pathInside(MCP_CARRIER_GENERATIONS_ROOT, resolvedGenerationPath)
-            || !sameRuntimePath(launch.command, process.execPath)
-            || !sameRuntimePath(
-              launchArgument(launch.args, '--artifact-store') ?? '',
-              MCP_ARTIFACT_STORE,
-            )
-          ) {
-            throw new Error('runtime_v3_launch_authority_mismatch');
-          }
-          const generation = readCarrierGeneration(resolvedGenerationPath);
-          assertCarrierGenerationActivated(generation);
-          const binding = generation.bindings.find((candidate) => candidate.server_key === serverKey);
-          if (
-            generation.carrier_id === carrier.carrier_id
-            && generation.carrier_kind === carrier.kind
-            && resolve(generation.config_path) === resolve(carrier.config_path)
-            && binding
-            && canonicalJson(binding.proxy_launch) === canonicalJson(launch)
-            && pathInside(MCP_CARRIER_ACTIVATIONS_ROOT, generation.activation.marker_path)
-          ) {
-            await resolvePinnedRuntimeProxy({
-              generation,
-              runtime_entrypoint: launch.args[0] ?? '',
-            });
-            await resolveCarrierBinding({
-              generation_path: resolvedGenerationPath,
-              server_key: serverKey,
-              artifact_store: MCP_ARTIFACT_STORE,
-            });
-            predecessorActivationMarkers.add(resolve(generation.activation.marker_path));
-            v3Generations.set(resolvedGenerationPath, generation);
-            continue;
-          }
-        } catch {
-          // Report one stable registrar diagnostic below.
-        }
-      }
-    }
-    throw diagnosticError(
-      'registrar_unmanaged_narada_launch_refused',
-      'Hard cutover requires every existing carrier-owned Narada launch to be a verifiable runtime V2 or V3 proxy.',
-      {
-        carrier_id: carrier.carrier_id,
-        server_key: serverKey,
-        runtime_contract_version: contractVersion,
-        remediation: 'Stop and remove the unmanaged launch, or materialize the current runtime V2 proxy contract before retrying.',
-      },
-    );
-  }
-  if (v2Launches.length > 0 && v3Generations.size > 0) {
-    throw diagnosticError(
-      'registrar_mixed_predecessor_runtime_refused',
-      'Hard cutover refuses a carrier config split between runtime V2 and V3.',
-      { carrier_id: carrier.carrier_id },
-    );
-  }
-  if (v2Launches.length > 0) {
-    validateV2PredecessorCarrierRuntime(carrier, currentStructured, v2Launches);
-  }
-  if (v3Generations.size > 1) {
-    throw diagnosticError(
-      'registrar_split_predecessor_generation_refused',
-      'Hard cutover requires one complete predecessor V3 generation per carrier.',
-      {
-        carrier_id: carrier.carrier_id,
-        generation_paths: [...v3Generations.keys()].sort(),
-      },
-    );
-  }
-  const predecessorGeneration = [...v3Generations.values()][0];
-  if (predecessorGeneration) {
-    const installedKeys = Object.keys(root)
-      .filter((serverKey) => carrierOwnsServerKey(carrier, serverKey))
-      .sort();
-    const generationKeys = predecessorGeneration.bindings
-      .map((binding) => binding.server_key)
-      .sort();
-    if (canonicalJson(installedKeys) !== canonicalJson(generationKeys)) {
-      throw diagnosticError(
-        'registrar_incomplete_predecessor_generation_refused',
-        'The installed carrier config is not the complete config for its predecessor V3 generation.',
-        {
-          carrier_id: carrier.carrier_id,
-          installed_server_keys: installedKeys,
-          generation_server_keys: generationKeys,
-        },
-      );
-    }
-  }
-  return [...predecessorActivationMarkers].sort();
-}
-
-function pathInside(root: string, candidate: string): boolean {
-  const rel = relative(resolve(root), resolve(candidate));
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-}
-
-function carrierBindingAuthority(binding: {
-  binding_id: string;
-  server_key: string;
-  surface_id: string;
-  projection_id: string;
-  descriptor: SurfaceDescriptorV3;
-  artifact_selector: ArtifactSelector;
-  source: { package_root: string; workspace_root: string };
-  artifact_entrypoint: string;
-  child_args: string[];
-  child_env_names: string[];
-  client_tool_names: string[];
-}): JsonRecord {
-  return {
-    binding_id: binding.binding_id,
-    server_key: binding.server_key,
-    surface_id: binding.surface_id,
-    projection_id: binding.projection_id,
-    descriptor: binding.descriptor,
-    artifact_selector: binding.artifact_selector,
-    source: binding.source,
-    artifact_entrypoint: binding.artifact_entrypoint,
-    child_args: binding.child_args,
-    child_env_names: binding.child_env_names,
-    client_tool_names: binding.client_tool_names,
-  };
-}
-
-async function validateInstalledCarrierRuntime(
-  carrier: CarrierDef,
-  expectedRuntime: PreparedCarrierRuntime,
-): Promise<JsonRecord> {
-  if (!existsSync(carrier.config_path)) {
-    throw diagnosticError(
-      'registrar_carrier_config_missing',
-      'The installed carrier configuration is missing.',
-      { carrier_id: carrier.carrier_id, config_path: carrier.config_path },
-    );
-  }
-  const current = currentCarrierConfig(
-    carrier,
-    readFileSync(carrier.config_path, 'utf8'),
-  );
-  await assertCurrentCarrierRuntimeManaged(carrier, current);
-  const root = carrierServerRoot(carrier.kind, current);
-  const expectedBindings = new Map(
-    expectedRuntime.prepared.generation.bindings.map((binding) => [binding.server_key, binding]),
-  );
-  const expectedKeys = [...expectedBindings.keys()].sort();
-  const installedKeys = Object.keys(root)
-    .filter((serverKey) => carrierOwnsServerKey(carrier, serverKey))
-    .sort();
-  if (canonicalJson(installedKeys) !== canonicalJson(expectedKeys)) {
-    throw diagnosticError(
-      'registrar_installed_server_set_mismatch',
-      'The installed Narada-owned server set differs from current carrier authority.',
-      {
-        carrier_id: carrier.carrier_id,
-        expected_server_keys: expectedKeys,
-        installed_server_keys: installedKeys,
-      },
-    );
-  }
-
-  const generationPaths = new Set<string>();
-  let installedGeneration = null as ReturnType<typeof readCarrierGeneration> | null;
-  for (const serverKey of expectedKeys) {
-    const launch = carrierRecordLaunch(carrier.kind, asRecord(root[serverKey]));
-    const contractVersion = launchArgument(launch.args, '--runtime-contract-version');
-    const generationPathValue = launchArgument(launch.args, '--carrier-generation');
-    const generationServerKey = launchArgument(launch.args, '--server-key');
-    const artifactStore = launchArgument(launch.args, '--artifact-store');
-    const runtimeEntrypoint = launch.args[0] ?? '';
-    if (
-      contractVersion !== String(MCP_RUNTIME_CONTRACT_VERSION)
-      || !generationPathValue
-      || generationServerKey !== serverKey
-      || !artifactStore
-      || !runtimeEntrypoint
-      || resolve(launch.command).toLowerCase() !== resolve(process.execPath).toLowerCase()
-      || resolve(artifactStore) !== resolve(MCP_ARTIFACT_STORE)
-      || !pathInside(MCP_CARRIER_GENERATIONS_ROOT, generationPathValue)
-    ) {
-      throw diagnosticError(
-        'registrar_installed_runtime_not_v3',
-        'The installed carrier is not an exact runtime V3 launch.',
-        {
-          carrier_id: carrier.carrier_id,
-          server_key: serverKey,
-          runtime_contract_version: contractVersion,
-          generation_path: generationPathValue,
-          artifact_store: artifactStore,
-          command: launch.command,
-        },
-      );
-    }
-    const generationPath = resolve(generationPathValue);
-    generationPaths.add(generationPath);
-    const generation = readCarrierGeneration(generationPath);
-    assertCarrierGenerationActivated(generation);
-    if (
-      generation.carrier_id !== carrier.carrier_id
-      || generation.carrier_kind !== carrier.kind
-      || resolve(generation.config_path) !== resolve(carrier.config_path)
-      || !pathInside(dirname(MCP_CARRIER_GENERATIONS_ROOT), generation.activation.marker_path)
-    ) {
-      throw diagnosticError(
-        'registrar_installed_generation_authority_mismatch',
-        'The installed carrier generation belongs to different runtime authority.',
-        {
-          carrier_id: carrier.carrier_id,
-          server_key: serverKey,
-          generation_path: generationPath,
-          generation_carrier_id: generation.carrier_id,
-          generation_carrier_kind: generation.carrier_kind,
-          generation_config_path: generation.config_path,
-          activation_marker_path: generation.activation.marker_path,
-        },
-      );
-    }
-    const binding = generation.bindings.find((candidate) => candidate.server_key === serverKey);
-    const expectedBinding = expectedBindings.get(serverKey);
-    if (
-      !binding
-      || !expectedBinding
-      || canonicalJson(binding.proxy_launch) !== canonicalJson(launch)
-      || canonicalJson(carrierBindingAuthority(binding))
-        !== canonicalJson(carrierBindingAuthority(expectedBinding))
-      || canonicalJson(generation.runtime_proxy)
-        !== canonicalJson(expectedRuntime.prepared.generation.runtime_proxy)
-    ) {
-      throw diagnosticError(
-        'registrar_installed_generation_drift',
-        'The installed immutable generation differs from current carrier authority.',
-        {
-          carrier_id: carrier.carrier_id,
-          server_key: serverKey,
-          generation_path: generationPath,
-        },
-      );
-    }
-    await resolvePinnedRuntimeProxy({
-      generation,
-      runtime_entrypoint: runtimeEntrypoint,
-    });
-    await resolveCarrierBinding({
-      generation_path: generationPath,
-      server_key: serverKey,
-      artifact_store: artifactStore,
-    });
-    installedGeneration = generation;
-  }
-  if (generationPaths.size !== 1 || installedGeneration === null) {
-    throw diagnosticError(
-      'registrar_installed_generation_split',
-      'All installed Narada-owned launches must reference one complete immutable generation.',
-      {
-        carrier_id: carrier.carrier_id,
-        generation_paths: [...generationPaths].sort(),
-      },
-    );
-  }
-  const generationKeys = installedGeneration.bindings
-    .map((binding) => binding.server_key)
-    .sort();
-  if (canonicalJson(generationKeys) !== canonicalJson(expectedKeys)) {
-    throw diagnosticError(
-      'registrar_installed_generation_server_set_mismatch',
-      'The installed generation contains bindings outside current carrier authority.',
-      {
-        carrier_id: carrier.carrier_id,
-        expected_server_keys: expectedKeys,
-        generation_server_keys: generationKeys,
-      },
-    );
-  }
-  return {
-    schema: 'narada.registrar.installed_carrier_validation.v3',
-    ok: true,
-    carrier_id: carrier.carrier_id,
-    config_path: resolve(carrier.config_path),
-    generation_path: [...generationPaths][0],
-    generation_digest: installedGeneration.generation_digest,
-    server_count: expectedKeys.length,
-  };
-}
-
-export function mergeJsonCarrierProjection(
-  kind: 'opencode' | 'kimi',
-  current: JsonRecord,
-  currentServers: JsonRecord,
-  generatedServers: JsonRecord,
-  ownedPrefixes: string[],
-): JsonRecord {
-  const merged: JsonRecord = {};
-  for (const [key, value] of Object.entries(currentServers)) {
-    if (!serverKeyOwnedByPrefixes(key, ownedPrefixes)) merged[key] = value;
-  }
-  for (const [key, value] of Object.entries(generatedServers)) merged[key] = value;
-  const field = kind === 'opencode' ? 'mcp' : 'mcpServers';
-  return {
-    ...current,
-    [field]: merged,
-  };
-}
-
-function jsonStringEnd(text: string, start: number): number {
-  let escaped = false;
-  for (let index = start + 1; index < text.length; index++) {
-    const char = text[index];
-    if (escaped) {
-      escaped = false;
-    } else if (char === '\\') {
-      escaped = true;
-    } else if (char === '"') {
-      return index + 1;
-    }
-  }
-  throw new Error('json_string_unterminated');
-}
-
-function jsonValueEnd(text: string, start: number): number {
-  const opening = text[start];
-  if (opening === '"') return jsonStringEnd(text, start);
-  if (opening === '{' || opening === '[') {
-    const stack: string[] = [opening];
-    let inString = false;
-    let escaped = false;
-    for (let index = start + 1; index < text.length; index++) {
-      const char = text[index];
-      if (inString) {
-        if (escaped) {
-          escaped = false;
-        } else if (char === '\\') {
-          escaped = true;
-        } else if (char === '"') {
-          inString = false;
-        }
-        continue;
-      }
-      if (char === '"') {
-        inString = true;
-      } else if (char === '{' || char === '[') {
-        stack.push(char);
-      } else if (char === '}' || char === ']') {
-        const expected = char === '}' ? '{' : '[';
-        if (stack.pop() !== expected) throw new Error('json_value_unbalanced');
-        if (stack.length === 0) return index + 1;
-      }
-    }
-    throw new Error('json_value_unterminated');
-  }
-  let end = start;
-  while (end < text.length && text[end] !== ',' && text[end] !== '}') end++;
-  while (end > start && /\s/u.test(text[end - 1])) end--;
-  return end;
-}
-
-function formatJsonValue(value: unknown, indentation: string): string {
-  return JSON.stringify(value, null, 2)
-    .split('\n')
-    .map((line, index) => index === 0 ? line : `${indentation}${line}`)
-    .join('\n');
-}
-
-export function rewriteJsonCarrierServerField(
-  currentContent: string,
-  field: 'mcp' | 'mcpServers',
-  servers: JsonRecord,
-): string {
-  const searchable = stripJsoncComments(currentContent);
-  const skipWhitespace = (start: number) => {
-    let index = start;
-    while (index < searchable.length && /\s/u.test(searchable[index])) index++;
-    return index;
-  };
-  const rootStart = skipWhitespace(0);
-  if (searchable[rootStart] !== '{') throw new Error('carrier_json_root_not_object');
-  let index = rootStart + 1;
-  let rootClose = -1;
-  const matches: Array<{ key_start: number; value_start: number; value_end: number }> = [];
-  while (index < searchable.length) {
-    index = skipWhitespace(index);
-    if (searchable[index] === ',') {
-      index++;
-      continue;
-    }
-    if (searchable[index] === '}') {
-      rootClose = index;
-      break;
-    }
-    if (searchable[index] !== '"') throw new Error('carrier_json_root_property_invalid');
-    const keyStart = index;
-    const keyEnd = jsonStringEnd(searchable, keyStart);
-    const key = String(JSON.parse(searchable.slice(keyStart, keyEnd)));
-    index = skipWhitespace(keyEnd);
-    if (searchable[index] !== ':') throw new Error('carrier_json_root_property_invalid');
-    const valueStart = skipWhitespace(index + 1);
-    const valueEnd = jsonValueEnd(searchable, valueStart);
-    if (key === field) {
-      matches.push({ key_start: keyStart, value_start: valueStart, value_end: valueEnd });
-    }
-    index = valueEnd;
-  }
-  if (rootClose < 0 || matches.length > 1) {
-    throw new Error(matches.length > 1
-      ? `carrier_json_duplicate_field:${field}`
-      : 'carrier_json_root_unterminated');
-  }
-  if (matches.length === 1) {
-    const match = matches[0];
-    const lineStart = currentContent.lastIndexOf('\n', match.key_start - 1) + 1;
-    const indentation = currentContent.slice(lineStart, match.key_start).match(/^\s*/u)?.[0] ?? '';
-    return (
-      currentContent.slice(0, match.value_start)
-      + formatJsonValue(servers, indentation)
-      + currentContent.slice(match.value_end)
-    );
-  }
-
-  const lineStart = currentContent.lastIndexOf('\n', rootClose - 1) + 1;
-  const rootIndentation = currentContent.slice(lineStart, rootClose).match(/^\s*/u)?.[0] ?? '';
-  const propertyIndentation = `${rootIndentation}  `;
-  let previous = rootClose - 1;
-  while (previous > rootStart && /\s/u.test(searchable[previous])) previous--;
-  const comma = searchable[previous] === '{' || searchable[previous] === ',' ? '' : ',';
-  const insertion = [
-    comma,
-    '\n',
-    propertyIndentation,
-    JSON.stringify(field),
-    ': ',
-    formatJsonValue(servers, propertyIndentation),
-    '\n',
-    rootIndentation,
-  ].join('');
-  return currentContent.slice(0, rootClose) + insertion + currentContent.slice(rootClose);
-}
-
-function emitOpencodeConfig(
-  carrier: CarrierDef,
-  runtime: PreparedCarrierRuntime,
-  currentContent: string | null,
-): { content: string; structured: JsonRecord } {
-  const current = currentCarrierConfig(carrier, currentContent);
-  const rawServers = runtime.servers;
-  const generatedMcp: JsonRecord = {};
+function emitOpencodeConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+  const rawServers = collectCarrierServers(carrier);
+  const mcp: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(runtime, key, overridden);
-    generatedMcp[key] = {
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
+    mcp[key] = {
       type: 'local',
       command: [launch.command, ...launch.args],
       enabled: overridden.enabled ?? true,
     };
   }
-  const merged = mergeJsonCarrierProjection(
-    'opencode',
-    current,
-    carrierServerRoot('opencode', current),
-    generatedMcp,
-    carrierOwnedServerPrefixes(carrier),
-  );
-  const structured = currentContent === null
-    ? { $schema: 'https://opencode.ai/config.json', ...merged }
-    : merged;
-  const content = currentContent === null
-    ? '// Narada owns only Narada-prefixed entries under "mcp"; other settings are preserved.\n'
-      + JSON.stringify(structured, null, 2) + '\n'
-    : rewriteJsonCarrierServerField(
-      currentContent,
-      'mcp',
-      carrierServerRoot('opencode', structured),
-    ).replace(
-      '// Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.',
-      '// Narada owns only Narada-prefixed entries under "mcp"; other settings are preserved.',
-    );
-  return { content: content.endsWith('\n') ? content : `${content}\n`, structured };
+  const structured = { $schema: 'https://opencode.ai/config.json', mcp };
+  const header = '// Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.\n';
+  return { content: header + JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function emitKimiConfig(
-  carrier: CarrierDef,
-  runtime: PreparedCarrierRuntime,
-  currentContent: string | null,
-): { content: string; structured: JsonRecord } {
-  const current = currentCarrierConfig(carrier, currentContent);
-  const rawServers = runtime.servers;
-  const generatedMcpServers: JsonRecord = {};
+function emitKimiConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+  const rawServers = collectCarrierServers(carrier);
+  const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const approval = carrier.surface_overrides?.[surfaceId]?.approval_mode;
-    const launch = carrierLaunchCommand(runtime, key, overridden);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const base: JsonRecord = {
       transport: 'stdio',
       command: launch.command,
@@ -2503,143 +1766,32 @@ function emitKimiConfig(
     };
     if (approval) base.approval_mode = approval;
     if (overridden.env_vars) base.env_vars = overridden.env_vars;
-    generatedMcpServers[key] = base;
+    mcpServers[key] = base;
   }
-  const structured = mergeJsonCarrierProjection(
-    'kimi',
-    current,
-    carrierServerRoot('kimi', current),
-    generatedMcpServers,
-    carrierOwnedServerPrefixes(carrier),
-  );
-  const content = currentContent === null
-    ? JSON.stringify(structured, null, 2) + '\n'
-    : rewriteJsonCarrierServerField(
-      currentContent,
-      'mcpServers',
-      carrierServerRoot('kimi', structured),
-    );
-  return { content: content.endsWith('\n') ? content : `${content}\n`, structured };
+  const structured = { mcpServers };
+  return { content: JSON.stringify(structured, null, 2) + '\n', structured };
 }
 
-function parseTomlDottedKey(value: string): string[] | null {
-  const result: string[] = [];
-  let token = '';
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-  const push = () => {
-    const raw = token.trim();
-    token = '';
-    if (!raw) return false;
-    try {
-      if (raw.startsWith('"') && raw.endsWith('"')) {
-        result.push(String(JSON.parse(raw)));
-      } else if (raw.startsWith("'") && raw.endsWith("'")) {
-        result.push(raw.slice(1, -1));
-      } else {
-        result.push(raw);
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  for (const char of value) {
-    if (quote) {
-      token += char;
-      if (quote === '"' && escaped) {
-        escaped = false;
-      } else if (quote === '"' && char === '\\') {
-        escaped = true;
-      } else if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      token += char;
-      continue;
-    }
-    if (char === '.') {
-      if (!push()) return null;
-      continue;
-    }
-    token += char;
-  }
-  return quote === null && push() ? result : null;
-}
-
-function tomlSectionPath(line: string): string[] | null {
-  const match = line.trim().match(/^\[([^\[\]]+)\](?:\s+#.*)?$/u);
-  return match ? parseTomlDottedKey(match[1]) : null;
-}
-
-function tomlAnySectionPath(line: string): string[] | null {
-  const trimmed = line.trim();
-  const arrayMatch = trimmed.match(/^\[\[([^\[\]]+)\]\](?:\s+#.*)?$/u);
-  return arrayMatch ? parseTomlDottedKey(arrayMatch[1]) : tomlSectionPath(trimmed);
-}
-
-function codexServerSectionKey(serverKey: string): string {
-  return /^[A-Za-z0-9_-]+$/u.test(serverKey) ? serverKey : JSON.stringify(serverKey);
-}
-
-export function retainUnownedCodexSections(
-  currentContent: string | null,
-  ownedPrefixes: string[],
-): string {
-  if (currentContent === null) return '';
-  const retained: string[] = [];
-  let retainSection = true;
-  for (const line of currentContent.replace(/\r\n/gu, '\n').split('\n')) {
-    const path = tomlAnySectionPath(line);
-    if (path) {
-      retainSection = !(
-        path[0] === 'mcp_servers'
-        && path.length >= 2
-        && serverKeyOwnedByPrefixes(path[1], ownedPrefixes)
-      );
-    }
-    if (retainSection) retained.push(line);
-  }
-  const registrarHeaders = new Set([
-    '# Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.',
-    '# Narada owns only the Narada-prefixed MCP server sections below.',
-  ]);
-  return retained
-    .filter((line) => !registrarHeaders.has(line.trim()))
-    .join('\n')
-    .trimEnd();
-}
-
-function emitCodexConfig(
-  carrier: CarrierDef,
-  runtime: PreparedCarrierRuntime,
-  currentContent: string | null,
-): { content: string; structured: JsonRecord } {
-  const current = currentCarrierConfig(carrier, currentContent);
-  const rawServers = runtime.servers;
+function emitCodexConfig(carrier: CarrierDef, configPath?: string): { content: string; structured: JsonRecord } {
+  const rawServers = collectCarrierServers(carrier);
   const lines: string[] = [];
-  const retained = retainUnownedCodexSections(
-    currentContent,
-    carrierOwnedServerPrefixes(carrier),
-  );
-  if (retained) {
-    lines.push(retained);
+  lines.push('# Generated by mcp-registrar. Do not hand-edit; changes will be overwritten on next materialize.');
+  lines.push('');
+  const trustProjects = dedupeRoots([...(carrier.trust_projects ?? []), ...(carrier.extra_allowed_roots ?? [])]);
+  for (const project of trustProjects) {
+    const escaped = project.replace(/\\/g, '\\\\');
+    lines.push(`[projects.'${escaped}']`);
+    lines.push('trust_level = "trusted"');
     lines.push('');
   }
-  lines.push('# Narada owns only the Narada-prefixed MCP server sections below.');
   const mcpServers: JsonRecord = {};
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
-    const launch = carrierLaunchCommand(runtime, key, overridden);
+    const launch = carrierLaunchCommand(overridden, surfaceId, configPath, carrier);
     const carrierAvailableTools = codexCarrierAvailableTools(server);
-    const sectionKey = codexServerSectionKey(key);
-    lines.push(`[mcp_servers.${sectionKey}]`);
-    lines.push('# Narada-managed runtime V3 binding; replaced only by coordinated hard cutover.');
-    lines.push(`command = ${JSON.stringify(launch.command)}`);
+    lines.push(`[mcp_servers.${key}]`);
+    lines.push(`command = "${launch.command}"`);
     lines.push(`args = ${JSON.stringify(launch.args)}`);
     lines.push('approval_mode = "approve"');
     const startupTimeoutSec = server.surface?.codex_startup_timeout_sec;
@@ -2653,7 +1805,7 @@ function emitCodexConfig(
     if (carrierAvailableTools.length > 0) {
       lines.push('# Generated carrier availability metadata. Narada MCP surfaces own policy.');
       for (const toolName of carrierAvailableTools) {
-        lines.push(`[mcp_servers.${sectionKey}.tools.${codexServerSectionKey(toolName)}]`);
+        lines.push(`[mcp_servers.${key}.tools.${toolName}]`);
         lines.push('approval_mode = "approve"');
         lines.push('');
       }
@@ -2665,9 +1817,8 @@ function emitCodexConfig(
       ...(startupTimeoutSec === undefined ? {} : { startup_timeout_sec: startupTimeoutSec }),
     };
   }
-  const content = lines.join('\n').trimEnd() + '\n';
-  const structured = parseCodexToml(content);
-  return { content, structured };
+  const structured = { trust_projects: trustProjects, mcpServers };
+  return { content: lines.join('\n') + '\n', structured };
 }
 
 function codexCarrierAvailableTools(server: MaterializedServer): string[] {
@@ -2675,72 +1826,69 @@ function codexCarrierAvailableTools(server: MaterializedServer): string[] {
   return [];
 }
 
-function legacyCarrierStatePaths(configPath: string): string[] {
-  const paths: string[] = [];
-  const legacyGeneration = `${configPath}.narada-generation.json`;
-  if (existsSync(legacyGeneration)) paths.push(legacyGeneration);
-  const configDirectory = dirname(configPath);
-  const backupPrefix = `${basename(configPath)}.backup-`;
-  if (existsSync(configDirectory)) {
-    for (const entry of readdirSync(configDirectory, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.startsWith(backupPrefix)) continue;
-      paths.push(join(configDirectory, entry.name));
-    }
+function writeFileAtomic(path: string, content: string): void {
+  const dir = resolve(path, '..');
+  mkdirSync(dir, { recursive: true });
+  const temporaryPath = `${path}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(temporaryPath, content, 'utf8');
+  try {
+    renameSync(temporaryPath, path);
+  } finally {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
   }
-  const legacyManifest = join(MCP_WORKSPACE_ROOT, '.ai', 'runtime', 'workspace-artifact-manifest.json');
-  if (existsSync(legacyManifest)) paths.push(legacyManifest);
-  return paths;
+}
+
+function readWorkspaceManifestFingerprint(): string | null {
+  if (!existsSync(MCP_WORKSPACE_ARTIFACT_MANIFEST)) return null;
+  try {
+    const manifest = asRecord(JSON.parse(readFileSync(MCP_WORKSPACE_ARTIFACT_MANIFEST, 'utf8')));
+    return typeof manifest.manifest_fingerprint === 'string' ? manifest.manifest_fingerprint : null;
+  } catch {
+    return null;
+  }
 }
 
 function validateCarrierMaterialization(
   carrier: CarrierDef,
   result: { content: string; structured: JsonRecord },
-  runtime: PreparedCarrierRuntime,
-): JsonRecord {
-  const root = carrierServerRoot(carrier.kind, result.structured);
-  const expectedKeys = runtime.prepared.generation.bindings.map((binding) => binding.server_key).sort();
-  const actualKeys = Object.keys(root).sort();
-  const actualOwnedKeys = actualKeys.filter((key) => carrierOwnsServerKey(carrier, key));
-  if (canonicalJson(expectedKeys) !== canonicalJson(actualOwnedKeys)) {
+  configPath?: string,
+): {
+  validation: ReturnType<typeof validateMaterializedConfiguration>;
+  generation: ReturnType<typeof buildMaterializationGeneration> | null;
+} {
+  const validation = validateMaterializedConfiguration({
+    structured: result.structured,
+    artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+    runtimeProxyEntrypoint: MCP_RUNTIME_PROXY_ENTRYPOINT,
+    expectedSidecarPath: configPath ? materializationSidecarPath(configPath) : undefined,
+    requireSidecar: Boolean(configPath),
+  });
+  if (!validation.ok) {
     throw diagnosticError(
-      'registrar_v3_server_set_mismatch',
-      'Generated Narada-owned carrier server set differs from the immutable generation.',
+      'registrar_materialized_config_contract_invalid',
+      'Generated carrier configuration violates the MCP runtime contract.',
       {
         carrier_id: carrier.carrier_id,
-        expected_server_keys: expectedKeys,
-        actual_owned_server_keys: actualOwnedKeys,
-        preserved_unowned_server_keys: actualKeys.filter((key) => !carrierOwnsServerKey(carrier, key)),
+        carrier_kind: carrier.kind,
+        validation,
+        remediation: 'Refuse the write, rebuild the workspace, and retry only after the generated contract validates.',
       },
     );
   }
-  for (const serverKey of expectedKeys) {
-    const record = asRecord(root[serverKey]);
-    const actualLaunch = Array.isArray(record.command)
-      ? { command: String(record.command[0] ?? ''), args: record.command.slice(1).map(String) }
-      : { command: String(record.command ?? ''), args: Array.isArray(record.args) ? record.args.map(String) : [] };
-    const expectedLaunch = runtime.prepared.launches.get(serverKey);
-    if (!expectedLaunch || canonicalJson(actualLaunch) !== canonicalJson(expectedLaunch)) {
-      throw diagnosticError(
-        'registrar_v3_launch_mismatch',
-        `Generated carrier launch differs from immutable binding ${serverKey}.`,
-        { server_key: serverKey, expected_launch: expectedLaunch ?? null, actual_launch: actualLaunch },
-      );
-    }
-  }
-  return {
-    schema: 'narada.registrar.carrier_materialization_validation.v3',
-    ok: true,
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
-    carrier_id: carrier.carrier_id,
-    carrier_kind: carrier.kind,
-    server_count: expectedKeys.length,
-    proxy_count: expectedKeys.length,
-    preserved_unowned_server_count: actualKeys.length - actualOwnedKeys.length,
-    generation_id: runtime.prepared.generation.generation_id,
-    generation_digest: runtime.prepared.generation.generation_digest,
-    generation_path: runtime.prepared.generation_path,
-    artifact_store: runtime.prepared.artifact_store,
-  };
+  const generation = configPath
+    ? buildMaterializationGeneration({
+      carrierId: carrier.carrier_id,
+      carrierKind: carrier.kind,
+      configPath,
+      content: result.content,
+      artifactManifestPath: MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      artifactManifestFingerprint: readWorkspaceManifestFingerprint(),
+      registrarEntrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT,
+      serverCount: validation.server_count,
+      proxyCount: validation.proxy_count,
+    })
+    : null;
+  return { validation, generation };
 }
 
 function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<JsonRecord> {
@@ -2754,9 +1902,6 @@ function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<Jso
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const timeoutMs = method === 'registrar_runtime_v3_cutover_prepare'
-      ? 14 * 60_000
-      : 30_000;
     const timeout = setTimeout(() => {
       if (settled) return;
       child.kill();
@@ -2764,9 +1909,9 @@ function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<Jso
       rejectRequest(diagnosticError(
         'registrar_fresh_materialization_failed',
         'Fresh registrar subprocess timed out while materializing the carrier configuration.',
-        { entrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT, timeout_ms: timeoutMs, stderr_tail: stderr.slice(-4000) },
+        { entrypoint: MCP_REGISTRAR_RUNTIME_ENTRYPOINT, timeout_ms: 30000, stderr_tail: stderr.slice(-4000) },
       ));
-    }, timeoutMs);
+    }, 30000);
     const fail = (message: string, details: JsonRecord = {}) => {
       if (settled) return;
       settled = true;
@@ -2834,460 +1979,82 @@ function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<Jso
   });
 }
 
-function emitCarrierConfig(
-  carrier: CarrierDef,
-  runtime: PreparedCarrierRuntime,
-  currentContent: string | null,
-): { content: string; structured: JsonRecord } {
-  switch (carrier.kind) {
-    case 'opencode': return emitOpencodeConfig(carrier, runtime, currentContent);
-    case 'kimi': return emitKimiConfig(carrier, runtime, currentContent);
-    case 'codex': return emitCodexConfig(carrier, runtime, currentContent);
-    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
-  }
-}
-
 async function registrarCarrierMaterialize(args: JsonRecord): Promise<JsonRecord> {
   if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
     return runFreshRegistrarRequest('registrar_carrier_materialize', args);
   }
   assertRegistrarProcessCurrent('registrar_carrier_materialize');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
-  if (args.output_path !== undefined) {
-    throw diagnosticError(
-      'registrar_v3_preview_write_refused',
-      'Carrier materialization is preview-only; durable executable output is owned by the all-carrier hard-cutover preparation.',
-      { carrier_id: carrierId },
-    );
-  }
   const carrier = lookupCarrier(carrierId);
   const injectionSummary = carrierInjectionSummary(carrier);
-  const preparedActivation = prepareActivation();
-  const runtime = await prepareCarrierRuntime(
-    carrier,
-    carrier.config_path,
-    preparedActivation.activation,
-  );
-  const currentContent = existsSync(carrier.config_path)
-    ? readFileSync(carrier.config_path, 'utf8')
-    : null;
-  await assertCurrentCarrierRuntimeManaged(
-    carrier,
-    currentCarrierConfig(carrier, currentContent),
-  );
-  const result = emitCarrierConfig(carrier, runtime, currentContent);
-  const validation = validateCarrierMaterialization(carrier, result, runtime);
+  const outputPath = optionalString(args.output_path);
+  let result: { content: string; structured: JsonRecord };
+  switch (carrier.kind) {
+    case 'opencode': result = emitOpencodeConfig(carrier, outputPath ?? undefined); break;
+    case 'kimi': result = emitKimiConfig(carrier, outputPath ?? undefined); break;
+    case 'codex': result = emitCodexConfig(carrier, outputPath ?? undefined); break;
+    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
+  }
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath ?? undefined);
+  if (outputPath) {
+    writeFileAtomic(outputPath, result.content);
+    writeMaterializationGeneration(materializationSidecarPath(outputPath), generation!);
+  }
   return {
-    status: 'preview',
+    status: 'materialized',
     carrier_id: carrierId,
     kind: carrier.kind,
-    output_path: null,
+    output_path: outputPath,
     byte_size: Buffer.byteLength(result.content, 'utf8'),
-    content: result.content,
     injection_scopes: injectionSummary,
     runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
     materialization_validation: validation,
-    carrier_generation: runtime.prepared.generation,
-    carrier_generation_path: runtime.prepared.generation_path,
-    artifact_store: runtime.prepared.artifact_store,
+    materialization_generation: generation,
+    generation_sidecar_path: outputPath ? materializationSidecarPath(outputPath) : null,
   };
 }
 
 async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    return runFreshRegistrarRequest('registrar_carrier_apply', args);
+  }
+  assertRegistrarProcessCurrent('registrar_carrier_apply');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
-  lookupCarrier(carrierId);
-  throw diagnosticError(
-    'registrar_v3_single_carrier_apply_refused',
-    'A single carrier cannot be activated without creating a mixed runtime generation.',
-    {
-      carrier_id: carrierId,
-      required_next_step: 'Call registrar_runtime_v3_cutover_prepare, then run its external coordinator command.',
-    },
-  );
-}
-
-async function collectActiveSiteRuntimeReferences(): Promise<{
-  artifact_selectors: ArtifactSelector[];
-  activation_marker_paths: string[];
-}> {
-  const selectors = new Map<string, ArtifactSelector>();
-  const activationMarkers = new Set<string>();
-  const validatedGenerations = new Set<string>();
-  const addGeneration = async (site: SiteDef, server: SiteMcpFabricServer) => {
-    if (server.launch_args.includes('--artifact-manifest')) {
-      throw diagnosticError(
-        'registrar_v3_site_runtime_legacy_refused',
-        'A registered Site fabric still depends on the runtime V2 artifact manifest.',
-        {
-          site_id: site.site_id,
-          server_key: server.server_key,
-          source_file: server.source_file,
-          remediation: 'Migrate the Site fabric to a sealed runtime V3 generation before the global hard cutover.',
-        },
-      );
-    }
-    const generationPath = launchArgument(server.launch_args, '--carrier-generation');
-    if (!generationPath) return;
-    if (!server.sealed_runtime) {
-      throw diagnosticError(
-        'registrar_v3_site_generation_invalid',
-        'A registered Site fabric references an unreadable runtime V3 generation.',
-        {
-          site_id: site.site_id,
-          server_key: server.server_key,
-          source_file: server.source_file,
-          generation_path: generationPath,
-        },
-      );
-    }
-    const generation = readCarrierGeneration(generationPath);
-    assertCarrierGenerationActivated(generation);
-    const expectedConfigPath = join(
-      siteMcpControlRoot(site),
-      '.ai',
-      'mcp',
-      server.source_file,
-    );
-    if (resolve(generation.config_path) !== resolve(expectedConfigPath)) {
-      throw diagnosticError(
-        'registrar_v3_site_generation_config_mismatch',
-        'A registered Site fabric generation is bound to another config path.',
-        {
-          site_id: site.site_id,
-          server_key: server.server_key,
-          source_file: server.source_file,
-          expected_config_path: expectedConfigPath,
-          generation_config_path: generation.config_path,
-        },
-      );
-    }
-    if (generation.carrier_kind !== 'site-fabric') {
-      throw diagnosticError(
-        'registrar_v3_site_generation_kind_mismatch',
-        'A registered Site fabric references a non-Site carrier generation.',
-        {
-          site_id: site.site_id,
-          server_key: server.server_key,
-          carrier_kind: generation.carrier_kind,
-          generation_path: generationPath,
-        },
-      );
-    }
-    const binding = generation.bindings.find(
-      (candidate) => candidate.server_key === server.server_key,
-    );
-    const actualLaunch = {
-      command: server.command,
-      args: [server.launch_entrypoint, ...server.launch_args],
-    };
-    if (!binding || canonicalJson(binding.proxy_launch) !== canonicalJson(actualLaunch)) {
-      throw diagnosticError(
-        'registrar_v3_site_generation_launch_mismatch',
-        'A registered Site fabric launch differs from its immutable generation.',
-        {
-          site_id: site.site_id,
-          server_key: server.server_key,
-          generation_path: generationPath,
-        },
-      );
-    }
-    if (!validatedGenerations.has(resolve(generationPath))) {
-      await resolvePinnedRuntimeProxy({
-        generation,
-        runtime_entrypoint: server.launch_entrypoint,
-      });
-      for (const generationBinding of generation.bindings) {
-        await resolveCarrierBinding({
-          generation_path: generationPath,
-          server_key: generationBinding.server_key,
-          artifact_store: generationBinding.artifact_selector.store_root,
-        });
-      }
-      validatedGenerations.add(resolve(generationPath));
-    }
-    const generationSelectors = [
-      generation.runtime_proxy.artifact_selector,
-      ...generation.bindings.map((binding) => binding.artifact_selector),
-    ];
-    activationMarkers.add(resolve(generation.activation.marker_path));
-    for (const selector of generationSelectors) {
-      selectors.set(canonicalJson(selector), selector);
-    }
-  };
-
-  for (const site of siteCatalogForOperations()) {
-    const servers = [
-      ...discoverSiteMcpFabric(site),
-      ...discoverSiteCarrierProjections(site),
-    ];
-    for (const server of servers) await addGeneration(site, server);
+  const carrier = lookupCarrier(carrierId);
+  const injectionSummary = carrierInjectionSummary(carrier);
+  const configPath = carrier.config_path;
+  let result: { content: string; structured: JsonRecord };
+  switch (carrier.kind) {
+    case 'opencode': result = emitOpencodeConfig(carrier, configPath); break;
+    case 'kimi': result = emitKimiConfig(carrier, configPath); break;
+    case 'codex': result = emitCodexConfig(carrier, configPath); break;
+    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, configPath);
+  writeFileAtomic(configPath, result.content);
+  writeMaterializationGeneration(materializationSidecarPath(configPath), generation!);
+  writeSiteAllowedRootsConfig(carrier);
+  const site_surface_registries = writeSiteSurfaceRegistriesForCarrier(carrier);
   return {
-    artifact_selectors: [...selectors.values()],
-    activation_marker_paths: [...activationMarkers].sort(),
+    status: 'applied',
+    carrier_id: carrierId,
+    kind: carrier.kind,
+    config_path: configPath,
+    byte_size: Buffer.byteLength(result.content, 'utf8'),
+    injection_scope_counts: injectionSummary.counts,
+    site_surface_registries,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: validation,
+    materialization_generation: generation,
+    generation_sidecar_path: materializationSidecarPath(configPath),
   };
 }
 
-async function resolveHardCutoverCoordinator(
-  runtime: PreparedCarrierRuntime,
-): Promise<HardCutoverCoordinator | null> {
-  const binding = runtime.prepared.generation.bindings.find(
-    (candidate) => candidate.surface_id === 'mcp-registrar',
-  );
-  if (!binding) return null;
-  const source = await discoverPackageSourceRoots({
-    package_root: binding.source.package_root,
-    workspace_root: binding.source.workspace_root,
-  });
-  const artifact = await resolveArtifactSelector({
-    selector: binding.artifact_selector,
-    source_roots: source.source_roots,
-  });
-  const artifactEntrypoint = 'dist/src/cutover-coordinator.js';
-  if (!artifact.closure.entrypoints.includes(artifactEntrypoint)) {
-    throw diagnosticError(
-      'registrar_v3_coordinator_entrypoint_missing',
-      'The sealed registrar artifact does not contain the hard-cutover coordinator entrypoint.',
-      {
-        closure_digest: artifact.closure.closure_digest,
-        artifact_entrypoint: artifactEntrypoint,
-      },
-    );
-  }
-  const entrypointPath = join(artifact.closure_path, ...artifactEntrypoint.split('/'));
-  if (!existsSync(entrypointPath)) {
-    throw diagnosticError(
-      'registrar_v3_coordinator_entrypoint_missing',
-      'The verified registrar closure is missing its declared hard-cutover coordinator.',
-      {
-        closure_digest: artifact.closure.closure_digest,
-        entrypoint_path: entrypointPath,
-      },
-    );
-  }
-  return {
-    node_executable: resolve(process.execPath),
-    entrypoint_path: resolve(entrypointPath),
-    artifact_entrypoint: artifactEntrypoint,
-    artifact_selector: binding.artifact_selector,
-    closure_digest: artifact.closure.closure_digest,
-    receipt_digest: artifact.receipt.receipt_digest,
-    source: {
-      package_root: resolve(binding.source.package_root),
-      workspace_root: resolve(binding.source.workspace_root),
-    },
-  };
-}
-
-function hardCutoverCoordinatorCommand(
-  coordinator: HardCutoverCoordinator,
-): { command: string; args: string[] } {
-  return {
-    command: coordinator.node_executable,
-    args: [coordinator.entrypoint_path, '--journal', MCP_HARD_CUTOVER_JOURNAL],
-  };
-}
-
-async function registrarRuntimeV3CutoverPrepare(_args: JsonRecord): Promise<JsonRecord> {
-  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
-    return runFreshRegistrarRequest('registrar_runtime_v3_cutover_prepare', {});
-  }
-  assertRegistrarProcessCurrent('registrar_runtime_v3_cutover_prepare');
-  if (existsSync(MCP_HARD_CUTOVER_JOURNAL)) {
-    const existing = readHardCutoverJournal(MCP_HARD_CUTOVER_JOURNAL);
-    return {
-      status: 'already_prepared',
-      cutover_id: existing.cutover_id,
-      state: existing.state,
-      journal_path: MCP_HARD_CUTOVER_JOURNAL,
-      coordinator_command: hardCutoverCoordinatorCommand(existing.coordinator),
-      last_error: existing.last_error,
-    };
-  }
-
-  const cutoverId = randomUUID();
-  const preparedActivation = prepareActivation(cutoverId);
-  const stagingRoot = join(MCP_HARD_CUTOVER_ROOT, cutoverId);
-  const targets: HardCutoverTarget[] = [];
-  const writtenGenerationPaths: string[] = [];
-  const activeSiteReferences = await collectActiveSiteRuntimeReferences();
-  const activeSelectors: ArtifactSelector[] = [...activeSiteReferences.artifact_selectors];
-  const predecessorActivationMarkers = new Set<string>();
-  let coordinator: HardCutoverCoordinator | null = null;
-  try {
-    for (const carrier of CARRIERS) {
-      const currentContent = existsSync(carrier.config_path)
-        ? readFileSync(carrier.config_path, 'utf8')
-        : null;
-      const currentStructured = currentCarrierConfig(carrier, currentContent);
-      for (const markerPath of await assertCurrentCarrierRuntimeManaged(carrier, currentStructured)) {
-        predecessorActivationMarkers.add(markerPath);
-      }
-      const runtime = await prepareCarrierRuntime(
-        carrier,
-        carrier.config_path,
-        preparedActivation.activation,
-      );
-      const runtimeCoordinator = await resolveHardCutoverCoordinator(runtime);
-      if (runtimeCoordinator) {
-        if (
-          coordinator
-          && canonicalJson(coordinator) !== canonicalJson(runtimeCoordinator)
-        ) {
-          throw diagnosticError(
-            'registrar_v3_coordinator_identity_mismatch',
-            'Carrier generations resolved different sealed hard-cutover coordinators.',
-            {
-              first: coordinator,
-              current: runtimeCoordinator,
-            },
-          );
-        }
-        coordinator = runtimeCoordinator;
-      }
-      const result = emitCarrierConfig(carrier, runtime, currentContent);
-      validateCarrierMaterialization(carrier, result, runtime);
-      writePreparedV3CarrierGeneration(runtime.prepared);
-      writtenGenerationPaths.push(runtime.prepared.generation_path);
-      const stagedConfigPath = join(stagingRoot, 'configs', `${carrier.carrier_id}.config`);
-      const configDigest = writeStagedCutoverFile(stagedConfigPath, result.content);
-      targets.push({
-        carrier_id: carrier.carrier_id,
-        config_path: carrier.config_path,
-        prior_config_digest: currentContent === null ? null : digestText(currentContent),
-        staged_config_path: stagedConfigPath,
-        config_digest: configDigest,
-        generation_path: runtime.prepared.generation_path,
-        generation_digest: runtime.prepared.generation.generation_digest,
-      });
-      activeSelectors.push(
-        runtime.prepared.generation.runtime_proxy.artifact_selector,
-        ...runtime.prepared.generation.bindings.map((binding) => binding.artifact_selector),
-      );
-    }
-    const siteActivationMarkers = new Set(
-      activeSiteReferences.activation_marker_paths.map((path) => resolve(path)),
-    );
-    const coupledMarkers = [...predecessorActivationMarkers]
-      .filter((path) => siteActivationMarkers.has(resolve(path)));
-    if (coupledMarkers.length > 0) {
-      throw diagnosticError(
-        'registrar_v3_activation_scope_coupled',
-        'A predecessor carrier activation marker is also referenced by a retained Site generation.',
-        {
-          activation_marker_paths: coupledMarkers,
-          remediation: 'Prepare one complete cutover that owns every generation authorized by the shared marker.',
-        },
-      );
-    }
-    if (!coordinator) {
-      throw diagnosticError(
-        'registrar_v3_coordinator_binding_missing',
-        'No carrier generation contains the sealed mcp-registrar coordinator binding.',
-      );
-    }
-    const now = new Date().toISOString();
-    const journal = buildHardCutoverJournal({
-      cutover_id: cutoverId,
-      state: 'prepared',
-      created_at: now,
-      updated_at: now,
-      attempt_count: 0,
-      last_error: null,
-      staging_root: stagingRoot,
-      generation_root: MCP_CARRIER_GENERATIONS_ROOT,
-      artifact_store: MCP_ARTIFACT_STORE,
-      activation: {
-        marker_path: preparedActivation.activation.marker_path,
-        activation_token: preparedActivation.activation_token,
-        token_digest: preparedActivation.activation.token_digest,
-      },
-      diagnostics_dir: defaultRuntimeDiagnosticsDir(),
-      legacy_runtime_root: MCP_LEGACY_RUNTIME_ROOT,
-      legacy_paths: uniqueStrings(
-        [
-          ...CARRIERS.flatMap((carrier) => legacyCarrierStatePaths(carrier.config_path)),
-          ...predecessorActivationMarkers,
-        ],
-      ),
-      coordinator,
-      targets,
-      active_selectors: [
-        ...new Map(activeSelectors.map((selector) => [canonicalJson(selector), selector])).values(),
-      ],
-    });
-    writeHardCutoverJournal(MCP_HARD_CUTOVER_JOURNAL, journal, true);
-    return {
-      status: 'prepared',
-      cutover_id: cutoverId,
-      journal_path: MCP_HARD_CUTOVER_JOURNAL,
-      target_count: targets.length,
-      targets,
-      coordinator_command: hardCutoverCoordinatorCommand(coordinator),
-      execution_note: 'Run the coordinator outside every MCP-managed process tree. It resumes forward from this journal after interruption.',
-    };
-  } catch (error) {
-    rmSync(stagingRoot, { recursive: true, force: true });
-    for (const generationPath of writtenGenerationPaths) {
-      rmSync(generationPath, { force: true });
-    }
-    throw error;
-  }
-}
-
-function registrarRuntimeV3CutoverStatus(_args: JsonRecord): JsonRecord {
-  if (!existsSync(MCP_HARD_CUTOVER_JOURNAL)) {
-    return {
-      status: 'idle',
-      journal_path: MCP_HARD_CUTOVER_JOURNAL,
-    };
-  }
-  const journal = readHardCutoverJournal(MCP_HARD_CUTOVER_JOURNAL);
-  return {
-    status: 'active',
-    cutover_id: journal.cutover_id,
-    state: journal.state,
-    attempt_count: journal.attempt_count,
-    last_error: journal.last_error,
-    journal_path: MCP_HARD_CUTOVER_JOURNAL,
-    targets: journal.targets.map((target) => ({
-      carrier_id: target.carrier_id,
-      config_path: target.config_path,
-      generation_digest: target.generation_digest,
-    })),
-    coordinator_command: {
-      command: journal.coordinator.node_executable,
-      args: [
-        journal.coordinator.entrypoint_path,
-        '--journal',
-        MCP_HARD_CUTOVER_JOURNAL,
-      ],
-    },
-  };
-}
-
-async function registrarRuntimeV3CutoverDiscardPrepared(_args: JsonRecord): Promise<JsonRecord> {
-  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
-    return runFreshRegistrarRequest('registrar_runtime_v3_cutover_discard_prepared', {});
-  }
-  assertRegistrarProcessCurrent('registrar_runtime_v3_cutover_discard_prepared');
-  if (!existsSync(MCP_HARD_CUTOVER_JOURNAL)) {
-    return {
-      schema: 'narada.mcp_hard_cutover.discard.v3',
-      status: 'idle',
-      journal_path: MCP_HARD_CUTOVER_JOURNAL,
-    };
-  }
-  return discardPreparedHardCutover(MCP_HARD_CUTOVER_JOURNAL);
-}
-
-async function registrarCarrierValidate(args: JsonRecord): Promise<JsonRecord> {
+function registrarCarrierValidate(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
   const includeOk = args.include_ok === true;
   const findings: ValidationFinding[] = [];
-  let runtime: PreparedCarrierRuntime | null = null;
-  let installedRuntime: JsonRecord | null = null;
 
   function add(severity: ValidationFinding['severity'], code: string, message: string, detail: JsonRecord = {}) {
     findings.push({ severity, code, message, ...detail });
@@ -3307,69 +2074,18 @@ async function registrarCarrierValidate(args: JsonRecord): Promise<JsonRecord> {
     }
   }
 
-  try {
-    runtime = await prepareCarrierRuntime(
-      carrier,
-      carrier.config_path,
-      prepareActivation().activation,
-    );
-    if (includeOk) {
-      add('info', 'registrar_v3_artifacts_current', 'Every carrier binding resolves to a fresh compatible sealed artifact.', {
-        carrier_generation_path: runtime.prepared.generation_path,
-        generation_digest: runtime.prepared.generation.generation_digest,
-        artifact_store: runtime.prepared.artifact_store,
-        runtime_proxy_entrypoint: runtime.prepared.runtime_proxy_entrypoint,
-      });
-    }
-  } catch (error) {
-    const diagnostic = errorDiagnostic(error);
-    add('error', String(diagnostic.code ?? 'registrar_v3_artifact_preflight_failed'), String(diagnostic.message ?? 'V3 artifact preflight failed.'), {
-      diagnostic,
-      remediation: 'Canonical-build the proxy and every selected surface artifact, then retry validation.',
-    });
-  }
-  if (runtime) {
-    try {
-      installedRuntime = await validateInstalledCarrierRuntime(carrier, runtime);
-      if (includeOk) {
-        add(
-          'info',
-          'registrar_installed_v3_runtime_current',
-          'The installed carrier config exactly matches one activated, source-fresh runtime V3 generation.',
-          { installed_runtime: installedRuntime },
-        );
-      }
-    } catch (error) {
-      const diagnostic = errorDiagnostic(error);
-      add(
-        'error',
-        String(diagnostic.code ?? 'registrar_installed_runtime_invalid'),
-        String(diagnostic.message ?? 'Installed carrier runtime validation failed.'),
-        {
-          diagnostic,
-          remediation: 'Execute one complete runtime V3 hard cutover after all carrier and Site preflights pass.',
-        },
-      );
-    }
-  }
-
-  // Source declaration and required child flags
+  // Entrypoint existence and required flags
   for (const [key, server] of Object.entries(rawServers)) {
     const surfaceId = server.kind === 'local' ? (server.local as SiteLocalSurface).surface_id : (server.surface as RegistrarSurfaceRecord).id;
     const overridden = applySurfaceOverrides(carrier, server, surfaceId);
     const scopeDetail = scopeFindingDetail(server.narada_scope);
+    const launch = carrierLaunchCommand(overridden, surfaceId);
     if (!existsSync(overridden.entrypoint)) {
       add('error', 'registrar_missing_entrypoint', `Entrypoint for '${key}' does not exist: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     } else if (includeOk) {
       add('info', 'registrar_entrypoint_exists', `Entrypoint for '${key}' exists: ${overridden.entrypoint}`, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail });
     }
-    if (server.kind !== 'shared') {
-      add('error', 'registrar_v3_local_surface_unsupported', `Unsealed local surface '${key}' is not executable under runtime V3.`, {
-        server_key: key,
-        surface_id: surfaceId,
-        ...scopeDetail,
-      });
-    }
+    addRuntimePreflightFindings(add, includeOk, { server_key: key, surface_id: surfaceId, entrypoint: overridden.entrypoint, ...scopeDetail }, server.kind === 'shared' ? server.surface as RegistrarSurfaceRecord : null, launch.uses_runtime_proxy);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -3403,10 +2119,6 @@ async function registrarCarrierValidate(args: JsonRecord): Promise<JsonRecord> {
     status: errors > 0 ? 'invalid' : warnings > 0 ? 'valid_with_warnings' : 'valid',
     carrier_id: carrierId,
     server_count: Object.keys(rawServers).length,
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
-    carrier_generation_path: runtime?.prepared.generation_path ?? null,
-    installed_runtime: installedRuntime,
-    artifact_store: MCP_ARTIFACT_STORE,
     errors,
     warnings,
     findings,
@@ -3419,23 +2131,20 @@ function registrarSiteMcpFabricValidate(args: JsonRecord): JsonRecord {
   return validateSiteMcpFabric(site, args.include_ok === true);
 }
 
-async function registrarCarrierDiff(args: JsonRecord): Promise<JsonRecord> {
+function registrarCarrierDiff(args: JsonRecord): JsonRecord {
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
-  const runtime = await prepareCarrierRuntime(
-    carrier,
-    carrier.config_path,
-    prepareActivation().activation,
-  );
+  let generated: { content: string; structured: JsonRecord };
+  switch (carrier.kind) {
+    case 'opencode': generated = emitOpencodeConfig(carrier); break;
+    case 'kimi': generated = emitKimiConfig(carrier); break;
+    case 'codex': generated = emitCodexConfig(carrier); break;
+    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
+  }
+  const materializationValidation = validateCarrierMaterialization(carrier, generated).validation;
+
   const currentPath = carrier.config_path;
   const currentContent = existsSync(currentPath) ? readFileSync(currentPath, 'utf8') : null;
-  await assertCurrentCarrierRuntimeManaged(
-    carrier,
-    currentCarrierConfig(carrier, currentContent),
-  );
-  const generated = emitCarrierConfig(carrier, runtime, currentContent);
-  const materializationValidation = validateCarrierMaterialization(carrier, generated, runtime);
-
   const currentStructured = currentContent ? parseCarrierConfig(carrier.kind, currentContent) : null;
 
   return {
@@ -3449,8 +2158,6 @@ async function registrarCarrierDiff(args: JsonRecord): Promise<JsonRecord> {
     }),
     runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
     materialization_validation: materializationValidation,
-    carrier_generation_path: runtime.prepared.generation_path,
-    artifact_store: runtime.prepared.artifact_store,
   };
 }
 
@@ -3567,25 +2274,15 @@ function parseCodexToml(content: string): JsonRecord {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (line.startsWith('#') || line.length === 0) continue;
-    if (line.startsWith('[[') && line.endsWith(']]')) {
-      currentKey = null;
-      continue;
-    }
-    const sectionPath = tomlSectionPath(line);
-    if (sectionPath) {
-      if (sectionPath[0] !== 'mcp_servers' || sectionPath.length !== 2) {
+    const sectionMatch = line.match(/^\[mcp_servers\.([^\]]+)\]$/);
+    if (sectionMatch) {
+      const sectionPath = sectionMatch[1];
+      if (sectionPath.includes('.tools.')) {
         currentKey = null;
         continue;
       }
-      currentKey = sectionPath[1];
-      if (Object.hasOwn(result.mcpServers as JsonRecord, currentKey)) {
-        throw new Error(`duplicate_codex_mcp_server_section:${currentKey}`);
-      }
+      currentKey = sectionPath;
       (result.mcpServers as JsonRecord)[currentKey] = {};
-      continue;
-    }
-    if (line.startsWith('[')) {
-      currentKey = null;
       continue;
     }
     if (currentKey) {
@@ -3596,7 +2293,7 @@ function parseCodexToml(content: string): JsonRecord {
         try {
           serverRecord[k] = JSON.parse(rawV);
         } catch {
-          serverRecord[k] = rawV.replace(/^(['"])|(['"])$/gu, '');
+          serverRecord[k] = rawV.replace(/^"|"$/g, '');
         }
         (result.mcpServers as JsonRecord)[currentKey] = serverRecord;
       }
@@ -3622,7 +2319,7 @@ function registrarSurfaceList(_args: JsonRecord): JsonRecord {
         projections,
         descriptor_source: descriptor.source,
         descriptor_digest: surfaceDescriptorDigest(descriptor),
-        interface_digest: surfaceInterfaceDigest(descriptor),
+        tool_contract_digest: surfaceToolContractDigest(descriptor),
         descriptor,
         ...scope,
       };
@@ -3634,15 +2331,12 @@ function registrarSurfaceList(_args: JsonRecord): JsonRecord {
 function registrarSurfaceToolInventoryCheck(args: JsonRecord): JsonRecord {
   const observedInput = asRecord(args.observed_tools);
   const includeOk = args.include_ok === true;
-  const standardToolNames = standardSurfaceToolDefinitions().map((tool) => tool.name);
   const surfaces = SURFACES.filter((surface) => Object.hasOwn(observedInput, surface.id));
   const findings = surfaces.flatMap((surface) => {
     const registered = nativeToolNames(surface.id);
     const observed = uniqueStrings(Array.isArray(observedInput[surface.id]) ? (observedInput[surface.id] as unknown[]).map(String) : []);
-    const runtimeGeneratedTools = standardToolNames.filter((tool) => !observed.includes(tool));
-    const effectiveObserved = uniqueStrings([...observed, ...runtimeGeneratedTools]);
-    const missing_from_registrar = effectiveObserved.filter((tool) => !registered.includes(tool));
-    const extra_in_registrar = registered.filter((tool) => !effectiveObserved.includes(tool));
+    const missing_from_registrar = observed.filter((tool) => !registered.includes(tool));
+    const extra_in_registrar = registered.filter((tool) => !observed.includes(tool));
     const status = missing_from_registrar.length === 0 && extra_in_registrar.length === 0 ? 'ok' : 'drift';
     if (status === 'ok' && !includeOk) return [];
     return [{
@@ -3651,8 +2345,6 @@ function registrarSurfaceToolInventoryCheck(args: JsonRecord): JsonRecord {
       status,
       registered_count: registered.length,
       observed_count: observed.length,
-      effective_observed_count: effectiveObserved.length,
-      runtime_generated_tools: runtimeGeneratedTools,
       missing_from_registrar,
       extra_in_registrar,
     }];
@@ -4248,12 +2940,7 @@ function siteSurfacePrefix(siteId: string): string {
   return siteId.startsWith('narada-') ? siteId : 'narada-' + siteId;
 }
 
-function resolveSiteBindingDefinition(
-  site: SiteDef,
-  surface: RegistrarSurfaceRecord,
-  projectionId?: string | null,
-  runtimeKind?: McpRuntimeKind,
-) {
+export function buildSiteBindConfig(site: SiteDef, surface: RegistrarSurfaceRecord, projectionId?: string | null, runtimeKind?: McpRuntimeKind): { fileName: string; serverKey: string; config: JsonRecord } {
   const siteId = site.site_id;
   const surfaceId = surface.id;
   const selected = selectSurfaceProjection(surfaceId, projectionId, runtimeKind, {
@@ -4275,42 +2962,14 @@ function resolveSiteBindingDefinition(
   const scopeMetadata = surfaceScopeMetadata(surfaceId, siteRoot, projection.id);
   const naradaScope = naradaScopeMetadata(surfaceId, siteRoot, siteId, projection.id);
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
-  return {
-    siteId,
-    surfaceId,
-    projection,
-    serverKey,
-    fileName,
-    resolvedEntrypoint,
-    resolvedArgs,
-    scopeMetadata,
-    naradaScope,
-  };
-}
-
-export function buildSiteBindConfig(
-  site: SiteDef,
-  surface: RegistrarSurfaceRecord,
-  projectionId?: string | null,
-  runtimeKind?: McpRuntimeKind,
-  launch?: { command: string; args: string[] },
-): { fileName: string; serverKey: string; config: JsonRecord } {
-  if (!launch) {
-    throw diagnosticError(
-      'registrar_v3_sealed_launch_required',
-      'Site binding config requires a prepared sealed V3 launch.',
-      { site_id: site.site_id, surface_id: surface.id },
-    );
-  }
-  const {
-    siteId,
-    surfaceId,
-    projection,
-    serverKey,
-    fileName,
-    scopeMetadata,
-    naradaScope,
-  } = resolveSiteBindingDefinition(site, surface, projectionId, runtimeKind);
+  const launch = carrierLaunchCommand({
+    kind: 'shared',
+    entrypoint: resolvedEntrypoint,
+    args: resolvedArgs,
+    surface,
+    ...scopeMetadata,
+    narada_scope: naradaScope,
+  }, surfaceId);
 
   return {
     fileName,
@@ -4349,124 +3008,7 @@ function siteWorkspaceRoot(site: SiteDef): string {
   return site.root;
 }
 
-function inspectExistingSiteBinding(
-  filePath: string,
-  serverKey: string,
-  surfaceId: string,
-): JsonRecord | null {
-  let config: JsonRecord;
-  try {
-    config = asRecord(JSON.parse(readFileSync(filePath, 'utf8')));
-  } catch (error) {
-    throw diagnosticError(
-      'registrar_v3_existing_site_binding_invalid',
-      'Existing Site binding is unreadable; refusing to replace it.',
-      { file_path: filePath, server_key: serverKey, error: String(error) },
-    );
-  }
-  const servers = asRecord(config.mcpServers);
-  const server = asRecord(servers[serverKey]);
-  const launch = carrierRecordLaunch('kimi', server);
-  const generationPath = launchArgument(launch.args, '--carrier-generation');
-  const launchServerKey = launchArgument(launch.args, '--server-key');
-  const contractVersion = launchArgument(launch.args, '--runtime-contract-version');
-  if (
-    !generationPath
-    || launchServerKey !== serverKey
-    || contractVersion !== String(MCP_RUNTIME_CONTRACT_VERSION)
-  ) {
-    throw diagnosticError(
-      'registrar_v3_existing_site_binding_invalid',
-      'Existing Site binding is not a sealed runtime V3 binding.',
-      { file_path: filePath, server_key: serverKey },
-    );
-  }
-  const resolvedGenerationPath = resolve(generationPath);
-  const generationRoot = portablePath(MCP_CARRIER_GENERATIONS_ROOT).replace(/\/$/u, '');
-  if (!portablePath(resolvedGenerationPath).startsWith(`${generationRoot}/`)) {
-    throw diagnosticError(
-      'registrar_v3_existing_site_binding_invalid',
-      'Existing Site binding generation is outside the admitted generation root.',
-      { file_path: filePath, server_key: serverKey, generation_path: resolvedGenerationPath },
-    );
-  }
-
-  if (!existsSync(resolvedGenerationPath)) {
-    rmSync(filePath, { force: true });
-    return null;
-  }
-  let generation;
-  try {
-    generation = readCarrierGeneration(resolvedGenerationPath);
-  } catch (error) {
-    throw diagnosticError(
-      'registrar_v3_existing_site_binding_invalid',
-      'Existing Site binding generation is unreadable; refusing automatic cleanup.',
-      {
-        file_path: filePath,
-        server_key: serverKey,
-        generation_path: resolvedGenerationPath,
-        error: String(error),
-      },
-    );
-  }
-  const binding = generation.bindings.find((candidate) => candidate.server_key === serverKey);
-  if (
-    resolve(generation.config_path) !== resolve(filePath)
-    || !binding
-    || binding.surface_id !== surfaceId
-    || canonicalJson(binding.proxy_launch) !== canonicalJson(launch)
-  ) {
-    throw diagnosticError(
-      'registrar_v3_existing_site_binding_invalid',
-      'Existing Site binding does not match its immutable generation.',
-      { file_path: filePath, server_key: serverKey, generation_path: resolvedGenerationPath },
-    );
-  }
-  if (!existsSync(generation.activation.marker_path)) {
-    rmSync(filePath, { force: true });
-    rmSync(resolvedGenerationPath, { force: true });
-    return null;
-  }
-  assertCarrierGenerationActivated(generation);
-  return {
-    status: 'already_bound',
-    server_key: serverKey,
-    generation_id: generation.generation_id,
-    generation_digest: generation.generation_digest,
-    carrier_generation_path: resolvedGenerationPath,
-  };
-}
-
-function pruneInertSiteGenerations(
-  retainedGenerationPath: string,
-  configPath: string,
-): string[] {
-  const retained = resolve(retainedGenerationPath);
-  const directory = dirname(retained);
-  if (!existsSync(directory)) return [];
-  const removed: string[] = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const path = resolve(join(directory, entry.name));
-    if (path === retained) continue;
-    try {
-      const generation = readCarrierGeneration(path);
-      if (
-        resolve(generation.config_path) === resolve(configPath)
-        && !existsSync(generation.activation.marker_path)
-      ) {
-        rmSync(path, { force: true });
-        removed.push(path);
-      }
-    } catch {
-      // Never reclaim a record whose identity cannot be proven.
-    }
-  }
-  return removed.sort();
-}
-
-async function registrarSiteBind(args: JsonRecord): Promise<JsonRecord> {
+function registrarSiteBind(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
   const projectionId = optionalString(args.projection_id);
@@ -4474,83 +3016,13 @@ async function registrarSiteBind(args: JsonRecord): Promise<JsonRecord> {
   const site = lookupSite(siteId);
   const surface = lookupSurface(surfaceId);
   const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
-  const fragmentRefusal = siteBindFragmentRefusal(site, surfaceId, args);
-  if (fragmentRefusal) return fragmentRefusal;
-  const resolved = resolveSiteBindingDefinition(site, surface, projectionId, runtimeKind);
-  const fileName = resolved.fileName;
-  const serverKey = resolved.serverKey;
-  const filePath = join(configDir, fileName);
-  if (existsSync(filePath)) {
-    const existing = inspectExistingSiteBinding(filePath, serverKey, surfaceId);
-    if (!existing) {
-      // A crash-left inert binding was removed and can be recreated forward.
-    } else {
-      pruneInertSiteGenerations(String(existing.carrier_generation_path), filePath);
-      return {
-        ...existing,
-        site_id: siteId,
-        surface_id: surfaceId,
-        file: fileName,
-        required_next_step: 'Use a complete external Site-fabric cutover to replace an existing binding.',
-      };
-    }
-  }
-  const descriptor = nativeSurfaceDescriptor(surfaceId);
-  const preparedActivation = prepareActivation();
-  const prepared = await prepareV3CarrierGeneration({
-    carrier_id: `site-${siteId}-${surfaceId}`,
-    carrier_kind: 'site-fabric',
-    config_path: filePath,
-    artifact_store: MCP_ARTIFACT_STORE,
-    generation_root: MCP_CARRIER_GENERATIONS_ROOT,
-    runtime_proxy_package_root: MCP_RUNTIME_PROXY_PACKAGE_ROOT,
-    runtime_proxy_workspace_root: MCP_WORKSPACE_ROOT,
-    activation: preparedActivation.activation,
-    bindings: [{
-      binding_id: `site-${siteId}.${serverKey}`,
-      server_key: serverKey,
-      surface_id: surfaceId,
-      projection_id: resolved.projection.id,
-      descriptor,
-      source: {
-        package_root: packageRootForDescriptor(descriptor),
-        workspace_root: MCP_WORKSPACE_ROOT,
-      },
-      artifact_entrypoint: resolved.resolvedEntrypoint,
-      child_args: resolved.resolvedArgs,
-      child_env_names: projectionEnvVars(surface, resolved.projection),
-      client_tool_names: nativeToolNames(surfaceId),
-    }],
-  });
-  const launch = prepared.launches.get(serverKey);
-  if (!launch) {
-    throw diagnosticError('registrar_v3_binding_missing', `Prepared Site binding is missing ${serverKey}.`);
-  }
-  const { config } = buildSiteBindConfig(
-    site,
-    surface,
-    projectionId,
-    runtimeKind,
-    launch,
-  );
+  const sidecarRefusal = siteBindSidecarRefusal(site, surfaceId, args);
+  if (sidecarRefusal) return sidecarRefusal;
   mkdirSync(configDir, { recursive: true });
-  try {
-    writePreparedV3CarrierGeneration(prepared);
-    writeStagedCutoverFile(filePath, JSON.stringify(config, null, 2) + '\n');
-    writeCarrierActivationMarkerImmutable(
-      preparedActivation.activation.marker_path,
-      buildCarrierActivationMarker({
-        cutover_id: preparedActivation.activation.cutover_id,
-        activation_token: preparedActivation.activation_token,
-        generation_digests: [prepared.generation.generation_digest],
-      }),
-    );
-    pruneInertSiteGenerations(prepared.generation_path, filePath);
-  } catch (error) {
-    rmSync(filePath, { force: true });
-    rmSync(prepared.generation_path, { force: true });
-    throw error;
-  }
+  const { fileName, serverKey, config } = buildSiteBindConfig(site, surface, projectionId, runtimeKind);
+  const filePath = join(configDir, fileName);
+  writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+  const registry = writeSiteSurfaceRegistry(site);
   return {
     status: 'bound',
     site_id: siteId,
@@ -4558,26 +3030,33 @@ async function registrarSiteBind(args: JsonRecord): Promise<JsonRecord> {
     projection_id: asRecord(asRecord(asRecord(config.mcpServers)[serverKey]).surface_projection).projection_id,
     file: fileName,
     server_key: serverKey,
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
-    carrier_generation_path: prepared.generation_path,
-    generation_digest: prepared.generation.generation_digest,
-    artifact_store: prepared.artifact_store,
+    registry,
   };
 }
 
 function registrarSiteUnbind(args: JsonRecord): JsonRecord {
   const siteId = requiredString(args.site_id, 'registrar_requires_site_id');
   const surfaceId = requiredString(args.surface_id, 'registrar_requires_surface_id');
-  lookupSite(siteId);
-  throw diagnosticError(
-    'registrar_v3_site_unbind_refused',
-    'Patch-in-place Site unbinding is forbidden after runtime V3 hard cutover.',
-    {
-      site_id: siteId,
-      surface_id: surfaceId,
-      required_next_step: 'Remove the binding from Site authority and execute a complete external Site-fabric cutover.',
-    },
-  );
+  const site = lookupSite(siteId);
+  const configDir = join(siteMcpControlRoot(site), '.ai', 'mcp');
+  if (!existsSync(configDir)) return { status: 'not_found', site_id: siteId, surface_id: surfaceId };
+  const files = readdirSync(configDir).filter((f: string) => f.endsWith('.json'));
+  const serverKey = siteSurfaceServerKey(siteId, surfaceId);
+  let removed = 0;
+  for (const file of files) {
+    try {
+      const content = readFileSync(join(configDir, file), 'utf8');
+      const cfg = JSON.parse(content);
+      const servers = asRecord(cfg.mcpServers);
+      if (servers[serverKey]) {
+        unlinkSync(join(configDir, file));
+        removed++;
+        const registry = writeSiteSurfaceRegistry(site);
+        return { status: 'unbound', site_id: siteId, surface_id: surfaceId, file, registry };
+      }
+    } catch { /* skip */ }
+  }
+  return { status: 'not_bound', site_id: siteId, surface_id: surfaceId };
 }
 
 function registrarCarrierList(_args: JsonRecord): JsonRecord {
@@ -4643,17 +3122,7 @@ type SiteMcpFabricServer = {
   args: string[];
   entrypoint: string;
   launch_entrypoint: string;
-  launch_args: string[];
   uses_runtime_proxy: boolean;
-  sealed_runtime: {
-    carrier_generation_path: string;
-    generation_id: string;
-    generation_digest: string;
-    server_key: string;
-    surface_id: string;
-    artifact_selector: JsonRecord;
-    artifact_entrypoint: string;
-  } | null;
   surface_id?: string;
   projection_id?: string;
   runtime_kind?: McpRuntimeKind;
@@ -4663,65 +3132,16 @@ type SiteMcpFabricServer = {
   projection_kind: 'site_fabric' | 'carrier_projection';
 };
 
-function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): {
-  entrypoint: string;
-  args: string[];
-  usesRuntimeProxy: boolean;
-  launchEntrypoint: string;
-  launchArgs: string[];
-  sealedRuntime: SiteMcpFabricServer['sealed_runtime'];
-} {
+function unwrapRuntimeProxyLaunch(entrypoint: string, args: string[]): { entrypoint: string; args: string[]; usesRuntimeProxy: boolean; launchEntrypoint: string } {
   const launchEntrypoint = entrypoint;
-  const contractIndex = args.indexOf('--runtime-contract-version');
-  const generationIndex = args.indexOf('--carrier-generation');
-  const serverKeyIndex = args.indexOf('--server-key');
-  if (
-    contractIndex < 0
-    || args[contractIndex + 1] !== String(MCP_RUNTIME_CONTRACT_VERSION)
-    || generationIndex < 0
-    || serverKeyIndex < 0
-  ) {
-    return {
-      entrypoint,
-      args,
-      usesRuntimeProxy: false,
-      launchEntrypoint,
-      launchArgs: args,
-      sealedRuntime: null,
-    };
+  if (portablePath(entrypoint) !== portablePath(MCP_RUNTIME_PROXY_ENTRYPOINT)) {
+    return { entrypoint, args, usesRuntimeProxy: false, launchEntrypoint };
   }
-  const generationPath = args[generationIndex + 1] ?? '';
-  const serverKey = args[serverKeyIndex + 1] ?? '';
-  try {
-    const generation = readCarrierGeneration(generationPath);
-    const binding = generation.bindings.find((candidate) => candidate.server_key === serverKey);
-    if (!binding) throw new Error(`binding_missing:${serverKey}`);
-    return {
-      entrypoint: join(binding.source.package_root, binding.artifact_entrypoint),
-      args: binding.child_args,
-      usesRuntimeProxy: true,
-      launchEntrypoint,
-      launchArgs: args,
-      sealedRuntime: {
-        carrier_generation_path: resolve(generationPath),
-        generation_id: generation.generation_id,
-        generation_digest: generation.generation_digest,
-        server_key: binding.server_key,
-        surface_id: binding.surface_id,
-        artifact_selector: binding.artifact_selector as unknown as JsonRecord,
-        artifact_entrypoint: binding.artifact_entrypoint,
-      },
-    };
-  } catch {
-    return {
-      entrypoint: '',
-      args: [],
-      usesRuntimeProxy: true,
-      launchEntrypoint,
-      launchArgs: args,
-      sealedRuntime: null,
-    };
-  }
+  const entrypointIndex = args.indexOf('--entrypoint');
+  const separatorIndex = args.indexOf('--');
+  const childEntrypoint = entrypointIndex >= 0 ? args[entrypointIndex + 1] : '';
+  const childArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
+  return { entrypoint: childEntrypoint, args: childArgs, usesRuntimeProxy: true, launchEntrypoint };
 }
 
 function portablePath(path: string): string {
@@ -4820,9 +3240,7 @@ function discoverMcpConfigDirectory(
         args: unwrapped.args,
         entrypoint: unwrapped.entrypoint,
         launch_entrypoint: unwrapped.launchEntrypoint,
-        launch_args: unwrapped.launchArgs,
         uses_runtime_proxy: unwrapped.usesRuntimeProxy,
-        sealed_runtime: unwrapped.sealedRuntime,
         surface_id: server.surface_id ? String(server.surface_id) : undefined,
         projection_id: optionalString(server.projection_id) ?? optionalString(surfaceProjection.projection_id) ?? undefined,
         runtime_kind: surfaceProjection.runtime_kind === 'nars' ? 'nars' : undefined,
@@ -4877,16 +3295,14 @@ type SiteSurfaceRegistrySurface = {
   display_name: string;
   server_name: string;
   runtime_binding: {
-    runtime_kind: 'sealed-artifact-v3';
-    runtime_contract_version: typeof MCP_RUNTIME_CONTRACT_VERSION;
+    runtime_kind: 'node-stdio';
+    entrypoint: string;
     owner_site_id: string;
-    carrier_generation_path: string;
-    generation_id: string;
-    generation_digest: string;
-    server_key: string;
-    surface_id: string;
-    artifact_selector: JsonRecord;
-    artifact_entrypoint: string;
+    transport: {
+      type: 'stdio';
+      command: string;
+      args: string[];
+    };
   };
   authority_boundary: JsonRecord;
   client_config: JsonRecord;
@@ -4904,21 +3320,31 @@ type SiteSurfaceRegistrySurface = {
 };
 
 function runtimeBindingForFabricServer(site: SiteDef, server: SiteMcpFabricServer): SiteSurfaceRegistrySurface['runtime_binding'] {
-  const sealed = server.sealed_runtime;
-  if (!server.uses_runtime_proxy || sealed === null) {
-    throw new Error(`registrar_site_registry_unsealed_binding:${site.site_id}:${server.server_key}`);
-  }
+  const surfaceId = server.surface_id ?? fabricSurfaceId(server.server_key, site);
+  const transportArgs = server.uses_runtime_proxy
+    ? [
+      server.launch_entrypoint,
+      '--surface-id',
+      surfaceId,
+      '--artifact-manifest',
+      MCP_WORKSPACE_ARTIFACT_MANIFEST,
+      '--runtime-contract-version',
+      String(MCP_RUNTIME_CONTRACT_VERSION),
+      '--entrypoint',
+      server.entrypoint,
+      '--',
+      ...server.args,
+    ]
+    : [server.entrypoint, ...server.args];
   return {
-    runtime_kind: 'sealed-artifact-v3',
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    runtime_kind: 'node-stdio',
+    entrypoint: server.entrypoint,
     owner_site_id: site.site_id,
-    carrier_generation_path: sealed.carrier_generation_path,
-    generation_id: sealed.generation_id,
-    generation_digest: sealed.generation_digest,
-    server_key: sealed.server_key,
-    surface_id: sealed.surface_id,
-    artifact_selector: sealed.artifact_selector,
-    artifact_entrypoint: sealed.artifact_entrypoint,
+    transport: {
+      type: 'stdio',
+      command: server.command,
+      args: transportArgs,
+    },
   };
 }
 
@@ -5116,33 +3542,14 @@ export function validateSiteMcpFabric(site: SiteDef, includeOk = false): JsonRec
     } else if (includeOk) {
       add('info', 'registrar_site_fabric_entrypoint_exists', `Entrypoint for '${server.server_key}' exists: ${resolvedEntrypoint}`, { site_id: siteId, server_key: server.server_key, entrypoint: resolvedEntrypoint, source_file: server.source_file, surface_id: surfaceId, ...scopeDetail });
     }
-    if (!server.uses_runtime_proxy) {
-      add('error', 'registrar_site_fabric_unsealed_launch', `Surface '${server.server_key}' is not launched through runtime V3.`, {
-        site_id: siteId,
-        server_key: server.server_key,
-        source_file: server.source_file,
-        surface_id: surfaceId,
-        remediation: 'Rematerialize the Site fabric with an immutable carrier generation and sealed proxy launch.',
-        ...scopeDetail,
-      });
-    } else if (server.sealed_runtime === null || !server.entrypoint) {
-      add('error', 'registrar_site_fabric_generation_unreadable', `Surface '${server.server_key}' references an unreadable V3 generation.`, {
-        site_id: siteId,
-        server_key: server.server_key,
-        source_file: server.source_file,
-        surface_id: surfaceId,
-        ...scopeDetail,
-      });
-    } else if (includeOk) {
-      add('info', 'registrar_site_fabric_sealed_launch_ok', `Surface '${server.server_key}' uses runtime V3.`, {
-        site_id: siteId,
-        server_key: server.server_key,
-        source_file: server.source_file,
-        surface_id: surfaceId,
-        launch_entrypoint: server.launch_entrypoint,
-        ...scopeDetail,
-      });
-    }
+    addRuntimePreflightFindings(add, includeOk, {
+      site_id: siteId,
+      server_key: server.server_key,
+      entrypoint: resolvedEntrypoint,
+      source_file: server.source_file,
+      surface_id: surfaceId,
+      ...scopeDetail,
+    }, SURFACES.find((surface) => surface.id === surfaceId) ?? null, server.uses_runtime_proxy);
 
     // Allowed-root requirement
     if (rootsNeedingAllowedRoot(surfaceId)) {
@@ -5262,29 +3669,57 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
   if (surfaceId === 'sop') appendSopsDirs(resolvedArgs);
 
   const aggregateServerKeys = carrierServerKeysForSurface(carrier, surfaceId);
+  if (binding?.loading_mode === 'progressive' && aggregateServerKeys.length === 0) {
+    throw diagnosticError(
+      'registrar_progressive_surface_bind_refused',
+      `registrar_progressive_surface_bind_refused:${carrierId}:${surfaceId}`,
+      {
+        carrier_id: carrierId,
+        site_id: defaultSiteId,
+        surface_id: surfaceId,
+        loading_mode: binding.loading_mode,
+        remediation: 'Use mcp-loader to attach this surface at runtime, or explicitly add it to the progressive bootstrap allowlist before materializing the carrier.',
+      },
+    );
+  }
   if (aggregateServerKeys.length > 0) {
+    const applied = await registrarCarrierApply({ carrier_id: carrierId });
+    writeSiteAllowedRootsConfig(carrier);
     return {
-      status: 'already_bound',
-      carrier_id: carrierId,
+      ...applied,
+      status: 'applied',
       surface_id: surfaceId,
       projection_id: projection.id,
       server_keys: aggregateServerKeys,
       binding_model: 'aggregate_carrier_config',
-      required_next_step: 'Use registrar_runtime_v3_cutover_prepare only when the complete carrier authority model needs reactivation.',
     };
   }
-  throw diagnosticError(
-    'registrar_v3_aggregate_binding_required',
-    `Surface ${surfaceId} is absent from the carrier authority model.`,
-    {
-      carrier_id: carrierId,
-      surface_id: surfaceId,
-      projection_id: projection.id,
-      resolved_entrypoint: resolvedEntrypoint,
-      resolved_args: resolvedArgs,
-      remediation: 'Add the binding to the carrier authority model, canonical-build its artifact, then prepare the coordinated all-carrier hard cutover.',
-    },
-  );
+
+  type CarrierBindPreparation = { result: JsonRecord; content: string; structured: JsonRecord };
+  let prepared: CarrierBindPreparation;
+  switch (carrier.kind) {
+    case 'opencode':
+      throw diagnosticError('registrar_single_surface_bind_unsupported_for_opencode_aggregate', 'registrar_single_surface_bind_unsupported_for_opencode_aggregate');
+    case 'kimi':
+      prepared = kimiBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
+      break;
+    case 'codex':
+      prepared = codexBind(carrier.config_path, surfaceId, resolvedEntrypoint, resolvedArgs, defaultSiteId, siteRoot, projection.id);
+      break;
+    default:
+      throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
+  }
+  const finalized = validateCarrierMaterialization(carrier, { content: prepared.content, structured: prepared.structured }, carrier.config_path);
+  writeFileAtomic(carrier.config_path, prepared.content);
+  writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
+  writeSiteAllowedRootsConfig(carrier);
+  return {
+    ...prepared.result,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+    materialization_validation: finalized.validation,
+    materialization_generation: finalized.generation,
+    generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+  };
 }
 
 async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
@@ -5304,19 +3739,104 @@ async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
         carrier_id: carrierId,
         surface_id: surfaceId,
         server_keys: aggregateServerKeys,
-        remediation: 'This surface is produced by the aggregate carrier model. Remove it from the carrier Site binding/source model, then prepare the coordinated all-carrier hard cutover.',
+        remediation: 'This surface is produced by the aggregate carrier model. Remove it from the carrier site binding/source model, then run registrar_carrier_apply.',
       },
     );
   }
-  throw diagnosticError(
-    'registrar_v3_aggregate_binding_required',
-    `Surface ${surfaceId} is absent from the carrier authority model.`,
-    {
-      carrier_id: carrierId,
-      surface_id: surfaceId,
-      remediation: 'Remove bindings only from the carrier authority model, then prepare the coordinated all-carrier hard cutover.',
-    },
-  );
+  let result: JsonRecord;
+  switch (carrier.kind) {
+    case 'opencode':
+      throw diagnosticError('registrar_single_surface_unbind_unsupported_for_opencode_aggregate', 'registrar_single_surface_unbind_unsupported_for_opencode_aggregate');
+    case 'kimi':
+      result = kimiUnbind(carrier.config_path, surfaceId);
+      break;
+    case 'codex':
+      result = codexUnbind(carrier.config_path, surfaceId);
+      break;
+    default:
+      throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
+  }
+  writeSiteAllowedRootsConfig(carrier);
+  if (result.status === 'unbound') {
+    const content = readFileSync(carrier.config_path, 'utf8');
+    const structured = parseCarrierConfig(carrier.kind, content);
+    if (!structured) {
+      throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed after unbinding.', { config_path: carrier.config_path });
+    }
+    const finalized = validateCarrierMaterialization(carrier, { content, structured }, carrier.config_path);
+    writeMaterializationGeneration(materializationSidecarPath(carrier.config_path), finalized.generation!);
+    return {
+      ...result,
+      runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+      materialization_validation: finalized.validation,
+      materialization_generation: finalized.generation,
+      generation_sidecar_path: materializationSidecarPath(carrier.config_path),
+    };
+  }
+  return result;
+}
+
+function kimiBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): { result: JsonRecord; content: string; structured: JsonRecord } {
+  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
+  const content = readFileSync(configPath, 'utf8');
+  const cfg = JSON.parse(content);
+  const mcp = asRecord(cfg.mcpServers);
+  const serverKey = siteSurfaceServerKey(siteId, surfaceId);
+  if (mcp[serverKey]) return { result: { status: 'already_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey }, content, structured: cfg };
+  const surface = lookupSurface(surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId, configPath);
+  mcp[serverKey] = {
+    transport: 'stdio',
+    command: launch.command,
+    args: launch.args,
+  };
+  const nextContent = JSON.stringify(cfg, null, 2) + '\n';
+  return { result: { status: 'bound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey }, content: nextContent, structured: cfg };
+}
+
+function kimiUnbind(configPath: string, surfaceId: string): JsonRecord {
+  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
+  const content = readFileSync(configPath, 'utf8');
+  const cfg = JSON.parse(content);
+  const mcp = asRecord(cfg.mcpServers);
+  const serverKey = siteSurfaceServerKey('andrey-user', surfaceId);
+  if (!mcp[serverKey]) return { status: 'not_bound', carrier_id: 'kimi-andrey', surface_id: surfaceId };
+  delete mcp[serverKey];
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  return { status: 'unbound', carrier_id: 'kimi-andrey', surface_id: surfaceId, server_key: serverKey };
+}
+
+function codexBind(configPath: string, surfaceId: string, entrypoint: string, resolvedArgs: string[], siteId: string, siteRoot: string, projectionId: string): { result: JsonRecord; content: string; structured: JsonRecord } {
+  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
+  let content = readFileSync(configPath, 'utf8');
+  const sectionKey = `[mcp_servers.${surfaceId}]`;
+  if (content.includes(sectionKey)) {
+    const structured = parseCarrierConfig('codex', content);
+    if (!structured) throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed before binding.', { config_path: configPath });
+    return { result: { status: 'already_bound', carrier_id: 'codex-andrey', surface_id: surfaceId }, content, structured };
+  }
+  const surface = lookupSurface(surfaceId);
+  const launch = carrierLaunchCommand({ kind: 'shared', entrypoint, args: resolvedArgs, surface, projection: selectSurfaceProjection(surfaceId, projectionId).projection, ...naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId), narada_scope: naradaScopeMetadata(surfaceId, siteRoot, siteId, projectionId) }, surfaceId, configPath);
+  content += `\n${sectionKey}\ncommand = "${launch.command}"\nargs = ${JSON.stringify(launch.args)}\n`;
+  const structured = parseCarrierConfig('codex', content);
+  if (!structured) throw diagnosticError('registrar_materialized_config_parse_failed', 'The carrier configuration could not be parsed after binding.', { config_path: configPath });
+  return { result: { status: 'bound', carrier_id: 'codex-andrey', surface_id: surfaceId }, content, structured };
+}
+
+function codexUnbind(configPath: string, surfaceId: string): JsonRecord {
+  if (!existsSync(configPath)) throw diagnosticError('registrar_config_not_found', `registrar_config_not_found:${configPath}`);
+  let content = readFileSync(configPath, 'utf8');
+  const sectionKey = `[mcp_servers.${surfaceId}]`;
+  if (!content.includes(sectionKey)) return { status: 'not_bound', carrier_id: 'codex-andrey', surface_id: surfaceId };
+  const idx = content.indexOf(sectionKey);
+  const nextSection = content.indexOf('\n[', idx + sectionKey.length);
+  if (nextSection >= 0) {
+    content = content.slice(0, idx) + content.slice(nextSection);
+  } else {
+    content = content.slice(0, idx).trimEnd();
+  }
+  writeFileSync(configPath, content, 'utf8');
+  return { status: 'unbound', carrier_id: 'codex-andrey', surface_id: surfaceId, server_key: surfaceId };
 }
 
 async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
@@ -5325,7 +3845,17 @@ async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
 
   if (target === 'all_surfaces_to_carriers') {
     const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id_for_target');
-    lookupCarrier(carrierId);
+    const carrier = lookupCarrier(carrierId);
+    if (carrier.site_bindings.some((binding) => binding.loading_mode === 'progressive')) {
+      throw diagnosticError(
+        'registrar_progressive_bulk_bind_refused',
+        `registrar_progressive_bulk_bind_refused:${carrierId}`,
+        {
+          carrier_id: carrierId,
+          remediation: 'Progressive carriers expose only their explicit bootstrap allowlist; use mcp-loader for runtime attachment or switch the binding to static loading.',
+        },
+      );
+    }
     for (const surface of SURFACES) {
       try { results.push(await registrarCarrierBind({ carrier_id: carrierId, surface_id: surface.id, projection_id: args.projection_id })); }
       catch (e) { results.push({ carrier_id: carrierId, surface_id: surface.id, error: e instanceof Error ? e.message : String(e) }); }
@@ -5334,6 +3864,15 @@ async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
   }
 
   if (target === 'all_surfaces_to_all_carriers') {
+    if (CARRIERS.some((carrier) => carrier.site_bindings.some((binding) => binding.loading_mode === 'progressive'))) {
+      throw diagnosticError(
+        'registrar_progressive_bulk_bind_refused',
+        'registrar_progressive_bulk_bind_refused:all_carriers',
+        {
+          remediation: 'Progressive carriers expose only their explicit bootstrap allowlists; use mcp-loader for runtime attachment or switch the bindings to static loading.',
+        },
+      );
+    }
     for (const carrier of CARRIERS) {
       for (const surface of SURFACES) {
         try { results.push(await registrarCarrierBind({ carrier_id: carrier.carrier_id, surface_id: surface.id, projection_id: args.projection_id })); }
@@ -5347,7 +3886,7 @@ async function registrarSync(args: JsonRecord): Promise<JsonRecord> {
   lookupSurface(surfaceId);
   if (target === 'all_sites' || target === 'all') {
     for (const site of siteCatalogForOperations()) {
-      try { results.push(await registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId, projection_id: args.projection_id, runtime_kind: args.runtime_kind })); }
+      try { results.push(registrarSiteBind({ site_id: site.site_id, surface_id: surfaceId, projection_id: args.projection_id, runtime_kind: args.runtime_kind, allow_sidecar: args.allow_sidecar === true })); }
       catch (e) { results.push({ site_id: site.site_id, surface_id: surfaceId, error: e instanceof Error ? e.message : String(e) }); }
     }
   }
@@ -5434,14 +3973,74 @@ function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolea
   else process.stdout.write(`${body}\n`);
 }
 
-function parseArgs(_argv: string[]) {
-  return {};
+export type RegistrarCliOptions =
+  | { mode: 'stdio' }
+  | { mode: 'help' }
+  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null };
+
+export function parseArgs(argv: string[]): RegistrarCliOptions {
+  let carrierId: string | null = null;
+  let outputPath: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--help' || arg === '-h') return { mode: 'help' };
+    if (arg === '--materialize-carrier') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_carrier_id');
+      carrierId = value;
+      continue;
+    }
+    if (arg === '--output-path') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_output_path');
+      outputPath = value;
+      continue;
+    }
+    // Keep the historical launch hint accepted by Site Fabric clients. The
+    // registrar's authoritative roots are resolved from its environment and
+    // generated fabric, so this compatibility argument does not alter
+    // materialization mode.
+    if (arg === '--narada-root') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_narada_root');
+      continue;
+    }
+    throw new Error(`registrar_unknown_cli_argument:${arg}`);
+  }
+  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath };
+  if (outputPath) throw new Error('registrar_output_path_requires_materialize_carrier');
+  return { mode: 'stdio' };
 }
 
-export { parseArgs };
+async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-carrier' }>): Promise<void> {
+  process.env[FRESH_REGISTRAR_ENV] = '1';
+  const carrier = lookupCarrier(options.carrierId);
+  const outputPath = options.outputPath ? resolve(options.outputPath) : carrier.config_path;
+  const result = await registrarCarrierMaterialize({ carrier_id: options.carrierId, output_path: outputPath });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+function printCliHelp(): void {
+  process.stdout.write([
+    'mcp-registrar MCP server',
+    '',
+    'Out-of-band carrier recovery (works when the MCP registrar surface cannot start):',
+    '  mcp-registrar --materialize-carrier <carrier-id> [--output-path <carrier-config>]',
+    '',
+    'Without arguments, mcp-registrar serves its MCP stdio protocol.',
+    'Materialization writes the carrier config and its .narada-generation.json sidecar atomically.',
+    '',
+  ].join('\n'));
+}
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runStdioServer(parseArgs(process.argv.slice(2))).catch((error) => {
+  const options = parseArgs(process.argv.slice(2));
+  const run = options.mode === 'materialize-carrier'
+    ? runDirectMaterialization(options)
+    : options.mode === 'help'
+      ? Promise.resolve(printCliHelp())
+      : runStdioServer(options);
+  run.catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   });

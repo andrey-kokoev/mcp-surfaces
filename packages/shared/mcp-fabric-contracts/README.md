@@ -13,7 +13,7 @@ This package describes fabric state. It does not discover Sites, authorize a
 tool invocation, launch a process, or own carrier-specific configuration files.
 
 Package-owned surfaces use `defineSurface` or `defineNativeSurface` so the same
-tool registry supplies `tools/list` and `SurfaceDescriptorV3`. Native
+tool registry supplies `tools/list` and `SurfaceDescriptorV2`. Native
 descriptors declare effects, guidance identity, authority/runtime requirements,
 explicit projections, and lifecycle class. `assertLiveToolsConform` compares a
 fresh live tool list with that descriptor before carrier materialization is

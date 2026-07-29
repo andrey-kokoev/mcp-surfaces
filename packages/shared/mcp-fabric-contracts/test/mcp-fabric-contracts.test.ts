@@ -6,36 +6,23 @@ import test from 'node:test';
 import {
   MCP_FABRIC_SCHEMA_VERSION,
   fabricManifestDigest,
-  parseFabricManifestV3,
-  parseSurfaceDescriptorV3,
+  parseFabricManifestV2,
+  parseSurfaceDescriptorV2,
   surfaceDescriptorDigest,
   assertLiveToolsConform,
   defineSurface,
   defineNativeSurface,
-  standardSurfaceToolDefinitions,
-  type SurfaceDescriptorV3,
-  SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-  SURFACE_DESCRIBE_TOOL_NAME,
-  standardSurfaceToolResult,
+  type SurfaceDescriptorV2,
 } from '../src/index.js';
 import { startHttpFixture } from '../src/http-fixture.js';
 
-function descriptor(): SurfaceDescriptorV3 {
-  const standardTools = standardSurfaceToolDefinitions().map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.inputSchema,
-    ...(tool.outputSchema === undefined ? {} : { output_schema: tool.outputSchema }),
-    ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
-    effect: { class: 'read' as const, idempotency: 'replayable' as const, confirmation: 'never' as const },
-  }));
+function descriptor(): SurfaceDescriptorV2 {
   return {
     schema_version: MCP_FABRIC_SCHEMA_VERSION,
     source: 'native',
     surface_id: 'example',
     surface_version: '1.0.0',
     package: '@example/mcp',
-    description: 'Example MCP surface.',
     guidance_tool: 'example_guidance',
     tools: [
       {
@@ -44,7 +31,6 @@ function descriptor(): SurfaceDescriptorV3 {
         input_schema: { type: 'object', properties: { b: {}, a: {} } },
         effect: { class: 'read', idempotency: 'replayable', confirmation: 'never' },
       },
-      ...standardTools,
       {
         name: 'example_guidance',
         description: 'Show guidance.',
@@ -88,7 +74,7 @@ test('descriptor digest is stable across declaration and object-key order', () =
       env: ['OUTPUT_ROOT', 'SITE_ROOT'],
     };
   }
-  right.tools.find((tool) => tool.name === 'example_read')!.input_schema = {
+  right.tools[1]!.input_schema = {
     properties: { a: {}, b: {} },
     type: 'object',
   };
@@ -111,91 +97,9 @@ test('defineSurface uses one registry for tools/list and descriptor emission', (
     }],
     projections: [descriptor().projections[0]!],
   });
-  assert.deepEqual(surface.tools.map((tool) => tool.name), [
-    'example_guidance',
-    SURFACE_DESCRIBE_TOOL_NAME,
-    SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-  ]);
-  for (const tool of surface.tools.slice(-2)) {
-    assert.deepEqual(tool.annotations, {
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    });
-  }
+  assert.deepEqual(surface.tools, [definition]);
   assertLiveToolsConform(surface.descriptor, surface.tools);
-  assertLiveToolsConform(surface.descriptor, [definition]);
   assert.equal(surface.descriptor.guidance_tool, 'example_guidance');
-  const described = standardSurfaceToolResult({
-    descriptor: surface.descriptor,
-    tool_name: SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-    arguments: { tool_name: 'example_guidance' },
-    observed_capabilities: { tools: {} },
-  });
-  assert.equal(
-    (described.structuredContent as { tools: unknown[] }).tools.length,
-    1,
-  );
-  const runtimeDescription = standardSurfaceToolResult({
-    descriptor: surface.descriptor,
-    tool_name: SURFACE_DESCRIBE_TOOL_NAME,
-    runtime_observation: {
-      schema: 'narada.mcp_surface.runtime.v1',
-      status: 'ok',
-      generation_id: 'generation-test',
-    },
-  });
-  assert.deepEqual(
-    (runtimeDescription.structuredContent as { runtime: unknown }).runtime,
-    {
-      generation_id: 'generation-test',
-      schema: 'narada.mcp_surface.runtime.v1',
-      status: 'ok',
-    },
-  );
-  const subsetDescriptor = descriptor();
-  const subsetContract = standardSurfaceToolResult({
-    descriptor: subsetDescriptor,
-    tool_name: SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-    client_tool_names: [
-      'example_guidance',
-      SURFACE_DESCRIBE_TOOL_NAME,
-      SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-    ],
-  }).structuredContent as {
-    client_tool_names: string[];
-    tools: Array<{ name: string }>;
-    interface_digest: string;
-    client_interface_digest: string;
-  };
-  assert.deepEqual(
-    subsetContract.tools.map((tool) => tool.name),
-    [
-      'example_guidance',
-      SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-      SURFACE_DESCRIBE_TOOL_NAME,
-    ],
-  );
-  assert.deepEqual(subsetContract.client_tool_names, [
-    'example_guidance',
-    SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-    SURFACE_DESCRIBE_TOOL_NAME,
-  ]);
-  assert.notEqual(subsetContract.interface_digest, subsetContract.client_interface_digest);
-  assert.throws(
-    () => standardSurfaceToolResult({
-      descriptor: subsetDescriptor,
-      tool_name: SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-      arguments: { tool_name: 'example_read' },
-      client_tool_names: [
-        'example_guidance',
-        SURFACE_DESCRIBE_TOOL_NAME,
-        SURFACE_CONTRACT_DESCRIBE_TOOL_NAME,
-      ],
-    }),
-    /mcp_fabric_tool_contract_missing/,
-  );
 });
 
 test('defineNativeSurface validates read-only inventory and exposes lifecycle readback', () => {
@@ -256,7 +160,7 @@ test('Streamable HTTP fixture is session-pinned and conforms to fresh tools/list
 
 test('unsupported schema majors fail closed', () => {
   assert.throws(
-    () => parseSurfaceDescriptorV3({ ...descriptor(), schema_version: '2.0' }),
+    () => parseSurfaceDescriptorV2({ ...descriptor(), schema_version: '3.0' }),
     /mcp_fabric_schema_major_unsupported/,
   );
 });
@@ -264,11 +168,11 @@ test('unsupported schema majors fail closed', () => {
 test('duplicate tool and projection identities are rejected', () => {
   const duplicateTool = descriptor();
   duplicateTool.tools.push({ ...duplicateTool.tools[0]! });
-  assert.throws(() => parseSurfaceDescriptorV3(duplicateTool), /duplicate tool/);
+  assert.throws(() => parseSurfaceDescriptorV2(duplicateTool), /duplicate tool/);
 
   const duplicateProjection = descriptor();
   duplicateProjection.projections.push({ ...duplicateProjection.projections[0]! });
-  assert.throws(() => parseSurfaceDescriptorV3(duplicateProjection), /duplicate projection/);
+  assert.throws(() => parseSurfaceDescriptorV2(duplicateProjection), /duplicate projection/);
 });
 
 test('invalid effect and lifecycle combinations are rejected', () => {
@@ -278,11 +182,11 @@ test('invalid effect and lifecycle combinations are rejected', () => {
     idempotency: 'non_idempotent',
     confirmation: 'always',
   };
-  assert.throws(() => parseSurfaceDescriptorV3(invalidEffect), /read effects/);
+  assert.throws(() => parseSurfaceDescriptorV2(invalidEffect), /read effects/);
 
   const invalidLifecycle = descriptor();
   invalidLifecycle.projections[0]!.lifecycle = { mode: 'restart_required' } as never;
-  assert.throws(() => parseSurfaceDescriptorV3(invalidLifecycle), /restart_owner/);
+  assert.throws(() => parseSurfaceDescriptorV2(invalidLifecycle), /restart_owner/);
 });
 
 test('manifest digest is stable and duplicate bindings fail closed', () => {
@@ -304,13 +208,13 @@ test('manifest digest is stable and duplicate bindings fail closed', () => {
     ],
     source_digest: 'a'.repeat(64),
   };
-  const parsed = parseFabricManifestV3(manifest);
+  const parsed = parseFabricManifestV2(manifest);
   assert.equal(fabricManifestDigest(parsed), fabricManifestDigest({
     ...manifest,
     bindings: [{ ...manifest.bindings[0]!, config: { a: 2, z: 1 } }],
   }));
   assert.throws(
-    () => parseFabricManifestV3({
+    () => parseFabricManifestV2({
       ...manifest,
       bindings: [...manifest.bindings, { ...manifest.bindings[0]! }],
     }),

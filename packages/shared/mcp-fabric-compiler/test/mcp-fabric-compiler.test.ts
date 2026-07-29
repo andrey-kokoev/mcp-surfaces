@@ -7,10 +7,10 @@ import {
   defineSurface,
   fabricManifestDigest,
   surfaceDescriptorDigest,
-  surfaceInterfaceDigest,
-  type FabricBindingV3,
-  type CarrierProjectionV3,
-  type RuntimeObservationV3,
+  surfaceToolContractDigest,
+  type FabricBindingV2,
+  type CarrierProjectionV2,
+  type RuntimeObservationV2,
 } from '@narada2/mcp-fabric-contracts';
 import {
   CarrierSchemaCompatibilityError,
@@ -20,23 +20,6 @@ import {
   assertReconciliationApplyAllowed,
   reconcileFabricState,
 } from '../src/index.js';
-
-const SEALED_LAUNCHES = {
-  'compiler-fixture': {
-    command: 'node',
-    args: [
-      'sealed-proxy.js',
-      '--runtime-contract-version',
-      '3',
-      '--carrier-generation',
-      'carrier-generation.json',
-      '--server-key',
-      'compiler-fixture',
-      '--artifact-store',
-      'artifact-store-v3',
-    ],
-  },
-};
 
 function fixture() {
   const surface = defineSurface({
@@ -81,7 +64,7 @@ function fixture() {
       lifecycle: { mode: 'replayable' },
     }],
   });
-  const binding: FabricBindingV3 = {
+  const binding: FabricBindingV2 = {
     binding_id: 'compiler-fixture-binding',
     surface_id: surface.descriptor.surface_id,
     projection_id: 'stdio',
@@ -101,12 +84,12 @@ test('one immutable manifest deterministically compiles all carrier projections'
     descriptors: [surface.descriptor],
     bindings: [binding],
   });
-  const first = compileAllCarrierArtifacts(manifest, { sealed_launches: SEALED_LAUNCHES });
+  const first = compileAllCarrierArtifacts(manifest);
   const second = compileAllCarrierArtifacts({
     ...manifest,
     descriptors: [...manifest.descriptors].reverse(),
     bindings: [...manifest.bindings].reverse(),
-  }, { sealed_launches: SEALED_LAUNCHES });
+  });
   assert.equal(first.manifest_digest, second.manifest_digest);
   assert.equal(first.artifacts.codex.content, second.artifacts.codex.content);
   assert.equal(first.artifacts.kimi.content, second.artifacts.kimi.content);
@@ -117,7 +100,7 @@ test('one immutable manifest deterministically compiles all carrier projections'
   assert.equal(first.artifacts.codex.content, [
     '[mcp_servers.compiler-fixture]',
     'command = "node"',
-    'args = ["sealed-proxy.js", "--runtime-contract-version", "3", "--carrier-generation", "carrier-generation.json", "--server-key", "compiler-fixture", "--artifact-store", "artifact-store-v3"]',
+    'args = ["fixture.js"]',
     'env = { TOKEN = "secret" }',
     '',
   ].join('\n'));
@@ -125,16 +108,12 @@ test('one immutable manifest deterministically compiles all carrier projections'
     mcpServers: {
       'compiler-fixture': {
         command: 'node',
-        args: SEALED_LAUNCHES['compiler-fixture'].args,
+        args: ['fixture.js'],
         env: { TOKEN: 'secret' },
       },
     },
     approvals: {
-      allow: [
-        'compiler-fixture/compiler_fixture_guidance',
-        'compiler-fixture/surface_contract_describe',
-        'compiler-fixture/surface_describe',
-      ],
+      allow: ['compiler-fixture/compiler_fixture_guidance'],
       prompt: ['compiler-fixture/compiler_fixture_update'],
     },
   });
@@ -142,7 +121,7 @@ test('one immutable manifest deterministically compiles all carrier projections'
     mcp: {
       'compiler-fixture': {
         type: 'local',
-        command: ['node', ...SEALED_LAUNCHES['compiler-fixture'].args],
+        command: ['node', 'fixture.js'],
         environment: { TOKEN: 'secret' },
       },
     },
@@ -159,18 +138,6 @@ test('one immutable manifest deterministically compiles all carrier projections'
         decision: 'prompt',
         reasons: ['effect.confirmation=policy', 'effect.class=local_write'],
       },
-      {
-        server_name: 'compiler-fixture',
-        tool_name: 'surface_contract_describe',
-        decision: 'allow',
-        reasons: [],
-      },
-      {
-        server_name: 'compiler-fixture',
-        tool_name: 'surface_describe',
-        decision: 'allow',
-        reasons: [],
-      },
     ],
   });
 });
@@ -185,8 +152,8 @@ test('reconciliation deterministically assigns one bounded actuator and guards a
     bindings: [binding],
   });
   const manifestDigest = fabricManifestDigest(manifest);
-  const carrier: CarrierProjectionV3 = {
-    schema_version: '3.0',
+  const carrier: CarrierProjectionV2 = {
+    schema_version: '2.0',
     carrier_kind: 'codex',
     site_id: 'test-site',
     manifest_digest: manifestDigest,
@@ -197,8 +164,8 @@ test('reconciliation deterministically assigns one bounded actuator and guards a
       transport: surface.descriptor.projections[0]!.transport,
     }],
   };
-  const observation: RuntimeObservationV3 = {
-    schema_version: '3.0',
+  const observation: RuntimeObservationV2 = {
+    schema_version: '2.0',
     observation_id: 'observation-test',
     observed_at: '2026-07-19T00:01:00.000Z',
     site_id: 'test-site',
@@ -215,12 +182,16 @@ test('reconciliation deterministically assigns one bounded actuator and guards a
         generation_id: 'generation-one',
         state: 'active',
         started_at: '2026-07-19T00:00:00.000Z',
+        activated_at: '2026-07-19T00:00:01.000Z',
         heartbeat_at: '2026-07-19T00:00:59.000Z',
+        lease_expires_at: '2026-07-19T00:02:00.000Z',
         freshness: 'current',
         health: 'healthy',
         descriptor_digest: surfaceDescriptorDigest(surface.descriptor),
-        interface_digest: surfaceInterfaceDigest(surface.descriptor),
+        tool_contract_digest: surfaceToolContractDigest(surface.descriptor),
+        inflight: 0,
       },
+      draining_generations: [],
       recovery_actions: [],
     }],
   };
@@ -262,11 +233,11 @@ test('reconciliation deterministically assigns one bounded actuator and guards a
   );
 
   const contractDrift = structuredClone(observation);
-  contractDrift.servers[0]!.active_generation!.interface_digest = '0'.repeat(64);
+  contractDrift.servers[0]!.active_generation!.tool_contract_digest = '0'.repeat(64);
   const replacement = reconcileFabricState({ manifest, carrier_projection: carrier, observation: contractDrift });
   assert.deepEqual(
     [replacement.actions[0]!.action, replacement.actions[0]!.actuator],
-    ['restart_process', 'mcp-loader'],
+    ['replace_generation', 'mcp-loader'],
   );
 
   const restartManifest = structuredClone(manifest);
@@ -318,10 +289,7 @@ test('approval posture changes only with canonical effects and authority require
     }],
     bindings: [binding],
   });
-  const approvals = compileAllCarrierArtifacts(
-    manifest,
-    { sealed_launches: SEALED_LAUNCHES },
-  ).artifacts.codex.approvals;
+  const approvals = compileAllCarrierArtifacts(manifest).artifacts.codex.approvals;
   assert.equal(approvals.every((approval) => approval.decision === 'prompt'), true);
   assert.equal(
     approvals.find((approval) => approval.tool_name.endsWith('_guidance'))?.reasons.includes('authority=operator.confirmed'),

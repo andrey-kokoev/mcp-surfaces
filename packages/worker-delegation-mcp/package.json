@@ -45,14 +45,5 @@
     "@narada2/mcp-e2e-harness": "workspace:*",
     "@narada2/mcp-runtime-proxy": "workspace:*",
     "c8": "^11.0.0"
-  },
-  "narada": {
-    "artifact": {
-      "profile": "mcp-surface-v3",
-      "entrypoints": [
-        "dist/src/main.js"
-      ],
-      "build_script": "build"
-    }
   }
 }

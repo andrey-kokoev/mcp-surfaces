@@ -33,16 +33,6 @@
     "README.md"
   ],
   "devDependencies": {
-    "@narada2/mcp-e2e-harness": "workspace:*",
-    "@narada2/mcp-runtime-proxy": "workspace:*"
-  },
-  "narada": {
-    "artifact": {
-      "profile": "mcp-surface-v3",
-      "entrypoints": [
-        "dist/src/main.js"
-      ],
-      "build_script": "build"
-    }
+    "@narada2/mcp-e2e-harness": "workspace:*"
   }
 }

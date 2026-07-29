@@ -6,18 +6,27 @@ MCP surface registrar for binding/unbinding surfaces across Narada sites and car
 
 Manages the surface-to-site-to-carrier weave so carrier and Site MCP config is generated rather than hand-maintained.
 
-## V3 native catalog and sealed artifacts
+## V2 native catalog
+Every registered surface resolves from a package-owned `SurfaceDescriptorV2`.
 
-Every registered surface resolves from a package-owned `SurfaceDescriptorV3`
-and a package-owned `narada.artifact` declaration. `registrar_surface_list`
-reports the native descriptor, descriptor/interface digests, lifecycle class,
-and explicit projections. The registrar is native-only; projection selection
-requires `projection_id` or unambiguous runtime context.
+## V2 native catalog details
+`registrar_surface_list` reports the native descriptor, descriptor/tool-contract digests, lifecycle class, and explicit projections.
+Materialized Site fabric stores the selected descriptor under `surface_projection` so mcp-loader can compare it with fresh `tools/list` output.
+The registrar is native-only; projection selection requires `projection_id` or unambiguous runtime context.
 
-Every stdio binding is materialized as an exact sealed runtime-proxy launch.
-The immutable carrier generation pins the proxy closure, child selector,
-descriptor, interface, arguments, and admitted environment names. Raw package
-entrypoints are not carrier launches.
+## Carrier loading modes
+
+Each carrier Site binding has a `loading_mode`:
+
+- `static` materializes the selected and automatically admitted surfaces as native carrier servers;
+- `progressive` materializes only its explicit bootstrap allowlist and requires `mcp-loader` for all other runtime attachments.
+
+The built-in carrier profiles use progressive loading with `agent-context`,
+`mcp-registrar`, `mcp-loader`, and `local-filesystem` as bootstrap surfaces.
+Progressive bindings reject `surfaces: "all"`, bulk carrier binding, and
+single-surface direct carrier binding for non-bootstrap surfaces. Attach those
+surfaces through `mcp_loader_open_surface` and inspect their schemas with
+`mcp_loader_list_tools` or `mcp_loader_tool_discovery_manifest`.
 ## Tools
 
 | Tool | Description |
@@ -28,13 +37,9 @@ entrypoints are not carrier launches.
 | `registrar_site_bind` | Write a surface config into a site's `.ai/mcp/` |
 | `registrar_site_unbind` | Remove a surface from a site |
 | `registrar_carrier_list` | List carriers |
-| `registrar_carrier_bind` | Refuse patch-in-place carrier mutation and direct the caller to complete V3 materialization |
-| `registrar_carrier_unbind` | Refuse patch-in-place carrier mutation and direct the caller to complete V3 materialization |
+| `registrar_carrier_bind` | Add surface to a carrier (JSON for opencode/kimi, TOML for Codex) |
+| `registrar_carrier_unbind` | Remove from carrier |
 | `registrar_sync` | Bind surfaces across configured sites and carriers |
-| `registrar_carrier_materialize` | Validate source-fresh sealed closures and stage one immutable V3 carrier generation |
-| `registrar_carrier_apply` | Hard-cut over to a fully validated generation, with the carrier config written last |
-| `registrar_carrier_validate` | Validate exact config/generation/closure agreement |
-| `registrar_carrier_diff` | Compare the desired complete projection with the active config |
 | `registrar_site_mcp_fabric_validate` | Validate a Site's materialized MCP fabric |
 | `registrar_site_surface_registry_sync` | Materialize the Site action-admission registry from fabric and catalog |
 | `registrar_site_registry_conformance_check` | Prove live tools, fabric, catalog, and materialized registry agree |
@@ -78,18 +83,9 @@ The ref's `created_by` and payload-id namespace provide declarative lineage and 
 
 `registrar_carrier_diff` distinguishes the exact full-file projection from parsed server definitions. `projection_changed` covers the complete generated carrier file; `server_projection_changed` and `server_changes` cover server entries only; `carrier_metadata_or_format_only` explains a full-file difference with unchanged server definitions.
 
-## Hard-cutover boundary
+## Boundary
 
-Carrier apply is forward-only. It validates all selected source closures and
-sealed artifacts, writes the immutable generation, purges obsolete V1/V2
-generation state and old config backups, and atomically replaces the carrier
-config as its final write. It creates no backup, rollback bundle, fallback
-launch, or alternate active generation. Recovery materializes and applies a new
-complete generation.
-
-The registrar edits config files but does not acquire process-control
-authority. The cutover coordinator must terminate every affected old MCP
-process before fresh carrier startup; V3 provides no overlap or drain mode.
+Edits config files (JSON/TOML) but does not start or stop servers, mutate the surfaces themselves, or grant runtime authority.
 
 Carrier approval controls are treated as volatile carrier UX/admission mechanics, not Narada policy authority. The registrar may generate carrier availability metadata, such as Codex `approval_mode = "approve"`, so registered Narada MCP tools are available without redundant carrier prompts. Authorization, refusal, audit, and semantic constraints remain owned by the MCP surfaces themselves.
 
@@ -97,16 +93,11 @@ This is the `CarrierAdmissionNeutralization` concept in Narada proper: `D:/code/
 
 ## Wiring Surfaces
 
-Use the registrar when you want to inject a standalone MCP surface into Codex,
-OpenCode, Kimi, or a Narada Site without hand-editing carrier config.
+Use the registrar when you want to inject a standalone MCP surface into Codex, opencode, Kimi, or a Narada site without hand-editing carrier config.
 
 - `registrar_site_bind` writes a site-local `.ai/mcp/` binding.
-- Carrier authority selects the complete desired binding set.
-- `registrar_carrier_materialize` proves every selected proxy and surface
-  closure is compatible and fresh.
-- `registrar_carrier_apply` activates the complete carrier-native projection.
-- `registrar_sync` applies the same governed desired bindings across supported
-  Sites and carriers.
+- `registrar_carrier_bind` writes carrier config in the carrier's own format.
+- `registrar_sync` applies the same surface binding across the supported sites and carriers.
 
 For a concrete example, `@narada2/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
 
@@ -119,6 +110,23 @@ The contract probe is intentionally serial and places each launched server in th
 `pnpm test:registrar:kimi-live` adds one real non-interactive Kimi provider turn with the complete materialized MCP config. It is skipped unless `NARADA_KIMI_CARRIER_LIVE_E2E=1`; running it requires operator approval and an authenticated Kimi installation. Set `NARADA_KIMI_COMMAND` to override the executable and `NARADA_KIMI_LIVE_TIMEOUT_MS` to override the 120-second timeout.
 
 The successful live turn is provider-level evidence that Moonshot accepted the complete advertised tool set. The deterministic layer remains responsible for proving that every configured server starts and every returned schema was inspected.
+
+## Recovery when MCP is unavailable
+
+The registrar also exposes an out-of-band carrier materialization CLI. Use it
+after a workspace build changes the artifact manifest, or when the registrar
+MCP surface is one of the surfaces that failed to start:
+
+```powershell
+pnpm materialize:carrier -- --materialize-carrier codex-andrey --output-path C:\Users\Andrey\.codex\config.toml
+```
+
+It atomically writes the carrier config and its
+`<config>.narada-generation.json` sidecar. Then restart the carrier or start a
+new carrier session so it reloads the generated config. The same command works
+for Kimi and OpenCode by changing the carrier id and output path. `mcp-registrar
+--help` describes the direct mode; without CLI arguments the package remains a
+normal MCP stdio server.
 
 ## Quick Start
 

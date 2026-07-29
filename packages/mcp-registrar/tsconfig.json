@@ -34,10 +34,8 @@
     { "path": "../operator-console-overlay-mcp" },
     { "path": "../cloudflare-carrier-mcp" },
     { "path": "../site-coherence-mcp" },
-    { "path": "../runtime-introspection-mcp" },
     { "path": "../shared/mcp-fabric-compiler" },
     { "path": "../shared/mcp-fabric-contracts" },
-    { "path": "../shared/mcp-runtime-proxy" },
     { "path": "../shared/mcp-transport" },
     { "path": "../shared/mcp-e2e-harness" }
   ],

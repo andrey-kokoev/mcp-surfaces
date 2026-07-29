@@ -23,9 +23,6 @@
     "dist/",
     "README.md"
   ],
-  "devDependencies": {
-    "@types/node": "^20.10.0"
-  },
   "dependencies": {
     "zod": "^4.4.3"
   }

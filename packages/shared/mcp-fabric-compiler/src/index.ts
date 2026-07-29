@@ -2,15 +2,15 @@ import {
   MCP_FABRIC_SCHEMA_VERSION,
   canonicalizeJson,
   fabricManifestDigest,
-  parseFabricManifestV3,
-  parseSurfaceDescriptorV3,
+  parseFabricManifestV2,
+  parseSurfaceDescriptorV2,
   stableDigest,
   surfaceDescriptorDigest,
-  type FabricBindingV3,
-  type FabricManifestV3,
-  type SurfaceDescriptorV3,
-  type SurfaceProjectionV3,
-  type ToolContractV3,
+  type FabricBindingV2,
+  type FabricManifestV2,
+  type SurfaceDescriptorV2,
+  type SurfaceProjectionV2,
+  type ToolContractV2,
 } from '@narada2/mcp-fabric-contracts';
 import {
   MOONSHOT_SCHEMA_DIALECT,
@@ -37,15 +37,6 @@ export type CarrierArtifact = {
   approvals: ApprovalDecision[];
 };
 
-export type SealedCarrierLaunch = {
-  command: string;
-  args: string[];
-};
-
-export type CarrierCompilationOptions = {
-  sealed_launches: Readonly<Record<string, SealedCarrierLaunch>>;
-};
-
 export type MoonshotCompilerDiagnostic = {
   tool_name: string;
   schema_path: string;
@@ -70,9 +61,9 @@ export function compileFabricManifest(input: {
   site_id: string;
   generated_at: string;
   descriptors: unknown[];
-  bindings: FabricBindingV3[];
-}): FabricManifestV3 {
-  const descriptors = input.descriptors.map(parseSurfaceDescriptorV3);
+  bindings: FabricBindingV2[];
+}): FabricManifestV2 {
+  const descriptors = input.descriptors.map(parseSurfaceDescriptorV2);
   const descriptorById = new Map(descriptors.map((descriptor) => [descriptor.surface_id, descriptor]));
   for (const binding of input.bindings) {
     const descriptor = descriptorById.get(binding.surface_id);
@@ -96,7 +87,7 @@ export function compileFabricManifest(input: {
       .sort((left, right) => left.surface_id.localeCompare(right.surface_id)),
     bindings: [...input.bindings].sort((left, right) => left.binding_id.localeCompare(right.binding_id)),
   });
-  return deepFreeze(parseFabricManifestV3({
+  return deepFreeze(parseFabricManifestV2({
     schema_version: MCP_FABRIC_SCHEMA_VERSION,
     manifest_id: input.manifest_id,
     site_id: input.site_id,
@@ -107,20 +98,17 @@ export function compileFabricManifest(input: {
   }));
 }
 
-export function compileAllCarrierArtifacts(
-  manifestValue: unknown,
-  options: CarrierCompilationOptions,
-): {
-  manifest: FabricManifestV3;
+export function compileAllCarrierArtifacts(manifestValue: unknown): {
+  manifest: FabricManifestV2;
   manifest_digest: string;
   artifacts: Record<CarrierKind, CarrierArtifact>;
 } {
-  const manifest = parseFabricManifestV3(manifestValue);
+  const manifest = parseFabricManifestV2(manifestValue);
   const digest = fabricManifestDigest(manifest);
   const artifacts = {
-    codex: compileCarrierArtifact(manifest, 'codex', options),
-    kimi: compileCarrierArtifact(manifest, 'kimi', options),
-    opencode: compileCarrierArtifact(manifest, 'opencode', options),
+    codex: compileCarrierArtifact(manifest, 'codex'),
+    kimi: compileCarrierArtifact(manifest, 'kimi'),
+    opencode: compileCarrierArtifact(manifest, 'opencode'),
   };
   return deepFreeze({ manifest, manifest_digest: digest, artifacts });
 }
@@ -128,9 +116,8 @@ export function compileAllCarrierArtifacts(
 export function compileCarrierArtifact(
   manifestValue: unknown,
   carrierKind: CarrierKind,
-  options: CarrierCompilationOptions,
 ): CarrierArtifact {
-  const manifest = parseFabricManifestV3(manifestValue);
+  const manifest = parseFabricManifestV2(manifestValue);
   const digest = fabricManifestDigest(manifest);
   const resolved = resolveEnabledBindings(manifest);
   if (carrierKind === 'kimi') {
@@ -141,7 +128,7 @@ export function compileCarrierArtifact(
     }
   }
   const approvals = deriveApprovalDecisions(resolved);
-  const document = carrierDocument(carrierKind, resolved, approvals, options.sealed_launches);
+  const document = carrierDocument(carrierKind, resolved, approvals);
   return deepFreeze({
     carrier_kind: carrierKind,
     format: carrierKind === 'codex' ? 'toml' : carrierKind === 'kimi' ? 'json' : 'jsonc',
@@ -178,12 +165,12 @@ export function transformMoonshotToolSchema(
 }
 
 type ResolvedBinding = {
-  binding: FabricBindingV3;
-  descriptor: SurfaceDescriptorV3;
-  projection: SurfaceProjectionV3;
+  binding: FabricBindingV2;
+  descriptor: SurfaceDescriptorV2;
+  projection: SurfaceProjectionV2;
 };
 
-function resolveEnabledBindings(manifest: FabricManifestV3): ResolvedBinding[] {
+function resolveEnabledBindings(manifest: FabricManifestV2): ResolvedBinding[] {
   const descriptorById = new Map(
     manifest.descriptors.map((descriptor) => [descriptor.surface_id, descriptor]),
   );
@@ -227,11 +214,10 @@ function carrierDocument(
   carrierKind: CarrierKind,
   resolved: ResolvedBinding[],
   approvals: ApprovalDecision[],
-  sealedLaunches: Readonly<Record<string, SealedCarrierLaunch>>,
 ): Record<string, unknown> {
   const entries = Object.fromEntries(resolved.map((item) => [
     item.binding.server_name,
-    transportDocument(carrierKind, item, sealedLaunches),
+    transportDocument(carrierKind, item),
   ]));
   if (carrierKind === 'codex') {
     return { mcp_servers: entries, approvals };
@@ -251,7 +237,6 @@ function carrierDocument(
 function transportDocument(
   carrierKind: CarrierKind,
   { binding, projection }: ResolvedBinding,
-  sealedLaunches: Readonly<Record<string, SealedCarrierLaunch>>,
 ): Record<string, unknown> {
   const config = binding.config;
   if (projection.transport.kind === 'streamable_http') {
@@ -260,27 +245,17 @@ function transportDocument(
     }
     return { url: projection.transport.url, headers: config.headers ?? {} };
   }
-  const launch = sealedLaunches[binding.server_name];
-  if (
-    launch === undefined
-    || typeof launch.command !== 'string'
-    || !launch.command.trim()
-    || !Array.isArray(launch.args)
-    || launch.args.some((argument) => typeof argument !== 'string')
-  ) {
-    throw new Error(`mcp_fabric_sealed_launch_required: ${binding.server_name}`);
-  }
   const env = filterDeclaredRecord(config.env, projection.transport.env);
   if (carrierKind === 'opencode') {
     return {
       type: 'local',
-      command: [launch.command, ...launch.args],
+      command: [projection.transport.command, ...projection.transport.args],
       environment: env,
     };
   }
   return {
-    command: launch.command,
-    args: launch.args,
+    command: projection.transport.command,
+    args: projection.transport.args,
     env,
   };
 }
