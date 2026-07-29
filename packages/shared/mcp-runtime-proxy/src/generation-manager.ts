@@ -8,6 +8,7 @@ import {
   type McpToolDefinition,
   type SurfaceDescriptorV2,
 } from '@narada2/mcp-fabric-contracts';
+import { describeUnknownError } from './error-description.js';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -305,7 +306,7 @@ export class GenerationManager {
     } catch (error) {
       generation.state = 'failed';
       generation.health = 'unreachable';
-      generation.failure = error instanceof Error ? error.message : String(error);
+      generation.failure = describeUnknownError(error, 'mcp_generation_warmup_failed');
       this.emit('failed', generation);
       if (generation.handle !== null) {
         await candidate.adapter.terminate(generation.handle).catch(() => undefined);
@@ -491,7 +492,7 @@ export class JsonLineStdioGenerationAdapter implements GenerationAdapter<StdioHa
       handle.pending.delete(id);
       clearTimeout(pending.timer);
       if (isRecord(message.error)) {
-        pending.reject(new Error(String(message.error.message ?? 'mcp_generation_child_error')));
+        pending.reject(new Error(describeUnknownError(message.error, 'mcp_generation_child_error')));
       } else {
         pending.resolve(isRecord(message.result) ? message.result : {});
       }
@@ -570,7 +571,7 @@ export class StreamableHttpGenerationAdapter implements GenerationAdapter<{ url:
   ): Promise<JsonRecord> {
     const response = await this.request(handle, request, context.session_id);
     if (isRecord(response.error)) {
-      throw new Error(String(response.error.message ?? 'mcp_http_generation_error'));
+      throw new Error(describeUnknownError(response.error, 'mcp_http_generation_error'));
     }
     return isRecord(response.result) ? response.result : response;
   }

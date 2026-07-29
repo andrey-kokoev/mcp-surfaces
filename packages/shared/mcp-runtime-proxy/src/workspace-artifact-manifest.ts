@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { describeUnknownError } from './error-description.js';
 
 export const WORKSPACE_ARTIFACT_MANIFEST_SCHEMA = 'narada.workspace_artifact_manifest.v1';
 
@@ -124,7 +125,7 @@ export function preflightWorkspaceArtifacts(input: {
     parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (error) {
     return refusal(input.surfaceId, entrypoint, manifestPath, 'workspace_manifest_stale', 'The workspace artifact manifest is unreadable.', {
-      error: error instanceof Error ? error.message : String(error),
+      error: describeUnknownError(error, 'workspace_artifact_manifest_read_error'),
     });
   }
   if (!isRecord(parsed) || parsed.schema !== WORKSPACE_ARTIFACT_MANIFEST_SCHEMA || typeof parsed.manifest_fingerprint !== 'string') {

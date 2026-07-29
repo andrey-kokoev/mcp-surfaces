@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { describeUnknownError } from './error-description.js';
 
 export const MCP_RUNTIME_CONTRACT_VERSION = 2 as const;
 export const MATERIALIZATION_GENERATION_SCHEMA = 'narada.mcp_materialization_generation.v1' as const;
@@ -250,7 +251,7 @@ export function preflightMaterializationGeneration(input: {
   try {
     parsed = JSON.parse(readFileSync(input.sidecarPath, 'utf8'));
   } catch (error) {
-    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar is unreadable.', generation_fingerprint: null, details: { error: error instanceof Error ? error.message : String(error) } };
+    return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar is unreadable.', generation_fingerprint: null, details: { error: describeUnknownError(error, 'materialization_generation_read_error') } };
   }
   if (!isRecord(parsed) || parsed.schema !== MATERIALIZATION_GENERATION_SCHEMA || typeof parsed.generation_fingerprint !== 'string') {
     return { ok: false, code: 'materialization_generation_stale', reason: 'The materialization generation sidecar has an unsupported schema.', generation_fingerprint: null };

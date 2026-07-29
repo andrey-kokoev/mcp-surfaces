@@ -15,6 +15,7 @@ import {
   startStableHttpGenerationEndpoint,
   type GenerationAdapter,
 } from '../src/generation-manager.js';
+import { describeUnknownError } from '../src/error-description.js';
 
 const definitions: McpToolDefinition[] = [
   {
@@ -44,6 +45,12 @@ const definitions: McpToolDefinition[] = [
     annotations: { readOnlyHint: true },
   },
 ];
+
+test('structured MCP errors never collapse to object stringification', () => {
+  assert.equal(describeUnknownError({ message: 'child failed', data: { code: 'child_failure' } }), 'child failed');
+  assert.match(describeUnknownError({ data: { code: 'child_failure', reason: 'structured failure' } }), /structured failure/);
+  assert.doesNotMatch(describeUnknownError({ reason: 'structured failure' }), /\[object Object\]/);
+});
 
 function surface(transport: 'stdio' | 'streamable_http', url?: string): DefinedSurface {
   return defineSurface({

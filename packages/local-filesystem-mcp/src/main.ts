@@ -3319,7 +3319,7 @@ function patchDiagnosticError(codeName: any, patch: any, details: unknown = {}) 
     first_non_empty_line: firstNonEmptyLine,
   });
 }
-function errorDiagnostic(error: any) {
+export function errorDiagnostic(error: unknown) {
   if (error instanceof McpToolError) {
     return {
       schema: 'local.filesystem.error.v1',
@@ -3328,14 +3328,47 @@ function errorDiagnostic(error: any) {
       details: error.details,
     };
   }
-  const message = error instanceof Error ? error.message : String(error);
-  const code = message.split(/[:\s]/)[0] || 'tool_error';
+  const record = asRecord(error);
+  const nested = firstRecord(record.data, record.diagnostic, record.error);
+  const source = nested ?? record;
+  const messageValue = error instanceof Error
+    ? error.message
+    : record.message ?? source.message ?? source.reason;
+  const message = typeof messageValue === 'string' && messageValue.length > 0
+    ? messageValue
+    : describeUnknownValue(messageValue ?? error);
+  const codeValue = source.code ?? source.codeName ?? record.codeName;
+  const code = typeof codeValue === 'string' && codeValue.length > 0
+    ? codeValue
+    : message.split(/[:\s]/)[0] || 'tool_error';
+  const sourceSchema = typeof source.schema === 'string' && source.schema !== 'local.filesystem.error.v1'
+    ? { source_schema: source.schema }
+    : {};
   return {
     schema: 'local.filesystem.error.v1',
     code,
     message,
-    details: {},
+    details: { ...asRecord(source.details), ...sourceSchema },
   };
+}
+
+function firstRecord(...values: unknown[]): Record<string, unknown> | null {
+  for (const value of values) {
+    const record = asRecord(value);
+    if (Object.keys(record).length > 0) return record;
+  }
+  return null;
+}
+
+function describeUnknownValue(value: unknown): string {
+  if (typeof value === 'string' && value.length > 0) return value;
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === 'string') return serialized;
+  } catch {
+    // Fall through to a non-opaque type label for cyclic or otherwise unserializable values.
+  }
+  return `<unserializable ${Object.prototype.toString.call(value).slice(8, -1) || 'unknown'}>`;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

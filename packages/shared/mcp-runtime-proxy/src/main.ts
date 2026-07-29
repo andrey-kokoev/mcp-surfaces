@@ -23,6 +23,7 @@ import {
   type MaterializationPreflight,
 } from './materialization-contract.js';
 import { preflightWorkspaceArtifacts, type WorkspaceArtifactPreflight } from './workspace-artifact-manifest.js';
+import { describeUnknownError } from './error-description.js';
 
 type JsonRecord = Record<string, unknown>;
 type RequestLifecycleEvent = {
@@ -1407,7 +1408,7 @@ function tail(text: string, limit: number): string {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   runProxy().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${describeUnknownError(error, 'mcp_runtime_proxy_error')}\n`);
     process.exit(1);
   });
 }
