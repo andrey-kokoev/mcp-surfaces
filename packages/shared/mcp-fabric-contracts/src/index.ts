@@ -311,6 +311,54 @@ export const ReconciliationPlanV2Schema = z.object({
   actions: z.array(ReconciliationActionV2Schema).length(1),
 }).strict();
 
+export const CarrierRestartRequestV1Schema = z.object({
+  schema: z.literal('narada.pc_runtime.carrier_restart_request.v1'),
+  operation_id: IdentifierSchema,
+  requested_at: z.string().datetime(),
+  requested_by: IdentifierSchema,
+  site_id: IdentifierSchema,
+  carrier_session_id: IdentifierSchema,
+  expected_state: z.object({
+    manifest_digest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+    observation_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    descriptor_digest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  }).strict(),
+  reason: z.string().trim().min(1),
+  timeout_ms: z.number().int().min(1_000).max(300_000),
+  dry_run: z.boolean(),
+}).strict();
+
+export const CarrierRestartOutcomeV1Schema = z.object({
+  schema: z.literal('narada.pc_runtime.carrier_restart_outcome.v1'),
+  operation_id: IdentifierSchema,
+  requested_at: z.string().datetime(),
+  completed_at: z.string().datetime().nullable(),
+  requested_by: IdentifierSchema,
+  site_id: IdentifierSchema,
+  source_session_id: IdentifierSchema,
+  target_session_id: IdentifierSchema.nullable(),
+  status: z.enum(['planned', 'accepted', 'running', 'completed', 'refused', 'failed']),
+  transition_state: z.enum([
+    'not_requested',
+    'proposed',
+    'preparing_target',
+    'source_draining',
+    'source_sealed',
+    'target_activating',
+    'target_active',
+    'source_retired',
+    'preparation_failed',
+    'drain_failed',
+    'seal_failed',
+    'target_activation_failed',
+    'transition_aborted',
+  ]),
+  source_retired: z.boolean(),
+  reason: z.string().trim().min(1),
+  error_code: z.string().trim().min(1).nullable(),
+  evidence: JsonObjectSchema,
+}).strict();
+
 export type ToolEffect = z.infer<typeof ToolEffectSchema>;
 export type LifecycleRequirement = z.infer<typeof LifecycleRequirementSchema>;
 export type ToolContractV2 = z.infer<typeof ToolContractV2Schema>;
@@ -325,6 +373,8 @@ export type RuntimeServerObservationV2 = z.infer<typeof RuntimeServerObservation
 export type RuntimeObservationV2 = z.infer<typeof RuntimeObservationV2Schema>;
 export type ReconciliationActionV2 = z.infer<typeof ReconciliationActionV2Schema>;
 export type ReconciliationPlanV2 = z.infer<typeof ReconciliationPlanV2Schema>;
+export type CarrierRestartRequestV1 = z.infer<typeof CarrierRestartRequestV1Schema>;
+export type CarrierRestartOutcomeV1 = z.infer<typeof CarrierRestartOutcomeV1Schema>;
 
 export type McpToolDefinition = {
   name: string;
@@ -699,4 +749,6 @@ export const McpFabricJsonSchemas = {
   carrier_projection: z.toJSONSchema(CarrierProjectionV2Schema),
   runtime_observation: z.toJSONSchema(RuntimeObservationV2Schema),
   reconciliation_plan: z.toJSONSchema(ReconciliationPlanV2Schema),
+  carrier_restart_request: z.toJSONSchema(CarrierRestartRequestV1Schema),
+  carrier_restart_outcome: z.toJSONSchema(CarrierRestartOutcomeV1Schema),
 } as const;

@@ -10,6 +10,8 @@ import {
   parseSurfaceDescriptorV2,
   surfaceDescriptorDigest,
   assertLiveToolsConform,
+  CarrierRestartOutcomeV1Schema,
+  CarrierRestartRequestV1Schema,
   defineSurface,
   defineNativeSurface,
   type SurfaceDescriptorV2,
@@ -220,6 +222,44 @@ test('manifest digest is stable and duplicate bindings fail closed', () => {
     }),
     /duplicate binding/,
   );
+});
+
+test('carrier restart request and outcome contracts preserve explicit authority evidence', () => {
+  const request = CarrierRestartRequestV1Schema.parse({
+    schema: 'narada.pc_runtime.carrier_restart_request.v1',
+    operation_id: 'restart-op-1',
+    requested_at: '2026-07-30T00:00:00.000Z',
+    requested_by: 'principal-andrey',
+    site_id: 'site-local',
+    carrier_session_id: 'carrier_20260730000000_abc123',
+    expected_state: {
+      manifest_digest: null,
+      observation_digest: 'a'.repeat(64),
+      descriptor_digest: null,
+    },
+    reason: 'runtime health degraded',
+    timeout_ms: 60_000,
+    dry_run: false,
+  });
+  assert.equal(request.schema, 'narada.pc_runtime.carrier_restart_request.v1');
+
+  const outcome = CarrierRestartOutcomeV1Schema.parse({
+    schema: 'narada.pc_runtime.carrier_restart_outcome.v1',
+    operation_id: request.operation_id,
+    requested_at: request.requested_at,
+    completed_at: null,
+    requested_by: request.requested_by,
+    site_id: request.site_id,
+    source_session_id: request.carrier_session_id,
+    target_session_id: null,
+    status: 'running',
+    transition_state: 'source_draining',
+    source_retired: false,
+    reason: request.reason,
+    error_code: null,
+    evidence: { source_write_admission: 'draining' },
+  });
+  assert.equal(outcome.transition_state, 'source_draining');
 });
 
 test('postcompile emits JSON Schema artifacts', async () => {
