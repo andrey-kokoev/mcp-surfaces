@@ -133,6 +133,8 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_session_create')?.inputSchema.properties.size.minimum, 1);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.inputSchema.required.join(','), 'upload_url,content_base64,range_start,range_end,total_size');
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_file')?.inputSchema.required.join(','), 'file_path');
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_draft_update')?.inputSchema.properties.allow_replace_full_body.default, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_draft_update')?.inputSchema.properties.allow_replace_quoted_body.default, false);
 
   const blockedFolderCalls: CapturedRequest[] = [];
   const blockedFolderState = createServerState({
@@ -828,6 +830,46 @@ try {
   assert.equal(createBody.subject, 'Customer follow-up');
   assert.equal(createBody.body.contentType, 'Text');
   assert.equal(createBody.toRecipients[0].emailAddress.address, 'customer@example.test');
+
+  const replyDraftCalls: CapturedRequest[] = [];
+  const replyDraftState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(replyDraftCalls, [
+      { body: { id: 'draft-reply-1', inReplyTo: 'message-original-1', body: { content: 'quoted text' } } },
+      { body: { id: 'draft-reply-1', inReplyTo: 'message-original-1', body: { content: 'new reply' } } },
+      { body: { id: 'draft-reply-1', inReplyTo: 'message-original-1', body: { content: 'new reply' } } },
+    ]),
+  });
+  const refusedReplyBodyUpdate = await rpc({
+    jsonrpc: '2.0',
+    id: 141,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_draft_update',
+      arguments: { draft_id: 'draft-reply-1', body_text: 'new reply' },
+    },
+  }, replyDraftState);
+  assert.equal(refusedReplyBodyUpdate.error, undefined);
+  assert.equal(refusedReplyBodyUpdate.result.structuredContent.status, 'refused');
+  assert.equal(replyDraftCalls.length, 1);
+  assert.equal(replyDraftCalls[0].init.method, 'GET');
+  assert.match(String(readFileSync(join(root, '.ai', 'audit', 'graph-mail-mcp.jsonl'), 'utf8')), /reply_or_forward_body_replacement_requires_explicit_authorization/);
+
+  const allowedReplyBodyUpdate = await rpc({
+    jsonrpc: '2.0',
+    id: 142,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_draft_update',
+      arguments: { draft_id: 'draft-reply-1', body_text: 'new reply', allow_replace_quoted_body: true },
+    },
+  }, replyDraftState);
+  assert.equal(allowedReplyBodyUpdate.error, undefined);
+  assert.equal(allowedReplyBodyUpdate.result.structuredContent.status, 'updated');
+  assert.equal(replyDraftCalls.length, 3);
+  assert.equal(replyDraftCalls[2].init.method, 'PATCH');
+  assert.equal(JSON.parse(replyDraftCalls[2].init.body).body.content, 'new reply');
 
   const blockedMailbox = await rpc({
     jsonrpc: '2.0',

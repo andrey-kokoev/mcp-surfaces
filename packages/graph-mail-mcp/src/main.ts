@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { assertAttachmentUploadUrlAllowed, buildGraphUrl, graphMailboxPath, graphRequest, graphTop, messagePatchFromArgs, recipients, requiredString } from './graph-client.js';
 import { decideDraftSend, decideMailboxOrganizationWrite, loadGraphMailPolicy, recordGraphMailAudit } from './policy.js';
 import { buildGraphMailTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
 
 const SERVER_NAME = 'narada-graph-mail-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -309,6 +309,8 @@ export function listTools(): unknown[] {
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
       draft_id: { type: 'string', description: 'Draft message id.' },
       ...draftMessageProperties(),
+      allow_replace_full_body: { type: 'boolean', default: false, description: 'Explicitly authorize replacing the complete draft body, including quoted content.' },
+      allow_replace_quoted_body: { type: 'boolean', default: false, description: 'Explicitly authorize replacing the body of a reply or forward draft, including its quoted content.' },
     }, ['draft_id']),
     tool('graph_mail_draft_discard', 'Delete an existing draft message.', {
       mailbox_id: { type: 'string', default: 'me', description: 'Mailbox id or user principal. Defaults to the only allowed mailbox when policy has one, otherwise me.' },
@@ -611,7 +613,7 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
         result = await graphMailDraftSend(args, state);
         break;
       case 'graph_mail_output_show':
-        result = outputShow({ siteRoot: state.siteRoot, args });
+        result = await outputShowAsync({ siteRoot: state.siteRoot, args });
         break;
       default:
         throw new Error(`unknown_tool: ${name}`);
@@ -1087,10 +1089,58 @@ async function graphMailDraftUpdate(args: GraphMailRecord, state: GraphMailServe
   const draftId = requiredString(args, 'draft_id');
   const patch = messagePatchFromArgs(args);
   const path = graphMailboxPath(args.mailbox_id, `messages/${encodeURIComponent(draftId)}`, policy);
+  const bodyReplacementRequested = Object.prototype.hasOwnProperty.call(patch, 'body');
+  let replyReference: string | null = null;
+  if (bodyReplacementRequested) {
+    const existing = asRecord(await graphRequest({ policy, accessToken, fetchImpl }, { method: 'GET', path }));
+    replyReference = graphReplyReference(existing);
+    if (replyReference && args.allow_replace_full_body !== true && args.allow_replace_quoted_body !== true) {
+      recordGraphMailAudit(state.siteRoot, {
+        event_kind: 'draft_update_refused',
+        mailbox_id: args.mailbox_id ?? 'me',
+        draft_id: draftId,
+        reason: 'reply_or_forward_body_replacement_requires_explicit_authorization',
+      });
+      return {
+        schema: 'narada.graph_mail_mcp.draft.v1',
+        status: 'refused',
+        reason: 'reply_or_forward_body_replacement_requires_explicit_authorization',
+        draft_id: draftId,
+        body_replacement: {
+          requested: true,
+          reply_or_forward: true,
+          authorization_required: true,
+          remediation: 'Pass allow_replace_quoted_body=true or allow_replace_full_body=true, or update non-body fields separately.',
+        },
+      };
+    }
+  }
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_update_requested', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
   const graph = await graphRequest({ policy, accessToken, fetchImpl }, { method: 'PATCH', path, body: patch });
   recordGraphMailAudit(state.siteRoot, { event_kind: 'draft_update_completed', mailbox_id: args.mailbox_id ?? 'me', draft_id: draftId });
-  return { schema: 'narada.graph_mail_mcp.draft.v1', status: 'updated', draft: graph };
+  return {
+    schema: 'narada.graph_mail_mcp.draft.v1',
+    status: 'updated',
+    draft: graph,
+    body_replacement: {
+      requested: bodyReplacementRequested,
+      reply_or_forward: Boolean(replyReference),
+      authorization: bodyReplacementRequested && replyReference
+        ? (args.allow_replace_full_body === true ? 'allow_replace_full_body' : 'allow_replace_quoted_body')
+        : 'not_required',
+      postcondition: bodyReplacementRequested ? 'patch_accepted_by_graph' : 'not_applicable',
+    },
+  };
+}
+
+function graphReplyReference(draft: GraphMailRecord): string | null {
+  const value = draft.inReplyTo;
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const id = (value as GraphMailRecord).id;
+    if (typeof id === 'string' && id.trim()) return id.trim();
+  }
+  return null;
 }
 
 async function graphMailDraftDiscard(args: GraphMailRecord, state: GraphMailServerState): Promise<GraphMailRecord> {
