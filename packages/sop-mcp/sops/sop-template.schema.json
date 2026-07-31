@@ -1,112 +1,92 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "narada:sop-template.v1.schema.json",
-  "title": "SOP Template",
-  "description": "Schema for SOP template YAML files consumed by sop_template_import_yaml.",
+  "$id": "narada:sop-template.v2.schema.json",
+  "title": "SOP Procedure Template",
+  "description": "A versioned, parameterized procedure definition. Scheduler/event owners activate occurrences; SOP owns only durable procedure execution.",
   "type": "object",
+  "definitions": {
+    "condition": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ref": { "type": "string" },
+            "op": { "type": "string", "enum": ["equals", "not_equals", "exists", "not_exists", "truthy", "falsy", "in", "contains"] },
+            "value": {}
+          },
+          "required": ["ref", "op"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/condition" } } },
+          "required": ["all"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/condition" } } },
+          "required": ["any"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "not": { "$ref": "#/definitions/condition" } },
+          "required": ["not"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "step": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+        "executor": { "type": "string", "enum": ["engine", "agent", "operator", "sop", "action"] },
+        "blocking": { "type": "boolean", "description": "Fixed by executor: true for agent/operator, false for engine/sop/action." },
+        "title": { "type": "string" },
+        "depends_on": { "type": "array", "items": { "type": "string" } },
+        "instructions": { "type": "string" },
+        "when": { "$ref": "#/definitions/condition" },
+        "input": { "description": "Child input mapping. An exact {$ref: path} object preserves the referenced value type." },
+        "input_ref": { "description": "Child immutable input-ref mapping." },
+        "result_schema": { "type": "object", "description": "Optional JSON Schema applied to a successful step inline result." },
+        "action": {
+          "type": "object",
+          "properties": {
+            "surface_id": { "type": "string" },
+            "tool_name": { "type": "string" },
+            "arguments": { "type": "object" },
+            "idempotency_key_argument": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }
+          },
+          "required": ["surface_id", "tool_name", "arguments", "idempotency_key_argument"],
+          "additionalProperties": false
+        },
+        "sop_id": { "type": "string" },
+        "sop_version": { "type": "integer", "minimum": 1 },
+        "wait_policy": { "type": "string", "enum": ["wait"] }
+      },
+      "required": ["id", "executor", "title", "instructions"],
+      "additionalProperties": false
+    }
+  },
   "properties": {
-    "sop_id": {
-      "type": "string",
-      "description": "Stable SOP identifier, e.g. site-onboarding."
-    },
-    "title": {
-      "type": "string",
-      "description": "Human-readable title."
-    },
-    "description": {
-      "type": "string",
-      "description": "Purpose and scope of this SOP."
-    },
-    "status": {
-      "type": "string",
-      "enum": ["draft", "active", "deprecated"],
-      "default": "draft",
-      "description": "Template status. Defaults to draft."
-    },
+    "sop_id": { "type": "string", "description": "Stable procedure identifier." },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "status": { "type": "string", "enum": ["draft", "active", "deprecated"], "default": "draft" },
     "trigger_kind": {
       "type": "string",
       "enum": ["manual", "inbox_event", "schedule"],
       "default": "manual",
-      "description": "What triggers a run of this SOP."
+      "description": "Activation provenance only. Scheduler/event surfaces own temporal and event activation."
     },
-    "steps": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Step identifier, e.g. verify_identity."
-          },
-          "executor": {
-            "type": "string",
-            "enum": ["engine", "agent", "operator", "sop"],
-            "description": "Who performs: engine (auto), agent (programmatic), operator (human), sop (child SOP run)."
-          },
-          "blocking": {
-            "type": "boolean",
-            "description": "If true, the run pauses and waits for sop_run_advance to complete this step."
-          },
-          "title": {
-            "type": "string",
-            "description": "Step title."
-          },
-          "depends_on": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "Step IDs this step depends on."
-          },
-          "instructions": {
-            "type": "string",
-            "description": "What the executor must do."
-          },
-          "command": {
-            "type": "string",
-            "description": "For engine steps: the executable."
-          },
-          "args": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "For engine steps: argv."
-          },
-          "timeout_ms": {
-            "type": "number",
-            "description": "For engine steps: timeout in milliseconds."
-          },
-          "cwd": {
-            "type": "string",
-            "description": "For command steps: working directory."
-          },
-          "sop_id": {
-            "type": "string",
-            "description": "For sop steps: child SOP identifier to start."
-          },
-          "sop_version": {
-            "type": "number",
-            "description": "For sop steps: optional child SOP version; defaults to latest active."
-          },
-          "wait_policy": {
-            "type": "string",
-            "enum": ["wait"],
-            "description": "For sop steps: wait for the child run to reach a terminal status."
-          }
-        },
-        "required": ["id", "executor", "title", "instructions"],
-        "additionalProperties": false
-      },
-      "description": "Ordered SOP steps."
-    },
-    "acceptance_criteria": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Acceptance criteria for validating SOP completion."
-    },
-    "evidence_requirements": {
-      "type": "array",
-      "items": { "type": "string" },
-      "description": "Evidence expected from each run."
-    }
+    "input_schema": { "type": "object", "description": "Optional JSON Schema for bounded inline occurrence input." },
+    "output": { "type": "object", "description": "Optional mapping deriving bounded inline occurrence output." },
+    "output_ref": { "type": "object", "description": "Optional mapping resolving to an immutable output reference." },
+    "output_schema": { "type": "object", "description": "Optional JSON Schema for derived inline output." },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/definitions/step" } },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+    "evidence_requirements": { "type": "array", "items": { "type": "string" } }
   },
   "required": ["sop_id", "title", "steps"],
   "additionalProperties": false

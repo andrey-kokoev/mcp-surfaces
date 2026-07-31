@@ -11,7 +11,7 @@ const server = spawnJsonlMcpServer(process.execPath, [serverPath, '--sop-root', 
 
 try {
   const protocol = await runMcpProtocolSmoke(server.client, { expectedServerName: 'sop-mcp' });
-  const tools = protocol.tools.tools as any[];
+  const tools = protocol.tools.tools as Array<{ name: string; inputSchema: { properties: Record<string, unknown>; required?: string[] }; annotations: Record<string, unknown> }>;
   const expectedTools = [
     'sop_guidance',
     'sop_doctor',
@@ -30,6 +30,9 @@ try {
     'sop_run_status',
     'sop_run_refresh',
     'sop_run_advance',
+    'sop_action_list',
+    'sop_action_show',
+    'sop_action_resolve',
     'sop_run_list',
     'sop_run_coverage_since',
     'sop_run_cancel',
@@ -37,29 +40,43 @@ try {
   ];
   assert.deepEqual(tools.map((tool: { name: string }) => tool.name), expectedTools);
 
-  const createTool = tools.find((tool: { name: string; annotations: Record<string, unknown> }) => tool.name === 'sop_template_create');
+  const createTool = tools.find((tool) => tool.name === 'sop_template_create')!;
   assert.equal(createTool.annotations.readOnlyHint, false);
 
-  const showTool = tools.find((tool: { name: string; annotations: Record<string, unknown> }) => tool.name === 'sop_template_show');
+  const showTool = tools.find((tool) => tool.name === 'sop_template_show')!;
   assert.equal(showTool.annotations.readOnlyHint, true);
   assert.ok(showTool.inputSchema.properties.sop_id);
 
-  const runTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> }; annotations: Record<string, unknown> }) => tool.name === 'sop_run_start');
+  const runTool = tools.find((tool) => tool.name === 'sop_run_start')!;
   assert.equal(runTool.annotations.readOnlyHint, false);
   assert.ok(runTool.inputSchema.properties.sop_id);
+  assert.ok(runTool.inputSchema.properties.occurrence_key);
+  assert.ok(runTool.inputSchema.properties.input);
+  assert.ok(runTool.inputSchema.properties.input_ref);
   assert.ok(runTool.inputSchema.properties.triggered_by);
+  assert.equal(runTool.annotations.idempotentHint, true);
+  assert.equal(runTool.inputSchema.required?.includes('occurrence_key'), true);
 
-  const advanceTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'sop_run_advance');
+  const advanceTool = tools.find((tool) => tool.name === 'sop_run_advance')!;
   assert.ok(advanceTool.inputSchema.properties.run_id);
   assert.ok(advanceTool.inputSchema.properties.step_id);
   assert.ok(advanceTool.inputSchema.properties.result);
+  assert.ok(advanceTool.inputSchema.properties.result_ref);
+  assert.ok(advanceTool.inputSchema.properties.completion_key);
+  assert.ok(advanceTool.inputSchema.properties.outcome);
   assert.ok(advanceTool.inputSchema.properties.principal);
 
-  const refreshTool = tools.find((tool: { name: string; annotations: Record<string, unknown>; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'sop_run_refresh');
+  const actionResolveTool = tools.find((tool) => tool.name === 'sop_action_resolve');
+  assert.ok(actionResolveTool?.inputSchema.properties.action_id);
+  assert.ok(actionResolveTool?.inputSchema.properties.operation_ref);
+  assert.ok(actionResolveTool?.inputSchema.properties.completion_key);
+  assert.equal(actionResolveTool?.annotations.idempotentHint, true);
+
+  const refreshTool = tools.find((tool) => tool.name === 'sop_run_refresh')!;
   assert.equal(refreshTool.annotations.readOnlyHint, false);
   assert.ok(refreshTool.inputSchema.properties.run_id);
 
-  const eventsTool = tools.find((tool: { name: string; inputSchema: { properties: Record<string, unknown> } }) => tool.name === 'sop_run_events');
+  const eventsTool = tools.find((tool) => tool.name === 'sop_run_events')!;
   assert.ok(eventsTool.inputSchema.properties.limit);
   assert.ok(eventsTool.inputSchema.properties.offset);
 

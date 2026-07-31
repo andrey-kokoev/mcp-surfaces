@@ -19,15 +19,14 @@ steps:
       Check that .narada/ site identity material is present.
 
   - id: probe_root
-    executor: engine
-    blocking: false
+    executor: agent
+    blocking: true
     title: Probe site root
     depends_on: [verify_identity]
-    instructions: Execute read-only site probe to collect governance metadata.
-    command: node
-    args:
-      - -e
-      - process.stdout.write(JSON.stringify({root:"ok",governance:"found"}))
+    instructions: |
+      Use the governed local-filesystem and Site lifecycle MCP surfaces to inspect
+      the target Site root supplied in the occurrence input. Return a bounded
+      governance summary and immutable evidence references; do not execute shell.
 
   - id: create_trust_pin
     executor: operator

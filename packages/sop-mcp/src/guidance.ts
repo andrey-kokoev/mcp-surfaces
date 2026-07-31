@@ -1,9 +1,9 @@
 export type GuidanceRecord = Record<string, unknown>;
 export type GuidanceToolDefinition = GuidanceRecord & { name: string; description: string; inputSchema: GuidanceRecord; annotations: GuidanceRecord; outputSchema: GuidanceRecord };
 
-const SURFACE_ID = "sop";
-const GUIDANCE_TOOL = "sop_guidance";
-const PURPOSE = "Versioned SOP templates and durable SOP run execution.";
+const SURFACE_ID = 'sop';
+const GUIDANCE_TOOL = 'sop_guidance';
+const PURPOSE = 'Durable, restart-safe execution of one parameterized procedure occurrence.';
 
 export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
   const workflow = typeof args.workflow === 'string' && args.workflow.trim() ? args.workflow.trim() : null;
@@ -15,79 +15,78 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     guidance_tool: GUIDANCE_TOOL,
     purpose: PURPOSE,
     requested: { workflow, tool },
-    first_use: [
-      'Call this guidance command when the surface is unfamiliar, when a refusal/error is unclear, or before composing a multi-step workflow.',
-      'Inspect policy/doctor/status tools before mutation or open-world operations.',
-      'Use bounded list/search/query tools for discovery, then show/read/detail tools before acting on a specific object.',
-      'Preserve structuredContent as authoritative evidence; text content is for assistant readability.'
+    core_model: [
+      'One SOP run is one durable procedure occurrence, identified by caller-owned occurrence_key.',
+      'The admitted template version, executable definition fingerprint, and omitted child versions are resolved and pinned before their handoffs become eligible.',
+      'Dependencies and deterministic when predicates decide which steps run or are skipped.',
+      'Scheduler and event surfaces decide when to call sop_run_start; trigger_kind is provenance, not an activation mechanism.',
+      'Domain MCP surfaces perform effects. SOP persists an action intent and later accepts an owning-surface operation reference; it never runs shell commands.',
+      'Child and manual completion reconcile transactionally; action receipts commit first and then automatically reconcile so an acknowledged domain effect is never forgotten.',
+      'Pinned run definitions, execution-step snapshots, action targets, and action completion receipts are fingerprint-checked when durable state is rehydrated.'
     ],
-    tool_preference: [
-      { step: 'orient', guidance: 'Use *_guidance first when uncertain, then policy/doctor/status tools.' },
-      { step: 'discover', guidance: 'Use bounded list/search/query commands with explicit limits and filters.' },
-      { step: 'inspect', guidance: 'Use show/read/detail commands for exact targets before mutation.' },
-      { step: 'mutate', guidance: 'Only call mutation tools after policy allows it and intent, target, and expected result are explicit.' },
-      { step: 'verify', guidance: 'Read back state with the owning surface after any mutation.' }
+    first_use: [
+      'Call sop_doctor and inspect execution_posture and byte bounds.',
+      'Inspect the exact template with sop_template_show before admitting an occurrence.',
+      'Preserve structuredContent as authoritative evidence; text content is only a bounded summary.'
     ],
     workflows: {
       template_authoring: [
-        'sop_template_create or sop_template_import_yaml to define a versioned SOP.',
-        'sop_template_show/export/list/search inspect imported registry templates before execution.',
-        'sop_template_candidate_list/show inspect YAML files in configured sops_dirs before import.',
-        'sop_template_update or sop_template_deprecate for governed template changes.',
-        'sop_template_unimport removes accidental registry imports with no runs; it does not delete YAML files.'
+        'Define a dependency DAG with engine, agent, operator, sop, and action steps.',
+        'Use input_schema, result_schema, output, output_ref, and output_schema where a procedure has a typed contract.',
+        'Use exact {$ref:"input.field"} or {$ref:"steps.predecessor.result.field"} mappings; step references must be dependency ancestors.',
+        'Use executor=action only with an owning surface_id/tool_name and a reserved idempotency_key_argument.',
+        'Import YAML candidates only through sop_template_import_yaml so the same v2 validation applies.'
       ],
-      durable_run_execution: [
-        'sop_run_start creates a durable run from an active template.',
-        'sop_run_status shows run and step state.',
-        'sop_run_advance records step results/evidence and moves the run forward.',
-        'sop_run_refresh synchronizes parent runs with child SOP terminal status.',
-        'sop_run_events reads the durable evidence/event ledger.',
-        'sop_run_list and sop_run_coverage_since support run discovery and coverage readback.',
-        'sop_run_cancel terminates a non-terminal run when execution is intentionally stopped.'
+      occurrence_execution: [
+        'The Scheduler or durable event consumer calls sop_run_start with sop_id, occurrence_key, triggered_by, bounded input, and optional immutable input_ref.',
+        'An exact admission retry returns the same run; reusing the key for a different request is refused as sop_occurrence_conflict.',
+        'Use sop_run_status for the complete occurrence and sop_run_events for its evidence ledger.',
+        'Complete agent/operator handoffs with sop_run_advance using principal, outcome, and a stable completion_key.',
+        'Use sop_run_refresh only for explicit repair/readback; it is not required for normal child continuation.'
+      ],
+      governed_action_handoff: [
+        'Use sop_action_list to discover pending summaries, then sop_action_show to read one exact persisted target envelope.',
+        'Invoke the named domain MCP tool with the exact arguments. SOP has already injected the stable action occurrence key into the declared idempotency argument.',
+        'Call sop_action_resolve with a stable completion_key and the domain surface operation_ref, plus a bounded result and/or immutable result_ref.',
+        'If interrupted at any boundary, re-read the same action and retry the domain operation by its injected key; exact resolution retries are idempotent.',
+        'If a run is cancelled while the domain outcome is in flight, do not dispatch the cancelled action again; submit any late operation receipt so the external outcome remains recorded.'
       ]
     },
     tool_inventory: {
       templates: ['sop_template_create', 'sop_template_show', 'sop_template_export', 'sop_template_list', 'sop_template_search', 'sop_template_candidate_list', 'sop_template_candidate_show', 'sop_template_update', 'sop_template_deprecate', 'sop_template_unimport', 'sop_template_import_yaml'],
-      runs: ['sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_coverage_since', 'sop_run_cancel', 'sop_run_events']
+      runs: ['sop_run_start', 'sop_run_status', 'sop_run_refresh', 'sop_run_advance', 'sop_run_list', 'sop_run_coverage_since', 'sop_run_cancel', 'sop_run_events'],
+      actions: ['sop_action_list', 'sop_action_show', 'sop_action_resolve']
     },
     examples: [
-      { intent: 'First use', call: 'sop_guidance({})' },
-      { intent: 'Execute SOP run', call: 'sop_template_show -> sop_run_start -> sop_run_status -> sop_run_advance -> sop_run_events' },
-      { intent: 'Tool-specific help', call: "sop_guidance({ tool: \"<tool_name>\" })" },
-      { intent: 'Workflow-specific help', call: "sop_guidance({ workflow: \"<workflow_name>\" })" }
+      { intent: 'Admit scheduled occurrence', call: 'scheduler event -> sop_run_start({ sop_id, occurrence_key, input, triggered_by })' },
+      { intent: 'Execute action handoff', call: 'sop_action_list -> sop_action_show -> owning domain MCP tool -> sop_action_resolve' },
+      { intent: 'Resume after interruption', call: 'sop_run_status and sop_action_show; retry with the same occurrence/completion keys' }
     ],
     anti_patterns: [
-      'Do not guess hidden state from a tool name; use doctor/status/list/show tools for evidence.',
-      'Do not use filesystem listing as the normal way to discover importable SOP YAML; use sop_template_candidate_list/show.',
-      'Do not use deprecate for accidental imports that have no run history; use sop_template_unimport with reason and principal.',
-      'Do not treat assistant text as the durable record when structuredContent is present.',
-      'Do not bypass the owning surface with shell scripts when a governed MCP tool exists.',
-      'Do not continue after malformed payloads, empty refs, or ambiguous target identifiers; stop and repair the input.'
+      'Do not put schedules, polling loops, or run-right-after-finish policy inside an SOP template.',
+      'Do not put executable, argv, cwd, filesystem mutation, task mutation, or other domain effects in engine steps.',
+      'Do not acknowledge an action without the owning domain surface operation reference.',
+      'Do not reuse an occurrence_key or completion_key for semantically different data.',
+      'Do not inline large evidence or results; keep a bounded summary and immutable digest-pinned reference.',
+      'Do not call sop_run_refresh as routine orchestration; normal reconciliation is automatic.'
     ],
     recovery: [
-      'For unknown_tool, call tools/list and this guidance command again after restart.',
-      'For policy refusal, inspect the surface policy/doctor output and report the exact refusal reason.',
-      'For oversized inputs, use the surface payload_ref or output_ref convention when it exists; otherwise reduce scope.',
-      'For unclear behavior, submit surface_feedback_submit with surface_id, kind, summary, reproduction steps, expected behavior, and impact.'
+      'For sop_occurrence_conflict or completion conflict, compare the recorded and supplied fingerprints/keys; do not overwrite either occurrence.',
+      'For oversized input/result, materialize it with the owning surface and provide a value-ref containing ref and sha256.',
+      'If aggregate run-state pressure omits an inline action result, read the full retained result with sop_action_show and revise the procedure to rely on result_ref for large payloads.',
+      'For pending action after restart, read sop_action_show and retry its owning tool with the already-injected idempotency key.',
+      'For unclear behavior, submit surface_feedback_submit with the exact refusal and expected invariant.'
     ],
-    feedback: {
-      surface_id: SURFACE_ID,
-      tool: 'surface_feedback_submit',
-      when: [
-        'guidance is missing, stale, or contradicted by live behavior',
-        'schema shape makes correct usage hard',
-        'errors hide the actionable refusal or recovery path'
-      ]
-    },
     boundaries: [
-      'Guidance is read-only model-facing operating advice.',
-      'Guidance does not weaken policy, authorize mutation, or replace tool schemas.',
-      'The owning MCP surface remains authoritative for state and enforcement.'
+      'SOP owns versioned procedure definitions, occurrence state, dependency/condition evaluation, handoff intents, and reconciliation.',
+      'Scheduler and durable event consumers own temporal/event activation and fan-out into one occurrence per durable event.',
+      'Domain MCP surfaces own effects and their authorization; an SOP action binding does not grant authority.',
+      'Worker/delegation surfaces own leases, worker execution, and liveness; SOP stores only procedure-level handoff state.'
     ]
   };
 }
 
-export function guidanceToolDefinition(name: string = GUIDANCE_TOOL, description: string = 'Show model-facing operating guidance for ' + SURFACE_ID + ' MCP workflows.'): GuidanceToolDefinition {
+export function guidanceToolDefinition(name: string = GUIDANCE_TOOL, description: string = `Show model-facing operating guidance for ${SURFACE_ID} MCP workflows.`): GuidanceToolDefinition {
   return {
     name,
     description,
