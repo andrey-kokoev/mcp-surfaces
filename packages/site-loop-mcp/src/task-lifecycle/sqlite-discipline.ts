@@ -5,7 +5,7 @@ import { openTaskLifecycleStore, prepareTaskLifecycleStore } from '@narada2/task
 import type { SqliteTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import { requireSiteLoopConfig, schemaName } from '../site-loop/site-loop-config.js';
 
-interface TaskLifecycleSqliteOptions {
+export interface TaskLifecycleSqliteOptions {
   write?: boolean;
   ackRepair?: boolean;
   busyTimeoutMs?: number;
@@ -16,8 +16,6 @@ interface TaskLifecycleSqliteOptions {
   integrityCheck?: boolean;
   /** Runtime callers must observe a prepared store; tests/maintenance may opt into preparation. */
   storeMode?: 'prepare' | 'runtime';
-  /** Callers with a stronger domain lock may bypass the coarse process lock. */
-  acquireWriteLock?: boolean;
 }
 
 type TaskLifecycleDatabase = SqliteTaskLifecycleStore['db'];
@@ -26,7 +24,8 @@ type MutableTaskLifecycleDatabase = TaskLifecycleDatabase & {
   inTransaction?: boolean;
 };
 type LockState = { depth: number };
-type WriteLock = { lockDir: string; reentrant: boolean };
+export type TaskLifecycleWriteLock = { lockDir: string; reentrant: boolean };
+type WriteLock = TaskLifecycleWriteLock;
 type LockOwner = {
   schema?: string;
   pid?: number;
@@ -37,9 +36,25 @@ type LockOwner = {
 const heldLocks: Map<string, LockState> = new Map();
 
 export function openTaskLifecycleStoreWithDiscipline(cwd: string, options: TaskLifecycleSqliteOptions = {}): SqliteTaskLifecycleStore {
+  return openTaskLifecycleStoreWithLockMode(cwd, options, true);
+}
+
+/**
+ * Open the lifecycle store for the Site Loop lock-ordering protocol.
+ *
+ * The caller must acquire the persisted Site Loop logical lock immediately
+ * and then attach the returned store's process lock before any domain write.
+ * This named entrypoint prevents generic lifecycle callers from silently
+ * disabling the process lock through an option flag.
+ */
+export function openTaskLifecycleStoreForLogicalLock(cwd: string, options: TaskLifecycleSqliteOptions = {}): SqliteTaskLifecycleStore {
+  return openTaskLifecycleStoreWithLockMode(cwd, options, false);
+}
+
+function openTaskLifecycleStoreWithLockMode(cwd: string, options: TaskLifecycleSqliteOptions, acquireProcessLock: boolean): SqliteTaskLifecycleStore {
   const siteRoot: string = resolve(cwd);
   const write: boolean = options.write !== false;
-  const lock: WriteLock | null = write && options.acquireWriteLock !== false ? acquireWriteLock(siteRoot, options) : null;
+  const lock: WriteLock | null = write && acquireProcessLock ? acquireWriteLock(siteRoot, options) : null;
   let store: SqliteTaskLifecycleStore | null = null;
   try {
     store = options.storeMode === 'prepare'
@@ -389,4 +404,19 @@ function sleepProcess(ms: number): void {
 
 function timestampForPath(date: Date): string {
   return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Acquire the same coarse write lock used by ordinary Task Lifecycle stores.
+ *
+ * Site Loop uses this after its persisted logical lock has arbitrated loop
+ * ownership. Keeping the lock primitive here makes mixed Site Loop/Task
+ * Lifecycle writers share one contract instead of relying on SQLite timing.
+ */
+export function acquireTaskLifecycleWriteLock(cwd: string, options: TaskLifecycleSqliteOptions = {}): TaskLifecycleWriteLock {
+  return acquireWriteLock(resolve(cwd), options);
+}
+
+export function releaseTaskLifecycleWriteLock(lock: TaskLifecycleWriteLock): void {
+  releaseWriteLock(lock);
 }

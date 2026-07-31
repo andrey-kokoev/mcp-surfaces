@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  projectWorkerProviderCredentialEnvironment,
+  projectCanonicalProviderCredentialEnvironment,
   projectWorkerProviderRuntimeEnvironment,
   providerRuntimeMetadataFromRegistry,
   redactWorkerProviderRuntimeBinding,
@@ -74,14 +74,20 @@ test('worker provider binding ignores unrelated canonical and provider-specific 
   const canonicalEnvironment = {
     NARADA_INTELLIGENCE_PROVIDER: 'ambient-selector-must-not-cross-boundary',
     NARADA_AI_API_KEY: 'ambient-canonical-secret-must-not-cross-boundary',
+    NARADA_AI_BASE_URL: 'https://ambient.example.invalid',
+    NARADA_AI_MODEL: 'ambient-model-must-not-cross-boundary',
+    NARADA_AI_THINKING: 'ambient-thinking-must-not-cross-boundary',
     KIMI_CODE_API_KEY: 'selected-kimi-key',
     OPENAI_API_KEY: 'openai-decoy',
   } as Record<string, string>;
-  projectWorkerProviderCredentialEnvironment(canonicalEnvironment, first, metadata);
+  projectCanonicalProviderCredentialEnvironment(canonicalEnvironment, first, metadata);
   assert.equal(canonicalEnvironment.KIMI_CODE_API_KEY, 'selected-kimi-key');
   assert.equal(canonicalEnvironment.OPENAI_API_KEY, undefined);
-  assert.equal(canonicalEnvironment.NARADA_INTELLIGENCE_PROVIDER, 'ambient-selector-must-not-cross-boundary');
-  assert.equal(canonicalEnvironment.NARADA_AI_API_KEY, 'ambient-canonical-secret-must-not-cross-boundary');
+  assert.equal(canonicalEnvironment.NARADA_INTELLIGENCE_PROVIDER, undefined);
+  assert.equal(canonicalEnvironment.NARADA_AI_API_KEY, undefined);
+  assert.equal(canonicalEnvironment.NARADA_AI_BASE_URL, undefined);
+  assert.equal(canonicalEnvironment.NARADA_AI_MODEL, undefined);
+  assert.equal(canonicalEnvironment.NARADA_AI_THINKING, undefined);
 });
 
 test('worker provider binding fails closed when the selected credential is absent', () => {

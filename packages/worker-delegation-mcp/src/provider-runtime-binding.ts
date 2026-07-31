@@ -248,14 +248,17 @@ export function projectWorkerProviderRuntimeEnvironment(
 }
 
 /**
- * Project only provider-specific credential aliases for a canonical NARS
- * launch. Provider and model selectors remain owned by the immutable plan.
+ * Project the canonical NARS credential boundary. Ambient canonical provider,
+ * model, endpoint, thinking, and all provider-specific credential aliases are
+ * removed before only the selected provider's credential aliases are added.
+ * Provider/model selection remains owned by the immutable invocation plan.
  */
-export function projectWorkerProviderCredentialEnvironment(
+export function projectCanonicalProviderCredentialEnvironment(
   environment: Record<string, string>,
   binding: WorkerProviderRuntimeBinding,
   metadataByProvider: Record<string, WorkerProviderRuntimeMetadata>,
 ): void {
+  for (const key of CANONICAL_PROVIDER_ENV_KEYS) delete environment[key];
   for (const metadata of Object.values(metadataByProvider)) {
     for (const key of metadata.credentialEnvNames) delete environment[key];
   }

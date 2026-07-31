@@ -85,7 +85,7 @@ function renderConfigResolve(record: Record<string, unknown>): string {
     siteBinding.matched_marker ? `site_matched_marker: ${siteBinding.matched_marker}` : null,
     siteBinding.required_markers ? `site_required_markers: ${arrayList(siteBinding.required_markers)}` : null,
     resolved.runtime === 'narada-agent-runtime-server' ? `site_environment: NARADA_SITE_ROOT=${arrayIncludes(resolved.environment_keys, 'NARADA_SITE_ROOT')} NARADA_WORKSPACE_ROOT=${arrayIncludes(resolved.environment_keys, 'NARADA_WORKSPACE_ROOT')} NARADA_AGENT_ID=${arrayIncludes(resolved.environment_keys, 'NARADA_AGENT_ID')} NARADA_CARRIER_SESSION_ID=${arrayIncludes(resolved.environment_keys, 'NARADA_CARRIER_SESSION_ID')} CODEX_HOME=${arrayIncludes(resolved.environment_keys, 'CODEX_HOME')} CODEX_CONFIG_DIR=${arrayIncludes(resolved.environment_keys, 'CODEX_CONFIG_DIR')}` : null,
-    resolved.runtime === 'narada-agent-runtime-server' ? `provider_binding: NARADA_INTELLIGENCE_PROVIDER=${arrayIncludes(resolved.environment_keys, 'NARADA_INTELLIGENCE_PROVIDER')} NARADA_AI_API_KEY=${arrayIncludes(resolved.environment_keys, 'NARADA_AI_API_KEY')} NARADA_AI_BASE_URL=${arrayIncludes(resolved.environment_keys, 'NARADA_AI_BASE_URL')} NARADA_AI_MODEL=${arrayIncludes(resolved.environment_keys, 'NARADA_AI_MODEL')} NARADA_AI_THINKING=${arrayIncludes(resolved.environment_keys, 'NARADA_AI_THINKING')}` : null,
+    resolved.runtime === 'narada-agent-runtime-server' ? renderProviderBinding(resolved) : null,
     `runtime_available: ${runtimeAvailability.available ?? false}`,
     runtimeAvailability.reason ? `runtime_reason: ${runtimeAvailability.reason}` : null,
     `command: ${invocation.command ?? ''}`,
@@ -95,8 +95,17 @@ function renderConfigResolve(record: Record<string, unknown>): string {
   ]);
 }
 
+function renderProviderBinding(resolved: Record<string, unknown>): string {
+  const binding = asRecord(resolved.provider_runtime_binding);
+  if (binding.schema === 'narada.worker.canonical-plan-binding.v1') {
+    return `provider_binding: source=${binding.source ?? 'canonical_invocation_plan'} provider=${binding.provider ?? 'unresolved'} credential_aliases=${arrayList(binding.credential_env_names) || 'none'} selector_crosses_worker_boundary=${binding.selector_crosses_worker_boundary ?? false}`;
+  }
+  return `provider_binding: source=${resolved.provider_source ?? 'runtime_default'} provider=${resolved.provider ?? 'null'} projected_aliases=${arrayList(binding.credential_env_names) || 'none'}`;
+}
+
 function renderPolicy(record: Record<string, unknown>): string {
   const narsSiteSemantics = asRecord(record.nars_site_semantics);
+  const canonicalProviderBinding = asRecord(narsSiteSemantics.canonical_provider_binding);
   return compactLines([
     'worker_policy: ok',
     `default_runtime: ${record.default_runtime ?? ''}`,
@@ -109,6 +118,8 @@ function renderPolicy(record: Record<string, unknown>): string {
     narsSiteSemantics.remediation ? `nars_site_remediation: ${narsSiteSemantics.remediation}` : null,
     `allowed_sandboxes: ${arrayList(record.allowed_sandboxes)}`,
     `allowed_config_keys: ${arrayList(record.allowed_config_keys)}`,
+    canonicalProviderBinding.owner ? `provider_selector: owner=${canonicalProviderBinding.owner} transport=${canonicalProviderBinding.selector_transport ?? ''} crosses_worker_boundary=${canonicalProviderBinding.selector_crosses_worker_boundary ?? false}` : null,
+    canonicalProviderBinding.credential_projection ? `provider_credentials: ${canonicalProviderBinding.credential_projection}` : null,
     `allow_raw_config_overrides: ${record.allow_raw_config_overrides ?? false}`,
     `allow_danger_full_access: ${record.allow_danger_full_access ?? false}`,
     `max_output_bytes: ${record.max_output_bytes ?? ''}`,

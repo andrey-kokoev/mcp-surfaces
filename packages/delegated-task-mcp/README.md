@@ -132,6 +132,13 @@ Step transitions and gate conditions use a small expression language (not arbitr
 
 The canonical task-linked assessment is a bounded read-only delegated workflow. Delegated Task owns orchestration and the strict dispatch gate; Task Lifecycle owns request, lease, assessment, currency, and verdict authority. A missing or failed evaluator is execution state, not a verdict. The deterministic cross-surface proof establishes bounded executable-path and lifecycle/recovery behavior, not task correctness; the optional live-provider boundary is separate. Both are documented in Narada's `docs/operations/task-executability-e2e-and-recovery.md` runbook.
 
+There are two deliberate schema layers at this boundary:
+
+- The worker output envelope is `narada.task.executability.assessment.v1`, nested under `structured_outputs.task_executability_assessment_v1`, and carries evaluator data as `evaluator_provenance`.
+- Site Loop translates that envelope into Task Governance's canonical persisted `narada.task_executability_assessment.v1` record, which carries the normalized provenance as `evaluator`. Task Lifecycle MCP transport responses remain versioned `*.v0` compatibility envelopes.
+
+Do not submit the worker envelope directly to Task Lifecycle admission. The Site Loop reconciliation adapter is the owner of this translation and preserves the worker/provider/model evidence while deriving the canonical verdict.
+
 ## Verification
 
 ```powershell

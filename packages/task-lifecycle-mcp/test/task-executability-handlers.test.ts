@@ -123,6 +123,11 @@ try {
   assert.equal(statusAfter.structuredContent.currency, 'current');
   assert.equal(statusAfter.structuredContent.verdict, 'executable');
 
+  const statusWithAssessment = await handlers.task_lifecycle_executability_status({ task_number: 2224, include_assessment: true });
+  assert.equal(statusWithAssessment.structuredContent.assessment_detail.schema, 'narada.task_executability_assessment.v1');
+  assert.equal(statusWithAssessment.structuredContent.assessment_detail.evaluator.provider, 'test-provider');
+  assert.equal(statusWithAssessment.structuredContent.assessment_detail.evaluator.model, 'test-model');
+
   // 7. Dispatch check allows execution based on the current assessment.
   const dispatchResult = await handlers.task_lifecycle_executability_dispatch_check({ task_number: 2224 });
   assert.equal(dispatchResult.structuredContent.executable, true);

@@ -781,6 +781,19 @@ function patchLocalToolDefinition(toolDef: any) {
       }),
     };
   }
+  if (name === 'task_lifecycle_executability_status') {
+    return {
+      ...annotatedToolDef,
+      description: `${annotatedToolDef.description} Set include_assessment=true to read the full admitted assessment and evaluator provenance through MCP; the default remains compact.`,
+      inputSchema: {
+        ...annotatedToolDef.inputSchema,
+        properties: {
+          ...(annotatedToolDef.inputSchema?.properties ?? {}),
+          include_assessment: { type: 'boolean', description: 'When true, include the full admitted assessment, findings, and evaluator provenance. Defaults false.' },
+        },
+      },
+    };
+  }
   if (name !== 'task_lifecycle_review') return annotatedToolDef;
   return {
     ...annotatedToolDef,

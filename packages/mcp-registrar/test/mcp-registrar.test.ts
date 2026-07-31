@@ -6,9 +6,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { payloadCreate } from '@narada2/mcp-transport';
+import { buildGuidanceResult } from '../src/guidance.js';
 import { buildSiteBindConfig, buildSiteSurfaceRegistry, checkOutputReaderClosureForRegistry, checkSiteRegistryConformance, checkSiteRegistryConformanceFromObservation, compareCarrierProjection, createServerState, handleRequest, sharedSurfaceIdsForBinding, siteBindSidecarRefusal, siteSurfaceServerKey, validateSiteMcpFabric, validateSiteToolInventoryObservation } from '../src/main.js';
 
 const root: any = mkdtempSync(join(tmpdir(), 'mcp-registrar-behavior-'));
+
+const guidance = buildGuidanceResult();
+assert.equal(
+  (guidance.recovery as string[]).some((item) => item.includes('direct CLI bootstrap recovery') && item.includes('do not wait for mcp-loader or mcp-registrar')),
+  true,
+);
 
 const nestedCarrierMetadataDiff: any = compareCarrierProjection({
   carrierId: 'fixture-codex',

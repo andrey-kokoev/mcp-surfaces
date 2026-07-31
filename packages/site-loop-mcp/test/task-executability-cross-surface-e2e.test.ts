@@ -3,7 +3,6 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createTemporaryE2eRoot,
@@ -680,31 +679,11 @@ async function waitForExecutable(
   let latestStatus: JsonRecord = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
     runs.push(await runSiteLoopProcess());
-    latestStatus = await toolJson(client, requestId + attempt, 'task_lifecycle_executability_status', { task_number: taskNumber });
+    latestStatus = await toolJson(client, requestId + attempt, 'task_lifecycle_executability_status', { task_number: taskNumber, include_assessment: true });
     if (latestStatus.currency === 'current' && latestStatus.verdict === 'executable') return { status: latestStatus, runs };
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
   }
   assert.fail(JSON.stringify({ task_number: taskNumber, latest_status: latestStatus, runs }));
-}
-
-function readPersistedAssessment(taskNumber: number): { row: AnyRecord; evaluator: AnyRecord } {
-  const db = new DatabaseSync(join(siteRoot, '.ai', 'task-lifecycle.db'), { readOnly: true });
-  try {
-    const row = db.prepare(`
-      SELECT a.*, r.state AS request_state, r.assessment_id AS request_assessment_id,
-             at.delegated_task_id, at.worker_run_id
-      FROM task_executability_assessments a
-      JOIN task_executability_requests r ON r.request_id = a.request_id
-      LEFT JOIN task_executability_attempts at ON at.request_id = a.request_id
-      WHERE a.task_number = ?
-      ORDER BY a.created_at DESC
-      LIMIT 1
-    `).get(taskNumber) as AnyRecord | undefined;
-    assert.ok(row, JSON.stringify({ task_number: taskNumber }));
-    return { row, evaluator: JSON.parse(String(row.evaluator_json)) as AnyRecord };
-  } finally {
-    db.close();
-  }
 }
 
 function readJsonLines(path: string): JsonLine[] {
@@ -817,18 +796,19 @@ async function main(): Promise<void> {
   assert.equal(mainStatus.currency, 'current', JSON.stringify(mainStatus));
   assert.equal(mainStatus.verdict, 'executable', JSON.stringify(mainStatus));
   assert.equal((mainStatus.request as AnyRecord | undefined)?.state, 'completed', JSON.stringify(mainStatus));
-  // Status is intentionally compact; verify the full evaluator provenance
-  // through the canonical persisted assessment row.
-  const persistedMain = readPersistedAssessment(mainTask.taskNumber);
+  // The full evaluator provenance is read back through the authoritative
+  // Task Lifecycle MCP surface, not by opening its SQLite file in the E2E.
+  const mainAssessment = mainStatus.assessment_detail as AnyRecord | undefined;
   const compactMainAssessment = mainStatus.assessment as AnyRecord | undefined;
   assert.equal(typeof compactMainAssessment?.assessment_id, 'string', JSON.stringify(mainStatus));
-  assert.equal(persistedMain.row.assessment_id, compactMainAssessment?.assessment_id, JSON.stringify({ mainStatus, persistedMain }));
-  assert.equal(persistedMain.row.request_state, 'completed', JSON.stringify(persistedMain));
-  assert.equal(persistedMain.row.verdict, 'executable', JSON.stringify(persistedMain));
-  assert.equal(persistedMain.evaluator.schema, 'narada.task_executability_evaluator_provenance.v1', JSON.stringify(persistedMain));
-  assert.equal(persistedMain.evaluator.provider, 'kimi-code-api', JSON.stringify(persistedMain));
-  assert.equal(persistedMain.evaluator.model, providerModel, JSON.stringify(persistedMain));
-  assert.equal(persistedMain.evaluator.cognition, 'low', JSON.stringify(persistedMain));
+  assert.equal(mainAssessment?.assessment_id, compactMainAssessment?.assessment_id, JSON.stringify({ mainStatus, mainAssessment }));
+  assert.equal(mainAssessment?.verdict, 'executable', JSON.stringify(mainStatus));
+  assert.equal(mainAssessment?.evaluator.schema, 'narada.task_executability_evaluator_provenance.v1', JSON.stringify(mainStatus));
+  assert.equal(mainAssessment?.evaluator.provider, 'kimi-code-api', JSON.stringify(mainStatus));
+  assert.equal(mainAssessment?.evaluator.model, providerModel, JSON.stringify(mainStatus));
+  assert.equal(mainAssessment?.evaluator.cognition, 'low', JSON.stringify(mainStatus));
+  assert.equal(typeof mainAssessment?.evaluator.delegated_task_id, 'string', JSON.stringify(mainStatus));
+  assert.equal(typeof mainAssessment?.evaluator.worker_run_id, 'string', JSON.stringify(mainStatus));
 
   const childCreated = await toolJson(controlServer.client, 35, 'task_lifecycle_list', { limit: 50 });
   const childTask = (Array.isArray(childCreated.tasks) ? childCreated.tasks : []).find((task) => String((task as AnyRecord).title ?? '').includes('created by the live NARS'));
@@ -842,17 +822,18 @@ async function main(): Promise<void> {
   assert.equal((childStatus.request as AnyRecord | undefined)?.state, 'completed', JSON.stringify(childStatus));
   // The child may already be current when the polling call observes it. In
   // that case the latest run packet is the intentional idle response, while
-  // status remains the authoritative compact readback of the persisted
-  // assessment. Full evaluator provenance is asserted through the canonical
-  // persisted assessment row below, not by widening the compact status.
+  // status remains the authoritative MCP readback of the persisted assessment.
   const childAssessment = childStatus.assessment as AnyRecord | undefined;
   assert.equal(typeof childAssessment?.assessment_id, 'string', JSON.stringify(childStatus));
   assert.equal(childAssessment?.verdict, 'executable', JSON.stringify(childStatus));
-  const persistedChild = readPersistedAssessment(childTaskNumber);
-  assert.equal(persistedChild.evaluator.schema, 'narada.task_executability_evaluator_provenance.v1', JSON.stringify(persistedChild));
-  assert.equal(persistedChild.evaluator.provider, 'kimi-code-api', JSON.stringify(persistedChild));
-  assert.equal(persistedChild.evaluator.model, providerModel, JSON.stringify(persistedChild));
-  assert.equal(persistedChild.evaluator.cognition, 'low', JSON.stringify(persistedChild));
+  const childAssessmentDetail = childStatus.assessment_detail as AnyRecord | undefined;
+  assert.equal(childAssessmentDetail?.assessment_id, childAssessment?.assessment_id, JSON.stringify(childStatus));
+  assert.equal(childAssessmentDetail?.evaluator.schema, 'narada.task_executability_evaluator_provenance.v1', JSON.stringify(childStatus));
+  assert.equal(childAssessmentDetail?.evaluator.provider, 'kimi-code-api', JSON.stringify(childStatus));
+  assert.equal(childAssessmentDetail?.evaluator.model, providerModel, JSON.stringify(childStatus));
+  assert.equal(childAssessmentDetail?.evaluator.cognition, 'low', JSON.stringify(childStatus));
+  assert.equal(typeof childAssessmentDetail?.evaluator.delegated_task_id, 'string', JSON.stringify(childStatus));
+  assert.equal(typeof childAssessmentDetail?.evaluator.worker_run_id, 'string', JSON.stringify(childStatus));
 
   const raceA = await createTask(controlServer.client, 50, 'race-a', 'Live Site Loop race A', 'Assess race A through the real worker.');
   const raceB = await createTask(controlServer.client, 60, 'race-b', 'Live Site Loop race B', 'Assess race B through the real worker.');

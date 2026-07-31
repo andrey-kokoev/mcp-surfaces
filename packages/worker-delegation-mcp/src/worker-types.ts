@@ -116,7 +116,6 @@ export type WorkerResolvedExecutionPolicy = {
   workspace_root?: string;
   provider?: string | null;
   provider_source?: string;
-  provider_env_key?: string;
   provider_runtime_binding?: Record<string, unknown>;
   required_mcp_tools?: string[];
   mcp_scope?: string | null;

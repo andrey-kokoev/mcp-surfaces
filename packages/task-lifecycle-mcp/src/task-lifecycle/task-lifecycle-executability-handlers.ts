@@ -79,6 +79,37 @@ export function createTaskLifecycleExecutabilityHandlers(context: any) {
     return assembleDeclaredEnvironment(siteRoot);
   }
 
+  function fullAssessmentReadback(assessment: any): Record<string, unknown> {
+    let findings: unknown[] = [];
+    let evaluator: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(String(assessment.findings_json ?? '[]'));
+      if (Array.isArray(parsed)) findings = parsed;
+    } catch {
+      // A malformed persisted row must not make compact status unreadable.
+    }
+    try {
+      const parsed = JSON.parse(String(assessment.evaluator_json ?? '{}'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) evaluator = parsed as Record<string, unknown>;
+    } catch {
+      // Preserve the readback boundary while exposing an explicit empty
+      // provenance object for malformed legacy rows.
+    }
+    return {
+      schema: TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
+      assessment_id: assessment.assessment_id,
+      request_id: assessment.request_id,
+      task_id: assessment.task_id,
+      task_number: assessment.task_number,
+      task_spec_digest: assessment.task_spec_digest,
+      environment_digest: assessment.environment_digest,
+      verdict: assessment.verdict,
+      findings,
+      evaluator,
+      created_at: assessment.created_at,
+    };
+  }
+
   async function dispatchExecutabilityTool(canonicalName: string, args: Record<string, unknown>) {
     switch (canonicalName) {
       case 'task_lifecycle_executability_request': {
@@ -126,6 +157,7 @@ export function createTaskLifecycleExecutabilityHandlers(context: any) {
       case 'task_lifecycle_executability_status': {
         const taskNumber = numberField(args, 'task_number');
         if (!taskNumber) throw new Error('task_number_required');
+        const includeAssessment = args.include_assessment === true;
         const { lifecycle, spec } = requireLifecycleAndSpec(taskNumber);
         const digestable = buildDigestableSpec(spec);
         const environment = currentEnvironmentDigest();
@@ -168,6 +200,12 @@ export function createTaskLifecycleExecutabilityHandlers(context: any) {
                 environment_digest: posture.assessment.environment_digest,
                 created_at: posture.assessment.created_at,
               }
+            : null,
+          // Compact status remains the default. Callers that need authoritative
+          // evaluator provenance can opt into this MCP readback instead of
+          // opening the SQLite file outside the Task Lifecycle boundary.
+          assessment_detail: includeAssessment && posture.assessment
+            ? fullAssessmentReadback(posture.assessment)
             : null,
           findings: posture.findings ?? null,
         });

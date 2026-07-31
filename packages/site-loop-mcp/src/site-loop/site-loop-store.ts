@@ -1,5 +1,12 @@
 import { resolve } from 'node:path';
-import { openTaskLifecycleStoreWithDiscipline } from '../task-lifecycle/sqlite-discipline.js';
+import {
+  acquireTaskLifecycleWriteLock,
+  openTaskLifecycleStoreForLogicalLock,
+  openTaskLifecycleStoreWithDiscipline,
+  releaseTaskLifecycleWriteLock,
+  type TaskLifecycleSqliteOptions,
+  type TaskLifecycleWriteLock,
+} from '../task-lifecycle/sqlite-discipline.js';
 import {
   getSiteOperatingLoopRuntimeHost as getCanonicalSiteOperatingLoopRuntimeHost,
 } from '@narada2/site-operating-loop/site-loop-store';
@@ -15,9 +22,9 @@ export * from '../site-operating-loop/site-loop-store.js';
 interface OpenSiteLoopStoreOptions {
   write?: boolean;
   storeMode?: 'prepare' | 'runtime';
-  /** Site Loop acquires its persisted logical lock before doing loop writes. */
-  acquireWriteLock?: boolean;
 }
+
+type OpenLifecycleStore = typeof openTaskLifecycleStoreWithDiscipline;
 
 function ensureRuntimeHostTables(db: any): void {
   db.exec(`
@@ -55,17 +62,17 @@ function ensureRuntimeHostTables(db: any): void {
   `);
 }
 
-export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
+function openSiteLoopStoreInternal(cwd: any, options: OpenSiteLoopStoreOptions, openLifecycleStore: OpenLifecycleStore) {
   const write = options.write !== false;
   const siteRoot = resolve(cwd);
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, {
+  const lifecycleStore = openLifecycleStore(siteRoot, {
     write,
     storeMode: options.storeMode,
-    acquireWriteLock: options.acquireWriteLock,
   });
   try {
     const db = lifecycleStore.db as unknown as SiteLoopDatabase;
     const evidenceStore = createSiteLoopEvidenceStore(siteRoot);
+    let processWriteLock: TaskLifecycleWriteLock | null = null;
     if (write) {
       ensureSiteLoopTables(db);
       ensureRuntimeHostTables(db);
@@ -75,12 +82,36 @@ export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = 
       db,
       siteRoot,
       evidenceStore,
+      acquireProcessWriteLock(lockOptions: TaskLifecycleSqliteOptions = {}) {
+        if (!write || processWriteLock) return;
+        processWriteLock = acquireTaskLifecycleWriteLock(siteRoot, lockOptions);
+      },
       close() {
-        lifecycleStore.db.close();
+        try {
+          lifecycleStore.db.close();
+        } finally {
+          if (processWriteLock) {
+            releaseTaskLifecycleWriteLock(processWriteLock);
+            processWriteLock = null;
+          }
+        }
       },
     };
   } catch (error) {
     lifecycleStore.db.close();
     throw error;
   }
+}
+
+export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
+  return openSiteLoopStoreInternal(cwd, options, openTaskLifecycleStoreWithDiscipline);
+}
+
+/**
+ * Open the Site Loop store before its persisted logical lock is acquired.
+ * The caller must acquire that lock immediately and attach the returned
+ * process lock before performing any Site Loop domain write.
+ */
+export function openSiteLoopStoreForLogicalLock(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
+  return openSiteLoopStoreInternal(cwd, options, openTaskLifecycleStoreForLogicalLock);
 }

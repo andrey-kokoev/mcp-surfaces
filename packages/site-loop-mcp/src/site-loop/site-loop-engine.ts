@@ -35,6 +35,7 @@ import {
   listLoopAttention,
   listLoopRuns,
   openSiteLoopStore,
+  openSiteLoopStoreForLogicalLock,
   recordDirectiveOutcome,
   resolveDirectiveOutcome,
   recordLoopClassificationObservation,
@@ -399,10 +400,11 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
   let staleRunRecovery = null;
 
   try {
-    // Acquire the persisted Site Loop lock before the coarse Task Lifecycle
-    // process lock. Otherwise a competing loop waits for the first run to
-    // finish, then runs sequentially and never observes logical contention.
-    store = dryRun ? null : openSiteLoopStore(siteRoot, { acquireWriteLock: false });
+    // Acquire the persisted Site Loop lock first so competing loops can
+    // observe logical contention. Once this run owns that lock, attach the
+    // shared Task Lifecycle process lock before any further Site Loop writes;
+    // this keeps mixed Site Loop/Task Lifecycle writers serialized.
+    store = dryRun ? null : openSiteLoopStoreForLogicalLock(siteRoot);
     if (store) {
       const lockTtlMs = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
       lock = acquireLoopLock(store, {
@@ -427,6 +429,10 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
           steps: [],
         };
       }
+      store.acquireProcessWriteLock?.({
+        timeoutMs: Number(options.writeLockTimeoutMs ?? options.write_lock_timeout_ms ?? 30_000),
+        pollMs: Number(options.writeLockPollMs ?? options.write_lock_poll_ms ?? 50),
+      });
       staleRunRecovery = reconcileStaleLoopRuns(store, {
         loopId,
         activeRunId: runId,

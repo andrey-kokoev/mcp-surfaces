@@ -11,7 +11,7 @@ import {
   recordTaskExecutabilityFailure,
 } from '@narada2/task-governance-core/task-executability-service';
 import {
-  TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
+  TASK_EXECUTABILITY_ASSESSMENT_SCHEMA as CANONICAL_TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
   TASK_EXECUTABILITY_EVALUATOR_PROVENANCE_SCHEMA,
   deriveTaskExecutabilityVerdict,
   taskExecutabilityAssessmentId,
@@ -39,6 +39,9 @@ import {
 
 export const TASK_EXECUTABILITY_SITE_LOOP_SCHEMA = 'narada.site_loop.task_executability_reconciliation.v1' as const;
 const WORKFLOW_TEMPLATE_ID = 'task_executability_assessment_v1';
+// Delegated Task's worker envelope and Task Governance's persisted record are
+// intentionally different contracts. Keep the translation boundary explicit.
+const WORKER_TASK_EXECUTABILITY_ASSESSMENT_SCHEMA = 'narada.task.executability.assessment.v1';
 const MAX_BATCH = 10;
 
 type JsonRecord = Record<string, unknown>;
@@ -169,7 +172,7 @@ function findAssessment(value: unknown, depth = 0): JsonRecord | null {
   if (typeof value !== 'object') return null;
   const current = value as JsonRecord;
   if (
-    current.schema === 'narada.task.executability.assessment.v1'
+    current.schema === WORKER_TASK_EXECUTABILITY_ASSESSMENT_SCHEMA
     && current.version === 1
     && Array.isArray(current.findings)
     && Array.isArray(current.dimensions)
@@ -236,7 +239,14 @@ function normalizedFinding(value: unknown, index: number, defaultKind: TaskExecu
   };
 }
 
-function assessmentForRequest(workerAssessment: JsonRecord, request: TaskExecutabilityRequest, result: JsonRecord): TaskExecutabilityAssessment {
+/**
+ * Translate the Delegated Task worker envelope into the canonical Task
+ * Governance assessment admitted to SQLite. The worker uses the dotted
+ * schema and `evaluator_provenance`; the durable record uses the core schema
+ * and `evaluator`. No caller should pass the worker object directly to the
+ * lifecycle admission service.
+ */
+export function assessmentForRequest(workerAssessment: JsonRecord, request: TaskExecutabilityRequest, result: JsonRecord): TaskExecutabilityAssessment {
   const findings: TaskExecutabilityFinding[] = [];
   records(workerAssessment.findings).forEach((item, index) => findings.push(normalizedFinding(item, index)));
   records(workerAssessment.required_decisions).forEach((item, index) => findings.push(normalizedFinding(item, findings.length + index, 'undecided_choice')));
@@ -247,10 +257,20 @@ function assessmentForRequest(workerAssessment: JsonRecord, request: TaskExecuta
     .filter((item) => item.mapped === false || item.status === 'unmapped' || item.status === 'missing')
     .forEach((item, index) => findings.push(normalizedFinding(item, findings.length + index, 'unmapped_acceptance_criterion')));
 
-  const provenance = findProvenance(result);
+  // The canonical NARS result may intentionally omit provider/model selector
+  // fields at the worker boundary. The worker assessment's validated
+  // evaluator_provenance owns those fields; the delegated result still owns
+  // transport provenance such as the worker run id. Merge both contracts with
+  // the assessment provenance taking precedence for evaluator identity.
+  const identity = resultIdentity(result);
+  const provenance: JsonRecord = {
+    ...findProvenance(result),
+    ...record(workerAssessment.evaluator_provenance),
+    ...(identity.worker_run_id ? { run_id: identity.worker_run_id } : {}),
+  };
   const createdAt = new Date().toISOString();
   return {
-    schema: TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
+    schema: CANONICAL_TASK_EXECUTABILITY_ASSESSMENT_SCHEMA,
     assessment_id: taskExecutabilityAssessmentId({ request_id: request.request_id, created_at: createdAt }),
     request_id: request.request_id,
     task_id: request.task_id,
@@ -274,8 +294,15 @@ function assessmentForRequest(workerAssessment: JsonRecord, request: TaskExecuta
 }
 
 function resultIdentity(result: JsonRecord): { delegated_task_id: string | null; worker_run_id: string | null } {
-  const refs = records(result.worker_refs ?? record(result.result).worker_refs);
-  const ref = refs[0] ?? {};
+  const nestedResult = record(result.result);
+  const ref = [
+    ...records(result.worker_refs),
+    ...records(result.run_refs),
+    ...records(result.worker_summaries),
+    ...records(nestedResult.worker_refs),
+    ...records(nestedResult.run_refs),
+    ...records(nestedResult.worker_summaries),
+  ][0] ?? {};
   return {
     delegated_task_id: typeof result.task_id === 'string' ? result.task_id : null,
     worker_run_id: typeof ref.run_id === 'string' ? ref.run_id : null,
