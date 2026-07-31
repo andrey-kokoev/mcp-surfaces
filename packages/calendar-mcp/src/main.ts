@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { buildGraphUrl, graphCalendarPath, graphRequest, graphTop, requiredString } from './graph-client.js';
 import { decideEventWrite, loadCalendarPolicy, recordCalendarAudit } from './policy.js';
 import { buildCalendarTelemetryDeclaration, emitTelemetryEvent, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
 
 const SERVER_NAME = 'narada-calendar-mcp';
 const SERVER_VERSION = '0.1.0';
@@ -289,7 +289,7 @@ async function callNamedTool(name: string, args: CalendarRecord, state: Calendar
     case 'calendar_event_delete':
       return calendarEventDelete(args, state);
     case 'calendar_output_show':
-      return outputShow({ siteRoot: state.siteRoot, args });
+      return await outputShowAsync({ siteRoot: state.siteRoot, args });
     default:
       throw new Error(`unknown_tool: ${name}`);
   }

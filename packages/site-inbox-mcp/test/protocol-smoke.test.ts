@@ -12,13 +12,13 @@ type JsonRpcTestResponse = {
     tools: ToolSummary[];
   };
 };
-const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+const rpc = async (...args: Parameters<typeof handleRequest>) => await handleRequest(...args) as JsonRpcTestResponse;
 
 const root = mkdtempSync(join(tmpdir(), 'inbox-mcp-protocol-'));
 
 try {
   const state = createServerState({ siteRoot: root });
-  const init = rpc({
+  const init = await rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'initialize',
@@ -27,7 +27,7 @@ try {
   assert.equal(init.error, undefined);
   assert.equal(init.result.serverInfo.name, 'narada-site-inbox-mcp');
 
-  const tools = rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
+  const tools = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, state);
   assert.equal(tools.error, undefined);
   const toolRows = tools.result.tools;
   const names = toolRows.map((tool) => tool.name);

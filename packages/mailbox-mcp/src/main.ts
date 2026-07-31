@@ -2,7 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
 import { messageMatchesQuery, readMailboxProjection, summarizeMessage } from './mailbox-store.js';
 
 const SERVER_NAME = 'narada-mailbox-mcp';
@@ -43,7 +43,7 @@ export async function runStdioServer(options: unknown): Promise<void> {
     }
     for (const request of requests) {
       if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) continue;
-      const response = handleRequest(request, state);
+      const response = await handleRequest(request, state);
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
     }
   }
@@ -57,10 +57,10 @@ export function createServerState(options: unknown = {}): MailboxServerState {
   };
 }
 
-export function handleRequest(request: MailboxRecord, state: MailboxServerState) {
+export async function handleRequest(request: MailboxRecord, state: MailboxServerState) {
   if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = dispatchMethod(String(request.method), asRecord(request.params), state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -68,7 +68,7 @@ export function handleRequest(request: MailboxRecord, state: MailboxServerState)
   }
 }
 
-function dispatchMethod(method: string, params: MailboxRecord, state: MailboxServerState) {
+async function dispatchMethod(method: string, params: MailboxRecord, state: MailboxServerState) {
   switch (method) {
     case 'initialize':
       return {
@@ -79,7 +79,7 @@ function dispatchMethod(method: string, params: MailboxRecord, state: MailboxSer
     case 'tools/list':
       return { tools: listTools() };
     case 'tools/call':
-      return callTool(params, state);
+      return await callTool(params, state);
     case 'prompts/list':
       return { prompts: listPrompts() };
     case 'prompts/get':
@@ -154,7 +154,7 @@ export function listTools(): unknown[] {
   ];
 }
 
-function callTool(params: MailboxRecord, state: MailboxServerState) {
+async function callTool(params: MailboxRecord, state: MailboxServerState) {
   const name = params.name;
   const args = asRecord(params.arguments);
   let result: unknown;
@@ -181,7 +181,7 @@ function callTool(params: MailboxRecord, state: MailboxServerState) {
       result = mailboxThreadShow(args, state);
       break;
     case 'mailbox_output_show':
-      result = outputShow({ siteRoot: state.siteRoot, args });
+      result = await outputShowAsync({ siteRoot: state.siteRoot, args });
       break;
     default:
       throw new Error(`unknown_tool: ${name}`);

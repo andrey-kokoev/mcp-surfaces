@@ -1,4 +1,5 @@
 import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { readFile as readFileAsync, stat as statAsync } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -12,6 +13,8 @@ export const DEFAULT_INLINE_PAYLOAD_CHAR_LIMIT = 20_000;
 export const DEFAULT_INLINE_OUTPUT_CHAR_LIMIT = 2_000;
 export const DEFAULT_OUTPUT_SHOW_CHAR_LIMIT = 10_000;
 export const MAX_OUTPUT_SHOW_CHAR_LIMIT = 20_000;
+export const DEFAULT_OUTPUT_READ_TIMEOUT_MS = 5_000;
+export const MAX_OUTPUT_READ_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT_PAGE_BYTES = 12 * 1024;
 const MAX_INLINE_RESPONSE_BYTES = 32 * 1024;
 const MIN_INLINE_OUTPUT_CHAR_LIMIT = 512;
@@ -156,6 +159,93 @@ export function createTransportScope(input: unknown): McpTransportScope {
     maxPayloadBytes: parsed.maxPayloadBytes ?? DEFAULT_MAX_BYTES,
     maxOutputBytes: parsed.maxOutputBytes ?? DEFAULT_OUTPUT_MAX_BYTES,
   });
+}
+
+function normalizeOutputReadTimeout(value: any): number {
+  if (value === undefined || value === null) return DEFAULT_OUTPUT_READ_TIMEOUT_MS;
+  const parsed = z.number().finite().int().safeParse(value);
+  if (!parsed.success || parsed.data < 1) throw new Error('output_read_timeout_must_be_positive_integer');
+  if (parsed.data > MAX_OUTPUT_READ_TIMEOUT_MS) throw new Error(`output_read_timeout_exceeds_transport_maximum: ${parsed.data} > ${MAX_OUTPUT_READ_TIMEOUT_MS}`);
+  return parsed.data;
+}
+
+async function readOutputRecordAsync({ scope, siteRoot, ref, maxBytes, outputDir }: OutputReadOptions, timeoutMs: number) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  const parsed = parseOutputRef(ref);
+  const path = outputPath({ siteRoot: transportScope.siteRoot, outputDir: transportScope.outputDir, outputId: parsed.outputId });
+  let stat;
+  try {
+    stat = await withOutputReadTimeout(statAsync(path), timeoutMs);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`output_ref_not_found: ${ref}`);
+    throw error;
+  }
+  if (!stat.isFile()) throw new Error(`output_ref_not_file: ${ref}`);
+  if (stat.size > transportScope.maxOutputBytes) throw new Error(`output_ref_too_large: ${stat.size} > ${transportScope.maxOutputBytes}`);
+  let serialized: string;
+  try {
+    serialized = await withOutputReadTimeout(readFileAsync(path, { encoding: 'utf8' }), timeoutMs);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`output_ref_not_found: ${ref}`);
+    throw error;
+  }
+  let record: any;
+  try {
+    record = JSON.parse(serialized);
+  } catch (error) {
+    throw new Error(`output_ref_invalid_json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`output_ref_record_must_be_object: ${ref}`);
+  if (record.schema !== 'narada.mcp_output_ref.v1') throw new Error(`output_ref_schema_unsupported: ${record.schema}`);
+  if (record.ref !== ref || record.output_id !== parsed.outputId) throw new Error(`output_ref_metadata_mismatch: ${ref}`);
+  const fullText = presentationJson(record.full_output);
+  if (record.full_output_char_length !== fullText.length) throw new Error(`output_ref_length_mismatch: ${ref}`);
+  if (record.sha256 !== sha256(stableJson(record.full_output))) throw new Error(`output_ref_sha256_mismatch: ${ref}`);
+  return { ...record, byte_size: stat.size, output_path: normalizePath(relative(resolveSiteRoot(transportScope.siteRoot), path)) };
+}
+
+function withOutputReadTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    const timer = setTimeout(() => rejectPromise(Object.assign(new Error(`output_ref_read_timed_out:${timeoutMs}`), { code: 'OUTPUT_READ_TIMED_OUT' })), timeoutMs);
+    operation.then((value) => { clearTimeout(timer); resolvePromise(value); }, (error) => { clearTimeout(timer); rejectPromise(error); });
+  });
+}
+
+function isOutputReadTimeout(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'OUTPUT_READ_TIMED_OUT');
+}
+
+export async function outputShowAsync({ scope, siteRoot, args, maxBytes, outputDir }: OutputShowOptions = {}) {
+  const transportScope = resolveTransportScope({ scope, siteRoot, outputDir, maxBytes });
+  const input = parseArgumentRecord(args);
+  if (Object.prototype.hasOwnProperty.call(input, 'target_site_root')) {
+    throw new Error('output_target_site_root_not_supported: output refs are bound to the current MCP site scope');
+  }
+  const ref = requireOutputRef(input, 'output_show_requires_ref');
+  const offset = normalizeOutputShowOffset(input.offset);
+  const outputLimit = normalizeOutputShowLimit(input.limit ?? input.output_limit);
+  const timeoutMs = normalizeOutputReadTimeout(input.timeout_ms);
+  try {
+    const record = await readOutputRecordAsync({ scope: transportScope, ref }, timeoutMs);
+    return publicOutputShowRecord(record, { outputLimit, offset });
+  } catch (error) {
+    if (isOutputReadTimeout(error)) {
+      return {
+        schema: 'narada.mcp_output_page.v1',
+        status: 'timed_out',
+        ref,
+        offset,
+        limit: outputLimit,
+        next_offset: offset,
+        output_limit: outputLimit,
+        output_truncated: true,
+        output_text: '',
+        retryable: true,
+        error: { code: 'output_ref_read_timed_out', timeout_ms: timeoutMs },
+      };
+    }
+    throw error;
+  }
 }
 
 function resolveTransportScope({ scope, siteRoot, payloadDir, outputDir, maxBytes, maxPayloadBytes, maxOutputBytes }: TransportScopeOptions = {}): McpTransportScope {
@@ -790,6 +880,7 @@ export function listOutputTools() {
           output_ref: { type: 'string', description: 'Alias for ref.' },
           offset: { type: 'integer', default: 0, description: 'Character offset into the materialized JSON output.' },
           limit: { type: 'integer', default: DEFAULT_OUTPUT_SHOW_CHAR_LIMIT, minimum: 1, maximum: MAX_OUTPUT_SHOW_CHAR_LIMIT, description: 'Maximum output characters to return; the transport hard-caps this value.' },
+          timeout_ms: { type: 'integer', default: DEFAULT_OUTPUT_READ_TIMEOUT_MS, minimum: 1, maximum: MAX_OUTPUT_READ_TIMEOUT_MS, description: 'Strict upper bound for reading and validating the materialized output file.' },
         },
         required: [],
         additionalProperties: false,

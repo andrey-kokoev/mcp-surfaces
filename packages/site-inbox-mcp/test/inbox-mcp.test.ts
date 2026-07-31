@@ -16,13 +16,13 @@ type JsonRpcTestResponse = {
   };
 };
 
-const rpc: any = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+const rpc = async (...args: Parameters<typeof handleRequest>) => await handleRequest(...args) as unknown as JsonRpcTestResponse;
 
 const root: any = mkdtempSync(join(tmpdir(), 'inbox-mcp-'));
 
 try {
   const state: any = createServerState({ siteRoot: root });
-  const submit: any = rpc({
+  const submit: any = await rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -41,7 +41,7 @@ try {
   assert.equal(submitted.status, 'admitted');
   assert.equal(existsSync(submitted.envelope_path), true);
 
-  const next: any = rpc({
+  const next: any = await rpc({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/call',
@@ -53,7 +53,7 @@ try {
   assert.equal(nextPayload.envelope.kind, 'incident');
   assert.equal(nextPayload.envelope.action, 'materialize');
 
-  const doctor: any = rpc({
+  const doctor: any = await rpc({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
@@ -63,7 +63,7 @@ try {
   const doctorPayload: any = doctor.result.structuredContent;
   assert.equal(doctorPayload.storage_mode, 'node_sqlite');
 
-  const filtered: any = rpc({
+  const filtered: any = await rpc({
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -87,7 +87,7 @@ try {
   assert.equal(filteredPayload.count, 1);
   assert.equal(filteredPayload.envelopes[0].envelope_id, submitted.envelope_id);
 
-  const rejected: any = rpc({
+  const rejected: any = await rpc({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -95,7 +95,7 @@ try {
   }, state);
   assert.match(rejected.error.message, /kind_must_be_one_of/);
 
-  const queue: any = rpc({
+  const queue: any = await rpc({
     jsonrpc: '2.0',
     id: 6,
     method: 'tools/call',
@@ -105,7 +105,7 @@ try {
   const queuePayload: any = queue.result.structuredContent;
   assert.equal(queuePayload.count, 1);
 
-  const audit: any = rpc({
+  const audit: any = await rpc({
     jsonrpc: '2.0',
     id: 7,
     method: 'tools/call',
@@ -117,7 +117,7 @@ try {
   assert.ok(auditPayload.entries.length);
   assert.ok(auditPayload.entries[0].event_kind);
 
-  const ack: any = rpc({
+  const ack: any = await rpc({
     jsonrpc: '2.0',
     id: 8,
     method: 'tools/call',
@@ -128,7 +128,7 @@ try {
   assert.equal(ackPayload.status, 'acknowledged');
   assert.equal(ackPayload.envelope_id, submitted.envelope_id);
 
-  const afterAck: any = rpc({
+  const afterAck: any = await rpc({
     jsonrpc: '2.0',
     id: 9,
     method: 'tools/call',

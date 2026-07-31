@@ -71,6 +71,7 @@ import {
   payloadShow,
   payloadValidate,
   outputShow,
+  outputShowAsync,
   readOutputResource,
   resolveToolPayloadArgs,
 } from '../mcp-payload-file.js';
@@ -1531,7 +1532,7 @@ function getTaskLifecycleHandlerRegistry() {
         mcp_payload_show: (args: any) => jsonToolResult(payloadShow({ siteRoot, args })),
         mcp_payload_derive: (args: any) => jsonToolResult(payloadDerive({ siteRoot, args })),
         mcp_payload_validate: (args: any) => jsonToolResult(payloadValidate({ siteRoot, args })),
-        mcp_output_show: (args: any) => jsonToolResult(outputShow({ siteRoot, args }), false, 'mcp_output_show'),
+        mcp_output_show: async (args: any) => jsonToolResult(await outputShowAsync({ siteRoot, args }), false, 'mcp_output_show'),
         task_lifecycle_chapter_add_task: async (args: any, context: any) => jsonToolResult(await taskLifecycleChapterAddTask(args, context)),
         task_lifecycle_chapter_show: (args: any) => jsonToolResult(taskLifecycleChapterShow(args)),
         task_lifecycle_submit_work: (args: any, context: any) => taskLifecycleSubmitWork(args, context),
@@ -1547,16 +1548,16 @@ async function dispatchTool(canonicalName: any, args: any, dispatchContext: Reco
   const handler: any = getTaskLifecycleHandlerRegistry().get(canonicalName);
   if (!handler) throw new Error(`task_mcp_refused: ${canonicalName}`);
   const result: any = await handler(args, dispatchContext);
-  return dispatchContext?.compound_tool ? unwrapInternalToolResult(result) : result;
+  return dispatchContext?.compound_tool ? await unwrapInternalToolResult(result) : result;
 }
 
-function unwrapInternalToolResult(result: any) {
+async function unwrapInternalToolResult(result: any) {
   const structured: any = result?.structuredContent;
   if (structured?.schema !== 'narada.producer_output_page.v1' || typeof structured.output_ref !== 'string') return result;
   let offset = 0;
   let outputText = '';
   while (true) {
-    const page: any = outputShow({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
+    const page: any = await outputShowAsync({ siteRoot, args: { ref: structured.output_ref, offset, limit: 20000 } });
     if (!page?.output_text) throw new Error('internal_output_ref_page_missing_output_text');
     outputText += page.output_text;
     if (page.next_offset === null || page.next_offset === undefined) break;

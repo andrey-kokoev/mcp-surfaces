@@ -2,7 +2,7 @@
 import { buildGuidanceResult } from './guidance.js';
 import { guidanceToolDefinition } from './guidance.js';
 import { resolve } from 'node:path';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
 import { admitEnvelope, emitEnvelopeAcknowledged, emitEnvelopeDismissed, emitEnvelopePromoted, readAdmissionLog } from './admission-log.js';
 import { INBOX_ENVELOPE_KINDS, assertKnownInboxEnvelopeKind } from './envelope-kinds.js';
 import { readInboxEnvelopeById, readIndexedInboxBacklog, readIndexedInboxRows, readInboxIndexCounts, refreshInboxIndex } from './inbox-index.js';
@@ -67,7 +67,7 @@ export async function runStdioServer(options: unknown): Promise<void> {
       const abortController = new AbortController();
       activeRequests.set(requestId, abortController);
       sendProgress(request, 0, 'started', { framed: sawFramedInput });
-      const response = handleRequest(request, state);
+      const response = await handleRequest(request, state);
       sendProgress(request, 1, abortController.signal.aborted ? 'cancelled' : 'completed', { framed: sawFramedInput });
       if (response) writeJsonRpcResponse(response, { framed: sawFramedInput });
       activeRequests.delete(requestId);
@@ -83,10 +83,10 @@ export function createServerState(options: unknown = {}): InboxServerState {
   };
 }
 
-export function handleRequest(request: InboxRecord, state: InboxServerState) {
+export async function handleRequest(request: InboxRecord, state: InboxServerState) {
   if (!request.id && typeof request.method === 'string' && request.method.startsWith('notifications/')) return null;
   try {
-    const result = dispatchMethod(String(request.method), asRecord(request.params), state);
+    const result = await dispatchMethod(String(request.method), asRecord(request.params), state);
     return { jsonrpc: '2.0', id: request.id ?? null, result };
   } catch (error) {
     const diagnostic = errorDiagnostic(error);
@@ -94,7 +94,7 @@ export function handleRequest(request: InboxRecord, state: InboxServerState) {
   }
 }
 
-function dispatchMethod(method: string, params: InboxRecord, state: InboxServerState) {
+async function dispatchMethod(method: string, params: InboxRecord, state: InboxServerState) {
   switch (method) {
     case 'initialize':
       return {
@@ -105,7 +105,7 @@ function dispatchMethod(method: string, params: InboxRecord, state: InboxServerS
     case 'tools/list':
       return { tools: listTools() };
     case 'tools/call':
-      return callTool(params, state);
+      return await callTool(params, state);
     case 'prompts/list':
       return { prompts: listPrompts() };
     case 'prompts/get':
@@ -196,7 +196,7 @@ export function listTools(): unknown[] {
   ];
 }
 
-function callTool(params: InboxRecord, state: InboxServerState) {
+async function callTool(params: InboxRecord, state: InboxServerState) {
   const name = params.name;
   const args = asRecord(params.arguments);
   let result: unknown;
@@ -235,7 +235,7 @@ function callTool(params: InboxRecord, state: InboxServerState) {
       result = capaQueue(args, state);
       break;
     case 'inbox_output_show':
-      result = outputShow({ siteRoot: state.siteRoot, args });
+      result = await outputShowAsync({ siteRoot: state.siteRoot, args });
       break;
     default:
       throw new Error(`unknown_tool: ${name}`);

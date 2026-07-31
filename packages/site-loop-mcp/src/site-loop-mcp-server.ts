@@ -15,7 +15,7 @@ import {
 import {
   buildBoundedToolResult,
   listOutputResources,
-  outputShow,
+  outputShowAsync,
   readOutputResource,
 } from '@narada2/mcp-transport';
 import { loadSiteLoopConfig, siteLoopConfigJsonSchema } from './site-loop/site-loop-config.js';
@@ -453,7 +453,7 @@ async function callTool(name: any, args: any, context: SiteOpsRequestContext = {
     case 'site_loop_run_show':
       return (await loadSiteLoopModule()).showSiteLoopRun(siteRoot, args);
     case 'site_loop_output_show':
-      return outputShow({ siteRoot, args });
+      return await outputShowAsync({ siteRoot, args });
     case 'site_loop_attention_list':
       return (await loadSiteLoopModule()).listSiteLoopAttention(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_attention_show':

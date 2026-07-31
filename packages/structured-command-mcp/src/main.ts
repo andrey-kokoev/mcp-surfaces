@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renam
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildCommandMetadataTelemetryDeclaration, emitTelemetryEvent, telemetryErrorCodeFromUnknown, telemetryRefusalCodeFromResult, type TelemetryDeclaration, type TelemetryEventKind } from '@narada2/mcp-telemetry';
-import { buildBoundedToolResult, outputShow } from '@narada2/mcp-transport';
+import { buildBoundedToolResult, outputShowAsync } from '@narada2/mcp-transport';
 import {
   buildAllowedRoots,
   createExecutionPolicy,
@@ -377,7 +377,7 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
     else {
       enforceInputCharLimit(args);
       if (name === 'structured_command_output_show') {
-        const page = structuredCommandOutputShow(args, state);
+        const page = await structuredCommandOutputShow(args, state);
         return buildBoundedToolResult({
           siteRoot: state.siteRoot,
           toolName: String(name),
@@ -403,9 +403,9 @@ async function callTool(params: Record<string, unknown>, state: StructuredComman
   }
 }
 
-function structuredCommandOutputShow(args: any, state: any) {
+async function structuredCommandOutputShow(args: any, state: any) {
   try {
-    const page = outputShow({ siteRoot: state.siteRoot, args });
+    const page = await outputShowAsync({ siteRoot: state.siteRoot, args });
     return {
       ...asRecord(page),
       output_scope: {

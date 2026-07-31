@@ -12,6 +12,7 @@ import {
   listOutputResources,
   listOutputTools,
   outputShow,
+  outputShowAsync,
   payloadCreate,
   payloadDerive,
   payloadShow,
@@ -205,6 +206,15 @@ try {
   const unicodeLastCodeUnit = unicodePage.output_text.charCodeAt(unicodePage.output_text.length - 1);
   assert.equal(unicodeLastCodeUnit >= 0xd800 && unicodeLastCodeUnit <= 0xdbff, false);
   assert.equal(unicodePage.output_truncated, true);
+  const asyncPage = await outputShowAsync({ siteRoot: tempRoot, args: { ref: unicodeEnvelope.output_ref, limit: 100, timeout_ms: 1000 } });
+  assert.equal(asyncPage.status, 'ok');
+  assert.equal(asyncPage.ref, unicodeEnvelope.output_ref);
+  await assert.rejects(
+    outputShowAsync({ siteRoot: tempRoot, args: { ref: unicodeEnvelope.output_ref, timeout_ms: 0 } }),
+    /output_read_timeout_must_be_positive_integer/,
+  );
+  const outputTool = listOutputTools().find((tool: any) => tool.name === 'mcp_output_show') as any;
+  assert.equal(outputTool.inputSchema.properties.timeout_ms.maximum, 15_000);
 
   const bulkyResult = buildOutputRefToolContent({
     siteRoot: tempRoot,

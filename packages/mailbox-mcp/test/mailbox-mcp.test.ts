@@ -16,7 +16,7 @@ type JsonRpcTestResponse = {
   };
 };
 
-const rpc = handleRequest as unknown as (...args: Parameters<typeof handleRequest>) => JsonRpcTestResponse;
+const rpc = async (...args: Parameters<typeof handleRequest>) => await handleRequest(...args) as JsonRpcTestResponse;
 
 const root = mkdtempSync(join(tmpdir(), 'mailbox-mcp-'));
 
@@ -78,7 +78,7 @@ try {
   writeFileSync(join(mailboxDir, 'bad.json'), '{not json');
 
   const state = createServerState({ siteRoot: root });
-  const doctor = rpc({
+  const doctor = await rpc({
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
@@ -89,7 +89,7 @@ try {
   assert.equal(doctor.result.structuredContent.skipped_non_message_records, 1);
   assert.equal(doctor.result.structuredContent.invalid_count, 1);
 
-  const accounts = rpc({
+  const accounts = await rpc({
     jsonrpc: '2.0',
     id: 2,
     method: 'tools/call',
@@ -99,7 +99,7 @@ try {
   assert.equal(accounts.result.structuredContent.count, 1);
   assert.equal(accounts.result.structuredContent.accounts[0].unread_count, 1);
 
-  const unread = rpc({
+  const unread = await rpc({
     jsonrpc: '2.0',
     id: 3,
     method: 'tools/call',
@@ -110,7 +110,7 @@ try {
   assert.equal(unread.result.structuredContent.messages[0].message_id, 'msg-1');
   assert.equal(unread.result.structuredContent.messages[0].body_text, undefined);
 
-  const show = rpc({
+  const show = await rpc({
     jsonrpc: '2.0',
     id: 4,
     method: 'tools/call',
@@ -120,7 +120,7 @@ try {
   assert.equal(show.result.structuredContent.message.body_text, 'Can you send an update on the open ticket?');
   assert.equal(show.result.structuredContent.message.attachments[0].name, 'screenshot.png');
 
-  const showDuplicate = rpc({
+  const showDuplicate = await rpc({
     jsonrpc: '2.0',
     id: 7,
     method: 'tools/call',
@@ -129,7 +129,7 @@ try {
   assert.equal(showDuplicate.error, undefined);
   assert.equal(showDuplicate.result.structuredContent.message.subject, 'Re: Ticket needs follow-up');
 
-  const thread = rpc({
+  const thread = await rpc({
     jsonrpc: '2.0',
     id: 5,
     method: 'tools/call',
@@ -139,7 +139,7 @@ try {
   assert.equal(thread.result.structuredContent.count, 2);
   assert.deepEqual(thread.result.structuredContent.messages.map((message: DynamicTestValue) => message.message_id), ['msg-1', 'msg-2']);
 
-  const rejected = rpc({
+  const rejected = await rpc({
     jsonrpc: '2.0',
     id: 6,
     method: 'tools/call',

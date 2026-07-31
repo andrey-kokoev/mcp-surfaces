@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildBoundedToolResult,
   listOutputResources,
-  outputShow,
+  outputShowAsync,
   readOutputResource,
 } from '@narada2/mcp-transport';
 import {
@@ -704,7 +704,7 @@ export function listTools() {
   return TOOLS;
 }
 
-function handleMessage(message: any) {
+async function handleMessage(message: any) {
   if (!message || typeof message !== 'object') return;
   if (message.error) return;
   if (!message.id && message.method === 'notifications/cancelled') {
@@ -737,7 +737,7 @@ function handleMessage(message: any) {
     if (message.method === 'tools/call') {
       const name = message.params?.name;
       const toolArgs = message.params?.arguments ?? {};
-      const result = callTool(name, toolArgs);
+      const result = await callTool(name, toolArgs);
       respond(id, buildBoundedToolResult({
         siteRoot,
         toolName: String(name ?? 'unknown_tool'),
@@ -803,14 +803,14 @@ function assistantTextContent(text: string) {
   return { type: 'text', text, annotations: { audience: ['assistant'] } };
 }
 
-function callTool(name: any, toolArgs: any) {
+async function callTool(name: any, toolArgs: any) {
   switch (name) {
     case 'agent_context_guidance':
       return buildGuidanceResult(toolArgs);
     case 'agent_context_doctor':
       return doctor();
     case 'mcp_output_show':
-      return outputShow({ siteRoot, args: toolArgs });
+      return await outputShowAsync({ siteRoot, args: toolArgs });
     case 'agent_context_whoami':
       return whoami(toolArgs);
     case 'agent_context_start_session':
