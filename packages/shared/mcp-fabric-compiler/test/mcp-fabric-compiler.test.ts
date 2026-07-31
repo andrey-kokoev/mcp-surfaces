@@ -263,7 +263,7 @@ test('reconciliation deterministically assigns one bounded actuator and guards a
   });
   assert.deepEqual(
     [rematerialize.actions[0]!.action, rematerialize.actions[0]!.actuator],
-    ['rematerialize_carrier_config', 'mcp-registrar'],
+    ['rematerialize_all_carrier_configs', 'mcp-registrar'],
   );
 
   const unsupported = reconcileFabricState({

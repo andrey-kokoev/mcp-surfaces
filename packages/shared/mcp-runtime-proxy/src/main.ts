@@ -187,8 +187,8 @@ function buildMaterializationRecovery(options: ProxyOptions, preflight: Material
     actual_manifest_fingerprint: stringDetail(details, 'actual_manifest_fingerprint'),
   });
   const recoveryGroupId = `materialization-${createHash('sha256').update(groupKey, 'utf8').digest('hex').slice(0, 20)}`;
-  const commandArgs = registrarEntrypoint && carrierId && configPath
-    ? [registrarEntrypoint, '--materialize-carrier', carrierId, '--output-path', configPath]
+  const commandArgs = registrarEntrypoint
+    ? [registrarEntrypoint, '--materialize-all']
     : null;
   const command = commandArgs
     ? {
@@ -215,7 +215,7 @@ function buildMaterializationRecovery(options: ProxyOptions, preflight: Material
       available: command !== null,
       owner: 'mcp-registrar',
       command,
-      unavailable_reason: command ? null : 'The materialization record does not identify the carrier, registrar entrypoint, or paired config path.',
+      unavailable_reason: command ? null : 'The materialization record does not identify the registrar entrypoint.',
     },
     restart_required: true,
     restart: {
@@ -247,8 +247,8 @@ function buildWorkspaceArtifactRecovery(options: ProxyOptions, preflight: Worksp
     code: preflight.code ?? 'workspace_manifest_stale',
   });
   const recoveryGroupId = `workspace-materialization-${createHash('sha256').update(groupKey, 'utf8').digest('hex').slice(0, 20)}`;
-  const materializeArgs = registrarEntrypoint && carrierId && configPath
-    ? [registrarEntrypoint, '--materialize-carrier', carrierId, '--output-path', configPath]
+  const materializeArgs = registrarEntrypoint
+    ? [registrarEntrypoint, '--materialize-all']
     : null;
   const materializeCommand = materializeArgs
     ? {
@@ -280,12 +280,12 @@ function buildWorkspaceArtifactRecovery(options: ProxyOptions, preflight: Worksp
       { order: 1, action: 'build_workspace', command: buildCommand },
       {
         order: 2,
-        action: 'materialize_carrier',
+        action: 'materialize_all_carriers',
         required: true,
         owner: 'mcp-registrar',
         available: materializeCommand !== null,
         command: materializeCommand,
-        unavailable_reason: materializeCommand ? null : 'The carrier launch does not identify the carrier, registrar entrypoint, or paired config path.',
+        unavailable_reason: materializeCommand ? null : 'The carrier launch does not identify the registrar entrypoint.',
       },
       {
         order: 3,

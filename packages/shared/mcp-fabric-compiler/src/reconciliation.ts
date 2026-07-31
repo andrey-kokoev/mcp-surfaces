@@ -108,15 +108,15 @@ function selectAction(
   }
   if (carrier.manifest_digest !== manifestDigest || observation.manifest_digest !== manifestDigest) {
     return actionSeed({
-      action: 'rematerialize_carrier_config',
+      action: 'rematerialize_all_carrier_configs',
       server_name: null,
       reason: 'Carrier materialization or runtime observation was produced from a different manifest.',
       actuator: 'mcp-registrar',
       required_authority: 'fabric.config.apply',
       expected_descriptor_digest: null,
       outcome_tool: 'registrar_operation_outcome_show',
-      recovery_tool: 'registrar_carrier_apply',
-      recovery_guidance: 'Call registrar_carrier_apply with the same operation_id after reviewing the diff; then restart or reconnect only if the returned plan requires it.',
+      recovery_tool: 'registrar_materialize_all',
+      recovery_guidance: 'Call registrar_materialize_all after reviewing the diff; it rewrites every registered carrier config, then restart or reconnect only if the returned plan requires it.',
     });
   }
 

@@ -797,28 +797,35 @@ try {
     /registrar_progressive_binding_requires_explicit_bootstrap/,
   );
 
-  const materialize: any = await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey' });
+  const materialize: any = await call('registrar_materialize_all', { output_dir: root });
   const matData: any = view(materialize);
-  assert.equal(matData.status, 'materialized');
-  assert.equal(matData.carrier_id, 'kimi-andrey');
-  assert.ok(matData.byte_size > 0);
-  assert.deepEqual((matData.injection_scopes as Record<string, any>).counts, { host: 0, user_site: 2, local_site: 2 });
-  const materializedBinding: any = ((matData.injection_scopes as Record<string, any>).bindings as Array<Record<string, any>>).find((binding) => binding.site_id === 'andrey-user');
+  assert.equal(matData.status, 'materialized_all');
+  assert.equal(matData.carrier_count, 3);
+  const kimiMaterialization: any = (matData.carriers as Array<Record<string, any>>).find((carrier) => carrier.carrier_id === 'kimi-andrey');
+  assert.ok(kimiMaterialization);
+  assert.ok(kimiMaterialization.byte_size > 0);
+  assert.deepEqual((kimiMaterialization.injection_scopes as Record<string, any>).counts, { host: 0, user_site: 2, local_site: 2 });
+  const materializedBinding: any = ((kimiMaterialization.injection_scopes as Record<string, any>).bindings as Array<Record<string, any>>).find((binding) => binding.site_id === 'andrey-user');
   assert.equal(materializedBinding.loading_mode, 'progressive');
   assert.deepEqual(materializedBinding.bootstrap_surface_ids, ['agent-context', 'local-filesystem', 'mcp-registrar', 'mcp-loader']);
-  const materializedSurfaceIds: any = ((matData.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).map((server) => server.surface_id).sort();
+  const materializedSurfaceIds: any = ((kimiMaterialization.injection_scopes as Record<string, any>).servers as Array<Record<string, any>>).map((server) => server.surface_id).sort();
   assert.deepEqual(materializedSurfaceIds, ['agent-context', 'local-filesystem', 'mcp-loader', 'mcp-registrar']);
-  const materializedPath: any = join(root, 'kimi-generated.json');
-  view(await call('registrar_carrier_materialize', { carrier_id: 'kimi-andrey', output_path: materializedPath }));
+  const materializedPath: any = join(root, 'mcp.json');
+  assert.equal((matData.carriers as Array<Record<string, any>>).some((carrier) => carrier.output_path === materializedPath), true);
   const materializedConfig: any = JSON.parse(readFileSync(materializedPath, 'utf8')) as Record<string, any>;
   const materializedFilesystem: any = materializedConfig.mcpServers['narada-site-andrey-user-local-filesystem'];
   assertRuntimeProxy(materializedFilesystem, 'D:/code/mcp-surfaces/packages/local-filesystem-mcp/dist/src/main.js');
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-loader']);
   assert.ok(materializedConfig.mcpServers['narada-site-andrey-user-mcp-registrar']);
   assert.equal(materializedConfig.mcpServers['narada-site-andrey-user-site-loop'], undefined);
+  const generatedPaths: Record<string, string> = {
+    'codex-andrey': join(root, 'config.toml'),
+    'kimi-andrey': join(root, 'mcp.json'),
+    'opencode-andrey': join(root, 'opencode.jsonc'),
+  };
   for (const carrierId of ['codex-andrey', 'kimi-andrey', 'opencode-andrey']) {
-    const generatedPath: any = join(root, `${carrierId}-generated.${carrierId === 'codex-andrey' ? 'toml' : 'json'}`);
-    view(await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: generatedPath }));
+    const generatedPath = generatedPaths[carrierId];
+    assert.equal((matData.carriers as Array<Record<string, any>>).some((carrier) => carrier.carrier_id === carrierId && carrier.output_path === generatedPath), true);
     const generatedText: any = readFileSync(generatedPath, 'utf8');
     const normalizedGeneratedText: any = generatedText.replace(/\\\\/g, '/').replace(/\\/g, '/');
     assert.equal(normalizedGeneratedText.includes('mcp-loader-mcp/dist/src/main.js'), true);
@@ -1127,10 +1134,17 @@ try {
   assert.ok(staleProjectionFindings.some((finding: any) => finding.code === 'registrar_site_fabric_duplicate_canonical_surface' && finding.canonical_surface_id === 'site-inbox'));
   assert.equal(staleProjectionValidation.carrier_projection_count, 2);
 
+  const allMaterialization: any = view(await call('registrar_materialize_all', { output_dir: root }));
+  assert.equal(allMaterialization.status, 'materialized_all');
+  assert.equal(allMaterialization.carrier_count, 3);
+  const contractGeneratedPaths: Record<string, string> = {
+    'opencode-andrey': join(root, 'opencode.jsonc'),
+    'kimi-andrey': join(root, 'mcp.json'),
+    'codex-andrey': join(root, 'config.toml'),
+  };
   for (const carrierId of ['opencode-andrey', 'kimi-andrey', 'codex-andrey']) {
-    const outputPath: any = join(root, `${carrierId}.generated`);
-    const materializedCarrier: any = await call('registrar_carrier_materialize', { carrier_id: carrierId, output_path: outputPath });
-    assert.equal(view(materializedCarrier).status, 'materialized');
+    const outputPath = contractGeneratedPaths[carrierId];
+    assert.equal((allMaterialization.carriers as Array<Record<string, any>>).some((carrier) => carrier.carrier_id === carrierId && carrier.output_path === outputPath), true);
     const content: any = readFileSync(outputPath, 'utf8');
     assert.match(content, /mcp-loader/);
     assert.match(content, /local-filesystem/);

@@ -24,12 +24,14 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
     tool_preference: [
       { step: 'validate_fabric', guidance: 'Call registrar_site_mcp_fabric_validate for the target Site.' },
       { step: 'observe_live', guidance: 'Call mcp_loader_site_tool_inventory_check against the same Site root. Every live tool must explicitly declare readOnlyHint=true or false.' },
+      { step: 'materialize_carriers', guidance: 'Call registrar_materialize_all to rewrite every registered carrier config together. Normal materialization never takes a carrier_id.' },
       { step: 'materialize', guidance: 'Call registrar_site_surface_registry_sync only when the Site fabric and catalog are intentional.' },
       { step: 'prove', guidance: 'Call registrar_site_registry_conformance_check with the Loader observation_ref. Status ok is the authority projection proof.' },
       { step: 'repair', guidance: 'Repair drift at its owning layer: surface annotations, Site fabric, registrar catalog, or materialized registry generation.' },
     ],
     examples: [
       { intent: 'First use', call: 'registrar_guidance({})' },
+      { intent: 'Materialize all carriers', call: 'registrar_materialize_all({})' },
       { intent: 'Validate Site fabric', call: 'registrar_site_mcp_fabric_validate({ site_id: "<site_id>" })' },
       { intent: 'Materialize Site registry', call: 'registrar_site_surface_registry_sync({ site_id: "<site_id>", dry_run: false })' },
       { intent: 'Prove conformance', call: 'registrar_site_registry_conformance_check({ site_id: "<site_id>", observation_ref: "<ref from Loader>" })' },
@@ -46,7 +48,8 @@ export function buildGuidanceResult(args: GuidanceRecord = {}): GuidanceRecord {
       'For missing live observations, rerun mcp_loader_site_tool_inventory_check and pass its new observation_ref.',
       'For live_tool_semantics_partition_incomplete, add an explicit boolean readOnlyHint at the owning surface; do not default it.',
       'For registry drift, repair the named layer and then rematerialize and rerun the full proof.',
-      'If mcp-registrar itself cannot start because carrier materialization or workspace artifacts are stale, use the direct CLI bootstrap recovery (not an MCP call): run pnpm build, then pnpm materialize:carrier -- --materialize-carrier <carrier-id> --output-path <carrier-config> from the mcp-surfaces workspace; do not wait for mcp-loader or mcp-registrar, and restart the carrier session afterward.',
+      'If mcp-registrar itself cannot start because carrier materialization or workspace artifacts are stale, use the direct CLI bootstrap recovery (not an MCP call): run pnpm build, then pnpm materialize:carrier -- --materialize-all from the mcp-surfaces workspace; do not wait for mcp-loader or mcp-registrar, and restart all affected carrier sessions afterward.',
+      'Targeted recovery is intentionally exceptional: only when all-carrier materialization cannot be used, run the direct CLI with --materialize-carrier <carrier-id> --allow-single-carrier. This escape hatch is not exposed as an MCP tool.',
       'For unclear behavior, submit surface_feedback_submit with reproduction steps, expected behavior, and impact.',
     ],
     feedback: {

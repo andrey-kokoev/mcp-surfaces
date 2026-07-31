@@ -118,14 +118,18 @@ after a workspace build changes the artifact manifest, or when the registrar
 MCP surface is one of the surfaces that failed to start:
 
 ```powershell
-pnpm materialize:carrier -- --materialize-carrier codex-andrey --output-path C:\Users\Andrey\.codex\config.toml
+pnpm materialize:carrier -- --materialize-all
 ```
 
-It atomically writes the carrier config and its
-`<config>.narada-generation.json` sidecar. Then restart the carrier or start a
-new carrier session so it reloads the generated config. The same command works
-for Kimi and OpenCode by changing the carrier id and output path. `mcp-registrar
---help` describes the direct mode; without CLI arguments the package remains a
+It atomically writes every registered carrier config and its
+`<config>.narada-generation.json` sidecar. Then restart affected carriers or
+start new carrier sessions so they reload the generated configs. Pass
+`--output-dir <directory>` to write an inspection copy of every carrier config
+without changing canonical carrier paths. Targeted single-carrier
+materialization is deliberately not an MCP operation; it is an emergency-only
+direct CLI escape hatch requiring
+`--materialize-carrier <carrier-id> --allow-single-carrier`. `mcp-registrar
+--help` describes both modes; without CLI arguments the package remains a
 normal MCP stdio server.
 
 ## Quick Start

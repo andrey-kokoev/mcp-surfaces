@@ -735,32 +735,16 @@ export function listTools() {
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
-      name: 'registrar_carrier_materialize',
-      description: 'Generate a carrier-native MCP config from the carrier manifest and site configs. Preview-only unless output_path is provided.',
+      name: 'registrar_materialize_all',
+      description: 'Generate and atomically replace every registered carrier-native MCP config. Normal materialization is always all-carrier; use the out-of-band CLI escape hatch only for targeted emergency recovery.',
       inputSchema: {
         type: 'object',
         properties: {
-          carrier_id: { type: 'string', description: 'Carrier identifier, e.g. kimi-andrey.' },
-          output_path: { type: 'string', description: 'Optional path to write the generated config for inspection.' },
+          output_dir: { type: 'string', description: 'Optional directory for inspection output. One config and generation sidecar is written for every registered carrier; omit to write canonical carrier paths.' },
         },
-        required: ['carrier_id'],
         additionalProperties: false,
       },
-      annotations: { title: 'registrar_carrier_materialize', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-      outputSchema: { type: 'object', additionalProperties: true },
-    },
-    {
-      name: 'registrar_carrier_apply',
-      description: 'Generate and atomically replace a carrier-native MCP config at the carrier config_path; hard cutover does not retain the previous config.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          carrier_id: { type: 'string', description: 'Carrier identifier, e.g. kimi-andrey.' },
-        },
-        required: ['carrier_id'],
-        additionalProperties: false,
-      },
-      annotations: { title: 'registrar_carrier_apply', readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      annotations: { title: 'registrar_materialize_all', readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       outputSchema: { type: 'object', additionalProperties: true },
     },
     {
@@ -934,8 +918,7 @@ async function callTool(params: JsonRecord, _state: RegistrarState) {
     case 'registrar_carrier_bind': result = await registrarCarrierBind(args); break;
     case 'registrar_carrier_unbind': result = await registrarCarrierUnbind(args); break;
     case 'registrar_sync': result = await registrarSync(args); break;
-    case 'registrar_carrier_materialize': result = await registrarCarrierMaterialize(args); break;
-    case 'registrar_carrier_apply': result = await registrarCarrierApply(args); break;
+    case 'registrar_materialize_all': result = await registrarMaterializeAll(args); break;
     case 'registrar_carrier_validate': result = registrarCarrierValidate(args); break;
     case 'registrar_carrier_diff': result = registrarCarrierDiff(args); break;
     case 'registrar_surface_usage': result = registrarSurfaceUsage(args); break;
@@ -1979,75 +1962,89 @@ function runFreshRegistrarRequest(method: string, args: JsonRecord): Promise<Jso
   });
 }
 
-async function registrarCarrierMaterialize(args: JsonRecord): Promise<JsonRecord> {
-  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
-    return runFreshRegistrarRequest('registrar_carrier_materialize', args);
-  }
-  assertRegistrarProcessCurrent('registrar_carrier_materialize');
-  const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
-  const carrier = lookupCarrier(carrierId);
+function materializeCarrierAtPath(carrier: CarrierDef, outputPath: string, persistSiteState: boolean): JsonRecord {
   const injectionSummary = carrierInjectionSummary(carrier);
-  const outputPath = optionalString(args.output_path);
   let result: { content: string; structured: JsonRecord };
   switch (carrier.kind) {
-    case 'opencode': result = emitOpencodeConfig(carrier, outputPath ?? undefined); break;
-    case 'kimi': result = emitKimiConfig(carrier, outputPath ?? undefined); break;
-    case 'codex': result = emitCodexConfig(carrier, outputPath ?? undefined); break;
+    case 'opencode': result = emitOpencodeConfig(carrier, outputPath); break;
+    case 'kimi': result = emitKimiConfig(carrier, outputPath); break;
+    case 'codex': result = emitCodexConfig(carrier, outputPath); break;
     default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
   }
-  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath ?? undefined);
-  if (outputPath) {
-    writeFileAtomic(outputPath, result.content);
-    writeMaterializationGeneration(materializationSidecarPath(outputPath), generation!);
+  const { validation, generation } = validateCarrierMaterialization(carrier, result, outputPath);
+  writeFileAtomic(outputPath, result.content);
+  writeMaterializationGeneration(materializationSidecarPath(outputPath), generation!);
+  let siteSurfaceRegistries: JsonRecord[] | null = null;
+  if (persistSiteState) {
+    writeSiteAllowedRootsConfig(carrier);
+    siteSurfaceRegistries = writeSiteSurfaceRegistriesForCarrier(carrier);
   }
   return {
     status: 'materialized',
-    carrier_id: carrierId,
+    carrier_id: carrier.carrier_id,
     kind: carrier.kind,
     output_path: outputPath,
     byte_size: Buffer.byteLength(result.content, 'utf8'),
     injection_scopes: injectionSummary,
+    injection_scope_counts: injectionSummary.counts,
+    ...(siteSurfaceRegistries === null ? {} : { site_surface_registries: siteSurfaceRegistries }),
     runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
     materialization_validation: validation,
     materialization_generation: generation,
-    generation_sidecar_path: outputPath ? materializationSidecarPath(outputPath) : null,
+    generation_sidecar_path: materializationSidecarPath(outputPath),
   };
 }
 
-async function registrarCarrierApply(args: JsonRecord): Promise<JsonRecord> {
+async function registrarMaterializeAll(args: JsonRecord): Promise<JsonRecord> {
   if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
-    return runFreshRegistrarRequest('registrar_carrier_apply', args);
+    return runFreshRegistrarRequest('registrar_materialize_all', args);
   }
-  assertRegistrarProcessCurrent('registrar_carrier_apply');
+  assertRegistrarProcessCurrent('registrar_materialize_all');
+  const requestedOutputDir = optionalString(args.output_dir);
+  const outputDir = requestedOutputDir ? resolve(requestedOutputDir) : null;
+  if (outputDir) mkdirSync(outputDir, { recursive: true });
+  const outputPaths = CARRIERS.map((carrier) => outputDir ? join(outputDir, basename(carrier.config_path)) : carrier.config_path);
+  const pathOwners = new Map<string, string>();
+  outputPaths.forEach((outputPath, index) => {
+    const normalizedPath = resolve(outputPath).toLowerCase();
+    const previousCarrierId = pathOwners.get(normalizedPath);
+    if (previousCarrierId) {
+      throw diagnosticError(
+        'registrar_carrier_materialization_path_collision',
+        'All-carrier materialization would overwrite two carrier configs at the same path.',
+        { output_path: outputPath, carrier_ids: [previousCarrierId, CARRIERS[index]!.carrier_id] },
+      );
+    }
+    pathOwners.set(normalizedPath, CARRIERS[index]!.carrier_id);
+  });
+  const carriers = CARRIERS.map((carrier, index) => materializeCarrierAtPath(carrier, outputPaths[index]!, outputDir === null));
+  return {
+    status: 'materialized_all',
+    carrier_count: carriers.length,
+    output_dir: outputDir,
+    carriers,
+    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
+  };
+}
+
+/**
+ * Targeted materialization is deliberately private to the direct CLI. It is
+ * an emergency recovery escape hatch, not an MCP operation or normal
+ * registrar workflow. The CLI parser requires --allow-single-carrier before
+ * this function can be reached.
+ */
+async function registrarSingleCarrierMaterialize(args: JsonRecord): Promise<JsonRecord> {
+  if (process.env[FRESH_REGISTRAR_ENV] !== '1') {
+    throw diagnosticError(
+      'registrar_single_carrier_materialization_direct_only',
+      'Single-carrier materialization is available only through the explicit direct CLI escape hatch.',
+    );
+  }
+  assertRegistrarProcessCurrent('registrar_single_carrier_materialize');
   const carrierId = requiredString(args.carrier_id, 'registrar_requires_carrier_id');
   const carrier = lookupCarrier(carrierId);
-  const injectionSummary = carrierInjectionSummary(carrier);
-  const configPath = carrier.config_path;
-  let result: { content: string; structured: JsonRecord };
-  switch (carrier.kind) {
-    case 'opencode': result = emitOpencodeConfig(carrier, configPath); break;
-    case 'kimi': result = emitKimiConfig(carrier, configPath); break;
-    case 'codex': result = emitCodexConfig(carrier, configPath); break;
-    default: throw diagnosticError('registrar_unknown_carrier_kind', `registrar_unknown_carrier_kind:${carrier.kind}`);
-  }
-  const { validation, generation } = validateCarrierMaterialization(carrier, result, configPath);
-  writeFileAtomic(configPath, result.content);
-  writeMaterializationGeneration(materializationSidecarPath(configPath), generation!);
-  writeSiteAllowedRootsConfig(carrier);
-  const site_surface_registries = writeSiteSurfaceRegistriesForCarrier(carrier);
-  return {
-    status: 'applied',
-    carrier_id: carrierId,
-    kind: carrier.kind,
-    config_path: configPath,
-    byte_size: Buffer.byteLength(result.content, 'utf8'),
-    injection_scope_counts: injectionSummary.counts,
-    site_surface_registries,
-    runtime_contract_version: MCP_RUNTIME_CONTRACT_VERSION,
-    materialization_validation: validation,
-    materialization_generation: generation,
-    generation_sidecar_path: materializationSidecarPath(configPath),
-  };
+  const outputPath = optionalString(args.output_path) ?? carrier.config_path;
+  return materializeCarrierAtPath(carrier, resolve(outputPath), false);
 }
 
 function registrarCarrierValidate(args: JsonRecord): JsonRecord {
@@ -3683,10 +3680,9 @@ async function registrarCarrierBind(args: JsonRecord): Promise<JsonRecord> {
     );
   }
   if (aggregateServerKeys.length > 0) {
-    const applied = await registrarCarrierApply({ carrier_id: carrierId });
-    writeSiteAllowedRootsConfig(carrier);
+    const materialized = await registrarMaterializeAll({});
     return {
-      ...applied,
+      ...materialized,
       status: 'applied',
       surface_id: surfaceId,
       projection_id: projection.id,
@@ -3739,7 +3735,7 @@ async function registrarCarrierUnbind(args: JsonRecord): Promise<JsonRecord> {
         carrier_id: carrierId,
         surface_id: surfaceId,
         server_keys: aggregateServerKeys,
-        remediation: 'This surface is produced by the aggregate carrier model. Remove it from the carrier site binding/source model, then run registrar_carrier_apply.',
+        remediation: 'This surface is produced by the aggregate carrier model. Remove it from the carrier site binding/source model, then run registrar_materialize_all.',
       },
     );
   }
@@ -3976,14 +3972,22 @@ function writeJsonRpcResponse(response: JsonRecord, { framed }: { framed: boolea
 export type RegistrarCliOptions =
   | { mode: 'stdio' }
   | { mode: 'help' }
-  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null };
+  | { mode: 'materialize-all'; outputDir: string | null }
+  | { mode: 'materialize-carrier'; carrierId: string; outputPath: string | null; allowSingleCarrier: true };
 
 export function parseArgs(argv: string[]): RegistrarCliOptions {
   let carrierId: string | null = null;
   let outputPath: string | null = null;
+  let outputDir: string | null = null;
+  let materializeAll = false;
+  let allowSingleCarrier = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--help' || arg === '-h') return { mode: 'help' };
+    if (arg === '--materialize-all') {
+      materializeAll = true;
+      continue;
+    }
     if (arg === '--materialize-carrier') {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error('registrar_missing_carrier_id');
@@ -3994,6 +3998,16 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
       const value = argv[++index];
       if (!value || value.startsWith('--')) throw new Error('registrar_missing_output_path');
       outputPath = value;
+      continue;
+    }
+    if (arg === '--output-dir') {
+      const value = argv[++index];
+      if (!value || value.startsWith('--')) throw new Error('registrar_missing_output_dir');
+      outputDir = value;
+      continue;
+    }
+    if (arg === '--allow-single-carrier') {
+      allowSingleCarrier = true;
       continue;
     }
     // Keep the historical launch hint accepted by Site Fabric clients. The
@@ -4007,16 +4021,23 @@ export function parseArgs(argv: string[]): RegistrarCliOptions {
     }
     throw new Error(`registrar_unknown_cli_argument:${arg}`);
   }
-  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath };
-  if (outputPath) throw new Error('registrar_output_path_requires_materialize_carrier');
+  if (materializeAll && carrierId) throw new Error('registrar_materialize_modes_are_mutually_exclusive');
+  if (materializeAll && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
+  if (materializeAll && outputPath) throw new Error('registrar_output_path_requires_materialize_carrier');
+  if (carrierId && outputDir) throw new Error('registrar_output_dir_requires_materialize_all');
+  if (carrierId && !allowSingleCarrier) throw new Error('registrar_single_carrier_materialization_requires_explicit_escape_hatch');
+  if (!carrierId && allowSingleCarrier) throw new Error('registrar_allow_single_carrier_requires_materialize_carrier');
+  if (!materializeAll && !carrierId && (outputPath || outputDir)) throw new Error('registrar_output_requires_materialization_mode');
+  if (materializeAll) return { mode: 'materialize-all', outputDir };
+  if (carrierId) return { mode: 'materialize-carrier', carrierId, outputPath, allowSingleCarrier: true };
   return { mode: 'stdio' };
 }
 
-async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-carrier' }>): Promise<void> {
+async function runDirectMaterialization(options: Extract<RegistrarCliOptions, { mode: 'materialize-all' | 'materialize-carrier' }>): Promise<void> {
   process.env[FRESH_REGISTRAR_ENV] = '1';
-  const carrier = lookupCarrier(options.carrierId);
-  const outputPath = options.outputPath ? resolve(options.outputPath) : carrier.config_path;
-  const result = await registrarCarrierMaterialize({ carrier_id: options.carrierId, output_path: outputPath });
+  const result = options.mode === 'materialize-all'
+    ? await registrarMaterializeAll({ ...(options.outputDir ? { output_dir: resolve(options.outputDir) } : {}) })
+    : await registrarSingleCarrierMaterialize({ carrier_id: options.carrierId, ...(options.outputPath ? { output_path: resolve(options.outputPath) } : {}) });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
@@ -4025,17 +4046,20 @@ function printCliHelp(): void {
     'mcp-registrar MCP server',
     '',
     'Out-of-band carrier recovery (works when the MCP registrar surface cannot start):',
-    '  mcp-registrar --materialize-carrier <carrier-id> [--output-path <carrier-config>]',
+    '  mcp-registrar --materialize-all [--output-dir <directory>]',
+    '',
+    'Targeted recovery is intentionally difficult and is not an MCP operation:',
+    '  mcp-registrar --materialize-carrier <carrier-id> --allow-single-carrier [--output-path <carrier-config>]',
     '',
     'Without arguments, mcp-registrar serves its MCP stdio protocol.',
-    'Materialization writes the carrier config and its .narada-generation.json sidecar atomically.',
+    'Normal materialization writes every registered carrier config and its .narada-generation.json sidecar atomically.',
     '',
   ].join('\n'));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const options = parseArgs(process.argv.slice(2));
-  const run = options.mode === 'materialize-carrier'
+  const run = options.mode === 'materialize-all' || options.mode === 'materialize-carrier'
     ? runDirectMaterialization(options)
     : options.mode === 'help'
       ? Promise.resolve(printCliHelp())

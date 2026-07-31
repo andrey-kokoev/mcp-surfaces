@@ -57,14 +57,16 @@ silently rewrite a user's Codex, Kimi, or OpenCode configuration. After a
 successful build, refresh a carrier explicitly with:
 
 ```powershell
-pnpm materialize:carrier -- --materialize-carrier <carrier-id> --output-path <carrier-config>
+pnpm materialize:carrier -- --materialize-all
 ```
 
 The command is owned by the built registrar and remains usable when the MCP
-registrar surface itself cannot start. Omit `--output-path` to use the
-registrar's configured path for the carrier. The generated sidecar is the
-proof that the carrier config and current workspace generation were produced
-together.
+registrar surface itself cannot start. It rewrites every registered carrier;
+use `--output-dir <directory>` only when an inspection copy is wanted. The
+generated sidecars are the proof that the carrier configs and current workspace
+generation were produced together. A targeted carrier escape hatch exists only
+behind the registrar's explicit `--allow-single-carrier` direct-CLI flag and is
+not used by runtime recovery.
 
 When a proxy refuses a stale generation, its structured error includes a
 `narada.mcp_runtime_proxy.materialization_recovery.v1` record. Use its

@@ -125,40 +125,69 @@ test('fresh registrar materializes, validates, and launches a carrier generation
   assert.equal(existsSync(registrarEntrypoint), true, registrarEntrypoint);
   assert.equal(existsSync(artifactManifestPath), true, artifactManifestPath);
   const root = mkdtempSync(join(tmpdir(), 'mcp-registrar-materialization-e2e-'));
-  const configPath = join(root, 'codex.config.toml');
+  const configPath = join(root, 'config.toml');
   const sidecarPath = `${resolve(configPath)}.narada-generation.json`;
   try {
-    const directMaterialize = await runCli([
+    const rejectedSingle = await runCli([
       registrarEntrypoint,
       '--materialize-carrier',
       'codex-andrey',
       '--output-path',
       configPath,
     ]);
+    assert.notEqual(rejectedSingle.exitCode, 0);
+    assert.match(rejectedSingle.stderr, /registrar_single_carrier_materialization_requires_explicit_escape_hatch/);
+
+    const emergencySingle = await runCli([
+      registrarEntrypoint,
+      '--materialize-carrier',
+      'codex-andrey',
+      '--allow-single-carrier',
+      '--output-path',
+      configPath,
+    ]);
+    assert.equal(emergencySingle.exitCode, 0, emergencySingle.stderr);
+    const emergencyResult = JSON.parse(emergencySingle.stdout) as JsonRecord;
+    assert.equal(emergencyResult.status, 'materialized');
+    assert.equal(emergencyResult.carrier_id, 'codex-andrey');
+    assert.equal(emergencyResult.materialization_validation.ok, true, JSON.stringify(emergencyResult));
+
+    const directMaterialize = await runCli([
+      registrarEntrypoint,
+      '--materialize-all',
+      '--output-dir',
+      root,
+    ]);
     assert.equal(directMaterialize.exitCode, 0, directMaterialize.stderr);
     const directResult = JSON.parse(directMaterialize.stdout) as JsonRecord;
-    assert.equal(directResult.status, 'materialized');
-    assert.equal(directResult.materialization_validation.ok, true, JSON.stringify(directResult));
+    assert.equal(directResult.status, 'materialized_all');
+    assert.equal(directResult.carrier_count, 3);
+    const directCodex = (directResult.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
+    assert.equal(directCodex.materialization_validation.ok, true, JSON.stringify(directCodex));
     assert.equal(existsSync(configPath), true);
     assert.equal(existsSync(sidecarPath), true);
+    assert.equal(existsSync(join(root, 'mcp.json')), true);
+    assert.equal(existsSync(join(root, 'opencode.jsonc')), true);
 
     const materialize = await runRpc(process.execPath, [registrarEntrypoint], {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
-      params: { name: 'registrar_carrier_materialize', arguments: { carrier_id: 'codex-andrey', output_path: configPath } },
+      params: { name: 'registrar_materialize_all', arguments: { output_dir: root } },
     });
     assert.equal(materialize.exitCode, 0, materialize.stderr);
     const result = structuredResult(materialize.responses[0]!);
-    assert.equal(result.status, 'materialized');
+    assert.equal(result.status, 'materialized_all');
+    assert.equal(result.carrier_count, 3);
+    const codexResult = (result.carriers as JsonRecord[]).find((carrier) => carrier.carrier_id === 'codex-andrey')!;
     assert.equal(result.runtime_contract_version, 2);
-    assert.equal(result.materialization_validation.ok, true, JSON.stringify(result.materialization_validation));
-    assert.equal(result.materialization_generation.config_path, resolve(configPath));
+    assert.equal(codexResult.materialization_validation.ok, true, JSON.stringify(codexResult.materialization_validation));
+    assert.equal(codexResult.materialization_generation.config_path, resolve(configPath));
     assert.equal(existsSync(configPath), true);
     assert.equal(existsSync(sidecarPath), true);
 
     const config = readFileSync(configPath, 'utf8');
-    const proxyCount = result.materialization_validation.proxy_count as number;
+    const proxyCount = codexResult.materialization_validation.proxy_count as number;
     assert.equal((config.match(/--artifact-manifest/g) ?? []).length, proxyCount);
     assert.equal((config.match(/--runtime-contract-version/g) ?? []).length, proxyCount);
     assert.equal((config.match(/--materialization-sidecar/g) ?? []).length, proxyCount);
@@ -166,9 +195,9 @@ test('fresh registrar materializes, validates, and launches a carrier generation
       preflightMaterializationGeneration({
         sidecarPath,
         manifestPath: artifactManifestPath,
-        manifestFingerprint: result.materialization_generation.artifact_manifest_fingerprint,
+        manifestFingerprint: codexResult.materialization_generation.artifact_manifest_fingerprint,
       }),
-      { ok: true, generation_fingerprint: result.materialization_generation.generation_fingerprint },
+      { ok: true, generation_fingerprint: codexResult.materialization_generation.generation_fingerprint },
     );
 
     const launch = codexLaunch(config, 'narada-site-andrey-user-mcp-registrar');
@@ -205,12 +234,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     const staleRecovery = staleRun.responses[0]?.error?.data?.details?.recovery;
     assert.match(staleRecovery?.recovery_group_id, /^materialization-[0-9a-f]{20}$/);
     assert.equal(staleRecovery?.regeneration?.available, true);
-    assert.deepEqual(staleRecovery?.regeneration?.command?.args.slice(1), [
-      '--materialize-carrier',
-      'codex-andrey',
-      '--output-path',
-      resolve(configPath),
-    ]);
+    assert.deepEqual(staleRecovery?.regeneration?.command?.args.slice(1), ['--materialize-all']);
     assert.equal(staleRecovery?.restart_required, true);
     assert.match(staleRecovery?.restart?.instruction, /Restart Codex/);
 

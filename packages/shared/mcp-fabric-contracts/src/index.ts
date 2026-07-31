@@ -276,7 +276,7 @@ export const ReconciliationActionV2Schema = z.object({
     'no_op',
     'replace_generation',
     'reconnect_required',
-    'rematerialize_carrier_config',
+    'rematerialize_all_carrier_configs',
     'unsupported',
   ]),
   server_name: IdentifierSchema.nullable(),

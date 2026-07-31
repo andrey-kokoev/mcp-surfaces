@@ -45,6 +45,7 @@ Current packages:
 - `@narada2/artifacts-mcp`: NARS session artifact registration and renderable artifact reference MCP surface.
 - `@narada2/nars-session-mcp`: governed input and bounded readback for existing NARS sessions.
 - `@narada2/quota-meter-mcp`: host-level quota-meter glide status and desktop overlay lifecycle surface.
+- `@narada2/browser-control-mcp`: bounded host-level browser-control surface for authenticated UX verification.
 
 Site Loop doctrine and boundaries are documented in `docs/site-loop-doctrine.md`.
 
@@ -131,7 +132,7 @@ Use this surface for any MCP usage friction, runtime failures, schema issues, or
 
 ```powershell
 pnpm build
-pnpm materialize:carrier -- --materialize-carrier <carrier-id> [--output-path <carrier-config>]
+pnpm materialize:carrier -- --materialize-all [--output-dir <directory>]
 pnpm typecheck
 pnpm test
 pnpm test:ui-boundary
@@ -171,6 +172,7 @@ pnpm test:cloudflare-carrier
 pnpm test:site-coherence
 pnpm test:artifacts
 pnpm test:nars-session
+pnpm test:browser-control
 ```
 
 The following variants require a live host, a live carrier, or explicit host authority. They are not part of `pnpm test`; do not run them without operator approval:
@@ -234,6 +236,7 @@ Do all of the following in the same change:
 - `execution-contract` owns shared execution binding and request fingerprint types only. It must not launch runtimes, authorize paths, or acquire task/domain behavior.
 - `nars-session-mcp` owns only the MCP adapter for concrete existing NARS sessions; NARS carrier protocol and session authority remain in Narada proper.
 - `quota-meter-mcp` owns only bounded quota-meter status and overlay lifecycle calls; native provider authentication and quota interpretation remain in quota-meter and the provider CLIs.
+- `browser-control-mcp` owns only bounded, explicitly attached host-browser UX verification through loopback CDP; it must not extract credentials, cookies, tokens, or arbitrary JavaScript, and login/submission/destructive actions require explicit confirmation.
 - `mailbox-mcp` owns read-only access to site-local synced mailbox projections; it must not become a general PowerShell, Graph, Outlook, or message-sending surface.
 - `graph-mail-mcp` owns policy-gated Microsoft Graph mail access and draft lifecycle tools; sending drafts must stay disallowed unless explicit site policy enables it.
 - `calendar-mcp` owns policy-gated Microsoft Graph calendar access and event lifecycle tools; event writes must stay disallowed unless explicit site policy enables them.
