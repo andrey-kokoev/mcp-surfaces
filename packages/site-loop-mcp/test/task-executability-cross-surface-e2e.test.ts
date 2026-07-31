@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createTemporaryE2eRoot,
+  createTestProcessScope,
   readMcpOutputText,
   removeTemporaryE2eRoot,
+  runBoundedProcess,
   runMcpProtocolSmoke,
   siteFabricChildEnv,
   spawnJsonlMcpServer,
@@ -22,6 +24,7 @@ type AnyRecord = Record<string, any>;
 type JsonLine = AnyRecord;
 
 const TEST_ID = 'site-loop-task-executability-live-e2e';
+const E2E_DEADLINE_MS = 150_000;
 const buildRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const packageRoot = resolve(buildRoot, '..');
 const naradaRoot = resolve(process.env.NARADA_E2E_NARADA_ROOT ?? 'D:/code/narada');
@@ -36,12 +39,25 @@ assert.equal(existsSync(siteLoopRunnerPath), true, 'the built Site Loop runner e
 assert.equal(existsSync(runtimeServerPath), true, 'the built NARS runtime entrypoint is required');
 assert.equal(existsSync(dispatchModulePath), true, 'the built NARS dispatch hook is required');
 
-const testSource = readFileSync(fileURLToPath(import.meta.url), 'utf8');
-assert.equal(testSource.includes(['TaskExecutability', 'Orchestrator'].join('')), false, 'the E2E must not inject an orchestrator');
-assert.equal(testSource.includes(['SqliteTaskLifecycle', 'Store'].join('')), false, 'the E2E must not mutate the lifecycle database directly');
-assert.equal(testSource.includes(['handle', 'Request'].join('')), false, 'the E2E must use MCP/process boundaries');
-assert.equal(testSource.includes(['fixture', '-delegated'].join('')), false, 'the E2E must not fabricate delegated identities');
-assert.equal(testSource.includes(['spawn', 'Sync'].join('')), false, 'the E2E must not block a live runtime event loop around dispatch');
+function latestSourceMtime(root: string): number {
+  if (!existsSync(root)) return 0;
+  return readdirSync(root, { withFileTypes: true }).reduce((latest, entry) => {
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) return Math.max(latest, latestSourceMtime(path));
+    return /\.(?:ts|tsx|mts|cts)$/.test(entry.name)
+      ? Math.max(latest, statSync(path).mtimeMs)
+      : latest;
+  }, 0);
+}
+
+const runtimeSourceRoots = [
+  join(naradaRoot, 'packages', 'agent-runtime-server', 'src'),
+  join(naradaRoot, 'packages', 'agent-runtime-server', 'bin'),
+];
+assert.equal(runtimeSourceRoots.every(existsSync), true, 'the NARS runtime source roots are required for artifact freshness validation');
+const runtimeSourceMtime = Math.max(...runtimeSourceRoots.map(latestSourceMtime));
+assert.equal(statSync(runtimeServerPath).mtimeMs >= runtimeSourceMtime, true, 'the NARS runtime entrypoint is older than its TypeScript sources');
+assert.equal(statSync(dispatchModulePath).mtimeMs >= runtimeSourceMtime, true, 'the NARS dispatch entrypoint is older than its TypeScript sources');
 
 const siteRoot = createTemporaryE2eRoot(TEST_ID);
 const siteSlug = 'site-loop-e2e-' + Date.now();
@@ -53,8 +69,14 @@ const providerRequestLogPath = join(siteRoot, '.ai', 'runtime', 'provider-reques
 const lifecycleFabricPath = join(siteRoot, '.ai', 'mcp', 'task-lifecycle.json');
 const providerModel = 'live-site-loop-e2e-model';
 const raceProviderDelayMs = 5_000;
+const runnerTimeoutMs = 15_000;
+const eventTimeoutMs = 20_000;
+const hookDispatchTimeoutMs = 30_000;
+const maxRunnerAttempts = 2;
+const runnerScope = createTestProcessScope({ label: TEST_ID, closeTimeoutMs: 3_000 });
 let lifecycleServer: ReturnType<typeof spawnJsonlMcpServer> | null = null;
 let provider: ProviderFixture | null = null;
+let activeRuntime: RuntimeProcess | null = null;
 
 function childEnvironment(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
@@ -95,7 +117,7 @@ function taskServer(): ReturnType<typeof spawnJsonlMcpServer> {
       NARADA_SITE_ID: siteId,
     }),
     label: 'live Site Loop Task Lifecycle MCP',
-    timeoutMs: 180_000,
+    timeoutMs: eventTimeoutMs,
   });
 }
 
@@ -597,7 +619,7 @@ function spawnRuntime(): RuntimeProcess {
     assert.equal(child.stdin.destroyed, false, 'NARS stdin is unavailable: ' + JSON.stringify(request));
     child.stdin.write(JSON.stringify(request) + '\n');
   };
-  const waitFor = async (predicate: (event: JsonLine) => boolean, timeoutMs = 180_000): Promise<JsonLine> => {
+  const waitFor = async (predicate: (event: JsonLine) => boolean, timeoutMs = eventTimeoutMs): Promise<JsonLine> => {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       const found = events.find(predicate);
@@ -617,7 +639,7 @@ function spawnRuntime(): RuntimeProcess {
     try {
       send({ id: 'live-site-loop-nars-close', method: 'session.close', params: {} });
     } catch {}
-    await waitForExit(child, 20_000);
+    await waitForExit(child, 5_000);
     if (child.exitCode === null) child.kill();
   };
   return { child, events, get stdout() { return stdout; }, get stderr() { return stderr; }, send, waitFor, close };
@@ -638,36 +660,32 @@ function waitForExit(child: ChildProcessWithoutNullStreams, timeoutMs: number): 
 }
 
 type ProcessResult = {
+  durationMs: number;
+  error: string | null;
   exitCode: number | null;
+  signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
   parsed: JsonRecord | null;
+  timedOut: boolean;
 };
 
 async function runSiteLoopProcess(): Promise<ProcessResult> {
-  return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [
-      siteLoopRunnerPath,
-      '--site-root', siteRoot,
-      '--limit', '1',
-    ], {
-      cwd: siteRoot,
-      env: childEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-    child.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-30_000); });
-    child.once('exit', (exitCode) => {
-      let parsed: JsonRecord | null = null;
-      try { parsed = JSON.parse(stdout.trim()) as JsonRecord; } catch {}
-      resolvePromise({ exitCode, stdout, stderr, parsed });
-    });
+  const result = await runBoundedProcess(process.execPath, [
+    siteLoopRunnerPath,
+    '--site-root', siteRoot,
+    '--limit', '1',
+  ], {
+    cwd: siteRoot,
+    env: childEnvironment(),
+    label: 'bounded Site Loop runner',
+    maxOutputBytes: 30_000,
+    scope: runnerScope,
+    timeoutMs: runnerTimeoutMs,
   });
+  let parsed: JsonRecord | null = null;
+  try { parsed = JSON.parse(result.stdout.trim()) as JsonRecord; } catch {}
+  return { ...result, parsed };
 }
 
 async function waitForExecutable(
@@ -677,8 +695,12 @@ async function waitForExecutable(
 ): Promise<{ status: JsonRecord; runs: ProcessResult[] }> {
   const runs: ProcessResult[] = [];
   let latestStatus: JsonRecord = {};
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < maxRunnerAttempts; attempt += 1) {
     runs.push(await runSiteLoopProcess());
+    const runner = runs.at(-1) as ProcessResult;
+    assert.equal(runner.timedOut, false, JSON.stringify(runner));
+    assert.equal(runner.exitCode, 0, JSON.stringify(runner));
+    assert.ok(runner.parsed?.status === 'ok' || runner.parsed?.status === 'locked', JSON.stringify(runner));
     latestStatus = await toolJson(client, requestId + attempt, 'task_lifecycle_executability_status', { task_number: taskNumber, include_assessment: true });
     if (latestStatus.currency === 'current' && latestStatus.verdict === 'executable') return { status: latestStatus, runs };
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
@@ -698,7 +720,7 @@ function readJsonLines(path: string): JsonLine[] {
   });
 }
 
-async function waitForHookDispatch(timeoutMs = 180_000): Promise<AnyRecord> {
+async function waitForHookDispatch(timeoutMs = hookDispatchTimeoutMs): Promise<AnyRecord> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const result = readJsonLines(hookLogPath).find((entry) => entry.kind === 'dispatch_result') as AnyRecord | undefined;
@@ -751,9 +773,10 @@ async function main(): Promise<void> {
   await seedCanonicalIntelligenceRegistry(provider.baseUrl);
 
   const nars = spawnRuntime();
+  activeRuntime = nars;
   let hookResult: AnyRecord;
   try {
-    await nars.waitFor((event) => event.event === 'session_started', 30_000);
+    await nars.waitFor((event) => event.event === 'session_started', eventTimeoutMs);
     nars.send({
       id: 'live-site-loop-nars-producer-turn',
       method: 'session.submit',
@@ -764,11 +787,12 @@ async function main(): Promise<void> {
     await nars.waitFor((event) => event.event === 'carrier_tool_completed'
       && event.tool_name === 'task_lifecycle_create'
       && event.status === 'completed'
-      && Object.hasOwn(event, 'result'), 120_000);
-    await nars.waitFor((event) => event.event === 'carrier_turn_completed', 120_000);
+      && Object.hasOwn(event, 'result'), eventTimeoutMs);
+    await nars.waitFor((event) => event.event === 'carrier_turn_completed', eventTimeoutMs);
     hookResult = await waitForHookDispatch();
     await nars.close();
   } finally {
+    activeRuntime = null;
     if (nars.child.exitCode === null) nars.child.kill();
   }
 
@@ -791,6 +815,8 @@ async function main(): Promise<void> {
   assert.equal(nars.events.some((event) => event.event === 'item.completed'), false, JSON.stringify(nars.events));
 
   const mainCompletion = await waitForExecutable(controlServer.client, mainTask.taskNumber, 30);
+  assert.equal(mainCompletion.runs.some((run) => run.parsed?.status === 'ok'), true, JSON.stringify(mainCompletion.runs));
+  assert.equal(mainCompletion.runs.some((run) => JSON.stringify(run.parsed).includes('task_executability_reconciliation')), true, JSON.stringify(mainCompletion.runs));
   const mainStatus = mainCompletion.status;
   assert.equal(mainStatus.executable, true, JSON.stringify(mainStatus));
   assert.equal(mainStatus.currency, 'current', JSON.stringify(mainStatus));
@@ -841,6 +867,11 @@ async function main(): Promise<void> {
   const raceResults = [raceResultA, raceResultB];
   assert.equal(raceResults.filter((result) => result.parsed?.status === 'ok').length, 1, JSON.stringify(raceResults));
   assert.equal(raceResults.filter((result) => result.parsed?.status === 'locked').length, 1, JSON.stringify(raceResults));
+  assert.equal(raceResults.every((result) => result.timedOut === false), true, JSON.stringify(raceResults));
+  assert.equal(raceResults.find((result) => result.parsed?.status === 'ok')?.exitCode, 0, JSON.stringify(raceResults));
+  assert.equal(raceResults.find((result) => result.parsed?.status === 'locked')?.exitCode, 1, JSON.stringify(raceResults));
+  const lockedRaceResult = raceResults.find((result) => result.parsed?.status === 'locked');
+  assert.equal((lockedRaceResult?.parsed?.lock as AnyRecord | undefined)?.status, 'contended', JSON.stringify(raceResults));
   assert.equal(raceResults.every((result) => result.parsed !== null), true, JSON.stringify(raceResults));
   await waitForExecutable(controlServer.client, raceA.taskNumber, 70);
   await waitForExecutable(controlServer.client, raceB.taskNumber, 100);
@@ -851,7 +882,10 @@ async function main(): Promise<void> {
     && event.tool_name === 'task_lifecycle_create'
     && Object.hasOwn(event, 'result')), true, JSON.stringify({ narsEventFiles, persistedNarsEvents }));
   assert.equal(persistedNarsEvents.some((event) => event.event === 'item.completed'), false, JSON.stringify({ narsEventFiles, persistedNarsEvents }));
-  assert.equal(provider.requests.length >= 4, true, JSON.stringify(provider.requests));
+  const producerRequests = provider.requests.filter((request) => JSON.stringify(request.messages ?? []).includes('live-site-loop-nars-producer'));
+  const workerRequests = provider.requests.filter((request) => !JSON.stringify(request.messages ?? []).includes('live-site-loop-nars-producer'));
+  assert.equal(producerRequests.length, 2, JSON.stringify(provider.requests));
+  assert.equal(workerRequests.length, 4, JSON.stringify(provider.requests));
   assert.equal(provider.requests.every((request) => request.model === providerModel), true, JSON.stringify(provider.requests));
 
   console.log(JSON.stringify({
@@ -879,13 +913,28 @@ async function main(): Promise<void> {
   }));
 }
 
-let testPassed = false;
+const watchdog = setTimeout(() => {
+  void activeRuntime?.close().catch(() => {});
+  void lifecycleServer?.close().catch(() => {});
+  void provider?.close().catch(() => {});
+  void runnerScope.close().catch(() => {});
+}, E2E_DEADLINE_MS);
 try {
   await main();
-  testPassed = true;
 } finally {
-  await closeLifecycleServer();
-  const cleanupProvider = provider as ProviderFixture | null;
-  if (cleanupProvider) await cleanupProvider.close();
-  if (testPassed) assert.equal(removeTemporaryE2eRoot(siteRoot), true);
+  clearTimeout(watchdog);
+  try {
+    await closeLifecycleServer();
+  } finally {
+    try {
+      const cleanupProvider = provider as ProviderFixture | null;
+      if (cleanupProvider) await cleanupProvider.close();
+    } finally {
+      try {
+        await runnerScope.close();
+      } finally {
+        assert.equal(removeTemporaryE2eRoot(siteRoot), true);
+      }
+    }
+  }
 }

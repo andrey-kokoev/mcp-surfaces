@@ -12,6 +12,7 @@ import {
   readMcpOutputText,
   removeTemporaryE2eRoot,
   resolveDefaultUserSiteRegistryPath,
+  runBoundedProcess,
   runMcpProtocolSmoke,
   siteFabricChildEnv,
   snapshotFileState,
@@ -158,6 +159,16 @@ await new Promise<void>((resolve, reject) => {
 const descendantPid = Number(readFileSync(descendantPidPath, 'utf8'));
 assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
 rmSync(descendantRoot, { recursive: true, force: true });
+const bounded = await runBoundedProcess(process.execPath, [
+  '-e',
+  'setInterval(() => {}, 1000);',
+], {
+  label: 'bounded-timeout-fixture',
+  scope: processScope,
+  timeoutMs: 250,
+});
+assert.equal(bounded.timedOut, true, JSON.stringify(bounded));
+assert.equal(bounded.durationMs >= 200, true, JSON.stringify(bounded));
 await processScope.close();
 processScope.assertClean();
 assert.throws(() => process.kill(descendantPid, 0));

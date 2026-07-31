@@ -130,9 +130,11 @@ export const TOOLS = [
   }),
   tool('site_loop_runs_list', 'List recent configured Site Operating Loop runs.', {
     limit: { type: 'number', description: 'Maximum runs to return.' },
+    test_authority: { type: 'boolean', description: 'Read the explicitly configured isolated test-authority run store.' },
   }),
   tool('site_loop_run_show', 'Show a Site Operating Loop run by run id.', {
     run_id: { type: 'string', description: 'Loop run id.' },
+    test_authority: { type: 'boolean', description: 'Read the explicitly configured isolated test-authority run store.' },
     detail: { type: 'string', enum: ['summary', 'full'], description: 'summary returns bounded step/evidence summaries and is the default. full returns the complete stored run and may be materialized as an output ref.' },
     include_evidence_preview: { type: 'boolean', description: 'Include short bounded evidence previews in summary mode. Defaults false.' },
     evidence_preview_chars: { type: 'number', description: 'Maximum evidence preview characters per step in summary mode. Capped at 1000.' },
@@ -449,9 +451,9 @@ async function callTool(name: any, args: any, context: SiteOpsRequestContext = {
     case 'site_loop_coherence':
       return (await loadSiteLoopModule()).siteLoopCoherence(siteRoot, normalizeLoopOptions(args));
     case 'site_loop_runs_list':
-      return (await loadSiteLoopModule()).listSiteLoopRuns(siteRoot, normalizeLoopOptions(args));
+      return (await loadSiteLoopModule()).listSiteLoopRuns(readSiteLoopRoot(args), normalizeLoopOptions(args));
     case 'site_loop_run_show':
-      return (await loadSiteLoopModule()).showSiteLoopRun(siteRoot, args);
+      return (await loadSiteLoopModule()).showSiteLoopRun(readSiteLoopRoot(args), args);
     case 'site_loop_output_show':
       return await outputShowAsync({ siteRoot, args });
     case 'site_loop_attention_list':
@@ -463,12 +465,15 @@ async function callTool(name: any, args: any, context: SiteOpsRequestContext = {
     case 'site_loop_control_set':
       return (await loadSiteLoopModule()).setSiteLoopControl(siteRoot, normalizeLoopControl(args));
     case 'site_loop_run_once':
-      assertRunOnceTransportBudget(args);
-      return runSiteLoopWithCanonicalRuntimeHost(
-        siteRoot,
-        () => loadSiteLoopModule().then((module: any) => module.runSiteLoop(siteRoot, normalizeLoopOptions(args))),
-        normalizeLoopOptions(args),
-      );
+      {
+        const transportBudget = assertRunOnceTransportBudget(args);
+        const loopOptions = normalizeLoopOptions(args);
+        const operation = () => loadSiteLoopModule().then((module: any) => module.runSiteLoop(siteRoot, loopOptions));
+        if (loopOptions.testAuthority === true) {
+          return runWithTimeout(operation, transportBudget as number);
+        }
+        return runSiteLoopWithCanonicalRuntimeHost(siteRoot, operation, loopOptions);
+      }
     default:
       throw new Error(`unknown_tool: ${name}`);
   }
@@ -708,6 +713,15 @@ function requireActiveSiteLoopConfig() {
   return loaded.config;
 }
 
+function readSiteLoopRoot(args: SiteLoopToolArgs = {}) {
+  if (!(args.test_authority === true || args.testAuthority === true)) return siteRoot;
+  const config = requireActiveSiteLoopConfig();
+  if (config.test_authority.enabled !== true) {
+    throw new Error('test_authority_not_enabled_in_site_config');
+  }
+  return resolve(siteRoot, config.test_authority.state_root);
+}
+
 function activeDocs() {
   return requireActiveSiteLoopConfig().docs;
 }
@@ -740,10 +754,35 @@ function normalizeLoopOptions(args: SiteLoopToolArgs = {}) {
   };
 }
 
-function assertRunOnceTransportBudget(args: SiteLoopToolArgs = {}) {
+function assertRunOnceTransportBudget(args: SiteLoopToolArgs = {}): number | null {
   const dryRun = args.dry_run === true || args.dryRun === true;
-  if (dryRun) return;
-  throw new Error('site_loop_run_once_mutating_mcp_not_supported: use the scheduler/supervisor path for production mutation; MCP run_once is dry-run only');
+  if (dryRun) return null;
+  const testAuthority = args.test_authority === true || args.testAuthority === true;
+  if (!testAuthority) {
+    throw new Error('site_loop_run_once_mutating_mcp_not_supported: use the scheduler/supervisor path for production mutation; MCP run_once is dry-run only');
+  }
+  if (!(args.wait_for_completion === true || args.waitForCompletion === true)) {
+    throw new Error('site_loop_run_once_test_authority_wait_required: non-dry test-authority execution must wait_for_completion');
+  }
+  const timeoutMs = optionalNumber(args.timeout_ms) ?? optionalNumber(args.timeoutMs);
+  if (timeoutMs == null || !Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 10_000) {
+    throw new Error('site_loop_run_once_test_authority_timeout_invalid: provide timeout_ms between 1 and 10000');
+  }
+  return timeoutMs;
+}
+
+async function runWithTimeout<T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('site_loop_run_once_test_authority_timed_out')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function normalizeProofRunOptions(args: SiteLoopToolArgs = {}) {

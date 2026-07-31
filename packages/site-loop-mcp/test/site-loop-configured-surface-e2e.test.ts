@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createTemporaryE2eRoot,
+  assertFileStateUnchanged,
   removeTemporaryE2eRoot,
   readMcpOutputText,
   runMcpProtocolSmoke,
+  snapshotFileState,
   spawnContentLengthMcpServer,
   structured,
   type JsonRecord,
@@ -43,9 +45,33 @@ writeFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')
       args: ['-e', 'process.stdout.write("configured-site-loop-e2e-ok")'],
     },
   },
+  test_authority: {
+    enabled: true,
+    state_root: '.ai/test-authority/site-loop',
+    allow_live_mailbox: false,
+    allow_live_resident: false,
+    allow_live_scheduler: false,
+    allow_configured_commands: false,
+    task_lifecycle_db: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    task_projection_root: '.ai/test-authority/site-loop/.ai/tasks',
+    inbox_projection: '.ai/test-authority/site-loop/.ai/inbox-envelopes',
+    site_loop_store: '.ai/test-authority/site-loop/.ai/task-lifecycle.db',
+    resident_adapter: 'fixture',
+    dispatch_adapter: 'fixture',
+    operator_attention_root: '.ai/test-authority/site-loop/.ai/operator-attention',
+  },
 }, null, 2), 'utf8');
 
-const initializedLoopStore = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
+const productionLoopStore = openSiteLoopStore(siteRoot, { storeMode: 'prepare' });
+productionLoopStore.close();
+const productionDbPath = join(siteRoot, '.ai', 'task-lifecycle.db');
+const testAuthorityRoot = join(siteRoot, '.ai', 'test-authority', 'site-loop');
+mkdirSync(join(testAuthorityRoot, '.narada', 'capabilities'), { recursive: true });
+writeFileSync(
+  join(testAuthorityRoot, '.narada', 'capabilities', 'site-loop-config.json'),
+  readFileSync(join(siteRoot, '.narada', 'capabilities', 'site-loop-config.json')),
+);
+const initializedLoopStore = openSiteLoopStore(testAuthorityRoot, { storeMode: 'prepare' });
 initializedLoopStore.close();
 
 const server = spawnContentLengthMcpServer(process.execPath, ['--no-warnings', serverPath, '--site-root', siteRoot], {
@@ -104,6 +130,7 @@ try {
       'site_loop_proof_status',
       'site_loop_recovery_drill',
       'site_loop_runs_list',
+      'site_loop_run_show',
     ],
     toolsListId: 99,
   });
@@ -149,8 +176,54 @@ try {
 
   const dryRun = await toolJson(18, 'site_loop_run_once', { dry_run: true, limit: 1 });
   const runtimeHost = dryRun.runtime_host as JsonRecord;
+  assert.equal(dryRun.dry_run, true, JSON.stringify(dryRun));
+  assert.equal(dryRun.authority_mode, 'production', JSON.stringify(dryRun));
   assert.equal(runtimeHost.runtime_host_state, 'stopped', JSON.stringify(dryRun));
   assert.deepEqual(runtimeHost.lifecycle_history, ['created', 'binding', 'ready', 'serving', 'closing', 'stopped'], JSON.stringify(dryRun));
+
+  const productionDbBeforeTestAuthority = snapshotFileState(productionDbPath);
+  const testAuthorityRun = await toolJson(19, 'site_loop_run_once', {
+    dry_run: false,
+    wait_for_completion: true,
+    timeout_ms: 10_000,
+    test_authority: true,
+    requireLiveCarrier: false,
+    ensureResident: false,
+    source_sync: false,
+    limit: 1,
+  });
+  assert.equal(testAuthorityRun.status, 'ok', JSON.stringify(testAuthorityRun));
+  assert.equal(testAuthorityRun.dry_run, false, JSON.stringify(testAuthorityRun));
+  assert.equal(testAuthorityRun.authority_mode, 'test', JSON.stringify(testAuthorityRun));
+  const authority = testAuthorityRun.test_authority as JsonRecord;
+  assert.equal(authority.production_site_root, siteRoot, JSON.stringify(testAuthorityRun));
+  assert.equal(authority.execution_site_root, testAuthorityRoot, JSON.stringify(testAuthorityRun));
+  assertFileStateUnchanged(productionDbBeforeTestAuthority);
+  assert.equal(existsSync(productionDbPath), true, JSON.stringify(testAuthorityRun));
+  assert.equal(existsSync(join(testAuthorityRoot, '.ai', 'task-lifecycle.db')), true, JSON.stringify(testAuthorityRun));
+
+  const runsAfterTestAuthority = await toolJson(20, 'site_loop_runs_list', { limit: 10, test_authority: true });
+  const storedTestRun = (Array.isArray(runsAfterTestAuthority.runs) ? runsAfterTestAuthority.runs : [])
+    .find((run) => (run as JsonRecord).run_id === testAuthorityRun.run_id) as JsonRecord | undefined;
+  assert.ok(storedTestRun, JSON.stringify(runsAfterTestAuthority));
+  const shownTestRun = await toolJson(21, 'site_loop_run_show', { run_id: testAuthorityRun.run_id, detail: 'full', test_authority: true });
+  const shownRun = shownTestRun.run as JsonRecord;
+  assert.equal(shownRun.run_id, testAuthorityRun.run_id, JSON.stringify(shownTestRun));
+  assert.equal(shownRun.dry_run, false, JSON.stringify(shownTestRun));
+  assert.equal(shownRun.status, 'ok', JSON.stringify(shownTestRun));
+
+  const refusedTestAuthorityRun = await toolJson(22, 'site_loop_run_once', {
+    dry_run: false,
+    wait_for_completion: true,
+    timeout_ms: 10_000,
+    test_authority: true,
+    source_sync: true,
+    requireLiveCarrier: false,
+    limit: 1,
+  });
+  assert.equal(refusedTestAuthorityRun.status, 'refused', JSON.stringify(refusedTestAuthorityRun));
+  assert.equal((refusedTestAuthorityRun.test_authority as JsonRecord).reason, 'test_authority_binding_refused', JSON.stringify(refusedTestAuthorityRun));
+  assert.equal(((refusedTestAuthorityRun.test_authority as JsonRecord).refused_edges as unknown[]).includes('test_authority_configured_commands_not_allowed'), true, JSON.stringify(refusedTestAuthorityRun));
 
   const unifiedStatus = await toolJson(10, 'site_loop_unified_status', {});
   assert.equal(unifiedStatus.status, 'ok', JSON.stringify(unifiedStatus));

@@ -13,6 +13,7 @@ import {
 } from '@narada2/mcp-e2e-harness';
 
 const TEST_ID = 'site-loop.production-scheduler-resident-recovery';
+const PRODUCTION_E2E_DEADLINE_MS = 150_000;
 const resultPath = join(fileURLToPath(new URL('../..', import.meta.url)), '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const evidence = installE2eArtifactRecorder(resultPath, {
   test_id: TEST_ID,
@@ -78,6 +79,8 @@ function notRun(reasonCode: string, details: JsonRecord = {}): void {
   process.exitCode = 2;
 }
 
+let activeServer: ReturnType<typeof spawnContentLengthMcpServer> | null = null;
+
 async function main(): Promise<void> {
   if (!authorityEnabled) {
     notRun('production_authority_opt_in_required:NARADA_E2E_SITE_LOOP_PRODUCTION=1');
@@ -102,9 +105,10 @@ async function main(): Promise<void> {
     server = spawnContentLengthMcpServer(process.execPath, ['--no-warnings', serverPath, '--site-root', configuredSiteRoot], {
       cwd: configuredSiteRoot,
       label: 'site-loop production scheduler/resident/recovery e2e',
-      timeoutMs: 180_000,
+      timeoutMs: 130_000,
       closeTimeoutMs: 5_000,
     });
+    activeServer = server;
     server.child.stderr.setEncoding('utf8');
     server.child.stderr.on('data', (chunk) => {
       stderr = (stderr + String(chunk)).slice(-4_000);
@@ -140,6 +144,7 @@ async function main(): Promise<void> {
     assert.equal((recoveryPlanBefore.recommended_order as unknown[]).length > 0, true, JSON.stringify(recoveryPlanBefore));
 
     const proofBefore = await toolJson(server.client, 6, 'site_loop_proof_status', {});
+    assert.equal(['missing_or_stale', 'fresh'].includes(String(proofBefore.status)), true, JSON.stringify(proofBefore));
     const drillId = `site-loop-production-e2e-${Date.now()}`;
     const recoveryDrill = await toolJson(server.client, 7, 'site_loop_recovery_drill', {
       id: drillId,
@@ -152,6 +157,11 @@ async function main(): Promise<void> {
     assert.equal(recoveryDrill.status, 'production_passed', JSON.stringify(recoveryDrill));
     assert.equal(recoveryDrill.accepted_work, true, JSON.stringify(recoveryDrill));
     assert.equal(recoveryDrill.production_proof, true, JSON.stringify(recoveryDrill));
+    const drillProof = recoveryDrill.proof as JsonRecord;
+    assert.equal(drillProof.directive_emitted, true, JSON.stringify(recoveryDrill));
+    assert.equal(drillProof.carrier_receipt_observed, true, JSON.stringify(recoveryDrill));
+    assert.equal(drillProof.task_report_observed, true, JSON.stringify(recoveryDrill));
+    assert.equal(drillProof.production_task_report_observed, true, JSON.stringify(recoveryDrill));
     assert.equal((recoveryDrill.retired as JsonRecord).status, 'retired', JSON.stringify(recoveryDrill));
     assert.equal(['launch_requested', 'already_available'].includes(String((recoveryDrill.replacement as JsonRecord).status)), true, JSON.stringify(recoveryDrill));
     assert.equal((recoveryDrill.cleanup as JsonRecord).status, 'removed', JSON.stringify(recoveryDrill));
@@ -199,6 +209,7 @@ async function main(): Promise<void> {
     evidence.update({ status, failure_reason: failureReason, stderr, ...observations });
   } finally {
     if (server) await server.close();
+    activeServer = null;
     const result = {
       schema: 'narada.site_loop.production_e2e.result.v1',
       test_id: TEST_ID,
@@ -217,4 +228,12 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+let watchdog: NodeJS.Timeout | null = null;
+try {
+  watchdog = setTimeout(() => {
+    if (activeServer) void activeServer.close();
+  }, PRODUCTION_E2E_DEADLINE_MS);
+  await main();
+} finally {
+  if (watchdog) clearTimeout(watchdog);
+}

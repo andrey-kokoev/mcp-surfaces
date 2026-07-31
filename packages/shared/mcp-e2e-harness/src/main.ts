@@ -7,6 +7,25 @@ export { TestProcessScope, createTestProcessScope, nativeTestProcessScopePath } 
 
 export type JsonRecord = Record<string, unknown>;
 
+export type BoundedProcessOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  label?: string;
+  maxOutputBytes?: number;
+  scope?: TestProcessScope;
+  timeoutMs: number;
+};
+
+export type BoundedProcessResult = {
+  durationMs: number;
+  error: string | null;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+  stdout: string;
+  timedOut: boolean;
+};
+
 export type JsonRpcResponse = {
   id?: number | string;
   result?: JsonRecord;
@@ -17,6 +36,88 @@ export type JsonlMcpClient = {
   request: (id: number | string, method: string, params?: JsonRecord) => Promise<JsonRpcResponse>;
   close: () => Promise<void>;
 };
+
+/**
+ * Run a non-MCP child process with a hard wall-clock deadline.
+ *
+ * The optional TestProcessScope is important on Windows: its Job Object owns
+ * descendants, so killing the scoped child also terminates a runner's worker
+ * processes instead of leaving them behind after a timeout.
+ */
+export function runBoundedProcess(
+  command: string,
+  args: readonly string[] = [],
+  options: BoundedProcessOptions,
+): Promise<BoundedProcessResult> {
+  const timeoutMs = positiveInteger(options.timeoutMs, 30_000);
+  const maxOutputBytes = boundedPositiveInteger(options.maxOutputBytes, 50_000, 2_000_000);
+  const startedAt = Date.now();
+  const child = options.scope
+    ? options.scope.spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: 'pipe',
+    })
+    : spawn(command, [...args], {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+      windowsHide: true,
+    });
+  let stdout = '';
+  let stderr = '';
+  let timedOut = false;
+  let error: string | null = null;
+  let settled = false;
+  let timer: NodeJS.Timeout | null = null;
+  let killTimer: NodeJS.Timeout | null = null;
+
+  const appendTail = (current: string, chunk: unknown): string => {
+    const next = current + String(chunk);
+    return next.length <= maxOutputBytes ? next : next.slice(-maxOutputBytes);
+  };
+
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout = appendTail(stdout, chunk); });
+  child.stderr.on('data', (chunk) => { stderr = appendTail(stderr, chunk); });
+  if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded) child.stdin.end();
+
+  return new Promise<BoundedProcessResult>((resolvePromise) => {
+    const finish = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolvePromise({
+        durationMs: Date.now() - startedAt,
+        error,
+        exitCode,
+        signal,
+        stderr,
+        stdout,
+        timedOut,
+      });
+    };
+
+    child.once('error', (cause) => {
+      error = cause instanceof Error ? cause.message : String(cause);
+      finish(null, null);
+    });
+    child.once('close', (exitCode, signal) => finish(exitCode, signal));
+    timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill();
+        killTimer = setTimeout(() => finish(child.exitCode, null), 2_000);
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : String(cause);
+        finish(null, null);
+      }
+    }, timeoutMs);
+  });
+}
 
 export type McpProtocolSmokeOptions = {
   initializeParams?: JsonRecord;
