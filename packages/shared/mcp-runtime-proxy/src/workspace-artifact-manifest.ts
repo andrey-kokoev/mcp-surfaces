@@ -95,7 +95,7 @@ export function buildWorkspaceArtifactManifest(input: {
   };
   const manifest = {
     ...unsigned,
-    manifest_fingerprint: fingerprintObject(unsigned),
+    manifest_fingerprint: fingerprintWorkspaceArtifactManifest(unsigned),
   } satisfies WorkspaceArtifactManifest;
   writeFileSync(resolve(input.outputPath), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   return manifest;
@@ -133,7 +133,7 @@ export function preflightWorkspaceArtifacts(input: {
   }
   const unsigned = { ...parsed };
   delete unsigned.manifest_fingerprint;
-  const actualManifestFingerprint = fingerprintObject(unsigned);
+  const actualManifestFingerprint = fingerprintWorkspaceArtifactManifest(unsigned);
   if (actualManifestFingerprint !== parsed.manifest_fingerprint) {
     return refusal(input.surfaceId, entrypoint, manifestPath, 'workspace_manifest_stale', 'The workspace artifact manifest fingerprint does not match its contents.', {
       expected_fingerprint: parsed.manifest_fingerprint,
@@ -420,6 +420,22 @@ function isPathInside(root: string, candidate: string): boolean {
 
 function fingerprintObject(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+export function fingerprintWorkspaceArtifactManifest(value: JsonRecord): string {
+  return fingerprintObject(stripVolatileManifestMetadata(value));
+}
+
+function stripVolatileManifestMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripVolatileManifestMetadata);
+  if (!isRecord(value)) return value;
+
+  const stable: JsonRecord = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'generated_at' || key === 'mtime_ms') continue;
+    stable[key] = stripVolatileManifestMetadata(child);
+  }
+  return stable;
 }
 
 export function artifactFingerprint(path: string): ArtifactFingerprint | null {

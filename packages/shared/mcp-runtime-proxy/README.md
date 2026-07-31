@@ -88,8 +88,9 @@ Every proxied surface advertises one proxy-owned read-only tool,
 `mcp_runtime_proxy_status`, in its normal `tools/list` response. Call it when
 a carrier-bound surface may be running an old build. Its
 `runtime_freshness.status` distinguishes `current`, `stale`, and `unknown`
-using the runtime files loaded at proxy start plus matching TypeScript source
-mtimes. `runtime_freshness.reload_action` is the machine-readable operation
+using runtime-file content hashes, manifest identity, and TypeScript
+source/build-order evidence. Metadata-only rewrites do not make a runtime
+stale. `runtime_freshness.reload_action` is the machine-readable operation
 for the carrier or runtime supervisor; it never implies an automatic restart.
 
 Pending child requests have a proxy-owned deadline. If the child stays alive but

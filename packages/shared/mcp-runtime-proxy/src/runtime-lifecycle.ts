@@ -97,13 +97,15 @@ export function evaluateRuntimeFreshness(input: {
       reasons.push({ code: 'runtime_file_missing', evidence: 'unknown', name: pair.name, path: pair.current.path });
       continue;
     }
-    if (pair.started.mtime_ms !== pair.current.mtime_ms || pair.started.size !== pair.current.size) {
+    if (pair.started.sha256 !== pair.current.sha256) {
       reasons.push({
         code: 'runtime_changed_since_process_start',
         name: pair.name,
         path: pair.current.path,
-        started_mtime_ms: pair.started.mtime_ms,
-        current_mtime_ms: pair.current.mtime_ms,
+        started_sha256: pair.started.sha256,
+        current_sha256: pair.current.sha256,
+        started_size: pair.started.size,
+        current_size: pair.current.size,
       });
     }
   }
@@ -113,10 +115,7 @@ export function evaluateRuntimeFreshness(input: {
     if (!artifactManifestCurrent.exists) {
       evidenceUnknown = true;
       reasons.push({ code: 'artifact_manifest_missing', evidence: 'unknown', path: artifactManifestCurrent.path });
-    } else if (
-      input.tracker.artifact_manifest_fingerprint !== readManifestFingerprint(artifactManifestCurrent.path)
-      || input.tracker.artifact_manifest.size !== artifactManifestCurrent.size
-    ) {
+    } else if (input.tracker.artifact_manifest_fingerprint !== readManifestFingerprint(artifactManifestCurrent.path)) {
       reasons.push({
         code: 'artifact_manifest_changed_since_process_start',
         path: artifactManifestCurrent.path,
@@ -125,10 +124,25 @@ export function evaluateRuntimeFreshness(input: {
       });
     }
   }
-  const sourceFiles = input.tracker.source_files.map((source) => fileSnapshot(source.path));
-  for (const source of sourceFiles) {
-    const runtime = runtimePairs.find((pair) => sameCompiledSource(pair.current.path, source.path))?.current;
-    if (source.exists && runtime?.exists && Number(source.mtime_ms) > Number(runtime.mtime_ms)) {
+  const sourceFiles = input.tracker.source_files.map((started) => ({ started, current: fileSnapshot(started.path) }));
+  for (const sourcePair of sourceFiles) {
+    const source = sourcePair.current;
+    const runtimePair = runtimePairs.find((pair) => sameCompiledSource(pair.current.path, source.path));
+    const runtime = runtimePair?.current;
+    if (sourcePair.started.sha256 !== source.sha256) {
+      reasons.push({
+        code: 'source_changed_since_process_start',
+        source_path: source.path,
+        started_sha256: sourcePair.started.sha256,
+        current_sha256: source.sha256,
+      });
+    }
+    const sourceWasNewerAtStart = sourcePair.started.exists
+      && runtimePair?.started.exists
+      && Number(sourcePair.started.mtime_ms) > Number(runtimePair.started.mtime_ms);
+    const sourceMtimeChanged = sourcePair.started.mtime_ms !== source.mtime_ms;
+    if (source.exists && runtime?.exists && Number(source.mtime_ms) > Number(runtime.mtime_ms)
+      && (sourceWasNewerAtStart || sourcePair.started.sha256 !== source.sha256 || !sourceMtimeChanged)) {
       reasons.push({
         code: 'source_newer_than_runtime_build',
         source_path: source.path,
@@ -149,7 +163,7 @@ export function evaluateRuntimeFreshness(input: {
     child_pid: input.childPid ?? null,
     surface_id: input.surfaceId,
     runtime_files: runtimePairs.map((pair) => ({ name: pair.name, started: pair.started, current: pair.current })),
-    source_files: sourceFiles,
+    source_files: sourceFiles.map((pair) => pair.current),
     reasons,
     reload_action: {
       schema: 'narada.mcp_runtime_proxy.supervisor_restart_action.v1',

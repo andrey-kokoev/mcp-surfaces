@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -46,6 +46,26 @@ test('workspace artifact manifest refuses missing, stale, and missing export art
       artifactManifestPath: manifestPath,
     }).status, 'ok');
 
+    const regeneratedWithoutChanges = buildWorkspaceArtifactManifest({
+      workspaceRoot: root,
+      packageRoots: [packageRoot],
+      outputPath: manifestPath,
+    });
+    assert.equal(regeneratedWithoutChanges.manifest_fingerprint, manifest.manifest_fingerprint);
+    assert.equal(preflightWorkspaceArtifacts({
+      surfaceId: 'test',
+      entrypoint,
+      artifactManifestPath: manifestPath,
+    }).status, 'ok');
+
+    utimesSync(join(sourceRoot, 'server.ts'), new Date(0), new Date(0));
+    const regeneratedAfterMtimeOnlyChange = buildWorkspaceArtifactManifest({
+      workspaceRoot: root,
+      packageRoots: [packageRoot],
+      outputPath: manifestPath,
+    });
+    assert.equal(regeneratedAfterMtimeOnlyChange.manifest_fingerprint, manifest.manifest_fingerprint);
+
     writeFileSync(join(sourceRoot, 'server.ts'), 'export const value = 2;\n', 'utf8');
     const stale = preflightWorkspaceArtifacts({
       surfaceId: 'test',
@@ -60,6 +80,7 @@ test('workspace artifact manifest refuses missing, stale, and missing export art
       outputPath: manifestPath,
     });
     assert.equal(regenerated.manifest_fingerprint.length, 64);
+    assert.notEqual(regenerated.manifest_fingerprint, manifest.manifest_fingerprint);
     unlinkSync(entrypoint);
     const missing = preflightWorkspaceArtifacts({
       surfaceId: 'test',

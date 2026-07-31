@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import {
   writeRuntimeInstance,
   type RuntimeInstanceRecord,
 } from '../src/runtime-lifecycle.js';
+import { fingerprintWorkspaceArtifactManifest } from '../src/workspace-artifact-manifest.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-runtime-proxy-'));
 const processScope = createTestProcessScope({ label: 'mcp-runtime-proxy-test' });
@@ -42,6 +43,11 @@ assert.equal(evaluateRuntimeFreshness({
   tracker: freshnessTracker,
   surfaceId: 'freshness-test',
 }).status, 'current');
+utimesSync(freshnessChildRuntime, new Date(0), new Date(0));
+assert.equal(evaluateRuntimeFreshness({
+  tracker: freshnessTracker,
+  surfaceId: 'freshness-test',
+}).status, 'current');
 await new Promise((resolve) => setTimeout(resolve, 20));
 writeFileSync(join(freshnessSourceRoot, 'child.ts'), 'export const changed = true;\n', 'utf8');
 const staleFreshness = evaluateRuntimeFreshness({
@@ -51,6 +57,34 @@ const staleFreshness = evaluateRuntimeFreshness({
 assert.equal(staleFreshness.status, 'stale');
 assert.ok((staleFreshness.reasons as Array<Record<string, unknown>>).some((reason) => reason.code === 'source_newer_than_runtime_build'));
 assert.equal((staleFreshness.reload_action as Record<string, unknown>).operation, 'restart');
+
+const manifestForFreshnessPath = join(root, 'freshness-manifest.json');
+const manifestForFreshness = {
+  schema: 'narada.workspace_artifact_manifest.v1',
+  generated_at: '2026-01-01T00:00:00.000Z',
+  workspace_root: root,
+  packages: [],
+  artifacts: [],
+};
+utimesSync(freshnessChildRuntime, new Date(), new Date());
+writeFileSync(manifestForFreshnessPath, `${JSON.stringify({
+  ...manifestForFreshness,
+  manifest_fingerprint: fingerprintWorkspaceArtifactManifest(manifestForFreshness),
+}, null, 2)}\n`, 'utf8');
+const manifestFreshnessTracker = captureRuntimeFreshness({
+  proxyRuntimePath: freshnessProxyRuntime,
+  childEntrypoint: freshnessChildRuntime,
+  artifactManifestPath: manifestForFreshnessPath,
+});
+writeFileSync(manifestForFreshnessPath, `${JSON.stringify({
+  ...manifestForFreshness,
+  generated_at: '2026-01-01T00:00:00.000Z-extra-metadata',
+  manifest_fingerprint: fingerprintWorkspaceArtifactManifest(manifestForFreshness),
+}, null, 2)}\n`, 'utf8');
+assert.equal(evaluateRuntimeFreshness({
+  tracker: manifestFreshnessTracker,
+  surfaceId: 'freshness-manifest-test',
+}).status, 'current');
 const unknownFreshness = evaluateRuntimeFreshness({
   tracker: {
     ...freshnessTracker,
@@ -112,7 +146,7 @@ function registerArtifact(entrypoint: string): void {
   };
   const manifest = {
     ...unsigned,
-    manifest_fingerprint: createHash('sha256').update(JSON.stringify(unsigned)).digest('hex'),
+    manifest_fingerprint: fingerprintWorkspaceArtifactManifest(unsigned),
   };
   writeFileSync(artifactManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
