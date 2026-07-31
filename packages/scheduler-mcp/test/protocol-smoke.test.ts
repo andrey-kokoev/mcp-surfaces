@@ -14,6 +14,7 @@ try {
   const tools = protocol.tools.tools as any[];
   const expectedTools = [
     'scheduler_guidance',
+    'scheduler_runtime_status',
     'scheduler_task_list',
     'scheduler_task_show',
     'scheduler_task_create',
@@ -25,6 +26,10 @@ try {
     'scheduler_task_history',
   ];
   assert.deepEqual(tools.map((t: { name: string }) => t.name), expectedTools);
+
+  const runtimeStatusTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'scheduler_runtime_status');
+  assert.equal(runtimeStatusTool?.annotations.readOnlyHint, true);
+  assert.equal(runtimeStatusTool?.annotations.destructiveHint, false);
 
   const listTool = tools.find((t: { name: string; annotations: Record<string, unknown> }) => t.name === 'scheduler_task_list');
   assert.equal(listTool.annotations.readOnlyHint, true);
@@ -42,6 +47,8 @@ try {
   assert.ok(createProps.schedule);
   assert.ok(createProps.arguments);
   assert.ok(createProps.working_dir);
+  assert.ok(createProps.implementation_id);
+  assert.deepEqual((tools.find((t: { name: string }) => t.name === 'scheduler_task_create') as any).inputSchema.required, ['task_name', 'command', 'schedule', 'implementation_id']);
 
   const showTool = tools.find((t: { name: string; inputSchema: { properties: Record<string, unknown> } }) => t.name === 'scheduler_task_show');
   assert.ok(showTool.inputSchema.properties.task_name);

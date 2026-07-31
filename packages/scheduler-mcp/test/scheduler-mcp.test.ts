@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildCreateScheduleArgs, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, scheduledActionPolicyReasons, schedulerFailureDetails } from '../src/main.js';
+import { buildCreateScheduleArgs, buildScheduledTaskMutationScript, buildTaskRunCommand, compactScheduledTaskRows, createServerState, handleRequest, schedulerRuntimeStatus, scheduledActionPolicyReasons, schedulerFailureDetails } from '../src/main.js';
 
 const state = createServerState({});
+const runtimeStatus = schedulerRuntimeStatus();
+assert.equal(runtimeStatus.status, 'fresh');
+assert.equal(state.implementationId, runtimeStatus.implementation_id);
+assert.match(buildScheduledTaskMutationScript(), /New-ScheduledTaskSettingsSet -Hidden/);
 
 const canonicalWrapperRoot = mkdtempSync(join(tmpdir(), 'scheduler-mcp-wrapper-'));
 try {
@@ -86,6 +90,7 @@ if (process.env.NARADA_RUN_LIVE_SCHEDULER_TESTS === '1') {
 const dryRunUpdate = await callTool('scheduler_task_update_action', {
   task_name: '\\Narada-Sonar-Daemon',
   command: 'pwsh.exe',
+  implementation_id: runtimeStatus.implementation_id,
   arguments: '-NoProfile -File D:\\code\\narada.sonar\\scripts\\supervisor.ps1 start',
   working_dir: 'D:\\code\\narada.sonar',
   dry_run: true,
