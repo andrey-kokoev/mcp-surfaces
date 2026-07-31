@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/v4';
 
 export const MCP_FABRIC_SCHEMA_VERSION = '2.0' as const;
 export const MCP_FABRIC_SCHEMA_MAJOR = 2;

@@ -19,6 +19,9 @@
     "dist",
     "README.md"
   ],
+  "bundleDependencies": [
+    "zod"
+  ],
   "scripts": {
     "build": "tsc -b",
     "build:postcompile": "node dist/src/emit-json-schema.js",
