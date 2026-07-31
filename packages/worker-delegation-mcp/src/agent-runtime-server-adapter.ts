@@ -85,20 +85,61 @@ export function commandRequiresWindowsShell(command: string, platform: NodeJS.Pl
   return extension === '.cmd' || extension === '.bat' || extension === '.ps1';
 }
 
-function runtimeSessionEventsPath(invocation: Invocation): string | null {
+function runtimeSessionId(invocation: Invocation): string | null {
   const sessionIndex = invocation.argv.findIndex((value) => value === '--session');
   const sessionId = sessionIndex >= 0 ? invocation.argv[sessionIndex + 1] : null;
+  return sessionId && sessionId.trim() ? sessionId.trim() : null;
+}
+
+function runtimeSessionEventsPathForSession(invocation: Invocation, sessionId: string | null): string | null {
   const siteRoot = invocation.environment.NARADA_SITE_ROOT;
   if (!sessionId || !siteRoot || sessionId.includes('..') || /[\\/]/.test(sessionId)) return null;
   return join(siteRoot, '.narada', 'crew', 'nars-sessions', sessionId, 'events.jsonl');
 }
 
+function runtimeSessionEventsPath(invocation: Invocation): string | null {
+  return runtimeSessionEventsPathForSession(invocation, runtimeSessionId(invocation));
+}
+
+function eventSequence(event: unknown): number | null {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+  const value = (event as Record<string, unknown>).event_sequence ?? (event as Record<string, unknown>).sequence;
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function eventSessionId(event: unknown): string | null {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+  const value = (event as Record<string, unknown>).session_id;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function durableEventMetadata(path: string): { bytes: number; max_sequence: number | null } {
+  if (!existsSync(path)) return { bytes: 0, max_sequence: null };
+  try {
+    const content = readFileSync(path, 'utf8');
+    let maxSequence: number | null = null;
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const sequence = eventSequence(JSON.parse(line));
+        if (sequence !== null && (maxSequence === null || sequence > maxSequence)) maxSequence = sequence;
+      } catch {
+        // Ignore incomplete or non-JSON historical lines when establishing the
+        // current-turn baseline. The normal poller only consumes complete JSON.
+      }
+    }
+    return { bytes: content.length, max_sequence: maxSequence };
+  } catch {
+    return { bytes: 0, max_sequence: null };
+  }
+}
+
 function runtimeEventIdentity(event: unknown): string {
   if (!event || typeof event !== 'object' || Array.isArray(event)) return `json:${JSON.stringify(event)}`;
-  const record = event as Record<string, unknown>;
-  const sessionId = typeof record.session_id === 'string' ? record.session_id : '';
-  const sequence = record.event_sequence ?? record.sequence;
-  if (typeof sequence === 'number' || typeof sequence === 'string') return `sequence:${sessionId}:${String(sequence)}`;
+  const sessionId = eventSessionId(event) ?? '';
+  const sequence = eventSequence(event);
+  if (sequence !== null) return `sequence:${sessionId}:${String(sequence)}`;
   return `json:${JSON.stringify(event)}`;
 }
 
@@ -123,6 +164,11 @@ export async function runAgentRuntimeServerInvocation(options: {
       return;
     }
 
+    const configuredDurableEventsPath = runtimeSessionEventsPath(options.invocation);
+    const configuredSessionId = runtimeSessionId(options.invocation);
+    const initialDurableMetadata = configuredDurableEventsPath
+      ? durableEventMetadata(configuredDurableEventsPath)
+      : { bytes: 0, max_sequence: null };
     const child = spawn(options.invocation.command, options.invocation.argv, {
       cwd: options.invocation.cwd,
       env: options.invocation.environment,
@@ -142,7 +188,9 @@ export async function runAgentRuntimeServerInvocation(options: {
     let fatalRuntimeError: string | null = null;
     let stderrBuffer = '';
     let closeFrameSent = false;
-    let durableEventsOffset = 0;
+    let submissionSent = false;
+    let durableEventsOffset = initialDurableMetadata.bytes;
+    let durableEventBaselineSequence = initialDurableMetadata.max_sequence;
     let durableEventsTimer: NodeJS.Timeout | null = null;
     let durableFallbackObserved = false;
     const seenRuntimeEvents = new Set<string>();
@@ -168,7 +216,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     };
 
     const closeAfterTurn = () => {
-      if (!runtimeEvents.turnCompleted) return;
+      if (!submissionSent || !runtimeEvents.turnCompleted) return;
       if (closeFrameSent) return;
       closeFrameSent = true;
       const stdin = child.stdin;
@@ -193,6 +241,10 @@ export async function runAgentRuntimeServerInvocation(options: {
     };
 
     const acceptRuntimeEvent = (event: unknown, rawLine: string) => {
+      const sequence = eventSequence(event);
+      if (configuredSessionId && eventSessionId(event) === configuredSessionId
+        && sequence !== null && durableEventBaselineSequence !== null
+        && sequence <= durableEventBaselineSequence) return;
       const identity = runtimeEventIdentity(event);
       if (seenRuntimeEvents.has(identity)) return;
       seenRuntimeEvents.add(identity);
@@ -201,7 +253,7 @@ export async function runAgentRuntimeServerInvocation(options: {
       handleEvent(event);
     };
 
-    const durableEventsPath = runtimeSessionEventsPath(options.invocation);
+    const durableEventsPath = configuredDurableEventsPath;
     const pollDurableEvents = () => {
       if (settled || !durableEventsPath || !existsSync(durableEventsPath)) return;
       try {
@@ -210,7 +262,10 @@ export async function runAgentRuntimeServerInvocation(options: {
           durableFallbackObserved = true;
           diagnostics.write(`durable_event_fallback_observed path=${durableEventsPath}\n`);
         }
-        if (content.length < durableEventsOffset) durableEventsOffset = 0;
+        if (content.length < durableEventsOffset) {
+          durableEventsOffset = 0;
+          durableEventBaselineSequence = null;
+        }
         const unread = content.slice(durableEventsOffset);
         const lastNewline = unread.lastIndexOf('\n');
         if (lastNewline < 0) return;
@@ -266,7 +321,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     }, options.maxRunMs);
 
     if (durableEventsPath) {
-      diagnostics.write(`durable_event_fallback_configured path=${durableEventsPath}\n`);
+      diagnostics.write(`durable_event_fallback_configured path=${durableEventsPath} baseline_bytes=${durableEventsOffset} baseline_sequence=${durableEventBaselineSequence ?? 'none'}\n`);
       durableEventsTimer = setInterval(pollDurableEvents, 100);
       durableEventsTimer.unref?.();
       pollDurableEvents();
@@ -294,6 +349,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     });
 
     const requestId = `worker-conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    submissionSent = true;
     child.stdin?.write(`${JSON.stringify({
       id: requestId,
       method: 'session.submit',

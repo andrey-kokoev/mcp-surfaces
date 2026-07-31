@@ -92,7 +92,7 @@ export function workerOutputSchema(): Record<string, unknown> {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict', 'structured_outputs'],
+    required: ['summary', 'deliverables', 'open_questions', 'next_actions', 'edits_performed', 'target_state_changed', 'changes', 'verification', 'verification_budget_respected', 'broad_unrelated_failures', 'exit_interview', 'review_verdict', 'acceptance_verdict', 'verdict'],
     properties: {
       summary: { type: 'string' },
       deliverables: { type: 'array', items: { type: 'object', required: ['path', 'description'], properties: { path: { type: 'string' }, description: { type: 'string' } }, additionalProperties: false } },
@@ -119,10 +119,10 @@ export function workerOutputSchema(): Record<string, unknown> {
       review_verdict: { type: ['string', 'null'] },
       acceptance_verdict: { type: ['string', 'null'] },
       verdict: { type: ['string', 'null'] },
-      // Keep the provider-facing structured output object closed.  Codex's
-      // structured-output validator rejects an object schema that omits this
-      // constraint, even though the outer worker contract is already closed.
-      structured_outputs: { type: 'object', additionalProperties: false },
+      // Structured outputs are an extension map.  Task-specific contracts
+      // validate their named entries separately; the generic worker schema
+      // must not make those entries impossible to emit.
+      structured_outputs: { type: 'object', additionalProperties: true },
     },
   };
 }

@@ -121,4 +121,5 @@ assert.equal(Array.isArray(requestContract.target_paths), true);
 const schema = workerOutputSchema() as any;
 assert.equal(schema.additionalProperties, false);
 assert.equal(schema.properties.structured_outputs.type, 'object');
-assert.equal(schema.properties.structured_outputs.additionalProperties, false);
+assert.equal(schema.required.includes('structured_outputs'), false);
+assert.equal(schema.properties.structured_outputs.additionalProperties, true);

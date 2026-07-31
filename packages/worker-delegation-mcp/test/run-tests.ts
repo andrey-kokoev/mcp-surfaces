@@ -8,6 +8,7 @@ const testFiles = [
   'canonical-provider-registry.test.js',
   'provider-registry-diagnostics.test.js',
   'provider-runtime-binding.test.js',
+  'agent-runtime-server-adapter.test.js',
   'implementation-identity.test.js',
   'output-contract.test.js',
   'runtime-events.test.js',
