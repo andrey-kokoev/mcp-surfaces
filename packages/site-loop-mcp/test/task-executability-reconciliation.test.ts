@@ -136,4 +136,29 @@ const translatedRunRef = assessmentForRequest({
 assert.equal(translatedRunRef.evaluator.delegated_task_id, 'delegated-run-ref');
 assert.equal(translatedRunRef.evaluator.worker_run_id, 'run-run-ref');
 
+const translatedMixedRefs = assessmentForRequest({
+  schema: 'narada.task.executability.assessment.v1',
+  version: 1,
+  dimensions: [],
+  first_actions: [],
+  reference_resolutions: [],
+  acceptance_mappings: [],
+  required_decisions: [],
+  findings: [],
+  evaluator_provenance: { provider: 'kimi-code-api', model: 'k3', cognition: 'low', profile_version: '1.0.0' },
+}, {
+  request_id: 'request-mixed-refs',
+  task_id: 'task-mixed-refs',
+  task_number: 44,
+  task_spec_digest: 'sha256:task-mixed-refs',
+  environment_digest: 'sha256:environment-mixed-refs',
+  evaluator_profile: 'profile',
+  evaluator_profile_version: '1.0.0',
+} as any, {
+  task_id: 'delegated-mixed-refs',
+  worker_refs: [{ step_id: 'metadata-only' }, { run_id: '  run-mixed-refs  ' }],
+});
+assert.equal(translatedMixedRefs.evaluator.delegated_task_id, 'delegated-mixed-refs');
+assert.equal(translatedMixedRefs.evaluator.worker_run_id, 'run-mixed-refs');
+
 console.log('site-loop task executability reconciliation contract ok');

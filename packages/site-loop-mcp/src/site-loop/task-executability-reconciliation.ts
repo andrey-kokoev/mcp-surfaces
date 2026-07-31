@@ -295,17 +295,20 @@ export function assessmentForRequest(workerAssessment: JsonRecord, request: Task
 
 function resultIdentity(result: JsonRecord): { delegated_task_id: string | null; worker_run_id: string | null } {
   const nestedResult = record(result.result);
-  const ref = [
+  const refs = [
     ...records(result.worker_refs),
     ...records(result.run_refs),
     ...records(result.worker_summaries),
     ...records(nestedResult.worker_refs),
     ...records(nestedResult.run_refs),
     ...records(nestedResult.worker_summaries),
-  ][0] ?? {};
+  ];
+  const workerRunId = refs
+    .map((ref) => typeof ref.run_id === 'string' ? ref.run_id.trim() : '')
+    .find((runId) => runId.length > 0) ?? null;
   return {
     delegated_task_id: typeof result.task_id === 'string' ? result.task_id : null,
-    worker_run_id: typeof ref.run_id === 'string' ? ref.run_id : null,
+    worker_run_id: workerRunId,
   };
 }
 
