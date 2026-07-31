@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { dirname, extname, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { parseLastMessage, resultStatus, type Invocation, type ResolvedWorkerConfig, type WorkerOutputParseResult, type WorkerRunTerminalStatus } from './codex-adapter.js';
 import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation, workerAiProcessRefusalError } from './ai-process-invocation.js';
 import { workerOutputFromAgentMessage } from './output-contract.js';
@@ -85,6 +85,23 @@ export function commandRequiresWindowsShell(command: string, platform: NodeJS.Pl
   return extension === '.cmd' || extension === '.bat' || extension === '.ps1';
 }
 
+function runtimeSessionEventsPath(invocation: Invocation): string | null {
+  const sessionIndex = invocation.argv.findIndex((value) => value === '--session');
+  const sessionId = sessionIndex >= 0 ? invocation.argv[sessionIndex + 1] : null;
+  const siteRoot = invocation.environment.NARADA_SITE_ROOT;
+  if (!sessionId || !siteRoot || sessionId.includes('..') || /[\\/]/.test(sessionId)) return null;
+  return join(siteRoot, '.narada', 'crew', 'nars-sessions', sessionId, 'events.jsonl');
+}
+
+function runtimeEventIdentity(event: unknown): string {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return `json:${JSON.stringify(event)}`;
+  const record = event as Record<string, unknown>;
+  const sessionId = typeof record.session_id === 'string' ? record.session_id : '';
+  const sequence = record.event_sequence ?? record.sequence;
+  if (typeof sequence === 'number' || typeof sequence === 'string') return `sequence:${sessionId}:${String(sequence)}`;
+  return `json:${JSON.stringify(event)}`;
+}
+
 export async function runAgentRuntimeServerInvocation(options: {
   invocation: Invocation;
   prompt: string;
@@ -125,12 +142,17 @@ export async function runAgentRuntimeServerInvocation(options: {
     let fatalRuntimeError: string | null = null;
     let stderrBuffer = '';
     let closeFrameSent = false;
+    let durableEventsOffset = 0;
+    let durableEventsTimer: NodeJS.Timeout | null = null;
+    let durableFallbackObserved = false;
+    const seenRuntimeEvents = new Set<string>();
 
     const finish = (result: { exit_code: number | null; signal: string | null; cancelled: boolean; error: string | null }) => {
       if (settled) return;
       settled = true;
       if (!released) { released = true; releaseWorkerAiProcessInvocation(admission, { exitCode: result.exit_code, signal: result.signal }); }
       clearTimeout(timer);
+      if (durableEventsTimer) clearInterval(durableEventsTimer);
       if (options.abortSignal) options.abortSignal.removeEventListener('abort', abortHandler);
       if (runtimeEvents.finalAssistantMessage !== null) {
         writeFileSync(options.lastMessagePath, `${JSON.stringify(workerOutputFromAgentMessage(runtimeEvents.finalAssistantMessage), null, 2)}\n`, 'utf8');
@@ -170,6 +192,46 @@ export async function runAgentRuntimeServerInvocation(options: {
       closeAfterTurn();
     };
 
+    const acceptRuntimeEvent = (event: unknown, rawLine: string) => {
+      const identity = runtimeEventIdentity(event);
+      if (seenRuntimeEvents.has(identity)) return;
+      seenRuntimeEvents.add(identity);
+      if (seenRuntimeEvents.size > 4096) seenRuntimeEvents.delete(seenRuntimeEvents.values().next().value as string);
+      events.write(`${rawLine.trim()}\n`);
+      handleEvent(event);
+    };
+
+    const durableEventsPath = runtimeSessionEventsPath(options.invocation);
+    const pollDurableEvents = () => {
+      if (settled || !durableEventsPath || !existsSync(durableEventsPath)) return;
+      try {
+        const content = readFileSync(durableEventsPath, 'utf8');
+        if (!durableFallbackObserved) {
+          durableFallbackObserved = true;
+          diagnostics.write(`durable_event_fallback_observed path=${durableEventsPath}\n`);
+        }
+        if (content.length < durableEventsOffset) durableEventsOffset = 0;
+        const unread = content.slice(durableEventsOffset);
+        const lastNewline = unread.lastIndexOf('\n');
+        if (lastNewline < 0) return;
+        const completeText = unread.slice(0, lastNewline + 1);
+        const completeLines = completeText.split(/\r?\n/).slice(0, -1);
+        durableEventsOffset += completeText.length;
+        for (const line of completeLines) {
+          if (!line.trim()) continue;
+          try {
+            acceptRuntimeEvent(JSON.parse(line), line);
+          } catch {
+            // The child stdout remains the primary protocol. Ignore durable
+            // lines that are not independently parseable JSON records.
+          }
+        }
+      } catch {
+        // Durable evidence is a bounded fallback; stdout/close remains authoritative
+        // when the session file is unavailable or temporarily locked.
+      }
+    };
+
     const handleDiagnosticChunk = (chunk: unknown) => {
       const text = String(chunk);
       diagnostics.write(text);
@@ -182,7 +244,6 @@ export async function runAgentRuntimeServerInvocation(options: {
     };
 
     const drainStdout = (chunk: string) => {
-      events.write(chunk);
       stdoutBuffer += chunk;
       while (true) {
         const idx = stdoutBuffer.indexOf('\n');
@@ -191,7 +252,7 @@ export async function runAgentRuntimeServerInvocation(options: {
         stdoutBuffer = stdoutBuffer.slice(idx + 1);
         if (!line) continue;
         try {
-          handleEvent(JSON.parse(line));
+          acceptRuntimeEvent(JSON.parse(line), line);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           eventError ||= `invalid json event: ${message}`;
@@ -204,6 +265,15 @@ export async function runAgentRuntimeServerInvocation(options: {
       try { child.kill(); } catch { /* ignore */ }
     }, options.maxRunMs);
 
+    if (durableEventsPath) {
+      diagnostics.write(`durable_event_fallback_configured path=${durableEventsPath}\n`);
+      durableEventsTimer = setInterval(pollDurableEvents, 100);
+      durableEventsTimer.unref?.();
+      pollDurableEvents();
+    } else {
+      diagnostics.write('durable_event_fallback_unavailable\n');
+    }
+
     const abortHandler = () => {
       cancelled = true;
       try { child.kill(); } catch { /* ignore */ }
@@ -214,7 +284,7 @@ export async function runAgentRuntimeServerInvocation(options: {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk) => drainStdout(String(chunk)));
     child.stderr.on('data', handleDiagnosticChunk);
-    child.on('error', (error) => finish({ exit_code: null, signal: null, cancelled: false, error: fatalRuntimeError ?? error.message }));
+    child.on('error', (error) => { finish({ exit_code: null, signal: null, cancelled: false, error: fatalRuntimeError ?? error.message }); });
     child.on('close', (code, signal) => {
       if (stdoutBuffer.trim()) eventError ||= 'unterminated json event';
       const assistantExtraction = runtimeEvents.evidence();

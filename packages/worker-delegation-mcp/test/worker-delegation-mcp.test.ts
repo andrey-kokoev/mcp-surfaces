@@ -1101,7 +1101,7 @@ assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_confi
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), false);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AI_API_KEY'), false);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AI_BASE_URL'), false);
-assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), false);
+assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PLAN_REF'), true);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('OPENAI_API_KEY'), false);
 assert.equal(agentRuntimeResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_API_KEY'), false);

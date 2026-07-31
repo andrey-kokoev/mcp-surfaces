@@ -78,6 +78,15 @@ assert.equal(reviewedWorkerOutput?.review_verdict, 'accepted');
 assert.equal(reviewedWorkerOutput?.acceptance_verdict, 'passed');
 assert.equal(reviewedWorkerOutput?.verdict, 'accepted');
 
+const structuredAssessment = { schema: 'narada.task.executability.assessment.v1', version: 1 };
+const structuredWorkerOutput = workerOutputFromAgentMessage(JSON.stringify({
+  summary: 'structured assessment output accepted',
+  structured_outputs: { task_executability_assessment_v1: structuredAssessment },
+}));
+assert.deepEqual(structuredWorkerOutput.structured_outputs, {
+  task_executability_assessment_v1: structuredAssessment,
+});
+
 const plainWorkerOutput = workerOutputFromAgentMessage('plain assistant fallback');
 assert.equal(plainWorkerOutput.summary, 'plain assistant fallback');
 assert.equal(plainWorkerOutput.edits_performed, false);

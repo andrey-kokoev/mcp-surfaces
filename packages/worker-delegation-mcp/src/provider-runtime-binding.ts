@@ -247,6 +247,22 @@ export function projectWorkerProviderRuntimeEnvironment(
   if (binding.model_env_names[0]) environment[binding.model_env_names[0]] = binding.model;
 }
 
+/**
+ * Project only provider-specific credential aliases for a canonical NARS
+ * launch. Provider and model selectors remain owned by the immutable plan.
+ */
+export function projectWorkerProviderCredentialEnvironment(
+  environment: Record<string, string>,
+  binding: WorkerProviderRuntimeBinding,
+  metadataByProvider: Record<string, WorkerProviderRuntimeMetadata>,
+): void {
+  for (const metadata of Object.values(metadataByProvider)) {
+    for (const key of metadata.credentialEnvNames) delete environment[key];
+  }
+  if (!binding.api_key) return;
+  for (const key of binding.credential_env_names) environment[key] = binding.api_key;
+}
+
 export function redactWorkerProviderRuntimeBinding(binding: WorkerProviderRuntimeBinding): Omit<WorkerProviderRuntimeBinding, 'api_key'> {
   const { api_key: _apiKey, ...redacted } = binding;
   return redacted;

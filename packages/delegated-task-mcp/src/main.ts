@@ -562,15 +562,24 @@ async function advanceTask(task: Task, state: State, options: AdvanceOptions = {
   const pollMs = Math.max(50, options.pollMs ?? 500);
   let current = task;
   do {
-    const before = JSON.stringify(rec(current.result).step_states ?? {});
+    const before = stepStateSchedulingFingerprint(current);
     current = await advanceTaskOnce(current, state);
-    const after = JSON.stringify(rec(current.result).step_states ?? {});
-    if (!waitUntilTerminal || TERMINAL.has(current.status) || before === after) {
-      if (!waitUntilTerminal || TERMINAL.has(current.status) || Date.now() >= deadline) break;
-      await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
-    }
+    const after = stepStateSchedulingFingerprint(current);
+    if (!waitUntilTerminal || TERMINAL.has(current.status) || Date.now() >= deadline) break;
+    // A running worker refreshes volatile liveness fields on every poll. Use
+    // only scheduling state for this comparison: otherwise a nonterminal
+    // refresh looks like progress forever and starves the event loop that must
+    // observe the worker child and its durable events. Immediate DAG progress
+    // is still allowed to cascade without paying a poll delay.
+    if (before === after) await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   } while (waitUntilTerminal && Date.now() < deadline && !TERMINAL.has(current.status));
   return current;
+}
+
+function stepStateSchedulingFingerprint(task: Task): string {
+  return JSON.stringify(Object.values(stepStateMap(task))
+    .sort((left, right) => left.step_id.localeCompare(right.step_id))
+    .map(({ active_posture: _activePosture, started_at: _startedAt, finished_at: _finishedAt, ...state }) => state));
 }
 
 async function refreshTaskStatus(task: Task, state: State): Promise<Task> {
@@ -1942,10 +1951,31 @@ function buildWorkerArgs(task: Task, step: WorkflowStep, state: State): JsonReco
   constraints.cwd = cwd;
   if (task.execution_binding.site_root) constraints.site_root = task.execution_binding.site_root;
   const workerConstraints: JsonRecord = { ...constraints, cwd, resumable: task.execution.resumable !== false, exit_interview: task.execution.exit_interview === true || constraints.exit_interview === true };
+  const requestedRuntime = String(workerConstraints.runtime ?? rec(workerConstraints.overrides).runtime ?? state.workerState.policy.defaultRuntime);
+  const usesCanonicalNaradaRuntime = requestedRuntime === 'narada-agent-runtime-server';
+  if (usesCanonicalNaradaRuntime) {
+    // NARS resolves provider, model, and cognition from the immutable Site
+    // invocation plan. They remain meaningful on the durable delegated-task
+    // record and its assessment contract, but must not cross the worker
+    // invocation boundary as legacy selector overrides.
+    delete workerConstraints.provider;
+    delete workerConstraints.cognition;
+    delete workerConstraints.model;
+    delete workerConstraints.reasoning_effort;
+  }
   const overrides = { ...rec(workerConstraints.overrides) };
   for (const key of ['runtime', 'model', 'reasoning_effort', 'sandbox', 'skip_git_repo_check']) {
     if (workerConstraints[key] !== undefined) overrides[key] = workerConstraints[key];
     delete workerConstraints[key];
+  }
+  if (usesCanonicalNaradaRuntime) {
+    delete overrides.model;
+    delete overrides.reasoning_effort;
+    const config = rec(overrides.config);
+    delete config.model;
+    delete config.model_reasoning_effort;
+    if (Object.keys(config).length > 0) overrides.config = config;
+    else delete overrides.config;
   }
   for (const key of ['max_concurrency', 'max_retries', 'profile', 'repair_policy']) delete workerConstraints[key];
   if (Object.keys(overrides).length > 0) workerConstraints.overrides = overrides;

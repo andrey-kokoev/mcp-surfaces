@@ -926,9 +926,14 @@ export async function pollInboxBridge(cwd: any, options: TaskLifecyclePayload = 
   const duplicates: any[] = [];
   const errors: any[] = [];
 
-  let store: any = null;
+  // A Site Loop already owns the disciplined lifecycle-store connection for
+  // the whole cycle. Reuse it when supplied; opening a second connection to
+  // the same database while the loop holds its write lease can block the
+  // first phase before it can record a step.
+  let store: any = options.store ?? null;
+  const ownsStore = store === null;
   try {
-    store = openTaskLifecycleStore(cwd, { mode: 'runtime' });
+    if (ownsStore) store = openTaskLifecycleStore(cwd, { mode: 'runtime' });
   } catch (e: any) {
     return {
       status: 'error',
@@ -1018,7 +1023,7 @@ export async function pollInboxBridge(cwd: any, options: TaskLifecyclePayload = 
       }
     }
   } finally {
-    store.db.close();
+    if (ownsStore) store.db.close();
   }
 
   return {

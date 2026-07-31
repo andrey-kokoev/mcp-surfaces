@@ -248,8 +248,8 @@ try {
   assert.ok(mergeProbeCall);
   const mergeProbeOverrides = (mergeProbeCall?.args.constraints as Record<string, any>).overrides;
   assert.equal(mergeProbeOverrides.runtime, 'narada-agent-runtime-server');
-  assert.equal(mergeProbeOverrides.model, 'caller-model');
-  assert.equal(mergeProbeOverrides.reasoning_effort, 'low');
+  assert.equal(mergeProbeOverrides.model, undefined);
+  assert.equal(mergeProbeOverrides.reasoning_effort, undefined);
   assert.equal(mergeProbeOverrides.skip_git_repo_check, true);
   assert.deepEqual(mergeProbeOverrides.config, { caller_key: 'caller', step_key: 'step' });
 
@@ -1484,11 +1484,11 @@ try {
   assert.equal(mappedConstraints.skip_git_repo_check, undefined);
   assert.equal(mappedConstraints.max_concurrency, undefined);
   assert.equal(mappedConstraints.site_root, siteRoot);
-  assert.equal(mappedConstraints.provider, 'deepseek-api');
-  assert.equal(mappedConstraints.cognition, 'high');
+  assert.equal(mappedConstraints.provider, undefined);
+  assert.equal(mappedConstraints.cognition, undefined);
   assert.deepEqual(mappedConstraints.required_mcp_tools, ['constraint-mcp-tool', 'acceptance-mcp-tool']);
   assert.equal(mappedConstraints.required_mcp_tools.includes('structured-command'), false);
-  assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', model: 'test-model', sandbox: 'read-only', skip_git_repo_check: true });
+  assert.deepEqual(mappedConstraints.overrides, { runtime: 'narada-agent-runtime-server', sandbox: 'read-only', skip_git_repo_check: true });
 
   const launchFailureRun = await callTool(state, 'delegated_task_run', {
     objective: 'Exercise worker launch failure diagnostics',

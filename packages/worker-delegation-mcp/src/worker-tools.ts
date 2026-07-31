@@ -1,5 +1,5 @@
 import { constants, accessSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { diagnosticError } from './errors.js';
 import { buildRuntimeDiagnostics, classifyRuntimeError, compactRunError, partialFailurePosture, readDiagnosticTail, readRunProgress, readTextTail, runtimeFailureRemediation, workerBudgetStatus } from './diagnostics.js';
 import { buildCodexArgv, buildInvocation as codexBuildInvocation, runCodexInvocation, type Invocation, type ResolvedWorkerConfig } from './codex-adapter.js';
@@ -8,6 +8,7 @@ import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuild
 import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, WORKER_REQUIRED_MCP_SCOPE, assertWorkerImplementationFresh, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationGate, workerImplementationIdentity } from './policy.js';
 import { IntelligenceLaunchContextError, loadIntelligenceLaunchContext, projectIntelligenceLaunchContext, publicIntelligenceLaunchContext, type IntelligenceLaunchContext } from './intelligence-launch-context.js';
 import { publicCognitionDefaults, publicProviderRegistryDiagnostics, updateCognitionDefault } from './cognition-defaults.js';
+import { projectWorkerProviderCredentialEnvironment, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
 import { audit, createRunRecord, readWorkerSessionRecord, writeJson, writeText, writeWorkerOutputSchema, writeWorkerSessionRecord } from './run-record.js';
 import { candidateRunRoots, listRunIds, locateRunResult, readRunResult, resolveRunInspectionSiteRoot, runArtifacts } from './run-store.js';
@@ -148,6 +149,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     intelligenceContext = canonicalPlanLaunch?.context ?? readWorkerIntelligenceContext(state, siteRoot);
     if (intelligenceContext.status === 'ready') Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
+    projectCanonicalProviderCredential(state, environment);
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
@@ -403,6 +405,32 @@ function canonicalPlanRuntimeBinding(context: IntelligenceLaunchContext): Record
   };
 }
 
+function projectCanonicalProviderCredential(state: WorkerMcpState, environment: Record<string, string>): void {
+  const provider = state.policy.defaultNaradaAgentRuntimeProvider;
+  if (!provider) return;
+  const metadata = state.providerRuntimeMetadata[provider];
+  if (!metadata || metadata.credentialEnvNames.length === 0) return;
+
+  // Canonical NARS owns provider/model selection. The worker boundary may
+  // carry only the selected provider's credential transport, never the
+  // ambient selector or legacy NARADA_AI_* tuple.
+  state.ensureProviderCredential?.(provider);
+  const bindingEnvironment = { ...state.env };
+  delete bindingEnvironment.NARADA_INTELLIGENCE_PROVIDER;
+  delete bindingEnvironment.NARADA_AI_API_KEY;
+  delete bindingEnvironment.NARADA_AI_BASE_URL;
+  delete bindingEnvironment.NARADA_AI_MODEL;
+  delete bindingEnvironment.NARADA_AI_THINKING;
+  const binding = resolveWorkerProviderRuntimeBinding({
+    provider,
+    metadataByProvider: state.providerRuntimeMetadata,
+    env: bindingEnvironment,
+    model: null,
+    reasoningEffort: null,
+  });
+  projectWorkerProviderCredentialEnvironment(environment, binding, state.providerRuntimeMetadata);
+}
+
 function invocationArtifact(invocation: Invocation, resolvedWorkerConfig: ResolvedWorkerConfig): Record<string, unknown> {
   return {
     command: invocation.command,
@@ -525,6 +553,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     intelligenceContext = canonicalPlanLaunch?.context ?? requireWorkerIntelligenceContext(state, siteRoot, environment);
     Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
+    projectCanonicalProviderCredential(state, environment);
     const workerSessionId = resumeSessionId ?? runRecord.runId;
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
@@ -925,6 +954,7 @@ function buildWorkerRunPayload(options: {
     open_questions: options.output ? options.output.open_questions : null,
     next_actions: options.output ? options.output.next_actions : null,
     changes: options.output ? options.output.changes : null,
+    structured_outputs: options.output?.structured_outputs ?? {},
     verification_results: options.output ? options.output.verification : null,
     verification_budget_respected: options.output?.verification_budget_respected ?? null,
     broad_unrelated_failures: options.output?.broad_unrelated_failures ?? [],

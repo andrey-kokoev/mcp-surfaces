@@ -15,6 +15,8 @@ export * from '../site-operating-loop/site-loop-store.js';
 interface OpenSiteLoopStoreOptions {
   write?: boolean;
   storeMode?: 'prepare' | 'runtime';
+  /** Site Loop acquires its persisted logical lock before doing loop writes. */
+  acquireWriteLock?: boolean;
 }
 
 function ensureRuntimeHostTables(db: any): void {
@@ -56,7 +58,11 @@ function ensureRuntimeHostTables(db: any): void {
 export function openSiteLoopStore(cwd: any, options: OpenSiteLoopStoreOptions = {}) {
   const write = options.write !== false;
   const siteRoot = resolve(cwd);
-  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, { write, storeMode: options.storeMode });
+  const lifecycleStore = openTaskLifecycleStoreWithDiscipline(siteRoot, {
+    write,
+    storeMode: options.storeMode,
+    acquireWriteLock: options.acquireWriteLock,
+  });
   try {
     const db = lifecycleStore.db as unknown as SiteLoopDatabase;
     const evidenceStore = createSiteLoopEvidenceStore(siteRoot);

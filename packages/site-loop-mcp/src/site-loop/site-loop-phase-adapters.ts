@@ -145,6 +145,7 @@ export function createSiteLoopPhaseAdapters(deps: SiteLoopPhaseDeps): SiteLoopPh
         dryRun: context.dryRun,
         limit: context.limit,
         threshold: context.threshold,
+        store: context.store,
       }),
       outputRefs: (result: unknown) => deps.bridgeOutputRefs(result),
       evidence: (result: unknown) => deps.summarizeBridgeResult(result),

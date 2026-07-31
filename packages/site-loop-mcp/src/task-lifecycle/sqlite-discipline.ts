@@ -16,6 +16,8 @@ interface TaskLifecycleSqliteOptions {
   integrityCheck?: boolean;
   /** Runtime callers must observe a prepared store; tests/maintenance may opt into preparation. */
   storeMode?: 'prepare' | 'runtime';
+  /** Callers with a stronger domain lock may bypass the coarse process lock. */
+  acquireWriteLock?: boolean;
 }
 
 type TaskLifecycleDatabase = SqliteTaskLifecycleStore['db'];
@@ -37,7 +39,7 @@ const heldLocks: Map<string, LockState> = new Map();
 export function openTaskLifecycleStoreWithDiscipline(cwd: string, options: TaskLifecycleSqliteOptions = {}): SqliteTaskLifecycleStore {
   const siteRoot: string = resolve(cwd);
   const write: boolean = options.write !== false;
-  const lock: WriteLock | null = write ? acquireWriteLock(siteRoot, options) : null;
+  const lock: WriteLock | null = write && options.acquireWriteLock !== false ? acquireWriteLock(siteRoot, options) : null;
   let store: SqliteTaskLifecycleStore | null = null;
   try {
     store = options.storeMode === 'prepare'

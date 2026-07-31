@@ -143,6 +143,9 @@ assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.env
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.status, 'ready');
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.intelligence_context.principal_binding_present, true);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_REGISTRY_DB'), true);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), false);
+assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AI_API_KEY'), false);
 
 const staleConfigState = createServerState({
   allowedRoot: root,

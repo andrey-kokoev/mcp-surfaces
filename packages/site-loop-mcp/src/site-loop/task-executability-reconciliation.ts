@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   createServerState,
   delegatedTaskResult,
@@ -26,6 +28,7 @@ import {
 } from '@narada2/task-governance-core/task-lifecycle-store';
 import {
   TaskExecutabilityOrchestrator,
+  deterministicIdempotencyKey,
   type DelegatedTaskInvocation,
   type DelegatedTaskPoll,
   type DelegatedTaskPort,
@@ -103,6 +106,11 @@ function makeLifecyclePort(
         ...(latestAttempt ? { latest_attempt: latestAttempt } : {}),
       } satisfies TaskExecutabilityRequest;
       requestContexts.set(request.request_id, request);
+      // The orchestrator addresses the delegated boundary with its canonical
+      // idempotency key, while lifecycle storage addresses the lease by the
+      // raw request id. Keep both aliases in the short-lived adapter context;
+      // otherwise a real Site Loop dispatch cannot recover its leased packet.
+      requestContexts.set(deterministicIdempotencyKey(request.request_id), request);
       return request;
     },
 
@@ -316,11 +324,22 @@ function makeDelegatedTaskPort(
         },
         workflow: { template_id: WORKFLOW_TEMPLATE_ID },
         acceptance: { required_tools: [], residual_risk_policy: 'allow' },
-        execution: { start: true, wait_for_completion: false, resumable: false, max_retries: 0 },
+        // Site Loop runs as a bounded process rather than a resident delegated
+        // task server. Keep the worker child inside this invocation until its
+        // terminal result is persisted; an async child would lose its in-memory
+        // completion supervisor when the Site Loop runner exits.
+        execution: {
+          start: true,
+          wait_for_completion: true,
+          timeout_ms: args.constraints.max_run_ms,
+          poll_ms: 100,
+          resumable: false,
+          max_retries: 0,
+        },
         execution_binding: {
           workspace_root: state.siteRoot,
           site_root: state.siteRoot,
-          executor_kind: 'site_loop_task_executability',
+          executor_kind: 'site_loop',
           correlation_key: args.idempotency_key,
         },
         idempotency_key: args.idempotency_key,
@@ -349,12 +368,21 @@ export function createTaskExecutabilityOrchestratorForSiteLoop(args: {
   const lifecycleStore = new SqliteTaskLifecycleStore({ db });
   const requestContexts = new Map<string, TaskExecutabilityRequest>();
   const lifecycle = makeLifecyclePort(lifecycleStore, args.siteRoot, requestContexts);
+  const workerPolicyConfig = join(args.siteRoot, '.narada', 'worker-policy.toml');
   const delegatedState = createServerState({
     taskRoot: args.siteRoot,
     siteRoot: args.siteRoot,
     outputRoot: args.siteRoot,
     allowedRoots: [args.siteRoot],
+    ...(existsSync(workerPolicyConfig) ? { workerPolicy: { config: workerPolicyConfig } } : {}),
   });
+  // The Site Loop already owns the disciplined lifecycle connection for this
+  // run. Bind the delegated-task gate to that connection instead of letting
+  // it open a second connection to the same database while the loop holds its
+  // write lease. A second synchronous node:sqlite connection can block the
+  // Site Loop event loop before the worker completion supervisor can observe
+  // the child NARS terminal event.
+  delegatedState.taskLifecycleStore = lifecycleStore;
   const delegated = makeDelegatedTaskPort(delegatedState, requestContexts);
   return new TaskExecutabilityOrchestrator(lifecycle, delegated, {
     consumer_id: `site-loop:${args.siteRoot}`,

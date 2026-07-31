@@ -399,7 +399,10 @@ export async function runSiteLoop(cwd: any, options: SiteLoopOptions = {}) {
   let staleRunRecovery = null;
 
   try {
-    store = dryRun ? null : openSiteLoopStore(siteRoot);
+    // Acquire the persisted Site Loop lock before the coarse Task Lifecycle
+    // process lock. Otherwise a competing loop waits for the first run to
+    // finish, then runs sequentially and never observes logical contention.
+    store = dryRun ? null : openSiteLoopStore(siteRoot, { acquireWriteLock: false });
     if (store) {
       const lockTtlMs = Number(options.lockTtlMs ?? options.lock_ttl_ms ?? operatingPolicy.cadence.lock_ttl_ms);
       lock = acquireLoopLock(store, {

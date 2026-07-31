@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendAdmissionEvent } from '../src/inbox/admission-log.js';
+import { prepareTaskLifecycleStore } from '@narada2/task-governance-core/task-lifecycle-store';
 import {
   buildTaskSpecFromEnvelope,
   checkDuplicateTask,
   deriveRoutingFromEnvelopePayload,
+  pollInboxBridge,
   readUnprocessedEnvelopes,
 } from '../src/task-lifecycle/inbox-bridge.js';
 
@@ -62,6 +64,19 @@ assert.equal(
   false,
   'bridge_materialized as latest admission event must keep an envelope out of unprocessed polling',
 );
+
+const reusedStore = prepareTaskLifecycleStore(siteRoot);
+try {
+  const reusedStoreResult = await pollInboxBridge(siteRoot, { store: reusedStore, limit: 1 });
+  assert.equal(reusedStoreResult.status, 'ok');
+  assert.equal(
+    (reusedStore.db.prepare('SELECT 1 AS alive').get() as { alive?: number }).alive,
+    1,
+    'polling with a caller-owned store must leave that connection open',
+  );
+} finally {
+  reusedStore.db.close();
+}
 
 const canonicalScheduledEnvelope = {
   schema: 'narada.inbox_envelope.v1',
