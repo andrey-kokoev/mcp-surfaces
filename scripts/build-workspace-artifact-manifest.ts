@@ -27,7 +27,7 @@ if (unverifiedDependencies.length > 0) {
 }
 const retiredNamespaceArtifacts = findFilesNamedDist(packageRoots)
   .filter((path) => /\.(?:js|cjs|mjs|d\.ts)$/.test(path))
-  .filter((path) => readFileSync(path, 'utf8').includes('@narada2/'));
+  .filter((path) => readFileSync(path, 'utf8').includes('@narada-core/'));
 if (retiredNamespaceArtifacts.length > 0) {
   throw new Error(`workspace_retired_namespace_artifact:${retiredNamespaceArtifacts
     .map((path) => path.replace(/\\/g, '/'))
