@@ -101,6 +101,15 @@ Use the registrar when you want to inject a standalone MCP surface into Codex, o
 
 For a concrete example, `@narada-core/local-filesystem-mcp` can run standalone, while this registrar handles how it gets exposed to a specific CLI or TUI. See `docs/mcp-wiring.md` for the emitted Codex, opencode, and Kimi shapes.
 
+### Codex Apps default
+
+Generated Codex carrier configs set `[features].apps = false`. This keeps
+Codex Apps/connectors, including the `mcp__codex_apps` namespace, out of a
+profile-less launch by default while leaving Narada `mcp_servers` available.
+Apps can be explicitly enabled for one launch with `codex --enable apps`.
+The setting is emitted by the registrar and must not be hand-edited into the
+generated carrier file.
+
 ## Kimi Carrier Contract
 
 `pnpm test:registrar:kimi-contract` materializes the real `kimi-andrey` configuration, launches every emitted stdio server with its generated command and arguments, performs MCP initialization and `tools/list`, and validates every tool `inputSchema` against the strict contract from [MoonshotAI/walle v0.1.13](https://github.com/MoonshotAI/walle). This deterministic test requires no Kimi account or provider call and is included in the registrar package test.

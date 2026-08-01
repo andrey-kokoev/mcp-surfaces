@@ -849,6 +849,7 @@ try {
     assert.equal(normalizedGeneratedText.includes('speech-mcp/dist/src/main.js'), false);
     assert.equal(normalizedGeneratedText.includes('C:/Users/Andrey/Narada'), true);
     if (carrierId === 'codex-andrey') {
+      assert.match(generatedText, /\[features\]\r?\napps = false\r?\n/);
       assert.equal(generatedText.includes('mcp_loader_open_surface'), true);
       assert.equal(generatedText.includes('mcp_loader_call_tool'), true);
       assert.equal(generatedText.includes('inbox_submit'), false);

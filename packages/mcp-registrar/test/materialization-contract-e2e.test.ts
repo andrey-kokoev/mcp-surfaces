@@ -187,6 +187,7 @@ test('fresh registrar materializes, validates, and launches a carrier generation
     assert.equal(existsSync(sidecarPath), true);
 
     const config = readFileSync(configPath, 'utf8');
+    assert.match(config, /\[features\]\r?\napps = false\r?\n/);
     const proxyCount = codexResult.materialization_validation.proxy_count as number;
     assert.equal((config.match(/--artifact-manifest/g) ?? []).length, proxyCount);
     assert.equal((config.match(/--runtime-contract-version/g) ?? []).length, proxyCount);

@@ -40,6 +40,10 @@ registrar operation from silently rebuilding the full startup inventory.
 Generated shape:
 
 ```toml
+# Codex Apps/connectors are opt-in for profile-less launches.
+[features]
+apps = false
+
 [mcp_servers.narada-andrey-user-local-filesystem]
 command = "node"
 args = ["<installed-package>/dist/src/main.js", "--mode", "read", "--allowed-root", "<your-workspace-root>"]
