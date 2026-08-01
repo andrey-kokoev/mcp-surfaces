@@ -110,6 +110,9 @@ try {
     'graph_mail_forward_draft_create',
     'graph_mail_reply_all_to_last_in_thread_draft_create',
     'graph_mail_ticket_draft_upsert',
+    'graph_mail_ticket_draft_disposition_scan',
+    'graph_mail_ticket_draft_disposition_list',
+    'graph_mail_ticket_draft_disposition_ack',
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
@@ -126,6 +129,9 @@ try {
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_attachment_upload_chunk')?.annotations.readOnlyHint, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.idempotentHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_upsert')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_disposition_scan')?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_disposition_scan')?.annotations.readOnlyHint, false);
+  assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_ticket_draft_disposition_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_folder_create')?.inputSchema.properties.confirm_write.default, false);
   assert.equal(toolRows.find((tool: DynamicTestValue) => tool.name === 'graph_mail_message_move')?.inputSchema.properties.confirm_write.default, false);
@@ -895,6 +901,90 @@ try {
   assert.equal(ticketDraftReplay.result.structuredContent.result.draft_id, 'ticket-draft-1');
   assert.equal(ticketDraftReplay.result.structuredContent.result.idempotency_replayed_or_recovered, true);
   assert.equal(ticketDraftCalls.length, 2, 'exact replay must not call Graph');
+
+  const absentDispositionCalls: CapturedRequest[] = [];
+  const absentDispositionState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(absentDispositionCalls, [{ body: { value: [] } }]),
+  });
+  const absentDispositionScan = await rpc({
+    jsonrpc: '2.0',
+    id: 14021,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_disposition_scan', arguments: { limit: 1 } },
+  }, absentDispositionState);
+  assert.equal(absentDispositionScan.error, undefined);
+  assert.equal(absentDispositionScan.result.structuredContent.operations_scanned, 1);
+  assert.equal(absentDispositionScan.result.structuredContent.observations_recorded, 0);
+  assert.equal(absentDispositionScan.result.structuredContent.still_pending, 1);
+
+  const sentDispositionCalls: CapturedRequest[] = [];
+  const sentDispositionState = createServerState({
+    siteRoot: root,
+    accessToken: 'test-token',
+    fetchImpl: mockFetch(sentDispositionCalls, [{
+      body: {
+        value: [{
+          id: 'ticket-draft-1',
+          isDraft: false,
+          changeKey: 'sent-change-1',
+          lastModifiedDateTime: '2026-07-31T15:00:00.000Z',
+        }],
+      },
+    }]),
+  });
+  const sentDispositionScan = await rpc({
+    jsonrpc: '2.0',
+    id: 14022,
+    method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_disposition_scan', arguments: { limit: 1 } },
+  }, sentDispositionState);
+  assert.equal(sentDispositionScan.error, undefined);
+  assert.equal(sentDispositionScan.result.structuredContent.observations_recorded, 1);
+  const dispositionList = await rpc({
+    jsonrpc: '2.0',
+    id: 14023,
+    method: 'tools/call',
+    params: {
+      name: 'graph_mail_ticket_draft_disposition_list',
+      arguments: { consumer_id: 'work-reconciler', limit: 5 },
+    },
+  }, sentDispositionState);
+  assert.equal(dispositionList.error, undefined);
+  assert.equal(dispositionList.result.structuredContent.count, 1);
+  const dispositionReceipt = dispositionList.result.structuredContent.items[0];
+  assert.equal(dispositionReceipt.schema, 'narada.graph_mail.ticket_draft_disposition_receipt.v1');
+  assert.equal(dispositionReceipt.disposition, 'sent');
+  assert.equal(dispositionReceipt.is_draft, false);
+  const { receipt_sha256: receiptSha256, ...unsignedDispositionReceipt } = dispositionReceipt;
+  assert.equal(receiptSha256, sha256Canonical(unsignedDispositionReceipt));
+  const dispositionAckArguments = {
+    observation_id: dispositionReceipt.observation_id,
+    consumer_id: 'work-reconciler',
+    reconciliation_ref: 'work-event-1',
+    reconciliation_receipt: { event_id: 'work-event-1', status: 'reconciled' },
+  };
+  const dispositionAck = await rpc({
+    jsonrpc: '2.0', id: 14024, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_disposition_ack', arguments: dispositionAckArguments },
+  }, sentDispositionState);
+  assert.equal(dispositionAck.error, undefined);
+  assert.equal(dispositionAck.result.structuredContent.status, 'acknowledged');
+  const dispositionAckReplay = await rpc({
+    jsonrpc: '2.0', id: 14025, method: 'tools/call',
+    params: { name: 'graph_mail_ticket_draft_disposition_ack', arguments: dispositionAckArguments },
+  }, sentDispositionState);
+  assert.equal(dispositionAckReplay.error, undefined);
+  assert.equal(dispositionAckReplay.result.structuredContent.status, 'already_acknowledged');
+  const emptyDispositionList = await rpc({
+    jsonrpc: '2.0', id: 14026, method: 'tools/call',
+    params: {
+      name: 'graph_mail_ticket_draft_disposition_list',
+      arguments: { consumer_id: 'work-reconciler', limit: 5 },
+    },
+  }, sentDispositionState);
+  assert.equal(emptyDispositionList.result.structuredContent.count, 0);
 
   const recoveryCalls: CapturedRequest[] = [];
   let injectCrash = true;

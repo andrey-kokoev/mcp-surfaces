@@ -11,7 +11,9 @@ import {
   spawnJsonlMcpServer,
   type JsonRecord,
 } from '@narada-core/mcp-e2e-harness';
+import { writeCanonicalPlanRegistry } from './canonical-plan-fixture.js';
 
+const PLAN_REF = 'plan:worker-delegation-live-edit';
 const root = createTemporaryE2eRoot('worker-delegation-live-edit-e2e');
 const targetPath = join(root, 'worker-edit-target.txt');
 const runRoot = join(root, 'runs');
@@ -24,13 +26,21 @@ const filesystemServerPath = fileURLToPath(new URL('../../../local-filesystem-mc
 mkdirSync(join(root, '.narada'), { recursive: true });
 mkdirSync(join(root, '.ai'), { recursive: true });
 writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-delegation-live-edit' }), 'utf8');
-writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeCanonicalPlanRegistry({
+  databasePath: join(root, '.ai', 'intelligence-registry.db'),
+  planRef: PLAN_REF,
+  targetSite: 'site:worker-delegation-live-edit',
+  principal: 'principal:worker-delegation-live-edit',
+  provider: 'codex-subscription',
+  model: 'fixture-edit-model',
+});
 writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
   schema: 'narada.intelligence.launch_context.v1',
   user_site_id: 'site:worker-delegation-live-edit-user',
   host_site_id: 'site:worker-delegation-live-edit-host',
   principal_id: 'principal:worker-delegation-live-edit',
-  registry_db_path: '.ai\\\\intelligence-registry.db',
+  invocation_plan_ref: PLAN_REF,
+  registry_db_path: '.ai\\intelligence-registry.db',
   principal_binding: {
     schema: 'narada.intelligence.principal_binding.v1',
     actor: { principal_id: 'principal:worker-delegation-live-edit', auth_type: 'test' },
@@ -190,7 +200,7 @@ try {
       arguments: {
         cwd: root,
         site_root: root,
-        provider: 'codex-subscription',
+        invocation_plan_ref: PLAN_REF,
         instruction: [
           'Perform exactly one delegated MCP edit.',
           'E2E_FILESYSTEM_SERVER=' + filesystemServerPath,

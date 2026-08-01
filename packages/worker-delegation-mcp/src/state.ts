@@ -5,6 +5,8 @@ import type { IntelligenceLaunchContext } from './intelligence-launch-context.js
 
 export type WorkerMcpState = {
   siteRoot?: string;
+  /** User Site that owns canonical intelligence context and registry authority. */
+  userSiteRoot?: string;
   policy: WorkerPolicy;
   env: NodeJS.ProcessEnv;
   activeRunCount: number;

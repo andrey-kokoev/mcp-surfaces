@@ -6,6 +6,7 @@ const testRoot = dirname(fileURLToPath(import.meta.url));
 const testFiles = [
   'cognition-defaults.test.js',
   'canonical-provider-registry.test.js',
+  'canonical-invocation-plan.test.js',
   'provider-registry-diagnostics.test.js',
   'provider-runtime-binding.test.js',
   'agent-runtime-server-adapter.test.js',

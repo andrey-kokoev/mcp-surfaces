@@ -327,7 +327,7 @@ export class MailboxDomainStore {
           observationId,
           generationId,
           eventId,
-          identity,
+          observationId,
           now,
           JSON.stringify(payload),
         );

@@ -6,6 +6,7 @@ import { buildCodexArgv, createServerState, handleRequest, parseArgs } from '../
 import { commandRequiresWindowsShell, runCodexInvocation, type Invocation } from '../src/codex-adapter.js';
 import { admitWorkerAiProcessInvocation, releaseWorkerAiProcessInvocation } from '../src/ai-process-invocation.js';
 import { resolveWorkingDirectory } from '../src/policy.js';
+import { writeCanonicalPlanRegistry } from './canonical-plan-fixture.js';
 
 type RpcResponse = {
   result?: Record<string, any>;
@@ -16,7 +17,14 @@ const root = mkdtempSync(join(testTempRoot(), 'worker-delegation-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
 mkdirSync(join(root, '.ai'), { recursive: true });
 writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-test-site' }), 'utf8');
-writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeCanonicalPlanRegistry({
+  databasePath: join(root, '.ai', 'intelligence-registry.db'),
+  planRef: 'plan:worker-test-canonical',
+  targetSite: 'site:worker-test-site',
+  principal: 'principal:worker-test',
+  provider: 'kimi-code-api',
+  model: 'k3',
+});
 writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
   schema: 'narada.intelligence.launch_context.v1',
   user_site_id: 'site:worker-test-user',
@@ -533,13 +541,13 @@ assert.equal(policy.result?.structuredContent.runtimes.deepseek, undefined);
 assert.equal(policy.result?.structuredContent.runtimes['deepseek-api'], undefined);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].accepted_site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_MCP_SCOPE', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].accepted_site_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_MCP_SCOPE', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_PLAN_REF', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].canonical_provider_binding.selector_crosses_worker_boundary, false);
 assert.deepEqual(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].allowed_providers, ['openai-api', 'kimi-api', 'kimi-code-api', 'anthropic-api', 'deepseek-api', 'glm-api', 'openrouter-api', 'codex-subscription']);
 assert.match(policy.result?.structuredContent.runtimes['narada-agent-runtime-server'].site_root_required_remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.site_bound, true);
 assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.required_markers, ['.narada/', '.ai/mcp/']);
-assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.accepted_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_MCP_SCOPE', 'NARADA_INTELLIGENCE_PROVIDER', 'NARADA_INTELLIGENCE_ADAPTER_ID', 'NARADA_AI_API_KEY', 'NARADA_AI_BASE_URL', 'NARADA_AI_MODEL', 'NARADA_AI_THINKING', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
+assert.deepEqual(policy.result?.structuredContent.nars_site_semantics.accepted_environment_keys, ['NARADA_SITE_ROOT', 'NARADA_WORKSPACE_ROOT', 'NARADA_AGENT_ID', 'NARADA_CARRIER_SESSION_ID', 'NARADA_MCP_SCOPE', 'NARADA_MAX_TOOL_ROUNDS', 'NARADA_INTELLIGENCE_PLAN_REF', 'NARADA_INTELLIGENCE_REGISTRY_DB', 'NARADA_INTELLIGENCE_TARGET_SITE', 'NARADA_INTELLIGENCE_USER_SITE', 'NARADA_INTELLIGENCE_HOST_SITE', 'NARADA_INTELLIGENCE_PRINCIPAL_ID', 'NARADA_INTELLIGENCE_PRINCIPAL_BINDING', 'CODEX_HOME', 'CODEX_CONFIG_DIR']);
 assert.equal(policy.result?.structuredContent.nars_site_semantics.canonical_provider_binding.selector_crosses_worker_boundary, false);
 assert.match(policy.result?.structuredContent.nars_site_semantics.remediation, /constraints\.site_root/);
 assert.equal(policy.result?.structuredContent.max_parallel_runs, 10);
@@ -962,6 +970,7 @@ assert.throws(() => parseArgs(['--codex-command']), hasCode('worker_invalid_cli_
 assert.throws(() => parseArgs(['--codex-command-arg']), hasCode('worker_invalid_cli_args'));
 assert.deepEqual(parseArgs(['--codex-command-arg', 'codex.js', '--codex-command-arg', 'arg2']).codexCommandArgs, ['codex.js', 'arg2']);
 assert.deepEqual(parseArgs(['--agent-runtime-server-command-arg', 'server.js', '--agent-runtime-server-command-arg', '--raw-jsonl']).agentRuntimeServerCommandArgs, ['server.js', '--raw-jsonl']);
+assert.equal(parseArgs(['--user-site-root', root]).userSiteRoot, root);
 assert.equal(parseArgs(['--cognition-low-reasoning-effort', 'minimal']).cognitionLowReasoningEffort, 'minimal');
 assert.equal(parseArgs(['--cognition-high-model', 'gpt-test-high']).cognitionHighModel, 'gpt-test-high');
 
@@ -1099,7 +1108,16 @@ assert.deepEqual(agentRuntimeResolve.result?.structuredContent.resolved_worker_c
   plan_ref: 'plan:worker-test-canonical',
   provider_model_resolution: 'narada-runtime',
   provider: 'kimi-code-api',
-  provider_source: 'canonical_environment',
+  provider_source: 'canonical_plan_store',
+  intent_ref: 'intent:worker-test-canonical',
+  purpose: 'local-agent-runtime',
+  model_ref: 'model:k3',
+  model_provider_ref: 'model-provider:fixture',
+  offering_ref: 'model-offering:kimi-code-api-k3',
+  invocation_model_key: 'k3',
+  options: { thinking: 'high' },
+  snapshot_digest: `sha256:${'1'.repeat(64)}`,
+  valid_until: '2099-01-01T00:00:00.000Z',
   credential_env_names: ['KIMI_CODE_API_KEY'],
   selector_crosses_worker_boundary: false,
   credential_materialization: 'final-adapter-boundary',
@@ -1151,11 +1169,11 @@ const nonDefaultProviderState = createServerState({
 });
 const nonDefaultProviderResolve = await rpc({ jsonrpc: '2.0', id: 50201, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: runArgs('server runtime non-default provider resolve', { runtime: 'narada-agent-runtime-server' }) } }, nonDefaultProviderState);
 assert.equal(nonDefaultProviderResolve.error, undefined, JSON.stringify(nonDefaultProviderResolve));
-assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider, 'openai-api');
-assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider_source, 'canonical_environment');
-assert.deepEqual(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.credential_env_names, []);
+assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider, 'kimi-code-api');
+assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider_source, 'canonical_plan_store');
+assert.deepEqual(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.provider_runtime_binding.credential_env_names, ['KIMI_CODE_API_KEY']);
 assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), false);
-assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), false);
+assert.equal(nonDefaultProviderResolve.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
 
 const agentRuntimeProviderResolve = await rpc({ jsonrpc: '2.0', id: 5011, method: 'tools/call', params: { name: 'worker_config_resolve', arguments: {
   intent: { instruction: 'server runtime provider resolve' },

@@ -83,6 +83,7 @@ try {
   assert.equal(first.outcome, 'completed');
   assert.equal(record(first.result).status, 'synced');
   assert.equal(record(first.result).first_observation_count, 2);
+  assert.equal(first.result_ref, undefined, 'SOP result_ref is reserved for immutable value refs');
   assert.equal(sourceCalls, 1);
 
   const replay = await service.syncGeneration({ idempotency_key: 'sync-action-1', scope_id: 'support' });
@@ -93,6 +94,10 @@ try {
   const listed = service.outboxList({ consumer_id: 'scheduler' });
   const events = arrayOfRecords(listed.items);
   assert.equal(events.length, 2);
+  assert.equal(new Set(events.map((event) => String(event.partition_key))).size, 2);
+  for (const event of events) {
+    assert.equal(event.partition_key, record(event.payload).observation_id);
+  }
 
   const allowedEvent = events.find((event) => record(event.payload).message_id === 'message-allowed');
   const rejectedEvent = events.find((event) => record(event.payload).message_id === 'message-rejected');
@@ -109,6 +114,8 @@ try {
   const admittedSourceRef = record(record(record(admitted.result).ticket_admit_source_arguments).source_ref);
   assert.equal(admittedSourceRef.fact_id, record(allowedEvent.payload).fact_id);
   assert.equal(admittedSourceRef.source_version, 'v1');
+  assert.equal(admittedSourceRef.scope_id, 'support');
+  assert.equal(admittedSourceRef.mailbox_id, 'support@example.test');
   assert.equal(JSON.stringify(admitted).includes('Allowed body must not cross admission receipt'), false);
 
   const immutableFact = await service.factShow({
@@ -189,6 +196,7 @@ try {
   assert.equal(record(blocked.result).status, 'blocked');
   assert.equal(record(blocked.result).error_message, 'fixture_fatal_sync_failure');
   assert.equal(record(blocked.result).idempotency_replayed, false);
+  assert.equal(blocked.result_ref, undefined, 'blocked receipts remain bounded inline results');
 
   const blockedReplay = await fatalService.syncGeneration({ idempotency_key: 'sync-action-fatal', scope_id: 'support' });
   assert.equal(blockedReplay.outcome, 'completed');

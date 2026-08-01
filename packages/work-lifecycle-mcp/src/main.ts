@@ -270,24 +270,21 @@ const TICKET_TOOLS: McpToolDefinition[] = [
   },
   {
     name: 'ticket_draft_disposition_reconcile',
-    description: 'Reconcile a verified Graph receipt or synchronized Graph observation and reactivate the ticket exactly once.',
+    description: 'Reconcile a digest-verified, operation-linked Graph disposition observation and reactivate the ticket exactly once.',
     inputSchema: objectSchema({
       ticket_id: stringSchema('Canonical ticket id.'),
       draft_id: stringSchema('Stable draft identity.'),
-      disposition: stringSchema('Typed operator disposition.'),
-      evidence_kind: {
-        type: 'string',
-        enum: ['graph_operation_receipt', 'synchronized_graph_observation'],
+      evidence: {
+        type: 'object',
+        additionalProperties: true,
+        description: 'Complete narada.graph_mail.ticket_draft_disposition_receipt.v1 emitted and persisted by Graph Mail.',
       },
-      evidence_id: stringSchema('Stable admitted evidence identity.'),
       idempotency_key: stringSchema('Stable disposition event operation key.'),
       causation_id: stringSchema('Graph event or synchronization event id.'),
     }, [
       'ticket_id',
       'draft_id',
-      'disposition',
-      'evidence_kind',
-      'evidence_id',
+      'evidence',
       'idempotency_key',
       'causation_id',
     ]),
@@ -715,11 +712,7 @@ function callTicketTool(
       return toolResult(domainOperation(idempotencyKey, store.reconcileDraftDisposition({
         ticket_id: requiredString(args.ticket_id, 'ticket_id_required'),
         draft_id: requiredString(args.draft_id, 'draft_id_required'),
-        disposition: requiredString(args.disposition, 'disposition_required'),
-        evidence_kind: requiredString(args.evidence_kind, 'evidence_kind_required') as
-          | 'graph_operation_receipt'
-          | 'synchronized_graph_observation',
-        evidence_id: requiredString(args.evidence_id, 'evidence_id_required'),
+        evidence: asRecord(args.evidence) as Parameters<typeof store.reconcileDraftDisposition>[0]['evidence'],
         idempotency_key: idempotencyKey,
         causation_id: requiredString(args.causation_id, 'causation_id_required'),
       })));

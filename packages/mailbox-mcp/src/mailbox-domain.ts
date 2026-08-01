@@ -273,6 +273,7 @@ export class MailboxDomainService {
         throw new Error(`mailbox_admission_fact_type_invalid:${fact.fact_type}`);
       }
       const metadata = mailMetadata(fact);
+      const graphMailboxId = configuredGraphMailboxId(loaded.scope);
       if (metadata.mailbox_id !== loaded.scope.scope_id) {
         throw new Error(`mailbox_admission_scope_mismatch:${metadata.mailbox_id}:${loaded.scope.scope_id}`);
       }
@@ -298,7 +299,8 @@ export class MailboxDomainService {
         summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
         source_ref: {
           schema: 'narada.work_lifecycle.source_ref.v1',
-          mailbox_id: metadata.mailbox_id,
+          scope_id: loaded.scope.scope_id,
+          mailbox_id: graphMailboxId,
           message_id: metadata.message_id,
           fact_id: factId,
           source_record_id: fact.provenance.source_record_id,
@@ -320,7 +322,8 @@ export class MailboxDomainService {
             policy_version: policyVersion,
             summary: metadata.subject ? `Mailbox message: ${metadata.subject}`.slice(0, 500) : 'Mailbox message',
             source_ref: {
-              mailbox_id: metadata.mailbox_id,
+              scope_id: loaded.scope.scope_id,
+              mailbox_id: graphMailboxId,
               message_id: metadata.message_id,
               fact_id: factId,
               source_record_id: fact.provenance.source_record_id,
@@ -592,6 +595,15 @@ function createGraphSource(kernel: ControlPlaneRuntime, scope: ScopeConfig): Sou
   return new kernel.ExchangeSource({ adapter, sourceId: scope.scope_id });
 }
 
+function configuredGraphMailboxId(scope: ScopeConfig): string {
+  const configured = scope.graph ?? scope.sources.find((source) => source.type === 'graph');
+  return requiredBoundedString(
+    configured?.user_id,
+    `mailbox_scope_graph_user_id_required:${scope.scope_id}`,
+    512,
+  );
+}
+
 async function writeGenerationArtifact(path: string, generationId: string, batch: SourceBatch): Promise<{ sha256: string }> {
   await mkdir(dirname(path), { recursive: true });
   const document = { schema: GENERATION_ARTIFACT_SCHEMA, generation_id: generationId, batch };
@@ -676,12 +688,6 @@ function generationOperation(generation: SyncGenerationRow, replayed: boolean): 
     operation_ref: `mailbox-sync:${generation.generation_id}`,
     outcome: 'completed',
     result: { ...receipt, idempotency_replayed: replayed },
-    result_ref: {
-      schema: 'narada.mcp_result_ref.v1',
-      surface_id: 'mailbox',
-      tool_name: 'mailbox_generation_show',
-      arguments: { generation_id: generation.generation_id },
-    },
   };
 }
 
@@ -698,12 +704,6 @@ function blockedGenerationOperation(generation: SyncGenerationRow, replayed: boo
       status: 'blocked',
       error_message: message,
       idempotency_replayed: replayed,
-    },
-    result_ref: {
-      schema: 'narada.mcp_result_ref.v1',
-      surface_id: 'mailbox',
-      tool_name: 'mailbox_generation_show',
-      arguments: { generation_id: generation.generation_id },
     },
   };
 }

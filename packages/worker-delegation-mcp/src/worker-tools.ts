@@ -8,6 +8,7 @@ import { outputContractForMode, outputContractForRequest, parseLastMessage, resu
 import { buildAgentRuntimeServerArgv, buildInvocation as agentRuntimeServerBuildInvocation, runAgentRuntimeServerInvocation } from './agent-runtime-server-adapter.js';
 import { CODEX_SUBSCRIPTION_PROVIDER, NARADA_AGENT_RUNTIME_SITE_REMEDIATION, NARADA_SITE_ROOT_MARKERS, WORKER_REQUIRED_MCP_SCOPE, assertWorkerImplementationFresh, defaultConfigForCognition, defaultSandboxForAuthority, environmentForWorker, publicWorkerPolicy, rejectNaradaAgentRuntimeProviderForRuntime, resolveAuthority, resolveCognition, resolveConfig, resolveNaradaAgentRuntimeProvider, resolveNaradaSiteBinding, resolveSandbox, resolveWorkingDirectory, validateRuntime, workerImplementationGate, workerImplementationIdentity } from './policy.js';
 import { IntelligenceLaunchContextError, loadIntelligenceLaunchContext, projectIntelligenceLaunchContext, publicIntelligenceLaunchContext, type IntelligenceLaunchContext } from './intelligence-launch-context.js';
+import { CanonicalInvocationPlanError, readCanonicalInvocationPlan, type CanonicalInvocationPlanBinding } from './canonical-invocation-plan.js';
 import { publicCognitionDefaults, publicProviderRegistryDiagnostics, updateCognitionDefault } from './cognition-defaults.js';
 import { projectCanonicalProviderCredentialEnvironment, resolveWorkerProviderRuntimeBinding } from './provider-runtime-binding.js';
 import { buildWorkerPrompt } from './prompt.js';
@@ -150,7 +151,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     intelligenceContext = canonicalPlanLaunch?.context ?? readWorkerIntelligenceContext(state, siteRoot);
     if (intelligenceContext.status === 'ready') Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
-    const canonicalProviderProjection = projectCanonicalProviderCredential(state, environment);
+    const canonicalProviderProjection = projectCanonicalProviderCredential(state, environment, canonicalPlanLaunch!.plan);
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
     environment.NARADA_AGENT_ID ??= 'narada.architect';
@@ -178,7 +179,7 @@ function workerConfigResolve(args: Record<string, unknown>, state: WorkerMcpStat
       site_binding: siteBinding,
       provider: null,
       provider_source: 'canonical_invocation_plan',
-      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext, canonicalProviderProjection),
+      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext, canonicalPlanLaunch!.plan, canonicalProviderProjection),
       intelligence_context: publicIntelligenceLaunchContext(intelligenceContext),
       required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       mcp_scope: workerMcpProjection ? WORKER_REQUIRED_MCP_SCOPE : null,
@@ -304,7 +305,7 @@ function naradaAgentRuntimeSiteBinding(cwd: string, siteBinding: { siteRoot: str
 function readWorkerIntelligenceContext(state: WorkerMcpState, sessionSiteRoot: string): IntelligenceLaunchContext {
   try {
     return loadIntelligenceLaunchContext({
-      userSiteRoot: resolve(state.siteRoot ?? state.env.NARADA_SITE_ROOT ?? sessionSiteRoot),
+      userSiteRoot: resolve(state.userSiteRoot ?? state.siteRoot ?? state.env.NARADA_SITE_ROOT ?? sessionSiteRoot),
       sessionSiteRoot,
       processEnv: state.env,
     });
@@ -320,7 +321,7 @@ function requireCanonicalInvocationPlan(
   state: WorkerMcpState,
   sessionSiteRoot: string,
   request: WorkerRunToolInput,
-): { context: IntelligenceLaunchContext; planRef: string } {
+): { context: IntelligenceLaunchContext; planRef: string; plan: CanonicalInvocationPlanBinding } {
   const legacyFields = [
     request.constraints.provider !== undefined ? 'constraints.provider' : null,
     request.constraints.cognition !== undefined ? 'constraints.cognition' : null,
@@ -364,8 +365,29 @@ function requireCanonicalInvocationPlan(
       { remediation: 'Resolve a plan in Narada and set invocation_plan_ref or NARADA_INTELLIGENCE_PLAN_REF.' },
     );
   }
+  if (context.status !== 'ready' || !context.target_site) {
+    throw diagnosticError('worker_intelligence_context_required', 'The canonical invocation plan requires a complete intelligence launch context.', {
+      context_path: context.context_path,
+      missing: context.missing,
+    });
+  }
+  let plan: CanonicalInvocationPlanBinding;
+  try {
+    plan = readCanonicalInvocationPlan({
+      databasePath: context.registry_db_path,
+      planRef,
+      expectedPurpose: 'local-agent-runtime',
+      expectedTargetSite: context.target_site,
+    });
+  } catch (error) {
+    if (error instanceof CanonicalInvocationPlanError) {
+      throw diagnosticError(error.codeName, error.message, error.details);
+    }
+    throw error;
+  }
   return {
     planRef,
+    plan,
     context: {
       ...context,
       invocation_plan_ref: planRef,
@@ -398,11 +420,11 @@ function intelligenceContextStatus(context: IntelligenceLaunchContext): Record<s
 
 type CanonicalProviderProjection = {
   provider: string;
-  source: 'canonical_environment';
+  source: 'canonical_plan_store';
   credential_env_names: string[];
 };
 
-function canonicalPlanRuntimeBinding(context: IntelligenceLaunchContext, projection: CanonicalProviderProjection): Record<string, unknown> {
+function canonicalPlanRuntimeBinding(context: IntelligenceLaunchContext, plan: CanonicalInvocationPlanBinding, projection: CanonicalProviderProjection): Record<string, unknown> {
   return {
     schema: 'narada.worker.canonical-plan-binding.v1',
     source: 'narada-canonical-invocation-plan',
@@ -410,24 +432,23 @@ function canonicalPlanRuntimeBinding(context: IntelligenceLaunchContext, project
     provider_model_resolution: 'narada-runtime',
     provider: projection.provider,
     provider_source: projection.source,
+    intent_ref: plan.intent_ref,
+    purpose: plan.purpose,
+    model_ref: plan.model_ref,
+    model_provider_ref: plan.model_provider_ref,
+    offering_ref: plan.offering_ref,
+    invocation_model_key: plan.invocation_model_key,
+    options: plan.options,
+    snapshot_digest: plan.snapshot_digest,
+    valid_until: plan.valid_until,
     credential_env_names: [...projection.credential_env_names],
     selector_crosses_worker_boundary: false,
     credential_materialization: 'final-adapter-boundary',
   };
 }
 
-function projectCanonicalProviderCredential(state: WorkerMcpState, environment: Record<string, string>): CanonicalProviderProjection {
-  const provider = String(state.env.NARADA_INTELLIGENCE_PROVIDER ?? '').trim();
-  if (!provider) {
-    throw diagnosticError(
-      'worker_canonical_provider_required',
-      'narada-agent-runtime-server requires the canonical invocation plan to bind an explicit provider.',
-      {
-        selector_key: 'NARADA_INTELLIGENCE_PROVIDER',
-        remediation: 'Materialize the canonical plan provider in the bound Site launch environment before delegating.',
-      },
-    );
-  }
+function projectCanonicalProviderCredential(state: WorkerMcpState, environment: Record<string, string>, plan: CanonicalInvocationPlanBinding): CanonicalProviderProjection {
+  const provider = plan.provider;
   resolveNaradaAgentRuntimeProvider(provider, state.policy);
   const metadata = state.providerRuntimeMetadata[provider];
   if (!metadata) throw diagnosticError('worker_provider_metadata_missing', 'worker_provider_metadata_missing', { provider });
@@ -452,7 +473,7 @@ function projectCanonicalProviderCredential(state: WorkerMcpState, environment: 
   projectCanonicalProviderCredentialEnvironment(environment, binding, state.providerRuntimeMetadata);
   return {
     provider,
-    source: 'canonical_environment',
+    source: 'canonical_plan_store',
     credential_env_names: [...binding.credential_env_names],
   };
 }
@@ -603,7 +624,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
     const siteBinding = naradaAgentRuntimeSiteBinding(cwd, resolvedSiteBinding);
     intelligenceContext = canonicalPlanLaunch?.context ?? requireWorkerIntelligenceContext(state, siteRoot, environment);
     Object.assign(environment, projectIntelligenceLaunchContext(intelligenceContext));
-    const canonicalProviderProjection = projectCanonicalProviderCredential(state, environment);
+    const canonicalProviderProjection = projectCanonicalProviderCredential(state, environment, canonicalPlanLaunch!.plan);
     const workerSessionId = resumeSessionId ?? runRecord.runId;
     environment.NARADA_SITE_ROOT = siteRoot;
     environment.NARADA_WORKSPACE_ROOT = resolvedSiteBinding.workspaceRoot;
@@ -632,7 +653,7 @@ async function workerRunInner(args: Record<string, unknown>, state: WorkerMcpSta
       site_binding: siteBinding,
       provider: null,
       provider_source: 'canonical_invocation_plan',
-      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext, canonicalProviderProjection),
+      provider_runtime_binding: canonicalPlanRuntimeBinding(intelligenceContext, canonicalPlanLaunch!.plan, canonicalProviderProjection),
       intelligence_context: publicIntelligenceLaunchContext(intelligenceContext),
       required_mcp_tools: request.constraints.required_mcp_tools ?? [],
       mcp_scope: workerMcpProjection ? WORKER_REQUIRED_MCP_SCOPE : null,

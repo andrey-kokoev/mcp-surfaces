@@ -7,6 +7,7 @@ import { listTools } from '../src/tool-list.js';
 import { writeWorkerSessionRecord } from '../src/run-record.js';
 import { callWorkerTool } from '../src/worker-tools.js';
 import { loadIntelligenceLaunchContext, projectIntelligenceLaunchContext } from '../src/intelligence-launch-context.js';
+import { writeCanonicalPlanRegistry } from './canonical-plan-fixture.js';
 
 type RpcResponse = {
   result?: Record<string, any>;
@@ -17,7 +18,14 @@ const root = mkdtempSync(join(testTempRoot(), 'worker-projection-'));
 mkdirSync(join(root, '.narada'), { recursive: true });
 mkdirSync(join(root, '.ai'), { recursive: true });
 writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'projection-site' }), 'utf8');
-writeFileSync(join(root, '.ai', 'intelligence-registry.db'), 'fixture', 'utf8');
+writeCanonicalPlanRegistry({
+  databasePath: join(root, '.ai', 'intelligence-registry.db'),
+  planRef: 'plan:projection-test',
+  targetSite: 'site:projection-site',
+  principal: 'principal:projection',
+  provider: 'kimi-code-api',
+  model: 'projection-test-model',
+});
 writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
   schema: 'narada.intelligence.launch_context.v1',
   user_site_id: 'site:projection-user',
@@ -146,6 +154,46 @@ assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.env
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('KIMI_CODE_API_KEY'), true);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_INTELLIGENCE_PROVIDER'), false);
 assert.equal(narsProjection.result?.structuredContent.resolved_worker_config.environment_keys.includes('NARADA_AI_API_KEY'), false);
+
+const separateTargetRoot = join(root, 'separate-target-site');
+mkdirSync(join(separateTargetRoot, '.narada'), { recursive: true });
+writeFileSync(join(separateTargetRoot, '.narada', 'site.json'), JSON.stringify({
+  schema: 'narada.site.v0',
+  site_id: 'projection-site',
+}), 'utf8');
+const splitAuthorityState = createServerState({
+  siteRoot: separateTargetRoot,
+  userSiteRoot: root,
+  allowedRoot: root,
+  runRoot: join(root, 'split-authority-runs'),
+  defaultRuntime: 'narada-agent-runtime-server',
+  agentRuntimeServerCommand: process.execPath,
+  providerRegistryPath,
+  maxOutputBytes: 2 * 1024 * 1024,
+}, env);
+const splitAuthorityProjection = await rpc({
+  jsonrpc: '2.0',
+  id: 21,
+  method: 'tools/call',
+  params: {
+    name: 'worker_config_resolve',
+    arguments: {
+      intent: { instruction: 'resolve target Site against separate User Site intelligence authority' },
+      constraints: {
+        cwd: separateTargetRoot,
+        site_root: separateTargetRoot,
+        authority: 'read',
+        overrides: { runtime: 'narada-agent-runtime-server' },
+      },
+    },
+  },
+}, splitAuthorityState);
+assert.equal(splitAuthorityProjection.error, undefined, JSON.stringify(splitAuthorityProjection));
+assert.equal(splitAuthorityState.userSiteRoot, root);
+assert.equal(splitAuthorityProjection.result?.structuredContent.resolved_worker_config.site_root, separateTargetRoot);
+assert.equal(splitAuthorityProjection.result?.structuredContent.resolved_worker_config.intelligence_context.context_path, join(root, '.narada', 'intelligence-launch-context.json'));
+assert.equal(splitAuthorityProjection.result?.structuredContent.resolved_worker_config.intelligence_context.registry_db_path, join(root, '.ai', 'intelligence-registry.db'));
+assert.equal(splitAuthorityProjection.result?.structuredContent.resolved_worker_config.provider_runtime_binding.provider_source, 'canonical_plan_store');
 
 const staleConfigState = createServerState({
   allowedRoot: root,

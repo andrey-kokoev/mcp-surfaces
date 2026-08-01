@@ -38,6 +38,9 @@ try {
     'graph_mail_forward_draft_create',
     'graph_mail_reply_all_to_last_in_thread_draft_create',
     'graph_mail_ticket_draft_upsert',
+    'graph_mail_ticket_draft_disposition_scan',
+    'graph_mail_ticket_draft_disposition_list',
+    'graph_mail_ticket_draft_disposition_ack',
     'graph_mail_draft_update',
     'graph_mail_draft_discard',
     'graph_mail_draft_send',
@@ -54,6 +57,8 @@ try {
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_attachment_delete')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_create')?.annotations.readOnlyHint, false);
   assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_ticket_draft_upsert') as any)?.annotations.idempotentHint, true);
+  assert.equal((toolRows.find((tool) => tool.name === 'graph_mail_ticket_draft_disposition_scan') as any)?.annotations.idempotentHint, true);
+  assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_ticket_draft_disposition_list')?.annotations.readOnlyHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.annotations.destructiveHint, true);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_draft_send')?.inputSchema.properties.confirm_send.default, false);
   assert.equal(toolRows.find((tool) => tool.name === 'graph_mail_folder_list')?.inputSchema.properties.limit.default, 50);

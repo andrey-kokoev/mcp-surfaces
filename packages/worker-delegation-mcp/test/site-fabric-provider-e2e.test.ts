@@ -16,8 +16,10 @@ import {
   type JsonlMcpClient,
   type JsonRecord,
 } from '@narada-core/mcp-e2e-harness';
+import { writeCanonicalPlanRegistry } from './canonical-plan-fixture.js';
 
 const TEST_ID = 'worker-delegation-site-fabric-provider-e2e';
+const PLAN_REF = 'plan:worker-delegation-site-fabric-provider';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const resultPath = join(packageRoot, '.tmp', 'e2e-results', `${TEST_ID}.json`);
 const startedAt = new Date().toISOString();
@@ -54,13 +56,21 @@ async function main(): Promise<void> {
     mkdirSync(join(root, '.narada'), { recursive: true });
     mkdirSync(join(root, '.ai', 'mcp'), { recursive: true });
     writeFileSync(join(root, '.narada', 'site.json'), JSON.stringify({ schema: 'narada.site.v0', site_id: 'worker-delegation-e2e-site' }), 'utf8');
-    writeFileSync(intelligenceRegistryPath, 'fixture', 'utf8');
+    writeCanonicalPlanRegistry({
+      databasePath: intelligenceRegistryPath,
+      planRef: PLAN_REF,
+      targetSite: 'site:worker-delegation-e2e-site',
+      principal: 'principal:worker-delegation-e2e',
+      provider: 'codex-subscription',
+      model: 'fixture-plan-model',
+    });
     writeFileSync(join(root, '.narada', 'intelligence-launch-context.json'), JSON.stringify({
       schema: 'narada.intelligence.launch_context.v1',
       user_site_id: 'site:worker-delegation-e2e-user',
       host_site_id: 'site:worker-delegation-e2e-host',
       principal_id: 'principal:worker-delegation-e2e',
-      registry_db_path: '.ai\\\\intelligence-registry.db',
+      invocation_plan_ref: PLAN_REF,
+      registry_db_path: '.ai\\intelligence-registry.db',
       principal_binding: {
         schema: 'narada.intelligence.principal_binding.v1',
         actor: { principal_id: 'principal:worker-delegation-e2e', auth_type: 'test' },
@@ -144,7 +154,8 @@ async function main(): Promise<void> {
       "  const model = process.env.NARADA_AI_MODEL || null;",
       "  const thinking = process.env.NARADA_AI_THINKING || null;",
       "  const codexModel = process.env.CODEX_MODEL || null;",
-      "  emit(frame, { summary: 'provider cognition binding fixture completed', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: 'provider-runtime-fixture', command: null, status: 'passed', summary: 'provider=' + provider + ' model=' + model + ' thinking=' + thinking + ' codex_model=' + codexModel, command_classification: 'not_applicable' }], verification_budget_respected: true, broad_unrelated_failures: [], exit_interview: null });",
+      "  const planRef = process.env.NARADA_INTELLIGENCE_PLAN_REF || null;",
+      "  emit(frame, { summary: 'canonical plan binding fixture completed', deliverables: [], open_questions: [], next_actions: [], edits_performed: false, target_state_changed: false, changes: [], verification: [{ tool: 'provider-runtime-fixture', command: null, status: 'passed', summary: 'plan_ref=' + planRef + ' provider=' + provider + ' model=' + model + ' thinking=' + thinking + ' codex_model=' + codexModel, command_classification: 'not_applicable' }], verification_budget_respected: true, broad_unrelated_failures: [], exit_interview: null });",
       "}",
       '',
       "function callFilesystem(serverPath, rootPath, patch) {",
@@ -253,7 +264,7 @@ async function main(): Promise<void> {
     const editResult = await callAttached(loaderClient, loaderConnectionId, 7, 'worker_edit', {
       cwd: root,
       site_root: root,
-      provider: 'codex-subscription',
+      invocation_plan_ref: PLAN_REF,
       instruction: [
         'Perform exactly one delegated MCP edit.',
         `E2E_FILESYSTEM_SERVER=${filesystemServerPath}`,
@@ -270,43 +281,40 @@ async function main(): Promise<void> {
     assert.equal(editOutputRecord.target_state_changed, true);
     assert.equal(readFileSync(targetPath, 'utf8'), 'after\n');
 
-    const cognitionExpectations = {
-      low: { model: 'fixture-low-model', thinking: 'low' },
-      medium: { model: 'fixture-medium-model', thinking: 'medium' },
-      high: { model: 'fixture-high-model', thinking: 'high' },
-    } as const;
-    let requestId = 40;
-    for (const [cognition, expected] of Object.entries(cognitionExpectations)) {
-      const runResult = await callAttached(loaderClient, loaderConnectionId, requestId++, 'worker_run', {
-        intent: { instruction: `Read-only provider binding check for ${cognition}.` },
-        constraints: {
-          cwd: root,
-          site_root: root,
-          authority: 'read',
-          cognition,
-          provider: 'codex-subscription',
-          wait_for_completion: true,
-          overrides: { runtime: 'narada-agent-runtime-server' },
-        },
-      });
-      const runStructured = await readProducedOrInline(loaderClient, loaderConnectionId, runResult, requestId + 100);
-      diagnosticState = runStructured;
-      const resolved = asRecord(runStructured.resolved_worker_config);
-      assert.equal(runStructured.status, 'completed', JSON.stringify(runStructured));
-      assert.equal(resolved.provider, 'codex-subscription');
-      assert.equal(resolved.cognition, cognition);
-      assert.equal(resolved.model, expected.model);
-      assert.equal(resolved.reasoning_effort, expected.thinking);
-      assert.equal(asRecord(resolved.provider_runtime_binding).credential_source, 'not_required');
-      assert.equal('api_key' in asRecord(resolved.provider_runtime_binding), false);
-      const verification = Array.isArray(runStructured.verification_results) ? runStructured.verification_results : [];
-      const summary = String(asRecord(verification[0]).summary ?? '');
-      assert.match(summary, new RegExp(`provider=codex-subscription`));
-      assert.match(summary, new RegExp(`model=${expected.model}`));
-      assert.match(summary, new RegExp(`thinking=${expected.thinking}`));
-      assert.match(summary, new RegExp(`codex_model=${expected.model}`));
-      providerEvidence.push({ cognition, provider: resolved.provider, model: resolved.model, reasoning_effort: resolved.reasoning_effort, status: runStructured.status, summary });
-    }
+    const runResult = await callAttached(loaderClient, loaderConnectionId, 40, 'worker_run', {
+      intent: { instruction: 'Read-only immutable canonical plan binding check.' },
+      constraints: {
+        cwd: root,
+        site_root: root,
+        authority: 'read',
+        invocation_plan_ref: PLAN_REF,
+        wait_for_completion: true,
+        overrides: { runtime: 'narada-agent-runtime-server' },
+      },
+    });
+    const runStructured = await readProducedOrInline(loaderClient, loaderConnectionId, runResult, 140);
+    diagnosticState = runStructured;
+    const resolved = asRecord(runStructured.resolved_worker_config);
+    const binding = asRecord(resolved.provider_runtime_binding);
+    assert.equal(runStructured.status, 'completed', JSON.stringify(runStructured));
+    assert.equal(resolved.provider, null);
+    assert.equal(resolved.cognition, null);
+    assert.equal(resolved.model, null);
+    assert.equal(resolved.reasoning_effort, null);
+    assert.equal(binding.plan_ref, PLAN_REF);
+    assert.equal(binding.provider, 'codex-subscription');
+    assert.equal(binding.model_ref, 'model:fixture-plan-model');
+    assert.equal(binding.invocation_model_key, 'fixture-plan-model');
+    assert.deepEqual(binding.credential_env_names, []);
+    assert.equal('api_key' in binding, false);
+    const verification = Array.isArray(runStructured.verification_results) ? runStructured.verification_results : [];
+    const summary = String(asRecord(verification[0]).summary ?? '');
+    assert.match(summary, new RegExp(`plan_ref=${PLAN_REF}`));
+    assert.match(summary, /provider=null/);
+    assert.match(summary, /model=null/);
+    assert.match(summary, /thinking=null/);
+    assert.match(summary, /codex_model=null/);
+    providerEvidence.push({ plan_ref: PLAN_REF, provider: binding.provider, model_ref: binding.model_ref, status: runStructured.status, summary });
 
     status = 'passed';
     console.log(JSON.stringify({

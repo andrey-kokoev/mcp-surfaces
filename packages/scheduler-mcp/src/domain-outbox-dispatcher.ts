@@ -68,34 +68,43 @@ export async function runSchedulerDomainOutboxDispatcher(
     if (runtime.status !== 'fresh') throw new Error(`scheduler_runtime_not_fresh:${String(runtime.status)}`);
 
     await registerConsumer(fabric, options);
-    const listed = await listEvents(fabric, options);
-    for (const raw of listed) {
-      report.events_seen += 1;
-      try {
-        const event = parseDomainEvent(raw);
-        await fabric.call(options.schedulerSurfaceId, 'scheduler_event_admit', {
-          event_id: event.event_id,
-          topic: event.topic,
-          partition_key: event.partition_key,
-          aggregate_id: event.aggregate_id,
-          aggregate_revision: event.aggregate_revision,
-          schema_version: event.schema_version,
-          causation_id: event.causation_id,
-          idempotency_key: event.idempotency_key,
-          payload: event.payload,
-          occurred_at: event.occurred_at,
-          implementation_id: implementationId,
-        });
-        report.events_admitted += 1;
-        await acknowledgeEvent(fabric, options, event);
-        report.events_acknowledged += 1;
-      } catch (error) {
-        report.errors.push({
-          stage: 'domain_outbox_event',
-          event_id: optionalString(raw.event_id),
-          error: boundedError(error),
-        });
+    let remaining = options.maxEvents;
+    while (remaining > 0) {
+      const pageLimit = Math.min(5, remaining);
+      const listed = await listEvents(fabric, options, pageLimit);
+      if (listed.length === 0) break;
+      let pageFailed = false;
+      for (const raw of listed) {
+        report.events_seen += 1;
+        remaining -= 1;
+        try {
+          const event = parseDomainEvent(raw);
+          await fabric.call(options.schedulerSurfaceId, 'scheduler_event_admit', {
+            event_id: event.event_id,
+            topic: event.topic,
+            partition_key: event.partition_key,
+            aggregate_id: event.aggregate_id,
+            aggregate_revision: event.aggregate_revision,
+            schema_version: event.schema_version,
+            causation_id: event.causation_id,
+            idempotency_key: event.idempotency_key,
+            payload: event.payload,
+            occurred_at: event.occurred_at,
+            implementation_id: implementationId,
+          });
+          report.events_admitted += 1;
+          await acknowledgeEvent(fabric, options, event);
+          report.events_acknowledged += 1;
+        } catch (error) {
+          pageFailed = true;
+          report.errors.push({
+            stage: 'domain_outbox_event',
+            event_id: optionalString(raw.event_id),
+            error: boundedError(error),
+          });
+        }
       }
+      if (pageFailed || listed.length < pageLimit) break;
     }
   } finally {
     if (ownedFabric) {
@@ -160,18 +169,22 @@ async function registerConsumer(fabric: SchedulerDomainFabricCaller, options: No
   }
 }
 
-async function listEvents(fabric: SchedulerDomainFabricCaller, options: NormalizedOptions): Promise<JsonRecord[]> {
+async function listEvents(
+  fabric: SchedulerDomainFabricCaller,
+  options: NormalizedOptions,
+  limit: number,
+): Promise<JsonRecord[]> {
   if (options.profile === 'mailbox') {
     const result = await fabric.call(options.sourceSurfaceId, 'mailbox_outbox_list', {
       consumer_id: options.consumerId,
-      limit: options.maxEvents,
+      limit,
     });
     return recordArray(result.items, 'mailbox_outbox_items_invalid');
   }
   const result = await fabric.call(options.sourceSurfaceId, 'work_outbox_list', {
     consumer_id: options.consumerId,
     topics: options.topics,
-    limit: options.maxEvents,
+    limit,
   });
   return recordArray(result.events, 'work_outbox_events_invalid');
 }

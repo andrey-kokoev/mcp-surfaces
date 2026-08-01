@@ -11,6 +11,7 @@ import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transp
 import {
   TicketDraftOperationStore,
   sha256Canonical,
+  stableDispositionObservationId,
   stableReceiptId,
   type TicketDraftOperationRow,
 } from './ticket-draft-store.js';
@@ -46,6 +47,9 @@ const GRAPH_MAIL_TELEMETRY_TOOL_NAMES = new Set([
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_disposition_scan',
+  'graph_mail_ticket_draft_disposition_list',
+  'graph_mail_ticket_draft_disposition_ack',
   'graph_mail_draft_update',
   'graph_mail_draft_discard',
   'graph_mail_draft_send',
@@ -344,6 +348,19 @@ export function listTools(): unknown[] {
       'reply_mode',
       'idempotency_key',
     ]),
+    tool('graph_mail_ticket_draft_disposition_scan', 'Mechanically observe bounded tracked ticket drafts and durably record a sent disposition only when Graph returns the operation-linked message with isDraft=false. Absence is never treated as a disposition.', {
+      limit: { type: 'integer', minimum: 1, maximum: 5, default: 5 },
+    }),
+    tool('graph_mail_ticket_draft_disposition_list', 'List durable Graph-backed ticket draft disposition receipts not yet acknowledged by one consumer.', {
+      consumer_id: { type: 'string', description: 'Stable Work Lifecycle reconciliation consumer id.' },
+      limit: { type: 'integer', minimum: 1, maximum: 5, default: 5 },
+    }, ['consumer_id']),
+    tool('graph_mail_ticket_draft_disposition_ack', 'Acknowledge one disposition receipt only after Work Lifecycle durably reconciles it.', {
+      observation_id: { type: 'string' },
+      consumer_id: { type: 'string' },
+      reconciliation_ref: { type: 'string', description: 'Stable Work Lifecycle event or operation ref.' },
+      reconciliation_receipt: { type: 'object', additionalProperties: true },
+    }, ['observation_id', 'consumer_id', 'reconciliation_ref', 'reconciliation_receipt']),
     tool('graph_mail_draft_update', 'Update an existing draft message.', {
       draft_id: { type: 'string', description: 'Draft message id.' },
       ...draftMessageProperties(),
@@ -643,6 +660,15 @@ async function callTool(params: GraphMailRecord, state: GraphMailServerState) {
         break;
       case 'graph_mail_ticket_draft_upsert':
         result = await graphMailTicketDraftUpsert(args, state);
+        break;
+      case 'graph_mail_ticket_draft_disposition_scan':
+        result = await graphMailTicketDraftDispositionScan(args, state);
+        break;
+      case 'graph_mail_ticket_draft_disposition_list':
+        result = graphMailTicketDraftDispositionList(args, state);
+        break;
+      case 'graph_mail_ticket_draft_disposition_ack':
+        result = graphMailTicketDraftDispositionAck(args, state);
         break;
       case 'graph_mail_draft_update':
         result = await graphMailDraftUpdate(args, state);
@@ -1303,6 +1329,175 @@ async function findTicketDraftByOperation(
   return drafts[0] ?? null;
 }
 
+async function graphMailTicketDraftDispositionScan(
+  args: GraphMailRecord,
+  state: GraphMailServerState,
+): Promise<GraphMailRecord> {
+  const limit = boundedInteger(args.limit, 5, 1, 5);
+  const store = new TicketDraftOperationStore(state.siteRoot);
+  const errors: GraphMailRecord[] = [];
+  let observationsRecorded = 0;
+  let stillPending = 0;
+  try {
+    const candidates = store.listDispositionScanCandidates(limit);
+    const client = await clientParts(state);
+    for (const operation of candidates) {
+      try {
+        const messages = await findTicketMessagesByOperation(
+          operation.mailbox_id,
+          operation.operation_key,
+          client,
+        );
+        if (messages.length > 1) {
+          throw new Error(`graph_ticket_draft_disposition_remote_identity_ambiguous:${operation.operation_key}`);
+        }
+        const observed = messages[0];
+        if (!observed || observed.isDraft !== false) {
+          stillPending += 1;
+          continue;
+        }
+        const observedMessageId = requiredDraftDispositionMessageId(observed);
+        const observedAt = new Date().toISOString();
+        const observationId = stableDispositionObservationId(
+          operation.operation_key,
+          'sent',
+          observedMessageId,
+        );
+        const receiptWithoutDigest: GraphMailRecord = {
+          schema: 'narada.graph_mail.ticket_draft_disposition_receipt.v1',
+          observation_id: observationId,
+          evidence_kind: 'synchronized_graph_observation',
+          evidence_id: observationId,
+          disposition: 'sent',
+          ticket_id: operation.ticket_id,
+          effect_claim_id: operation.effect_claim_id,
+          draft_operation_key: operation.operation_key,
+          mailbox_id: operation.mailbox_id,
+          draft_id: operation.draft_id,
+          observed_message_id: observedMessageId,
+          is_draft: false,
+          ...(stringOption(observed['@odata.etag']) ? { etag: stringOption(observed['@odata.etag']) } : {}),
+          ...(stringOption(observed.changeKey) ? { change_key: stringOption(observed.changeKey) } : {}),
+          ...(stringOption(observed.lastModifiedDateTime)
+            ? { last_modified_at: stringOption(observed.lastModifiedDateTime) }
+            : {}),
+          observed_at: observedAt,
+        };
+        const receipt = {
+          ...receiptWithoutDigest,
+          receipt_sha256: sha256Canonical(receiptWithoutDigest),
+        };
+        const recorded = store.recordDispositionObservation({
+          observation_id: observationId,
+          operation_key: operation.operation_key,
+          ticket_id: operation.ticket_id,
+          mailbox_id: operation.mailbox_id,
+          draft_id: String(operation.draft_id),
+          disposition: 'sent',
+          evidence_kind: 'synchronized_graph_observation',
+          evidence_id: observationId,
+          receipt,
+          observed_at: observedAt,
+        });
+        if (recorded.recorded) observationsRecorded += 1;
+      } catch (error) {
+        errors.push({
+          operation_key: operation.operation_key,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return {
+      schema: 'narada.graph_mail.ticket_draft_disposition_scan.v1',
+      status: errors.length > 0 ? 'completed_with_errors' : 'completed',
+      operations_scanned: candidates.length,
+      observations_recorded: observationsRecorded,
+      still_pending: stillPending,
+      errors,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function graphMailTicketDraftDispositionList(
+  args: GraphMailRecord,
+  state: GraphMailServerState,
+): GraphMailRecord {
+  const consumerId = requiredString(args, 'consumer_id');
+  const limit = boundedInteger(args.limit, 5, 1, 5);
+  const store = new TicketDraftOperationStore(state.siteRoot);
+  try {
+    const items = store.listDispositionObservations(consumerId, limit)
+      .map((observation) => observation.receipt);
+    return {
+      schema: 'narada.graph_mail.ticket_draft_disposition_list.v1',
+      consumer_id: consumerId,
+      items,
+      count: items.length,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function graphMailTicketDraftDispositionAck(
+  args: GraphMailRecord,
+  state: GraphMailServerState,
+): GraphMailRecord {
+  const observationId = requiredString(args, 'observation_id');
+  const consumerId = requiredString(args, 'consumer_id');
+  const reconciliationRef = requiredString(args, 'reconciliation_ref');
+  const reconciliationReceipt = asRecord(args.reconciliation_receipt);
+  const store = new TicketDraftOperationStore(state.siteRoot);
+  try {
+    const acknowledged = store.acknowledgeDispositionObservation({
+      observation_id: observationId,
+      consumer_id: consumerId,
+      reconciliation_ref: reconciliationRef,
+      receipt: reconciliationReceipt,
+      acknowledged_at: new Date().toISOString(),
+    });
+    return {
+      schema: 'narada.graph_mail.ticket_draft_disposition_ack.v1',
+      ...acknowledged,
+      observation_id: observationId,
+      consumer_id: consumerId,
+      reconciliation_ref: reconciliationRef,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+async function findTicketMessagesByOperation(
+  mailboxId: string,
+  operationKey: string,
+  client: Awaited<ReturnType<typeof clientParts>>,
+): Promise<GraphMailRecord[]> {
+  const propertyId = odataString(TICKET_DRAFT_OPERATION_PROPERTY_ID);
+  const propertyValue = odataString(operationKey);
+  const path = graphMailboxPath(mailboxId, 'messages', client.policy);
+  const result = asRecord(await graphRequest(client, {
+    path,
+    query: {
+      '$filter': `singleValueExtendedProperties/Any(ep: ep/id eq '${propertyId}' and ep/value eq '${propertyValue}')`,
+      '$expand': `singleValueExtendedProperties($filter=id eq '${propertyId}')`,
+      '$select': 'id,isDraft,changeKey,createdDateTime,lastModifiedDateTime,sentDateTime,parentFolderId',
+      '$top': 2,
+    },
+  }));
+  return Array.isArray(result.value)
+    ? result.value.map(asRecord).filter((message) => stringOption(message.id))
+    : [];
+}
+
+function requiredDraftDispositionMessageId(message: GraphMailRecord): string {
+  const messageId = stringOption(message.id);
+  if (!messageId) throw new Error('graph_ticket_draft_disposition_message_id_missing');
+  return messageId;
+}
+
 function ticketDraftRef(
   input: {
     ticket_id: string;
@@ -1634,6 +1829,12 @@ function positiveInteger(value: unknown, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback;
 }
 
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) return fallback;
+  return parsed;
+}
+
 function loadGraphMailEnvironment(siteRoot: string): Record<string, string> {
   const env: Record<string, string> = { ...readEnvFile(resolve(siteRoot, '..', '.env')), ...readEnvFile(resolve(siteRoot, '.env')) };
   for (const [key, value] of Object.entries(process.env)) {
@@ -1678,6 +1879,8 @@ const GRAPH_MAIL_MUTATING_TOOLS = new Set([
   'graph_mail_forward_draft_create',
   'graph_mail_reply_all_to_last_in_thread_draft_create',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_disposition_scan',
+  'graph_mail_ticket_draft_disposition_ack',
   'graph_mail_draft_update',
   'graph_mail_draft_discard',
   'graph_mail_draft_send',
@@ -1702,6 +1905,9 @@ const GRAPH_MAIL_IDEMPOTENT_TOOLS = new Set([
   'graph_mail_attachment_list',
   'graph_mail_attachment_get',
   'graph_mail_ticket_draft_upsert',
+  'graph_mail_ticket_draft_disposition_scan',
+  'graph_mail_ticket_draft_disposition_list',
+  'graph_mail_ticket_draft_disposition_ack',
 ]);
 
 function tool(name: string, description: string, properties: unknown, required: string[] = []): unknown {

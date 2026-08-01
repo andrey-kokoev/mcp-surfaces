@@ -12,6 +12,7 @@ import { buildBoundedToolResult, outputShowAsync } from '@narada-core/mcp-transp
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const PROTOCOL_VERSION = '2024-11-05';
@@ -68,13 +69,15 @@ export async function runStdioServer(options: Record<string, unknown>) {
 
 export function createServerState(options: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = process.env): WorkerMcpState {
   const siteRoot = resolve(String(options.siteRoot ?? firstRoot(options.allowedRoot) ?? firstRoot(options.allowedRoots) ?? process.cwd()));
+  const userSiteRoot = resolveUserSiteRoot(siteRoot, options, env);
+  const resolvedOptions = { ...options, userSiteRoot };
   const stateEnv = { ...env };
   const hasExplicitSiteRoot = typeof options.siteRoot === 'string' && options.siteRoot.trim().length > 0;
   const hasInheritedSiteBinding = typeof stateEnv.NARADA_SITE_ROOT === 'string' && stateEnv.NARADA_SITE_ROOT.trim().length > 0;
   if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_SITE_ROOT = siteRoot;
   if (hasExplicitSiteRoot || !hasInheritedSiteBinding) stateEnv.NARADA_WORKSPACE_ROOT ??= siteRoot;
   loadSiteSecrets(siteRoot, stateEnv);
-  const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, options);
+  const providerPolicyDefaults = loadProviderPolicyDefaults(siteRoot, stateEnv, resolvedOptions);
   const loadedCognitionDefaults = loadCognitionDefaultsState({
     siteRoot,
     providerModels: providerPolicyDefaults.providerModels,
@@ -82,13 +85,14 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
     defaultProvider: typeof providerPolicyDefaults.policyOptions.defaultNaradaAgentRuntimeProvider === 'string' ? providerPolicyDefaults.policyOptions.defaultNaradaAgentRuntimeProvider : null,
   });
   const siteExtraRoots = loadSiteExtraAllowedRoots(siteRoot);
-  const baseOptions = { ...providerPolicyDefaults.policyOptions, providerCognitionDefaults: loadedCognitionDefaults.defaults, ...options };
+  const baseOptions = { ...providerPolicyDefaults.policyOptions, providerCognitionDefaults: loadedCognitionDefaults.defaults, ...resolvedOptions };
   const mergedOptions = siteExtraRoots.length > 0
     ? { ...baseOptions, allowedRoots: [...siteExtraRoots, ...(Array.isArray(options.allowedRoot) ? options.allowedRoot : options.allowedRoot ? [options.allowedRoot] : []), ...(Array.isArray(options.allowedRoots) ? options.allowedRoots : [])] }
     : baseOptions;
   const attemptedProviderCredentialLoads = new Set<string>();
   return {
     siteRoot,
+    userSiteRoot,
     policy: createWorkerPolicy(mergedOptions),
     cognitionDefaults: loadedCognitionDefaults.state,
     providerRegistryDiagnostics: providerPolicyDefaults.providerRegistryDiagnostics,
@@ -98,10 +102,19 @@ export function createServerState(options: Record<string, unknown> = {}, env: No
     ensureProviderCredential: (provider) => {
       if (attemptedProviderCredentialLoads.has(provider)) return;
       attemptedProviderCredentialLoads.add(provider);
-      loadProviderCredentialSecrets(siteRoot, stateEnv, options, provider);
+      loadProviderCredentialSecrets(siteRoot, stateEnv, resolvedOptions, provider);
     },
     clientRoots: { supported: false, roots: [], lastUpdatedAt: null },
   };
+}
+
+function resolveUserSiteRoot(siteRoot: string, options: Record<string, unknown>, env: NodeJS.ProcessEnv): string {
+  const explicit = firstString(options.userSiteRoot, env.NARADA_USER_SITE_ROOT);
+  if (explicit) return resolve(explicit);
+  if (existsSync(join(siteRoot, '.narada', 'intelligence-launch-context.json'))) return siteRoot;
+  const conventional = resolve(homedir(), 'Narada');
+  if (existsSync(join(conventional, '.narada', 'intelligence-launch-context.json'))) return conventional;
+  return siteRoot;
 }
 
 async function processStdioRequest(request: Record<string, unknown>, state: WorkerMcpState, activeRequests: Map<string, AbortController>, options: { framed: boolean }) {
@@ -270,7 +283,7 @@ function isPathInside(candidate: string, root: string): boolean {
 
 export function parseArgs(argv: string[]): Record<string, unknown> {
   const parsed: Record<string, unknown> & { allowedRoots?: string[]; allowedSandboxes?: string[]; allowedConfigKeys?: string[]; codexCommandArgs?: string[]; agentRuntimeServerCommandArgs?: string[] } = {};
-  const valueFlags = new Set(['config', 'runRoot', 'auditLogDir', 'codexCommand', 'agentRuntimeServerCommand', 'naradaAgentRuntimeServerCommand', 'siteRoot', 'providerRegistryPath', 'secretLookupCommand']);
+  const valueFlags = new Set(['config', 'runRoot', 'auditLogDir', 'codexCommand', 'agentRuntimeServerCommand', 'naradaAgentRuntimeServerCommand', 'siteRoot', 'userSiteRoot', 'providerRegistryPath', 'secretLookupCommand']);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) continue;
@@ -517,7 +530,8 @@ export function providerRegistryResolution(siteRoot: string, env: NodeJS.Process
   }
   const configuredRegistryDb = firstString(env.NARADA_INTELLIGENCE_REGISTRY_DB);
   const configuredRegistryDbPath = configuredRegistryDb ? resolve(siteRoot, configuredRegistryDb) : null;
-  const contextRegistryDbPath = intelligenceLaunchContextRegistryPath(siteRoot, env);
+  const userSiteRoot = firstString(options.userSiteRoot) ?? siteRoot;
+  const contextRegistryDbPath = intelligenceLaunchContextRegistryPath(siteRoot, userSiteRoot, env);
   const properRoot = firstString(env.NARADA_PROPER_ROOT);
   const candidates = [
     ...(configuredRegistryDbPath ? [configuredRegistryDbPath] : []),
@@ -533,9 +547,9 @@ export function providerRegistryResolution(siteRoot: string, env: NodeJS.Process
   return { candidates, path, selection: path ? 'candidate' : null, source: path ? providerRegistrySource(path) : providerRegistrySource(candidates[0] ?? '') };
 }
 
-function intelligenceLaunchContextRegistryPath(siteRoot: string, env: NodeJS.ProcessEnv): string | null {
+function intelligenceLaunchContextRegistryPath(siteRoot: string, userSiteRoot: string, env: NodeJS.ProcessEnv): string | null {
   try {
-    const context = loadIntelligenceLaunchContext({ sessionSiteRoot: siteRoot, userSiteRoot: siteRoot, processEnv: env });
+    const context = loadIntelligenceLaunchContext({ sessionSiteRoot: siteRoot, userSiteRoot, processEnv: env });
     return context.registry_db_exists ? context.registry_db_path : null;
   } catch {
     return null;

@@ -10,7 +10,7 @@ const mailboxEvent: JsonRecord = {
   schema: 'narada.mailbox.outbox_event.v1',
   event_id: 'mailbox-event-1',
   topic: 'mailbox.message.first_observed',
-  partition_key: 'support\u0000message-1',
+  partition_key: 'observation-1',
   aggregate_id: 'observation-1',
   aggregate_revision: 1,
   schema_version: 1,
@@ -78,17 +78,53 @@ test('work-lifecycle profile registers every topic and normalizes created_at', a
   assert.equal(fabric.workAcknowledged, true);
 });
 
+test('mailbox outbox drains in bounded pages without requiring oversized MCP output', async () => {
+  const events = Array.from({ length: 12 }, (_, index) => ({
+    ...mailboxEvent,
+    event_id: `mailbox-event-${index + 1}`,
+    partition_key: `observation-${index + 1}`,
+    aggregate_id: `observation-${index + 1}`,
+    idempotency_key: `mailbox-event-${index + 1}`,
+    payload: { mailbox_id: 'support', message_id: `message-${index + 1}`, fact_id: `fact-${index + 1}` },
+  }));
+  const fabric = new FixtureFabric(events);
+  const report = await runSchedulerDomainOutboxDispatcher({
+    siteRoot: 'D:/fixture',
+    profile: 'mailbox',
+    consumerId: 'scheduler-mailbox-paged',
+    outboxStartAt: '2026-07-31T00:00:00.000Z',
+    maxEvents: 12,
+  }, fabric);
+
+  assert.equal(report.status, 'completed');
+  assert.equal(report.events_acknowledged, 12);
+  assert.deepEqual(fabric.mailboxListLimits, [5, 5, 2]);
+  assert.equal(fabric.schedulerEvents.size, 12);
+});
+
 class FixtureFabric implements SchedulerDomainFabricCaller {
   readonly schedulerEvents = new Map<string, JsonRecord>();
   readonly workTopics = new Set<string>();
-  mailboxAcknowledged = false;
+  readonly mailboxAcknowledgedIds = new Set<string>();
+  readonly mailboxListLimits: number[] = [];
   workAcknowledged = false;
   failNextMailboxAck = false;
 
   constructor(
-    private readonly mailboxEvent: JsonRecord | null,
+    mailboxEvent: JsonRecord | JsonRecord[] | null,
     private readonly workEvent: JsonRecord | null = null,
-  ) {}
+  ) {
+    this.mailboxEvents = mailboxEvent === null
+      ? []
+      : Array.isArray(mailboxEvent) ? mailboxEvent : [mailboxEvent];
+  }
+
+  private readonly mailboxEvents: JsonRecord[];
+
+  get mailboxAcknowledged(): boolean {
+    return this.mailboxEvents.length > 0
+      && this.mailboxEvents.every((event) => this.mailboxAcknowledgedIds.has(String(event.event_id)));
+  }
 
   async call(surfaceId: string, toolName: string, args: JsonRecord = {}): Promise<JsonRecord> {
     if (surfaceId === 'scheduler' && toolName === 'scheduler_runtime_status') {
@@ -107,14 +143,20 @@ class FixtureFabric implements SchedulerDomainFabricCaller {
       return { status: 'registered' };
     }
     if (surfaceId === 'mailbox' && toolName === 'mailbox_outbox_list') {
-      return { items: this.mailboxEvent && !this.mailboxAcknowledged ? [this.mailboxEvent] : [] };
+      const limit = Number(args.limit);
+      this.mailboxListLimits.push(limit);
+      return {
+        items: this.mailboxEvents
+          .filter((event) => !this.mailboxAcknowledgedIds.has(String(event.event_id)))
+          .slice(0, limit),
+      };
     }
     if (surfaceId === 'mailbox' && toolName === 'mailbox_outbox_ack') {
       if (this.failNextMailboxAck) {
         this.failNextMailboxAck = false;
         throw new Error('fixture_response_lost_before_mailbox_ack');
       }
-      this.mailboxAcknowledged = true;
+      this.mailboxAcknowledgedIds.add(String(args.event_id));
       return { status: 'acknowledged' };
     }
     if (surfaceId === 'work-lifecycle' && toolName === 'work_outbox_consumer_register') {
